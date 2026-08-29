@@ -321,8 +321,25 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   gap: 8px;
   margin-bottom: 8px;
 }
+
+.kpi.annual {
+  display: flex;
+  flex-direction: column;
+}
+.kpi.annual .value {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 52px;
+  margin-top: 0;
+  letter-spacing: -0.04em;
+}
+.kpi.annual .sub {
+  margin-top: 0;
+}
 .compare {
-  margin-bottom: 14px;
+  margin-bottom: 0;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -402,7 +419,27 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .section-title em { font-style: normal; color: var(--text-dim); letter-spacing: 0; text-transform: none; font-weight: 400; }
 
-.chart-wrap { height: 220px; width: 100%; }
+.chart-wrap { height: 220px; width: 100%; position: relative; overflow: visible; }
+.chart-tip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 3;
+  background: #10131a;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+.chart-tip.below { transform: translate(-50%, 12px); }
+svg.chart .month-hit:hover,
+svg.chart .equity-hit:hover { fill: rgba(230, 232, 236, 0.06); }
+svg.chart .month-lbl,
+svg.chart .chart-axis-lbl { pointer-events: none; }
 
 .breakdowns {
   display: grid;
@@ -464,6 +501,43 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   min-width: 220px;
   font-family: var(--mono);
 }
+.symbol-pick {
+  position: relative;
+  margin-left: auto;
+}
+.blotter-head .symbol-pick input {
+  margin-left: 0;
+  min-width: 180px;
+  width: 180px;
+}
+.symbol-pick-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 180px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  z-index: 30;
+  padding: 4px;
+}
+.symbol-pick-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.symbol-pick-list button:hover,
+.symbol-pick-list button.on { background: var(--bg-hover); }
 .table-wrap {
   overflow: auto;
   max-height: 480px;
@@ -1862,6 +1936,58 @@ function renderCompare(closedFx, selectedYear, years, activities) {
   );
 }
 
+function isoDayDiff(from, to) {
+  const a = Date.parse(String(from).slice(0, 10) + "T12:00:00");
+  const b = Date.parse(String(to).slice(0, 10) + "T12:00:00");
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return (b - a) / 86400000;
+}
+
+function accountAnnualizedReturn(activities, years) {
+  const ys = (years || []).slice().sort();
+  let prod = 1;
+  let days = 0;
+  let from = "";
+  let to = "";
+  let firstYear = "";
+  let lastYear = "";
+  for (let i = 0; i < ys.length; i++) {
+    const w = yearWindow(activities, ys[i]);
+    const r = bookReturn(activities, w.from, w.to, w.start, w.flowAfter);
+    if (r == null || !Number.isFinite(r) || r <= -1) continue;
+    const d = isoDayDiff(w.from, w.to);
+    if (!(d >= 30)) continue;
+    prod *= (1 + r);
+    days += d;
+    if (!from) {
+      from = w.from;
+      firstYear = ys[i];
+    }
+    to = w.to;
+    lastYear = ys[i];
+  }
+  if (!from || !(days > 0)) {
+    return { rate: null, from: "", to: "", years: 0, firstYear: "", lastYear: "" };
+  }
+  const yrs = days / 365.25;
+  const rate = yrs >= 1 / 12 ? Math.pow(prod, 1 / yrs) - 1 : prod - 1;
+  return { rate: rate, from: from, to: to, years: yrs, firstYear: firstYear, lastYear: lastYear };
+}
+
+function formatYearSpan(years) {
+  if (!(years > 0)) return "";
+  if (years >= 1) return years.toFixed(1) + " yrs";
+  const months = Math.max(1, Math.round(years * 12));
+  return months + " mo";
+}
+
+function renderAnnualized(activities, years) {
+  const a = accountAnnualizedReturn(activities, years);
+  const sub = formatYearSpan(a.years) || "No NAV history";
+  const cls = a.rate == null ? "flat" : pnlClass(a.rate);
+  return kpiCard("Avg annualized return", formatReturn(a.rate), esc(sub), cls, "annual");
+}
+
 function realizedPnlCurve(trades) {
   const sorted = trades.slice().sort((a, b) => a.exitDate.localeCompare(b.exitDate));
   const points = [];
@@ -1907,11 +2033,26 @@ function maxDrawdown(points) {
 function underlyingSymbol(symbol) {
   const s = String(symbol || "").trim();
   if (!s) return "—";
-  if (/\b(PUT|CALL)\b/i.test(s)) {
-    const tok = s.split(/\s+/)[0];
-    return tok ? tok.toUpperCase() : s;
+  const u = s.toUpperCase().replace(/\s+/g, " ");
+  if (/\b(PUT|CALL)\b/.test(u) || /\s[CP]$/.test(u)) {
+    const tok = u.split(" ")[0];
+    return tok || s;
   }
+  const occ = u.match(/^([A-Z][A-Z0-9.]{0,9}) \d{6}[CP]\d+/);
+  if (occ) return occ[1];
+  const dated = u.match(/^([A-Z][A-Z0-9.]{0,9}) \d{1,2}[A-Z]{3}\d{2}\b/);
+  if (dated) return dated[1];
   return s;
+}
+
+function blotterTickerMatch(t, q) {
+  const qq = String(q || "").trim().toUpperCase();
+  if (!qq) return true;
+  const s = String(t.symbol || "").trim().toUpperCase().replace(/\s+/g, " ");
+  const u = String(underlyingSymbol(t.symbol) || "").toUpperCase();
+  if (u === qq || s === qq) return true;
+  if (s.indexOf(qq + " ") === 0) return true;
+  return false;
 }
 
 function computeMetrics(trades, openLotCount, incomeCad, feesCad) {
@@ -1950,6 +2091,8 @@ function computeMetrics(trades, openLotCount, incomeCad, feesCad) {
   }
   return {
     realizedPnlCad, tradeCount: trades.length, winCount: wins.length, lossCount: losses.length,
+    evenCount: trades.length - wins.length - losses.length,
+    grossProfit, grossLoss,
     winRate, profitFactor, avgWin, avgLoss, expectancy, maxDrawdown: maxDrawdown(curve),
     maxWinPnl: maxWinPnl, maxWinSymbol: maxWinSymbol,
     maxLossPnl: maxLossPnl, maxLossSymbol: maxLossSymbol,
@@ -2045,6 +2188,19 @@ function formatSigned(n, digits) {
   if (n < 0) return "−" + abs;
   if (n > 0) return "+" + abs;
   return abs;
+}
+function formatCad(n, digits) {
+  digits = digits == null ? 0 : digits;
+  const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (n < 0) return "−$" + abs;
+  return "$" + abs;
+}
+function formatAxisCad(n, digits) {
+  digits = digits == null ? 0 : digits;
+  const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (n < 0) return "−$" + abs;
+  if (n > 0) return "+$" + abs;
+  return "$" + abs;
 }
 function formatPct(n) {
   if (!Number.isFinite(n)) return "—";
@@ -2171,12 +2327,6 @@ function filteredTrades(closedFx) {
     if (f.to && t.exitDate > f.to) return false;
     if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
     if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
-    if (f.q) {
-      const s = f.q.trim().toLowerCase();
-      const note = state.notes[t.id] || {};
-      const blob = [t.symbol, t.name, t.accountId, t.accountType, note.tag, note.thesis].join(" ").toLowerCase();
-      if (!blob.includes(s)) return false;
-    }
     return true;
   });
 }
@@ -2266,6 +2416,146 @@ function groupClosedByExit(trades) {
   return out;
 }
 
+function closedTradesForBlotter() {
+  const { closed } = matchFifo(state.activities);
+  const visible = filteredTrades(applyFx(closed));
+  const grouped = groupClosedByExit(visible);
+  const q = (state.filters.q || "").trim().toUpperCase();
+  const searched = !q ? grouped : grouped.filter(function (t) {
+    return blotterTickerMatch(t, q);
+  });
+  const closedSort = state.sort.closed || { key: "exitDate", dir: "desc" };
+  return sortRows(searched, (t) => {
+    const n = state.notes[t.id] || {};
+    const map = {
+      entryDate: t.entryDate,
+      exitDate: t.exitDate,
+      symbol: t.symbol,
+      side: t.openDirection === "SHORT" ? "COVER" : t.side,
+      quantity: t.quantity,
+      entryPrice: t.entryPrice,
+      exitPrice: t.exitPrice,
+      pnlCad: t.pnlCad,
+      holdDays: t.holdDays,
+      currency: t.currency,
+      tag: n.tag || "",
+      notes: n.thesis || "",
+    };
+    return map[closedSort.key];
+  }, closedSort.dir);
+}
+
+function closedBlotterRowHtml(t) {
+  const n = state.notes[t.id] || {};
+  const sel = state.selected && state.selected.id === t.id ? " selected" : "";
+  return (
+    "<tr class='" + sel + "' data-id='" + esc(t.id) + "'>" +
+    "<td>" + esc(t.entryDate) + "</td><td>" + esc(t.exitDate) + "</td>" +
+    "<td>" + esc(t.symbol) + (n.grade ? " <span class='grade " + esc(n.grade) + "'>" + esc(n.grade) + "</span>" : "") + "</td>" +
+    "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
+    "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
+    "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
+    "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</td>" +
+    "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
+    "<td>" + esc(t.currency) + "</td>" +
+    "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
+    "<td class='sans'>" + esc(n.thesis || "") + "</td></tr>"
+  );
+}
+
+function closedBlotterBodyHtml(rows) {
+  return rows.map(closedBlotterRowHtml).join("") || "<tr><td colspan='12' class='sans'>No closed trades match.</td></tr>";
+}
+
+function bindClosedBlotterClicks(root) {
+  const scope = root || document;
+  scope.querySelectorAll("table#closedBlotter tbody tr[data-id]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const id = tr.getAttribute("data-id");
+      const { closed } = matchFifo(state.activities);
+      const t = applyFx(closed).find((x) => x.id === id);
+      state.selected = t || null;
+      render();
+    });
+  });
+}
+
+function refreshClosedBlotter() {
+  const tbody = document.querySelector("table#closedBlotter tbody");
+  if (!tbody) return;
+  const rows = closedTradesForBlotter();
+  const countEl = document.getElementById("closedCount");
+  if (countEl) countEl.textContent = rows.length + " closed";
+  tbody.innerHTML = closedBlotterBodyHtml(rows);
+  bindClosedBlotterClicks(tbody.parentNode);
+}
+
+function blotterSymbolList() {
+  const { closed } = matchFifo(state.activities);
+  const grouped = groupClosedByExit(filteredTrades(applyFx(closed)));
+  const seen = {};
+  const out = [];
+  for (let i = 0; i < grouped.length; i++) {
+    const s = underlyingSymbol(grouped[i].symbol);
+    if (!s || s === "—" || seen[s]) continue;
+    seen[s] = true;
+    out.push(s);
+  }
+  out.sort(function (a, b) { return a.localeCompare(b); });
+  return out;
+}
+
+function matchingBlotterSymbols(q) {
+  const all = blotterSymbolList();
+  const qq = String(q || "").trim().toUpperCase();
+  if (!qq) return all;
+  return all.filter(function (s) { return s.toUpperCase().indexOf(qq) === 0; });
+}
+
+function exactBlotterSymbol(q) {
+  const qq = String(q || "").trim().toUpperCase();
+  if (!qq) return "";
+  const matches = matchingBlotterSymbols(qq);
+  for (let i = 0; i < matches.length; i++) {
+    if (matches[i].toUpperCase() === qq) return matches[i];
+  }
+  return "";
+}
+
+function hideSymbolPick() {
+  const list = document.getElementById("symbolPickList");
+  if (!list) return;
+  list.hidden = true;
+  list.innerHTML = "";
+}
+
+function showSymbolPick(query) {
+  const list = document.getElementById("symbolPickList");
+  if (!list) return;
+  const matches = matchingBlotterSymbols(query);
+  if (!matches.length) {
+    hideSymbolPick();
+    return;
+  }
+  const q = String(query || "").trim().toUpperCase();
+  const hi = state.symbolPickHi;
+  list.innerHTML = matches.map(function (s, i) {
+    const on = (hi == null ? s.toUpperCase() === q : i === hi) ? " on" : "";
+    return '<button type="button" data-symbol="' + esc(s) + '"' + (on ? ' class="on"' : "") + ">" + esc(s) + "</button>";
+  }).join("");
+  list.hidden = false;
+}
+
+function pickBlotterSymbol(sym) {
+  const v = String(sym || "").trim().toUpperCase();
+  state.filters.q = v;
+  state.symbolPickHi = null;
+  const input = document.getElementById("search");
+  if (input) input.value = v;
+  hideSymbolPick();
+  refreshClosedBlotter();
+}
+
 function sortTh(tab, cols) {
   const cur = state.sort[tab] || {};
   return cols.map((c) => {
@@ -2300,15 +2590,22 @@ function svgEquity(points) {
     const gy = padT + (innerH * g) / 3;
     const gv = maxY - ((maxY - minY) * g) / 3;
     grid.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="#262c36"/>');
-    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatSigned(gv, 0) + '</text>');
+    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisCad(gv, 0) + "</text>");
   }
+  const hits = points.map((p, i) => {
+    const x0 = i === 0 ? padL : (x(i - 1) + x(i)) / 2;
+    const x1 = i === points.length - 1 ? w - padR : (x(i) + x(i + 1)) / 2;
+    const tip = esc(formatChartDate(p.date) + "  " + formatCad(p.equity, 2));
+    return '<rect class="equity-hit" data-pnl-tip="' + tip + '" x="' + x0.toFixed(1) + '" y="' + padT + '" width="' + Math.max(1, x1 - x0).toFixed(1) + '" height="' + innerH.toFixed(1) + '" fill="#fff" fill-opacity="0" pointer-events="all"/>';
+  }).join("");
   return (
     '<svg viewBox="0 0 ' + w + ' ' + h + '" class="chart" preserveAspectRatio="none">' +
     grid.join("") +
     '<line x1="' + padL + '" y1="' + zero + '" x2="' + (w - padR) + '" y2="' + zero + '" stroke="#343b47" stroke-dasharray="3 3"/>' +
-    '<path d="' + d + '" fill="none" stroke="' + (cls === "pos" ? "#3ecf8e" : "#ef6b73") + '" stroke-width="2"/>' +
-    '<text x="' + padL + '" y="' + (h - 8) + '" fill="#6b7380" font-size="10">' + esc(points[0].date) + '</text>' +
-    '<text x="' + (w - padR) + '" y="' + (h - 8) + '" text-anchor="end" fill="#6b7380" font-size="10">' + esc(last.date) + '</text>' +
+    '<path d="' + d + '" fill="none" stroke="' + (cls === "pos" ? "#3ecf8e" : "#ef6b73") + '" stroke-width="2" pointer-events="none"/>' +
+    '<text class="chart-axis-lbl" x="' + padL + '" y="' + (h - 8) + '" fill="#6b7380" font-size="10">' + esc(formatChartDate(points[0].date)) + "</text>" +
+    '<text class="chart-axis-lbl" x="' + (w - padR) + '" y="' + (h - 8) + '" text-anchor="end" fill="#6b7380" font-size="10">' + esc(formatChartDate(last.date)) + "</text>" +
+    hits +
     "</svg>"
   );
 }
@@ -2320,6 +2617,14 @@ function monthTick(ym) {
   const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const mon = names[m - 1] || (parts[1] || "");
   return mon + " '" + y.slice(2);
+}
+
+function formatChartDate(iso) {
+  const parts = String(iso || "").split("-");
+  if (parts.length < 3) return parts.length === 2 ? monthTick(iso) : String(iso || "");
+  const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const mon = names[Number(parts[1]) - 1] || parts[1];
+  return Number(parts[2]) + " " + mon + " '" + String(parts[0]).slice(2);
 }
 
 function svgMonthly(rows) {
@@ -2356,33 +2661,47 @@ function svgMonthly(rows) {
     keep.push(i);
   }
   const keepSet = new Set(keep);
+  const grid = [];
+  for (let g = 0; g < 4; g++) {
+    const gy = padT + (innerH * g) / 3;
+    const gv = maxY - ((maxY - minY) * g) / 3;
+    grid.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="#262c36"/>');
+    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisCad(gv, 0) + "</text>");
+  }
+  const hits = [];
   const bars = rows.map((r, i) => {
     const x = padL + i * slot + gap / 2;
     const y1 = y(r.pnl);
     const top = Math.min(y1, zero);
     const height = Math.max(2, Math.abs(y1 - zero));
     const color = r.pnl >= 0 ? "#3ecf8e" : "#ef6b73";
-    const tip = esc(r.month + "  " + formatSigned(r.pnl, 0));
+    const tip = esc(monthTick(r.month) + "  " + formatAxisCad(r.pnl, 2));
+    hits.push(
+      '<rect class="month-hit" data-pnl-tip="' + tip + '" x="' + (padL + i * slot).toFixed(1) + '" y="' + padT + '" width="' + slot.toFixed(1) + '" height="' + innerH.toFixed(1) + '" fill="#fff" fill-opacity="0" pointer-events="all"/>'
+    );
     let label = "";
     if (keepSet.has(i)) {
-      label = '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 12) + '" text-anchor="middle" fill="#8b93a0" font-size="10">' + esc(monthTick(r.month)) + "</text>";
+      label = '<text class="month-lbl" x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 12) + '" text-anchor="middle" fill="#8b93a0" font-size="10">' + esc(monthTick(r.month)) + "</text>";
     }
     return (
-      '<rect x="' + x.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + height.toFixed(1) + '" fill="' + color + '" rx="1"><title>' + tip + "</title></rect>" +
+      '<rect x="' + x.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + height.toFixed(1) + '" fill="' + color + '" rx="1"/>' +
       label
     );
   }).join("");
   return (
     '<svg viewBox="0 0 ' + w + ' ' + h + '" class="chart">' +
+    grid.join("") +
     '<line x1="' + padL + '" y1="' + zero + '" x2="' + (w - padR) + '" y2="' + zero + '" stroke="#343b47"/>' +
     bars +
+    hits.join("") +
     "</svg>"
   );
 }
 
-function kpiCard(label, value, sub, cls) {
+
+function kpiCard(label, value, sub, cls, extra) {
   return (
-    '<div class="kpi"><div class="label">' + esc(label) + '</div>' +
+    '<div class="kpi' + (extra ? " " + extra : "") + '"><div class="label">' + esc(label) + '</div>' +
     '<div class="value ' + (cls || "") + '">' + value + '</div>' +
     '<div class="sub">' + sub + "</div></div>"
   );
@@ -2466,42 +2785,8 @@ function render() {
   if (!state.activities.length) {
     main = emptyStateHtml();
   } else {
-    const closedSort = state.sort.closed || { key: "exitDate", dir: "desc" };
-    const closedSorted = sortRows(groupClosedByExit(visible), (t) => {
-      const n = state.notes[t.id] || {};
-      const map = {
-        entryDate: t.entryDate,
-        exitDate: t.exitDate,
-        symbol: t.symbol,
-        side: t.openDirection === "SHORT" ? "COVER" : t.side,
-        quantity: t.quantity,
-        entryPrice: t.entryPrice,
-        exitPrice: t.exitPrice,
-        pnlCad: t.pnlCad,
-        holdDays: t.holdDays,
-        currency: t.currency,
-        tag: n.tag || "",
-        notes: n.thesis || "",
-      };
-      return map[closedSort.key];
-    }, closedSort.dir);
-    const blotterRows = closedSorted.map((t) => {
-      const n = state.notes[t.id] || {};
-      const sel = state.selected && state.selected.id === t.id ? " selected" : "";
-      return (
-        "<tr class='" + sel + "' data-id='" + esc(t.id) + "'>" +
-        "<td>" + esc(t.entryDate) + "</td><td>" + esc(t.exitDate) + "</td>" +
-        "<td>" + esc(t.symbol) + (n.grade ? " <span class='grade " + esc(n.grade) + "'>" + esc(n.grade) + "</span>" : "") + "</td>" +
-        "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
-        "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
-        "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
-        "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</td>" +
-        "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
-        "<td>" + esc(t.currency) + "</td>" +
-        "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
-        "<td class='sans'>" + esc(n.thesis || "") + "</td></tr>"
-      );
-    }).join("");
+    const closedSorted = closedTradesForBlotter();
+    const blotterRows = closedBlotterBodyHtml(closedSorted);
 
     const actSort = state.sort.activity || { key: "transactionDate", dir: "desc" };
     const actSorted = sortRows(incomeActs, (a) => ({
@@ -2554,9 +2839,11 @@ function render() {
     }).join("");
 
     const tabClosed =
-      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades <em>' + closedSorted.length + " closed</em></h3>" +
-      '<input id="search" placeholder="Search symbol, tag, notes…" value="' + esc(state.filters.q) + '"/></div>' +
-      '<div class="table-wrap"><table class="blotter"><thead><tr>' +
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades <em id="closedCount">' + closedSorted.length + " closed</em></h3>" +
+      '<div class="symbol-pick" id="symbolPick">' +
+      '<input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="Symbol" value="' + esc(state.filters.q) + '"/>' +
+      '<div class="symbol-pick-list" id="symbolPickList" hidden></div></div></div>' +
+      '<div class="table-wrap"><table class="blotter" id="closedBlotter"><thead><tr>' +
       sortTh("closed", [
         { key: "entryDate", label: "In" },
         { key: "exitDate", label: "Out" },
@@ -2572,7 +2859,7 @@ function render() {
         { key: "notes", label: "Notes" },
       ]) +
       "</tr></thead><tbody>" +
-      (blotterRows || "<tr><td colspan='12' class='sans'>No closed trades match.</td></tr>") +
+      blotterRows +
       "</tbody></table></div>";
 
     const tabAct =
@@ -2620,17 +2907,20 @@ function render() {
         : "") +
       (unmatchedWarn ? '<div class="warn fifo-warn">' + esc(unmatchedWarn) + "</div>" : "") +
       '<div class="kpis">' +
-      kpiCard("Realized P&L (CAD)", esc(formatMoney(m.realizedPnlCad)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
-      kpiCard("Win rate", formatPct(m.winRate), m.winCount + "W / " + m.lossCount + "L of " + m.tradeCount, "") +
-      kpiCard("Profit factor", pf, "gross win / gross loss", "") +
-      kpiCard("Expectancy", esc(formatMoney(m.expectancy)), "avg W " + formatSigned(m.avgWin) + " · avg L " + formatSigned(m.avgLoss), pnlClass(m.expectancy)) +
-      kpiCard("Biggest winner", esc(formatMoney(m.maxWinPnl)), m.maxWinSymbol ? esc(m.maxWinSymbol) : "—", pnlClass(m.maxWinPnl)) +
-      kpiCard("Biggest loser", esc(formatMoney(m.maxLossPnl)), m.maxLossSymbol ? esc(m.maxLossSymbol) : "—", m.maxLossPnl < 0 ? "neg" : "flat") +
+      kpiCard("Realized P&L (CAD)", esc(formatCad(m.realizedPnlCad, 2)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
+      kpiCard("Win rate", formatPct(m.winRate), m.winCount.toLocaleString("en-CA") + " W, " + m.lossCount.toLocaleString("en-CA") + " L, " + m.evenCount.toLocaleString("en-CA") + " BE", "") +
+      kpiCard("Profit factor", pf, esc(formatCad(m.grossProfit, 2) + " W, " + formatCad(m.grossLoss, 2) + " L"), "") +
+      kpiCard("Expectancy", esc(formatCad(m.expectancy, 2)), "avg W " + formatCad(m.avgWin, 2) + " · avg L " + formatCad(m.avgLoss, 2), pnlClass(m.expectancy)) +
+      kpiCard("Biggest winner", esc(formatCad(m.maxWinPnl, 2)), m.maxWinSymbol ? esc(m.maxWinSymbol) : "—", pnlClass(m.maxWinPnl)) +
+      kpiCard("Biggest loser", esc(formatCad(m.maxLossPnl, 2)), m.maxLossSymbol ? esc(m.maxLossSymbol) : "—", m.maxLossPnl < 0 ? "neg" : "flat") +
       "</div>" +
-      renderCompare(closedFx, selectedYear, years, state.activities) +
       '<div class="grid-2">' +
-      '<div class="panel"><h3 class="section-title">Equity <em>account value CAD</em></h3><div class="chart-wrap">' + svgEquity(curve) + "</div></div>" +
-      '<div class="panel"><h3 class="section-title">Monthly P&amp;L</h3><div class="chart-wrap">' + svgMonthly(monthly) + "</div></div>" +
+      renderCompare(closedFx, selectedYear, years, state.activities) +
+      renderAnnualized(state.activities, years) +
+      "</div>" +
+      '<div class="grid-2">' +
+      '<div class="panel"><h3 class="section-title">Equity <em>account value CAD</em></h3><div class="chart-wrap" id="equityChart">' + svgEquity(curve) + '<div class="chart-tip" id="equityTip" hidden></div></div></div>' +
+      '<div class="panel"><h3 class="section-title">Monthly P&amp;L</h3><div class="chart-wrap" id="monthlyChart">' + svgMonthly(monthly) + '<div class="chart-tip" id="monthlyTip" hidden></div></div></div>' +
       "</div>" +
       '<div class="breakdowns">' + breakdownTable(bySymbol, "By symbol") + "</div>" +
       '<div class="tabs">' +
@@ -3473,7 +3763,82 @@ function bindDocumentOnce() {
       if (files && files.length) ingestFileList(files);
     });
   });
-  document.addEventListener("click", () => {
+  document.addEventListener("input", (e) => {
+    if (!e.target || e.target.id !== "search") return;
+    const raw = e.target.value;
+    const exact = exactBlotterSymbol(raw);
+    state.filters.q = exact;
+    state.symbolPickHi = null;
+    refreshClosedBlotter();
+    showSymbolPick(raw);
+  });
+  document.addEventListener("focusin", (e) => {
+    if (!e.target || e.target.id !== "search") return;
+    showSymbolPick(e.target.value);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!e.target || e.target.id !== "search") return;
+    const list = document.getElementById("symbolPickList");
+    const open = list && !list.hidden;
+    const matches = matchingBlotterSymbols(e.target.value);
+    if (e.key === "Escape") {
+      hideSymbolPick();
+      return;
+    }
+    if (e.key === "ArrowDown" && matches.length) {
+      e.preventDefault();
+      const cur = state.symbolPickHi;
+      state.symbolPickHi = cur == null ? 0 : Math.min(matches.length - 1, cur + 1);
+      showSymbolPick(e.target.value);
+      return;
+    }
+    if (e.key === "ArrowUp" && matches.length) {
+      e.preventDefault();
+      const cur = state.symbolPickHi;
+      state.symbolPickHi = cur == null ? matches.length - 1 : Math.max(0, cur - 1);
+      showSymbolPick(e.target.value);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const exact = exactBlotterSymbol(e.target.value);
+      const hi = state.symbolPickHi;
+      const pick = (hi != null && matches[hi]) || exact || (matches.length === 1 ? matches[0] : "");
+      if (pick) pickBlotterSymbol(pick);
+      return;
+    }
+  });
+  document.addEventListener("mousedown", (e) => {
+    const btn = e.target && e.target.closest && e.target.closest("#symbolPickList [data-symbol]");
+    if (!btn) return;
+    e.preventDefault();
+    pickBlotterSymbol(btn.getAttribute("data-symbol"));
+  });
+  document.addEventListener("mousemove", (e) => {
+    const hit = e.target && e.target.closest && e.target.closest("[data-pnl-tip]");
+    const wrap = hit && hit.closest(".chart-wrap");
+    document.querySelectorAll(".chart-tip").forEach((t) => {
+      if (!wrap || t.parentElement !== wrap) t.hidden = true;
+    });
+    if (!hit || !wrap) return;
+    const tip = wrap.querySelector(".chart-tip");
+    if (!tip) return;
+    tip.hidden = false;
+    tip.textContent = hit.getAttribute("data-pnl-tip") || "";
+    const r = wrap.getBoundingClientRect();
+    const tw = tip.offsetWidth || 0;
+    const th = tip.offsetHeight || 0;
+    let x = e.clientX - r.left;
+    let y = e.clientY - r.top;
+    const half = tw / 2;
+    x = Math.min(Math.max(half + 4, x), Math.max(half + 4, r.width - half - 4));
+    const above = y >= th + 12;
+    tip.classList.toggle("below", !above);
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target || !e.target.closest || !e.target.closest("#symbolPick")) hideSymbolPick();
     if (!state.menuOpen && !state.filterOpen) return;
     state.menuOpen = false;
     state.filterOpen = false;
@@ -3642,12 +4007,6 @@ function bind() {
       persist();
       render();
     });
-  }
-  const search = document.getElementById("search");
-  if (search) {
-    search.addEventListener("input", () => { state.filters.q = search.value; });
-    search.addEventListener("change", () => { state.filters.q = search.value; render(); });
-    search.addEventListener("keydown", (e) => { if (e.key === "Enter") { state.filters.q = search.value; render(); } });
   }
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => { state.tab = btn.getAttribute("data-tab"); render(); });
