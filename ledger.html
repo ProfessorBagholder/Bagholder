@@ -2907,7 +2907,7 @@ function render() {
         : "") +
       (unmatchedWarn ? '<div class="warn fifo-warn">' + esc(unmatchedWarn) + "</div>" : "") +
       '<div class="kpis">' +
-      kpiCard("Realized P&L (CAD)", esc(formatCad(m.realizedPnlCad, 2)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
+      kpiCard("Realized P&L", esc(formatCad(m.realizedPnlCad, 2)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
       kpiCard("Win rate", formatPct(m.winRate), m.winCount.toLocaleString("en-CA") + " W, " + m.lossCount.toLocaleString("en-CA") + " L, " + m.evenCount.toLocaleString("en-CA") + " BE", "") +
       kpiCard("Profit factor", pf, esc(formatCad(m.grossProfit, 2) + " W, " + formatCad(m.grossLoss, 2) + " L"), "") +
       kpiCard("Expectancy", esc(formatCad(m.expectancy, 2)), "avg W " + formatCad(m.avgWin, 2) + " · avg L " + formatCad(m.avgLoss, 2), pnlClass(m.expectancy)) +
@@ -2919,7 +2919,7 @@ function render() {
       renderAnnualized(state.activities, years) +
       "</div>" +
       '<div class="grid-2">' +
-      '<div class="panel"><h3 class="section-title">Equity <em>account value CAD</em></h3><div class="chart-wrap" id="equityChart">' + svgEquity(curve) + '<div class="chart-tip" id="equityTip" hidden></div></div></div>' +
+      '<div class="panel"><h3 class="section-title">Equity Curve</h3><div class="chart-wrap" id="equityChart">' + svgEquity(curve) + '<div class="chart-tip" id="equityTip" hidden></div></div></div>' +
       '<div class="panel"><h3 class="section-title">Monthly P&amp;L</h3><div class="chart-wrap" id="monthlyChart">' + svgMonthly(monthly) + '<div class="chart-tip" id="monthlyTip" hidden></div></div></div>' +
       "</div>" +
       '<div class="breakdowns">' + breakdownTable(bySymbol, "By symbol") + "</div>" +
