@@ -1,0 +1,22 @@
+# Bagholder runtime data lives in ~/.bagholder, never in the repo.
+# These entries guard against copies ever landing inside the project.
+.bagholder/
+session.json
+book.json
+client_id
+user_agent
+chrome/
+ext/
+
+# OS / editor cruft
+.DS_Store
+._*
+__MACOSX/
+*.swp
+*~
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc

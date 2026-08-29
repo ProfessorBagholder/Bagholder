@@ -1,0 +1,3715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Bagholder</title>
+<style>
+:root {
+  --bg: #07080a;
+  --bg-elev: #0e1014;
+  --bg-panel: #12151b;
+  --bg-panel-2: #171b22;
+  --bg-hover: #1c212a;
+  --line: #262c36;
+  --line-strong: #343b47;
+  --text: #e6e8ec;
+  --text-dim: #9aa3af;
+  --text-mute: #6b7380;
+  --pos: #3ecf8e;
+  --pos-dim: rgba(62, 207, 142, 0.14);
+  --neg: #ef6b73;
+  --neg-dim: rgba(239, 107, 115, 0.14);
+  --accent: #d4a017;
+  --accent-2: #e8c547;
+  --accent-dim: rgba(212, 160, 23, 0.12);
+  --info: #6cb6ff;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+html { color-scheme: dark; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+button { cursor: pointer; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #10131a 0%, #0c0e13 100%);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.brand img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid #2a3a28;
+  box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35), 0 0 10px rgba(62, 207, 142, 0.18);
+}
+.brand h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  line-height: 1;
+}
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.watch-status {
+  font-size: 10px;
+  color: var(--text-mute);
+  max-width: 220px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-wrap { position: relative; }
+.menu-btn {
+  width: 36px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0;
+  position: relative;
+  color: var(--text);
+}
+.menu-btn:hover { background: var(--bg-hover); border-color: #4a5362; }
+.menu-btn.on { border-color: var(--accent); background: var(--accent-dim); color: var(--accent-2); }
+.menu-btn i {
+  display: block;
+  width: 15px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.menu-btn svg { display: block; }
+.menu-btn .dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px #0c0e13;
+}
+.menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 176px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 40;
+}
+.menu.open { display: block; }
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.menu button:hover { background: var(--bg-hover); }
+.menu button.danger { color: var(--neg); }
+.menu button.danger:hover { background: var(--neg-dim); }
+
+.menu .sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal {
+  width: min(440px, calc(100vw - 32px));
+  background: #10131a;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 61;
+}
+.modal-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+.modal-head h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+.modal-body { padding: 14px 16px 18px; }
+.modal-body p { color: var(--text-dim); margin: 0 0 12px; }
+.modal-body .quiet { color: var(--text-mute); font-size: 11px; margin: 0 0 4px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.modal .edit { margin: 0; }
+.modal .edit label { margin-top: 8px; }
+.modal .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.modal select, .modal input[type='date'], .modal input[type='number'] {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+}
+.empty .cta { margin: 14px 0 18px; }
+.empty .quiet { color: var(--text-mute); font-size: 12px; margin: 8px 0 0; }
+.drop-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(7, 8, 10, 0.78);
+  border: 2px dashed var(--accent);
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-2);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.drop-overlay.on { display: flex; }
+
+.btn {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-hover); border-color: #4a5362; }
+.btn.primary {
+  background: var(--accent);
+  color: #1a1404;
+  border-color: #c49212;
+  font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-2); }
+.btn.danger { color: var(--neg); border-color: #5a3034; }
+.btn.danger:hover { background: var(--neg-dim); }
+.btn.ghost { background: transparent; }
+
+/* Layout */
+.main {
+  flex: 1;
+  padding: 14px 18px 28px;
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.filter-panel {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 220px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+  z-index: 40;
+}
+.filter-panel.open { display: block; }
+.filter-panel .field { margin-bottom: 8px; }
+.filter-panel .field:last-of-type { margin-bottom: 10px; }
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field label, .kpi .label, .section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-mute);
+  font-weight: 600;
+}
+.field input, .field select {
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  width: 100%;
+  min-width: 0;
+}
+.filter-panel .reset {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  padding: 6px 2px 2px;
+  font-size: 12px;
+}
+.filter-panel .reset:hover { color: var(--text); }
+
+/* KPIs */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.compare {
+  margin-bottom: 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.compare table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.compare th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #161a21;
+}
+.compare td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(38, 44, 54, 0.65);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.compare tbody tr:last-child td { border-bottom: 0; }
+.compare th.num, .compare td.num { text-align: right; width: 22%; }
+.compare td.year {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.kpi {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px 11px;
+  min-height: 72px;
+}
+.kpi .value {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 500;
+  margin-top: 6px;
+  letter-spacing: -0.02em;
+}
+.kpi .sub {
+  font-size: 11px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.flat { color: var(--text-dim); }
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 12px 8px;
+  min-height: 260px;
+}
+.panel.tight { min-height: 0; }
+.section-title {
+  margin: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.section-title em { font-style: normal; color: var(--text-dim); letter-spacing: 0; text-transform: none; font-weight: 400; }
+
+.chart-wrap { height: 220px; width: 100%; }
+
+.breakdowns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.b-scroll { max-height: 420px; overflow: auto; }
+.b-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.b-table th.sort { cursor: pointer; user-select: none; }
+.b-table th.sort:hover, .b-table th.sort.on { color: var(--text); }
+.b-table th.sort .dir { margin-left: 4px; color: var(--accent-2); font-size: 9px; letter-spacing: 0; }
+.b-table th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  font-weight: 600;
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
+}
+.b-table td {
+  padding: 6px;
+  border-bottom: 1px solid rgba(38, 44, 54, 0.7);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.b-table td.name { font-family: var(--sans); }
+.bar-cell { width: 90px; }
+.mini-bar {
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mini-bar > span { display: block; height: 100%; }
+.mini-bar > span.pos { background: var(--pos); }
+.mini-bar > span.neg { background: var(--neg); }
+
+/* Blotter */
+.blotter-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.blotter-head input {
+  margin-left: auto;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 12px;
+  min-width: 220px;
+  font-family: var(--mono);
+}
+.table-wrap {
+  overflow: auto;
+  max-height: 480px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+table.blotter {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.blotter th {
+  position: sticky;
+  top: 0;
+  background: #161a21;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  font-weight: 600;
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.blotter th.sort {
+  cursor: pointer;
+  user-select: none;
+}
+table.blotter th.sort:hover { color: var(--text); }
+table.blotter th.sort.on { color: var(--text); }
+table.blotter th.sort .dir { margin-left: 4px; color: var(--accent-2); font-size: 9px; letter-spacing: 0; }
+table.blotter td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(38, 44, 54, 0.65);
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+table.blotter td.sans { font-family: var(--sans); color: var(--text-dim); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+table.blotter tbody tr { cursor: pointer; }
+table.blotter tbody tr:hover { background: var(--bg-hover); }
+table.blotter tbody tr.selected { background: var(--accent-dim); }
+.tag-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  border: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  font-family: var(--sans);
+}
+.grade {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+.grade.A { background: var(--pos-dim); color: var(--pos); }
+.grade.B { background: rgba(108,182,255,0.15); color: var(--info); }
+.grade.C { background: var(--accent-dim); color: var(--accent-2); }
+.grade.F { background: var(--neg-dim); color: var(--neg); }
+
+/* Empty */
+.empty {
+  max-width: 640px;
+  margin: 48px auto;
+  padding: 28px 30px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.empty h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+.empty-load { display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
+.spin { width:22px; height:22px; border:2px solid var(--line-strong); border-top-color: var(--accent); border-radius:50%; animation: bagspin .7s linear infinite; }
+@keyframes bagspin { to { transform: rotate(360deg); } }
+#importElapsed, #importStep { color: var(--text-dim); font-size:13px; margin:0; }
+.empty p { color: var(--text-dim); margin: 0 0 12px; }
+.empty ol { color: var(--text); padding-left: 18px; }
+.empty li { margin: 6px 0; }
+.empty code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.warn {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-2);
+  font-size: 12px;
+}
+.warn.fifo-warn { margin: 0 0 14px; }
+
+/* Import review */
+.review {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  align-items: start;
+}
+.review h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
+.review ul { margin: 0; padding-left: 16px; }
+.review .meta { color: var(--text-dim); font-family: var(--mono); font-size: 12px; }
+
+/* Drawer */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 40;
+}
+.drawer {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: min(420px, 100vw);
+  background: #10131a;
+  border-left: 1px solid var(--line-strong);
+  z-index: 50;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+.drawer-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+.drawer-head h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+.drawer-head .sym-sub { color: var(--text-dim); font-size: 12px; }
+.drawer-body { padding: 14px 16px 24px; overflow: auto; flex: 1; }
+.dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  margin-bottom: 16px;
+}
+.dl div { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.dl dt { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-mute); }
+.dl dd { margin: 4px 0 0; font-family: var(--mono); font-size: 14px; }
+.edit label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  margin: 10px 0 4px;
+}
+.edit textarea, .edit input[type='text'] {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 90px;
+}
+.edit input[type='text'] { min-height: 0; }
+.grades { display: flex; gap: 6px; }
+.grades button {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-panel);
+  font-weight: 700;
+  font-family: var(--mono);
+}
+.grades button.on.A, .grades button.A:hover { background: var(--pos-dim); color: var(--pos); border-color: var(--pos); }
+.grades button.on.B, .grades button.B:hover { background: rgba(108,182,255,0.15); color: var(--info); border-color: var(--info); }
+.grades button.on.C, .grades button.C:hover { background: var(--accent-dim); color: var(--accent-2); border-color: var(--accent); }
+.grades button.on.F, .grades button.F:hover { background: var(--neg-dim); color: var(--neg); border-color: var(--neg); }
+
+
+
+@media (max-width: 1100px) {
+  .kpis { grid-template-columns: repeat(3, 1fr); }
+  .grid-2, .breakdowns { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+}
+
+.tabs { display: flex; gap: 6px; margin: 0 0 10px; }
+.tab {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text-dim);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.tab.on, .tab:hover { color: var(--text); border-color: var(--accent); background: var(--accent-dim); }
+svg.chart { width: 100%; height: 220px; display: block; }
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* Ledger engine: CSV parse (statement/canonical/legacy) + FIFO + metrics */
+
+function normalizeHeader(h) {
+  return String(h || "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-]+/g, "_");
+}
+
+function parseCsvRows(text) {
+  text = String(text || "").replace(/^\uFEFF/, "");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n") {
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else if (c === "\r") {
+      if (text[i + 1] === "\n") continue;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  if (rows.length && rows[rows.length - 1].every((v) => String(v).trim() === "")) {
+    rows.pop();
+  }
+  return rows;
+}
+
+function parseNumber(raw) {
+  if (raw == null) return 0;
+  let s = String(raw).trim();
+  if (!s || s === "-" || s === "—" || s.toLowerCase() === "n/a") return 0;
+  const paren = /^\(.*\)$/.test(s);
+  s = s.replace(/[()]/g, "");
+  s = s.replace(/[$£€CADUSDcadusd,\s]/g, "");
+  if (!s) return 0;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return 0;
+  return paren ? -Math.abs(n) : n;
+}
+
+const MONTHS = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
+function parseDate(raw) {
+  if (raw == null) return "";
+  const s = String(raw).trim();
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  const ymdSlash = s.match(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})(?:\s.*)?$/);
+  if (ymdSlash) {
+    return ymdSlash[1] + "-" + ymdSlash[2].padStart(2, "0") + "-" + ymdSlash[3].padStart(2, "0");
+  }
+  const mon = s.match(/^(\d{1,2})[- ]([A-Za-z]{3})[- ](\d{4})$/);
+  if (mon) {
+    const mm = MONTHS[mon[2].toLowerCase()];
+    if (mm) return mon[3] + "-" + mm + "-" + mon[1].padStart(2, "0");
+  }
+  const monFirst = s.match(/^([A-Za-z]{3})[- ](\d{1,2}),?[- ](\d{4})$/);
+  if (monFirst) {
+    const mm = MONTHS[monFirst[1].toLowerCase()];
+    if (mm) return monFirst[3] + "-" + mm + "-" + monFirst[2].padStart(2, "0");
+  }
+  const dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:\s.*)?$/);
+  if (dmy) {
+    const a = Number(dmy[1]);
+    const b = Number(dmy[2]);
+    const y = dmy[3];
+    if (a > 12 && b <= 12) return y + "-" + String(b).padStart(2, "0") + "-" + String(a).padStart(2, "0");
+    return y + "-" + String(a).padStart(2, "0") + "-" + String(b).padStart(2, "0");
+  }
+  if (/^\d{4,6}(\.\d+)?$/.test(s)) {
+    const serial = Number(s);
+    if (serial > 20000 && serial < 80000) {
+      const epoch = Date.UTC(1899, 11, 30);
+      const d = new Date(epoch + Math.round(serial) * 86400000);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      return y + "-" + m + "-" + day;
+    }
+  }
+  return "";
+}
+
+function isFooterLine(text) {
+  return /^\s*as of\s+\d{4}-\d{2}-\d{2}/i.test(text);
+}
+
+function detectFormat(headers) {
+  const norms = new Set(headers.map(normalizeHeader));
+  const canonHints = ["transaction_date", "activity_type", "activity_sub_type", "net_cash_amount", "unit_price"];
+  const legacyHints = ["date", "action", "symbol", "quantity", "price", "amount"];
+  const canonHits = canonHints.filter((h) => norms.has(h)).length;
+  const legacyHits = legacyHints.filter((h) => norms.has(h)).length;
+  if (canonHits >= 3) return "canonical";
+  if (norms.has("transaction_date") || norms.has("activity_type")) return "canonical";
+  if (norms.has("date") && norms.has("transaction") && norms.has("description") && norms.has("amount")) {
+    return "statement";
+  }
+  if (legacyHits >= 5 && (norms.has("action") || norms.has("date"))) return "legacy";
+  if (norms.has("action") && norms.has("date")) return "legacy";
+  return "unknown";
+}
+
+function categorize(activityType, activitySubType) {
+  const t = String(activityType).trim().toLowerCase().replace(/[\s_\-]/g, "");
+  const s = String(activitySubType).trim().toLowerCase().replace(/[\s_\-]/g, "");
+  const blob = t + " " + s;
+  if (t === "fxexchange" || t === "fx" || s === "fxexchange" || blob.includes("fxexchange")) return "fx";
+  if (t.includes("expir") || t.includes("exercise") || t.includes("assign") || s.includes("expir") || s.includes("exercise") || s.includes("assign")) {
+    return "option_event";
+  }
+  if (t === "trade" || s === "buy" || s === "sell") return "trade";
+  if (t.includes("dividend") || s.includes("dividend")) return "dividend";
+  if (t.includes("deposit") || s.includes("deposit")) return "deposit";
+  if (t.includes("withdraw") || s.includes("withdraw")) return "withdrawal";
+  if (t.includes("interest") || s.includes("interest")) return "interest";
+  if (t === "fee" || t.includes("fee") || s === "fee" || s.includes("fee")) return "fee";
+  if (t.includes("transfer") || s.includes("transfer")) return "transfer";
+  return "other";
+}
+
+function extractInstrument(description) {
+  const text = String(description || "").trim();
+  if (!text) return { symbol: "", name: "" };
+  const colon = text.indexOf(":");
+  if (colon < 0) {
+    const dash = text.match(/^([A-Za-z][A-Za-z0-9.\-]{0,20})\s+-\s+(.+)$/);
+    if (dash) return { symbol: dash[1].toUpperCase(), name: dash[2].trim() };
+    return { symbol: "", name: "" };
+  }
+  const left = text.slice(0, colon).trim();
+  const dash = left.match(/^([A-Za-z][A-Za-z0-9.\-]{0,20})\s+-\s+(.+)$/);
+  if (dash) return { symbol: dash[1].toUpperCase(), name: dash[2].trim() };
+  if (/\s/.test(left)) {
+    const sym = left.replace(/\s+/g, " ").toUpperCase();
+    return { symbol: sym, name: sym };
+  }
+  if (/^[A-Za-z][A-Za-z0-9.\-]{0,20}$/.test(left)) {
+    const sym = left.toUpperCase();
+    return { symbol: sym, name: sym };
+  }
+  return { symbol: "", name: "" };
+}
+
+function parseStatementDescription(description) {
+  const desc = description || "";
+  let quantity = 0;
+  let unitPrice = 0;
+  let executedAt = "";
+  let fillParsed = false;
+  let contractSigned = 0;
+  const { symbol, name } = extractInstrument(desc);
+  let sharesSigned = 0;
+  const sharesMatch = desc.match(/(-?[\d,]+(?:\.\d+)?)\s+shares?\b/i);
+  const contractMatch = desc.match(/(-?[\d,]+(?:\.\d+)?)\s+contracts?\b/i);
+  const priceMatch = desc.match(/\bat\s+\$?([\d,]+(?:\.\d+)?)\s+per\s+share\b/i);
+  if (sharesMatch) {
+    sharesSigned = parseNumber(sharesMatch[1]);
+    quantity = Math.abs(sharesSigned);
+    fillParsed = quantity > 0;
+  } else if (contractMatch) {
+    contractSigned = parseNumber(contractMatch[1]);
+    quantity = Math.abs(contractSigned);
+    fillParsed = quantity > 0;
+  }
+  if (priceMatch) {
+    unitPrice = parseNumber(priceMatch[1]);
+  }
+  const execMatch = desc.match(/\(\s*executed at\s+(\d{4}-\d{2}-\d{2})\s*\)/i);
+  if (execMatch) executedAt = parseDate(execMatch[1]);
+  return { symbol, name, quantity, unitPrice, executedAt, fillParsed, contractSigned, sharesSigned };
+}
+
+function mapStatementType(code, description) {
+  const raw = String(code || "").trim();
+  const c = raw.toUpperCase().replace(/[\s_\-]/g, "");
+  const blob = (c + " " + description).toLowerCase();
+  if (c.includes("EXPIR") || c === "ASSIGN" || c === "ASSIGNMENT" || c === "EXERCISE") {
+    return { activityType: raw, activitySubType: raw.toUpperCase(), category: "option_event" };
+  }
+  if (c === "LOAN" || c === "RECALL") {
+    return { activityType: raw || c, activitySubType: c, category: "other" };
+  }
+  if (c === "STKDIS" || c === "STKDIV" || c === "SPIN" || c === "SPINOFF") {
+    return { activityType: raw || "STKDIS", activitySubType: "STKDIS", category: "trade" };
+  }
+  if (c === "ROC" || c === "RETURNOFCAPITAL") {
+    return { activityType: raw || "ROC", activitySubType: "ROC", category: "other" };
+  }
+  if (c === "DIV" || c === "DIVIDEND" || c.includes("DIVIDEND")) {
+    return { activityType: "Dividend", activitySubType: raw || "DIV", category: "dividend" };
+  }
+  if (c === "CONT" || c === "CONTRIBUTION" || c.includes("CONTRIB")) {
+    return { activityType: "Deposit", activitySubType: raw || "CONT", category: "deposit" };
+  }
+  if (c === "WD" || c === "WITHDRAWAL" || c.includes("WITHDRAW")) {
+    return { activityType: "Withdrawal", activitySubType: raw || "WD", category: "withdrawal" };
+  }
+  if (c === "INTCHARGED" || c === "INTPAID" || c === "INTEREST" || c.startsWith("INT")) {
+    return { activityType: "Interest", activitySubType: raw || "INTEREST", category: "interest" };
+  }
+  if (c === "TRFOUT" || c === "TRFIN" || c === "TRANSFER" || c.startsWith("TRF") || c.includes("TRANSFER")) {
+    return { activityType: "Transfer", activitySubType: raw || "TRANSFER", category: "transfer" };
+  }
+  if (c === "FXCONVERSION" || c === "FX" || c === "CONVERT" || c.includes("FX") || c.includes("CONVERT")) {
+    return { activityType: "FxExchange", activitySubType: raw || "FX", category: "fx" };
+  }
+  if (c === "FEE" || c === "FCHRG" || c === "COMM" || c.includes("FEE") || c.includes("FCHRG")) {
+    return { activityType: "Fee", activitySubType: raw || "FEE", category: "fee" };
+  }
+  if (c === "BUY" || c === "SELL") return { activityType: "Trade", activitySubType: c, category: "trade" };
+  if (c.includes("SELL")) return { activityType: raw || "Trade", activitySubType: "SELL", category: "trade" };
+  if (c.includes("BUY")) return { activityType: raw || "Trade", activitySubType: "BUY", category: "trade" };
+  if (/\breturn of capital\b|\broc\b/.test(blob)) {
+    return { activityType: raw || "ROC", activitySubType: "ROC", category: "other" };
+  }
+  if (/\b(bought|sold|buy|sell)\b/.test(blob) && !/\bfx\b/.test(blob) && !/conversion|convert/.test(blob)) {
+    const sub = /\bsell|sold\b/.test(blob) ? "SELL" : "BUY";
+    return { activityType: "Trade", activitySubType: sub, category: "trade" };
+  }
+  if (/dividend|distribution/.test(blob)) return { activityType: "Dividend", activitySubType: raw || "DIV", category: "dividend" };
+  if (/interest/.test(blob)) return { activityType: "Interest", activitySubType: raw || "INTEREST", category: "interest" };
+  if (/transfer|trfout|trfin/.test(blob)) return { activityType: "Transfer", activitySubType: raw || "TRANSFER", category: "transfer" };
+  if (/\bfx\b|conversion|convert/.test(blob)) return { activityType: "FxExchange", activitySubType: raw || "FX", category: "fx" };
+  if (/\bfee\b|commission|fchrg/.test(blob)) return { activityType: "Fee", activitySubType: raw || "FEE", category: "fee" };
+  if (/deposit/.test(blob)) return { activityType: "Deposit", activitySubType: raw || "DEPOSIT", category: "deposit" };
+  if (/withdraw/.test(blob)) return { activityType: "Withdrawal", activitySubType: raw || "WITHDRAWAL", category: "withdrawal" };
+  return { activityType: raw || "Unknown", activitySubType: raw.toUpperCase(), category: categorize(raw, description) };
+}
+
+function activityId(parts) {
+  return parts.map((p) => String(p ?? "").trim()).join("|");
+}
+
+function pickFrom(row, ...keys) {
+  for (const key of keys) {
+    if (row[key] != null && String(row[key]).trim() !== "") return String(row[key]).trim();
+  }
+  return "";
+}
+
+function tradeSide(activity) {
+  const s = String(activity.activitySubType || "").trim().toUpperCase().replace(/[\s_\-]/g, "");
+  if (s === "BUY" || s === "BUYTOOPEN" || s === "BTO" || s === "BUYTOCLOSE" || s === "BTC") return "BUY";
+  if (s === "SELL" || s === "SELLTOOPEN" || s === "STO" || s === "SELLTOCLOSE" || s === "STC") return "SELL";
+  const t = String(activity.activityType || "").trim().toUpperCase().replace(/[\s_\-]/g, "");
+  if (t === "BUYTOOPEN" || t === "BTO" || t === "BUYTOCLOSE" || t === "BTC") return "BUY";
+  if (t === "SELLTOOPEN" || t === "STO" || t === "SELLTOCLOSE" || t === "STC") return "SELL";
+  return null;
+}
+
+function bookIdFromFileName(name) {
+  const n = String(name || "").split("/").pop();
+  const m = n.match(/([A-Z0-9]{8,}(?:CAD|USD))-\d{4}-\d{2}-\d{2}/i) || n.match(/([A-Z0-9]{8,}(?:CAD|USD))/i);
+  return m ? m[1].toUpperCase() : (n || "");
+}
+
+function parseCsv(text, sourceName) {
+  const skipped = [];
+  const fileBookId = bookIdFromFileName(sourceName);
+  let footerStripped = false;
+  const rawLines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  const cleaned = [];
+  for (const line of rawLines) {
+    if (isFooterLine(line)) {
+      footerStripped = true;
+      continue;
+    }
+    cleaned.push(line);
+  }
+  const table = parseCsvRows(cleaned.join("\n"));
+  if (!table.length) {
+    return {
+      format: "unknown",
+      activities: [],
+      skipped: [{ row: 1, message: "Empty file", raw: "" }],
+      footerStripped,
+      countsByType: {},
+      rowCount: 0,
+    };
+  }
+  const headerRow = table[0];
+  const fields = headerRow.map((h) => String(h).replace(/^\uFEFF/, "").trim());
+  const format = detectFormat(fields);
+  const norms = fields.map(normalizeHeader);
+  const activities = [];
+  const countsByType = {};
+
+  if (format === "unknown") {
+    skipped.push({
+      row: 1,
+      message:
+        "Unrecognized CSV format. Expected a Wealthsimple activities-export (canonical), a legacy Date/Action/Symbol file, or a statement export with date/transaction/description/amount columns.",
+      raw: fields.join(","),
+    });
+    return { format, activities: [], skipped, footerStripped, countsByType, rowCount: table.length - 1 };
+  }
+
+  function rowObj(cells) {
+    const o = {};
+    for (let i = 0; i < norms.length; i++) o[norms[i]] = cells[i] != null ? String(cells[i]) : "";
+    return o;
+  }
+
+  function rowEmpty(o) {
+    return Object.values(o).every((v) => v == null || String(v).trim() === "");
+  }
+
+  for (let i = 1; i < table.length; i++) {
+    const rowNum = i + 1;
+    const o = rowObj(table[i]);
+    if (rowEmpty(o)) continue;
+    const joined = Object.values(o).join(" ");
+    if (isFooterLine(joined)) {
+      footerStripped = true;
+      continue;
+    }
+    let activity = null;
+    let issue;
+    try {
+      if (format === "statement") {
+        const mapped = mapStatement(o, fileBookId);
+        activity = mapped.activity;
+        issue = mapped.issue;
+      } else if (format === "legacy") {
+        activity = mapLegacy(o);
+      } else {
+        activity = mapCanonical(o);
+      }
+    } catch (e) {
+      skipped.push({ row: rowNum, message: e && e.message ? e.message : "parse error", raw: JSON.stringify(o) });
+      continue;
+    }
+    if (issue) skipped.push({ row: rowNum, message: issue, raw: JSON.stringify(o) });
+    if (!activity) {
+      skipped.push({ row: rowNum, message: "Unparsed row (missing or invalid date)", raw: JSON.stringify(o) });
+      continue;
+    }
+    activities.push(activity);
+    const typeKey = activity.activityType || activity.category;
+    countsByType[typeKey] = (countsByType[typeKey] || 0) + 1;
+  }
+
+  return { format, activities, skipped, footerStripped, countsByType, rowCount: table.length - 1 };
+}
+
+function mapStatement(row, bookId) {
+  const settlementDate = parseDate(pickFrom(row, "date", "settlement_date", "transaction_date"));
+  if (!settlementDate) return { activity: null };
+  const code = pickFrom(row, "transaction", "activity_type", "type", "action");
+  const description = pickFrom(row, "description", "memo", "details");
+  const parsed = parseStatementDescription(description);
+  const typed = mapStatementType(code, description);
+  let activityType = typed.activityType;
+  let activitySubType = typed.activitySubType;
+  let category = typed.category;
+  let currency = (pickFrom(row, "currency", "ccy") || "CAD").toUpperCase();
+  const keyCcy = (String(parsed.symbol || "").match(/\b(USD|CAD)\b/i) || [])[1];
+  if (keyCcy && currency !== "CAD" && currency !== "USD") currency = keyCcy.toUpperCase();
+  const accountId = "";
+  const book = String(bookId || "").trim();
+  const balRaw = pickFrom(row, "balance");
+  const balance = balRaw === "" ? null : parseNumber(balRaw);
+  const netCashAmount = parseNumber(pickFrom(row, "amount", "net_cash_amount", "net_amount"));
+  const compactCode = String(code || "").trim().toUpperCase().replace(/[\s_\-]/g, "");
+  if (compactCode === "STKDIS" || compactCode === "STKDIV" || compactCode === "SPIN" || compactCode === "SPINOFF") {
+    activityType = "STKDIS";
+    activitySubType = parsed.sharesSigned < 0 ? "SELL" : "BUY";
+    category = "trade";
+  }
+  if (parsed.fillParsed && category === "other" && compactCode !== "LOAN" && compactCode !== "RECALL") {
+    activitySubType = netCashAmount < 0 ? "BUY" : "SELL";
+    activityType = activityType && activityType !== "Unknown" ? activityType : "Trade";
+    category = "trade";
+  }
+  let quantity = parsed.quantity;
+  let unitPrice = parsed.unitPrice;
+  if (compactCode === "STKDIS" || compactCode === "STKDIV" || compactCode === "SPIN" || compactCode === "SPINOFF") {
+    unitPrice = 0;
+  }
+  if (parsed.fillParsed && unitPrice === 0 && parsed.quantity > 0 && compactCode !== "STKDIS" && compactCode !== "STKDIV") {
+    unitPrice = Math.abs(netCashAmount) / parsed.quantity;
+  }
+  if (category === "option_event" && parsed.fillParsed) {
+    if (parsed.contractSigned < 0) activitySubType = "BUY";
+    else if (parsed.contractSigned > 0) activitySubType = "SELL";
+  }
+  if (activitySubType === "SELL") quantity = -Math.abs(quantity);
+  else if (activitySubType === "BUY") quantity = Math.abs(quantity);
+  let issue;
+  if (category === "trade" && (activitySubType === "BUY" || activitySubType === "SELL") && (!parsed.fillParsed || parsed.quantity === 0)) {
+    issue = "Could not parse quantity/price from description for " + activitySubType;
+  }
+  const transactionDate = parsed.executedAt || settlementDate;
+  const activity = {
+    id: activityId([transactionDate, book, parsed.symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    transactionDate,
+    settlementDate,
+    accountId,
+    bookId: book,
+    accountType: "",
+    activityType,
+    activitySubType,
+    description,
+    direction: "",
+    symbol: parsed.symbol,
+    name: parsed.name,
+    currency,
+    quantity,
+    unitPrice,
+    commission: 0,
+    netCashAmount,
+    category,
+    balance: balance,
+    source: "statement",
+  };
+  return { activity, issue };
+}
+
+function mapCanonical(row) {
+  const transactionDate = parseDate(pickFrom(row, "transaction_date", "date", "trade_date", "activity_date"));
+  if (!transactionDate) return null;
+  const activityType = pickFrom(row, "activity_type", "type");
+  const activitySubType = pickFrom(row, "activity_sub_type", "activity_subtype", "sub_type", "subtype");
+  const category = categorize(activityType, activitySubType);
+  const quantity = parseNumber(pickFrom(row, "quantity", "qty"));
+  const unitPrice = parseNumber(pickFrom(row, "unit_price", "price", "fill_price"));
+  const commission = Math.abs(parseNumber(pickFrom(row, "commission", "fee", "fees")));
+  const netCashAmount = parseNumber(pickFrom(row, "net_cash_amount", "amount", "net_amount", "net_cash"));
+  const accountId = pickFrom(row, "account_id", "account");
+  const symbol = pickFrom(row, "symbol", "ticker");
+  return {
+    id: activityId([transactionDate, accountId, symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    transactionDate,
+    settlementDate: parseDate(pickFrom(row, "settlement_date", "settle_date")) || transactionDate,
+    accountId,
+    accountType: pickFrom(row, "account_type"),
+    activityType: activityType || "Unknown",
+    activitySubType,
+    description: pickFrom(row, "description", "memo", "details"),
+    direction: pickFrom(row, "direction").toUpperCase(),
+    symbol,
+    name: pickFrom(row, "name", "security_name", "instrument"),
+    currency: (pickFrom(row, "currency", "ccy") || "CAD").toUpperCase(),
+    quantity,
+    unitPrice,
+    commission,
+    netCashAmount,
+    category,
+    source: "canonical",
+  };
+}
+
+function mapLegacy(row) {
+  const transactionDate = parseDate(pickFrom(row, "date", "transaction_date"));
+  if (!transactionDate) return null;
+  const action = pickFrom(row, "action", "type", "activity").toLowerCase();
+  let activityType = "Other";
+  let activitySubType = "";
+  if (action === "buy" || action === "sell") {
+    activityType = "Trade";
+    activitySubType = action.toUpperCase();
+  } else if (action.includes("dividend")) {
+    activityType = "Dividend";
+    activitySubType = "DIVIDEND";
+  } else if (action.includes("deposit")) {
+    activityType = "Deposit";
+    activitySubType = "DEPOSIT";
+  } else if (action.includes("withdraw")) {
+    activityType = "Withdrawal";
+    activitySubType = "WITHDRAWAL";
+  } else if (action.includes("interest")) {
+    activityType = "Interest";
+    activitySubType = "INTEREST";
+  } else if (action.includes("fee")) {
+    activityType = "Fee";
+    activitySubType = "FEE";
+  } else if (action.includes("fx")) {
+    activityType = "FxExchange";
+    activitySubType = action.toUpperCase();
+  } else if (action) {
+    activityType = action.charAt(0).toUpperCase() + action.slice(1);
+    activitySubType = action.toUpperCase();
+  }
+  const quantity = parseNumber(pickFrom(row, "quantity", "qty"));
+  const unitPrice = parseNumber(pickFrom(row, "price", "unit_price"));
+  const netCashAmount = parseNumber(pickFrom(row, "amount", "net_cash_amount", "net_amount"));
+  const symbol = pickFrom(row, "symbol", "ticker");
+  const accountId = pickFrom(row, "account_id", "account") || "legacy";
+  const commission = Math.abs(parseNumber(pickFrom(row, "commission", "fee", "fees")));
+  return {
+    id: activityId([transactionDate, accountId, symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    transactionDate,
+    settlementDate: transactionDate,
+    accountId,
+    accountType: pickFrom(row, "account_type") || "",
+    activityType,
+    activitySubType,
+    description: pickFrom(row, "description", "memo"),
+    direction: "",
+    symbol,
+    name: pickFrom(row, "name", "security_name"),
+    currency: (pickFrom(row, "currency", "ccy") || "CAD").toUpperCase(),
+    quantity,
+    unitPrice,
+    commission,
+    netCashAmount,
+    category: categorize(activityType, activitySubType),
+    source: "legacy",
+  };
+}
+
+function dedupKey(a) {
+  return [a.transactionDate, a.accountId, a.symbol, a.quantity, a.unitPrice, a.netCashAmount].join("|");
+}
+
+function mergeActivities(existing, incoming) {
+  const existingCounts = new Map();
+  for (const a of existing) {
+    const k = dedupKey(a);
+    existingCounts.set(k, (existingCounts.get(k) || 0) + 1);
+  }
+  const incomingSeen = new Map();
+  const merged = existing.slice();
+  let added = 0;
+  let duplicates = 0;
+  for (const a of incoming) {
+    const k = dedupKey(a);
+    const n = (incomingSeen.get(k) || 0) + 1;
+    incomingSeen.set(k, n);
+    if (n <= (existingCounts.get(k) || 0)) {
+      duplicates += 1;
+      continue;
+    }
+    merged.push(a);
+    added += 1;
+  }
+  merged.sort((x, y) => x.transactionDate.localeCompare(y.transactionDate) || x.id.localeCompare(y.id));
+  return { merged, added, duplicates };
+}
+
+function daysBetween(a, b) {
+  const ms = Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z");
+  return Math.max(0, Math.round(ms / 86400000));
+}
+
+function stableTradeId(t) {
+  return [t.accountId, t.symbol, t.currency, t.entryDate, t.exitDate, t.quantity.toFixed(8), t.entryPrice.toFixed(8), t.exitPrice.toFixed(8), t.side].join("|");
+}
+
+function compactType(s) {
+  return String(s || "").trim().toUpperCase().replace(/[\s_\-]/g, "");
+}
+
+function isIntentionalOpen(activity) {
+  const type = compactType(activity.activityType);
+  const sub = compactType(activity.activitySubType);
+  const fields = [type, sub];
+  if (fields.some((f) => f.includes("TOOPEN"))) return true;
+  if (fields.some((f) => f === "STO" || f === "BTO")) return true;
+  return false;
+}
+
+function isCloseOnly(activity) {
+  const type = compactType(activity.activityType);
+  const sub = compactType(activity.activitySubType);
+  const fields = [type, sub];
+  if (fields.some((f) => f.includes("TOCLOSE") || f === "BTC" || f === "STC")) return true;
+  if (fields.some((f) => f.includes("EXPIR") || f.includes("ASSIGN") || f.includes("EXERCISE"))) return true;
+  return false;
+}
+
+function openingDirection(activity, side) {
+  if (side === "BUY") {
+    if (isCloseOnly(activity)) return null;
+    return "LONG";
+  }
+  if (isIntentionalOpen(activity)) return "SHORT";
+  return null;
+}
+
+function formatUnmatchedWarning(unmatched) {
+  if (!unmatched || !unmatched.length) return "";
+  function detail(u) {
+    const qty = Number(u.quantity);
+    const q = Number.isFinite(qty) ? (Math.abs(qty) >= 1 ? String(Math.round(qty)) : String(qty)) : "";
+    const d = u.date || "";
+    return [u.symbol, q ? q + " sh" : "", d].filter(Boolean).join(" ");
+  }
+  const sells = unmatched.filter((u) => u.side === "SELL");
+  const buys = unmatched.filter((u) => u.side !== "SELL");
+  const parts = [];
+  if (sells.length) {
+    parts.push(sells.length + " sell" + (sells.length === 1 ? "" : "s") + " had no matching buy (not counted as shorts): " + sells.slice(0, 8).map(detail).join("; "));
+  }
+  if (buys.length) {
+    parts.push(buys.length + " close" + (buys.length === 1 ? "" : "s") + " had no matching open: " + buys.slice(0, 8).map(detail).join("; "));
+  }
+  return parts.join(" ");
+}
+
+function fifoAccount(a) {
+  const nick = String((a && a.accountType) || "").trim();
+  if (nick) return nick;
+  if (a && a.fifoId) return String(a.fifoId);
+  return String((a && a.accountId) || "");
+}
+
+function tickerWasReplaced(activities, accountId, symbol, currency, byDate) {
+  let removedOn = "";
+  for (let i = 0; i < (activities || []).length; i++) {
+    const a = activities[i];
+    if (fifoAccount(a) !== String(accountId || "")) continue;
+    if (a.symbol !== symbol || a.currency !== currency) continue;
+    const t = compactType(a.activityType);
+    const raw = compactType(a.rawType) + compactType(a.aftType);
+    const sub = compactType(a.activitySubType);
+    const q = Number(a.quantity) || 0;
+    const removal = (t === "STKDIS" && (sub === "SELL" || q < 0)) || /CODECHANGE|SYMBOLCHANGE|TICKERCHANGE|LISTINGSTATUS|SECURITYSWAP/.test(raw);
+    if (removal && a.transactionDate && (!removedOn || a.transactionDate < removedOn)) removedOn = a.transactionDate;
+  }
+  if (!removedOn || removedOn > byDate) return false;
+  for (let i = 0; i < (activities || []).length; i++) {
+    const a = activities[i];
+    if (fifoAccount(a) !== String(accountId || "")) continue;
+    if (a.symbol !== symbol || a.currency !== currency) continue;
+    if ((a.transactionDate || "") <= removedOn) continue;
+    if ((a.category === "trade" || a.category === "option_event") && compactType(a.activityType) !== "STKDIS" && tradeSide(a)) return false;
+  }
+  return true;
+}
+
+function foldStkdis(activities) {
+  // Name-change STKDIS is +N and -N of the same ticker on one day.
+  // Net those to zero so they do not close real lots at $0. Leftover +N opens at $0.
+  // Parent -N with no matching +N is ignored so we do not sell the old ticker at $0.
+  const rest = [];
+  const groups = new Map();
+  for (let i = 0; i < activities.length; i++) {
+    const a = activities[i];
+    if (compactType(a.activityType) !== "STKDIS") {
+      rest.push(a);
+      continue;
+    }
+    const k = [a.symbol, a.transactionDate, a.currency].join("|");
+    if (!groups.has(k)) groups.set(k, { pos: 0, neg: 0, sample: a });
+    const g = groups.get(k);
+    const q = Number(a.quantity) || 0;
+    if (a.activitySubType === "SELL" || q < 0) g.neg += Math.abs(q);
+    else g.pos += Math.abs(q);
+  }
+  groups.forEach((g) => {
+    const net = g.pos - g.neg;
+    if (net > 1e-10) {
+      const a = Object.assign({}, g.sample, {
+        quantity: net,
+        activitySubType: "BUY",
+        unitPrice: 0,
+        netCashAmount: 0,
+        category: "trade",
+      });
+      rest.push(a);
+    }
+  });
+  return rest;
+}
+
+function matchFifo(activities) {
+  const fills = foldStkdis(activities)
+    .filter((a) => (a.category === "trade" || a.category === "option_event") && a.symbol)
+    .map((a) => ({ activity: a, side: tradeSide(a), qty: Math.abs(a.quantity) }))
+    .filter((f) => f.side && f.qty > 0);
+  function fillRank(f) {
+    // Same-day option order without timestamps:
+    // STO, BTC (cover), BTO, STC, then plain stock SELL.
+    // Stock day trades stay BUY then SELL.
+    const t = compactType(f.activity.activityType);
+    const s = compactType(f.activity.activitySubType);
+    const blob = t + s;
+    if ((blob.includes("TOOPEN") || t === "STO" || s === "STO") && f.side === "SELL") return 0;
+    if (isCloseOnly(f.activity) && f.side === "BUY") return 1;
+    if (f.side === "BUY") return 2;
+    if (blob.includes("TOCLOSE") || t === "STC" || s === "STC") return 3;
+    return 4;
+  }
+  fills.sort((a, b) => {
+    const d = a.activity.transactionDate.localeCompare(b.activity.transactionDate);
+    if (d !== 0) return d;
+    const ra = fillRank(a);
+    const rb = fillRank(b);
+    if (ra !== rb) return ra - rb;
+    return a.activity.id.localeCompare(b.activity.id);
+  });
+  const books = new Map();
+  const closed = [];
+  const unmatched = [];
+  function getBook(a) {
+    const k = fifoAccount(a) + "::" + a.symbol + "::" + a.currency;
+    if (!books.has(k)) books.set(k, []);
+    return books.get(k);
+  }
+  for (const fill of fills) {
+    const a = fill.activity;
+    const book = getBook(a);
+    const closingDir = fill.side === "BUY" ? "SHORT" : "LONG";
+    let remaining = fill.qty;
+    while (remaining > 0 && book.length > 0 && book[0].direction === closingDir) {
+      const lot = book[0];
+      const matched = Math.min(lot.qty, remaining);
+      const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
+      const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
+      const commission = entryCommission + exitCommission;
+      const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+      const trade = {
+        id: "",
+        accountId: lot.accountId,
+        accountType: lot.accountType,
+        symbol: lot.symbol,
+        name: lot.name,
+        currency: lot.currency,
+        side: fill.side,
+        quantity: matched,
+        entryPrice: lot.price,
+        exitPrice: a.unitPrice,
+        entryDate: lot.date,
+        exitDate: a.transactionDate,
+        holdDays: daysBetween(lot.date, a.transactionDate),
+        commission,
+        entryCommission: entryCommission,
+        exitCommission: exitCommission,
+        pnl: rawPnl - commission,
+        pnlCad: rawPnl - commission,
+        openDirection: lot.direction,
+      };
+      trade.id = stableTradeId(trade);
+      closed.push(trade);
+      lot.commission *= (lot.qty - matched) / lot.qty;
+      lot.qty -= matched;
+      remaining -= matched;
+      if (lot.qty <= 1e-10) book.shift();
+    }
+    if (remaining > 1e-10 && fill.side === "SELL") {
+      for (const [dk, dbook] of books) {
+        if (!dbook || !dbook.length) continue;
+        if (dk === fifoAccount(a) + "::" + a.symbol + "::" + a.currency) continue;
+        const bits = dk.split("::");
+        if (bits[0] !== fifoAccount(a) || bits[2] !== a.currency) continue;
+        if (!tickerWasReplaced(activities, bits[0], bits[1], bits[2], a.transactionDate)) continue;
+        while (remaining > 1e-10 && dbook.length > 0 && dbook[0].direction === closingDir) {
+          const lot = dbook[0];
+          const matched = Math.min(lot.qty, remaining);
+          const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
+          const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
+          const commission = entryCommission + exitCommission;
+          const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+          const trade = {
+            id: "",
+            accountId: lot.accountId,
+            accountType: lot.accountType,
+            symbol: a.symbol,
+            name: a.name || lot.name,
+            currency: lot.currency,
+            side: fill.side,
+            quantity: matched,
+            entryPrice: lot.price,
+            exitPrice: a.unitPrice,
+            entryDate: lot.date,
+            exitDate: a.transactionDate,
+            holdDays: daysBetween(lot.date, a.transactionDate),
+            commission,
+            entryCommission: entryCommission,
+            exitCommission: exitCommission,
+            pnl: rawPnl - commission,
+            pnlCad: rawPnl - commission,
+            openDirection: lot.direction,
+          };
+          trade.id = stableTradeId(trade);
+          closed.push(trade);
+          lot.commission *= (lot.qty - matched) / lot.qty;
+          lot.qty -= matched;
+          remaining -= matched;
+          if (lot.qty <= 1e-10) dbook.shift();
+        }
+        if (remaining <= 1e-10) break;
+      }
+    }
+    if (remaining > 1e-10) {
+      const opening = openingDirection(a, fill.side);
+      if (opening) {
+        book.push({
+          qty: remaining,
+          price: a.unitPrice,
+          date: a.transactionDate,
+          commission: fill.qty > 0 ? a.commission * (remaining / fill.qty) : 0,
+          direction: opening,
+          accountId: a.accountId,
+          accountType: a.accountType,
+          symbol: a.symbol,
+          name: a.name,
+          currency: a.currency,
+        });
+      } else {
+        unmatched.push({
+          symbol: a.symbol,
+          currency: a.currency,
+          side: fill.side,
+          quantity: remaining,
+          price: a.unitPrice,
+          date: a.transactionDate,
+          description: a.description || undefined,
+          accountId: a.accountId,
+        });
+      }
+    }
+  }
+  const open = [];
+  for (const book of books.values()) {
+    for (const lot of book) {
+      if (lot.qty <= 1e-10) continue;
+      open.push({
+        accountId: lot.accountId,
+        accountType: lot.accountType,
+        symbol: lot.symbol,
+        name: lot.name,
+        currency: lot.currency,
+        quantity: lot.qty,
+        price: lot.price,
+        date: lot.date,
+        commission: lot.commission,
+        direction: lot.direction,
+      });
+    }
+  }
+  closed.sort((a, b) => a.exitDate.localeCompare(b.exitDate) || a.id.localeCompare(b.id));
+  return { closed, open, unmatched };
+}
+
+const FX_FALLBACK = 1.35;
+
+function shiftIsoDate(iso, days) {
+  const d = new Date(String(iso).slice(0, 10) + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function rateOn(date) {
+  let d = String(date || "").slice(0, 10);
+  if (!d) return FX_FALLBACK;
+  for (let i = 0; i < 12; i++) {
+    const r = state.fxByDate[d];
+    if (r > 0) return r;
+    d = shiftIsoDate(d, -1);
+  }
+  return FX_FALLBACK;
+}
+
+function toCad(amount, currency, date) {
+  const ccy = (currency || "CAD").toUpperCase();
+  if (ccy !== "USD") return amount;
+  return amount * rateOn(date);
+}
+
+function applyFx(trades) {
+  return trades.map((t) => {
+    const ccy = (t.currency || "CAD").toUpperCase();
+    if (ccy !== "USD") return Object.assign({}, t, { pnlCad: t.pnl });
+    const qty = t.quantity;
+    const entryC = t.entryCommission || 0;
+    const exitC = t.exitCommission || 0;
+    const entryNotional = t.entryPrice * qty;
+    const exitNotional = t.exitPrice * qty;
+    let pnlCad;
+    if (t.openDirection === "SHORT") {
+      pnlCad = toCad(entryNotional - entryC, ccy, t.entryDate) - toCad(exitNotional + exitC, ccy, t.exitDate);
+    } else {
+      pnlCad = toCad(exitNotional - exitC, ccy, t.exitDate) - toCad(entryNotional + entryC, ccy, t.entryDate);
+    }
+    return Object.assign({}, t, { pnlCad: pnlCad });
+  });
+}
+
+async function ensureFxRates() {
+  const dates = (state.activities || []).map((a) => a.transactionDate).filter(Boolean).sort();
+  const start = dates[0] || "2020-01-01";
+  const end = new Date().toISOString().slice(0, 10);
+  const keys = Object.keys(state.fxByDate || {}).sort();
+  if (keys.length && keys[0] <= start && keys[keys.length - 1] >= shiftIsoDate(end, -5)) return;
+  try {
+    const url = "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?start_date=" + encodeURIComponent(start) + "&end_date=" + encodeURIComponent(end);
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    const map = Object.assign({}, state.fxByDate);
+    for (const ob of data.observations || []) {
+      const v = ob.FXUSDCAD && Number(ob.FXUSDCAD.v);
+      if (ob.d && v > 0) map[ob.d] = v;
+    }
+    state.fxByDate = map;
+    try { localStorage.setItem(LS_FX_TABLE, JSON.stringify(map)); } catch (e) {}
+    render();
+  } catch (e) {}
+}
+
+function formatReturn(r) {
+  if (!Number.isFinite(r)) return "—";
+  const pct = (r * 100).toFixed(1) + "%";
+  if (r > 0) return "+" + pct;
+  return pct;
+}
+
+function spyOn(date) {
+  let d = String(date || "").slice(0, 10);
+  if (!d) return null;
+  for (let i = 0; i < 18; i++) {
+    const v = state.spyByDate[d];
+    if (v > 0) return v;
+    d = shiftIsoDate(d, -1);
+  }
+  return null;
+}
+
+function spyReturn(from, to) {
+  const a = spyOn(from);
+  const b = spyOn(to);
+  if (!(a > 0) || !(b > 0)) return null;
+  return b / a - 1;
+}
+
+function ingestYahooChart(data, map) {
+  const r = data && data.chart && data.chart.result && data.chart.result[0];
+  if (!r || !r.timestamp) return 0;
+  const close = (r.indicators.adjclose && r.indicators.adjclose[0] && r.indicators.adjclose[0].adjclose)
+    || (r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close);
+  if (!close) return 0;
+  let n = 0;
+  for (let i = 0; i < r.timestamp.length; i++) {
+    if (close[i] == null || !(close[i] > 0)) continue;
+    const d = new Date(r.timestamp[i] * 1000).toISOString().slice(0, 10);
+    map[d] = close[i];
+    n += 1;
+  }
+  return n;
+}
+
+function ingestStooqCsv(text, map) {
+  const lines = String(text || "").split(/\r?\n/);
+  let n = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(",");
+    if (parts.length < 5) continue;
+    const d = parts[0].trim();
+    const px = Number(parts[4]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !(px > 0)) continue;
+    map[d] = px;
+    n += 1;
+  }
+  return n;
+}
+
+async function ensureSpyPrices() {
+  mergeSpySeed();
+  const keys = Object.keys(state.spyByDate || {}).sort();
+  const end = new Date().toISOString().slice(0, 10);
+  if (keys.length && keys[keys.length - 1] >= shiftIsoDate(end, -7)) return;
+  const urls = [
+    { url: "https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", kind: "yahoo" },
+    { url: "https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", kind: "yahoo" },
+    { url: "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10y", kind: "yahoo" },
+    { url: "https://stooq.com/q/d/l/?s=spy.us&i=d", kind: "stooq" },
+  ];
+  for (let u = 0; u < urls.length; u++) {
+    try {
+      const res = await fetch(urls[u].url);
+      if (!res.ok) continue;
+      const map = Object.assign({}, state.spyByDate);
+      let n = 0;
+      if (urls[u].kind === "yahoo") n = ingestYahooChart(await res.json(), map);
+      else n = ingestStooqCsv(await res.text(), map);
+      if (!n) continue;
+      state.spyByDate = map;
+      try { localStorage.setItem(LS_SPY, JSON.stringify(map)); } catch (e) {}
+      render();
+      return;
+    } catch (e) {}
+  }
+}
+
+function ensureBookIds(activities) {
+  const rows = activities || [];
+  if (!rows.some((a) => !a.bookId && a.balance != null && Number.isFinite(a.balance))) return rows;
+  const streams = [];
+  let n = 0;
+  return rows.map((a) => {
+    if (a.bookId || a.balance == null || !Number.isFinite(a.balance)) return a;
+    const ccy = (a.currency || "CAD").toUpperCase();
+    const amt = Number(a.netCashAmount) || 0;
+    let best = -1;
+    let bestErr = 1e9;
+    for (let i = 0; i < streams.length; i++) {
+      if (streams[i].ccy !== ccy) continue;
+      const err = Math.abs(streams[i].lastBal + amt - a.balance);
+      if (err < bestErr) {
+        bestErr = err;
+        best = i;
+      }
+    }
+    if (best >= 0 && bestErr < 0.06) {
+      streams[best].lastBal = a.balance;
+      return Object.assign({}, a, { bookId: streams[best].id });
+    }
+    n += 1;
+    const id = "~" + ccy + n;
+    streams.push({ ccy: ccy, lastBal: a.balance, id: id });
+    return Object.assign({}, a, { bookId: id });
+  });
+}
+
+function navHist() {
+  return (state.navHistory || []).slice().sort(function (a, b) {
+    return String(a.date || "").localeCompare(String(b.date || ""));
+  });
+}
+
+function histNavOn(day) {
+  const hist = navHist();
+  if (!hist.length) return null;
+  let v = null;
+  for (let i = 0; i < hist.length; i++) {
+    if (hist[i].date > day) break;
+    const eq = Number(hist[i].equity);
+    if (Number.isFinite(eq)) v = eq;
+  }
+  return v;
+}
+
+function yearWindow(activities, year) {
+  const to = clampToToday(year + "-12-31");
+  const cal = year + "-01-01";
+  const hist = navHist();
+  if (!hist.length) return { from: cal, to: to, start: null, flowAfter: cal };
+  const startDay = shiftIsoDate(cal, -1);
+  let start = histNavOn(startDay);
+  let from = cal;
+  let flowAfter = startDay;
+  if (!(start > 0)) {
+    let first = null;
+    for (let i = 0; i < hist.length; i++) {
+      if (hist[i].date >= cal && hist[i].date <= to) {
+        first = hist[i];
+        break;
+      }
+    }
+    if (!first) return { from: cal, to: to, start: null, flowAfter: cal };
+    from = first.date;
+    start = Number(first.equity);
+    flowAfter = from;
+  }
+  return { from: from, to: to, start: start, flowAfter: flowAfter };
+}
+
+function histNetDepositsOn(day) {
+  const hist = navHist();
+  if (!hist.length) return null;
+  let v = null;
+  for (let i = 0; i < hist.length; i++) {
+    if (hist[i].date > day) break;
+    if (hist[i].netDeposits != null && Number.isFinite(Number(hist[i].netDeposits))) {
+      v = Number(hist[i].netDeposits);
+    }
+  }
+  return v;
+}
+
+function bookReturn(activities, from, to, start, flowAfter) {
+  const hist = navHist();
+  if (!hist.length) return null;
+  const after = flowAfter || shiftIsoDate(from, -1);
+  if (start == null) start = histNavOn(after);
+  if (!(start > 0)) return null;
+  const pts = hist.filter((p) => p && p.date > after && p.date <= to);
+  if (!pts.length) return null;
+  let prevEq = start;
+  let prevNd = histNetDepositsOn(after);
+  let factor = 1;
+  for (let i = 0; i < pts.length; i++) {
+    const eq = Number(pts[i].equity);
+    if (!Number.isFinite(eq) || !(prevEq > 0)) return null;
+    let cf = 0;
+    const nd = (pts[i].netDeposits != null) ? Number(pts[i].netDeposits) : null;
+    if (nd != null && Number.isFinite(nd) && prevNd != null) cf = nd - prevNd;
+    factor *= 1 + (eq - prevEq - cf) / prevEq;
+    prevEq = eq;
+    if (nd != null && Number.isFinite(nd)) prevNd = nd;
+  }
+  const r = factor - 1;
+  if (!Number.isFinite(r)) return null;
+  return r;
+}
+
+function clampToToday(iso) {
+  const today = new Date().toISOString().slice(0, 10);
+  return iso > today ? today : iso;
+}
+
+function compareRow(year, activities) {
+  const w = yearWindow(activities, year);
+  const mine = bookReturn(activities, w.from, w.to, w.start, w.flowAfter);
+  const idx = spyReturn(w.from, w.to);
+  const vs = (mine != null && idx != null) ? mine - idx : null;
+  return (
+    "<tr><td class=\"year\">" + esc(year) + "</td>" +
+    '<td class="num ' + (mine == null ? "" : pnlClass(mine)) + '">' + formatReturn(mine) + "</td>" +
+    '<td class="num">' + formatReturn(idx) + "</td>" +
+    '<td class="num ' + (vs == null ? "" : pnlClass(vs)) + '">' + formatReturn(vs) + "</td></tr>"
+  );
+}
+
+function renderCompare(closedFx, selectedYear, years, activities) {
+  const ys = [];
+  if (selectedYear) {
+    ys.push(selectedYear);
+    const prev = String(Number(selectedYear) - 1);
+    if ((years || []).indexOf(prev) >= 0) ys.push(prev);
+  } else {
+    (years || []).forEach((y) => ys.push(y));
+  }
+  if (!ys.length) return "";
+  const body = ys.map((y) => compareRow(y, activities)).join("");
+  return (
+    '<div class="compare"><table><thead><tr>' +
+    "<th>Year</th><th class=\"num\">Return</th><th class=\"num\">S&amp;P 500</th><th class=\"num\">vs S&amp;P</th>" +
+    "</tr></thead><tbody>" + body + "</tbody></table></div>"
+  );
+}
+
+function realizedPnlCurve(trades) {
+  const sorted = trades.slice().sort((a, b) => a.exitDate.localeCompare(b.exitDate));
+  const points = [];
+  let equity = 0;
+  for (const t of sorted) {
+    equity += t.pnlCad;
+    const last = points[points.length - 1];
+    if (last && last.date === t.exitDate) last.equity = equity;
+    else points.push({ date: t.exitDate, equity });
+  }
+  return points;
+}
+
+function equityCurve(activities, from, to) {
+  const hist = state.navHistory || [];
+  return hist
+    .filter((p) => p && p.date && (!from || p.date >= from) && (!to || p.date <= to))
+    .map((p) => ({ date: p.date, equity: Number(p.equity) || 0 }));
+}
+
+function monthlyPnl(trades) {
+  const map = new Map();
+  for (const t of trades) {
+    const month = t.exitDate.slice(0, 7);
+    map.set(month, (map.get(month) || 0) + t.pnlCad);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, pnl]) => ({ month, pnl }));
+}
+
+function maxDrawdown(points) {
+  let peak = 0;
+  let maxDd = 0;
+  for (const p of points) {
+    if (p.equity > peak) peak = p.equity;
+    const dd = peak - p.equity;
+    if (dd > maxDd) maxDd = dd;
+  }
+  return maxDd;
+}
+
+function underlyingSymbol(symbol) {
+  const s = String(symbol || "").trim();
+  if (!s) return "—";
+  if (/\b(PUT|CALL)\b/i.test(s)) {
+    const tok = s.split(/\s+/)[0];
+    return tok ? tok.toUpperCase() : s;
+  }
+  return s;
+}
+
+function computeMetrics(trades, openLotCount, incomeCad, feesCad) {
+  const wins = trades.filter((t) => t.pnlCad > 0);
+  const losses = trades.filter((t) => t.pnlCad < 0);
+  const grossProfit = wins.reduce((s, t) => s + t.pnlCad, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnlCad, 0));
+  const avgWin = wins.length ? grossProfit / wins.length : 0;
+  const avgLoss = losses.length ? -grossLoss / losses.length : 0;
+  const winRate = trades.length ? wins.length / trades.length : 0;
+  const lossRate = trades.length ? losses.length / trades.length : 0;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  const expectancy = trades.length ? winRate * avgWin + lossRate * avgLoss : 0;
+  const curve = realizedPnlCurve(trades);
+  const realizedPnlCad = trades.reduce((s, t) => s + t.pnlCad, 0);
+  const avgHoldDays = trades.length ? trades.reduce((s, t) => s + t.holdDays, 0) / trades.length : 0;
+  const bySym = new Map();
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    const k = underlyingSymbol(t.symbol);
+    bySym.set(k, (bySym.get(k) || 0) + t.pnlCad);
+  }
+  let maxWinSymbol = "";
+  let maxWinPnl = 0;
+  let maxLossSymbol = "";
+  let maxLossPnl = 0;
+  bySym.forEach((pnl, sym) => {
+    if (pnl > maxWinPnl) { maxWinPnl = pnl; maxWinSymbol = sym; }
+    if (pnl < maxLossPnl) { maxLossPnl = pnl; maxLossSymbol = sym; }
+  });
+  let best = null;
+  let worst = null;
+  for (const t of trades) {
+    if (!best || t.pnlCad > best.pnlCad) best = t;
+    if (!worst || t.pnlCad < worst.pnlCad) worst = t;
+  }
+  return {
+    realizedPnlCad, tradeCount: trades.length, winCount: wins.length, lossCount: losses.length,
+    winRate, profitFactor, avgWin, avgLoss, expectancy, maxDrawdown: maxDrawdown(curve),
+    maxWinPnl: maxWinPnl, maxWinSymbol: maxWinSymbol,
+    maxLossPnl: maxLossPnl, maxLossSymbol: maxLossSymbol,
+    avgHoldDays, bestTrade: best, worstTrade: worst, incomeCad, feesCad, openLotCount,
+  };
+}
+
+function breakdown(trades, keyFn) {
+  const map = new Map();
+  for (const t of trades) {
+    const key = keyFn(t) || "—";
+    const cur = map.get(key) || { key, label: key, pnlCad: 0, trades: 0, wins: 0 };
+    cur.pnlCad += t.pnlCad;
+    cur.trades += 1;
+    if (t.pnlCad > 0) cur.wins += 1;
+    map.set(key, cur);
+  }
+  return Array.from(map.values())
+    .map((v) => Object.assign(v, { winRate: v.trades ? v.wins / v.trades : 0 }))
+    .sort((a, b) => b.pnlCad - a.pnlCad);
+}
+
+
+/* UI */
+const LS_ACT = "ledger.activities.v1";
+const LS_NOTES = "ledger.notes.v1";
+const LS_FX_TABLE = "ledger.fx.boc.v1";
+const LS_SPY = "ledger.spy.v1";
+const LS_NAV = "ledger.nav.v1";
+const SPY_SEED = "20160829:186.00,20160830:185.70,20160831:185.17,20160901:185.18,20160902:186.01,20160906:186.57,20160907:186.56,20160908:186.13,20160909:181.67,20160912:184.28,20160913:181.63,20160914:181.56,20160915:183.38,20160916:182.67,20160919:182.70,20160920:182.71,20160921:184.77,20160922:185.93,20160923:184.91,20160926:183.41,20160927:184.55,20160928:185.47,20160929:183.79,20160930:185.18,20161003:184.73,20161004:183.79,20161005:184.60,20161006:184.73,20161007:184.10,20161010:185.06,20161011:182.72,20161012:182.96,20161013:182.36,20161014:182.46,20161017:181.82,20161018:182.96,20161019:183.45,20161020:183.11,20161021:183.19,20161024:183.97,20161025:183.35,20161026:182.99,20161027:182.50,20161028:181.96,20161031:181.97,20161101:180.65,20161102:179.56,20161103:178.74,20161104:178.54,20161107:182.48,20161108:183.30,20161109:185.25,20161110:185.71,20161111:185.28,20161114:185.43,20161115:186.87,20161116:186.52,20161117:187.48,20161118:187.06,20161121:188.47,20161122:188.84,20161123:188.94,20161125:189.65,20161128:188.76,20161129:189.12,20161130:188.67,20161201:187.98,20161202:188.07,20161205:189.20,20161206:189.80,20161207:192.28,20161208:192.75,20161209:193.92,20161212:193.70,20161213:194.99,20161214:193.38,20161215:194.18,20161216:193.80,20161219:194.22,20161220:194.97,20161221:194.42,20161222:194.09,20161223:194.37,20161227:194.86,20161228:193.24,20161229:193.20,20161230:192.50,20170103:193.97,20170104:195.12,20170105:194.97,20170106:195.66,20170109:195.02,20170110:195.02,20170111:195.57,20170112:195.08,20170113:195.53,20170117:194.84,20170118:195.27,20170119:194.55,20170120:195.26,20170123:194.75,20170124:196.00,20170125:197.70,20170126:197.49,20170127:197.18,20170130:195.96,20170131:195.94,20170201:196.02,20170202:196.15,20170203:197.50,20170206:197.15,20170207:197.15,20170208:197.41,20170209:198.58,20170210:199.37,20170213:200.45,20170214:201.25,20170215:202.30,20170216:202.13,20170217:202.45,20170221:203.66,20170222:203.48,20170223:203.61,20170224:203.87,20170227:204.19,20170228:203.64,20170301:206.49,20170302:205.19,20170303:205.32,20170306:204.71,20170307:204.10,20170308:203.72,20170309:203.97,20170310:204.69,20170313:204.79,20170314:204.01,20170315:205.77,20170316:205.37,20170317:205.01,20170320:204.78,20170321:202.16,20170322:202.63,20170323:202.41,20170324:202.27,20170327:202.06,20170328:203.53,20170329:203.72,20170330:204.37,20170331:203.89,20170403:203.54,20170404:203.67,20170405:203.06,20170406:203.63,20170407:203.43,20170410:203.55,20170411:203.31,20170412:202.41,20170413:201.10,20170417:202.88,20170418:202.28,20170419:201.90,20170420:203.55,20170421:202.90,20170424:205.13,20170425:206.32,20170426:206.19,20170427:206.37,20170428:205.92,20170501:206.44,20170502:206.51,20170503:206.26,20170504:206.51,20170505:207.32,20170508:207.28,20170509:207.09,20170510:207.47,20170511:207.04,20170512:206.70,20170515:207.84,20170516:207.65,20170517:203.96,20170518:204.78,20170519:206.12,20170522:207.16,20170523:207.62,20170524:208.11,20170525:209.10,20170526:209.06,20170530:208.88,20170531:208.82,20170601:210.48,20170602:211.18,20170605:211.03,20170606:210.35,20170607:210.74,20170608:210.85,20170609:210.53,20170612:210.48,20170613:211.51,20170614:211.25,20170615:210.84,20170616:210.88,20170619:212.64,20170620:211.21,20170621:211.15,20170622:211.06,20170623:211.31,20170626:211.45,20170627:209.75,20170628:211.62,20170629:209.76,20170630:210.15,20170703:210.51,20170705:211.00,20170706:209.07,20170707:210.42,20170710:210.65,20170711:210.49,20170712:212.08,20170713:212.43,20170714:213.42,20170717:213.40,20170718:213.51,20170719:214.67,20170720:214.76,20170721:214.57,20170724:214.52,20170725:215.04,20170726:215.05,20170727:214.85,20170728:214.60,20170731:214.47,20170801:214.95,20170802:215.06,20170803:214.64,20170804:215.03,20170807:215.43,20170808:214.90,20170809:214.89,20170810:211.86,20170811:212.17,20170814:214.27,20170815:214.25,20170816:214.62,20170817:211.28,20170818:210.95,20170821:211.11,20170822:213.32,20170823:212.55,20170824:212.06,20170825:212.55,20170828:212.56,20170829:212.81,20170830:213.81,20170831:215.10,20170901:215.40,20170905:213.86,20170906:214.59,20170907:214.56,20170908:214.31,20170911:216.59,20170912:217.33,20170913:217.43,20170914:217.36,20170915:217.65,20170918:218.12,20170919:218.33,20170920:218.41,20170921:217.83,20170922:217.87,20170925:217.43,20170926:217.56,20170927:218.40,20170928:218.67,20170929:219.43,20171002:220.39,20171003:220.86,20171004:221.12,20171005:222.43,20171006:222.18,20171009:221.81,20171010:222.40,20171011:222.74,20171012:222.41,20171013:222.68,20171016:222.98,20171017:223.14,20171018:223.36,20171019:223.42,20171020:224.57,20171023:223.70,20171024:224.09,20171025:222.98,20171026:223.27,20171027:225.09,20171030:224.26,20171031:224.60,20171101:224.90,20171102:224.99,20171103:225.74,20171106:226.09,20171107:225.93,20171108:226.32,20171109:225.50,20171110:225.43,20171113:225.64,20171114:225.11,20171115:223.98,20171116:225.89,20171117:225.23,20171120:225.61,20171121:227.09,20171122:226.88,20171124:227.41,20171127:227.30,20171128:229.60,20171129:229.46,20171130:231.47,20171201:230.99,20171204:230.71,20171205:229.88,20171206:229.92,20171207:230.65,20171208:231.91,20171211:232.61,20171212:233.02,20171213:232.99,20171214:232.04,20171215:233.97,20171218:235.45,20171219:234.55,20171220:234.43,20171221:234.91,20171222:234.85,20171226:234.57,20171227:234.68,20171228:235.16,20171229:234.28,20180102:235.95,20180103:237.45,20180104:238.45,20180105:240.04,20180108:240.48,20180109:241.02,20180110:240.65,20180111:242.41,20180112:243.99,20180116:243.15,20180117:245.47,20180118:245.06,20180119:246.17,20180122:248.17,20180123:248.70,20180124:248.60,20180125:248.71,20180126:251.59,20180129:249.92,20180130:247.36,20180131:247.48,20180201:247.20,20180202:241.82,20180205:231.71,20180206:236.27,20180207:234.99,20180208:226.17,20180209:229.57,20180212:232.94,20180213:233.52,20180214:236.67,20180215:239.69,20180216:239.76,20180220:238.26,20180221:237.08,20180222:237.39,20180223:241.17,20180226:243.97,20180227:240.92,20180228:238.48,20180301:235.01,20180302:236.23,20180305:238.96,20180306:239.56,20180307:239.47,20180308:240.63,20180309:244.82,20180312:244.51,20180313:242.93,20180314:241.69,20180315:241.42,20180316:241.69,20180319:238.42,20180320:238.82,20180321:238.36,20180322:232.40,20180323:227.45,20180326:233.67,20180327:229.70,20180328:229.02,20180329:231.95,20180402:226.94,20180403:229.85,20180404:232.31,20180405:234.14,20180406:228.92,20180409:230.05,20180410:233.71,20180411:232.48,20180412:234.40,20180413:233.71,20180416:235.63,20180417:238.15,20180418:238.33,20180419:237.01,20180420:235.00,20180423:234.96,20180424:231.80,20180425:232.37,20180426:234.73,20180427:234.95,20180430:233.14,20180501:233.56,20180502:231.99,20180503:231.48,20180504:234.48,20180507:235.27,20180508:235.27,20180509:237.54,20180510:239.76,20180511:240.50,20180514:240.61,20180515:238.95,20180516:239.96,20180517:239.76,20180518:239.16,20180521:240.95,20180522:240.28,20180523:240.94,20180524:240.45,20180525:239.88,20180529:237.12,20180530:240.28,20180531:238.81,20180601:241.16,20180604:242.30,20180605:242.48,20180606:244.51,20180607:244.48,20180608:245.20,20180611:245.53,20180612:245.85,20180613:245.06,20180614:245.68,20180615:245.36,20180618:244.86,20180619:243.92,20180620:244.34,20180621:242.81,20180622:243.25,20180625:239.94,20180626:240.47,20180627:238.48,20180628:239.84,20180629:240.19,20180702:240.70,20180703:239.85,20180705:241.81,20180706:243.85,20180709:246.05,20180710:246.93,20180711:245.13,20180712:247.35,20180713:247.54,20180716:247.32,20180717:248.32,20180718:248.84,20180719:247.91,20180720:247.62,20180723:248.08,20180724:249.33,20180725:251.46,20180726:250.86,20180727:249.16,20180730:247.86,20180731:249.08,20180801:248.67,20180802:250.02,20180803:251.09,20180806:252.01,20180807:252.85,20180808:252.74,20180809:252.39,20180810:250.70,20180813:249.77,20180814:251.36,20180815:249.48,20180816:251.50,20180817:252.39,20180820:252.93,20180821:253.52,20180822:253.37,20180823:253.03,20180824:254.56,20180827:256.56,20180828:256.69,20180829:258.07,20180830:257.03,20180831:257.03,20180904:256.59,20180905:255.90,20180906:255.13,20180907:254.63,20180910:255.08,20180911:255.92,20180912:255.98,20180913:257.49,20180914:257.54,20180917:256.18,20180918:257.57,20180919:257.84,20180920:259.93,20180921:259.69,20180924:258.83,20180925:258.59,20180926:257.82,20180927:258.54,20180928:258.56,20181001:259.46,20181002:259.31,20181003:259.45,20181004:257.42,20181005:255.98,20181008:255.98,20181009:255.61,20181010:247.52,20181011:242.06,20181012:245.43,20181015:244.05,20181016:249.38,20181017:249.43,20181018:245.83,20181019:245.69,20181022:244.59,20181023:243.34,20181024:235.97,20181025:240.21,20181026:235.98,20181029:234.67,20181030:238.15,20181031:240.69,20181101:243.26,20181102:241.82,20181105:243.15,20181106:244.69,20181107:249.93,20181108:249.47,20181109:247.04,20181112:242.42,20181113:241.97,20181114:240.31,20181115:242.82,20181116:243.45,20181119:239.33,20181120:234.90,20181121:235.71,20181123:234.13,20181126:237.91,20181127:238.71,20181128:244.21,20181129:243.67,20181130:245.16,20181203:248.41,20181204:240.36,20181206:239.99,20181207:234.42,20181210:234.86,20181211:234.91,20181212:236.10,20181213:236.02,20181214:231.66,20181217:227.11,20181218:226.86,20181219:223.47,20181220:219.83,20181221:215.33,20181224:209.64,20181226:220.23,20181227:221.92,20181228:221.63,20181231:223.57,20190102:223.81,20190103:218.47,20190104:225.78,20190107:227.56,20190108:229.70,20190109:230.77,20190110:231.59,20190111:231.68,20190114:230.26,20190115:232.90,20190116:233.47,20190117:235.24,20190118:238.37,20190122:235.15,20190123:235.64,20190124:235.77,20190125:237.76,20190128:235.95,20190129:235.64,20190130:239.37,20190131:241.47,20190201:241.59,20190204:243.29,20190205:244.31,20190206:243.99,20190207:241.66,20190208:241.96,20190211:242.09,20190212:245.20,20190213:246.00,20190214:245.45,20190215:248.13,20190219:248.56,20190220:249.06,20190221:248.17,20190222:249.71,20190225:250.05,20190226:249.87,20190227:249.77,20190228:249.30,20190301:250.86,20190304:249.95,20190305:249.61,20190306:248.09,20190307:246.02,20190308:245.53,20190311:249.09,20190312:250.03,20190313:251.68,20190314:251.52,20190315:252.76,20190318:253.68,20190319:253.74,20190320:252.98,20190321:255.84,20190322:250.91,20190325:250.72,20190326:252.59,20190327:251.27,20190328:252.22,20190329:253.81,20190401:256.82,20190402:256.95,20190403:257.35,20190404:258.04,20190405:259.29,20190408:259.48,20190409:258.15,20190410:259.03,20190411:258.96,20190412:260.71,20190415:260.54,20190416:260.71,20190417:260.08,20190418:260.59,20190422:260.81,20190423:263.16,20190424:262.57,20190425:262.41,20190426:263.63,20190429:264.05,20190430:264.18,20190501:262.20,20190502:261.63,20190503:264.19,20190506:263.10,20190507:258.71,20190508:258.35,20190509:257.57,20190510:258.86,20190513:252.36,20190514:254.64,20190515:256.13,20190516:258.50,20190517:256.83,20190520:255.13,20190521:257.44,20190522:256.64,20190523:253.51,20190524:254.08,20190528:251.72,20190529:250.03,20190530:250.71,20190531:247.34,20190603:246.71,20190604:252.06,20190605:254.25,20190606:255.90,20190607:258.46,20190610:259.65,20190611:259.58,20190612:259.12,20190613:260.19,20190614:259.91,20190617:260.00,20190618:262.73,20190619:263.32,20190620:265.84,20190621:265.45,20190624:265.12,20190625:262.52,20190626:262.26,20190627:263.19,20190628:264.55,20190701:266.95,20190702:267.64,20190703:269.78,20190705:269.48,20190708:268.00,20190709:268.33,20190710:269.61,20190711:270.24,20190712:271.45,20190715:271.54,20190716:270.67,20190717:268.83,20190718:269.81,20190719:268.31,20190722:268.97,20190723:270.89,20190724:272.17,20190725:270.87,20190726:272.68,20190729:272.19,20190730:271.52,20190731:268.55,20190801:266.21,20190802:264.20,20190805:256.26,20190806:259.85,20190807:260.01,20190808:265.11,20190809:263.30,20190812:260.10,20190813:264.14,20190814:256.33,20190815:257.01,20190816:260.80,20190819:263.94,20190820:261.92,20190821:264.05,20190822:263.97,20190823:257.19,20190826:260.03,20190827:259.01,20190828:260.84,20190829:264.17,20190830:264.05,20190903:262.51,20190904:265.49,20190905:268.90,20190906:269.11,20190909:269.24,20190910:269.18,20190911:271.09,20190912:272.03,20190913:271.85,20190916:271.01,20190917:271.70,20190918:271.86,20190919:271.84,20190920:270.56,20190923:270.49,20190924:268.37,20190925:269.96,20190926:269.40,20190927:267.95,20190930:269.19,20191001:265.99,20191002:261.29,20191003:263.43,20191004:266.99,20191007:265.84,20191008:261.71,20191009:264.20,20191010:265.99,20191011:268.74,20191014:268.44,20191015:271.10,20191016:270.67,20191017:271.46,20191018:270.28,20191021:272.11,20191022:271.22,20191023:272.01,20191024:272.45,20191025:273.57,20191028:275.11,20191029:275.03,20191030:275.87,20191031:275.14,20191101:277.69,20191104:278.80,20191105:278.49,20191106:278.56,20191107:279.54,20191108:280.23,20191111:279.69,20191112:280.28,20191113:280.37,20191114:280.78,20191115:282.81,20191118:283.02,20191119:282.94,20191120:281.89,20191121:281.43,20191122:282.06,20191125:284.25,20191126:284.89,20191127:286.16,20191129:285.10,20191202:282.68,20191203:280.78,20191204:282.51,20191205:283.02,20191206:285.61,20191209:284.71,20191210:284.39,20191211:285.20,20191212:287.66,20191213:287.83,20191216:289.81,20191217:289.87,20191218:289.89,20191219:291.08,20191220:292.35,20191223:292.80,20191224:292.81,20191226:294.37,20191227:294.29,20191230:292.67,20191231:293.38,20200102:296.13,20200103:293.88,20200106:295.00,20200107:294.17,20200108:295.74,20200109:297.75,20200110:296.89,20200113:298.93,20200114:298.48,20200115:299.15,20200116:301.64,20200117:302.58,20200121:301.99,20200122:302.02,20200123:302.37,20200124:299.68,20200127:294.88,20200128:297.97,20200129:297.72,20200130:298.69,20200131:293.26,20200203:295.44,20200204:299.94,20200205:303.41,20200206:304.43,20200207:302.81,20200210:305.07,20200211:305.60,20200212:307.56,20200213:307.24,20200214:307.73,20200218:306.94,20200219:308.40,20200220:307.14,20200221:303.97,20200224:293.89,20200225:284.99,20200226:283.94,20200227:271.19,20200228:270.05,20200302:281.74,20200303:273.67,20200304:285.18,20200305:275.70,20200306:271.14,20200309:249.97,20200310:262.90,20200311:250.08,20200312:226.16,20200313:245.49,20200316:218.63,20200317:230.43,20200318:218.76,20200319:219.23,20200320:209.78,20200323:204.42,20200324:222.94,20200325:226.28,20200326:239.49,20200327:232.36,20200330:239.90,20200331:236.33,20200401:225.69,20200402:230.90,20200403:227.56,20200406:242.84,20200407:243.09,20200408:251.25,20200409:255.08,20200413:252.75,20200414:260.20,20200415:254.67,20200416:255.90,20200417:262.81,20200420:258.18,20200421:250.34,20200422:255.90,20200423:255.88,20200424:259.45,20200427:263.19,20200428:261.98,20200429:268.84,20200430:266.34,20200501:259.28,20200504:260.00,20200505:262.40,20200506:260.62,20200507:263.77,20200508:268.13,20200511:268.19,20200512:262.84,20200513:258.19,20200514:261.28,20200515:262.48,20200518:270.48,20200519:267.70,20200520:272.25,20200521:270.37,20200522:270.88,20200526:274.22,20200527:278.30,20200528:277.79,20200529:279.02,20200601:280.15,20200602:282.47,20200603:286.23,20200604:285.48,20200605:292.80,20200608:296.34,20200609:294.13,20200610:292.48,20200611:275.62,20200612:278.92,20200615:281.53,20200616:286.95,20200617:285.75,20200618:285.86,20200619:284.23,20200622:286.05,20200623:287.37,20200624:280.04,20200625:283.04,20200626:276.32,20200629:280.38,20200630:283.97,20200701:285.96,20200702:287.54,20200706:291.98,20200707:288.96,20200708:291.17,20200709:289.52,20200710:292.47,20200713:289.94,20200714:293.70,20200715:296.40,20200716:295.42,20200717:296.28,20200720:298.67,20200721:299.31,20200722:301.01,20200723:297.42,20200724:295.50,20200727:297.66,20200728:295.77,20200729:299.41,20200730:298.34,20200731:300.70,20200803:302.79,20200804:303.96,20200805:305.84,20200806:307.89,20200807:308.11,20200810:309.03,20200811:306.48,20200812:310.75,20200813:310.19,20200814:310.20,20200817:311.19,20200818:311.86,20200819:310.56,20200820:311.53,20200821:312.63,20200824:315.80,20200825:316.90,20200826:320.08,20200827:320.78,20200828:322.85,20200831:321.68,20200901:324.71,20200902:329.41,20200903:318.07,20200904:315.48,20200908:306.86,20200909:312.92,20200910:307.48,20200911:307.64,20200914:311.69,20200915:313.27,20200916:312.02,20200917:309.28,20200918:305.72,20200921:302.32,20200922:305.40,20200923:298.31,20200924:299.11,20200925:303.94,20200928:308.99,20200929:307.31,20200930:309.64,20201001:311.63,20201002:308.67,20201005:314.14,20201006:309.68,20201007:315.07,20201008:317.86,20201009:320.70,20201012:325.86,20201013:323.73,20201014:321.70,20201015:321.30,20201016:321.10,20201019:316.22,20201020:317.49,20201021:316.89,20201022:318.63,20201023:319.71,20201026:313.80,20201027:312.72,20201028:302.03,20201029:305.10,20201030:301.92,20201102:305.30,20201103:310.69,20201104:317.64,20201105:323.83,20201106:323.76,20201109:327.83,20201110:327.35,20201111:329.78,20201112:326.58,20201113:331.10,20201116:335.23,20201117:333.43,20201118:329.42,20201119:330.80,20201120:328.54,20201123:330.51,20201124:335.83,20201125:335.32,20201127:336.25,20201130:334.76,20201201:338.42,20201202:339.13,20201203:339.04,20201204:341.96,20201207:341.26,20201208:342.26,20201209:339.19,20201210:339.08,20201211:338.68,20201214:337.16,20201215:341.72,20201216:342.26,20201217:344.17,20201218:342.80,20201221:341.57,20201222:341.00,20201223:341.30,20201224:342.63,20201228:345.58,20201229:344.92,20201230:345.41,20201231:347.16,20210104:342.44,20210105:344.80,20210106:346.86,20210107:352.01,20210108:354.02,20210111:351.63,20210112:351.70,20210113:352.65,20210114:351.42,20210115:348.85,20210119:351.59,20210120:356.46,20210121:356.78,20210122:355.52,20210125:356.92,20210126:356.37,20210127:347.66,20210128:350.65,20210129:343.63,20210201:349.35,20210202:354.29,20210203:354.56,20210204:358.59,20210205:360.00,20210208:362.60,20210209:362.36,20210210:362.21,20210211:362.79,20210212:364.58,20210216:364.27,20210217:364.35,20210218:362.80,20210219:362.16,20210222:359.37,20210223:359.81,20210224:363.77,20210225:355.01,20210226:353.18,20210301:361.74,20210302:358.92,20210303:354.16,20210304:349.78,20210305:356.22,20210308:354.44,20210309:359.50,20210310:361.74,20210311:365.41,20210312:365.90,20210315:368.08,20210316:367.62,20210317:368.87,20210318:363.51,20210319:362.83,20210322:365.73,20210323:362.85,20210324:361.01,20210325:363.04,20210326:368.89,20210329:368.70,20210330:367.72,20210331:369.21,20210401:373.20,20210405:378.56,20210406:378.33,20210407:378.77,20210408:380.57,20210409:383.34,20210412:383.48,20210413:384.61,20210414:383.30,20210415:387.42,20210416:388.71,20210419:386.80,20210420:383.97,20210421:387.60,20210422:384.06,20210423:388.23,20210426:389.04,20210427:388.95,20210428:388.84,20210429:391.32,20210430:388.75,20210503:389.59,20210504:387.18,20210505:387.31,20210506:390.40,20210507:393.24,20210510:389.35,20210511:385.87,20210512:377.67,20210513:382.21,20210514:388.08,20210517:387.09,20210518:383.76,20210519:382.75,20210520:386.87,20210521:386.55,20210524:390.49,20210525:389.63,20210526:390.40,20210527:390.60,20210528:391.30,20210601:390.96,20210602:391.57,20210603:390.12,20210604:393.69,20210607:393.31,20210608:393.39,20210609:392.80,20210610:394.63,20210611:395.28,20210614:396.16,20210615:395.44,20210616:393.23,20210617:393.10,20210618:387.80,20210621:393.35,20210622:395.45,20210623:394.97,20210624:397.31,20210625:398.72,20210628:399.53,20210629:399.74,20210630:400.08,20210701:402.29,20210702:405.37,20210706:404.63,20210707:406.06,20210708:402.75,20210709:407.05,20210712:408.51,20210713:407.12,20210714:407.72,20210715:406.33,20210716:403.14,20210719:397.19,20210720:402.88,20210721:406.14,20210722:406.99,20210723:411.18,20210726:412.19,20210727:410.31,20210728:410.14,20210729:411.85,20210730:409.84,20210802:408.99,20210803:412.31,20210804:410.28,20210805:412.88,20210806:413.56,20210809:413.23,20210810:413.74,20210811:414.77,20210812:416.01,20210813:416.77,20210816:417.75,20210817:415.01,20210818:410.47,20210819:411.11,20210820:414.38,20210823:418.02,20210824:418.69,20210825:419.57,20210826:417.09,20210827:420.82,20210830:422.67,20210831:422.04,20210901:422.27,20210902:423.57,20210903:423.46,20210907:421.95,20210908:421.43,20210909:419.63,20210910:416.32,20210913:417.39,20210914:415.13,20210915:418.60,20210916:417.94,20210917:413.87,20210920:406.97,20210921:406.58,20210922:410.55,20210923:415.54,20210924:416.22,20210927:415.03,20210928:406.67,20210929:407.35,20210930:402.37,20211001:407.15,20211004:401.90,20211005:406.09,20211006:407.77,20211007:411.30,20211008:410.55,20211011:407.58,20211012:406.57,20211013:408.04,20211014:414.90,20211015:418.06,20211018:419.30,20211019:422.53,20211020:424.19,20211021:425.30,20211022:424.86,20211025:427.14,20211026:427.52,20211027:425.63,20211028:429.73,20211029:430.60,20211101:431.34,20211102:433.09,20211103:435.73,20211104:437.79,20211105:439.31,20211108:439.68,20211109:438.23,20211110:434.70,20211111:434.84,20211112:438.12,20211115:438.27,20211116:440.01,20211117:438.94,20211118:440.43,20211119:439.64,20211122:438.41,20211123:438.99,20211124:440.16,20211126:430.34,20211129:435.62,20211130:427.14,20211201:422.40,20211202:428.87,20211203:425.14,20211206:430.17,20211207:439.07,20211208:440.23,20211209:437.26,20211210:441.38,20211213:437.47,20211214:434.46,20211215:441.25,20211216:437.36,20211217:432.70,20211220:428.10,20211221:435.70,20211222:440.06,20211223:442.80,20211227:449.06,20211228:448.70,20211229:449.27,20211230:448.03,20211231:446.90,20220103:449.49,20220104:449.34,20220105:440.71,20220106:440.29,20220107:438.55,20220110:438.01,20220111:442.00,20220112:443.19,20220113:437.09,20220114:437.26,20220118:429.52,20220119:425.06,20220120:420.36,20220121:412.10,20220124:413.85,20220125:408.80,20220126:407.78,20220127:405.76,20220128:415.84,20220131:423.33,20220201:426.19,20220202:430.33,20220203:420.21,20220204:422.19,20220207:420.84,20220208:424.30,20220209:430.51,20220210:422.77,20220211:414.44,20220214:413.08,20220215:419.74,20220216:420.21,20220217:411.24,20220218:408.58,20220222:404.19,20220223:397.02,20220224:403.00,20220225:411.89,20220228:410.83,20220301:404.58,20220302:412.02,20220303:409.97,20220304:406.64,20220307:394.65,20220308:391.66,20220309:402.16,20220310:400.34,20220311:395.25,20220314:392.36,20220315:400.99,20220316:409.88,20220317:415.01,20220318:419.56,20220321:419.43,20220322:424.34,20220323:418.88,20220324:425.19,20220325:427.27,20220328:430.31,20220329:435.63,20220330:432.94,20220331:426.28,20220401:427.49,20220404:431.15,20220405:425.70,20220406:421.44,20220407:423.57,20220408:422.44,20220411:415.22,20220412:413.68,20220413:418.41,20220414:413.20,20220418:413.37,20220419:420.05,20220420:419.74,20220421:413.46,20220422:402.11,20220425:404.45,20220426:392.73,20220427:393.84,20220428:403.79,20220429:388.86,20220502:391.20,20220503:393.00,20220504:404.96,20220505:390.57,20220506:388.24,20220509:375.81,20220510:376.68,20220511:370.69,20220512:370.31,20220513:379.16,20220516:377.62,20220517:385.39,20220518:369.85,20220519:367.59,20220520:367.75,20220523:374.63,20220524:371.77,20220525:375.05,20220526:382.55,20220527:391.94,20220531:389.74,20220601:386.59,20220602:393.95,20220603:387.48,20220606:388.66,20220607:392.39,20220608:388.13,20220609:378.90,20220610:367.91,20220613:353.94,20220614:352.87,20220615:357.91,20220616:346.06,20220617:346.81,20220621:355.54,20220622:354.89,20220623:358.37,20220624:369.76,20220627:368.35,20220628:360.83,20220629:360.53,20220630:357.60,20220701:361.38,20220705:362.07,20220706:363.29,20220707:368.73,20220708:368.43,20220711:364.22,20220712:361.00,20220713:359.10,20220714:358.23,20220715:365.07,20220718:362.06,20220719:371.84,20220720:374.21,20220721:378.02,20220722:374.51,20220725:374.97,20220726:370.53,20220727:380.15,20220728:384.92,20220729:390.53,20220801:389.38,20220802:386.81,20220803:392.87,20220804:392.60,20220805:391.94,20220808:391.48,20220809:389.93,20220810:398.12,20220811:398.12,20220812:404.86,20220815:406.52,20220816:407.32,20220817:404.43,20220818:405.61,20220819:400.15,20220822:391.82,20220823:390.87,20220824:392.13,20220825:397.66,20220826:384.20,20220829:381.66,20220830:377.47,20220831:374.60,20220901:375.77,20220902:371.81,20220906:370.41,20220907:377.06,20220908:379.53,20220909:385.42,20220912:389.57,20220913:372.63,20220914:374.05,20220915:369.80,20220916:366.98,20220919:369.83,20220920:365.58,20220921:359.20,20220922:356.19,20220923:350.22,20220926:346.76,20220927:345.87,20220928:352.68,20220929:345.31,20220930:339.97,20221003:348.94,20221004:359.76,20221005:358.92,20221006:355.22,20221007:345.31,20221010:342.67,20221011:340.50,20221012:339.38,20221013:348.34,20221014:340.40,20221017:349.14,20221018:353.25,20221019:350.74,20221020:347.80,20221021:356.25,20221024:360.61,20221025:366.37,20221026:363.61,20221027:361.67,20221028:370.27,20221031:367.60,20221101:365.99,20221102:356.81,20221103:353.13,20221104:358.21,20221107:361.64,20221108:363.59,20221109:356.10,20221110:375.67,20221111:379.31,20221114:376.08,20221115:379.29,20221116:376.39,20221117:375.24,20221118:376.95,20221121:375.58,20221122:380.63,20221123:383.03,20221125:382.94,20221128:376.83,20221129:376.19,20221130:388.04,20221201:387.75,20221202:387.30,20221205:380.34,20221206:374.85,20221207:374.21,20221208:377.15,20221209:374.33,20221212:379.73,20221213:382.60,20221214:380.15,20221215:370.85,20221216:366.48,20221219:363.37,20221220:363.87,20221221:369.31,20221222:364.04,20221223:366.13,20221227:364.69,20221228:360.16,20221229:366.64,20221230:365.67,20230103:364.13,20230104:366.95,20230105:362.76,20230106:371.08,20230109:370.87,20230110:373.47,20230111:378.19,20230112:379.57,20230113:381.04,20230117:380.34,20230118:374.34,20230119:371.61,20230120:378.53,20230123:383.08,20230124:382.66,20230125:382.81,20230126:387.02,20230127:387.90,20230130:383.04,20230131:388.67,20230201:392.80,20230202:398.52,20230203:394.28,20230206:391.87,20230207:397.00,20230208:392.66,20230209:389.25,20230210:390.16,20230213:394.74,20230214:394.56,20230215:395.84,20230216:390.39,20230217:389.42,20230221:381.60,20230222:381.08,20230223:383.10,20230224:379.01,20230227:380.30,20230228:378.90,20230301:377.44,20230302:380.38,20230303:386.48,20230306:386.75,20230307:380.82,20230308:381.44,20230309:374.40,20230310:369.00,20230313:368.47,20230314:374.57,20230315:372.22,20230316:378.75,20230317:374.33,20230320:377.92,20230321:382.89,20230322:376.36,20230323:377.38,20230324:379.85,20230327:380.56,20230328:379.71,20230329:385.23,20230330:387.48,20230331:392.95,20230403:394.44,20230404:392.26,20230405:391.23,20230406:392.75,20230410:393.16,20230411:393.26,20230412:391.66,20230413:396.86,20230414:395.89,20230417:397.31,20230418:397.57,20230419:397.51,20230420:395.34,20230421:395.64,20230424:396.06,20230425:389.77,20230426:388.12,20230427:395.84,20230428:399.22,20230501:398.82,20230502:394.34,20230503:391.63,20230504:388.86,20230505:396.06,20230508:396.16,20230509:394.42,20230510:396.27,20230511:395.58,20230512:395.06,20230515:396.42,20230516:393.77,20230517:398.55,20230518:402.39,20230519:401.81,20230522:401.97,20230523:397.46,20230524:394.58,20230525:397.99,20230526:403.15,20230530:403.30,20230531:401.07,20230601:404.88,20230602:410.73,20230605:409.94,20230606:410.84,20230607:409.42,20230608:411.89,20230609:412.63,20230612:416.38,20230613:419.12,20230614:419.62,20230615:424.82,20230616:423.38,20230620:421.18,20230621:419.02,20230622:420.53,20230623:417.35,20230626:415.65,20230627:420.21,20230628:420.42,20230629:422.07,20230630:427.06,20230703:427.55,20230705:426.91,20230706:423.57,20230707:422.50,20230710:423.57,20230711:426.27,20230712:429.69,20230713:433.11,20230714:432.84,20230717:434.34,20230718:437.57,20230719:438.54,20230720:435.63,20230721:435.63,20230724:437.58,20230725:438.77,20230726:438.84,20230727:435.93,20230728:440.20,20230731:441.03,20230801:439.77,20230802:433.65,20230803:432.41,20230804:430.46,20230807:434.21,20230808:432.33,20230809:429.43,20230810:429.59,20230811:429.34,20230814:431.71,20230815:426.68,20230816:423.55,20230817:420.32,20230818:420.52,20230821:423.26,20230822:422.11,20230823:426.81,20230824:420.90,20230825:423.87,20230828:426.55,20230829:432.72,20230830:434.50,20230831:433.87,20230901:434.68,20230905:432.80,20230906:429.89,20230907:428.57,20230908:429.21,20230911:432.04,20230912:429.67,20230913:430.17,20230914:433.88,20230915:428.65,20230918:428.90,20230919:428.01,20230920:424.08,20230921:417.07,20230922:416.13,20230925:417.88,20230926:411.74,20230927:411.90,20230928:414.29,20230929:413.29,20231002:413.12,20231003:407.59,20231004:410.56,20231005:410.41,20231006:415.28,20231009:417.94,20231010:420.11,20231011:421.83,20231012:419.26,20231013:417.17,20231016:421.56,20231017:421.54,20231018:415.93,20231019:412.27,20231020:407.21,20231023:406.50,20231024:409.56,20231025:403.69,20231026:398.85,20231027:397.04,20231030:401.79,20231031:404.31,20231101:408.63,20231102:416.46,20231103:420.26,20231106:421.22,20231107:422.42,20231108:422.73,20231109:419.44,20231110:425.98,20231113:425.57,20231114:433.83,20231115:434.75,20231116:435.28,20231117:435.82,20231120:439.18,20231121:438.22,20231122:439.91,20231124:440.18,20231127:439.39,20231128:439.82,20231129:439.52,20231130:441.25,20231201:443.86,20231204:441.53,20231205:441.44,20231206:439.66,20231207:443.02,20231208:444.92,20231211:446.65,20231212:448.69,20231213:454.88,20231214:456.34,20231215:455.59,20231218:458.15,20231219:460.94,20231220:454.55,20231221:458.86,20231222:459.78,20231226:461.72,20231227:462.56,20231228:462.73,20231229:461.39,20240102:458.81,20240103:455.06,20240104:453.60,20240105:454.22,20240108:460.70,20240109:460.00,20240110:462.60,20240111:462.40,20240112:462.72,20240116:461.02,20240117:458.46,20240118:462.54,20240119:468.30,20240122:469.29,20240123:470.66,20240124:471.18,20240125:473.74,20240126:473.14,20240129:476.88,20240130:476.52,20240131:468.74,20240201:474.87,20240202:479.87,20240205:478.13,20240206:479.51,20240207:483.51,20240208:483.73,20240209:486.52,20240212:486.31,20240213:479.61,20240214:483.97,20240215:487.31,20240216:484.88,20240220:482.21,20240221:482.65,20240222:492.64,20240223:492.98,20240226:491.17,20240227:492.09,20240228:491.43,20240229:493.20,20240301:497.83,20240304:497.30,20240305:492.33,20240306:494.82,20240307:499.73,20240308:496.74,20240311:496.31,20240312:501.65,20240313:500.86,20240314:499.87,20240315:496.44,20240318:499.39,20240319:502.16,20240320:506.81,20240321:508.48,20240322:507.52,20240325:506.12,20240326:505.18,20240327:509.43,20240328:509.33,20240401:508.44,20240402:505.21,20240403:505.77,20240404:499.59,20240405:504.81,20240408:505.09,20240409:505.68,20240410:500.62,20240411:504.39,20240412:497.43,20240415:491.20,20240416:490.30,20240417:487.40,20240418:486.40,20240419:482.15,20240422:486.59,20240423:492.37,20240424:492.13,20240425:490.26,20240426:494.91,20240429:496.66,20240430:488.79,20240501:487.21,20240502:491.76,20240503:497.86,20240506:503.00,20240507:503.56,20240508:503.60,20240509:506.51,20240510:507.16,20240513:507.23,20240514:509.55,20240515:515.86,20240516:514.80,20240517:515.54,20240520:516.14,20240521:517.40,20240522:515.91,20240523:512.14,20240524:515.53,20240528:515.89,20240529:512.28,20240530:508.88,20240531:513.52,20240603:513.94,20240604:514.51,20240605:520.63,20240606:520.62,20240607:519.98,20240610:521.59,20240611:522.85,20240612:527.14,20240613:528.20,20240614:528.52,20240617:532.73,20240618:534.08,20240620:532.63,20240621:531.92,20240624:530.19,20240625:532.23,20240626:532.89,20240627:533.73,20240628:531.63,20240701:532.73,20240702:536.31,20240703:538.71,20240705:541.81,20240708:542.44,20240709:542.97,20240710:548.34,20240711:543.61,20240712:547.04,20240715:548.54,20240716:551.80,20240717:544.06,20240718:539.88,20240719:536.29,20240722:541.82,20240723:540.97,20240724:528.71,20240725:525.96,20240726:531.85,20240729:532.16,20240730:529.47,20240731:538.07,20240801:530.45,20240802:520.58,20240805:505.42,20240806:510.07,20240807:506.67,20240808:518.38,20240809:520.66,20240812:520.94,20240813:529.50,20240814:531.18,20240815:540.28,20240816:541.49,20240819:546.67,20240820:545.78,20240821:547.66,20240822:543.36,20240823:549.13,20240826:547.82,20240827:548.57,20240828:545.39,20240829:545.44,20240830:550.64,20240903:539.31,20240904:538.21,20240905:536.90,20240906:527.86,20240909:533.77,20240910:536.10,20240911:541.60,20240912:546.16,20240913:549.01,20240916:549.82,20240917:550.05,20240918:548.42,20240919:557.78,20240920:556.81,20240923:558.20,20240924:559.80,20240925:558.57,20240926:560.78,20240927:559.97,20240930:562.21,20241001:557.17,20241002:557.41,20241003:556.39,20241004:561.45,20241007:556.37,20241008:561.63,20241009:565.52,20241010:564.53,20241011:567.91,20241014:572.56,20241015:568.11,20241016:570.58,20241017:570.63,20241018:572.82,20241021:571.88,20241022:571.58,20241023:566.36,20241024:567.58,20241025:567.38,20241028:569.14,20241029:570.06,20241030:568.33,20241031:557.19,20241101:559.55,20241104:558.34,20241105:565.09,20241106:579.14,20241107:583.62,20241108:586.15,20241111:586.71,20241112:584.88,20241113:585.17,20241114:581.41,20241115:573.96,20241118:576.31,20241119:578.42,20241120:578.61,20241121:581.72,20241122:583.52,20241125:585.50,20241126:588.56,20241127:586.78,20241129:590.42,20241202:591.48,20241203:591.75,20241204:595.43,20241205:594.45,20241206:595.58,20241209:592.51,20241210:590.67,20241211:595.23,20241212:592.17,20241213:592.05,20241216:594.58,20241217:592.13,20241218:574.48,20241219:574.30,20241220:581.20,20241223:584.68,20241224:591.18,20241226:591.22,20241227:584.99,20241230:578.32,20241231:576.22,20250102:574.80,20250103:581.99,20250106:585.34,20250107:578.72,20250108:579.57,20250110:570.72,20250113:571.60,20250114:572.39,20250115:582.80,20250116:581.68,20250117:587.52,20250121:592.90,20250122:596.23,20250123:599.49,20250124:597.74,20250127:589.28,20250128:594.34,20250129:591.68,20250130:594.86,20250131:591.69,20250203:587.71,20250204:591.65,20250205:594.05,20250206:596.11,20250207:590.66,20250210:594.67,20250211:595.12,20250212:593.20,20250213:599.47,20250214:599.44,20250218:601.20,20250219:602.61,20250220:600.11,20250221:589.84,20250224:587.16,20250225:584.24,20250226:584.53,20250227:575.20,20250228:584.18,20250303:573.94,20250304:567.15,20250305:573.25,20250306:563.07,20250307:566.23,20250310:551.14,20250311:546.56,20250312:549.46,20250313:542.14,20250314:553.34,20250317:557.60,20250318:551.58,20250319:557.58,20250320:555.97,20250321:556.16,20250324:566.12,20250325:567.48,20250326:560.70,20250327:559.21,20250328:547.95,20250331:551.63,20250401:553.19,20250402:556.69,20250403:529.25,20250404:498.27,20250407:497.38,20250408:489.59,20250409:541.01,20250410:517.30,20250411:526.53,20250414:531.64,20250415:530.15,20250416:518.37,20250417:519.11,20250421:506.75,20250422:519.93,20250423:527.99,20250424:539.11,20250425:543.00,20250428:543.21,20250429:546.63,20250430:546.85,20250501:550.72,20250502:558.90,20250505:555.69,20250506:551.05,20250507:553.36,20250508:557.22,20250509:556.51,20250512:574.90,20250513:578.70,20250514:579.44,20250515:582.27,20250516:585.96,20250519:586.60,20250520:584.62,20250521:574.77,20250522:575.00,20250523:571.08,20250527:582.95,20250528:579.58,20250529:581.86,20250530:581.21,20250602:584.49,20250603:587.82,20250604:587.66,20250605:584.82,20250606:590.83,20250609:591.36,20250610:594.71,20250611:593.02,20250612:595.37,20250613:588.72,20250616:594.32,20250617:589.24,20250618:589.15,20250620:587.77,20250623:593.57,20250624:600.13,20250625:600.47,20250626:605.16,20250627:608.17,20250630:611.08,20250701:610.88,20250702:613.65,20250703:618.49,20250707:613.88,20250708:613.54,20250709:617.22,20250710:618.96,20250711:616.79,20250714:617.96,20250715:615.32,20250716:617.38,20250717:621.16,20250718:620.70,20250721:621.88,20250722:621.97,20250723:627.26,20250724:627.47,20250725:630.12,20250728:629.96,20250729:628.30,20250730:627.51,20250731:625.15,20250801:614.91,20250804:624.25,20250805:621.09,20250806:625.85,20250807:625.32,20250808:630.20,20250811:628.95,20250812:635.65,20250813:637.82,20250814:637.88,20250815:636.39,20250818:636.25,20250819:632.80,20250820:631.12,20250821:628.59,20250822:638.24,20250825:635.43,20250826:638.09,20250827:639.54,20250828:641.81,20250829:637.98,20250902:633.25,20250903:636.69,20250904:642.01,20250905:640.15,20250908:641.72,20250909:643.20,20250910:645.06,20250911:650.42,20250912:650.21,20250915:653.67,20250916:652.77,20250917:651.96,20250918:655.00,20250919:658.25,20250922:661.36,20250923:657.76,20250924:655.67,20250925:652.64,20250926:656.38,20250929:658.23,20250930:660.71,20251001:662.96,20251002:663.72,20251003:663.71,20251006:666.09,20251007:663.62,20251008:667.58,20251009:665.65,20251010:647.65,20251013:657.59,20251014:656.79,20251015:659.70,20251016:655.21,20251017:658.93,20251020:665.78,20251021:665.77,20251022:662.31,20251023:666.24,20251024:671.69,20251027:679.61,20251028:681.41,20251029:681.74,20251030:674.24,20251031:676.46,20251103:677.73,20251104:669.69,20251105:672.01,20251106:664.80,20251107:665.46,20251110:675.84,20251111:677.39,20251112:677.76,20251113:666.52,20251114:666.41,20251117:660.20,20251118:654.66,20251119:657.19,20251120:647.17,20251121:653.61,20251124:663.24,20251125:669.47,20251126:674.10,20251128:677.77,20251201:674.68,20251202:675.93,20251203:678.27,20251204:678.77,20251205:680.06,20251208:678.01,20251209:677.43,20251210:681.92,20251211:683.51,20251212:676.16,20251215:675.14,20251216:673.29,20251217:665.88,20251218:670.91,20251219:676.99,20251222:681.21,20251223:684.32,20251224:686.73,20251226:686.66,20251229:684.21,20251230:683.38,20251231:678.32,20260102:679.56,20260105:684.08,20260106:688.15,20260107:685.93,20260108:685.87,20260109:690.40,20260112:691.49,20260113:690.10,20260114:686.71,20260115:688.58,20260116:688.00,20260120:674.00,20260121:681.78,20260122:685.34,20260123:685.59,20260126:689.07,20260127:691.81,20260128:691.74,20260129:690.37,20260130:688.31,20260202:691.73,20260203:685.89,20260204:682.56,20260205:674.04,20260206:686.97,20260209:690.28,20260210:688.46,20260211:688.30,20260212:677.67,20260213:678.15,20260217:679.24,20260218:682.66,20260219:680.86,20260220:685.79,20260223:678.78,20260224:683.72,20260225:689.49,20260226:685.66,20260227:682.36,20260302:682.75,20260303:676.73,20260304:681.51,20260305:677.71,20260306:668.83,20260309:674.68,20260310:673.60,20260311:672.75,20260312:662.54,20260313:658.79,20260316:665.49,20260317:667.24,20260318:657.93,20260319:656.31,20260320:646.90,20260323:653.70,20260324:651.50,20260325:655.13,20260326:643.43,20260327:632.46,20260330:630.35,20260331:648.67,20260401:653.56,20260402:654.14,20260406:657.24,20260407:657.53,20260408:674.27,20260409:678.16,20260410:677.71,20260413:684.34,20260414:692.68,20260415:698.14,20260416:699.86,20260417:708.32,20260420:706.90,20260421:702.27,20260422:709.38,20260423:706.63,20260424:712.11,20260427:713.33,20260428:709.86,20260429:709.75,20260430:716.81,20260501:718.80,20260504:716.16,20260505:721.91,20260506:731.94,20260507:729.70,20260508:735.72,20260511:737.40,20260512:736.28,20260513:740.40,20260514:746.25,20260515:737.27,20260518:736.75,20260519:731.84,20260520:739.35,20260521:740.81,20260522:743.72,20260526:748.66,20260527:748.53,20260528:752.66,20260529:754.54,20260601:756.59,20260602:757.62,20260603:752.30,20260604:755.14,20260605:735.65,20260608:737.32,20260609:735.16,20260610:723.57,20260611:735.86,20260612:739.84,20260615:752.89,20260616:748.40,20260617:739.06,20260618:746.74,20260622:744.39,20260623:733.58,20260624:733.24,20260625:734.30,20260626:728.99,20260629:741.00,20260630:746.77,20260701:745.76,20260702:744.78,20260706:751.28,20260707:747.71,20260708:745.40,20260709:751.71,20260710:754.95,20260713:749.17,20260714:751.83,20260715:754.81,20260716:750.72,20260717:743.29,20260720:742.09,20260721:748.28,20260722:747.41,20260723:738.18,20260724:738.93,20260727:739.09,20260728:740.86,20260729:729.46,20260730:741.69,20260731:747.03,20260803:757.67,20260804:771.33,20260805:769.79,20260806:768.56,20260807:773.26,20260810:773.03,20260811:770.56,20260812:772.49,20260813:777.88,20260814:776.34,20260817:772.67,20260818:767.45,20260819:769.06,20260820:762.60,20260821:765.72,20260824:763.47,20260825:765.91,20260826:766.08,20260827:771.10";
+function parseSpySeed(raw) {
+  const map = {};
+  const parts = String(raw || "").split(",");
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.length < 10) continue;
+    const d = p.slice(0, 4) + "-" + p.slice(4, 6) + "-" + p.slice(6, 8);
+    const px = Number(p.slice(9));
+    if (px > 0) map[d] = px;
+  }
+  return map;
+}
+function mergeSpySeed() {
+  state.spyByDate = Object.assign(parseSpySeed(SPY_SEED), state.spyByDate || {});
+}
+
+const state = {
+  activities: [],
+  notes: {},
+  fxByDate: {},
+  spyByDate: {},
+  navHistory: [],
+  menuOpen: false,
+  filterOpen: false,
+  filters: { from: "", to: "", account: "", symbol: "", q: "" },
+  reports: [],
+  selected: null,
+  tab: "closed",
+  dropActive: false,
+  watchStatus: "",
+  ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", syncStartedAt: 0 },
+  connectOpen: false,
+  tradeOpen: false,
+  sort: {
+    closed: { key: "exitDate", dir: "desc" },
+    activity: { key: "transactionDate", dir: "desc" },
+    open: { key: "date", dir: "desc" },
+    symbol: { key: "pnlCad", dir: "desc" },
+  },
+};
+
+const HAS_LOCAL_API = (location.hostname === "127.0.0.1" || location.hostname === "localhost");
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatMoney(n, currency) {
+  currency = currency || "CAD";
+  const abs = Math.abs(n);
+  const formatted = abs.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sign = n < 0 ? "−" : n > 0 ? "+" : "";
+  return sign + currency + " " + formatted;
+}
+function formatSigned(n, digits) {
+  digits = digits == null ? 2 : digits;
+  const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (n < 0) return "−" + abs;
+  if (n > 0) return "+" + abs;
+  return abs;
+}
+function formatPct(n) {
+  if (!Number.isFinite(n)) return "—";
+  return (n * 100).toFixed(1) + "%";
+}
+function formatNumber(n, digits) {
+  digits = digits == null ? 2 : digits;
+  return n.toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function formatHold(days) {
+  if (days === 0) return "intraday";
+  if (days === 1) return "1d";
+  if (days < 60) return days + "d";
+  const months = Math.round(days / 30.44);
+  if (months < 24) return days + "d (~" + months + "mo)";
+  return days + "d";
+}
+function pnlClass(n) {
+  if (n > 0.0001) return "pos";
+  if (n < -0.0001) return "neg";
+  return "flat";
+}
+
+function persist() {
+  try {
+    localStorage.setItem(LS_ACT, JSON.stringify(state.activities));
+    localStorage.setItem(LS_NOTES, JSON.stringify(state.notes));
+    localStorage.setItem(LS_FX_TABLE, JSON.stringify(state.fxByDate || {}));
+    localStorage.setItem(LS_SPY, JSON.stringify(state.spyByDate || {}));
+    localStorage.setItem(LS_NAV, JSON.stringify(state.navHistory || []));
+  } catch (e) {}
+}
+
+function isInventedAccountId(accountId, currency) {
+  const id = String(accountId || "").trim();
+  if (!id) return false;
+  const up = id.toUpperCase();
+  if (up === "CAD" || up === "USD" || id.toLowerCase() === "statement") return true;
+  return up === String(currency || "").trim().toUpperCase();
+}
+
+function migrateInventedAccounts(activities) {
+  let changed = false;
+  const next = (activities || []).map((a) => {
+    if (!isInventedAccountId(a.accountId, a.currency)) return a;
+    changed = true;
+    return Object.assign({}, a, { accountId: "", accountType: "" });
+  });
+  return { activities: next, changed };
+}
+
+function migrateInventedNoteKeys(notes) {
+  const src = notes || {};
+  const next = {};
+  let changed = false;
+  for (const key of Object.keys(src)) {
+    const m = key.match(/^(CAD|USD|statement)\|/i);
+    const nk = m ? key.slice(m[1].length) : key;
+    const note = Object.assign({}, src[key]);
+    if (nk !== key || (note.tradeId && note.tradeId !== nk)) {
+      note.tradeId = nk;
+      changed = true;
+    }
+    next[nk] = note;
+  }
+  return { notes: next, changed };
+}
+
+function loadPersisted() {
+  try {
+    const a = localStorage.getItem(LS_ACT);
+    if (a) state.activities = JSON.parse(a);
+    const n = localStorage.getItem(LS_NOTES);
+    if (n) state.notes = JSON.parse(n);
+    const fx = localStorage.getItem(LS_FX_TABLE);
+    if (fx) {
+      const parsed = JSON.parse(fx);
+      if (parsed && typeof parsed === "object") state.fxByDate = parsed;
+    }
+    const spy = localStorage.getItem(LS_SPY);
+    if (spy) {
+      const parsedS = JSON.parse(spy);
+      if (parsedS && typeof parsedS === "object") state.spyByDate = parsedS;
+    }
+    const nav = localStorage.getItem(LS_NAV);
+    if (nav) {
+      const parsedN = JSON.parse(nav);
+      if (Array.isArray(parsedN)) state.navHistory = parsedN;
+    }
+    mergeSpySeed();
+    state.activities = ensureBookIds(state.activities);
+    const acts = migrateInventedAccounts(state.activities);
+    const notes = migrateInventedNoteKeys(state.notes);
+    state.activities = acts.activities;
+    state.notes = notes.notes;
+    if (acts.changed || notes.changed) persist();
+  } catch (e) {}
+}
+
+function ingestText(name, text) {
+  const parsed = parseCsv(text, name);
+  const { merged, added, duplicates } = mergeActivities(state.activities, parsed.activities);
+  state.activities = ensureBookIds(merged);
+  state.reports = [{
+    file: name,
+    format: parsed.format,
+    rowCount: parsed.rowCount,
+    added,
+    duplicates,
+    footerStripped: parsed.footerStripped,
+    countsByType: parsed.countsByType,
+    skipped: parsed.skipped,
+  }];
+  persist();
+  render();
+  ensureFxRates();
+  ensureSpyPrices();
+}
+
+function filteredTrades(closedFx) {
+  const f = state.filters;
+  return closedFx.filter((t) => {
+    if (f.from && t.exitDate < f.from) return false;
+    if (f.to && t.exitDate > f.to) return false;
+    if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
+    if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
+    if (f.q) {
+      const s = f.q.trim().toLowerCase();
+      const note = state.notes[t.id] || {};
+      const blob = [t.symbol, t.name, t.accountId, t.accountType, note.tag, note.thesis].join(" ").toLowerCase();
+      if (!blob.includes(s)) return false;
+    }
+    return true;
+  });
+}
+
+function unique(arr) {
+  return Array.from(new Set(arr.filter(Boolean))).sort();
+}
+
+function yearsFromActivities(activities) {
+  const years = new Set();
+  for (let i = 0; i < (activities || []).length; i++) {
+    const d = String((activities[i] && activities[i].transactionDate) || "").slice(0, 4);
+    if (/^\d{4}$/.test(d)) years.add(d);
+  }
+  return Array.from(years).sort().reverse();
+}
+
+function yearFromRange(from, to) {
+  const a = /^(\d{4})-01-01$/.exec(from || "");
+  const b = /^(\d{4})-12-31$/.exec(to || "");
+  if (a && b && a[1] === b[1]) return a[1];
+  return "";
+}
+
+function cmp(a, b) {
+  if (a == null && b == null) return 0;
+  if (a == null || a === "") return 1;
+  if (b == null || b === "") return -1;
+  if (typeof a === "number" && typeof b === "number") {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  }
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function sortRows(rows, keyFn, dir) {
+  const m = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => m * cmp(keyFn(a), keyFn(b)));
+}
+
+function groupClosedByExit(trades) {
+  // FIFO writes one row per buy lot. Same sell against 12 lots looks like 12 tiny P&Ls.
+  // Collapse those slices so the table is one row per close (avg entry, summed P&L).
+  const map = new Map();
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    const k = [t.symbol, t.currency, t.exitDate, Number(t.exitPrice).toFixed(8), t.side, t.openDirection].join("|");
+    let g = map.get(k);
+    if (!g) {
+      g = {
+        id: t.id,
+        accountId: t.accountId,
+        accountType: t.accountType,
+        symbol: t.symbol,
+        name: t.name,
+        currency: t.currency,
+        side: t.side,
+        quantity: 0,
+        entryPrice: 0,
+        exitPrice: t.exitPrice,
+        entryDate: t.entryDate,
+        exitDate: t.exitDate,
+        holdDays: t.holdDays,
+        commission: 0,
+        pnl: 0,
+        pnlCad: 0,
+        openDirection: t.openDirection,
+        _entryNotional: 0,
+      };
+      map.set(k, g);
+    }
+    g.quantity += t.quantity;
+    g.pnl += t.pnl;
+    g.pnlCad += t.pnlCad;
+    g.commission += t.commission;
+    g._entryNotional += t.entryPrice * t.quantity;
+    if (t.entryDate < g.entryDate) g.entryDate = t.entryDate;
+  }
+  const out = Array.from(map.values());
+  for (let i = 0; i < out.length; i++) {
+    const g = out[i];
+    g.entryPrice = g.quantity ? g._entryNotional / g.quantity : 0;
+    g.holdDays = daysBetween(g.entryDate, g.exitDate);
+    delete g._entryNotional;
+  }
+  return out;
+}
+
+function sortTh(tab, cols) {
+  const cur = state.sort[tab] || {};
+  return cols.map((c) => {
+    const on = cur.key === c.key;
+    const arrow = on ? (cur.dir === "asc" ? "▲" : "▼") : "";
+    return (
+      '<th class="sort' + (on ? " on" : "") + '" data-sort-tab="' + tab + '" data-sort-key="' + c.key + '">' +
+      c.label + (arrow ? '<span class="dir">' + arrow + "</span>" : "") + "</th>"
+    );
+  }).join("");
+}
+
+function svgEquity(points) {
+  const w = 640, h = 220, padL = 52, padR = 12, padT = 16, padB = 28;
+  if (!points.length) {
+    return '<svg viewBox="0 0 640 220" class="chart"><text x="320" y="110" text-anchor="middle" fill="#6b7380" font-size="12">No equity yet</text></svg>';
+  }
+  const ys = points.map((p) => p.equity);
+  let minY = Math.min(0, ...ys);
+  let maxY = Math.max(0, ...ys);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  function x(i) { return padL + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW); }
+  function y(v) { return padT + ((maxY - v) / (maxY - minY)) * innerH; }
+  const d = points.map((p, i) => (i === 0 ? "M" : "L") + x(i).toFixed(1) + " " + y(p.equity).toFixed(1)).join(" ");
+  const zero = y(0);
+  const last = points[points.length - 1];
+  const cls = last.equity >= points[0].equity ? "pos" : "neg";
+  const grid = [];
+  for (let g = 0; g < 4; g++) {
+    const gy = padT + (innerH * g) / 3;
+    const gv = maxY - ((maxY - minY) * g) / 3;
+    grid.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="#262c36"/>');
+    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatSigned(gv, 0) + '</text>');
+  }
+  return (
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" class="chart" preserveAspectRatio="none">' +
+    grid.join("") +
+    '<line x1="' + padL + '" y1="' + zero + '" x2="' + (w - padR) + '" y2="' + zero + '" stroke="#343b47" stroke-dasharray="3 3"/>' +
+    '<path d="' + d + '" fill="none" stroke="' + (cls === "pos" ? "#3ecf8e" : "#ef6b73") + '" stroke-width="2"/>' +
+    '<text x="' + padL + '" y="' + (h - 8) + '" fill="#6b7380" font-size="10">' + esc(points[0].date) + '</text>' +
+    '<text x="' + (w - padR) + '" y="' + (h - 8) + '" text-anchor="end" fill="#6b7380" font-size="10">' + esc(last.date) + '</text>' +
+    "</svg>"
+  );
+}
+
+function monthTick(ym) {
+  const parts = String(ym || "").split("-");
+  const y = parts[0] || "";
+  const m = Number(parts[1] || 0);
+  const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const mon = names[m - 1] || (parts[1] || "");
+  return mon + " '" + y.slice(2);
+}
+
+function svgMonthly(rows) {
+  const w = 640, h = 220, padL = 52, padR = 16, padT = 16, padB = 44;
+  if (!rows.length) {
+    return '<svg viewBox="0 0 640 220" class="chart"><text x="320" y="110" text-anchor="middle" fill="#6b7380" font-size="12">No monthly P&amp;L</text></svg>';
+  }
+  const ys = rows.map((r) => r.pnl);
+  let minY = Math.min(0, ...ys);
+  let maxY = Math.max(0, ...ys);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  function y(v) { return padT + ((maxY - v) / (maxY - minY)) * innerH; }
+  const zero = y(0);
+  const n = rows.length;
+  const slot = innerW / n;
+  const gap = Math.min(4, Math.max(1, slot * 0.18));
+  const bw = Math.max(2, slot - gap);
+  const maxLabels = 8;
+  const step = Math.max(1, Math.ceil(n / maxLabels));
+  const labeled = new Set();
+  for (let i = 0; i < n; i++) {
+    const isJan = String(rows[i].month).slice(5, 7) === "01";
+    if (i === 0 || i === n - 1 || isJan || i % step === 0) labeled.add(i);
+  }
+  // Drop a label if it sits too close to a neighbor (in slot units).
+  const idxs = Array.from(labeled).sort((a, b) => a - b);
+  const keep = [];
+  for (let k = 0; k < idxs.length; k++) {
+    const i = idxs[k];
+    if (keep.length && i - keep[keep.length - 1] < step && i !== n - 1 && String(rows[i].month).slice(5, 7) !== "01") continue;
+    if (i === n - 1 && keep.length && n - 1 - keep[keep.length - 1] < Math.max(1, Math.floor(step / 2))) keep.pop();
+    keep.push(i);
+  }
+  const keepSet = new Set(keep);
+  const bars = rows.map((r, i) => {
+    const x = padL + i * slot + gap / 2;
+    const y1 = y(r.pnl);
+    const top = Math.min(y1, zero);
+    const height = Math.max(2, Math.abs(y1 - zero));
+    const color = r.pnl >= 0 ? "#3ecf8e" : "#ef6b73";
+    const tip = esc(r.month + "  " + formatSigned(r.pnl, 0));
+    let label = "";
+    if (keepSet.has(i)) {
+      label = '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 12) + '" text-anchor="middle" fill="#8b93a0" font-size="10">' + esc(monthTick(r.month)) + "</text>";
+    }
+    return (
+      '<rect x="' + x.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + height.toFixed(1) + '" fill="' + color + '" rx="1"><title>' + tip + "</title></rect>" +
+      label
+    );
+  }).join("");
+  return (
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" class="chart">' +
+    '<line x1="' + padL + '" y1="' + zero + '" x2="' + (w - padR) + '" y2="' + zero + '" stroke="#343b47"/>' +
+    bars +
+    "</svg>"
+  );
+}
+
+function kpiCard(label, value, sub, cls) {
+  return (
+    '<div class="kpi"><div class="label">' + esc(label) + '</div>' +
+    '<div class="value ' + (cls || "") + '">' + value + '</div>' +
+    '<div class="sub">' + sub + "</div></div>"
+  );
+}
+
+function breakdownTable(rows, title) {
+  const sort = state.sort.symbol || { key: "pnlCad", dir: "desc" };
+  const sorted = sortRows(rows, (r) => {
+    const map = { key: r.key, pnlCad: r.pnlCad, trades: r.trades, winRate: r.winRate };
+    return map[sort.key];
+  }, sort.dir);
+  const body = sorted.map((r) => {
+    return (
+      "<tr><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
+      esc(formatMoney(r.pnlCad)) + "</td><td>" + r.trades + "</td><td>" + formatPct(r.winRate) +
+      "</td></tr>"
+    );
+  }).join("");
+  return (
+    '<div class="panel tight"><h3 class="section-title">' + esc(title) + "</h3>" +
+    '<div class="b-scroll"><table class="b-table"><thead><tr>' +
+    sortTh("symbol", [
+      { key: "key", label: "Symbol" },
+      { key: "pnlCad", label: "P&L" },
+      { key: "trades", label: "# of trades" },
+      { key: "winRate", label: "Win rate" },
+    ]) +
+    "</tr></thead><tbody>" +
+    (body || "<tr><td class='name' colspan='4'>None yet</td></tr>") +
+    "</tbody></table></div></div>"
+  );
+}
+
+function render() {
+  const root = document.getElementById("app");
+  const { closed, open, unmatched } = matchFifo(state.activities);
+  const unmatchedWarn = formatUnmatchedWarning(unmatched);
+  const closedFx = applyFx(closed);
+  const visible = filteredTrades(closedFx);
+  const incomeActs = state.activities.filter((a) => {
+    const f = state.filters;
+    if (f.from && a.transactionDate < f.from) return false;
+    if (f.to && a.transactionDate > f.to) return false;
+    if (f.account && a.accountId !== f.account && a.accountType !== f.account) return false;
+    if (f.symbol && a.symbol && underlyingSymbol(a.symbol) !== f.symbol) return false;
+    return true;
+  });
+  const incomeCad = incomeActs
+    .filter((a) => a.category === "dividend" || a.category === "interest")
+    .reduce((s, a) => s + toCad(a.netCashAmount, a.currency, a.transactionDate), 0);
+  const feesCad = incomeActs
+    .filter((a) => a.category === "fee")
+    .reduce((s, a) => s + toCad(a.netCashAmount, a.currency, a.transactionDate), 0);
+  const m = computeMetrics(visible, open.length, incomeCad, feesCad);
+  const curve = equityCurve(state.activities, state.filters.from, state.filters.to);
+  const monthly = monthlyPnl(visible);
+  const bySymbol = breakdown(visible, (t) => underlyingSymbol(t.symbol));
+  const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
+  const years = yearsFromActivities(state.activities);
+  const selectedYear = yearFromRange(state.filters.from, state.filters.to);
+  const pf = m.profitFactor === Infinity ? "∞" : Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "—";
+
+  const reportsHtml = state.reports.map((r) => {
+    const counts = Object.keys(r.countsByType)
+      .sort((a, b) => r.countsByType[b] - r.countsByType[a])
+      .map((k) => "<li>" + esc(k) + ": " + r.countsByType[k] + "</li>")
+      .join("");
+    const skipped = r.skipped && r.skipped.length
+      ? '<div class="meta" style="margin-top:8px;color:var(--neg)">' + r.skipped.length + " skipped / unparsed<ul>" +
+        r.skipped.slice(0, 8).map((s) => "<li>row " + s.row + ": " + esc(s.message) + "</li>").join("") +
+        "</ul></div>"
+      : "";
+    return (
+      "<div><h3>Import · " + esc(r.file) + "</h3><div class='meta'>format " +
+      esc(r.format) + " · " + r.rowCount + " data rows · " + r.added + " new · " + r.duplicates + " duplicates" +
+      (r.footerStripped ? " · footer stripped" : "") + "</div><ul>" + counts + "</ul>" + skipped + "</div>"
+    );
+  }).join("");
+
+  let main;
+  if (!state.activities.length) {
+    main = emptyStateHtml();
+  } else {
+    const closedSort = state.sort.closed || { key: "exitDate", dir: "desc" };
+    const closedSorted = sortRows(groupClosedByExit(visible), (t) => {
+      const n = state.notes[t.id] || {};
+      const map = {
+        entryDate: t.entryDate,
+        exitDate: t.exitDate,
+        symbol: t.symbol,
+        side: t.openDirection === "SHORT" ? "COVER" : t.side,
+        quantity: t.quantity,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
+        pnlCad: t.pnlCad,
+        holdDays: t.holdDays,
+        currency: t.currency,
+        tag: n.tag || "",
+        notes: n.thesis || "",
+      };
+      return map[closedSort.key];
+    }, closedSort.dir);
+    const blotterRows = closedSorted.map((t) => {
+      const n = state.notes[t.id] || {};
+      const sel = state.selected && state.selected.id === t.id ? " selected" : "";
+      return (
+        "<tr class='" + sel + "' data-id='" + esc(t.id) + "'>" +
+        "<td>" + esc(t.entryDate) + "</td><td>" + esc(t.exitDate) + "</td>" +
+        "<td>" + esc(t.symbol) + (n.grade ? " <span class='grade " + esc(n.grade) + "'>" + esc(n.grade) + "</span>" : "") + "</td>" +
+        "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
+        "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
+        "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
+        "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</td>" +
+        "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
+        "<td>" + esc(t.currency) + "</td>" +
+        "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
+        "<td class='sans'>" + esc(n.thesis || "") + "</td></tr>"
+      );
+    }).join("");
+
+    const actSort = state.sort.activity || { key: "transactionDate", dir: "desc" };
+    const actSorted = sortRows(incomeActs, (a) => ({
+      transactionDate: a.transactionDate,
+      settlementDate: a.settlementDate,
+      activityType: a.activityType,
+      activitySubType: a.activitySubType,
+      symbol: a.symbol,
+      name: a.name,
+      quantity: a.quantity,
+      unitPrice: a.unitPrice,
+      netCashAmount: a.netCashAmount,
+      currency: a.currency,
+      category: a.category,
+    }[actSort.key]), actSort.dir);
+    const actRows = actSorted.map((a) => {
+        return (
+          "<tr>" +
+          "<td>" + esc(a.transactionDate) + "</td>" +
+          "<td>" + esc(a.settlementDate) + "</td>" +
+          "<td>" + esc(a.activityType) + "</td>" +
+          "<td>" + esc(a.activitySubType) + "</td>" +
+          "<td>" + esc(a.symbol) + "</td>" +
+          "<td class='sans'>" + esc(a.name) + "</td>" +
+          "<td>" + (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") + "</td>" +
+          "<td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td>" +
+          "<td class='" + pnlClass(a.netCashAmount) + "'>" + esc(formatMoney(a.netCashAmount, a.currency)) + "</td>" +
+          "<td>" + esc(a.currency) + "</td>" +
+          "<td class='sans' title='" + esc(a.description) + "'>" + esc(a.category) + "</td></tr>"
+        );
+      }).join("");
+
+    const openSort = state.sort.open || { key: "date", dir: "desc" };
+    const openSorted = sortRows(open, (l) => ({
+      date: l.date,
+      symbol: l.symbol,
+      direction: l.direction,
+      quantity: l.quantity,
+      price: l.price,
+      currency: l.currency,
+      name: l.name,
+    }[openSort.key]), openSort.dir);
+    const openRows = openSorted.map((l) => {
+      return (
+        "<tr><td>" + esc(l.date) + "</td><td>" + esc(l.symbol) + "</td><td>" + esc(l.direction) + "</td>" +
+        "<td>" + formatNumber(l.quantity, l.quantity % 1 ? 4 : 0) + "</td>" +
+        "<td>" + formatNumber(l.price) + "</td><td>" + esc(l.currency) + "</td>" +
+        "<td class='sans'>" + esc(l.name) + "</td></tr>"
+      );
+    }).join("");
+
+    const tabClosed =
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades <em>' + closedSorted.length + " closed</em></h3>" +
+      '<input id="search" placeholder="Search symbol, tag, notes…" value="' + esc(state.filters.q) + '"/></div>' +
+      '<div class="table-wrap"><table class="blotter"><thead><tr>' +
+      sortTh("closed", [
+        { key: "entryDate", label: "In" },
+        { key: "exitDate", label: "Out" },
+        { key: "symbol", label: "Symbol" },
+        { key: "side", label: "Side" },
+        { key: "quantity", label: "Qty" },
+        { key: "entryPrice", label: "Entry" },
+        { key: "exitPrice", label: "Exit" },
+        { key: "pnlCad", label: "P&amp;L" },
+        { key: "holdDays", label: "Hold" },
+        { key: "currency", label: "Ccy" },
+        { key: "tag", label: "Tag" },
+        { key: "notes", label: "Notes" },
+      ]) +
+      "</tr></thead><tbody>" +
+      (blotterRows || "<tr><td colspan='12' class='sans'>No closed trades match.</td></tr>") +
+      "</tbody></table></div>";
+
+    const tabAct =
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Activity <em>' + incomeActs.length + " rows</em></h3></div>" +
+      '<div class="table-wrap"><table class="blotter"><thead><tr>' +
+      sortTh("activity", [
+        { key: "transactionDate", label: "Date" },
+        { key: "settlementDate", label: "Settle" },
+        { key: "activityType", label: "Type" },
+        { key: "activitySubType", label: "Sub" },
+        { key: "symbol", label: "Symbol" },
+        { key: "name", label: "Name" },
+        { key: "quantity", label: "Qty" },
+        { key: "unitPrice", label: "Price" },
+        { key: "netCashAmount", label: "Amount" },
+        { key: "currency", label: "Ccy" },
+        { key: "category", label: "Cat" },
+      ]) +
+      "</tr></thead><tbody>" +
+      (actRows || "<tr><td colspan='11' class='sans'>No rows.</td></tr>") +
+      "</tbody></table></div>";
+
+    const tabOpen =
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Open lots <em>' + open.length + "</em></h3></div>" +
+      '<div class="table-wrap"><table class="blotter"><thead><tr>' +
+      sortTh("open", [
+        { key: "date", label: "Opened" },
+        { key: "symbol", label: "Symbol" },
+        { key: "direction", label: "Dir" },
+        { key: "quantity", label: "Qty" },
+        { key: "price", label: "Price" },
+        { key: "currency", label: "Ccy" },
+        { key: "name", label: "Name" },
+      ]) +
+      "</tr></thead><tbody>" +
+      (openRows || "<tr><td colspan='7' class='sans'>No open lots.</td></tr>") +
+      "</tbody></table></div>";
+
+    const tabBody = state.tab === "activity" ? tabAct : state.tab === "open" ? tabOpen : tabClosed;
+
+    main =
+      (reportsHtml
+        ? '<section class="review" id="review">' + reportsHtml +
+          '<div style="margin-left:auto"><button class="btn ghost" type="button" id="dismiss">Dismiss</button></div></section>'
+        : "") +
+      (unmatchedWarn ? '<div class="warn fifo-warn">' + esc(unmatchedWarn) + "</div>" : "") +
+      '<div class="kpis">' +
+      kpiCard("Realized P&L (CAD)", esc(formatMoney(m.realizedPnlCad)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
+      kpiCard("Win rate", formatPct(m.winRate), m.winCount + "W / " + m.lossCount + "L of " + m.tradeCount, "") +
+      kpiCard("Profit factor", pf, "gross win / gross loss", "") +
+      kpiCard("Expectancy", esc(formatMoney(m.expectancy)), "avg W " + formatSigned(m.avgWin) + " · avg L " + formatSigned(m.avgLoss), pnlClass(m.expectancy)) +
+      kpiCard("Biggest winner", esc(formatMoney(m.maxWinPnl)), m.maxWinSymbol ? esc(m.maxWinSymbol) : "—", pnlClass(m.maxWinPnl)) +
+      kpiCard("Biggest loser", esc(formatMoney(m.maxLossPnl)), m.maxLossSymbol ? esc(m.maxLossSymbol) : "—", m.maxLossPnl < 0 ? "neg" : "flat") +
+      "</div>" +
+      renderCompare(closedFx, selectedYear, years, state.activities) +
+      '<div class="grid-2">' +
+      '<div class="panel"><h3 class="section-title">Equity <em>account value CAD</em></h3><div class="chart-wrap">' + svgEquity(curve) + "</div></div>" +
+      '<div class="panel"><h3 class="section-title">Monthly P&amp;L</h3><div class="chart-wrap">' + svgMonthly(monthly) + "</div></div>" +
+      "</div>" +
+      '<div class="breakdowns">' + breakdownTable(bySymbol, "By symbol") + "</div>" +
+      '<div class="tabs">' +
+      '<button type="button" class="tab' + (state.tab === "closed" ? " on" : "") + '" data-tab="closed">Closed trades</button>' +
+      '<button type="button" class="tab' + (state.tab === "activity" ? " on" : "") + '" data-tab="activity">Activity</button>' +
+      '<button type="button" class="tab' + (state.tab === "open" ? " on" : "") + '" data-tab="open">Open lots</button>' +
+      "</div>" +
+      tabBody;
+  }
+
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol);
+
+  const drawer = state.selected
+    ? renderDrawer(closedFx.find((t) => t.id === state.selected.id) || state.selected)
+    : "";
+
+  root.innerHTML =
+    '<div class="app">' +
+    '<header class="header">' +
+    '<div class="brand"><img src="data:image/jpeg;base64,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" alt="Bagholder"/><h1>Bagholder</h1></div>' +
+    '<input id="file" type="file" accept=".csv,text/csv" multiple style="display:none"/>' +
+    '<input id="folder" type="file" webkitdirectory multiple accept=".csv,text/csv" style="display:none"/>' +
+    '<div class="header-actions">' +
+    '<span class="watch-status" id="watchStatus">' + esc(wsStatusText() || state.watchStatus) + "</span>" +
+    '<div class="menu-wrap">' +
+    '<button class="menu-btn' + (state.filterOpen ? " on" : "") + '" type="button" id="filterBtn" aria-label="Filters">' +
+    '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3.5h12L9.2 9.2V13l-2.4 1.2V9.2L2 3.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>' +
+    (filtersActive ? '<span class="dot"></span>' : "") +
+    "</button>" +
+    '<div class="filter-panel' + (state.filterOpen ? " open" : "") + '" id="filterPanel">' +
+    '<div class="field"><label>Closed in</label><select id="year"><option value="">All years</option>' +
+    years.map((y) => "<option " + (selectedYear === y ? "selected" : "") + " value='" + esc(y) + "'>" + esc(y) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="field"><label>From</label><input type="date" id="from" value="' + esc(state.filters.from) + '"/></div>' +
+    '<div class="field"><label>To</label><input type="date" id="to" value="' + esc(state.filters.to) + '"/></div>' +
+    '<div class="field"><label>Symbol</label><select id="symbol"><option value="">All</option>' +
+    symbols.map((a) => "<option " + (state.filters.symbol === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
+    "</select></div>" +
+    (filtersActive ? '<button type="button" class="reset" id="resetFilters">Reset filters</button>' : "") +
+    "</div></div>" +
+    '<div class="menu-wrap">' +
+    '<button class="menu-btn" type="button" id="menuBtn" aria-label="Menu"><i></i><i></i><i></i></button>' +
+    '<div class="menu' + (state.menuOpen ? " open" : "") + '" id="menu">' +
+    menuItemsHtml() +
+    "</div></div></div></header>" +
+    '<div class="drop-overlay" id="dropOverlay">Drop CSV</div>' +    '<main class="main">' + main + "</main>" +
+    drawer +
+    renderConnectModal() +
+    renderTradeModal() +
+    "</div>";
+
+  bind();
+}
+
+function renderDrawer(t) {
+  const n = state.notes[t.id] || { thesis: "", tag: "", grade: "" };
+  const grades = ["A", "B", "C", "F"].map((g) => {
+    return '<button type="button" class="' + g + (n.grade === g ? " on" : "") + '" data-grade="' + g + '">' + g + "</button>";
+  }).join("");
+  return (
+    '<div class="overlay" id="overlay"></div>' +
+    '<aside class="drawer"><div class="drawer-head"><div><h2>' + esc(t.symbol) + "</h2>" +
+    '<div class="sym-sub">' + esc(t.name || "") + " · " + esc(t.side) + " " + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</div></div>" +
+    '<button class="btn ghost" type="button" id="closeDrawer" style="margin-left:auto">Close</button></div>' +
+    '<div class="drawer-body"><div class="dl">' +
+    "<div><dt>In</dt><dd>" + esc(t.entryDate) + "</dd></div>" +
+    "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
+    "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
+    "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
+    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</dd></div>" +
+    "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
+    "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
+    '</div><div class="edit">' +
+    "<label>Thesis / notes</label><textarea id='thesis'>" + esc(n.thesis) + "</textarea>" +
+    "<label>Tag</label><input type='text' id='tag' value='" + esc(n.tag) + "'/>" +
+    "<label>Grade</label><div class='grades'>" + grades + "</div>" +
+    "</div></div></aside>"
+  );
+}
+
+function isCsvName(name) {
+  return /\.csv$/i.test(name || "");
+}
+
+function isJunkCsvPath(name, rel) {
+  const n = String(name || "");
+  const r = String(rel || "").replace(/\\/g, "/");
+  if (n.startsWith("._")) return true;
+  if (/__MACOSX/i.test(n) || /__MACOSX/i.test(r)) return true;
+  return false;
+}
+
+function isTopLevelCsvFile(file) {
+  if (!file || !isCsvName(file.name)) return false;
+  if (file.size === 0) return false;
+  const rel = String(file.webkitRelativePath || "").replace(/\\/g, "/");
+  if (isJunkCsvPath(file.name, rel)) return false;
+  if (!rel) return true;
+  return rel.split("/").filter(Boolean).length <= 2;
+}
+
+function ingestFileList(fileList) {
+  const files = Array.from(fileList || []).filter(isTopLevelCsvFile);
+  if (!files.length) return Promise.resolve();
+  const jobs = files.map((f) => f.text().then((text) => ({ name: f.name, text })));
+  return Promise.all(jobs).then((items) => {
+    let current = state.activities;
+    const reports = [];
+    for (const item of items) {
+      if (!item.text || !String(item.text).trim()) continue;
+      const parsed = parseCsv(item.text, item.name);
+      const { merged, added, duplicates } = mergeActivities(current, parsed.activities);
+      current = merged;
+      reports.push({
+        file: item.name,
+        format: parsed.format,
+        rowCount: parsed.rowCount,
+        added,
+        duplicates,
+        footerStripped: parsed.footerStripped,
+        countsByType: parsed.countsByType,
+        skipped: parsed.skipped,
+      });
+    }
+    state.activities = ensureBookIds(current);
+    state.reports = reports;
+    persist();
+    render();
+    ensureFxRates();
+    ensureSpyPrices();
+  });
+}
+
+function fileFromEntry(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const acc = [];
+    function next() {
+      reader.readEntries((batch) => {
+        if (!batch.length) resolve(acc);
+        else { acc.push.apply(acc, batch); next(); }
+      }, reject);
+    }
+    next();
+  });
+}
+
+async function collectCsvFromEntry(entry, out) {
+  if (!entry) return;
+  if (entry.isFile) {
+    const file = await fileFromEntry(entry);
+    if (isTopLevelCsvFile(file)) out.push(file);
+  } else if (entry.isDirectory) {
+    if (/__MACOSX/i.test(entry.name || "")) return;
+    const children = await readAllEntries(entry.createReader());
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (child && child.isFile) {
+        const file = await fileFromEntry(child);
+        if (isTopLevelCsvFile(file)) out.push(file);
+      }
+    }
+  }
+}
+
+async function filesFromDataTransfer(dt) {
+  const items = dt && dt.items;
+  if (items && items.length) {
+    const entries = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === "file" && typeof item.webkitGetAsEntry === "function") {
+        const entry = item.webkitGetAsEntry();
+        if (entry) entries.push(entry);
+      }
+    }
+    if (entries.length) {
+      const out = [];
+      for (let i = 0; i < entries.length; i++) await collectCsvFromEntry(entries[i], out);
+      return out;
+    }
+  }
+  return Array.from((dt && dt.files) || []).filter(isTopLevelCsvFile);
+}
+
+const WATCH_MS = 5000;
+let watchTimer = null;
+let watchHandle = null;
+let watchPrints = new Map();
+
+function setWatchStatus(text) {
+  state.watchStatus = text || "";
+  const el = document.getElementById("watchStatus");
+  if (el) el.textContent = state.watchStatus;
+}
+
+function stopWatch() {
+  if (watchTimer) {
+    clearInterval(watchTimer);
+    watchTimer = null;
+  }
+  watchHandle = null;
+  watchPrints = new Map();
+  setWatchStatus("");
+}
+
+function openWatchDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("ledger-watch-folder", 1);
+    req.onupgradeneeded = function () {
+      if (!req.result.objectStoreNames.contains("kv")) req.result.createObjectStore("kv");
+    };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
+
+async function saveDirHandle(handle) {
+  try {
+    const db = await openWatchDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("kv", "readwrite");
+      tx.objectStore("kv").put(handle, "dir");
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  } catch (e) {}
+}
+
+async function loadDirHandle() {
+  try {
+    const db = await openWatchDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("kv", "readonly");
+      const req = tx.objectStore("kv").get("dir");
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { reject(req.error); };
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function ensureReadPermission(handle) {
+  const opts = { mode: "read" };
+  if (handle.queryPermission) {
+    const q = await handle.queryPermission(opts);
+    if (q === "granted") return true;
+  }
+  if (handle.requestPermission) {
+    const r = await handle.requestPermission(opts);
+    return r === "granted";
+  }
+  return true;
+}
+
+async function csvFilesFromDirHandle(dirHandle) {
+  const out = [];
+  for await (const entry of dirHandle.values()) {
+    if (entry.kind === "file" && isCsvName(entry.name) && !isJunkCsvPath(entry.name, entry.name)) {
+      const file = await entry.getFile();
+      if (file.size > 0) out.push({ file: file, path: entry.name });
+    }
+  }
+  return out;
+}
+
+async function scanWatchedDir() {
+  if (!watchHandle) return;
+  try {
+    const items = await csvFilesFromDirHandle(watchHandle);
+    const fresh = [];
+    const nextPrints = new Map();
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const fp = item.path + "|" + item.file.size + "|" + item.file.lastModified;
+      nextPrints.set(item.path, fp);
+      if (watchPrints.get(item.path) !== fp) fresh.push(item.file);
+    }
+    watchPrints = nextPrints;
+    const now = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    setWatchStatus("Watching /" + watchHandle.name + " · last scan " + now);
+    if (fresh.length) await ingestFileList(fresh);
+  } catch (e) {
+    setWatchStatus("Watch error — use Load folder in the menu to retry");
+  }
+}
+
+function startWatch(handle) {
+  if (watchTimer) {
+    clearInterval(watchTimer);
+    watchTimer = null;
+  }
+  watchHandle = handle;
+  watchPrints = new Map();
+  scanWatchedDir();
+  watchTimer = setInterval(scanWatchedDir, WATCH_MS);
+}
+
+async function resumeWatch() {
+  const handle = await loadDirHandle();
+  if (!handle) return;
+  try {
+    const ok = await ensureReadPermission(handle);
+    if (ok) startWatch(handle);
+    else setWatchStatus("Folder watch paused — use Load folder in the menu to resume");
+  } catch (e) {
+    setWatchStatus("Folder watch paused — use Load folder in the menu to resume");
+  }
+}
+
+function showDropOverlay(on) {
+  const el = document.getElementById("dropOverlay");
+  if (el) el.classList.toggle("on", !!on);
+  state.dropActive = !!on;
+}
+
+
+function emptyStateHtml() {
+  const fileProto = location.protocol === "file:";
+  const csvSteps =
+    "<p>CSV is an escape hatch:</p>" +
+    "<ol>" +
+    "<li>Sign in to Wealthsimple on the web.</li>" +
+    "<li>Open the <strong>Activities</strong> tab and download the CSV (one file per month is fine).</li>" +
+    "<li>The common file has columns <code>date, transaction, description, amount, balance, currency</code> (a statement export). An activities-export with <code>transaction_date</code> / <code>unit_price</code> also works.</li>" +
+    "<li>Use the menu (top right): <strong>Load folder</strong> for a directory of monthly CSVs (it keeps watching while this tab is open), or <strong>Choose file</strong> for a single export.</li>" +
+    "<li>Or drop CSVs anywhere on this page.</li>" +
+    "</ol>" +
+    "<p>Share-lending rows (on loan / loan ended) are not buys or sells, so they do not hit P&amp;L.</p>" +
+    '<div class="warn">Do not open the CSV in Excel first. Excel rewrites dates and can smash tickers. Import the file Wealthsimple wrote.</div>';
+  const csvQuiet = '<p class="quiet">CSV import is still in the menu if you need it.</p>';
+  if (fileProto) {
+    return (
+      '<div class="empty"><h2>No activity loaded</h2>' +
+      "<p>Run <code>python3 bagholder.py</code> and open the printed URL to connect Wealthsimple from this computer.</p>" +
+      csvSteps +
+      "</div>"
+    );
+  }
+  if (HAS_LOCAL_API && state.ws.connected && state.ws.syncing) {
+    return (
+      '<div class="empty empty-load">' +
+      '<div class="spin" aria-hidden="true"></div>' +
+      '<h2>Importing activity</h2>' +
+      '<p id="importStep">' + esc(state.ws.syncStep || "Pulling Wealthsimple accounts and trades.") + "</p>" +
+      '<p id="importElapsed">' + esc(importElapsedText()) + "</p>" +
+      '<p class="quiet">First import can take a few minutes if you have years of activity.</p>' +
+      "</div>"
+    );
+  }
+  if (HAS_LOCAL_API && state.ws.connected && state.ws.error) {
+    return (
+      '<div class="empty"><h2>Couldn\u2019t import activity</h2>' +
+      '<div class="warn">' + esc(state.ws.error) + "</div>" +
+      '<div class="cta"><button type="button" class="btn primary" id="emptySync">Try again</button></div>' +
+      csvQuiet +
+      "</div>"
+    );
+  }
+  if (HAS_LOCAL_API && state.ws.connected && !state.ws.syncing && !state.ws.error) {
+    return (
+      '<div class="empty"><h2>No activity yet</h2>' +
+      "<p>The session is connected and the book is empty.</p>" +
+      '<div class="cta"><button type="button" class="btn primary" id="emptySync">Sync now</button></div>' +
+      csvQuiet +
+      "</div>"
+    );
+  }
+  if (HAS_LOCAL_API && !state.ws.connected) {
+    return (
+      '<div class="empty"><h2>No activity loaded</h2>' +
+      "<p>Connect Wealthsimple to pull trades automatically. CSV import is still here if you need it.</p>" +
+      '<div class="cta"><button type="button" class="btn primary" id="emptyConnect">Connect Wealthsimple</button></div>' +
+      csvSteps +
+      "</div>"
+    );
+  }
+  return (
+    '<div class="empty"><h2>No activity loaded</h2>' +
+    "<p>Drop a folder of monthly Wealthsimple CSVs (or a single export). Bagholder reconstructs round-trips, P&amp;L, and an equity curve in this file. Nothing is uploaded.</p>" +
+    csvSteps +
+    "</div>"
+  );
+}
+
+function relSync(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const sec = Math.round((Date.now() - t) / 1000);
+  if (sec < 45) return "Synced just now";
+  if (sec < 120) return "Synced 1 min ago";
+  if (sec < 3600) return "Synced " + Math.round(sec / 60) + " min ago";
+  return "Synced " + Math.round(sec / 3600) + "h ago";
+}
+
+function wsStatusText() {
+  if (!HAS_LOCAL_API && !state.ws.available) return "";
+  if (state.ws.syncing) return state.ws.syncStep || "Importing activity…";
+  if (state.ws.capturing || (state.connectOpen && !state.ws.connected)) return "Waiting for Wealthsimple login…";
+  if (state.ws.error) return state.ws.error;
+  if (state.ws.connected && state.ws.lastSync) {
+    const rel = relSync(state.ws.lastSync);
+    if (rel) return rel;
+  }
+  if (state.ws.connected) return "Connected";
+  return "";
+}
+
+function menuItemsHtml() {
+  let html = "";
+  if (HAS_LOCAL_API && !state.ws.connected) {
+    html += '<button type="button" id="connectWs">Connect Wealthsimple</button>';
+  }
+  if (HAS_LOCAL_API && state.ws.connected) {
+    html += '<button type="button" id="syncNow">Sync now</button>';
+    html += '<button type="button" class="danger" id="disconnectWs">Disconnect</button>';
+  }
+  if (HAS_LOCAL_API) html += '<div class="sep"></div>';
+  html += '<button type="button" id="addTrade">Add trade</button>';
+  html += '<button type="button" id="loadFolder">Load folder</button>';
+  html += '<button type="button" id="chooseFile">Choose file</button>';
+  html += '<button type="button" class="danger" id="clear">Clear data</button>';
+  return html;
+}
+
+function renderConnectModal() {
+  if (!state.connectOpen) return "";
+  const capturing = !!state.ws.capturing;
+  const err = state.ws.error ? '<div class="warn">' + esc(state.ws.error) + "</div>" : "";
+  const bodyText = capturing
+    ? "<p>Log in with your passkey in the Chrome window. This screen updates when Bagholder has the session.</p>"
+    : "<p>A browser window will open to Wealthsimple. Log in with your passkey. When you&rsquo;re in, you can close that window — Bagholder will sync here.</p>" +
+      '<p class="quiet">Session stays on this computer. Wealthsimple has no official app login.</p>';
+  const continueBtn = capturing
+    ? ""
+    : '<button class="btn primary" type="button" id="confirmConnect">Continue</button>';
+  return (
+    '<div class="modal-overlay" id="connectOverlay">' +
+    '<div class="modal" id="connectModal">' +
+    '<div class="modal-head"><div><h2>Connect Wealthsimple</h2></div>' +
+    '<button class="btn ghost" type="button" id="closeConnect" style="margin-left:auto">Close</button></div>' +
+    '<div class="modal-body">' +
+    bodyText +
+    err +
+    '<div class="modal-actions">' +
+    '<button class="btn ghost" type="button" id="cancelConnect">Cancel</button>' +
+    continueBtn +
+    "</div></div></div></div>"
+  );
+}
+
+function renderTradeModal() {
+  if (!state.tradeOpen) return "";
+  const today = new Date().toISOString().slice(0, 10);
+  const accounts = state.ws.accounts || [];
+  let acc = '<option value="manual">Manual</option>';
+  accounts.forEach((a) => {
+    const id = a.id || "";
+    const label = (a.nickname || a.unifiedAccountType || id) + (id ? " · " + id.slice(0, 8) : "");
+    acc += "<option value='" + esc(id) + "'>" + esc(label) + "</option>";
+  });
+  return (
+    '<div class="modal-overlay" id="tradeOverlay">' +
+    '<div class="modal" id="tradeModal">' +
+    '<div class="modal-head"><div><h2>Add trade</h2></div>' +
+    '<button class="btn ghost" type="button" id="closeTrade" style="margin-left:auto">Close</button></div>' +
+    '<div class="modal-body"><div class="edit">' +
+    '<div class="row2"><div><label>Date</label><input type="date" id="trDate" value="' + today + '"/></div>' +
+    '<div><label>Symbol</label><input type="text" id="trSymbol" placeholder="Ticker" autocomplete="off"/></div></div>' +
+    '<div class="row2"><div><label>Side</label><select id="trSide"><option>BUY</option><option>SELL</option></select></div>' +
+    '<div><label>Currency</label><select id="trCcy"><option>CAD</option><option>USD</option></select></div></div>' +
+    '<div class="row2"><div><label>Quantity</label><input type="number" id="trQty" min="0" step="any" value="1"/></div>' +
+    '<div><label>Price</label><input type="number" id="trPrice" min="0" step="any" value=""/></div></div>' +
+    "<label>Account</label><select id='trAccount'>" + acc + "</select>" +
+    '</div><div class="modal-actions">' +
+    '<button class="btn ghost" type="button" id="cancelTrade">Cancel</button>' +
+    '<button class="btn primary" type="button" id="saveTrade">Add</button>' +
+    "</div></div></div></div>"
+  );
+}
+
+function api(method, path, body) {
+  const headers = { "X-Bagholder": "1" };
+  if (body) headers["Content-Type"] = "application/json";
+  return fetch(path, {
+    method: method,
+    headers: headers,
+    body: body ? JSON.stringify(body) : undefined,
+  }).then((r) => r.json().catch(() => ({ ok: false }))).catch(() => ({ ok: false, error: "offline" }));
+}
+
+function replaceWsActivities(book) {
+  const acts = (book && book.activities) ? book.activities : [];
+  state.activities = ensureBookIds(acts);
+  if (book && book.accounts) state.ws.accounts = book.accounts;
+  state.navHistory = (book && book.navHistory) ? book.navHistory.slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); }) : [];
+  if (book && book.syncedAt) state.ws.lastSync = book.syncedAt;
+  window.__wsBookAt = state.ws.lastSync || "";
+  persist();
+  render();
+  ensureFxRates();
+  ensureSpyPrices();
+}
+
+function importElapsedText() {
+  const t0 = state.ws.syncStartedAt;
+  if (!t0) return "Working · 0s";
+  const sec = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+  if (sec < 60) return "Working · " + sec + "s";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return "Working · " + m + "m " + String(s).padStart(2, "0") + "s";
+}
+
+function applyWsStatus(st) {
+  if (!st) return false;
+  const prevSync = state.ws.lastSync;
+  const prevCount = state.ws.activityCount;
+  state.ws.available = true;
+  state.ws.connected = !!st.connected;
+  state.ws.email = st.email || "";
+  state.ws.syncing = !!st.syncing;
+  state.ws.capturing = !!st.capturing;
+  state.ws.lastSync = st.lastSync || state.ws.lastSync || "";
+  state.ws.activityCount = st.activityCount || 0;
+  state.ws.error = st.error || "";
+  state.ws.syncStep = st.syncStep || "";
+  if (st.syncing && !state.ws.syncStartedAt) state.ws.syncStartedAt = Date.now();
+  if (!st.syncing) state.ws.syncStartedAt = 0;
+  const el = document.getElementById("watchStatus");
+  if (el) el.textContent = wsStatusText() || state.watchStatus || "";
+  const changed = (state.ws.lastSync && state.ws.lastSync !== prevSync) || (state.ws.activityCount !== prevCount);
+  return changed;
+}
+
+function fetchWsBook() {
+  return api("GET", "/api/book").then((book) => {
+    if (book && book.ok && Array.isArray(book.activities)) replaceWsActivities(book);
+  });
+}
+
+function pollWsStatus() {
+  if (!HAS_LOCAL_API) return Promise.resolve();
+  return api("GET", "/api/status").then((st) => {
+    if (!st || st.ok === false) {
+      state.ws.available = false;
+      return;
+    }
+    const prev = {
+      connected: state.ws.connected,
+      syncing: state.ws.syncing,
+      error: state.ws.error,
+      capturing: state.ws.capturing,
+      connectOpen: state.connectOpen,
+      syncStep: state.ws.syncStep,
+    };
+    const changed = applyWsStatus(st);
+    if (state.ws.connected && state.ws.capturing === false && state.connectOpen) {
+      state.connectOpen = false;
+    }
+    const screenChanged = (
+      prev.connected !== state.ws.connected ||
+      prev.syncing !== state.ws.syncing ||
+      prev.error !== state.ws.error ||
+      prev.capturing !== state.ws.capturing ||
+      prev.connectOpen !== state.connectOpen ||
+      prev.syncStep !== state.ws.syncStep
+    );
+    if (changed && state.ws.connected && state.ws.activityCount > 0 && state.ws.lastSync !== window.__wsBookAt) {
+      return fetchWsBook();
+    }
+    if (screenChanged) render();
+    else {
+      const el = document.getElementById("watchStatus");
+      if (el) el.textContent = wsStatusText() || state.watchStatus || "";
+    }
+  });
+}
+
+function startWsPoll() {
+  if (window.__wsPollStarted || !HAS_LOCAL_API) return;
+  window.__wsPollStarted = true;
+  setInterval(pollWsStatus, 20000);
+  setInterval(function () {
+    if (state.ws.capturing || state.ws.syncing) pollWsStatus();
+    if (state.ws.syncing) {
+      const el = document.getElementById("importElapsed");
+      if (el) el.textContent = importElapsedText();
+    }
+  }, 1000);
+}
+
+function waitForConnect(timeoutMs) {
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      api("GET", "/api/status").then((st) => {
+        applyWsStatus(st);
+        render();
+        if (st && st.connected) return resolve(st);
+        if (Date.now() - t0 > timeoutMs) {
+          if (!st || !st.connected) {
+            state.ws.error = "No session yet. Finish login in the Chrome window, then wait a few seconds.";
+            state.ws.capturing = false;
+          }
+          return resolve(st);
+        }
+        setTimeout(tick, 1500);
+      });
+    };
+    tick();
+  });
+}
+
+function beginConnect() {
+  state.ws.error = "";
+  state.connectOpen = true;
+  state.menuOpen = false;
+  render();
+}
+
+function confirmConnect() {
+  state.ws.error = "";
+  state.ws.capturing = true;
+  render();
+  api("POST", "/api/login/start").then((res) => {
+    if (!res || !res.ok) {
+      state.ws.capturing = false;
+      state.ws.error = (res && res.error) || "Install Chrome. Passkey login has to happen on Wealthsimple’s site.";
+      render();
+      return;
+    }
+    setWatchStatus("Waiting for Wealthsimple login…");
+    waitForConnect(180000).then((st) => {
+      if (!st || !st.connected) {
+        state.ws.capturing = false;
+        render();
+        return;
+      }
+      state.connectOpen = false;
+      state.ws.syncing = true;
+      setWatchStatus("Syncing…");
+      render();
+      api("POST", "/api/sync").then(() => {
+        const t0 = Date.now();
+        const waitSync = () => {
+          api("GET", "/api/status").then((s2) => {
+            applyWsStatus(s2);
+            if (s2 && s2.error && !s2.syncing) {
+              state.ws.syncing = false;
+              render();
+              return;
+            }
+            if (s2 && !s2.syncing && (s2.lastSync || s2.activityCount > 0)) {
+              return fetchWsBook().then(() => { state.ws.syncing = false; render(); });
+            }
+            if (Date.now() - t0 > 120000) {
+              state.ws.syncing = false;
+              if (!state.ws.error) state.ws.error = "Sync timed out.";
+              render();
+              return;
+            }
+            setTimeout(waitSync, 1500);
+          });
+        };
+        waitSync();
+      });
+    });
+  });
+}
+
+function syncNow() {
+  if (!HAS_LOCAL_API || !state.ws.connected) return;
+  state.ws.error = "";
+  state.ws.syncing = true;
+  state.menuOpen = false;
+  setWatchStatus("Syncing…");
+  render();
+  api("POST", "/api/sync").then(() => {
+    const t0 = Date.now();
+    const waitSync = () => {
+      api("GET", "/api/status").then((s2) => {
+        applyWsStatus(s2);
+        if (s2 && s2.error && !s2.syncing) {
+          state.ws.syncing = false;
+          render();
+          return;
+        }
+        if (s2 && !s2.syncing && (s2.lastSync || s2.activityCount > 0)) {
+          return fetchWsBook().then(() => { state.ws.syncing = false; render(); });
+        }
+        if (Date.now() - t0 > 120000) {
+          state.ws.syncing = false;
+          if (!state.ws.error) state.ws.error = "Sync timed out.";
+          render();
+          return;
+        }
+        setTimeout(waitSync, 1500);
+      });
+    };
+    waitSync();
+  });
+}
+
+function disconnectWs() {
+  state.menuOpen = false;
+  api("POST", "/api/disconnect").then(() => {
+    state.ws.connected = false;
+    state.ws.email = "";
+    state.ws.lastSync = "";
+    state.ws.capturing = false;
+    state.ws.syncing = false;
+    state.ws.accounts = [];
+    render();
+  });
+}
+
+function saveManualTrade() {
+  const date = (document.getElementById("trDate") || {}).value || "";
+  const symbol = String((document.getElementById("trSymbol") || {}).value || "").trim().toUpperCase();
+  const side = String((document.getElementById("trSide") || {}).value || "BUY").toUpperCase();
+  const qty = Number((document.getElementById("trQty") || {}).value || 0);
+  const price = Number((document.getElementById("trPrice") || {}).value || 0);
+  const currency = String((document.getElementById("trCcy") || {}).value || "CAD").toUpperCase();
+  const accountId = String((document.getElementById("trAccount") || {}).value || "manual") || "manual";
+  if (!symbol || !(qty > 0) || !(price >= 0) || !date) return;
+  const payload = { date: date, symbol: symbol, side: side, qty: qty, price: price, currency: currency, accountId: accountId };
+  const finish = (act) => {
+    if (act) {
+      const { merged } = mergeActivities(state.activities, [act]);
+      state.activities = ensureBookIds(merged);
+    }
+    state.tradeOpen = false;
+    persist();
+    render();
+    ensureFxRates();
+    ensureSpyPrices();
+  };
+  if (HAS_LOCAL_API) {
+    api("POST", "/api/book/append", payload).then((res) => {
+      if (res && res.ok && res.activity) finish(res.activity);
+      else {
+        const signedQty = side === "SELL" ? -Math.abs(qty) : Math.abs(qty);
+        const cash = side === "SELL" ? Math.abs(qty * price) : -Math.abs(qty * price);
+        finish({
+          id: "manual|" + date + "|" + accountId + "|" + symbol + "|" + side + "|" + qty + "|" + price + "|" + Date.now(),
+          transactionDate: date,
+          settlementDate: date,
+          accountId: accountId,
+          bookId: accountId,
+          accountType: accountId === "manual" ? "Manual" : "",
+          activityType: "Trade",
+          activitySubType: side,
+          description: (side === "BUY" ? "Buy" : "Sell") + " " + qty + " " + symbol + " @ " + price,
+          direction: side === "BUY" ? "DEBIT" : "CREDIT",
+          symbol: symbol,
+          name: symbol,
+          currency: currency,
+          quantity: signedQty,
+          unitPrice: price,
+          commission: 0,
+          netCashAmount: cash,
+          category: "trade",
+          source: "manual",
+        });
+      }
+    });
+  } else {
+    const signedQty = side === "SELL" ? -Math.abs(qty) : Math.abs(qty);
+    const cash = side === "SELL" ? Math.abs(qty * price) : -Math.abs(qty * price);
+    finish({
+      id: "manual|" + date + "|" + accountId + "|" + symbol + "|" + side + "|" + qty + "|" + price + "|" + Date.now(),
+      transactionDate: date,
+      settlementDate: date,
+      accountId: accountId,
+      bookId: accountId,
+      accountType: accountId === "manual" ? "Manual" : "",
+      activityType: "Trade",
+      activitySubType: side,
+      description: (side === "BUY" ? "Buy" : "Sell") + " " + qty + " " + symbol + " @ " + price,
+      direction: side === "BUY" ? "DEBIT" : "CREDIT",
+      symbol: symbol,
+      name: symbol,
+      currency: currency,
+      quantity: signedQty,
+      unitPrice: price,
+      commission: 0,
+      netCashAmount: cash,
+      category: "trade",
+      source: "manual",
+    });
+  }
+}
+
+function bootLocalApi() {
+  if (!HAS_LOCAL_API) return;
+  startWsPoll();
+  api("GET", "/api/status").then((st) => {
+    if (!st || st.ok === false) return;
+    applyWsStatus(st);
+    const load = (st.connected && st.activityCount > 0)
+      ? api("GET", "/api/book").then((book) => {
+          if (book && book.ok && Array.isArray(book.activities)) replaceWsActivities(book);
+        })
+      : Promise.resolve();
+    load.then(() => {
+      const last = st.lastSync ? Date.parse(st.lastSync) : 0;
+      const stale = !last || (Date.now() - last) > 2 * 60 * 1000;
+      if (st.connected && stale) {
+        api("POST", "/api/sync");
+      }
+      render();
+    });
+  });
+}
+
+function bindDocumentOnce() {
+  if (window.__bagholderDocBound) return;
+  window.__bagholderDocBound = true;
+  document.addEventListener("dragover", (e) => {
+    const types = e.dataTransfer && e.dataTransfer.types;
+    if (!types || (types.contains ? !types.contains("Files") : ![].slice.call(types).includes("Files"))) return;
+    e.preventDefault();
+    showDropOverlay(true);
+  });
+  document.addEventListener("dragleave", (e) => {
+    if (e.relatedTarget) return;
+    showDropOverlay(false);
+  });
+  document.addEventListener("drop", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    showDropOverlay(false);
+    filesFromDataTransfer(e.dataTransfer).then((files) => {
+      if (files && files.length) ingestFileList(files);
+    });
+  });
+  document.addEventListener("click", () => {
+    if (!state.menuOpen && !state.filterOpen) return;
+    state.menuOpen = false;
+    state.filterOpen = false;
+    const menu = document.getElementById("menu");
+    const panel = document.getElementById("filterPanel");
+    const fbtn = document.getElementById("filterBtn");
+    if (menu) menu.classList.remove("open");
+    if (panel) panel.classList.remove("open");
+    if (fbtn) fbtn.classList.remove("on");
+  });
+}
+
+function bind() {
+  bindDocumentOnce();
+  const file = document.getElementById("file");
+  const folder = document.getElementById("folder");
+  file.addEventListener("change", () => {
+    if (file.files && file.files.length) ingestFileList(file.files);
+    file.value = "";
+  });
+  if (folder) {
+    folder.addEventListener("change", () => {
+      if (folder.files && folder.files.length) ingestFileList(folder.files);
+      folder.value = "";
+    });
+  }
+  function closePanels() {
+    state.menuOpen = false;
+    state.filterOpen = false;
+    const menu = document.getElementById("menu");
+    const panel = document.getElementById("filterPanel");
+    const fbtn = document.getElementById("filterBtn");
+    if (menu) menu.classList.remove("open");
+    if (panel) panel.classList.remove("open");
+    if (fbtn) fbtn.classList.remove("on");
+  }
+  const menuBtn = document.getElementById("menuBtn");
+  const menu = document.getElementById("menu");
+  if (menuBtn && menu) {
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !state.menuOpen;
+      closePanels();
+      state.menuOpen = open;
+      menu.classList.toggle("open", open);
+    });
+    menu.addEventListener("click", (e) => e.stopPropagation());
+  }
+  const filterBtn = document.getElementById("filterBtn");
+  const filterPanel = document.getElementById("filterPanel");
+  if (filterBtn && filterPanel) {
+    filterBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !state.filterOpen;
+      closePanels();
+      state.filterOpen = open;
+      filterPanel.classList.toggle("open", open);
+      filterBtn.classList.toggle("on", open);
+    });
+    filterPanel.addEventListener("click", (e) => e.stopPropagation());
+  }
+  const resetFilters = document.getElementById("resetFilters");
+  if (resetFilters) {
+    resetFilters.addEventListener("click", () => {
+      state.filters.from = "";
+      state.filters.to = "";
+      state.filters.symbol = "";
+      state.filterOpen = true;
+      persist();
+      render();
+    });
+  }
+  function closeConnect() { state.connectOpen = false; render(); }
+  function closeTrade() { state.tradeOpen = false; render(); }
+  const connectWs = document.getElementById("connectWs");
+  if (connectWs) connectWs.addEventListener("click", (e) => { e.stopPropagation(); beginConnect(); });
+  const emptyConnect = document.getElementById("emptyConnect");
+  if (emptyConnect) emptyConnect.addEventListener("click", (e) => { e.stopPropagation(); beginConnect(); });
+  const emptySync = document.getElementById("emptySync");
+  if (emptySync) emptySync.addEventListener("click", (e) => { e.stopPropagation(); syncNow(); });
+  const confirmConnectBtn = document.getElementById("confirmConnect");
+  if (confirmConnectBtn) confirmConnectBtn.addEventListener("click", (e) => { e.stopPropagation(); confirmConnect(); });
+  const cancelConnect = document.getElementById("cancelConnect");
+  if (cancelConnect) cancelConnect.addEventListener("click", (e) => { e.stopPropagation(); closeConnect(); });
+  const closeConnectBtn = document.getElementById("closeConnect");
+  if (closeConnectBtn) closeConnectBtn.addEventListener("click", (e) => { e.stopPropagation(); closeConnect(); });
+  const connectModal = document.getElementById("connectModal");
+  if (connectModal) connectModal.addEventListener("click", (e) => e.stopPropagation());
+  const connectOverlay = document.getElementById("connectOverlay");
+  if (connectOverlay) connectOverlay.addEventListener("click", closeConnect);
+  const syncNowBtn = document.getElementById("syncNow");
+  if (syncNowBtn) syncNowBtn.addEventListener("click", (e) => { e.stopPropagation(); syncNow(); });
+  const disconnectBtn = document.getElementById("disconnectWs");
+  if (disconnectBtn) disconnectBtn.addEventListener("click", (e) => { e.stopPropagation(); disconnectWs(); });
+  const addTrade = document.getElementById("addTrade");
+  if (addTrade) addTrade.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.menuOpen = false;
+    state.tradeOpen = true;
+    render();
+  });
+  const tradeModal = document.getElementById("tradeModal");
+  if (tradeModal) tradeModal.addEventListener("click", (e) => e.stopPropagation());
+  const tradeOverlay = document.getElementById("tradeOverlay");
+  if (tradeOverlay) tradeOverlay.addEventListener("click", closeTrade);
+  const closeTradeBtn = document.getElementById("closeTrade");
+  if (closeTradeBtn) closeTradeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeTrade(); });
+  const cancelTrade = document.getElementById("cancelTrade");
+  if (cancelTrade) cancelTrade.addEventListener("click", (e) => { e.stopPropagation(); closeTrade(); });
+  const saveTrade = document.getElementById("saveTrade");
+  if (saveTrade) saveTrade.addEventListener("click", (e) => { e.stopPropagation(); saveManualTrade(); });
+
+  document.getElementById("chooseFile").addEventListener("click", () => {
+    state.menuOpen = false;
+    document.getElementById("file").click();
+  });
+  document.getElementById("loadFolder").addEventListener("click", async () => {
+    state.menuOpen = false;
+    if (typeof window.showDirectoryPicker === "function") {
+      try {
+        const handle = await window.showDirectoryPicker({ mode: "read" });
+        await saveDirHandle(handle);
+        startWatch(handle);
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        document.getElementById("folder").click();
+      }
+      return;
+    }
+    setWatchStatus("Loaded from folder. Live watch needs Chrome/Edge (not a file:// page).");
+    document.getElementById("folder").click();
+  });
+  document.getElementById("clear").addEventListener("click", () => {
+    state.menuOpen = false;
+    if (!confirm("Clear all imported activity and notes from this browser?")) return;
+    stopWatch();
+    state.activities = [];
+    state.notes = {};
+    state.filters = { from: "", to: "", account: "", symbol: "", q: "" };
+    state.reports = [];
+    state.selected = null;
+    state.filterOpen = false;
+    persist();
+    render();
+  });
+  const dismiss = document.getElementById("dismiss");
+  if (dismiss) dismiss.addEventListener("click", () => { state.reports = []; render(); });
+  const from = document.getElementById("from");
+  if (from) {
+    from.addEventListener("change", () => { state.filters.from = from.value; state.filterOpen = true; persist(); render(); });
+    document.getElementById("to").addEventListener("change", (e) => { state.filters.to = e.target.value; state.filterOpen = true; persist(); render(); });
+    document.getElementById("symbol").addEventListener("change", (e) => { state.filters.symbol = e.target.value; state.filterOpen = true; persist(); render(); });
+  }
+  const yearSel = document.getElementById("year");
+  if (yearSel) {
+    yearSel.addEventListener("change", (e) => {
+      const y = e.target.value;
+      if (!y) {
+        state.filters.from = "";
+        state.filters.to = "";
+      } else {
+        state.filters.from = y + "-01-01";
+        state.filters.to = y + "-12-31";
+      }
+      state.filterOpen = true;
+      persist();
+      render();
+    });
+  }
+  const search = document.getElementById("search");
+  if (search) {
+    search.addEventListener("input", () => { state.filters.q = search.value; });
+    search.addEventListener("change", () => { state.filters.q = search.value; render(); });
+    search.addEventListener("keydown", (e) => { if (e.key === "Enter") { state.filters.q = search.value; render(); } });
+  }
+  document.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => { state.tab = btn.getAttribute("data-tab"); render(); });
+  });
+  document.querySelectorAll("th.sort").forEach((th) => {
+    th.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const tab = th.getAttribute("data-sort-tab");
+      const key = th.getAttribute("data-sort-key");
+      const cur = state.sort[tab] || { key: key, dir: "desc" };
+      const dir = cur.key === key && cur.dir === "desc" ? "asc" : "desc";
+      state.sort[tab] = { key: key, dir: dir };
+      render();
+    });
+  });
+  document.querySelectorAll("table.blotter tbody tr[data-id]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const id = tr.getAttribute("data-id");
+      const { closed } = matchFifo(state.activities);
+      const t = applyFx(closed).find((x) => x.id === id);
+      state.selected = t || null;
+      render();
+    });
+  });
+  const overlay = document.getElementById("overlay");
+  const closeDrawer = document.getElementById("closeDrawer");
+  if (overlay) overlay.addEventListener("click", () => { state.selected = null; render(); });
+  if (closeDrawer) closeDrawer.addEventListener("click", () => { state.selected = null; render(); });
+  const thesis = document.getElementById("thesis");
+  if (thesis) {
+    const saveNote = () => {
+      const id = state.selected.id;
+      const cur = state.notes[id] || { thesis: "", tag: "", grade: "" };
+      cur.thesis = thesis.value;
+      cur.tag = document.getElementById("tag").value;
+      cur.tradeId = id;
+      state.notes[id] = cur;
+      persist();
+    };
+    thesis.addEventListener("change", saveNote);
+    document.getElementById("tag").addEventListener("change", saveNote);
+    document.querySelectorAll(".grades button").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = state.selected.id;
+        const cur = state.notes[id] || { thesis: "", tag: "", grade: "" };
+        cur.grade = b.getAttribute("data-grade");
+        cur.tradeId = id;
+        state.notes[id] = cur;
+        persist();
+        render();
+      });
+    });
+  }
+}
+
+loadPersisted();
+bootLocalApi();
+render();
+resumeWatch();
+ensureFxRates();
+ensureSpyPrices();
+
+</script>
+</body>
+</html>
