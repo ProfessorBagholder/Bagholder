@@ -371,6 +371,74 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertTrue(bagholder.CLIENT_ID_PATH.exists())
         self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
 
+    def test_token_info_uid_is_stored(self):
+        sess = {"access_token": "tok", "refresh_token": "r"}
+        info = {"application_uid": FAKE_CLIENT_ID}
+        found = bagholder.apply_token_info_client_id(sess, info)
+        self.assertEqual(found, FAKE_CLIENT_ID)
+        self.assertEqual(sess.get("client_id"), FAKE_CLIENT_ID)
+        self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
+
+        sess2 = {"access_token": "tok"}
+        nested = bagholder.client_id_from_token_info({"application": {"uid": FAKE_CLIENT_ID}})
+        self.assertEqual(nested, FAKE_CLIENT_ID)
+        bagholder.apply_token_info_client_id(sess2, {"application": {"uid": FAKE_CLIENT_ID}})
+        self.assertEqual(sess2.get("client_id"), FAKE_CLIENT_ID)
+
+    def test_boot_stores_client_id_from_token_info_before_refresh(self):
+        bagholder.save_session({
+            "access_token": "tok",
+            "refresh_token": "r",
+            "expires_at": time_now_minus(),
+        })
+        seen = {}
+
+        def fake_refresh(sess):
+            seen["client_id"] = sess.get("client_id")
+            return True
+
+        with mock.patch.object(
+            bagholder,
+            "token_info",
+            return_value={"application_uid": FAKE_CLIENT_ID},
+        ):
+            with mock.patch.object(bagholder, "refresh_session", side_effect=fake_refresh):
+                with mock.patch.object(bagholder, "scrape_client_id") as scrape:
+                    bagholder.boot_session()
+        scrape.assert_not_called()
+        self.assertEqual(seen.get("client_id"), FAKE_CLIENT_ID)
+        saved = bagholder.load_session()
+        self.assertEqual(saved.get("client_id"), FAKE_CLIENT_ID)
+        self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
+
+    def test_capture_stores_client_id_from_token_info_uid(self):
+        with mock.patch.object(
+            bagholder,
+            "token_info",
+            return_value={"application_uid": FAKE_CLIENT_ID, "identity_canonical_id": "ident-1"},
+        ):
+            with mock.patch.object(bagholder, "scrape_client_id") as scrape:
+                with mock.patch.object(bagholder, "refresh_session", return_value=True):
+                    with mock.patch.object(bagholder.threading, "Thread"):
+                        result = bagholder.capture_tokens({
+                            "access_token": "tok",
+                            "refresh_token": "r",
+                        })
+        self.assertTrue(result.get("ok"))
+        scrape.assert_not_called()
+        saved = bagholder.load_session()
+        self.assertEqual(saved.get("client_id"), FAKE_CLIENT_ID)
+        self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
+
+    def test_header_copy_and_hover_exist(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("copyWatchStatus", html)
+        self.assertIn('id="watchCopy"', html)
+        self.assertIn("watch-status", html)
+        self.assertIn("watchStatusFullText", html)
+        self.assertIn('title="', html)
+        self.assertIn("navigator.clipboard.writeText", html)
+
     def test_refresh_session_without_client_id_does_not_scrape_or_post(self):
         bagholder.save_session({"refresh_token": "r"})
         self.assertFalse(bagholder.CLIENT_ID_PATH.exists())

@@ -1359,6 +1359,36 @@ def token_info(sess):
     return data or {}
 
 
+def client_id_from_token_info(info):
+    """OAuth application uid that issued these tokens. Unofficial token/info shape."""
+    if not isinstance(info, dict):
+        return ""
+    uid = info.get("application_uid")
+    if uid:
+        return str(uid).strip()
+    app = info.get("application")
+    if isinstance(app, dict) and app.get("uid"):
+        return str(app.get("uid")).strip()
+    return ""
+
+
+def apply_token_info_client_id(sess, info=None):
+    """Write token/info application uid to the session and CLIENT_ID_PATH. Do not scrape."""
+    if not sess or not sess.get("access_token"):
+        return ""
+    if info is None:
+        try:
+            info = token_info(sess) or {}
+        except Exception:
+            info = {}
+    cid = client_id_from_token_info(info)
+    if not cid:
+        return ""
+    sess["client_id"] = cid
+    save_client_id(cid)
+    return cid
+
+
 IDENTITY_KEYS = (
     "identity_canonical_id",
     "identityCanonicalId",
@@ -1830,20 +1860,38 @@ def boot_session():
             snap = store.snapshot()
             _state["lastSync"] = snap.get("syncedAt") or ""
         return
+    info = {}
+    if sess.get("access_token"):
+        try:
+            info = token_info(sess) or {}
+        except Exception:
+            info = {}
+        info_ok = bool(info) and not info.get("error") and not info.get("_http_status")
+        if info_ok:
+            apply_token_info_client_id(sess, info)
+            if info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
+                sess["identity_canonical_id"] = info["identity_canonical_id"]
+            if info.get("email"):
+                sess["email"] = info["email"]
+            save_session(sess)
     ok = False
     if sess.get("refresh_token"):
         ok = ensure_fresh_token(sess)
         sess = load_session() or sess
     if not ok and sess.get("access_token"):
-        info = token_info(sess)
+        if not info:
+            try:
+                info = token_info(sess) or {}
+            except Exception:
+                info = {}
         ok = bool(info) and not info.get("error") and not info.get("_http_status")
         if ok:
+            apply_token_info_client_id(sess, info)
             if info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
                 sess["identity_canonical_id"] = info["identity_canonical_id"]
-                save_session(sess)
             if info.get("email"):
                 sess["email"] = info["email"]
-                save_session(sess)
+            save_session(sess)
     with _lock:
         _state["connected"] = bool(ok)
         if ok:
@@ -2350,15 +2398,19 @@ def capture_tokens(body):
         if body.get(k):
             sess[k] = body[k]
     ident = _identity_from(body) or _identity_from(sess)
-    if not ident:
+    info = {}
+    if sess.get("access_token"):
         try:
-            ident = _identity_from(token_info(sess) or {})
+            info = token_info(sess) or {}
         except Exception:
-            ident = ""
+            info = {}
+    if not ident:
+        ident = _identity_from(info)
     if ident:
         sess["identity_canonical_id"] = ident
     if not sess.get("session_id"):
         sess["session_id"] = str(uuid.uuid4())
+    apply_token_info_client_id(sess, info)
     if not sess.get("client_id"):
         cid = scrape_client_id()
         if cid:
