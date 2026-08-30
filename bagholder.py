@@ -1229,6 +1229,15 @@ def client_id_for(sess):
     return scrape_client_id()
 
 
+def _ws_session_headers(sess, headers):
+    headers = dict(headers)
+    if sess and sess.get("wssdi"):
+        headers["x-ws-device-id"] = sess["wssdi"]
+    if sess and sess.get("session_id"):
+        headers["x-ws-session-id"] = sess["session_id"]
+    return headers
+
+
 def refresh_session(sess):
     """refresh_token grant. Do not send Authorization."""
     rt = (sess or {}).get("refresh_token")
@@ -1242,10 +1251,13 @@ def refresh_session(sess):
         "refresh_token": rt,
         "client_id": cid,
     }
-    headers = {
-        "x-wealthsimple-client": WS_CLIENT,
-        "x-ws-profile": "invest",
-    }
+    headers = _ws_session_headers(
+        sess,
+        {
+            "x-wealthsimple-client": WS_CLIENT,
+            "x-ws-profile": "invest",
+        },
+    )
     data = _http_json("POST", OAUTH + "/token", body, headers)
     if not data or not data.get("access_token"):
         return False
@@ -1265,10 +1277,13 @@ def token_info(sess):
     token = (sess or {}).get("access_token")
     if not token:
         return {}
-    headers = {
-        "Authorization": "Bearer " + token,
-        "x-wealthsimple-client": WS_CLIENT,
-    }
+    headers = _ws_session_headers(
+        sess,
+        {
+            "Authorization": "Bearer " + token,
+            "x-wealthsimple-client": WS_CLIENT,
+        },
+    )
     data = _http_json("GET", OAUTH + "/token/info", None, headers)
     if data and data.get("_http_status") in (401, 403):
         return {}
@@ -1741,13 +1756,24 @@ def boot_session():
             snap = store.snapshot()
             _state["lastSync"] = snap.get("syncedAt") or ""
         return
+    ok = False
     if sess.get("refresh_token"):
-        ensure_fresh_token(sess)
+        ok = ensure_fresh_token(sess)
         sess = load_session() or sess
-    else:
-        with _lock:
-            _state["connected"] = False
+    if not ok and sess.get("access_token"):
+        info = token_info(sess)
+        ok = bool(info) and not info.get("error") and not info.get("_http_status")
+        if ok:
+            if info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
+                sess["identity_canonical_id"] = info["identity_canonical_id"]
+                save_session(sess)
+            if info.get("email"):
+                sess["email"] = info["email"]
+                save_session(sess)
     with _lock:
+        _state["connected"] = bool(ok)
+        if ok:
+            _state["error"] = ""
         _state["email"] = (sess or {}).get("email") or ""
         book = load_book()
         _state["lastSync"] = book.get("syncedAt") or ""
@@ -2263,6 +2289,10 @@ def capture_tokens(body):
         if ua:
             sess["user_agent"] = ua
     save_session(sess)
+    try:
+        refresh_session(sess)
+    except Exception:
+        pass
     with _lock:
         _state["connected"] = True
         _state["capturing"] = False
