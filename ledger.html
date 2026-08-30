@@ -3773,20 +3773,16 @@ function bootLocalApi() {
   api("GET", "/api/status").then((st) => {
     if (!st || st.ok === false) return;
     applyWsStatus(st);
-    const localRows = state.activities || [];
-    const pushLocal = (st.activityCount === 0 && localRows.length)
-      ? persistLocalActivities(localRows)
-      : Promise.resolve();
-    const load = pushLocal.then(function () {
-      return api("GET", "/api/book").then((book) => {
+    if (st.activityCount > 0) {
+      api("GET", "/api/book").then((book) => {
         if (book && book.ok && Array.isArray(book.activities) && book.activities.length) {
           replaceWsActivities(book);
         }
+        render();
       });
-    });
-    load.then(() => {
-      render();
-    });
+      return;
+    }
+    render();
   });
 }
 
