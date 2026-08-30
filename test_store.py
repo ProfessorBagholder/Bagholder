@@ -193,6 +193,8 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(bagholder.token_refresh_needed(sess, now=now))
         sess_ok = {"expires_at": now + 3600, "refresh_token": "r"}
         self.assertFalse(bagholder.token_refresh_needed(sess_ok, now=now))
+        sess_missing = {"refresh_token": "r"}
+        self.assertTrue(bagholder.token_refresh_needed(sess_missing, now=now))
 
     def test_ensure_fresh_token_does_not_pull_activity(self):
         called = {"graphql": 0, "token": 0}
@@ -200,6 +202,10 @@ class StoreTest(unittest.TestCase):
         def fake_refresh(sess):
             called["token"] += 1
             return True
+
+        def fake_fail(sess):
+            called["token"] += 1
+            return False
 
         def fake_graphql(*args, **kwargs):
             called["graphql"] += 1
@@ -210,10 +216,25 @@ class StoreTest(unittest.TestCase):
             "expires_at": time_now_minus(),
         }
         bagholder.save_session(sess)
+        with bagholder._lock:
+            bagholder._state["connected"] = False
         with mock.patch.object(bagholder, "refresh_session", side_effect=fake_refresh):
             with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
-                bagholder.ensure_fresh_token(sess)
+                ok = bagholder.ensure_fresh_token(sess)
+        self.assertTrue(ok)
+        self.assertTrue(bagholder._state["connected"])
         self.assertEqual(called["token"], 1)
+        self.assertEqual(called["graphql"], 0)
+
+        called["token"] = 0
+        with bagholder._lock:
+            bagholder._state["connected"] = False
+        with mock.patch.object(bagholder, "refresh_session", side_effect=fake_fail):
+            with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+                ok = bagholder.ensure_fresh_token(sess)
+        self.assertFalse(ok)
+        self.assertFalse(bagholder._state["connected"])
+        self.assertTrue(bagholder.SESSION_PATH.exists())
         self.assertEqual(called["graphql"], 0)
 
     def test_link_single_manual_match_stamps_canonical_id(self):

@@ -1569,19 +1569,30 @@ def _expires_at_unix(sess):
 def token_refresh_needed(sess, now=None):
     exp = _expires_at_unix(sess)
     if exp is None:
-        return False
+        return True
     now = time.time() if now is None else float(now)
     return now >= exp - TOKEN_REFRESH_MARGIN_SEC
 
 
 def ensure_fresh_token(sess=None):
-    """Refresh the access token before expires_at. Token POST only."""
+    """Refresh the access token before expires_at. Token POST only.
+
+    Connected means this POST produced a new access token. A failed POST
+    leaves session.json on disk and marks connected False.
+    """
     sess = sess if sess is not None else load_session()
     if not sess or not sess.get("refresh_token"):
         return False
-    if not token_refresh_needed(sess):
+    with _lock:
+        connected = bool(_state.get("connected"))
+    if connected and not token_refresh_needed(sess):
         return True
-    return refresh_session(sess)
+    ok = refresh_session(sess)
+    with _lock:
+        _state["connected"] = bool(ok)
+        if ok:
+            _state["error"] = ""
+    return ok
 
 
 def activity_sync_bounds():
@@ -1730,21 +1741,13 @@ def boot_session():
             snap = store.snapshot()
             _state["lastSync"] = snap.get("syncedAt") or ""
         return
-    ok = False
     if sess.get("refresh_token"):
-        ok = refresh_session(sess)
+        ensure_fresh_token(sess)
         sess = load_session() or sess
-    if not ok and sess.get("access_token"):
-        info = token_info(sess)
-        ok = bool(info) and not info.get("error") and not info.get("_http_status")
-        if ok and info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
-            sess["identity_canonical_id"] = info["identity_canonical_id"]
-            save_session(sess)
-        if ok and info.get("email"):
-            sess["email"] = info["email"]
-            save_session(sess)
+    else:
+        with _lock:
+            _state["connected"] = False
     with _lock:
-        _state["connected"] = bool(ok and sess.get("access_token"))
         _state["email"] = (sess or {}).get("email") or ""
         book = load_book()
         _state["lastSync"] = book.get("syncedAt") or ""
@@ -2528,7 +2531,7 @@ def auto_sync_loop():
     fail_delay = TOKEN_CHECK_SEC
     while not _stop.wait(delay):
         sess = load_session()
-        if sess:
+        if sess and sess.get("refresh_token"):
             try:
                 ensure_fresh_token(sess)
             except Exception:
@@ -2536,8 +2539,7 @@ def auto_sync_loop():
         with _lock:
             connected = _state["connected"]
             syncing = _state["syncing"]
-        sess = load_session()
-        if sess and connected and not syncing and store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
+        if connected and not syncing and store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
             try:
                 ok = run_sync(force_activity=True)
             except Exception:
