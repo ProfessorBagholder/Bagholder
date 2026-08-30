@@ -1658,10 +1658,9 @@ def run_sync(allow_refresh=True, force_activity=True):
         known = store.canonical_ids() if not bounds["full_history"] else set()
         mapped = []
         with_ids = [a for a in accounts if a.get("id")]
+        _set_sync_step("Syncing transactions")
         for acc in with_ids:
             aid = acc.get("id")
-            label = acc.get("nickname") or acc.get("unifiedAccountType") or "account"
-            _set_sync_step(f"Fetching trades · {label}")
             raw_items = fetch_activities_for_account(
                 sess,
                 aid,

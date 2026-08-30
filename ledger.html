@@ -2897,7 +2897,7 @@ function render() {
         { key: "exitPrice", label: "Exit" },
         { key: "pnlCad", label: "P&amp;L" },
         { key: "holdDays", label: "Hold" },
-        { key: "currency", label: "Ccy" },
+        { key: "currency", label: "Currency" },
         { key: "tag", label: "Tag" },
         { key: "notes", label: "Notes" },
       ]) +
@@ -3313,8 +3313,8 @@ function emptyStateHtml() {
     return (
       '<div class="empty empty-load">' +
       '<div class="spin" aria-hidden="true"></div>' +
-      '<h2>Importing activity</h2>' +
-      '<p id="importStep">' + esc(state.ws.syncStep || "Pulling Wealthsimple accounts and trades.") + "</p>" +
+      '<h2>Syncing transactions</h2>' +
+      '<p id="importStep">' + esc(state.ws.syncStep || "Syncing transactions") + "</p>" +
       '<p id="importElapsed">' + esc(importElapsedText()) + "</p>" +
       '<p class="quiet">First import can take a few minutes if you have years of activity.</p>' +
       "</div>"
@@ -3368,7 +3368,7 @@ function relSync(iso) {
 
 function wsStatusText() {
   if (!HAS_LOCAL_API && !state.ws.available) return "";
-  if (state.ws.syncing) return state.ws.syncStep || "Importing activity…";
+  if (state.ws.syncing) return state.ws.syncStep || "Syncing transactions";
   if (state.ws.capturing || (state.connectOpen && !state.ws.connected)) return "Waiting for Wealthsimple login…";
   if (state.ws.error) return state.ws.error;
   if (state.ws.connected && state.ws.lastSync) {
