@@ -33,18 +33,31 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
+import store
+
 # --- constants (tradesimple WealthsimpleAPIBase) ---
 OAUTH = "https://api.production.wealthsimple.com/v1/oauth/v2"
 GRAPHQL = "https://my.wealthsimple.com/graphql"
 GRAPHQL_VERSION = "12"
 WS_CLIENT = "@wealthsimple/wealthsimple"
 LOGIN_URL = "https://my.wealthsimple.com/app/login"
-HOME = Path.home() / ".bagholder"
+
+
+def _data_home():
+    env = (os.environ.get("BAGHOLDER_HOME") or "").strip()
+    if env:
+        return Path(env)
+    return Path.home() / ".bagholder"
+
+
+HOME = _data_home()
 SESSION_PATH = HOME / "session.json"
-BOOK_PATH = HOME / "book.json"
+JSON_PATH = HOME / "book.json"
 CLIENT_ID_PATH = HOME / "client_id"
 UA_PATH = HOME / "user_agent"
-AUTO_SYNC_SEC = 300
+TOKEN_CHECK_SEC = 30
+TOKEN_REFRESH_MARGIN_SEC = 300
+ACTIVITY_PULL_SEC = 24 * 60 * 60
 PORTS = (8765, 8766, 8767)
 DEBUG_PORTS = (18765, 18766, 18767)
 CAPTURE_WAIT_SEC = 180
@@ -567,8 +580,19 @@ def _is_code_change(item):
     )
 
 
+def set_home(path):
+    """Point session + SQLite paths at a directory (used by tests)."""
+    global HOME, SESSION_PATH, JSON_PATH, CLIENT_ID_PATH, UA_PATH
+    HOME = Path(path)
+    SESSION_PATH = HOME / "session.json"
+    JSON_PATH = HOME / "book.json"
+    CLIENT_ID_PATH = HOME / "client_id"
+    UA_PATH = HOME / "user_agent"
+    store.set_home(HOME)
+
+
 def skip_activity(item):
-    """True when this GraphQL row should not hit the book."""
+    """True when this GraphQL row should not be stored."""
     if not item:
         return True
     if not _s(item.get("occurredAt")).strip():
@@ -818,6 +842,8 @@ def map_activity(item, accounts=None):
     transaction_date = _date_only(occurred)
     if not transaction_date:
         return None
+    # Keep Wealthsimple date and time. transactionDate stays the calendar day
+    # for FIFO / filters that compare YYYY-MM-DD.
     account_id = _s(item.get("accountId"))
     typ = _upper(item.get("type")).replace("-", "_")
     sub = _upper(item.get("subType")).replace("-", "_")
@@ -938,26 +964,16 @@ def map_activity(item, accounts=None):
     elif sign in ("positive", "credit", "+", "pos") or cash > 0:
         direction = "CREDIT"
 
-    aid = _s(item.get("canonicalId")).strip()
-    if not aid:
-        aid = "|".join(
-            [
-                transaction_date,
-                account_id,
-                symbol,
-                f"{quantity:g}",
-                f"{unit_price:g}",
-                f"{cash:g}",
-                _s(activity_type),
-                _s(activity_sub),
-            ]
-        )
+    cid = _s(item.get("canonicalId")).strip()
+    if store.looks_like_homemade_id(cid):
+        cid = ""
 
     desc = _human_desc(item, typ, sub, symbol, quantity, unit_price, cash)
     name = _s(item.get("aftOriginatorName") or item.get("institutionName") or symbol)
 
     return {
-        "id": aid,
+        "canonicalId": cid or None,
+        "occurredAt": occurred,
         "transactionDate": transaction_date,
         "settlementDate": transaction_date,
         "accountId": account_id,
@@ -1036,12 +1052,12 @@ def save_session(sess):
 
 
 def delete_session_and_book():
+    """Drop the login session only. Stored activity rows stay in SQLite."""
     with _lock:
-        for p in (SESSION_PATH, BOOK_PATH):
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        try:
+            SESSION_PATH.unlink()
+        except OSError:
+            pass
         _state["connected"] = False
         _state["email"] = ""
         _state["lastSync"] = ""
@@ -1050,23 +1066,17 @@ def delete_session_and_book():
 
 
 def load_book():
-    with _lock:
-        if not BOOK_PATH.exists():
-            return {"activities": [], "accounts": [], "balances": [], "syncedAt": ""}
-        try:
-            data = json.loads(BOOK_PATH.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
-        data.setdefault("activities", [])
-        data.setdefault("accounts", [])
-        data.setdefault("balances", [])
-        data.setdefault("syncedAt", "")
-        return data
+    store.ensure()
+    return store.snapshot()
 
 
-def save_book(book):
-    with _lock:
-        _atomic_write(BOOK_PATH, json.dumps(book).encode("utf-8"), 0o600)
+def save_accounts_snapshot(book):
+    """Write accounts / balances / NAV. Never rebuilds the activity table."""
+    store.replace_accounts(book.get("accounts") or [])
+    store.replace_balances(book.get("balances") or [])
+    store.replace_nav(book.get("navHistory") or [])
+    if book.get("syncedAt"):
+        store.set_meta("synced_at", book["syncedAt"])
 
 
 
@@ -1416,29 +1426,51 @@ def fetch_all_accounts(sess, identity_id):
     return accounts
 
 
-def fetch_activities_for_account(sess, account_id):
+def activity_fetch_condition(account_id, start_date=None, now=None):
+    """Wealthsimple ActivityCondition. startDate bounds a daily pull to new rows."""
+    end = (now or datetime.now(timezone.utc)) + timedelta(days=1)
+    cond = {
+        "endDate": end.strftime("%Y-%m-%dT%H:%M:%S.999Z"),
+        "accountIds": [account_id],
+    }
+    if start_date:
+        raw = _s(start_date).strip()
+        if raw:
+            if "T" not in raw:
+                raw = raw[:10] + "T00:00:00.000Z"
+            cond["startDate"] = raw
+    return cond
+
+
+def fetch_activities_for_account(
+    sess, account_id, start_date=None, known_canonical_ids=None
+):
     items = []
     cursor = None
-    end = datetime.now(timezone.utc) + timedelta(days=1)
-    end_date = end.strftime("%Y-%m-%dT%H:%M:%S.999Z")
+    known = set(known_canonical_ids or [])
+    bounded = bool(start_date)
     while True:
         variables = {
             "first": 100,
             "orderBy": "OCCURRED_AT_DESC",
-            "condition": {
-                "endDate": end_date,
-                "accountIds": [account_id],
-            },
+            "condition": activity_fetch_condition(account_id, start_date=start_date),
         }
         if cursor:
             variables["cursor"] = cursor
         data = graphql(sess, "FetchActivityFeedItems", variables)
         feed = (data or {}).get("activityFeedItems") or {}
+        new_on_page = 0
         for edge in feed.get("edges") or []:
             node = (edge or {}).get("node")
-            if node:
-                items.append(node)
+            if not node:
+                continue
+            items.append(node)
+            cid = _s(node.get("canonicalId")).strip()
+            if cid and cid not in known:
+                new_on_page += 1
         page = feed.get("pageInfo") or {}
+        if bounded and known and new_on_page == 0:
+            break
         if not page.get("hasNextPage"):
             break
         cursor = page.get("endCursor")
@@ -1514,8 +1546,57 @@ def _set_sync_step(msg):
         _state["syncStep"] = msg or ""
 
 
-def run_sync(allow_refresh=True):
-    """Full GraphQL pull. Preserves source=manual rows. Never prints tokens."""
+def _expires_at_unix(sess):
+    raw = (sess or {}).get("expires_at")
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def token_refresh_needed(sess, now=None):
+    exp = _expires_at_unix(sess)
+    if exp is None:
+        return False
+    now = time.time() if now is None else float(now)
+    return now >= exp - TOKEN_REFRESH_MARGIN_SEC
+
+
+def ensure_fresh_token(sess=None):
+    """Refresh the access token before expires_at. Token POST only."""
+    sess = sess if sess is not None else load_session()
+    if not sess or not sess.get("refresh_token"):
+        return False
+    if not token_refresh_needed(sess):
+        return True
+    return refresh_session(sess)
+
+
+def activity_sync_bounds():
+    """Full history only when the activity table has no rows yet."""
+    if store.activity_count() == 0:
+        return {"start_date": None, "full_history": True}
+    start = store.incremental_start_date() or None
+    return {"start_date": start, "full_history": False}
+
+
+def run_sync(allow_refresh=True, force_activity=True):
+    """GraphQL pull. Inserts new Wealthsimple rows only. Never rebuilds the table."""
+    store.ensure()
     with _lock:
         if _state["syncing"]:
             return False
@@ -1530,7 +1611,10 @@ def run_sync(allow_refresh=True):
             return False
         ok = True
         try:
-            info = token_info(sess)
+            if token_refresh_needed(sess):
+                ok = refresh_session(sess)
+                sess = load_session() or sess
+            info = token_info(sess) if sess and sess.get("access_token") else {}
             if not info or info.get("error") or info.get("_http_status"):
                 ok = refresh_session(sess)
                 sess = load_session() or sess
@@ -1558,16 +1642,34 @@ def run_sync(allow_refresh=True):
             sess["email"] = email
         save_session(sess)
 
+        if not force_activity and not store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
+            with _lock:
+                _state["connected"] = True
+                _state["email"] = email
+                _state["lastSync"] = store.get_meta("synced_at") or _state["lastSync"]
+                _state["capturing"] = False
+                _state["error"] = ""
+                _state["syncStep"] = ""
+            return True
+
         _set_sync_step("Fetching accounts…")
         accounts = fetch_all_accounts(sess, identity)
         acc_by_id = {a.get("id"): a for a in accounts if a.get("id")}
+        bounds = activity_sync_bounds()
+        start_date = bounds["start_date"]
+        known = store.canonical_ids() if not bounds["full_history"] else set()
         mapped = []
         with_ids = [a for a in accounts if a.get("id")]
         for acc in with_ids:
             aid = acc.get("id")
             label = acc.get("nickname") or acc.get("unifiedAccountType") or "account"
             _set_sync_step(f"Fetching trades · {label}")
-            raw_items = fetch_activities_for_account(sess, aid)
+            raw_items = fetch_activities_for_account(
+                sess,
+                aid,
+                start_date=start_date,
+                known_canonical_ids=known,
+            )
             for it in raw_items:
                 mapped.extend(map_activity_rows(it, acc_by_id))
         pools = fifo_pool_ids(accounts)
@@ -1581,24 +1683,18 @@ def run_sync(allow_refresh=True):
             nav_history = fetch_nav_history(sess, identity)
         except Exception:
             nav_history = []
-        old = load_book()
-        manuals = [a for a in old.get("activities") or [] if a.get("source") == "manual"]
-        ids = {a.get("id") for a in mapped}
-        manuals = [m for m in manuals if m.get("id") not in ids]
-        activities = mapped + manuals
-        activities.sort(
-            key=lambda a: (a.get("transactionDate") or "", a.get("id") or "")
-        )
+        store.apply_wealthsimple_mapped(mapped)
         synced = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        book = {
-            "activities": activities,
-            "accounts": [slim_account(a) for a in accounts],
-            "balances": balances,
-            "navHistory": nav_history,
-            "syncedAt": synced,
-        }
-        _set_sync_step("Saving book…")
-        save_book(book)
+        _set_sync_step("Saving…")
+        save_accounts_snapshot(
+            {
+                "accounts": [slim_account(a) for a in accounts],
+                "balances": balances,
+                "navHistory": nav_history,
+                "syncedAt": synced,
+            }
+        )
+        store.mark_activity_pulled(synced)
         with _lock:
             _state["connected"] = True
             _state["email"] = email
@@ -1611,7 +1707,7 @@ def run_sync(allow_refresh=True):
         if allow_refresh and refresh_session(load_session() or {}):
             with _lock:
                 _state["syncing"] = False
-            return run_sync(allow_refresh=False)
+            return run_sync(allow_refresh=False, force_activity=force_activity)
         with _lock:
             _state["connected"] = False
             _state["error"] = "Session expired. Connect again."
@@ -1629,10 +1725,13 @@ def run_sync(allow_refresh=True):
 
 
 def boot_session():
+    store.ensure()
     sess = load_session()
     if not sess:
         with _lock:
             _state["connected"] = False
+            snap = store.snapshot()
+            _state["lastSync"] = snap.get("syncedAt") or ""
         return
     ok = False
     if sess.get("refresh_token"):
@@ -2173,59 +2272,96 @@ def capture_tokens(body):
     return {"ok": True}
 
 
-def append_manual(body):
-    body = body or {}
-    if body.get("activity") and isinstance(body["activity"], dict):
-        act = dict(body["activity"])
-    else:
-        side = _upper(body.get("side") or "BUY")
-        if side not in ("BUY", "SELL"):
-            side = "BUY"
-        qty = abs(_num(body.get("qty") if body.get("qty") is not None else body.get("quantity")))
-        px = abs(_num(body.get("price") if body.get("price") is not None else body.get("unitPrice")))
-        date = _date_only(body.get("date") or body.get("transactionDate")) or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        symbol = _upper(body.get("symbol"))
-        currency = _upper(body.get("currency") or "CAD")
-        if currency not in ("CAD", "USD"):
-            currency = "CAD"
-        account_id = _s(body.get("accountId") or body.get("account") or "manual") or "manual"
-        signed_qty = qty if side == "BUY" else -qty
-        cash = -(qty * px) if side == "BUY" else (qty * px)
-        act = {
-            "id": "manual|" + "|".join([date, account_id, symbol, side, f"{qty:g}", f"{px:g}", uuid.uuid4().hex[:10]]),
-            "transactionDate": date,
-            "settlementDate": date,
-            "accountId": account_id,
-            "bookId": account_id,
-            "accountType": _s(body.get("accountType") or ("Manual" if account_id == "manual" else "")),
-            "activityType": "Trade",
-            "activitySubType": side,
-            "description": ("Buy" if side == "BUY" else "Sell") + (f" {qty:g} {symbol} @ {px:g}" if symbol else ""),
-            "direction": "DEBIT" if side == "BUY" else "CREDIT",
-            "symbol": symbol,
-            "name": symbol,
-            "currency": currency,
-            "quantity": signed_qty,
-            "unitPrice": px,
-            "commission": abs(_num(body.get("commission"))),
-            "netCashAmount": cash,
-            "category": "trade",
-            "balance": None,
-            "source": "manual",
-        }
-    act["source"] = "manual"
+def _manual_from_fields(body):
+    side = _upper(body.get("side") or "BUY")
+    if side not in ("BUY", "SELL"):
+        side = "BUY"
+    qty = abs(_num(body.get("qty") if body.get("qty") is not None else body.get("quantity")))
+    px = abs(_num(body.get("price") if body.get("price") is not None else body.get("unitPrice")))
+    date = _date_only(body.get("date") or body.get("transactionDate") or body.get("occurredAt")) or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    symbol = _upper(body.get("symbol"))
+    currency = _upper(body.get("currency") or "CAD")
+    if currency not in ("CAD", "USD"):
+        currency = "CAD"
+    account_id = _s(body.get("accountId") or body.get("account") or "manual") or "manual"
+    signed_qty = qty if side == "BUY" else -qty
+    cash = -(qty * px) if side == "BUY" else (qty * px)
+    return {
+        "id": str(uuid.uuid4()),
+        "occurredAt": date,
+        "transactionDate": date,
+        "settlementDate": date,
+        "accountId": account_id,
+        "bookId": account_id,
+        "accountType": _s(body.get("accountType") or ("Manual" if account_id == "manual" else "")),
+        "activityType": "Trade",
+        "activitySubType": side,
+        "description": ("Buy" if side == "BUY" else "Sell") + (f" {qty:g} {symbol} @ {px:g}" if symbol else ""),
+        "direction": "DEBIT" if side == "BUY" else "CREDIT",
+        "symbol": symbol,
+        "name": symbol,
+        "currency": currency,
+        "quantity": signed_qty,
+        "unitPrice": px,
+        "commission": abs(_num(body.get("commission"))),
+        "netCashAmount": cash,
+        "category": "trade",
+        "balance": None,
+        "source": "manual",
+    }
+
+
+def _normalize_local_row(act):
+    act = dict(act or {})
+    source = _s(act.get("source")) or "manual"
+    if source == "wealthsimple":
+        cid = store._canonical_from_row(act, "wealthsimple")
+        if cid:
+            act["canonicalId"] = cid
+            act["source"] = "wealthsimple"
+            return act
+        source = "manual"
+    act["source"] = source
+    act.pop("canonicalId", None)
+    act.pop("canonical_id", None)
     if not act.get("accountId"):
         act["accountId"] = "manual"
     if not act.get("bookId"):
         act["bookId"] = act["accountId"]
-    book = load_book()
-    book["activities"] = list(book.get("activities") or []) + [act]
-    if not book.get("syncedAt"):
-        book["syncedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    save_book(book)
+    if not act.get("id") or store.looks_like_homemade_id(act.get("id")):
+        act["id"] = str(uuid.uuid4())
+    if not act.get("occurredAt"):
+        act["occurredAt"] = act.get("transactionDate") or ""
+    return act
+
+
+def append_manual(body):
+    body = body or {}
+    rows = []
+    if isinstance(body.get("activities"), list):
+        rows = [r for r in body["activities"] if isinstance(r, dict)]
+    elif body.get("activity") and isinstance(body["activity"], dict):
+        rows = [body["activity"]]
+    else:
+        rows = [_manual_from_fields(body)]
+    rows = [_normalize_local_row(r) for r in rows]
+    result = store.merge_local_rows(rows)
+    snap = store.snapshot()
+    if not snap.get("syncedAt"):
+        store.set_meta("synced_at", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        snap = store.snapshot()
     with _lock:
-        _state["lastSync"] = book["syncedAt"]
-    return {"ok": True, "activity": act}
+        _state["lastSync"] = snap.get("syncedAt") or _state["lastSync"]
+    saved = result.get("activities") or []
+    out = {"ok": True, "added": result.get("added", 0), "duplicates": result.get("duplicates", 0)}
+    if len(saved) == 1:
+        out["activity"] = saved[0]
+    elif saved:
+        out["activities"] = saved
+    elif len(rows) == 1:
+        # duplicate of an already-stored local row
+        out["activity"] = rows[0]
+    return out
 
 
 def status_payload():
@@ -2391,20 +2527,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def auto_sync_loop():
-    delay = AUTO_SYNC_SEC
+    delay = TOKEN_CHECK_SEC
+    fail_delay = TOKEN_CHECK_SEC
     while not _stop.wait(delay):
         sess = load_session()
+        if sess:
+            try:
+                ensure_fresh_token(sess)
+            except Exception:
+                pass
         with _lock:
             connected = _state["connected"]
             syncing = _state["syncing"]
-        if sess and connected and not syncing:
+        sess = load_session()
+        if sess and connected and not syncing and store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
             try:
-                ok = run_sync()
+                ok = run_sync(force_activity=True)
             except Exception:
                 ok = False
-            delay = AUTO_SYNC_SEC if ok else min(max(delay, AUTO_SYNC_SEC) * 2, 1800)
+            fail_delay = TOKEN_CHECK_SEC if ok else min(max(fail_delay, TOKEN_CHECK_SEC) * 2, 1800)
+            delay = fail_delay
         else:
-            delay = AUTO_SYNC_SEC
+            delay = TOKEN_CHECK_SEC
+            fail_delay = TOKEN_CHECK_SEC
 
 
 def bind_server():
@@ -2421,6 +2566,7 @@ def bind_server():
 
 def main():
     _ensure_home()
+    store.ensure()
     boot_session()
     httpd, port = bind_server()
     t = threading.Thread(target=auto_sync_loop, name="bagholder-auto-sync", daemon=True)
@@ -2432,7 +2578,9 @@ def main():
     except Exception:
         pass
     if _state.get("connected"):
-        threading.Thread(target=run_sync, name="bagholder-boot-sync", daemon=True).start()
+        threading.Thread(target=ensure_fresh_token, name="bagholder-boot-token", daemon=True).start()
+        if store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
+            threading.Thread(target=run_sync, name="bagholder-boot-sync", daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

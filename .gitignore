@@ -3,6 +3,10 @@
 .bagholder/
 session.json
 book.json
+*.db
+*.db-wal
+*.db-shm
+bagholder.db
 client_id
 user_agent
 chrome/

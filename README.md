@@ -16,6 +16,6 @@ The webapp opens on `http://127.0.0.1:8765`.
 
 ## Data
 
-Login session and journal data are stored in `~/.bagholder/`.
+Login session and journal data are stored in `~/.bagholder/`. Activities, accounts, balances, and equity history live in a local SQLite database in that folder. If an older JSON activity file is already there, Bagholder imports it once so existing rows are kept.
 
 ![App demo](screenshot.png)   
