@@ -1039,6 +1039,33 @@ function activityId(parts) {
   return parts.map((p) => String(p ?? "").trim()).join("|");
 }
 
+function assignedActivityId() {
+  try {
+    if (crypto && crypto.randomUUID) return crypto.randomUUID();
+  } catch (e) {}
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function looksHomemadeActivityId(id) {
+  const s = String(id || "");
+  return !s || s.indexOf("|") >= 0;
+}
+
+function activityWhen(a) {
+  const raw = String((a && (a.occurredAt || a.transactionDate)) || "").trim();
+  if (!raw) return "";
+  if (raw.indexOf("T") >= 0) {
+    const day = raw.slice(0, 10);
+    const clock = raw.slice(11, 16);
+    return clock ? day + " " + clock : day;
+  }
+  return raw.slice(0, 10);
+}
+
 function pickFrom(row, ...keys) {
   for (const key of keys) {
     if (row[key] != null && String(row[key]).trim() !== "") return String(row[key]).trim();
@@ -1200,7 +1227,8 @@ function mapStatement(row, bookId) {
   }
   const transactionDate = parsed.executedAt || settlementDate;
   const activity = {
-    id: activityId([transactionDate, book, parsed.symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    id: assignedActivityId(),
+    occurredAt: transactionDate,
     transactionDate,
     settlementDate,
     accountId,
@@ -1237,7 +1265,8 @@ function mapCanonical(row) {
   const accountId = pickFrom(row, "account_id", "account");
   const symbol = pickFrom(row, "symbol", "ticker");
   return {
-    id: activityId([transactionDate, accountId, symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    id: assignedActivityId(),
+    occurredAt: transactionDate,
     transactionDate,
     settlementDate: parseDate(pickFrom(row, "settlement_date", "settle_date")) || transactionDate,
     accountId,
@@ -1296,7 +1325,8 @@ function mapLegacy(row) {
   const accountId = pickFrom(row, "account_id", "account") || "legacy";
   const commission = Math.abs(parseNumber(pickFrom(row, "commission", "fee", "fees")));
   return {
-    id: activityId([transactionDate, accountId, symbol, quantity, unitPrice, netCashAmount, activityType, activitySubType]),
+    id: assignedActivityId(),
+    occurredAt: transactionDate,
     transactionDate,
     settlementDate: transactionDate,
     accountId,
@@ -1344,6 +1374,11 @@ function mergeActivities(existing, incoming) {
   }
   merged.sort((x, y) => x.transactionDate.localeCompare(y.transactionDate) || x.id.localeCompare(y.id));
   return { merged, added, duplicates };
+}
+
+function persistLocalActivities(rows) {
+  if (!HAS_LOCAL_API || !rows || !rows.length) return Promise.resolve();
+  return api("POST", "/api/book/append", { activities: rows }).catch(function () {});
 }
 
 function daysBetween(a, b) {
@@ -2306,9 +2341,11 @@ function loadPersisted() {
 }
 
 function ingestText(name, text) {
+  const existingIds = new Set((state.activities || []).map((a) => a.id));
   const parsed = parseCsv(text, name);
   const { merged, added, duplicates } = mergeActivities(state.activities, parsed.activities);
   state.activities = ensureBookIds(merged);
+  persistLocalActivities(merged.filter((a) => a && a.id && !existingIds.has(a.id)));
   state.reports = [{
     file: name,
     format: parsed.format,
@@ -2810,7 +2847,7 @@ function render() {
     const actRows = actSorted.map((a) => {
         return (
           "<tr>" +
-          "<td>" + esc(a.transactionDate) + "</td>" +
+          "<td>" + esc(activityWhen(a)) + "</td>" +
           "<td>" + esc(a.settlementDate) + "</td>" +
           "<td>" + esc(a.activityType) + "</td>" +
           "<td>" + esc(a.activitySubType) + "</td>" +
@@ -2860,7 +2897,7 @@ function render() {
         { key: "exitPrice", label: "Exit" },
         { key: "pnlCad", label: "P&amp;L" },
         { key: "holdDays", label: "Hold" },
-        { key: "currency", label: "Ccy" },
+        { key: "currency", label: "Currency" },
         { key: "tag", label: "Tag" },
         { key: "notes", label: "Notes" },
       ]) +
@@ -3034,6 +3071,7 @@ function ingestFileList(fileList) {
   const jobs = files.map((f) => f.text().then((text) => ({ name: f.name, text })));
   return Promise.all(jobs).then((items) => {
     let current = state.activities;
+    const existingIds = new Set((current || []).map((a) => a.id));
     const reports = [];
     for (const item of items) {
       if (!item.text || !String(item.text).trim()) continue;
@@ -3054,6 +3092,7 @@ function ingestFileList(fileList) {
     state.activities = ensureBookIds(current);
     state.reports = reports;
     persist();
+    persistLocalActivities((state.activities || []).filter((a) => a && a.id && !existingIds.has(a.id)));
     render();
     ensureFxRates();
     ensureSpyPrices();
@@ -3274,8 +3313,8 @@ function emptyStateHtml() {
     return (
       '<div class="empty empty-load">' +
       '<div class="spin" aria-hidden="true"></div>' +
-      '<h2>Importing activity</h2>' +
-      '<p id="importStep">' + esc(state.ws.syncStep || "Pulling Wealthsimple accounts and trades.") + "</p>" +
+      '<h2>Syncing transactions</h2>' +
+      '<p id="importStep">' + esc(state.ws.syncStep || "Syncing transactions") + "</p>" +
       '<p id="importElapsed">' + esc(importElapsedText()) + "</p>" +
       '<p class="quiet">First import can take a few minutes if you have years of activity.</p>' +
       "</div>"
@@ -3329,7 +3368,7 @@ function relSync(iso) {
 
 function wsStatusText() {
   if (!HAS_LOCAL_API && !state.ws.available) return "";
-  if (state.ws.syncing) return state.ws.syncStep || "Importing activity…";
+  if (state.ws.syncing) return state.ws.syncStep || "Syncing transactions";
   if (state.ws.capturing || (state.connectOpen && !state.ws.connected)) return "Waiting for Wealthsimple login…";
   if (state.ws.error) return state.ws.error;
   if (state.ws.connected && state.ws.lastSync) {
@@ -3677,7 +3716,8 @@ function saveManualTrade() {
         const signedQty = side === "SELL" ? -Math.abs(qty) : Math.abs(qty);
         const cash = side === "SELL" ? Math.abs(qty * price) : -Math.abs(qty * price);
         finish({
-          id: "manual|" + date + "|" + accountId + "|" + symbol + "|" + side + "|" + qty + "|" + price + "|" + Date.now(),
+          id: assignedActivityId(),
+          occurredAt: date,
           transactionDate: date,
           settlementDate: date,
           accountId: accountId,
@@ -3703,7 +3743,8 @@ function saveManualTrade() {
     const signedQty = side === "SELL" ? -Math.abs(qty) : Math.abs(qty);
     const cash = side === "SELL" ? Math.abs(qty * price) : -Math.abs(qty * price);
     finish({
-      id: "manual|" + date + "|" + accountId + "|" + symbol + "|" + side + "|" + qty + "|" + price + "|" + Date.now(),
+      id: assignedActivityId(),
+      occurredAt: date,
       transactionDate: date,
       settlementDate: date,
       accountId: accountId,
@@ -3732,19 +3773,16 @@ function bootLocalApi() {
   api("GET", "/api/status").then((st) => {
     if (!st || st.ok === false) return;
     applyWsStatus(st);
-    const load = (st.connected && st.activityCount > 0)
-      ? api("GET", "/api/book").then((book) => {
-          if (book && book.ok && Array.isArray(book.activities)) replaceWsActivities(book);
-        })
-      : Promise.resolve();
-    load.then(() => {
-      const last = st.lastSync ? Date.parse(st.lastSync) : 0;
-      const stale = !last || (Date.now() - last) > 2 * 60 * 1000;
-      if (st.connected && stale) {
-        api("POST", "/api/sync");
-      }
-      render();
-    });
+    if (st.activityCount > 0) {
+      api("GET", "/api/book").then((book) => {
+        if (book && book.ok && Array.isArray(book.activities) && book.activities.length) {
+          replaceWsActivities(book);
+        }
+        render();
+      });
+      return;
+    }
+    render();
   });
 }
 

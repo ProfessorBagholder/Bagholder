@@ -16,6 +16,6 @@ The webapp opens on `http://127.0.0.1:8765`.
 
 ## Data
 
-Login session and journal data are stored in `~/.bagholder/`.
+Login session and journal data are stored in `~/.bagholder/`. Activities, accounts, balances, and equity history live in `~/.bagholder/bagholder.db`.
 
 ![App demo](screenshot.png)   
