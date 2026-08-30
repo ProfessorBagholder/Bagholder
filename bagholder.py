@@ -2673,6 +2673,12 @@ def auto_sync_loop():
     delay = TOKEN_CHECK_SEC
     fail_delay = TOKEN_CHECK_SEC
     while not _stop.wait(delay):
+        sess = load_session()
+        if sess and sess.get("refresh_token"):
+            try:
+                ensure_fresh_token(sess)
+            except Exception:
+                pass
         with _lock:
             connected = _state["connected"]
             syncing = _state["syncing"]
