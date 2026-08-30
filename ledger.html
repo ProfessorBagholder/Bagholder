@@ -3182,24 +3182,36 @@ function watchStatusFullText() {
   return wsStatusText() || state.watchStatus || "";
 }
 
+function watchStatusNeedsCopy(full, el) {
+  if (!full) return false;
+  if (state.ws.error) return true;
+  if (el && el.scrollWidth > el.clientWidth + 1) return true;
+  return full.length > 32;
+}
+
 function paintWatchStatus() {
   const el = document.getElementById("watchStatus");
+  const wrap = document.getElementById("watchStatusWrap");
   if (!el) return;
   const full = watchStatusFullText();
   el.textContent = full;
-  if (full) el.setAttribute("title", full);
-  else el.removeAttribute("title");
+  if (full) {
+    el.setAttribute("title", full);
+    if (wrap) wrap.setAttribute("title", full);
+  } else {
+    el.removeAttribute("title");
+    if (wrap) wrap.removeAttribute("title");
+  }
   const btn = document.getElementById("watchCopy");
   if (!btn) return;
-  const truncated = el.scrollWidth > el.clientWidth + 1;
-  btn.hidden = !(state.ws.error || truncated);
+  btn.hidden = !watchStatusNeedsCopy(full, el);
 }
 
 function copyWatchStatus(ev) {
   if (ev) ev.stopPropagation();
   const el = document.getElementById("watchStatus");
   const btn = document.getElementById("watchCopy");
-  const text = (el && el.getAttribute("title")) || watchStatusFullText();
+  const text = watchStatusFullText() || (el && el.getAttribute("title")) || "";
   if (!text) return;
   const label = "Copy";
   function done() {
@@ -3231,12 +3243,11 @@ function copyWatchStatus(ev) {
 
 function watchStatusHtml() {
   const full = watchStatusFullText();
-  const showCopy = !!state.ws.error;
+  const showCopy = watchStatusNeedsCopy(full, null);
+  const title = full ? ' title="' + esc(full) + '"' : "";
   return (
-    '<div class="watch-status-wrap">' +
-    '<span class="watch-status" id="watchStatus"' +
-    (full ? ' title="' + esc(full) + '"' : "") +
-    ">" + esc(full) + "</span>" +
+    '<div class="watch-status-wrap" id="watchStatusWrap"' + title + ">" +
+    '<span class="watch-status" id="watchStatus"' + title + ">" + esc(full) + "</span>" +
     '<button type="button" class="watch-copy" id="watchCopy"' +
     (showCopy ? "" : " hidden") +
     ' aria-label="Copy status">Copy</button>' +
