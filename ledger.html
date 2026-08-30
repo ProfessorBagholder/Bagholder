@@ -3776,7 +3776,7 @@ function bootLocalApi() {
     const localRows = state.activities || [];
     const pushLocal = (st.activityCount === 0 && localRows.length)
       ? persistLocalActivities(localRows)
-      : persistLocalActivities(localRows.filter((a) => a && a.source && a.source !== "wealthsimple"));
+      : Promise.resolve();
     const load = pushLocal.then(function () {
       return api("GET", "/api/book").then((book) => {
         if (book && book.ok && Array.isArray(book.activities) && book.activities.length) {
