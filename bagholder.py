@@ -25,7 +25,6 @@ import threading
 import time
 import traceback
 import uuid
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -2573,10 +2572,6 @@ def main():
     t.start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
     if _state.get("connected"):
         threading.Thread(target=ensure_fresh_token, name="bagholder-boot-token", daemon=True).start()
         if store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
