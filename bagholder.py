@@ -12,6 +12,7 @@ Open the printed http://127.0.0.1 URL (the dashboard), not Wealthsimple.
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import re
@@ -1110,6 +1111,30 @@ def _ssl_context():
     return _SSL_CTX
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _http_body_text(raw, headers=None):
+    """Decode HTTP body bytes. Decompress gzip when the payload is still compressed."""
+    if not raw:
+        return ""
+    encoding = ""
+    if headers is not None:
+        try:
+            encoding = (headers.get("Content-Encoding") or "").strip().lower()
+        except Exception:
+            encoding = ""
+    gzip_magic = raw.startswith(_GZIP_MAGIC)
+    # urllib may leave gzip bodies compressed. Magic bytes are the reliable check;
+    # Content-Encoding alone is not enough, and must not cause a second decompress.
+    if gzip_magic or (encoding == "gzip" and gzip_magic):
+        try:
+            raw = gzip.decompress(raw)
+        except OSError:
+            pass
+    return raw.decode("utf-8", "replace")
+
+
 def _http_json(method, url, body=None, headers=None, timeout=60):
     hdrs = {
         "Accept": "application/json",
@@ -1127,14 +1152,22 @@ def _http_json(method, url, body=None, headers=None, timeout=60):
     try:
         with urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             raw = resp.read()
-            if not raw:
+            text = _http_body_text(raw, getattr(resp, "headers", None))
+            if not text:
                 return {}
-            return json.loads(raw.decode("utf-8"))
+            try:
+                return json.loads(text)
+            except ValueError:
+                return {
+                    "error": "invalid_json",
+                    "_http_status": getattr(resp, "status", None) or 200,
+                }
     except HTTPError as e:
         raw = e.read() if e.fp else b""
+        text = _http_body_text(raw, getattr(e, "headers", None))
         parsed = None
         try:
-            parsed = json.loads(raw.decode("utf-8")) if raw else {}
+            parsed = json.loads(text) if text else {}
         except ValueError:
             parsed = {"error": "http_%s" % e.code}
         parsed = parsed or {}
@@ -1202,7 +1235,7 @@ def scrape_client_id():
             hdrs["User-Agent"] = ua
         req = Request(LOGIN_URL, headers=hdrs)
         with urlopen(req, timeout=20, context=_ssl_context()) as resp:
-            html = resp.read().decode("utf-8", "replace")
+            html = _http_body_text(resp.read(), getattr(resp, "headers", None))
         m = re.search(r'<script[^>]+src="([^"]*app-[a-f0-9]+\.js[^"]*)"', html, re.I)
         if not m:
             return ""
@@ -1213,7 +1246,7 @@ def scrape_client_id():
             js_url = "https://my.wealthsimple.com" + js_url
         req2 = Request(js_url, headers=hdrs)
         with urlopen(req2, timeout=20, context=_ssl_context()) as resp:
-            js = resp.read().decode("utf-8", "replace")
+            js = _http_body_text(resp.read(), getattr(resp, "headers", None))
         m2 = re.search(r'production:.*?clientId:"([a-f0-9]+)"', js, re.S)
         if m2:
             save_client_id(m2.group(1))
@@ -1225,6 +1258,7 @@ def scrape_client_id():
 
 def client_id_for(sess):
     if sess and sess.get("client_id"):
+        save_client_id(sess["client_id"])
         return sess["client_id"]
     return scrape_client_id()
 
@@ -1238,13 +1272,20 @@ def _ws_session_headers(sess, headers):
     return headers
 
 
+def _set_public_error(msg):
+    with _lock:
+        _state["error"] = msg or ""
+
+
 def refresh_session(sess):
     """refresh_token grant. Do not send Authorization."""
     rt = (sess or {}).get("refresh_token")
     if not rt:
+        _set_public_error("missing refresh token")
         return False
     cid = client_id_for(sess)
     if not cid:
+        _set_public_error("could not read Wealthsimple client id")
         return False
     body = {
         "grant_type": "refresh_token",
@@ -1260,6 +1301,14 @@ def refresh_session(sess):
     )
     data = _http_json("POST", OAUTH + "/token", body, headers)
     if not data or not data.get("access_token"):
+        status = (data or {}).get("_http_status")
+        oauth_err = _s((data or {}).get("error")).strip()
+        if status:
+            _set_public_error("Wealthsimple token refresh HTTP %s" % status)
+        elif oauth_err:
+            _set_public_error(oauth_err)
+        else:
+            _set_public_error("Wealthsimple token refresh failed")
         return False
     sess["access_token"] = data["access_token"]
     if data.get("refresh_token"):
@@ -1597,6 +1646,9 @@ def ensure_fresh_token(sess=None):
     """
     sess = sess if sess is not None else load_session()
     if not sess or not sess.get("refresh_token"):
+        with _lock:
+            _state["connected"] = False
+            _state["error"] = "missing refresh token"
         return False
     with _lock:
         connected = bool(_state.get("connected"))
@@ -1607,6 +1659,8 @@ def ensure_fresh_token(sess=None):
         _state["connected"] = bool(ok)
         if ok:
             _state["error"] = ""
+        elif not (_state.get("error") or "").strip():
+            _state["error"] = "Wealthsimple token refresh failed"
     return ok
 
 
@@ -1774,6 +1828,11 @@ def boot_session():
         _state["connected"] = bool(ok)
         if ok:
             _state["error"] = ""
+        elif not (_state.get("error") or "").strip():
+            if not (sess or {}).get("refresh_token"):
+                _state["error"] = "missing refresh token"
+            else:
+                _state["error"] = "Wealthsimple token refresh failed"
         _state["email"] = (sess or {}).get("email") or ""
         book = load_book()
         _state["lastSync"] = book.get("syncedAt") or ""

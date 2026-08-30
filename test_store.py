@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gzip
 import os
 import tempfile
 import unittest
@@ -11,6 +12,28 @@ from unittest import mock
 
 import bagholder
 import store
+
+# Fake Wealthsimple production clientId for scrape tests. Not a real id.
+FAKE_CLIENT_ID = "ab" * 32
+
+
+class _FakeHTTPResp:
+    def __init__(self, body, headers=None, status=200):
+        if isinstance(body, (bytes, bytearray)):
+            self._body = bytes(body)
+        else:
+            self._body = str(body).encode("utf-8")
+        self.headers = headers or {}
+        self.status = status
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def _ws_item(**overrides):
@@ -38,6 +61,12 @@ class StoreTest(unittest.TestCase):
         store.set_home(self.home)
         bagholder.set_home(self.home)
         store.ensure()
+        with bagholder._lock:
+            bagholder._state["connected"] = False
+            bagholder._state["error"] = ""
+            bagholder._state["syncing"] = False
+            bagholder._state["capturing"] = False
+            bagholder._state["email"] = ""
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -223,17 +252,20 @@ class StoreTest(unittest.TestCase):
                 ok = bagholder.ensure_fresh_token(sess)
         self.assertTrue(ok)
         self.assertTrue(bagholder._state["connected"])
+        self.assertEqual(bagholder._state["error"], "")
         self.assertEqual(called["token"], 1)
         self.assertEqual(called["graphql"], 0)
 
         called["token"] = 0
         with bagholder._lock:
             bagholder._state["connected"] = False
+            bagholder._state["error"] = ""
         with mock.patch.object(bagholder, "refresh_session", side_effect=fake_fail):
             with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
                 ok = bagholder.ensure_fresh_token(sess)
         self.assertFalse(ok)
         self.assertFalse(bagholder._state["connected"])
+        self.assertTrue(bagholder._state["error"])
         self.assertTrue(bagholder.SESSION_PATH.exists())
         self.assertEqual(called["graphql"], 0)
 
@@ -259,6 +291,155 @@ class StoreTest(unittest.TestCase):
 
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
+
+
+def _login_html(js_url="https://assets.wealthsimple.com/app-abc123.js"):
+    return '<html><script src="%s"></script></html>' % js_url
+
+
+def _app_js(client_id):
+    return 'var cfg={production:{env:"prod",clientId:"%s"}};' % client_id
+
+
+class WealthsimpleHttpTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+        os.environ["BAGHOLDER_HOME"] = self.home
+        store.set_home(self.home)
+        bagholder.set_home(self.home)
+        store.ensure()
+        with bagholder._lock:
+            bagholder._state["connected"] = False
+            bagholder._state["error"] = ""
+            bagholder._state["syncing"] = False
+            bagholder._state["capturing"] = False
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def _urlopen_for_js(self, js_body, html_body=None, js_headers=None, html_headers=None):
+        html = html_body if html_body is not None else _login_html()
+        if not isinstance(html, (bytes, bytearray)):
+            html = html.encode("utf-8")
+
+        def fake_urlopen(req, timeout=None, context=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "app-" in url and ".js" in url:
+                return _FakeHTTPResp(js_body, headers=js_headers)
+            return _FakeHTTPResp(html, headers=html_headers)
+
+        return fake_urlopen
+
+    def test_scrape_client_id_from_gzip_js(self):
+        js = _app_js(FAKE_CLIENT_ID)
+        gz = gzip.compress(js.encode("utf-8"))
+        self.assertEqual(gz[:2], b"\x1f\x8b")
+        fake = self._urlopen_for_js(
+            gz,
+            js_headers={"Content-Encoding": "gzip"},
+        )
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake):
+            cid = bagholder.scrape_client_id()
+        self.assertEqual(cid, FAKE_CLIENT_ID)
+        self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
+
+    def test_scrape_client_id_from_uncompressed_js(self):
+        js = _app_js(FAKE_CLIENT_ID)
+        fake = self._urlopen_for_js(js.encode("utf-8"))
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake):
+            cid = bagholder.scrape_client_id()
+        self.assertEqual(cid, FAKE_CLIENT_ID)
+
+    def test_scrape_client_id_from_gzip_login_html(self):
+        html_gz = gzip.compress(_login_html().encode("utf-8"))
+        js = _app_js(FAKE_CLIENT_ID)
+        fake = self._urlopen_for_js(
+            js.encode("utf-8"),
+            html_body=html_gz,
+            html_headers={"Content-Encoding": "gzip"},
+        )
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake):
+            cid = bagholder.scrape_client_id()
+        self.assertEqual(cid, FAKE_CLIENT_ID)
+
+    def test_session_client_id_is_written_to_disk(self):
+        sess = {"client_id": FAKE_CLIENT_ID}
+        found = bagholder.client_id_for(sess)
+        self.assertEqual(found, FAKE_CLIENT_ID)
+        self.assertTrue(bagholder.CLIENT_ID_PATH.exists())
+        self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
+
+    def test_refresh_session_sets_error_when_client_id_missing(self):
+        bagholder.save_session({"refresh_token": "r"})
+        with mock.patch.object(bagholder, "scrape_client_id", return_value=""):
+            ok = bagholder.refresh_session({"refresh_token": "r"})
+        self.assertFalse(ok)
+        self.assertEqual(bagholder._state["error"], "could not read Wealthsimple client id")
+        self.assertTrue(bagholder.SESSION_PATH.exists())
+        self.assertEqual(bagholder.load_session().get("refresh_token"), "r")
+
+    def test_refresh_session_sets_http_error(self):
+        sess = {"refresh_token": "r", "client_id": FAKE_CLIENT_ID}
+        bagholder.save_session(sess)
+        with mock.patch.object(
+            bagholder,
+            "_http_json",
+            return_value={"error": "invalid_grant", "_http_status": 400},
+        ):
+            ok = bagholder.refresh_session(sess)
+        self.assertFalse(ok)
+        self.assertEqual(bagholder._state["error"], "Wealthsimple token refresh HTTP 400")
+        self.assertTrue(bagholder.SESSION_PATH.exists())
+        saved = bagholder.load_session()
+        self.assertEqual(saved.get("refresh_token"), "r")
+
+    def test_refresh_session_sets_oauth_error_text(self):
+        sess = {"refresh_token": "r", "client_id": FAKE_CLIENT_ID}
+        with mock.patch.object(bagholder, "_http_json", return_value={"error": "invalid_grant"}):
+            ok = bagholder.refresh_session(sess)
+        self.assertFalse(ok)
+        self.assertEqual(bagholder._state["error"], "invalid_grant")
+
+    def test_ensure_fresh_token_sets_error_on_failed_refresh(self):
+        sess = {"refresh_token": "r", "expires_at": time_now_minus()}
+        bagholder.save_session(sess)
+        with mock.patch.object(bagholder, "refresh_session", return_value=False):
+            ok = bagholder.ensure_fresh_token(sess)
+        self.assertFalse(ok)
+        self.assertFalse(bagholder._state["connected"])
+        self.assertTrue(bagholder._state["error"])
+        self.assertTrue(bagholder.SESSION_PATH.exists())
+
+    def test_boot_session_sets_error_when_refresh_fails(self):
+        sess = {"refresh_token": "r", "expires_at": time_now_minus()}
+        bagholder.save_session(sess)
+        with mock.patch.object(bagholder, "refresh_session", return_value=False):
+            bagholder.boot_session()
+        self.assertFalse(bagholder._state["connected"])
+        self.assertTrue(bagholder._state["error"])
+        self.assertTrue(bagholder.SESSION_PATH.exists())
+
+    def test_http_json_invalid_body_returns_error_dict(self):
+        def fake_urlopen(req, timeout=None, context=None):
+            return _FakeHTTPResp(b"not-json{", status=200)
+
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake_urlopen):
+            data = bagholder._http_json("GET", "https://example.test/token")
+        self.assertEqual(data.get("error"), "invalid_json")
+        self.assertIn("_http_status", data)
+
+    def test_http_json_reads_gzip_json(self):
+        raw = gzip.compress(b'{"access_token":"tok","expires_in":3600}')
+
+        def fake_urlopen(req, timeout=None, context=None):
+            return _FakeHTTPResp(raw, headers={"Content-Encoding": "gzip"})
+
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake_urlopen):
+            data = bagholder._http_json("POST", "https://example.test/token", {"grant_type": "refresh_token"})
+        self.assertEqual(data.get("access_token"), "tok")
+        self.assertNotIn("_http_status", data)
 
 
 if __name__ == "__main__":
