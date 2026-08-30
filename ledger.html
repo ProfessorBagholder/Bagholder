@@ -2783,6 +2783,7 @@ function render() {
   const unmatchedWarn = formatUnmatchedWarning(unmatched);
   const closedFx = applyFx(closed);
   const visible = filteredTrades(closedFx);
+  const grouped = groupClosedByExit(visible);
   const incomeActs = state.activities.filter((a) => {
     const f = state.filters;
     if (f.from && a.transactionDate < f.from) return false;
@@ -2797,10 +2798,10 @@ function render() {
   const feesCad = incomeActs
     .filter((a) => a.category === "fee")
     .reduce((s, a) => s + toCad(a.netCashAmount, a.currency, a.transactionDate), 0);
-  const m = computeMetrics(visible, open.length, incomeCad, feesCad);
+  const m = computeMetrics(grouped, open.length, incomeCad, feesCad);
   const curve = equityCurve(state.activities, state.filters.from, state.filters.to);
-  const monthly = monthlyPnl(visible);
-  const bySymbol = breakdown(visible, (t) => underlyingSymbol(t.symbol));
+  const monthly = monthlyPnl(grouped);
+  const bySymbol = breakdown(grouped, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const years = yearsFromActivities(state.activities);
   const selectedYear = yearFromRange(state.filters.from, state.filters.to);
