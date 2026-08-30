@@ -2455,7 +2455,7 @@ function closedBlotterRowHtml(t) {
     "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
     "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
     "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
-    "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</td>" +
+    "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</td>" +
     "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
     "<td>" + esc(t.currency) + "</td>" +
     "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
@@ -2716,7 +2716,7 @@ function breakdownTable(rows, title) {
   const body = sorted.map((r) => {
     return (
       "<tr><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
-      esc(formatMoney(r.pnlCad)) + "</td><td>" + r.trades + "</td><td>" + formatPct(r.winRate) +
+      esc(formatCad(r.pnlCad, 2)) + "</td><td>" + r.trades + "</td><td>" + formatPct(r.winRate) +
       "</td></tr>"
     );
   }).join("");
@@ -2990,7 +2990,7 @@ function renderDrawer(t) {
     "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
     "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
     "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
-    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatMoney(t.pnlCad)) + "</dd></div>" +
+    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
     '</div><div class="edit">' +
