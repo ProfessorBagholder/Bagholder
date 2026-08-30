@@ -545,6 +545,11 @@ svg.chart .chart-axis-lbl { pointer-events: none; }
   border-radius: var(--radius);
   background: var(--bg-panel);
 }
+.panel .table-wrap {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 table.blotter {
   width: 100%;
   border-collapse: collapse;
@@ -2839,7 +2844,8 @@ function render() {
     }).join("");
 
     const tabClosed =
-      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades <em id="closedCount">' + closedSorted.length + " closed</em></h3>" +
+      '<div class="panel tight">' +
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades</h3>' +
       '<div class="symbol-pick" id="symbolPick">' +
       '<input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="Symbol" value="' + esc(state.filters.q) + '"/>' +
       '<div class="symbol-pick-list" id="symbolPickList" hidden></div></div></div>' +
@@ -2860,7 +2866,7 @@ function render() {
       ]) +
       "</tr></thead><tbody>" +
       blotterRows +
-      "</tbody></table></div>";
+      "</tbody></table></div></div>";
 
     const tabAct =
       '<div class="blotter-head"><h3 class="section-title" style="margin:0">Activity <em>' + incomeActs.length + " rows</em></h3></div>" +
