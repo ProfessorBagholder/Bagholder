@@ -1512,8 +1512,14 @@ function matchFifo(activities) {
     .filter((a) => (a.category === "trade" || a.category === "option_event") && a.symbol)
     .map((a) => ({ activity: a, side: tradeSide(a), qty: Math.abs(a.quantity) }))
     .filter((f) => f.side && f.qty > 0);
+  function fillWhen(a) {
+    // Same-day order is Wealthsimple's time when present.
+    const occurred = String((a && a.occurredAt) || "").trim();
+    if (occurred.indexOf("T") >= 0) return occurred;
+    return String((a && a.transactionDate) || "").trim();
+  }
   function fillRank(f) {
-    // Same-day option order without timestamps:
+    // Tiebreak when two fills share a time, or when there is no time:
     // STO, BTC (cover), BTO, STC, then plain stock SELL.
     // Stock day trades stay BUY then SELL.
     const t = compactType(f.activity.activityType);
@@ -1526,7 +1532,7 @@ function matchFifo(activities) {
     return 4;
   }
   fills.sort((a, b) => {
-    const d = a.activity.transactionDate.localeCompare(b.activity.transactionDate);
+    const d = fillWhen(a.activity).localeCompare(fillWhen(b.activity));
     if (d !== 0) return d;
     const ra = fillRank(a);
     const rb = fillRank(b);
