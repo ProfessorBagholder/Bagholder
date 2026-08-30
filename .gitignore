@@ -2,7 +2,6 @@
 # These entries guard against copies ever landing inside the project.
 .bagholder/
 session.json
-book.json
 *.db
 *.db-wal
 *.db-shm

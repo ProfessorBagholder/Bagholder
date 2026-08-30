@@ -161,33 +161,22 @@ class StoreTest(unittest.TestCase):
         cond = bagholder.activity_fetch_condition("acct-1", start_date=bounds["start_date"])
         self.assertNotIn("startDate", cond)
 
-    def test_json_import_once_then_daily_is_incremental(self):
-        payload = {
-            "activities": [
-                bagholder.map_activity(_ws_item()),
-                {
-                    "id": "manual|2024-07-01|manual|ZZZ|BUY|1|2",
-                    "transactionDate": "2024-07-01",
-                    "accountId": "manual",
-                    "symbol": "ZZZ",
-                    "quantity": 1,
-                    "unitPrice": 2,
-                    "netCashAmount": -2,
-                    "activityType": "Trade",
-                    "activitySubType": "BUY",
-                    "source": "manual",
-                },
-            ],
-            "accounts": [],
-            "balances": [],
-            "syncedAt": "2024-07-03T00:00:00Z",
-        }
-        json_file = store.json_path()
-        json_file.write_text(__import__("json").dumps(payload), encoding="utf-8")
-        # new empty db dir already has schema; drop rows to simulate first open
-        # import runs only when the table is empty — already true before apply
-        self.assertEqual(store.activity_count(), 0)
-        self.assertTrue(store.import_json_if_needed())
+    def test_existing_rows_make_daily_sync_incremental(self):
+        store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
+        store.insert_local(
+            {
+                "transactionDate": "2024-07-01",
+                "occurredAt": "2024-07-01",
+                "accountId": "manual",
+                "symbol": "ZZZ",
+                "quantity": 1,
+                "unitPrice": 2,
+                "netCashAmount": -2,
+                "activityType": "Trade",
+                "activitySubType": "BUY",
+                "source": "manual",
+            }
+        )
         self.assertEqual(store.activity_count(), 2)
         ws = [a for a in store.snapshot()["activities"] if a["source"] == "wealthsimple"][0]
         self.assertEqual(ws["canonicalId"], "ws-cid-aaa-001")
@@ -196,6 +185,7 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(manual.get("canonicalId"))
         bounds = bagholder.activity_sync_bounds()
         self.assertFalse(bounds["full_history"])
+        self.assertTrue(bounds["start_date"])
 
     def test_token_refresh_needed_uses_expires_at(self):
         now = 1_700_000_000

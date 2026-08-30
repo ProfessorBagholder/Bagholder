@@ -1,12 +1,10 @@
 """Local SQLite store for Bagholder activities, accounts, balances, and NAV.
 
-Paths stay under ~/.bagholder/ (or BAGHOLDER_HOME). The old JSON file is
-imported once when the activity table is empty, then left in place.
+The live store is ~/.bagholder/bagholder.db (or BAGHOLDER_HOME/bagholder.db).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import threading
@@ -41,10 +39,6 @@ def home():
 
 def db_path():
     return home() / "bagholder.db"
-
-
-def json_path():
-    return home() / "book.json"
 
 
 def _now_iso():
@@ -161,7 +155,6 @@ def ensure():
             _init_schema(conn)
         finally:
             conn.close()
-        import_json_if_needed()
 
 
 def get_meta(key, default=""):
@@ -801,48 +794,3 @@ def snapshot():
             }
         finally:
             conn.close()
-
-
-def import_legacy_activity(act):
-    if not isinstance(act, dict):
-        return None
-    source = _s(act.get("source")) or "manual"
-    if source == "wealthsimple":
-        cid = _canonical_from_row(act, "wealthsimple")
-        payload = dict(act)
-        payload["source"] = "wealthsimple"
-        return insert_activity(payload, canonical_id=cid)
-    payload = dict(act)
-    payload["source"] = source
-    return insert_local(payload)
-
-
-def import_json_if_needed(path=None):
-    """One-time import so stored history is not lost and daily sync stays incremental."""
-    if activity_count() > 0:
-        return False
-    src = Path(path) if path else json_path()
-    if not src.exists():
-        return False
-    if get_meta("json_imported_at"):
-        return False
-    try:
-        data = json.loads(src.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    acts = data.get("activities") or []
-    for act in acts:
-        try:
-            import_legacy_activity(act)
-        except sqlite3.IntegrityError:
-            continue
-    replace_accounts(data.get("accounts") or [])
-    replace_balances(data.get("balances") or [])
-    if data.get("navHistory"):
-        replace_nav(data.get("navHistory") or [])
-    if data.get("syncedAt"):
-        set_meta("synced_at", data["syncedAt"])
-    set_meta("json_imported_at", _now_iso())
-    return True

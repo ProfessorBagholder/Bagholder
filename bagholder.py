@@ -52,7 +52,6 @@ def _data_home():
 
 HOME = _data_home()
 SESSION_PATH = HOME / "session.json"
-JSON_PATH = HOME / "book.json"
 CLIENT_ID_PATH = HOME / "client_id"
 UA_PATH = HOME / "user_agent"
 TOKEN_CHECK_SEC = 30
@@ -582,10 +581,9 @@ def _is_code_change(item):
 
 def set_home(path):
     """Point session + SQLite paths at a directory (used by tests)."""
-    global HOME, SESSION_PATH, JSON_PATH, CLIENT_ID_PATH, UA_PATH
+    global HOME, SESSION_PATH, CLIENT_ID_PATH, UA_PATH
     HOME = Path(path)
     SESSION_PATH = HOME / "session.json"
-    JSON_PATH = HOME / "book.json"
     CLIENT_ID_PATH = HOME / "client_id"
     UA_PATH = HOME / "user_agent"
     store.set_home(HOME)
