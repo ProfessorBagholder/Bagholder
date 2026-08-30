@@ -371,14 +371,53 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertTrue(bagholder.CLIENT_ID_PATH.exists())
         self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
 
-    def test_refresh_session_sets_error_when_client_id_missing(self):
+    def test_refresh_session_without_client_id_does_not_scrape_or_post(self):
         bagholder.save_session({"refresh_token": "r"})
-        with mock.patch.object(bagholder, "scrape_client_id", return_value=""):
-            ok = bagholder.refresh_session({"refresh_token": "r"})
+        self.assertFalse(bagholder.CLIENT_ID_PATH.exists())
+        with mock.patch.object(bagholder, "scrape_client_id") as scrape:
+            with mock.patch.object(bagholder, "_http_json") as http:
+                ok = bagholder.refresh_session({"refresh_token": "r"})
         self.assertFalse(ok)
-        self.assertEqual(bagholder._state["error"], "could not read Wealthsimple client id")
+        scrape.assert_not_called()
+        http.assert_not_called()
+        self.assertEqual(bagholder._state["error"], "session has no client id")
         self.assertTrue(bagholder.SESSION_PATH.exists())
         self.assertEqual(bagholder.load_session().get("refresh_token"), "r")
+
+    def test_refresh_session_uses_cached_client_id_file(self):
+        bagholder.save_client_id(FAKE_CLIENT_ID)
+        sess = {"refresh_token": "r"}
+        with mock.patch.object(bagholder, "scrape_client_id") as scrape:
+            with mock.patch.object(
+                bagholder,
+                "_http_json",
+                return_value={"access_token": "tok", "expires_in": 3600},
+            ) as http:
+                ok = bagholder.refresh_session(sess)
+        self.assertTrue(ok)
+        scrape.assert_not_called()
+        http.assert_called_once()
+        self.assertEqual(sess.get("client_id"), FAKE_CLIENT_ID)
+
+    def test_refresh_session_sets_http_and_oauth_error(self):
+        sess = {"refresh_token": "r", "client_id": FAKE_CLIENT_ID}
+        bagholder.save_session(sess)
+        with mock.patch.object(
+            bagholder,
+            "_http_json",
+            return_value={"error": "invalid_client", "_http_status": 401},
+        ):
+            ok = bagholder.refresh_session(sess)
+        self.assertFalse(ok)
+        err = bagholder._state["error"]
+        self.assertIn("HTTP 401", err)
+        self.assertIn("invalid_client", err)
+        self.assertTrue(err.startswith("Wealthsimple token refresh HTTP 401"))
+        self.assertNotIn(FAKE_CLIENT_ID, err)
+        self.assertNotIn("r", err.split())
+        self.assertTrue(bagholder.SESSION_PATH.exists())
+        saved = bagholder.load_session()
+        self.assertEqual(saved.get("refresh_token"), "r")
 
     def test_refresh_session_sets_http_error(self):
         sess = {"refresh_token": "r", "client_id": FAKE_CLIENT_ID}
@@ -390,7 +429,10 @@ class WealthsimpleHttpTest(unittest.TestCase):
         ):
             ok = bagholder.refresh_session(sess)
         self.assertFalse(ok)
-        self.assertEqual(bagholder._state["error"], "Wealthsimple token refresh HTTP 400")
+        self.assertEqual(
+            bagholder._state["error"],
+            "Wealthsimple token refresh HTTP 400 invalid_grant",
+        )
         self.assertTrue(bagholder.SESSION_PATH.exists())
         saved = bagholder.load_session()
         self.assertEqual(saved.get("refresh_token"), "r")

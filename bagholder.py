@@ -1257,10 +1257,11 @@ def scrape_client_id():
 
 
 def client_id_for(sess):
+    """Session or cached file only. Do not scrape at refresh time."""
     if sess and sess.get("client_id"):
         save_client_id(sess["client_id"])
         return sess["client_id"]
-    return scrape_client_id()
+    return cached_client_id()
 
 
 def _ws_session_headers(sess, headers):
@@ -1277,6 +1278,32 @@ def _set_public_error(msg):
         _state["error"] = msg or ""
 
 
+def _oauth_error_code(data):
+    """Short OAuth `error` field only. Never tokens, client_id values, or raw bodies."""
+    err = (data or {}).get("error")
+    if not isinstance(err, str):
+        return ""
+    err = err.strip()
+    if not err:
+        return ""
+    if re.fullmatch(r"[a-f0-9]{32,}", err, re.I):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", err):
+        return ""
+    return _public_sync_error(err)
+
+
+def _refresh_failure_message(data):
+    status = (data or {}).get("_http_status")
+    oauth_err = _oauth_error_code(data)
+    parts = []
+    if status:
+        parts.append("Wealthsimple token refresh HTTP %s" % status)
+    if oauth_err:
+        parts.append(oauth_err)
+    return " ".join(parts) if parts else "Wealthsimple token refresh failed"
+
+
 def refresh_session(sess):
     """refresh_token grant. Do not send Authorization."""
     rt = (sess or {}).get("refresh_token")
@@ -1285,7 +1312,7 @@ def refresh_session(sess):
         return False
     cid = client_id_for(sess)
     if not cid:
-        _set_public_error("could not read Wealthsimple client id")
+        _set_public_error("session has no client id")
         return False
     body = {
         "grant_type": "refresh_token",
@@ -1301,14 +1328,7 @@ def refresh_session(sess):
     )
     data = _http_json("POST", OAUTH + "/token", body, headers)
     if not data or not data.get("access_token"):
-        status = (data or {}).get("_http_status")
-        oauth_err = _s((data or {}).get("error")).strip()
-        if status:
-            _set_public_error("Wealthsimple token refresh HTTP %s" % status)
-        elif oauth_err:
-            _set_public_error(oauth_err)
-        else:
-            _set_public_error("Wealthsimple token refresh failed")
+        _set_public_error(_refresh_failure_message(data))
         return False
     sess["access_token"] = data["access_token"]
     if data.get("refresh_token"):
