@@ -385,30 +385,25 @@ class WealthsimpleHttpTest(unittest.TestCase):
         bagholder.apply_token_info_client_id(sess2, {"application": {"uid": FAKE_CLIENT_ID}})
         self.assertEqual(sess2.get("client_id"), FAKE_CLIENT_ID)
 
-    def test_boot_stores_client_id_from_token_info_before_refresh(self):
+    def test_boot_stores_client_id_from_token_info_without_refresh(self):
         bagholder.save_session({
             "access_token": "tok",
             "refresh_token": "r",
             "expires_at": time_now_minus(),
         })
-        seen = {}
-
-        def fake_refresh(sess):
-            seen["client_id"] = sess.get("client_id")
-            return True
-
         with mock.patch.object(
             bagholder,
             "token_info",
             return_value={"application_uid": FAKE_CLIENT_ID},
         ):
-            with mock.patch.object(bagholder, "refresh_session", side_effect=fake_refresh):
+            with mock.patch.object(bagholder, "refresh_session") as refresh:
                 with mock.patch.object(bagholder, "scrape_client_id") as scrape:
                     bagholder.boot_session()
         scrape.assert_not_called()
-        self.assertEqual(seen.get("client_id"), FAKE_CLIENT_ID)
+        refresh.assert_not_called()
         saved = bagholder.load_session()
         self.assertEqual(saved.get("client_id"), FAKE_CLIENT_ID)
+        self.assertTrue(bagholder._state["connected"])
         self.assertEqual(bagholder.CLIENT_ID_PATH.read_text(encoding="utf-8").strip(), FAKE_CLIENT_ID)
 
     def test_capture_stores_client_id_from_token_info_uid(self):
@@ -466,6 +461,9 @@ class WealthsimpleHttpTest(unittest.TestCase):
         scrape.assert_not_called()
         http.assert_called_once()
         self.assertEqual(sess.get("client_id"), FAKE_CLIENT_ID)
+        self.assertIsInstance(sess.get("expires_at"), str)
+        self.assertIn("T", sess.get("expires_at"))
+        self.assertTrue(sess.get("expires_at").endswith("Z"))
 
     def test_refresh_session_sets_http_and_oauth_error(self):
         sess = {"refresh_token": "r", "client_id": FAKE_CLIENT_ID}

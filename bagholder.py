@@ -1304,6 +1304,22 @@ def _refresh_failure_message(data):
     return " ".join(parts) if parts else "Wealthsimple token refresh failed"
 
 
+def _expires_at_as_timestamp(data):
+    """Store Wealthsimple expiry as the same timestamp string the cookie uses."""
+    raw = (data or {}).get("expires_at")
+    if isinstance(raw, str) and "T" in raw.strip():
+        return raw.strip()
+    unix = None
+    if isinstance(raw, (int, float)):
+        unix = float(raw)
+    elif data and data.get("expires_in") is not None:
+        unix = time.time() + int(data["expires_in"])
+    if unix is None:
+        return None
+    dt = datetime.fromtimestamp(unix, timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def refresh_session(sess):
     """refresh_token grant. Do not send Authorization."""
     rt = (sess or {}).get("refresh_token")
@@ -1333,10 +1349,9 @@ def refresh_session(sess):
     sess["access_token"] = data["access_token"]
     if data.get("refresh_token"):
         sess["refresh_token"] = data["refresh_token"]
-    if data.get("expires_at"):
-        sess["expires_at"] = data["expires_at"]
-    elif data.get("expires_in"):
-        sess["expires_at"] = int(time.time()) + int(data["expires_in"])
+    stamped = _expires_at_as_timestamp(data)
+    if stamped:
+        sess["expires_at"] = stamped
     sess["client_id"] = cid
     save_session(sess)
     return True
@@ -1737,23 +1752,7 @@ def run_sync(allow_refresh=True, force_activity=True):
             with _lock:
                 _state["connected"] = False
             return False
-        ok = True
-        try:
-            if token_refresh_needed(sess):
-                ok = refresh_session(sess)
-                sess = load_session() or sess
-            info = token_info(sess) if sess and sess.get("access_token") else {}
-            if not info or info.get("error") or info.get("_http_status"):
-                ok = refresh_session(sess)
-                sess = load_session() or sess
-                info = token_info(sess) if ok else {}
-            elif not sess.get("identity_canonical_id") and info.get("identity_canonical_id"):
-                sess["identity_canonical_id"] = info.get("identity_canonical_id")
-                save_session(sess)
-        except Exception:
-            ok = refresh_session(sess)
-            sess = load_session() or sess
-            info = token_info(sess) if ok else {}
+        info = {}
         if not sess or not sess.get("access_token"):
             with _lock:
                 _state["connected"] = False
@@ -1861,6 +1860,7 @@ def boot_session():
             _state["lastSync"] = snap.get("syncedAt") or ""
         return
     info = {}
+    info_ok = False
     if sess.get("access_token"):
         try:
             info = token_info(sess) or {}
@@ -1874,24 +1874,10 @@ def boot_session():
             if info.get("email"):
                 sess["email"] = info["email"]
             save_session(sess)
-    ok = False
-    if sess.get("refresh_token"):
-        ok = ensure_fresh_token(sess)
+    ok = bool(info_ok)
+    if not ok and sess.get("refresh_token"):
+        ok = refresh_session(sess)
         sess = load_session() or sess
-    if not ok and sess.get("access_token"):
-        if not info:
-            try:
-                info = token_info(sess) or {}
-            except Exception:
-                info = {}
-        ok = bool(info) and not info.get("error") and not info.get("_http_status")
-        if ok:
-            apply_token_info_client_id(sess, info)
-            if info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
-                sess["identity_canonical_id"] = info["identity_canonical_id"]
-            if info.get("email"):
-                sess["email"] = info["email"]
-            save_session(sess)
     with _lock:
         _state["connected"] = bool(ok)
         if ok:
@@ -2420,10 +2406,6 @@ def capture_tokens(body):
         if ua:
             sess["user_agent"] = ua
     save_session(sess)
-    try:
-        refresh_session(sess)
-    except Exception:
-        pass
     with _lock:
         _state["connected"] = True
         _state["capturing"] = False
@@ -2691,12 +2673,6 @@ def auto_sync_loop():
     delay = TOKEN_CHECK_SEC
     fail_delay = TOKEN_CHECK_SEC
     while not _stop.wait(delay):
-        sess = load_session()
-        if sess and sess.get("refresh_token"):
-            try:
-                ensure_fresh_token(sess)
-            except Exception:
-                pass
         with _lock:
             connected = _state["connected"]
             syncing = _state["syncing"]
@@ -2738,7 +2714,6 @@ def main():
     except Exception:
         pass
     if _state.get("connected"):
-        threading.Thread(target=ensure_fresh_token, name="bagholder-boot-token", daemon=True).start()
         if store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
             threading.Thread(target=run_sync, name="bagholder-boot-sync", daemon=True).start()
     try:
