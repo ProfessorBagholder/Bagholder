@@ -969,7 +969,7 @@ def map_activity(item, accounts=None):
     desc = _human_desc(item, typ, sub, symbol, quantity, unit_price, cash)
     name = _s(item.get("aftOriginatorName") or item.get("institutionName") or symbol)
 
-    return {
+    mapped = {
         "canonicalId": cid or None,
         "occurredAt": occurred,
         "transactionDate": transaction_date,
@@ -996,6 +996,9 @@ def map_activity(item, accounts=None):
         "aftType": _s(item.get("aftTransactionType")),
         "counterSymbol": _counter_symbol(item),
     }
+    if cid:
+        mapped["id"] = cid
+    return mapped
 
 
 # --- runtime (not executed on import) ---

@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ACTIVITY_PULL_SEC = 24 * 60 * 60
 
 _home = None
@@ -145,7 +145,65 @@ def _init_schema(conn):
         "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),
     )
+    _apply_migrations(conn)
     conn.commit()
+
+
+def _schema_version(conn):
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?", ("schema_version",)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    if not row or row["value"] is None:
+        return 0
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_schema_version(conn, version):
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("schema_version", str(version)),
+    )
+
+
+def _align_wealthsimple_activity_ids(conn):
+    """One-time: activities.id = Wealthsimple canonical_id when that id is real."""
+    rows = conn.execute(
+        """
+        SELECT id, canonical_id FROM activities
+        WHERE source = 'wealthsimple'
+          AND canonical_id IS NOT NULL
+          AND canonical_id != ''
+          AND id != canonical_id
+        """
+    ).fetchall()
+    for row in rows:
+        cid = _s(row["canonical_id"]).strip()
+        old_id = row["id"]
+        if not cid or looks_like_homemade_id(cid):
+            continue
+        clash = conn.execute(
+            "SELECT 1 FROM activities WHERE id = ?", (cid,)
+        ).fetchone()
+        if clash:
+            continue
+        conn.execute(
+            "UPDATE activities SET id = ? WHERE id = ?",
+            (cid, old_id),
+        )
+
+
+def _apply_migrations(conn):
+    ver = _schema_version(conn)
+    if ver < 2:
+        _align_wealthsimple_activity_ids(conn)
+        _set_schema_version(conn, 2)
 
 
 def ensure():
@@ -492,9 +550,16 @@ def insert_activity(act, canonical_id=None, assigned_id=None):
         canonical_id = None
     if canonical_id == "":
         canonical_id = None
-    aid = assigned_id or _s(act.get("id")).strip()
-    if not aid or looks_like_homemade_id(aid):
-        aid = _new_id()
+    if (
+        source == "wealthsimple"
+        and canonical_id
+        and not looks_like_homemade_id(canonical_id)
+    ):
+        aid = canonical_id
+    else:
+        aid = assigned_id or _s(act.get("id")).strip()
+        if not aid or looks_like_homemade_id(aid):
+            aid = _new_id()
     with _lock:
         conn = _connect()
         try:

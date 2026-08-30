@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -61,6 +62,7 @@ class StoreTest(unittest.TestCase):
         store.apply_wealthsimple_mapped([changed])
         stored = store.snapshot()["activities"]
         self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["id"], "ws-cid-aaa-001")
         self.assertEqual(stored[0]["canonicalId"], "ws-cid-aaa-001")
         self.assertNotEqual(stored[0]["description"], "should not land")
         self.assertAlmostEqual(stored[0]["netCashAmount"], -100.0)
@@ -84,6 +86,7 @@ class StoreTest(unittest.TestCase):
         stored = store.snapshot()["activities"][0]
         self.assertIsNone(stored.get("canonicalId"))
         self.assertEqual(stored["source"], "manual")
+        self.assertEqual(stored["id"], act["id"])
 
     def test_csv_has_no_canonical_id(self):
         saved = store.insert_local(
@@ -104,16 +107,19 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(saved.get("canonicalId"))
         self.assertEqual(saved["source"], "csv")
         self.assertFalse(store.looks_like_homemade_id(saved["id"]))
+        self.assertNotEqual(saved["id"], "do-not-keep-this")
 
     def test_occurred_at_not_cut_to_date_for_wealthsimple_row(self):
         row = bagholder.map_activity(_ws_item())
         self.assertEqual(row["occurredAt"], "2024-06-15T13:45:22.123Z")
         self.assertEqual(row["transactionDate"], "2024-06-15")
-        self.assertNotIn("id", row)
+        self.assertEqual(row["id"], "ws-cid-aaa-001")
         store.apply_wealthsimple_mapped([row])
         stored = store.snapshot()["activities"][0]
         self.assertEqual(stored["occurredAt"], "2024-06-15T13:45:22.123Z")
         self.assertTrue("T" in stored["occurredAt"])
+        self.assertEqual(stored["id"], "ws-cid-aaa-001")
+        self.assertEqual(stored["canonicalId"], "ws-cid-aaa-001")
 
     def test_daily_path_does_not_page_whole_history_when_rows_exist(self):
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
@@ -180,9 +186,11 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.activity_count(), 2)
         ws = [a for a in store.snapshot()["activities"] if a["source"] == "wealthsimple"][0]
         self.assertEqual(ws["canonicalId"], "ws-cid-aaa-001")
+        self.assertEqual(ws["id"], "ws-cid-aaa-001")
         self.assertFalse(store.looks_like_homemade_id(ws["id"]))
         manual = [a for a in store.snapshot()["activities"] if a["source"] == "manual"][0]
         self.assertIsNone(manual.get("canonicalId"))
+        self.assertNotEqual(manual["id"], ws["id"])
         bounds = bagholder.activity_sync_bounds()
         self.assertFalse(bounds["full_history"])
         self.assertTrue(bounds["start_date"])
@@ -255,6 +263,78 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["canonicalId"], "ws-cid-aaa-001")
         self.assertEqual(rows[0]["source"], "manual")
+        self.assertNotEqual(rows[0]["id"], "ws-cid-aaa-001")
+
+    def test_wealthsimple_insert_uses_canonical_id_as_row_id(self):
+        row = bagholder.map_activity(_ws_item())
+        self.assertEqual(row["id"], "ws-cid-aaa-001")
+        self.assertEqual(row["canonicalId"], "ws-cid-aaa-001")
+        stored = store.insert_activity(row)
+        self.assertEqual(stored["id"], "ws-cid-aaa-001")
+        self.assertEqual(stored["canonicalId"], "ws-cid-aaa-001")
+
+        other = bagholder.map_activity(_ws_item(canonicalId="ws-cid-bbb-002"))
+        other.pop("id", None)
+        stored2 = store.insert_activity(other)
+        self.assertEqual(stored2["id"], "ws-cid-bbb-002")
+        self.assertEqual(stored2["canonicalId"], "ws-cid-bbb-002")
+
+    def test_migrates_wealthsimple_row_id_to_canonical_id(self):
+        conn = sqlite3.connect(str(store.db_path()))
+        conn.execute(
+            "INSERT INTO activities (id, canonical_id, transaction_date, source) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "11111111-2222-3333-4444-555555555555",
+                "ws-cid-mig-001",
+                "2024-06-15",
+                "wealthsimple",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO activities (id, canonical_id, transaction_date, source) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                None,
+                "2024-07-02",
+                "csv",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO activities (id, canonical_id, transaction_date, source) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "cccccccc-dddd-eeee-ffff-000000000000",
+                "2024-06-16|acct-1|AAA|10|10|-100|Trade|BUY",
+                "2024-06-16",
+                "wealthsimple",
+            ),
+        )
+        conn.execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        conn.commit()
+        conn.close()
+
+        store.ensure()
+        self.assertEqual(store.get_meta("schema_version"), "2")
+        snap = store.snapshot()["activities"]
+        self.assertEqual(len(snap), 3)
+        ws = [a for a in snap if a.get("canonicalId") == "ws-cid-mig-001"][0]
+        self.assertEqual(ws["id"], "ws-cid-mig-001")
+        csv = [a for a in snap if a["source"] == "csv"][0]
+        self.assertEqual(csv["id"], "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        self.assertIsNone(csv.get("canonicalId"))
+        homemade = [
+            a
+            for a in snap
+            if a["id"] == "cccccccc-dddd-eeee-ffff-000000000000"
+        ][0]
+        self.assertEqual(
+            homemade["canonicalId"],
+            "2024-06-16|acct-1|AAA|10|10|-100|Trade|BUY",
+        )
 
 
 def time_now_minus():
