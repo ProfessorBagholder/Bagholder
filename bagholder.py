@@ -3042,6 +3042,7 @@ class Handler(BaseHTTPRequestHandler):
                     "navByAccount": book.get("navByAccount") or {},
                     "syncedAt": book.get("syncedAt") or "",
                     "tradeGroups": book.get("tradeGroups") or [],
+                    "notes": book.get("notes") or {},
                     "securities": book.get("securities") or [],
                 },
             )
@@ -3093,6 +3094,11 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             groups = store.save_trade_groups(body.get("groups") if isinstance(body, dict) else [])
             self._send(200, {"ok": True, "groups": groups})
+            return
+        if path == "/api/notes":
+            body = self._read_json()
+            notes = store.save_trade_notes(body.get("notes") if isinstance(body, dict) else {})
+            self._send(200, {"ok": True, "notes": notes})
             return
         self._send(404, {"ok": False, "error": "not found"})
 
