@@ -3389,7 +3389,7 @@ function innerBuysSellsHtml(t) {
     const sorted = sortRows(acts, function (a) {
       return {
         when: activityWhen(a),
-        side: a.activitySubType,
+        side: tradeSide(a) || a.activitySubType,
         quantity: a.quantity,
         unitPrice: a.unitPrice,
         netCashAmount: a.netCashAmount,
@@ -3397,7 +3397,7 @@ function innerBuysSellsHtml(t) {
     }, innerSort.dir);
     const rows = sorted.map(function (a) {
       const cash = a.netCashAmount;
-      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activitySubType || "") + "</td><td>" +
+      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(tradeSide(a) || a.activitySubType || "") + "</td><td>" +
         (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
         "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(cash) + "'>" +
         esc(formatCad(cash, 2)) + "</td></tr>";
