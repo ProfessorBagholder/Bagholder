@@ -1832,11 +1832,12 @@ function priceMatches(px, op, a, b) {
 function rowPriceOk(prices) {
   if (!priceFilterOn()) return true;
   const f = state.filters;
-  const list = prices || [];
+  const list = (prices || []).filter(function (px) { return Number.isFinite(Number(px)); });
+  if (!list.length) return false;
   for (let i = 0; i < list.length; i++) {
-    if (priceMatches(list[i], f.priceOp, f.priceMin, f.priceMax)) return true;
+    if (!priceMatches(list[i], f.priceOp, f.priceMin, f.priceMax)) return false;
   }
-  return false;
+  return true;
 }
 
 function tradeCostCad(t) {
