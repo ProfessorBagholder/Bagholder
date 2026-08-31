@@ -1743,6 +1743,7 @@ function toCad(amount, currency, date) {
 
 function applyFx(trades) {
   return trades.map((t) => {
+    const ccy = (t.currency || "CAD").toUpperCase();
     const qty = t.quantity;
     const entryC = t.entryCommission || 0;
     const exitC = t.exitCommission || 0;
@@ -1750,9 +1751,9 @@ function applyFx(trades) {
     const exitNotional = t.exitPrice * qty * optionMultiplier(t.symbol);
     let pnlCad;
     if (t.openDirection === "SHORT") {
-      pnlCad = (entryNotional - entryC) - (exitNotional + exitC);
+      pnlCad = toCad(entryNotional - entryC, ccy, t.entryDate) - toCad(exitNotional + exitC, ccy, t.exitDate);
     } else {
-      pnlCad = (exitNotional - exitC) - (entryNotional + entryC);
+      pnlCad = toCad(exitNotional - exitC, ccy, t.exitDate) - toCad(entryNotional + entryC, ccy, t.entryDate);
     }
     return Object.assign({}, t, { pnlCad: pnlCad });
   });
