@@ -277,6 +277,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.danger:hover { background: var(--neg-dim); }
 .btn.ghost { background: transparent; }
 
+.btn:disabled { opacity: 0.4; pointer-events: none; }
+.group-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.group-error { color: var(--neg); font-size: 12px; margin: 0 0 8px; }
+.blotter th.pick, .blotter td.pick { width: 28px; text-align: center; }
+.blotter td.pick { cursor: default; }
+.split-list { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.split-list label { display: flex; gap: 8px; align-items: center; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--line); }
+.split-list label:last-child { border-bottom: 0; }
+.inner-acts { margin-top: 12px; }
+.inner-acts table { width: 100%; font-size: 12px; }
+.inner-acts th, .inner-acts td { padding: 4px 6px; text-align: left; }
+
 /* Layout */
 .main {
   flex: 1;
@@ -1591,6 +1603,8 @@ function matchFifo(activities) {
         pnl: rawPnl - commission,
         pnlCad: rawPnl - commission,
         openDirection: lot.direction,
+        buyActivityId: lot.activityId || "",
+        sellActivityId: a.id || "",
       };
       trade.id = stableTradeId(trade);
       closed.push(trade);
@@ -1633,6 +1647,8 @@ function matchFifo(activities) {
             pnl: rawPnl - commission,
             pnlCad: rawPnl - commission,
             openDirection: lot.direction,
+            buyActivityId: lot.activityId || "",
+            sellActivityId: a.id || "",
           };
           trade.id = stableTradeId(trade);
           closed.push(trade);
@@ -1658,6 +1674,7 @@ function matchFifo(activities) {
           symbol: a.symbol,
           name: a.name,
           currency: a.currency,
+          activityId: a.id,
         });
       } else {
         unmatched.push({
@@ -2214,6 +2231,10 @@ const state = {
   ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", syncStartedAt: 0, refreshing: false, refreshResult: "" },
   connectOpen: false,
   tradeOpen: false,
+  splitOpen: null,
+  savedGroups: [],
+  checkedGroups: {},
+  groupError: "",
   sort: {
     closed: { key: "exitDate", dir: "desc" },
     activity: { key: "transactionDate", dir: "desc" },
@@ -2428,52 +2449,257 @@ function sortRows(rows, keyFn, dir) {
   return rows.slice().sort((a, b) => m * cmp(keyFn(a), keyFn(b)));
 }
 
-function groupClosedByExit(trades) {
-  // FIFO writes one row per buy lot. Same sell against 12 lots looks like 12 tiny P&Ls.
-  // Collapse those slices so the table is one row per close (avg entry, summed P&L).
-  const map = new Map();
-  for (let i = 0; i < trades.length; i++) {
-    const t = trades[i];
-    const k = [t.symbol, t.currency, t.exitDate, Number(t.exitPrice).toFixed(8), t.side, t.openDirection].join("|");
-    let g = map.get(k);
-    if (!g) {
-      g = {
-        id: t.id,
-        accountId: t.accountId,
-        accountType: t.accountType,
-        symbol: t.symbol,
-        name: t.name,
-        currency: t.currency,
-        side: t.side,
-        quantity: 0,
-        entryPrice: 0,
-        exitPrice: t.exitPrice,
-        entryDate: t.entryDate,
-        exitDate: t.exitDate,
-        holdDays: t.holdDays,
-        commission: 0,
-        pnl: 0,
-        pnlCad: 0,
-        openDirection: t.openDirection,
-        _entryNotional: 0,
-      };
-      map.set(k, g);
+function sliceMemberKey(t) {
+  const buy = String(t.buyActivityId || "");
+  const sell = String(t.sellActivityId || "");
+  if (buy && sell) return [buy, sell, Number(t.quantity).toFixed(8)].join("|");
+  return String(t.sliceKey || t.id || "");
+}
+
+function groupIdForKeys(keys) {
+  const s = keys.slice().sort().join("\n");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return "g_" + (h >>> 0).toString(16) + "_" + keys.length;
+}
+
+function newGroupId() {
+  if (window.crypto && crypto.randomUUID) return "g_" + crypto.randomUUID();
+  return "g_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+}
+
+function collapseClosedGroup(slices, id, locked) {
+  if (!slices.length) return null;
+  const t0 = slices[0];
+  const g = {
+    id: id,
+    locked: !!locked,
+    accountId: t0.accountId,
+    accountType: t0.accountType,
+    symbol: t0.symbol,
+    name: t0.name,
+    currency: t0.currency,
+    side: t0.side,
+    quantity: 0,
+    entryPrice: 0,
+    exitPrice: 0,
+    entryDate: t0.entryDate,
+    exitDate: t0.exitDate,
+    holdDays: t0.holdDays,
+    commission: 0,
+    pnl: 0,
+    pnlCad: 0,
+    openDirection: t0.openDirection,
+    slices: slices.slice(),
+    members: slices.map(sliceMemberKey),
+    _entryNotional: 0,
+    _exitNotional: 0,
+  };
+  for (let i = 0; i < slices.length; i++) {
+    const s = slices[i];
+    g.quantity += s.quantity;
+    g.pnl += s.pnl;
+    g.pnlCad += s.pnlCad;
+    g.commission += s.commission;
+    g._entryNotional += s.entryPrice * s.quantity;
+    g._exitNotional += s.exitPrice * s.quantity;
+    if (s.entryDate < g.entryDate) g.entryDate = s.entryDate;
+    if (s.exitDate > g.exitDate) g.exitDate = s.exitDate;
+  }
+  g.entryPrice = g.quantity ? g._entryNotional / g.quantity : 0;
+  g.exitPrice = g.quantity ? g._exitNotional / g.quantity : t0.exitPrice;
+  g.holdDays = daysBetween(g.entryDate, g.exitDate);
+  delete g._entryNotional;
+  delete g._exitNotional;
+  return g;
+}
+
+function groupLaneKey(t) {
+  return [t.accountId || "", t.symbol || "", t.currency || ""].join("|");
+}
+
+function sortClosedSlices(a, b) {
+  let d = String(a.exitDate || "").localeCompare(String(b.exitDate || ""));
+  if (d) return d;
+  d = String(a.entryDate || "").localeCompare(String(b.entryDate || ""));
+  if (d) return d;
+  return String(sliceMemberKey(a)).localeCompare(String(sliceMemberKey(b)));
+}
+
+function defaultGroupsUntilSideChange(slices) {
+  const lanes = new Map();
+  for (let i = 0; i < slices.length; i++) {
+    const s = slices[i];
+    const k = groupLaneKey(s);
+    if (!lanes.has(k)) lanes.set(k, []);
+    lanes.get(k).push(s);
+  }
+  const out = [];
+  lanes.forEach(function (list) {
+    list.sort(sortClosedSlices);
+    let cur = [];
+    let dir = null;
+    function flush() {
+      if (!cur.length) return;
+      const keys = cur.map(sliceMemberKey);
+      out.push(collapseClosedGroup(cur, groupIdForKeys(keys), false));
+      cur = [];
     }
-    g.quantity += t.quantity;
-    g.pnl += t.pnl;
-    g.pnlCad += t.pnlCad;
-    g.commission += t.commission;
-    g._entryNotional += t.entryPrice * t.quantity;
-    if (t.entryDate < g.entryDate) g.entryDate = t.entryDate;
-  }
-  const out = Array.from(map.values());
-  for (let i = 0; i < out.length; i++) {
-    const g = out[i];
-    g.entryPrice = g.quantity ? g._entryNotional / g.quantity : 0;
-    g.holdDays = daysBetween(g.entryDate, g.exitDate);
-    delete g._entryNotional;
-  }
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      if (dir !== null && s.openDirection !== dir) flush();
+      dir = s.openDirection;
+      cur.push(s);
+    }
+    flush();
+  });
   return out;
+}
+
+function applySavedTradeGroups(slices, saved) {
+  const byKey = new Map();
+  for (let i = 0; i < slices.length; i++) {
+    byKey.set(sliceMemberKey(slices[i]), slices[i]);
+  }
+  const used = {};
+  const out = [];
+  const list = Array.isArray(saved) ? saved : [];
+  for (let i = 0; i < list.length; i++) {
+    const rec = list[i] || {};
+    const members = [];
+    const keys = Array.isArray(rec.members) ? rec.members : [];
+    for (let j = 0; j < keys.length; j++) {
+      const s = byKey.get(String(keys[j]));
+      const mk = s ? sliceMemberKey(s) : "";
+      if (s && !used[mk]) {
+        members.push(s);
+        used[mk] = true;
+      }
+    }
+    if (!members.length) continue;
+    const id = String(rec.id || groupIdForKeys(members.map(sliceMemberKey)));
+    out.push(collapseClosedGroup(members, id, true));
+  }
+  const rest = [];
+  for (let i = 0; i < slices.length; i++) {
+    if (!used[sliceMemberKey(slices[i])]) rest.push(slices[i]);
+  }
+  return out.concat(defaultGroupsUntilSideChange(rest));
+}
+
+function groupClosedByExit(trades) {
+  return applySavedTradeGroups(trades, state.savedGroups || []);
+}
+
+function persistSavedGroups(groups) {
+  state.savedGroups = groups || [];
+  if (!HAS_LOCAL_API) return Promise.resolve();
+  return api("POST", "/api/groups", { groups: state.savedGroups }).then(function (r) {
+    if (r && r.ok && Array.isArray(r.groups)) state.savedGroups = r.groups;
+  });
+}
+
+function selectedClosedGroups() {
+  const rows = closedTradesForBlotter();
+  const ids = Object.keys(state.checkedGroups || {});
+  return rows.filter(function (t) { return ids.indexOf(t.id) >= 0; });
+}
+
+function combineSelectedGroups() {
+  const picked = selectedClosedGroups();
+  state.groupError = "";
+  if (picked.length < 2) {
+    state.groupError = "Select two or more Closed trades rows to Combine.";
+    render();
+    return;
+  }
+  const k0 = groupLaneKey(picked[0]);
+  const d0 = picked[0].openDirection;
+  for (let i = 1; i < picked.length; i++) {
+    if (groupLaneKey(picked[i]) !== k0) {
+      state.groupError = "Combine only works for the same account, symbol, and currency.";
+      render();
+      return;
+    }
+    if (picked[i].openDirection !== d0) {
+      state.groupError = "Combine only works when the rows are the same side (long with long, or short with short).";
+      render();
+      return;
+    }
+  }
+  const members = [];
+  picked.forEach(function (g) {
+    (g.members || []).forEach(function (k) {
+      if (members.indexOf(k) < 0) members.push(k);
+    });
+  });
+  const drop = {};
+  picked.forEach(function (g) { drop[g.id] = true; });
+  const next = (state.savedGroups || []).filter(function (g) { return !drop[g.id]; });
+  next.push({ id: newGroupId(), locked: true, members: members });
+  state.checkedGroups = {};
+  persistSavedGroups(next).then(function () { render(); });
+}
+
+function openSplitModal() {
+  const picked = selectedClosedGroups();
+  state.groupError = "";
+  if (picked.length !== 1) {
+    state.groupError = "Select one Closed trades row to Split.";
+    render();
+    return;
+  }
+  const g = picked[0];
+  if (!g.members || g.members.length < 2) {
+    state.groupError = "That row has only one matched buy and sell, so there is nothing to Split.";
+    render();
+    return;
+  }
+  state.splitOpen = { groupId: g.id, picked: {} };
+  render();
+}
+
+function confirmSplit() {
+  const spec = state.splitOpen;
+  if (!spec) return;
+  const g = closedTradesForBlotter().find(function (t) { return t.id === spec.groupId; });
+  if (!g) { state.splitOpen = null; render(); return; }
+  const all = (g.members || []).slice();
+  const splitKeys = all.filter(function (k) { return spec.picked[k]; });
+  const keepKeys = all.filter(function (k) { return !spec.picked[k]; });
+  if (!splitKeys.length || !keepKeys.length) {
+    state.groupError = "Pick some of the buys and sells, not all of them.";
+    render();
+    return;
+  }
+  const next = (state.savedGroups || []).filter(function (x) { return x.id !== g.id; });
+  next.push({ id: newGroupId(), locked: true, members: keepKeys });
+  next.push({ id: newGroupId(), locked: true, members: splitKeys });
+  state.splitOpen = null;
+  state.checkedGroups = {};
+  state.groupError = "";
+  persistSavedGroups(next).then(function () { render(); });
+}
+
+function activitiesInGroup(g) {
+  const byId = {};
+  (state.activities || []).forEach(function (a) { byId[a.id] = a; });
+  const seen = {};
+  const acts = [];
+  (g.slices || []).forEach(function (s) {
+    [s.buyActivityId, s.sellActivityId].forEach(function (id) {
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      if (byId[id]) acts.push(byId[id]);
+    });
+  });
+  acts.sort(function (a, b) {
+    return String(activityWhen(a)).localeCompare(String(activityWhen(b))) || String(a.id).localeCompare(String(b.id));
+  });
+  return acts;
 }
 
 function closedTradesForBlotter() {
@@ -2508,8 +2734,10 @@ function closedTradesForBlotter() {
 function closedBlotterRowHtml(t) {
   const n = state.notes[t.id] || {};
   const sel = state.selected && state.selected.id === t.id ? " selected" : "";
+  const checked = state.checkedGroups && state.checkedGroups[t.id] ? " checked" : "";
   return (
     "<tr class='" + sel + "' data-id='" + esc(t.id) + "'>" +
+    "<td class='pick'><input type='checkbox' class='group-pick' data-id='" + esc(t.id) + "'" + checked + "/></td>" +
     "<td>" + esc(t.entryDate) + "</td><td>" + esc(t.exitDate) + "</td>" +
     "<td>" + esc(t.symbol) + (n.grade ? " <span class='grade " + esc(n.grade) + "'>" + esc(n.grade) + "</span>" : "") + "</td>" +
     "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
@@ -2524,18 +2752,27 @@ function closedBlotterRowHtml(t) {
 }
 
 function closedBlotterBodyHtml(rows) {
-  return rows.map(closedBlotterRowHtml).join("") || "<tr><td colspan='12' class='sans'>No closed trades match.</td></tr>";
+  return rows.map(closedBlotterRowHtml).join("") || "<tr><td colspan='13' class='sans'>No closed trades match.</td></tr>";
 }
 
 function bindClosedBlotterClicks(root) {
   const scope = root || document;
   scope.querySelectorAll("table#closedBlotter tbody tr[data-id]").forEach((tr) => {
-    tr.addEventListener("click", () => {
+    tr.addEventListener("click", (e) => {
+      if (e.target && e.target.closest && e.target.closest(".pick")) return;
       const id = tr.getAttribute("data-id");
-      const { closed } = matchFifo(state.activities);
-      const t = applyFx(closed).find((x) => x.id === id);
+      const t = closedTradesForBlotter().find((x) => x.id === id);
       state.selected = t || null;
       render();
+    });
+  });
+  scope.querySelectorAll("input.group-pick").forEach((box) => {
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => {
+      state.checkedGroups = state.checkedGroups || {};
+      const id = box.getAttribute("data-id");
+      if (box.checked) state.checkedGroups[id] = true;
+      else delete state.checkedGroups[id];
     });
   });
 }
@@ -2902,10 +3139,16 @@ function render() {
     const tabClosed =
       '<div class="panel tight">' +
       '<div class="blotter-head"><h3 class="section-title" style="margin:0">Closed trades</h3>' +
+      '<div class="group-actions">' +
+      '<button type="button" class="btn" id="combineGroups">Combine</button>' +
+      '<button type="button" class="btn" id="splitGroup">Split</button>' +
+      "</div>" +
       '<div class="symbol-pick" id="symbolPick">' +
       '<input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="Symbol" value="' + esc(state.filters.q) + '"/>' +
       '<div class="symbol-pick-list" id="symbolPickList" hidden></div></div></div>' +
+      (state.groupError ? '<p class="group-error">' + esc(state.groupError) + "</p>" : "") +
       '<div class="table-wrap"><table class="blotter" id="closedBlotter"><thead><tr>' +
+      '<th class="pick"></th>' +
       sortTh("closed", [
         { key: "entryDate", label: "In" },
         { key: "exitDate", label: "Out" },
@@ -2996,7 +3239,7 @@ function render() {
   const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol);
 
   const drawer = state.selected
-    ? renderDrawer(closedFx.find((t) => t.id === state.selected.id) || state.selected)
+    ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
     : "";
 
   root.innerHTML =
@@ -3032,9 +3275,32 @@ function render() {
     drawer +
     renderConnectModal() +
     renderTradeModal() +
+    renderSplitModal() +
     "</div>";
 
   bind();
+}
+
+function innerBuysSellsHtml(t) {
+  const acts = activitiesInGroup(t);
+  const slices = t.slices || [];
+  if (acts.length) {
+    const rows = acts.map(function (a) {
+      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activityType || "") + "</td><td>" +
+        esc(a.activitySubType || "") + "</td><td>" + (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
+        "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(a.netCashAmount) + "'>" +
+        esc(formatMoney(a.netCashAmount, a.currency)) + "</td></tr>";
+    }).join("");
+    return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table><thead><tr><th>When</th><th>Type</th><th>Sub</th><th>Qty</th><th>Price</th><th>Cash</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+  }
+  if (!slices.length) return "";
+  const rows = slices.map(function (s) {
+    return "<tr><td>" + esc(s.entryDate) + "</td><td>" + esc(s.exitDate) + "</td><td>" +
+      formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + "</td><td>" + formatNumber(s.entryPrice) +
+      "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnlCad) + "'>" +
+      esc(formatCad(s.pnlCad, 2)) + "</td></tr>";
+  }).join("");
+  return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table><thead><tr><th>In</th><th>Out</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
 }
 
 function renderDrawer(t) {
@@ -3055,7 +3321,8 @@ function renderDrawer(t) {
     "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
-    '</div><div class="edit">' +
+    "</div>" + innerBuysSellsHtml(t) +
+    '<div class="edit">' +
     "<label>Thesis / notes</label><textarea id='thesis'>" + esc(n.thesis) + "</textarea>" +
     "<label>Tag</label><input type='text' id='tag' value='" + esc(n.tag) + "'/>" +
     "<label>Grade</label><div class='grades'>" + grades + "</div>" +
@@ -3521,6 +3788,33 @@ function renderConnectModal() {
   );
 }
 
+function renderSplitModal() {
+  if (!state.splitOpen) return "";
+  const g = closedTradesForBlotter().find(function (row) { return row.id === state.splitOpen.groupId; });
+  if (!g) return "";
+  const rows = (g.slices || []).map(function (s) {
+    const k = sliceMemberKey(s);
+    const checked = state.splitOpen.picked[k] ? " checked" : "";
+    return "<label><input type='checkbox' class='split-pick' data-key='" + esc(k) + "'" + checked + "/><span>" +
+      esc(s.entryDate) + " in · " + esc(s.exitDate) + " out · " +
+      formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + " @ " + formatNumber(s.entryPrice) +
+      " → " + formatNumber(s.exitPrice) + " · " + esc(formatCad(s.pnlCad, 2)) + "</span></label>";
+  }).join("");
+  return (
+    '<div class="modal-overlay" id="splitOverlay">' +
+    '<div class="modal" id="splitModal">' +
+    '<div class="modal-head"><div><h2>Split</h2></div>' +
+    '<button class="btn ghost" type="button" id="closeSplit" style="margin-left:auto">Close</button></div>' +
+    '<div class="modal-body"><p>Pick the buys and sells that should become their own Closed trades row.</p>' +
+    '<div class="split-list">' + rows + "</div>" +
+    (state.groupError ? '<p class="group-error">' + esc(state.groupError) + "</p>" : "") +
+    '<div class="modal-actions">' +
+    '<button class="btn ghost" type="button" id="cancelSplit">Cancel</button>' +
+    '<button class="btn primary" type="button" id="confirmSplit">Split</button>' +
+    "</div></div></div></div>"
+  );
+}
+
 function renderTradeModal() {
   if (!state.tradeOpen) return "";
   const today = new Date().toISOString().slice(0, 10);
@@ -3567,6 +3861,7 @@ function replaceWsActivities(book) {
   if (book && book.accounts) state.ws.accounts = book.accounts;
   state.navHistory = (book && book.navHistory) ? book.navHistory.slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); }) : [];
   if (book && book.syncedAt) state.ws.lastSync = book.syncedAt;
+  if (book && Array.isArray(book.tradeGroups)) state.savedGroups = book.tradeGroups;
   window.__wsBookAt = state.ws.lastSync || "";
   persist();
   render();
@@ -4100,6 +4395,28 @@ function bind() {
   if (refreshSessionBtn) refreshSessionBtn.addEventListener("click", (e) => { e.stopPropagation(); refreshSessionNow(); });
   const disconnectBtn = document.getElementById("disconnectWs");
   if (disconnectBtn) disconnectBtn.addEventListener("click", (e) => { e.stopPropagation(); disconnectWs(); });
+  const combineBtn = document.getElementById("combineGroups");
+  if (combineBtn) combineBtn.addEventListener("click", (e) => { e.stopPropagation(); combineSelectedGroups(); });
+  const splitBtn = document.getElementById("splitGroup");
+  if (splitBtn) splitBtn.addEventListener("click", (e) => { e.stopPropagation(); openSplitModal(); });
+  const closeSplit = document.getElementById("closeSplit");
+  if (closeSplit) closeSplit.addEventListener("click", (e) => { e.stopPropagation(); state.splitOpen = null; state.groupError = ""; render(); });
+  const cancelSplit = document.getElementById("cancelSplit");
+  if (cancelSplit) cancelSplit.addEventListener("click", (e) => { e.stopPropagation(); state.splitOpen = null; state.groupError = ""; render(); });
+  const splitOverlay = document.getElementById("splitOverlay");
+  if (splitOverlay) splitOverlay.addEventListener("click", () => { state.splitOpen = null; state.groupError = ""; render(); });
+  const splitModal = document.getElementById("splitModal");
+  if (splitModal) splitModal.addEventListener("click", (e) => e.stopPropagation());
+  const confirmSplitBtn = document.getElementById("confirmSplit");
+  if (confirmSplitBtn) confirmSplitBtn.addEventListener("click", (e) => { e.stopPropagation(); confirmSplit(); });
+  document.querySelectorAll("input.split-pick").forEach((box) => {
+    box.addEventListener("change", () => {
+      if (!state.splitOpen) return;
+      const k = box.getAttribute("data-key");
+      if (box.checked) state.splitOpen.picked[k] = true;
+      else delete state.splitOpen.picked[k];
+    });
+  });
   const addTrade = document.getElementById("addTrade");
   if (addTrade) addTrade.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -4147,6 +4464,8 @@ function bind() {
     state.filters = { from: "", to: "", account: "", symbol: "", q: "" };
     state.reports = [];
     state.selected = null;
+    state.checkedGroups = {};
+    state.savedGroups = [];
     state.filterOpen = false;
     persist();
     render();

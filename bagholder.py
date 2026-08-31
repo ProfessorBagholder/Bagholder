@@ -2625,6 +2625,7 @@ class Handler(BaseHTTPRequestHandler):
                     "balances": book.get("balances") or [],
                     "navHistory": book.get("navHistory") or [],
                     "syncedAt": book.get("syncedAt") or "",
+                    "tradeGroups": book.get("tradeGroups") or [],
                 },
             )
             return
@@ -2670,6 +2671,11 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             result = append_manual(body)
             self._send(200, result)
+            return
+        if path == "/api/groups":
+            body = self._read_json()
+            groups = store.save_trade_groups(body.get("groups") if isinstance(body, dict) else [])
+            self._send(200, {"ok": True, "groups": groups})
             return
         self._send(404, {"ok": False, "error": "not found"})
 

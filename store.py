@@ -5,6 +5,7 @@ The live store is ~/.bagholder/bagholder.db (or BAGHOLDER_HOME/bagholder.db).
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -763,6 +764,51 @@ def replace_nav(points):
             conn.close()
 
 
+
+def _clean_trade_groups(raw):
+    if not isinstance(raw, list):
+        return []
+    out = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        gid = str(item.get("id") or "").strip()
+        members = item.get("members")
+        if not gid or gid in seen or not isinstance(members, list):
+            continue
+        keys = []
+        used = set()
+        for m in members:
+            k = str(m or "").strip()
+            if not k or k in used:
+                continue
+            used.add(k)
+            keys.append(k)
+        if not keys:
+            continue
+        seen.add(gid)
+        out.append({"id": gid, "locked": bool(item.get("locked")), "members": keys})
+    return out
+
+
+def trade_groups():
+    raw = get_meta("trade_groups")
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    return _clean_trade_groups(data)
+
+
+def save_trade_groups(groups):
+    clean = _clean_trade_groups(groups)
+    set_meta("trade_groups", json.dumps(clean))
+    return clean
+
+
 def snapshot():
     ensure()
     with _lock:
@@ -806,12 +852,18 @@ def snapshot():
                     rec["netDeposits"] = r["net_deposits"]
                 nav.append(rec)
             synced = get_meta("synced_at")
+            groups_raw = get_meta("trade_groups")
+            try:
+                groups = _clean_trade_groups(json.loads(groups_raw) if groups_raw else [])
+            except ValueError:
+                groups = []
             return {
                 "activities": activities,
                 "accounts": accounts,
                 "balances": balances,
                 "navHistory": nav,
                 "syncedAt": synced,
+                "tradeGroups": groups,
             }
         finally:
             conn.close()
