@@ -787,6 +787,67 @@ def _nav_point_from_row(r):
     return rec
 
 
+def nav_last_dates():
+    """Newest stored daily-value date per account_id. Empty string is All."""
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            rows = conn.execute(
+                "SELECT account_id, MAX(date) AS last FROM nav_history GROUP BY account_id"
+            ).fetchall()
+            out = {}
+            for r in rows:
+                last = r["last"]
+                if not last:
+                    continue
+                out[r["account_id"] or ""] = last
+            return out
+        finally:
+            conn.close()
+
+
+def _write_nav_points(conn, points):
+    for rec in points or []:
+        if not isinstance(rec, dict):
+            continue
+        day = _s(rec.get("date"))[:10]
+        if not day:
+            continue
+        equity = _num(rec.get("equity"), None)
+        if equity is None:
+            continue
+        account_id = _s(rec.get("accountId") if rec.get("accountId") is not None else rec.get("account_id"))
+        conn.execute(
+            "INSERT INTO nav_history "
+            "(account_id, date, equity, currency, net_deposits) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id, date) DO UPDATE SET "
+            "equity = excluded.equity, "
+            "currency = excluded.currency, "
+            "net_deposits = excluded.net_deposits",
+            (
+                account_id,
+                day,
+                equity,
+                _s(rec.get("currency") or "CAD"),
+                _num(rec.get("netDeposits") if rec.get("netDeposits") is not None else rec.get("net_deposits"), None),
+            ),
+        )
+
+
+def upsert_nav(points):
+    """Insert or update daily-value rows. Does not delete existing days."""
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            _write_nav_points(conn, points)
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def replace_nav(points):
     """Replace the whole nav_history table from identity-wide + per-nickname series."""
     with _lock:
@@ -794,32 +855,7 @@ def replace_nav(points):
         try:
             _init_schema(conn)
             conn.execute("DELETE FROM nav_history")
-            for rec in points or []:
-                if not isinstance(rec, dict):
-                    continue
-                day = _s(rec.get("date"))[:10]
-                if not day:
-                    continue
-                equity = _num(rec.get("equity"), None)
-                if equity is None:
-                    continue
-                account_id = _s(rec.get("accountId") if rec.get("accountId") is not None else rec.get("account_id"))
-                conn.execute(
-                    "INSERT INTO nav_history "
-                    "(account_id, date, equity, currency, net_deposits) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(account_id, date) DO UPDATE SET "
-                    "equity = excluded.equity, "
-                    "currency = excluded.currency, "
-                    "net_deposits = excluded.net_deposits",
-                    (
-                        account_id,
-                        day,
-                        equity,
-                        _s(rec.get("currency") or "CAD"),
-                        _num(rec.get("netDeposits") if rec.get("netDeposits") is not None else rec.get("net_deposits"), None),
-                    ),
-                )
+            _write_nav_points(conn, points)
             conn.commit()
         finally:
             conn.close()

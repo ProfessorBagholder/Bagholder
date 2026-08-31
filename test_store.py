@@ -688,6 +688,39 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertEqual(set(snap["navByAccount"]), {"TFSA"})
         self.assertNotIn("RRSP", snap["navByAccount"])
 
+    def test_upsert_nav_keeps_existing_days(self):
+        store.replace_nav(
+            [
+                {"date": "2024-01-01", "equity": 10, "accountId": ""},
+                {"date": "2024-01-01", "equity": 5, "accountId": "TFSA"},
+            ]
+        )
+        store.upsert_nav(
+            [
+                {"date": "2024-01-02", "equity": 11, "accountId": ""},
+                {"date": "2024-01-01", "equity": 6, "accountId": "TFSA"},
+            ]
+        )
+        snap = store.snapshot()
+        self.assertEqual([p["date"] for p in snap["navHistory"]], ["2024-01-01", "2024-01-02"])
+        self.assertEqual(snap["navHistory"][1]["equity"], 11)
+        self.assertEqual(snap["navByAccount"]["TFSA"][0]["equity"], 6)
+        self.assertEqual(store.nav_last_dates(), {"": "2024-01-02", "TFSA": "2024-01-01"})
+
+    def test_fetch_nav_history_since_date_skips_older_years(self):
+        calls = []
+
+        def fake_graphql(sess, operation, variables, query=None):
+            calls.append(dict(variables))
+            return {"identity": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {}}}}}
+
+        with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+            bagholder.fetch_nav_history({"access_token": "t"}, "ident-1", since_date="2026-08-30")
+        self.assertTrue(calls)
+        for variables in calls:
+            self.assertGreaterEqual(variables["startDate"], "2026-08-30")
+            self.assertTrue(variables["startDate"].startswith("2026"))
+
     def test_nav_account_groups_joins_same_nickname(self):
         groups = bagholder.nav_account_groups(
             [
@@ -823,7 +856,7 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertNotIn("netDeposits", merged[1])
 
     def test_fetch_nickname_nav_history_merges_and_records_errors(self):
-        def fake_account(sess, account_id):
+        def fake_account(sess, account_id, since_date=None):
             if account_id == "rrsp-1":
                 raise RuntimeError("nope")
             if account_id == "cad-1":
