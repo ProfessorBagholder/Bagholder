@@ -372,6 +372,75 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(rows[0]["canonicalId"], "ws-cid-aaa-001")
         self.assertEqual(rows[0]["source"], "manual")
 
+    def test_map_activity_copies_security_id(self):
+        row = bagholder.map_activity(_ws_item(securityId="sec-s-abc123"))
+        self.assertEqual(row["securityId"], "sec-s-abc123")
+
+    def test_second_sync_stamps_security_id_only(self):
+        row = bagholder.map_activity(_ws_item())
+        store.apply_wealthsimple_mapped([row])
+        later = dict(row)
+        later["securityId"] = "sec-s-later"
+        later["quantity"] = 999
+        later["netCashAmount"] = 1
+        again = store.apply_wealthsimple_mapped([later])
+        self.assertEqual(again["inserted"], 0)
+        self.assertEqual(again["skipped"], 1)
+        got = store.snapshot()["activities"][0]
+        self.assertEqual(got["securityId"], "sec-s-later")
+        self.assertEqual(got["quantity"], 10)
+        self.assertEqual(got["netCashAmount"], -100)
+
+    def test_snapshot_includes_securities(self):
+        store.upsert_securities(
+            [
+                {
+                    "id": "sec-s-ch",
+                    "symbol": "CH",
+                    "name": "Charbone Corporation",
+                    "primaryExchange": "TSX Venture Exchange",
+                    "primaryMic": "XTSV",
+                    "currency": "CAD",
+                }
+            ]
+        )
+        secs = store.snapshot()["securities"]
+        self.assertEqual(len(secs), 1)
+        self.assertEqual(secs[0]["id"], "sec-s-ch")
+        self.assertEqual(secs[0]["name"], "Charbone Corporation")
+        self.assertEqual(secs[0]["primaryMic"], "XTSV")
+
+    def test_fetch_security_reads_stock_fields(self):
+        def fake_graphql(sess, operation, variables, query=None):
+            self.assertEqual(operation, "FetchSecurity")
+            self.assertEqual(variables["securityId"], "sec-s-ch")
+            return {
+                "security": {
+                    "id": "sec-s-ch",
+                    "currency": "CAD",
+                    "stock": {
+                        "name": "Charbone Corporation",
+                        "primaryExchange": "TSX Venture Exchange",
+                        "primaryMic": "XTSV",
+                        "symbol": "CH",
+                    },
+                    "optionDetails": {},
+                }
+            }
+
+        with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+            rec = bagholder.fetch_security({"access_token": "t"}, "sec-s-ch")
+        self.assertEqual(rec["name"], "Charbone Corporation")
+        self.assertEqual(rec["symbol"], "CH")
+        self.assertEqual(rec["primaryMic"], "XTSV")
+        self.assertEqual(rec["currency"], "CAD")
+
+    def test_ledger_uses_listing_line(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function listingLine(", html)
+        self.assertIn("book.securities", html)
+        self.assertIn("esc(listingLine(t))", html)
+        self.assertNotIn('esc(t.side) + " " + formatNumber(t.quantity', html)
 
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
@@ -714,7 +783,7 @@ class WealthsimpleHttpTest(unittest.TestCase):
         conn.close()
         store.ensure()
         snap = store.snapshot()
-        self.assertEqual(store.get_meta("schema_version"), "2")
+        self.assertEqual(store.get_meta("schema_version"), "3")
         self.assertEqual(len(snap["navHistory"]), 1)
         self.assertEqual(snap["navHistory"][0]["date"], "2024-01-02")
         self.assertEqual(snap["navHistory"][0]["equity"], 1000.0)
@@ -954,6 +1023,8 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertIn("const hist = navHist();", html)
         self.assertIn("state.navByAccount = (book && book.navByAccount", html)
         self.assertNotIn("const hist = state.navHistory || [];", html)
+
+
 
 if __name__ == "__main__":
     unittest.main()

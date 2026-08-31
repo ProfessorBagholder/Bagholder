@@ -2261,6 +2261,7 @@ const state = {
   tradeOpen: false,
   splitOpen: null,
   savedGroups: [],
+  securities: [],
   checkedGroups: {},
   groupError: "",
   sort: {
@@ -3448,6 +3449,80 @@ function innerBuysSellsHtml(t) {
   return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
+
+function securityById(id) {
+  const sid = String(id || "");
+  if (!sid) return null;
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || "") === sid) return list[i];
+  }
+  return null;
+}
+
+function activitySecurityId(t) {
+  if (t && t.securityId) return t.securityId;
+  const acts = state.activities || [];
+  const ids = [];
+  if (t && t.buyActivityId) ids.push(t.buyActivityId);
+  if (t && t.sellActivityId) ids.push(t.sellActivityId);
+  const slices = (t && t.slices) || [];
+  for (let i = 0; i < slices.length; i++) {
+    const s = slices[i];
+    if (s.buyActivityId) ids.push(s.buyActivityId);
+    if (s.sellActivityId) ids.push(s.sellActivityId);
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = 0; j < acts.length; j++) {
+      if (String(acts[j].id || "") === String(ids[i] || "") && acts[j].securityId) {
+        return acts[j].securityId;
+      }
+    }
+  }
+  return "";
+}
+
+function exchangeLabel(sec) {
+  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
+  const micMap = {
+    XTSV: "TSX-V",
+    XTSX: "TSX",
+    XNAS: "NASDAQ",
+    XNYS: "NYSE",
+    XASE: "NYSE American",
+    ARCX: "NYSE Arca",
+  };
+  if (micMap[mic]) return micMap[mic];
+  const raw = String((sec && sec.primaryExchange) || "").trim();
+  const up = raw.toUpperCase();
+  const alias = {
+    TSXV: "TSX-V",
+    "TSX-V": "TSX-V",
+    "TSX VENTURE": "TSX-V",
+    CDNX: "TSX-V",
+    VENTURE: "TSX-V",
+    TORONTO: "TSX",
+    TSX: "TSX",
+  };
+  if (alias[up]) return alias[up];
+  return raw;
+}
+
+function listingLine(t) {
+  let sec = securityById(activitySecurityId(t));
+  if (sec && sec.underlyingId) {
+    const under = securityById(sec.underlyingId);
+    if (under) sec = under;
+  }
+  const fallback = String((t && t.symbol) || "");
+  if (!sec || !sec.name) return fallback;
+  const exch = exchangeLabel(sec);
+  const sym = String(sec.symbol || "").trim();
+  if (exch && sym) return sec.name + " · " + exch + ": " + sym;
+  if (exch) return sec.name + " · " + exch;
+  return sec.name;
+}
+
 function renderDrawer(t) {
   const n = state.notes[t.id] || { thesis: "", tag: "", grade: "" };
   const grades = ["A", "B", "C", "F"].map((g) => {
@@ -3456,7 +3531,7 @@ function renderDrawer(t) {
   return (
     '<div class="overlay" id="overlay"></div>' +
     '<aside class="drawer"><div class="drawer-head"><div><h2>' + esc(t.symbol) + "</h2>" +
-    '<div class="sym-sub">' + esc(t.name || "") + " · " + esc(t.side) + " " + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</div></div>" +
+    '<div class="sym-sub">' + esc(listingLine(t)) + "</div></div>" +
     '<button class="btn ghost" type="button" id="closeDrawer" style="margin-left:auto">Close</button></div>' +
     '<div class="drawer-body"><div class="dl">' +
     "<div><dt>In</dt><dd>" + esc(t.entryDate) + "</dd></div>" +
@@ -4009,6 +4084,7 @@ function replaceWsActivities(book) {
   state.navByAccount = (book && book.navByAccount && typeof book.navByAccount === "object" && !Array.isArray(book.navByAccount)) ? book.navByAccount : {};
   if (book && book.syncedAt) state.ws.lastSync = book.syncedAt;
   if (book && Array.isArray(book.tradeGroups)) state.savedGroups = book.tradeGroups;
+  state.securities = (book && Array.isArray(book.securities)) ? book.securities : [];
   window.__wsBookAt = state.ws.lastSync || "";
   persist();
   render();
