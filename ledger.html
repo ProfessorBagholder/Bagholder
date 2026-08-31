@@ -3524,13 +3524,38 @@ function listingTicker(sym) {
   return m ? m[1] : s;
 }
 
+function isAlphaVenue(sec) {
+  const exch = String((sec && sec.primaryExchange) || "").toUpperCase();
+  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
+  return exch === "ALPHA EXCHANGE" || exch === "ALPHA" || mic === "XATS";
+}
+
+function preferredListing(sec) {
+  if (!sec || !isAlphaVenue(sec)) return sec;
+  const sym = listingTicker(sec.symbol);
+  const ccy = String(sec.currency || "");
+  if (!sym) return sec;
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    const other = list[i];
+    if (!other || other.id === sec.id) continue;
+    if (other.underlyingId) continue;
+    if (listingTicker(other.symbol) !== sym) continue;
+    if (ccy && String(other.currency || "") && String(other.currency || "") !== ccy) continue;
+    if (isAlphaVenue(other)) continue;
+    if (!exchangeLabel(other)) continue;
+    return other;
+  }
+  return sec;
+}
+
 function listingSecurity(t) {
   let sec = securityById(activitySecurityId(t));
   if (sec && sec.underlyingId) {
     const under = securityById(sec.underlyingId);
     if (under) sec = under;
   }
-  return sec;
+  return preferredListing(sec);
 }
 
 function listingExchange(t) {
@@ -3546,6 +3571,7 @@ function knownExchanges() {
       const under = securityById(sec.underlyingId);
       if (under) sec = under;
     }
+    sec = preferredListing(sec);
     const e = exchangeLabel(sec);
     if (e) set[e] = true;
   }

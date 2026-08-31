@@ -463,6 +463,13 @@ class StoreTest(unittest.TestCase):
         self.assertIn("function knownExchanges(", html)
         self.assertIn("f.exchange && listingExchange(t) !== f.exchange", html)
 
+    def test_ledger_prefers_listed_one_over_alpha(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function isAlphaVenue(", html)
+        self.assertIn("function preferredListing(", html)
+        self.assertIn('exch === "ALPHA EXCHANGE"', html)
+        self.assertIn("return preferredListing(sec);", html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
