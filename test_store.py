@@ -810,6 +810,31 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertEqual(store.trade_groups(), [])
         self.assertEqual(store.save_trade_groups(None), [])
 
+    def test_trade_notes_roundtrip(self):
+        saved = store.save_trade_notes({
+            "g_one": {"thesis": "scale in", "tag": "hold", "grade": "A"},
+            "g_empty": {"thesis": "", "tag": "", "grade": ""},
+            "g_bad": {"thesis": "x", "tag": "y", "grade": "Z"},
+            "": {"thesis": "nope"},
+        })
+        self.assertEqual(saved["g_one"]["grade"], "A")
+        self.assertEqual(saved["g_one"]["tag"], "hold")
+        self.assertNotIn("g_empty", saved)
+        self.assertEqual(saved["g_bad"]["grade"], "")
+        self.assertEqual(saved["g_bad"]["thesis"], "x")
+        snap = store.snapshot()
+        self.assertEqual(snap["notes"], saved)
+        self.assertEqual(store.trade_notes(), saved)
+
+    def test_ledger_posts_notes(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function persistNotes(", html)
+        self.assertIn("function saveDrawerNote(", html)
+        self.assertIn('api("POST", "/api/notes"', html)
+        src = bagholder.ledger_path().with_name("bagholder.py").read_text(encoding="utf-8")
+        self.assertIn('path == "/api/notes"', src)
+        self.assertIn('"notes": book.get("notes") or {}', src)
+
     def test_nav_history_migrates_date_pk_to_account_date(self):
         path = store.db_path()
         conn = sqlite3.connect(str(path))

@@ -2469,15 +2469,49 @@ function pnlClass(n) {
   return "flat";
 }
 
+let _notesTimer = 0;
+
+function persistNotesSoon() {
+  try { localStorage.setItem(LS_NOTES, JSON.stringify(state.notes)); } catch (e) {}
+  if (!HAS_LOCAL_API) return;
+  if (_notesTimer) clearTimeout(_notesTimer);
+  _notesTimer = setTimeout(function () {
+    _notesTimer = 0;
+    api("POST", "/api/notes", { notes: state.notes });
+  }, 300);
+}
+
+function persistNotes() {
+  try { localStorage.setItem(LS_NOTES, JSON.stringify(state.notes)); } catch (e) {}
+  if (_notesTimer) { clearTimeout(_notesTimer); _notesTimer = 0; }
+  if (HAS_LOCAL_API) api("POST", "/api/notes", { notes: state.notes });
+}
+
 function persist() {
+  try { localStorage.setItem(LS_NOTES, JSON.stringify(state.notes)); } catch (e) {}
   try {
-    localStorage.setItem(LS_ACT, JSON.stringify(state.activities));
-    localStorage.setItem(LS_NOTES, JSON.stringify(state.notes));
+    if (!HAS_LOCAL_API) {
+      localStorage.setItem(LS_ACT, JSON.stringify(state.activities));
+      localStorage.setItem(LS_NAV, JSON.stringify(state.navHistory || []));
+      localStorage.setItem(LS_NAV_BY_ACCOUNT, JSON.stringify(state.navByAccount || {}));
+    }
     localStorage.setItem(LS_FX_TABLE, JSON.stringify(state.fxByDate || {}));
     localStorage.setItem(LS_SPY, JSON.stringify(state.spyByDate || {}));
-    localStorage.setItem(LS_NAV, JSON.stringify(state.navHistory || []));
-    localStorage.setItem(LS_NAV_BY_ACCOUNT, JSON.stringify(state.navByAccount || {}));
   } catch (e) {}
+}
+
+function saveDrawerNote(soon) {
+  const thesis = document.getElementById("thesis");
+  if (!state.selected || !state.selected.id || !thesis) return;
+  const id = state.selected.id;
+  const cur = state.notes[id] || { thesis: "", tag: "", grade: "" };
+  cur.thesis = thesis.value;
+  const tagEl = document.getElementById("tag");
+  cur.tag = tagEl ? tagEl.value : (cur.tag || "");
+  cur.tradeId = id;
+  state.notes[id] = cur;
+  if (soon) persistNotesSoon();
+  else persistNotes();
 }
 
 function isInventedAccountId(accountId, currency) {
@@ -4302,9 +4336,16 @@ function replaceWsActivities(book) {
   state.navByAccount = (book && book.navByAccount && typeof book.navByAccount === "object" && !Array.isArray(book.navByAccount)) ? book.navByAccount : {};
   if (book && book.syncedAt) state.ws.lastSync = book.syncedAt;
   if (book && Array.isArray(book.tradeGroups)) state.savedGroups = book.tradeGroups;
+  if (book && book.notes && typeof book.notes === "object" && !Array.isArray(book.notes)) {
+    state.notes = Object.assign({}, book.notes, state.notes);
+  }
   state.securities = (book && Array.isArray(book.securities)) ? book.securities : [];
   window.__wsBookAt = state.ws.lastSync || "";
   persist();
+  if (HAS_LOCAL_API && !window.__notesPushed) {
+    window.__notesPushed = true;
+    persistNotes();
+  }
   render();
   ensureFxRates();
   ensureSpyPrices();
@@ -4980,29 +5021,26 @@ function bind() {
   bindSymbolBreakdownClicks();
   const overlay = document.getElementById("overlay");
   const closeDrawer = document.getElementById("closeDrawer");
-  if (overlay) overlay.addEventListener("click", () => { state.selected = null; render(); });
-  if (closeDrawer) closeDrawer.addEventListener("click", () => { state.selected = null; render(); });
+  if (overlay) overlay.addEventListener("click", () => { saveDrawerNote(); state.selected = null; render(); });
+  if (closeDrawer) closeDrawer.addEventListener("click", () => { saveDrawerNote(); state.selected = null; render(); });
   const thesis = document.getElementById("thesis");
   if (thesis) {
-    const saveNote = () => {
-      const id = state.selected.id;
-      const cur = state.notes[id] || { thesis: "", tag: "", grade: "" };
-      cur.thesis = thesis.value;
-      cur.tag = document.getElementById("tag").value;
-      cur.tradeId = id;
-      state.notes[id] = cur;
-      persist();
-    };
-    thesis.addEventListener("change", saveNote);
-    document.getElementById("tag").addEventListener("change", saveNote);
+    thesis.addEventListener("change", function () { saveDrawerNote(); });
+    thesis.addEventListener("input", function () { saveDrawerNote(true); });
+    const tagEl = document.getElementById("tag");
+    if (tagEl) {
+      tagEl.addEventListener("change", function () { saveDrawerNote(); });
+      tagEl.addEventListener("input", function () { saveDrawerNote(true); });
+    }
     document.querySelectorAll(".grades button").forEach((b) => {
       b.addEventListener("click", () => {
+        saveDrawerNote();
         const id = state.selected.id;
         const cur = state.notes[id] || { thesis: "", tag: "", grade: "" };
         cur.grade = b.getAttribute("data-grade");
         cur.tradeId = id;
         state.notes[id] = cur;
-        persist();
+        persistNotes();
         render();
       });
     });

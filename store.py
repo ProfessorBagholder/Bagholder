@@ -968,6 +968,42 @@ def save_trade_groups(groups):
     return clean
 
 
+def _clean_trade_notes(raw):
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, val in raw.items():
+        kid = str(key or "").strip()
+        if not kid or not isinstance(val, dict):
+            continue
+        thesis = str(val.get("thesis") or "")
+        tag = str(val.get("tag") or "")
+        grade = str(val.get("grade") or "")
+        if grade not in ("A", "B", "C", "F"):
+            grade = ""
+        if not thesis and not tag and not grade:
+            continue
+        out[kid] = {"thesis": thesis, "tag": tag, "grade": grade, "tradeId": kid}
+    return out
+
+
+def trade_notes():
+    raw = get_meta("trade_notes")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return _clean_trade_notes(data)
+
+
+def save_trade_notes(notes):
+    clean = _clean_trade_notes(notes if isinstance(notes, dict) else {})
+    set_meta("trade_notes", json.dumps(clean))
+    return clean
+
+
 def _security_from_row(r):
     return {
         "id": r["id"],
@@ -1129,6 +1165,11 @@ def snapshot():
                 groups = _clean_trade_groups(json.loads(groups_raw) if groups_raw else [])
             except ValueError:
                 groups = []
+            notes_raw = get_meta("trade_notes")
+            try:
+                notes = _clean_trade_notes(json.loads(notes_raw) if notes_raw else {})
+            except ValueError:
+                notes = {}
             securities = [
                 _security_from_row(r)
                 for r in conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
@@ -1141,6 +1182,7 @@ def snapshot():
                 "navByAccount": nav_by_account,
                 "syncedAt": synced,
                 "tradeGroups": groups,
+                "notes": notes,
                 "securities": securities,
             }
         finally:
