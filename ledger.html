@@ -2440,23 +2440,6 @@ function yearsFromActivities(activities) {
   return Array.from(years).sort().reverse();
 }
 
-function yearsFromNavOrActivities(activities) {
-  const years = new Set();
-  const hist = navHist();
-  for (let i = 0; i < hist.length; i++) {
-    const d = String((hist[i] && hist[i].date) || "").slice(0, 4);
-    if (/^\d{4}$/.test(d)) years.add(d);
-  }
-  const acc = state.filters && state.filters.account;
-  for (let i = 0; i < (activities || []).length; i++) {
-    const a = activities[i];
-    if (acc && a.accountId !== acc && a.accountType !== acc) continue;
-    const d = String((a && a.transactionDate) || "").slice(0, 4);
-    if (/^\d{4}$/.test(d)) years.add(d);
-  }
-  return Array.from(years).sort().reverse();
-}
-
 function yearFromRange(from, to) {
   const a = /^(\d{4})-01-01$/.exec(from || "");
   const b = /^(\d{4})-12-31$/.exec(to || "");
@@ -3138,7 +3121,7 @@ function render() {
   const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
-  const years = yearsFromNavOrActivities(state.activities);
+  const years = yearsFromActivities(state.activities);
   const selectedYear = yearFromRange(state.filters.from, state.filters.to);
   const pf = m.profitFactor === Infinity ? "∞" : Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "—";
 
