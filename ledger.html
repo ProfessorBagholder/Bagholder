@@ -2138,6 +2138,14 @@ function isOptionSymbol(symbol) {
 function optionMultiplier(symbol) {
   return isOptionSymbol(symbol) ? 100 : 1;
 }
+function closedPnlPct(t) {
+  const qty = Number(t.quantity) || 0;
+  const entry = Number(t.entryPrice) || 0;
+  if (!(qty > 0) || !(entry > 0)) return NaN;
+  const cost = entry * qty * optionMultiplier(t.symbol);
+  if (!(cost > 0) || !Number.isFinite(t.pnl)) return NaN;
+  return t.pnl / cost;
+}
 function blotterTickerMatch(t, q) {
   const qq = String(q || "").trim().toUpperCase();
   if (!qq) return true;
@@ -2248,11 +2256,12 @@ const state = {
   tab: "closed",
   dropActive: false,
   watchStatus: "",
-  ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", syncStartedAt: 0, refreshing: false, refreshResult: "" },
+  ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", listingsFilling: false, syncStartedAt: 0, refreshing: false, refreshResult: "" },
   connectOpen: false,
   tradeOpen: false,
   splitOpen: null,
   savedGroups: [],
+  securities: [],
   checkedGroups: {},
   groupError: "",
   sort: {
@@ -3389,7 +3398,7 @@ function innerBuysSellsHtml(t) {
     const sorted = sortRows(acts, function (a) {
       return {
         when: activityWhen(a),
-        side: a.activitySubType,
+        side: tradeSide(a) || a.activitySubType,
         quantity: a.quantity,
         unitPrice: a.unitPrice,
         netCashAmount: a.netCashAmount,
@@ -3397,7 +3406,7 @@ function innerBuysSellsHtml(t) {
     }, innerSort.dir);
     const rows = sorted.map(function (a) {
       const cash = a.netCashAmount;
-      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activitySubType || "") + "</td><td>" +
+      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(tradeSide(a) || a.activitySubType || "") + "</td><td>" +
         (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
         "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(cash) + "'>" +
         esc(formatCad(cash, 2)) + "</td></tr>";
@@ -3407,9 +3416,9 @@ function innerBuysSellsHtml(t) {
       { key: "side", label: "Side" },
       { key: "quantity", label: "Qty" },
       { key: "unitPrice", label: "Price" },
-      { key: "netCashAmount", label: "Cash" },
+      { key: "netCashAmount", label: "Amount" },
     ]);
-    return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+    return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
   }
   if (!slices.length) return "";
   const sliceSort = state.sort.innerSlice || { key: "exitDate", dir: "desc" };
@@ -3437,7 +3446,81 @@ function innerBuysSellsHtml(t) {
     { key: "exitPrice", label: "Exit" },
     { key: "pnlCad", label: "P&amp;L" },
   ]);
-  return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+  return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+}
+
+
+function securityById(id) {
+  const sid = String(id || "");
+  if (!sid) return null;
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || "") === sid) return list[i];
+  }
+  return null;
+}
+
+function activitySecurityId(t) {
+  if (t && t.securityId) return t.securityId;
+  const acts = state.activities || [];
+  const ids = [];
+  if (t && t.buyActivityId) ids.push(t.buyActivityId);
+  if (t && t.sellActivityId) ids.push(t.sellActivityId);
+  const slices = (t && t.slices) || [];
+  for (let i = 0; i < slices.length; i++) {
+    const s = slices[i];
+    if (s.buyActivityId) ids.push(s.buyActivityId);
+    if (s.sellActivityId) ids.push(s.sellActivityId);
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = 0; j < acts.length; j++) {
+      if (String(acts[j].id || "") === String(ids[i] || "") && acts[j].securityId) {
+        return acts[j].securityId;
+      }
+    }
+  }
+  return "";
+}
+
+function exchangeLabel(sec) {
+  const raw = String((sec && sec.primaryExchange) || "").trim();
+  const up = raw.toUpperCase();
+  const alias = {
+    TSXV: "TSX-V",
+    "TSX-V": "TSX-V",
+    "TSX VENTURE": "TSX-V",
+    CDNX: "TSX-V",
+    VENTURE: "TSX-V",
+    TORONTO: "TSX",
+    TSX: "TSX",
+  };
+  if (alias[up]) return alias[up];
+  if (raw) return raw;
+  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
+  const micMap = {
+    XTSV: "TSX-V",
+    XTSX: "TSX",
+    XNAS: "NASDAQ",
+    XNYS: "NYSE",
+    XASE: "NYSE American",
+    ARCX: "NYSE Arca",
+  };
+  return micMap[mic] || "";
+}
+
+function listingLine(t) {
+  let sec = securityById(activitySecurityId(t));
+  if (sec && sec.underlyingId) {
+    const under = securityById(sec.underlyingId);
+    if (under) sec = under;
+  }
+  const fallback = String((t && t.symbol) || "");
+  if (!sec || !sec.name) return fallback;
+  const exch = exchangeLabel(sec);
+  const sym = String(sec.symbol || "").trim();
+  if (exch && sym) return sec.name + " · " + exch + ": " + sym;
+  if (exch) return sec.name + " · " + exch;
+  return sec.name;
 }
 
 function renderDrawer(t) {
@@ -3448,14 +3531,15 @@ function renderDrawer(t) {
   return (
     '<div class="overlay" id="overlay"></div>' +
     '<aside class="drawer"><div class="drawer-head"><div><h2>' + esc(t.symbol) + "</h2>" +
-    '<div class="sym-sub">' + esc(t.name || "") + " · " + esc(t.side) + " " + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</div></div>" +
+    '<div class="sym-sub">' + esc(listingLine(t)) + "</div></div>" +
     '<button class="btn ghost" type="button" id="closeDrawer" style="margin-left:auto">Close</button></div>' +
     '<div class="drawer-body"><div class="dl">' +
     "<div><dt>In</dt><dd>" + esc(t.entryDate) + "</dd></div>" +
     "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
     "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
     "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
-    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L $</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L %</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatPct(closedPnlPct(t))) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
     "</div>" + innerBuysSellsHtml(t) +
@@ -3870,6 +3954,7 @@ function wsStatusText() {
   if (!HAS_LOCAL_API && !state.ws.available) return "";
   if (state.ws.refreshing) return "Refreshing session…";
   if (state.ws.syncing) return state.ws.syncStep || "Syncing transactions";
+  if (state.ws.listingsFilling || state.ws.syncStep) return state.ws.syncStep || "Looking up company names…";
   if (state.ws.capturing || (state.connectOpen && !state.ws.connected)) return "Waiting for Wealthsimple login…";
   if (state.ws.error) return state.ws.error;
   if (state.ws.refreshResult) return state.ws.refreshResult;
@@ -4000,6 +4085,7 @@ function replaceWsActivities(book) {
   state.navByAccount = (book && book.navByAccount && typeof book.navByAccount === "object" && !Array.isArray(book.navByAccount)) ? book.navByAccount : {};
   if (book && book.syncedAt) state.ws.lastSync = book.syncedAt;
   if (book && Array.isArray(book.tradeGroups)) state.savedGroups = book.tradeGroups;
+  state.securities = (book && Array.isArray(book.securities)) ? book.securities : [];
   window.__wsBookAt = state.ws.lastSync || "";
   persist();
   render();
@@ -4025,6 +4111,7 @@ function applyWsStatus(st) {
   state.ws.connected = !!st.connected;
   state.ws.email = st.email || "";
   state.ws.syncing = !!st.syncing;
+  state.ws.listingsFilling = !!st.listingsFilling;
   state.ws.capturing = !!st.capturing;
   state.ws.lastSync = st.lastSync || state.ws.lastSync || "";
   state.ws.activityCount = st.activityCount || 0;
@@ -4055,6 +4142,7 @@ function pollWsStatus() {
       syncing: state.ws.syncing,
       error: state.ws.error,
       capturing: state.ws.capturing,
+      listingsFilling: state.ws.listingsFilling,
       connectOpen: state.connectOpen,
       syncStep: state.ws.syncStep,
     };
@@ -4067,6 +4155,7 @@ function pollWsStatus() {
       prev.syncing !== state.ws.syncing ||
       prev.error !== state.ws.error ||
       prev.capturing !== state.ws.capturing ||
+      prev.listingsFilling !== state.ws.listingsFilling ||
       prev.connectOpen !== state.connectOpen ||
       prev.syncStep !== state.ws.syncStep
     );
@@ -4083,7 +4172,7 @@ function startWsPoll() {
   window.__wsPollStarted = true;
   setInterval(pollWsStatus, 20000);
   setInterval(function () {
-    if (state.ws.capturing || state.ws.syncing) pollWsStatus();
+    if (state.ws.capturing || state.ws.syncing || state.ws.listingsFilling || state.ws.syncStep) pollWsStatus();
     if (state.ws.syncing) {
       const el = document.getElementById("importElapsed");
       if (el) el.textContent = importElapsedText();

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
 ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
 ACTIVITY_PULL_HOUR = 14
@@ -108,7 +108,19 @@ def _init_schema(conn):
             source TEXT,
             raw_type TEXT,
             aft_type TEXT,
-            counter_symbol TEXT
+            counter_symbol TEXT,
+            security_id TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS securities (
+            id TEXT PRIMARY KEY,
+            symbol TEXT,
+            name TEXT,
+            primary_exchange TEXT,
+            primary_mic TEXT,
+            currency TEXT,
+            underlying_id TEXT,
+            fetched_at TEXT
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS activities_canonical_id_uq
@@ -149,6 +161,7 @@ def _init_schema(conn):
         """
     )
     _migrate_nav_history(conn)
+    _ensure_activity_security_id(conn)
     conn.execute(
         "INSERT INTO meta(key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -196,6 +209,12 @@ def _migrate_nav_history(conn):
         )
     conn.execute("DROP TABLE nav_history")
     conn.execute("ALTER TABLE nav_history_new RENAME TO nav_history")
+
+
+def _ensure_activity_security_id(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(activities)").fetchall()}
+    if "security_id" not in cols:
+        conn.execute("ALTER TABLE activities ADD COLUMN security_id TEXT")
 
 
 def _relabel_option_trades(conn):
@@ -520,6 +539,7 @@ def _row_to_activity(row):
         "rawType": row["raw_type"] or "",
         "aftType": row["aft_type"] or "",
         "counterSymbol": row["counter_symbol"] or "",
+        "securityId": row["security_id"] or None,
     }
 
 
@@ -560,6 +580,7 @@ def _insert_params(act, assigned_id, canonical_id):
         _s(act.get("rawType") or act.get("raw_type")),
         _s(act.get("aftType") or act.get("aft_type")),
         _s(act.get("counterSymbol") or act.get("counter_symbol")),
+        _s(act.get("securityId") or act.get("security_id")).strip() or None,
     )
 
 
@@ -569,9 +590,9 @@ _INSERT_SQL = """
         account_id, book_id, fifo_id, account_type, activity_type,
         activity_sub_type, description, direction, symbol, name, currency,
         quantity, unit_price, commission, net_cash_amount, category, balance,
-        source, raw_type, aft_type, counter_symbol
+        source, raw_type, aft_type, counter_symbol, security_id
     ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
 """
 
@@ -684,6 +705,21 @@ def apply_wealthsimple_mapped(rows):
         if not cid or looks_like_homemade_id(cid):
             continue
         if cid in known:
+            sid = _s(row.get("securityId") or row.get("security_id")).strip()
+            if sid:
+                with _lock:
+                    conn = _connect()
+                    try:
+                        _init_schema(conn)
+                        conn.execute(
+                            "UPDATE activities SET security_id = ? "
+                            "WHERE canonical_id = ? "
+                            "AND (security_id IS NULL OR security_id = '')",
+                            (sid, cid),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
             skipped += 1
             continue
         matches = find_link_candidates(row)
@@ -932,6 +968,120 @@ def save_trade_groups(groups):
     return clean
 
 
+def _security_from_row(r):
+    return {
+        "id": r["id"],
+        "symbol": r["symbol"] or "",
+        "name": r["name"] or "",
+        "primaryExchange": r["primary_exchange"] or "",
+        "primaryMic": r["primary_mic"] or "",
+        "currency": r["currency"] or "",
+        "underlyingId": r["underlying_id"] or None,
+    }
+
+
+def upsert_securities(rows):
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            now = _now_iso()
+            for raw in rows or []:
+                if not isinstance(raw, dict):
+                    continue
+                sid = _s(raw.get("id")).strip()
+                if not sid:
+                    continue
+                under = _s(
+                    raw.get("underlyingId")
+                    if raw.get("underlyingId") is not None
+                    else raw.get("underlying_id")
+                ).strip()
+                conn.execute(
+                    "INSERT INTO securities ("
+                    "id, symbol, name, primary_exchange, primary_mic, "
+                    "currency, underlying_id, fetched_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET "
+                    "symbol = excluded.symbol, "
+                    "name = excluded.name, "
+                    "primary_exchange = excluded.primary_exchange, "
+                    "primary_mic = excluded.primary_mic, "
+                    "currency = excluded.currency, "
+                    "underlying_id = excluded.underlying_id, "
+                    "fetched_at = excluded.fetched_at",
+                    (
+                        sid,
+                        _s(raw.get("symbol")),
+                        _s(raw.get("name")),
+                        _s(raw.get("primaryExchange") or raw.get("primary_exchange")),
+                        _s(raw.get("primaryMic") or raw.get("primary_mic")),
+                        _s(raw.get("currency")),
+                        under or None,
+                        _s(raw.get("fetchedAt") or raw.get("fetched_at")) or now,
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def list_securities():
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            rows = conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
+            return [_security_from_row(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def missing_security_ids(ids):
+    wanted = []
+    seen = set()
+    for raw in ids or []:
+        sid = _s(raw).strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        wanted.append(sid)
+    if not wanted:
+        return []
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            have = set()
+            for i in range(0, len(wanted), 400):
+                chunk = wanted[i : i + 400]
+                qmarks = ",".join("?" * len(chunk))
+                for r in conn.execute(
+                    "SELECT id FROM securities WHERE id IN (%s)" % qmarks, chunk
+                ).fetchall():
+                    have.add(r["id"])
+            return [sid for sid in wanted if sid not in have]
+        finally:
+            conn.close()
+
+
+def needs_security_id_backfill():
+    with _lock:
+        conn = _connect()
+        try:
+            _init_schema(conn)
+            row = conn.execute(
+                "SELECT 1 AS n FROM activities "
+                "WHERE source = 'wealthsimple' "
+                "AND IFNULL(symbol, '') != '' "
+                "AND (security_id IS NULL OR security_id = '') "
+                "LIMIT 1"
+            ).fetchone()
+            return bool(row)
+        finally:
+            conn.close()
+
+
 def snapshot():
     ensure()
     with _lock:
@@ -979,6 +1129,10 @@ def snapshot():
                 groups = _clean_trade_groups(json.loads(groups_raw) if groups_raw else [])
             except ValueError:
                 groups = []
+            securities = [
+                _security_from_row(r)
+                for r in conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
+            ]
             return {
                 "activities": activities,
                 "accounts": accounts,
@@ -987,6 +1141,7 @@ def snapshot():
                 "navByAccount": nav_by_account,
                 "syncedAt": synced,
                 "tradeGroups": groups,
+                "securities": securities,
             }
         finally:
             conn.close()

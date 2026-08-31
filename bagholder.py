@@ -488,6 +488,19 @@ query FetchAccountHistoricalFinancials(
 }
 """.strip()
 
+Q_FETCH_SECURITY = """
+query FetchSecurity($securityId: ID!) {
+  security(id: $securityId) {
+    id
+    currency
+    stock { name primaryExchange primaryMic symbol }
+    optionDetails { underlyingSecurity { id currency } }
+    __typename
+  }
+}
+""".strip()
+
+
 QUERIES = {
     "IdentityHistoricalFinancialsQuery": Q_IDENTITY_HISTORICAL_FINANCIALS,
     "FetchAccountHistoricalFinancials": Q_FETCH_ACCOUNT_HISTORICAL_FINANCIALS,
@@ -495,6 +508,7 @@ QUERIES = {
     "FetchActivityFeedItems": Q_FETCH_ACTIVITY_FEED_ITEMS,
     "FetchAccountsWithBalance": Q_FETCH_ACCOUNTS_WITH_BALANCE,
     "FetchSecuritySearchResult": Q_FETCH_SECURITY_SEARCH_RESULT,
+    "FetchSecurity": Q_FETCH_SECURITY,
 }
 
 SKIP_TYPE_MARKERS = (
@@ -1076,6 +1090,7 @@ def map_activity(item, accounts=None):
         "rawType": _s(item.get("type")),
         "aftType": _s(item.get("aftTransactionType")),
         "counterSymbol": _counter_symbol(item),
+        "securityId": _s(item.get("securityId")).strip() or None,
     }
 
 
@@ -1091,6 +1106,7 @@ _state = {
     "lastSync": "",
     "error": "",
     "chrome_proc": None,
+    "listingsFilling": False,
 }
 _stop = threading.Event()
 
@@ -1865,6 +1881,150 @@ def fetch_balances(sess, account_ids):
     return balances
 
 
+def fetch_security(sess, security_id):
+    sid = _s(security_id).strip()
+    if not sid:
+        return None
+    try:
+        data = graphql(sess, "FetchSecurity", {"securityId": sid})
+    except Exception:
+        return None
+    sec = (data or {}).get("security") or {}
+    if not isinstance(sec, dict) or not sec:
+        return None
+    stock = sec.get("stock") or {}
+    if not isinstance(stock, dict):
+        stock = {}
+    option = sec.get("optionDetails") or {}
+    if not isinstance(option, dict):
+        option = {}
+    under = option.get("underlyingSecurity") or {}
+    if not isinstance(under, dict):
+        under = {}
+    under_id = _s(under.get("id")).strip() or None
+    return {
+        "id": _s(sec.get("id")).strip() or sid,
+        "symbol": _s(stock.get("symbol")).strip(),
+        "name": _s(stock.get("name")).strip(),
+        "primaryExchange": _s(stock.get("primaryExchange")).strip(),
+        "primaryMic": _s(stock.get("primaryMic")).strip(),
+        "currency": _s(sec.get("currency")).strip(),
+        "underlyingId": under_id,
+    }
+
+
+def _collect_security_ids():
+    ids = []
+    seen = set()
+    snap = store.snapshot()
+    for a in snap.get("activities") or []:
+        sid = _s(a.get("securityId")).strip()
+        if sid and sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+    for b in snap.get("balances") or []:
+        sid = _s(b.get("securityId")).strip()
+        if sid and sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+    return ids
+
+
+def _account_ids_for_backfill():
+    snap = store.snapshot()
+    ids = []
+    seen = set()
+    for acc in snap.get("accounts") or []:
+        aid = _s(acc.get("id")).strip()
+        if aid and aid not in seen:
+            seen.add(aid)
+            ids.append(aid)
+    if ids:
+        return ids
+    for a in snap.get("activities") or []:
+        aid = _s(a.get("accountId")).strip()
+        if aid and aid not in seen:
+            seen.add(aid)
+            ids.append(aid)
+    return ids
+
+
+def fill_listings(sess, from_sync=False):
+    """Stamp missing activity security_id values and cache FetchSecurity listings."""
+    store.ensure()
+    if not sess or not sess.get("access_token"):
+        return False
+    with _lock:
+        if _state.get("listingsFilling"):
+            return False
+        if _state.get("syncing") and not from_sync:
+            return False
+        _state["listingsFilling"] = True
+        _state["syncStep"] = "Attaching listing ids…"
+    try:
+        if store.needs_security_id_backfill():
+            walk_ok = True
+            known = store.canonical_ids()
+            mapped = []
+            _set_sync_step("Attaching listing ids…")
+            for aid in _account_ids_for_backfill():
+                try:
+                    raw_items = fetch_activities_for_account(
+                        sess,
+                        aid,
+                        start_date=None,
+                        known_canonical_ids=known,
+                    )
+                except Exception:
+                    walk_ok = False
+                    continue
+                acc_by_id = {
+                    a.get("id"): a
+                    for a in (store.snapshot().get("accounts") or [])
+                    if a.get("id")
+                }
+                for it in raw_items:
+                    mapped.extend(map_activity_rows(it, acc_by_id))
+            if mapped:
+                store.apply_wealthsimple_mapped(mapped)
+            if walk_ok:
+                store.set_meta("security_id_backfill_done", "1")
+        wanted = _collect_security_ids()
+        missing = store.missing_security_ids(wanted)
+        seen = set()
+        pending = list(missing)
+        to_upsert = []
+        total = len(pending)
+        if pending:
+            _set_sync_step(
+                "Looking up company names, %s left" % total if total else "Looking up company names…"
+            )
+        while pending:
+            left = len(pending)
+            if total:
+                _set_sync_step("Looking up company names, %s left" % left)
+            sid = pending.pop(0)
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            rec = fetch_security(sess, sid)
+            if not rec:
+                continue
+            to_upsert.append(rec)
+            uid = _s(rec.get("underlyingId")).strip()
+            if uid and uid not in seen:
+                pending.extend(store.missing_security_ids([uid]))
+        if to_upsert:
+            store.upsert_securities(to_upsert)
+        return True
+    except Exception:
+        return False
+    finally:
+        with _lock:
+            _state["listingsFilling"] = False
+            _state["syncStep"] = ""
+
+
 def slim_account(acc):
     nlv = None
     try:
@@ -2059,6 +2219,7 @@ def run_sync(allow_refresh=True, force_activity=True):
             }
         )
         store.mark_activity_pulled(synced)
+        fill_listings(sess, from_sync=True)
         nav_err_line = ""
         if nav_errors:
             nav_err_line = "NAV history failed for " + "; ".join(nav_errors)
@@ -2762,6 +2923,7 @@ def status_payload():
             "accountCount": len(book.get("accounts") or []),
             "capturing": bool(_state["capturing"]),
             "syncing": bool(_state["syncing"]),
+            "listingsFilling": bool(_state.get("listingsFilling")),
             "syncStep": _state.get("syncStep") or "",
             "error": _state["error"] or "",
         }
@@ -2868,6 +3030,7 @@ class Handler(BaseHTTPRequestHandler):
                     "navByAccount": book.get("navByAccount") or {},
                     "syncedAt": book.get("syncedAt") or "",
                     "tradeGroups": book.get("tradeGroups") or [],
+                    "securities": book.get("securities") or [],
                 },
             )
             return
@@ -2993,6 +3156,13 @@ def main():
     if _state.get("connected"):
         if store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
             threading.Thread(target=run_sync, name="bagholder-boot-sync", daemon=True).start()
+        else:
+            threading.Thread(
+                target=fill_listings,
+                args=(load_session(),),
+                name="bagholder-listings",
+                daemon=True,
+            ).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
