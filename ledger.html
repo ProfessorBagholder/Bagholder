@@ -503,6 +503,9 @@ svg.chart .chart-axis-lbl { pointer-events: none; }
   font-size: 12px;
 }
 .b-table td.name { font-family: var(--sans); }
+.b-table tbody tr { cursor: pointer; }
+.b-table tbody tr:hover { background: var(--bg-hover); }
+.b-table tbody tr.selected { background: var(--accent-dim); }
 .bar-cell { width: 90px; }
 .mini-bar {
   height: 4px;
@@ -1582,7 +1585,7 @@ function matchFifo(activities) {
       const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
       const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
       const commission = entryCommission + exitCommission;
-      const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+      const rawPnl = (lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched) * optionMultiplier(lot.symbol);
       const trade = {
         id: "",
         accountId: lot.accountId,
@@ -1626,7 +1629,7 @@ function matchFifo(activities) {
           const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
           const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
           const commission = entryCommission + exitCommission;
-          const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+          const rawPnl = (lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched) * optionMultiplier(a.symbol);
           const trade = {
             id: "",
             accountId: lot.accountId,
@@ -1740,18 +1743,16 @@ function toCad(amount, currency, date) {
 
 function applyFx(trades) {
   return trades.map((t) => {
-    const ccy = (t.currency || "CAD").toUpperCase();
-    if (ccy !== "USD") return Object.assign({}, t, { pnlCad: t.pnl });
     const qty = t.quantity;
     const entryC = t.entryCommission || 0;
     const exitC = t.exitCommission || 0;
-    const entryNotional = t.entryPrice * qty;
-    const exitNotional = t.exitPrice * qty;
+    const entryNotional = t.entryPrice * qty * optionMultiplier(t.symbol);
+    const exitNotional = t.exitPrice * qty * optionMultiplier(t.symbol);
     let pnlCad;
     if (t.openDirection === "SHORT") {
-      pnlCad = toCad(entryNotional - entryC, ccy, t.entryDate) - toCad(exitNotional + exitC, ccy, t.exitDate);
+      pnlCad = (entryNotional - entryC) - (exitNotional + exitC);
     } else {
-      pnlCad = toCad(exitNotional - exitC, ccy, t.exitDate) - toCad(entryNotional + entryC, ccy, t.entryDate);
+      pnlCad = (exitNotional - exitC) - (entryNotional + entryC);
     }
     return Object.assign({}, t, { pnlCad: pnlCad });
   });
@@ -2125,6 +2126,16 @@ function underlyingSymbol(symbol) {
   return s;
 }
 
+function isOptionSymbol(symbol) {
+  const u = String(symbol || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (!u) return false;
+  if (/\b(PUT|CALL)\b/.test(u) || /\s[CP]$/.test(u)) return true;
+  if (/^[A-Z][A-Z0-9.]{0,9} \d{6}[CP]\d+/.test(u)) return true;
+  return false;
+}
+function optionMultiplier(symbol) {
+  return isOptionSymbol(symbol) ? 100 : 1;
+}
 function blotterTickerMatch(t, q) {
   const qq = String(q || "").trim().toUpperCase();
   if (!qq) return true;
@@ -2816,6 +2827,20 @@ function closedBlotterBodyHtml(rows) {
   return rows.map(closedBlotterRowHtml).join("") || "<tr><td colspan='13' class='sans'>No closed trades match.</td></tr>";
 }
 
+function bindSymbolBreakdownClicks() {
+  document.querySelectorAll(".b-table tbody tr[data-symbol]").forEach(function (tr) {
+    tr.addEventListener("click", function () {
+      var sym = tr.getAttribute("data-symbol");
+      if (!sym) return;
+      state.filters.symbol = sym;
+      state.tab = "closed";
+      state.filterOpen = false;
+      state.pickFirstClosed = true;
+      persist();
+      render();
+    });
+  });
+}
 function bindClosedBlotterClicks(root) {
   const scope = root || document;
   scope.querySelectorAll("table#closedBlotter tbody tr[data-id]").forEach((tr) => {
@@ -3072,8 +3097,9 @@ function breakdownTable(rows, title) {
     return map[sort.key];
   }, sort.dir);
   const body = sorted.map((r) => {
+    const on = state.filters.symbol === r.key;
     return (
-      "<tr><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
+      "<tr data-symbol='" + esc(r.key) + "'" + (on ? " class='selected'" : "") + "><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
       esc(formatCad(r.pnlCad, 2)) + "</td><td>" + r.trades + "</td><td>" + formatPct(r.winRate) +
       "</td></tr>"
     );
@@ -3100,6 +3126,11 @@ function render() {
   const closedFx = applyFx(closed);
   const visible = filteredTrades(closedFx);
   const grouped = groupClosedByExit(visible);
+  if (state.pickFirstClosed) {
+    state.pickFirstClosed = false;
+    if (grouped.length === 1) state.selected = grouped[0];
+    else state.selected = null;
+  }
   const closedForMetrics = groupClosedByClose(visible);
   const incomeActs = state.activities.filter((a) => {
     const f = state.filters;
@@ -3363,7 +3394,7 @@ function innerBuysSellsHtml(t) {
       }[innerSort.key];
     }, innerSort.dir);
     const rows = sorted.map(function (a) {
-      const cash = toCad(a.netCashAmount, a.currency, a.transactionDate);
+      const cash = a.netCashAmount;
       return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activitySubType || "") + "</td><td>" +
         (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
         "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(cash) + "'>" +
@@ -4616,6 +4647,7 @@ function bind() {
     });
   });
   bindClosedBlotterClicks();
+  bindSymbolBreakdownClicks();
   const overlay = document.getElementById("overlay");
   const closeDrawer = document.getElementById("closeDrawer");
   if (overlay) overlay.addEventListener("click", () => { state.selected = null; render(); });
