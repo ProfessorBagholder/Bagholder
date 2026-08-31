@@ -439,6 +439,8 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertIn('id="refreshSession"', html)
         self.assertIn("Refresh session", html)
         self.assertIn("/api/refresh", html)
+        self.assertIn("Refreshing session…", html)
+        self.assertIn("Wealthsimple token refresh ok", html)
 
     def test_refresh_now_posts_when_expiry_is_not_near(self):
         sess = {
