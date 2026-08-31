@@ -2138,6 +2138,14 @@ function isOptionSymbol(symbol) {
 function optionMultiplier(symbol) {
   return isOptionSymbol(symbol) ? 100 : 1;
 }
+function closedPnlPct(t) {
+  const qty = Number(t.quantity) || 0;
+  const entry = Number(t.entryPrice) || 0;
+  if (!(qty > 0) || !(entry > 0)) return NaN;
+  const cost = entry * qty * optionMultiplier(t.symbol);
+  if (!(cost > 0) || !Number.isFinite(t.pnl)) return NaN;
+  return t.pnl / cost;
+}
 function blotterTickerMatch(t, q) {
   const qq = String(q || "").trim().toUpperCase();
   if (!qq) return true;
@@ -3455,7 +3463,8 @@ function renderDrawer(t) {
     "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
     "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
     "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
-    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L $</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L %</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatPct(closedPnlPct(t))) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
     "</div>" + innerBuysSellsHtml(t) +
