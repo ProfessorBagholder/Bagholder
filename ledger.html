@@ -3107,6 +3107,7 @@ function render() {
   const monthly = monthlyPnl(closedForMetrics);
   const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
+  const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
   const years = yearsFromActivities(state.activities);
   const selectedYear = yearFromRange(state.filters.from, state.filters.to);
   const pf = m.profitFactor === Infinity ? "∞" : Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "—";
@@ -3166,8 +3167,9 @@ function render() {
         );
       }).join("");
 
+    const openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
     const openSort = state.sort.open || { key: "date", dir: "desc" };
-    const openSorted = sortRows(open, (l) => ({
+    const openSorted = sortRows(openLots, (l) => ({
       date: l.date,
       symbol: l.symbol,
       direction: l.direction,
@@ -3237,7 +3239,7 @@ function render() {
       "</tbody></table></div>";
 
     const tabOpen =
-      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Open lots <em>' + open.length + "</em></h3></div>" +
+      '<div class="blotter-head"><h3 class="section-title" style="margin:0">Open lots <em>' + openLots.length + "</em></h3></div>" +
       '<div class="table-wrap"><table class="blotter"><thead><tr>' +
       sortTh("open", [
         { key: "date", label: "Opened" },
@@ -3285,7 +3287,7 @@ function render() {
       tabBody;
   }
 
-  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol);
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account);
 
   const drawer = state.selected
     ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
@@ -3312,6 +3314,9 @@ function render() {
     '<div class="field"><label>To</label><input type="date" id="to" value="' + esc(state.filters.to) + '"/></div>' +
     '<div class="field"><label>Symbol</label><select id="symbol"><option value="">All</option>' +
     symbols.map((a) => "<option " + (state.filters.symbol === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="field"><label>Account</label><select id="account"><option value="">All</option>' +
+    accounts.map((a) => "<option " + (state.filters.account === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
     "</select></div>" +
     (filtersActive ? '<button type="button" class="reset" id="resetFilters">Reset filters</button>' : "") +
     "</div></div>" +
@@ -4452,6 +4457,7 @@ function bind() {
       state.filters.from = "";
       state.filters.to = "";
       state.filters.symbol = "";
+      state.filters.account = "";
       state.filterOpen = true;
       persist();
       render();
@@ -4563,6 +4569,7 @@ function bind() {
     from.addEventListener("change", () => { state.filters.from = from.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("to").addEventListener("change", (e) => { state.filters.to = e.target.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("symbol").addEventListener("change", (e) => { state.filters.symbol = e.target.value; state.filterOpen = true; persist(); render(); });
+    document.getElementById("account").addEventListener("change", (e) => { state.filters.account = e.target.value; state.filterOpen = true; persist(); render(); });
   }
   const yearSel = document.getElementById("year");
   if (yearSel) {
