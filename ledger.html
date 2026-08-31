@@ -3263,7 +3263,7 @@ function render() {
       '<div class="kpis">' +
       kpiCard("Realized P&L", esc(formatCad(m.realizedPnlCad, 2)), m.tradeCount.toLocaleString("en-CA") + (m.tradeCount === 1 ? " trade" : " trades"), pnlClass(m.realizedPnlCad)) +
       kpiCard("Win rate", formatPct(m.winRate), m.winCount.toLocaleString("en-CA") + " W, " + m.lossCount.toLocaleString("en-CA") + " L, " + m.evenCount.toLocaleString("en-CA") + " BE", "") +
-      kpiCard("Profit factor", pf, esc(formatCad(m.grossProfit, 2) + " won, " + formatCad(m.grossLoss, 2) + " lost"), "") +
+      kpiCard("Profit factor", pf, esc(formatCad(m.grossProfit, 2) + " W, " + formatCad(m.grossLoss, 2) + " L"), "") +
       kpiCard("Expectancy", esc(formatCad(m.expectancy, 2)), "avg W " + formatCad(m.avgWin, 2) + " · avg L " + formatCad(m.avgLoss, 2), pnlClass(m.expectancy)) +
       kpiCard("Biggest winner", esc(formatCad(m.maxWinPnl, 2)), m.maxWinSymbol ? esc(m.maxWinSymbol) : "—", pnlClass(m.maxWinPnl)) +
       kpiCard("Biggest loser", esc(formatCad(m.maxLossPnl, 2)), m.maxLossSymbol ? esc(m.maxLossSymbol) : "—", m.maxLossPnl < 0 ? "neg" : "flat") +
