@@ -4508,15 +4508,7 @@ function bind() {
       render();
     });
   });
-  document.querySelectorAll("table.blotter tbody tr[data-id]").forEach((tr) => {
-    tr.addEventListener("click", () => {
-      const id = tr.getAttribute("data-id");
-      const { closed } = matchFifo(state.activities);
-      const t = applyFx(closed).find((x) => x.id === id);
-      state.selected = t || null;
-      render();
-    });
-  });
+  bindClosedBlotterClicks();
   const overlay = document.getElementById("overlay");
   const closeDrawer = document.getElementById("closeDrawer");
   if (overlay) overlay.addEventListener("click", () => { state.selected = null; render(); });
