@@ -438,6 +438,7 @@ class StoreTest(unittest.TestCase):
     def test_ledger_uses_listing_line(self):
         html = bagholder.ledger_path().read_text(encoding="utf-8")
         self.assertIn("function listingLine(", html)
+        self.assertIn("function listingTicker(", html)
         self.assertIn("book.securities", html)
         self.assertIn("esc(listingLine(t))", html)
         self.assertNotIn('esc(t.side) + " " + formatNumber(t.quantity', html)

@@ -3509,6 +3509,12 @@ function exchangeLabel(sec) {
   return micMap[mic] || "";
 }
 
+function listingTicker(sym) {
+  const s = String(sym || "").trim();
+  const m = s.match(/^(.+)\.(TO|V|CN|NE)$/i);
+  return m ? m[1] : s;
+}
+
 function listingLine(t) {
   let sec = securityById(activitySecurityId(t));
   if (sec && sec.underlyingId) {
@@ -3518,7 +3524,7 @@ function listingLine(t) {
   const fallback = String((t && t.symbol) || "");
   if (!sec || !sec.name) return fallback;
   const exch = exchangeLabel(sec);
-  const sym = String(sec.symbol || "").trim();
+  const sym = listingTicker(sec.symbol);
   if (exch && sym) return sec.name + " · " + exch + ": " + sym;
   if (exch) return sec.name + " · " + exch;
   return sec.name;
