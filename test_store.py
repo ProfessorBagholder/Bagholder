@@ -478,6 +478,15 @@ class StoreTest(unittest.TestCase):
         self.assertIn("realizedPnlCurve(closedForMetrics)", html)
         self.assertIn("closedAnnualizedReturn(closedFx || [], years)", html)
 
+    def test_ledger_favicon_link(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('<link rel="icon" type="image/png" href="favicon.png"/>', html)
+        icon = bagholder.ledger_path().parent / "favicon.png"
+        self.assertTrue(icon.is_file())
+        with open(bagholder.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn('path in ("/favicon.png", "/favicon.ico")', src)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 

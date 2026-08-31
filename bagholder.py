@@ -3014,6 +3014,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, status_payload())
             return
+        if path in ("/favicon.png", "/favicon.ico"):
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            icon = Path(__file__).resolve().parent / "favicon.png"
+            try:
+                data = icon.read_bytes()
+            except OSError:
+                self._send(404, {"ok": False, "error": "favicon missing"})
+                return
+            self._send(200, data, "image/png")
+            return
         if path == "/api/book":
             if not self._gate():
                 self._send(403, {"ok": False})
