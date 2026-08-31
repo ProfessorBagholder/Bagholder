@@ -74,6 +74,73 @@ class StoreTest(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
 
+    def test_options_sell_maps_as_sell_to_open(self):
+        item = _ws_item(
+            type="OPTIONS_SELL",
+            subType="LIMIT_ORDER",
+            assetSymbol="QNC",
+            contractType="CALL",
+            strikePrice=3,
+            expiryDate="2027-02-19",
+            assetQuantity=35,
+            amount=1050,
+            amountSign="positive",
+        )
+        row = bagholder.map_activity(item)
+        self.assertEqual(row["activitySubType"], "SELLTOOPEN")
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["quantity"], -35)
+        self.assertEqual(row["netCashAmount"], 1050)
+        self.assertEqual(row["symbol"], "QNC 19FEB27 3.00 CALL")
+
+    def test_options_buy_maps_as_buy_to_open(self):
+        item = _ws_item(
+            type="OPTIONS_BUY",
+            subType="LIMIT_ORDER",
+            assetSymbol="QNC",
+            contractType="CALL",
+            strikePrice=3,
+            expiryDate="2027-02-19",
+            assetQuantity=5,
+            amount=150,
+            amountSign="negative",
+        )
+        row = bagholder.map_activity(item)
+        self.assertEqual(row["activitySubType"], "BUYTOOPEN")
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["quantity"], 5)
+        self.assertEqual(row["netCashAmount"], -150)
+
+    def test_relabel_stored_options_sell(self):
+        store.apply_wealthsimple_mapped(
+            [
+                {
+                    "canonicalId": "opt-sell-1",
+                    "occurredAt": "2026-08-31T14:16:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SELL",
+                    "activitySubType": "LIMIT_ORDER",
+                    "symbol": "QNC 19FEB27 3.00 CALL",
+                    "currency": "USD",
+                    "quantity": 35,
+                    "unitPrice": 0.3,
+                    "netCashAmount": 1050,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_SELL",
+                }
+            ]
+        )
+        store.ensure()
+        snap = store.snapshot()
+        row = [a for a in snap["activities"] if a.get("canonicalId") == "opt-sell-1"][0]
+        self.assertEqual(row["activitySubType"], "SELLTOOPEN")
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["quantity"], -35)
+        self.assertEqual(row["netCashAmount"], 1050)
+
     def test_insert_if_new_by_canonical_id(self):
         row = bagholder.map_activity(_ws_item())
         first = store.apply_wealthsimple_mapped([row])

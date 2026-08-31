@@ -198,11 +198,37 @@ def _migrate_nav_history(conn):
     conn.execute("ALTER TABLE nav_history_new RENAME TO nav_history")
 
 
+def _relabel_option_trades(conn):
+    """OPTIONS_BUY / OPTIONS_SELL were stored as LIMIT_ORDER / other. Treat as trades."""
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_sub_type = 'BUYTOOPEN', "
+        "category = 'trade', "
+        "quantity = ABS(quantity), "
+        "net_cash_amount = -ABS(net_cash_amount) "
+        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) = 'OPTIONS_BUY' "
+        "AND UPPER(REPLACE(IFNULL(activity_sub_type,''), '-', '_')) "
+        "NOT IN ('BUY', 'BUYTOOPEN', 'BTO', 'BUYTOCLOSE', 'BTC')"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_sub_type = 'SELLTOOPEN', "
+        "category = 'trade', "
+        "quantity = -ABS(quantity), "
+        "net_cash_amount = ABS(net_cash_amount) "
+        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) = 'OPTIONS_SELL' "
+        "AND UPPER(REPLACE(IFNULL(activity_sub_type,''), '-', '_')) "
+        "NOT IN ('SELL', 'SELLTOOPEN', 'STO', 'SELLTOCLOSE', 'STC', 'COVER')"
+    )
+
+
 def ensure():
     with _lock:
         conn = _connect()
         try:
             _init_schema(conn)
+            _relabel_option_trades(conn)
+            conn.commit()
         finally:
             conn.close()
 

@@ -703,12 +703,13 @@ def signed_cash(item):
     amount = abs(_num(item.get("amount")))
     typ = _upper(item.get("type")).replace("-", "_")
     sub = _upper(item.get("subType")).replace("-", "_")
-    if typ in ("DIY_BUY", "WITHDRAWAL") or (
+    if typ in ("DIY_BUY", "OPTIONS_BUY", "WITHDRAWAL") or (
         typ == "INTERNAL_TRANSFER" and "SOURCE" in sub
     ):
         return -amount
     if typ in (
         "DIY_SELL",
+        "OPTIONS_SELL",
         "DEPOSIT",
         "CONTRIBUTION",
         "DIVIDEND",
@@ -953,6 +954,20 @@ def map_activity(item, accounts=None):
                 activity_type, activity_sub = "Trade", "SELLTOOPEN"
         else:
             activity_type, activity_sub = "Trade", "SELL"
+        quantity = -abs(qty_abs)
+    elif typ == "OPTIONS_BUY":
+        category = "trade"
+        if _is_to_close(sub):
+            activity_type, activity_sub = "OPTIONS_BUY", "BUYTOCLOSE"
+        else:
+            activity_type, activity_sub = "OPTIONS_BUY", "BUYTOOPEN"
+        quantity = abs(qty_abs)
+    elif typ == "OPTIONS_SELL":
+        category = "trade"
+        if _is_to_close(sub):
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOCLOSE"
+        else:
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOOPEN"
         quantity = -abs(qty_abs)
     elif typ in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE"):
         category = "option_event"
