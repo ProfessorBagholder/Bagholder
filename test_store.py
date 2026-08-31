@@ -470,6 +470,14 @@ class StoreTest(unittest.TestCase):
         self.assertIn('exch === "ALPHA EXCHANGE"', html)
         self.assertIn("return preferredListing(sec);", html)
 
+    def test_ledger_listing_filters_drive_nav_tiles(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function listingFiltersOn(", html)
+        self.assertIn("function closedYearReturn(", html)
+        self.assertIn("listingFiltersOn()", html)
+        self.assertIn("realizedPnlCurve(closedForMetrics)", html)
+        self.assertIn("closedAnnualizedReturn(closedFx || [], years)", html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
