@@ -487,6 +487,15 @@ class StoreTest(unittest.TestCase):
             src = fh.read()
         self.assertIn('path in ("/favicon.png", "/favicon.ico")', src)
 
+    def test_ledger_price_filter(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('<label>Price</label>', html)
+        self.assertIn("function priceFilterOn(", html)
+        self.assertIn("function rowPriceOk(", html)
+        self.assertIn('id="priceOp"', html)
+        self.assertIn("rowPriceOk([t.entryPrice, t.exitPrice])", html)
+        self.assertIn("priceFilterOn()", html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 

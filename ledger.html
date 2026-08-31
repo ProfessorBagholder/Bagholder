@@ -316,6 +316,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .filter-panel.open { display: block; }
 .filter-panel .field { margin-bottom: 8px; }
 .filter-panel .field:last-of-type { margin-bottom: 10px; }
+.filter-panel .price-pair { display: flex; gap: 6px; }
+.filter-panel .price-pair input { min-width: 0; flex: 1; }
 .field { display: flex; flex-direction: column; gap: 3px; }
 .field label, .kpi .label, .section-title {
   font-size: 10px;
@@ -1793,7 +1795,48 @@ function formatReturn(r) {
 
 function listingFiltersOn() {
   const f = state.filters || {};
-  return !!(f.symbol || f.exchange);
+  return !!(f.symbol || f.exchange || priceFilterOn());
+}
+
+function parsePrice(s) {
+  if (s == null || s === "") return null;
+  const n = Number(String(s).trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function priceFilterOn() {
+  const f = state.filters || {};
+  if (!f.priceOp) return false;
+  if (f.priceOp === "between") return parsePrice(f.priceMin) != null && parsePrice(f.priceMax) != null;
+  return parsePrice(f.priceMin) != null;
+}
+
+function priceMatches(px, op, a, b) {
+  const p = Number(px);
+  if (!Number.isFinite(p)) return false;
+  const x = parsePrice(a);
+  const y = parsePrice(b);
+  if (op === "between") {
+    if (x == null || y == null) return true;
+    const lo = Math.min(x, y);
+    const hi = Math.max(x, y);
+    return p >= lo && p <= hi;
+  }
+  if (x == null) return true;
+  if (op === "under") return p < x;
+  if (op === "over") return p > x;
+  if (op === "equal") return Math.round(p * 10000) === Math.round(x * 10000);
+  return true;
+}
+
+function rowPriceOk(prices) {
+  if (!priceFilterOn()) return true;
+  const f = state.filters;
+  const list = prices || [];
+  for (let i = 0; i < list.length; i++) {
+    if (priceMatches(list[i], f.priceOp, f.priceMin, f.priceMax)) return true;
+  }
+  return false;
 }
 
 function tradeCostCad(t) {
@@ -2341,7 +2384,7 @@ const state = {
   navByAccount: {},
   menuOpen: false,
   filterOpen: false,
-  filters: { from: "", to: "", account: "", exchange: "", symbol: "", q: "" },
+  filters: { from: "", to: "", account: "", exchange: "", symbol: "", q: "", priceOp: "", priceMin: "", priceMax: "" },
   reports: [],
   selected: null,
   tab: "closed",
@@ -2537,6 +2580,7 @@ function filteredTrades(closedFx) {
     if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
     if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
     if (f.exchange && listingExchange(t) !== f.exchange) return false;
+    if (!rowPriceOk([t.entryPrice, t.exitPrice])) return false;
     return true;
   });
 }
@@ -3242,6 +3286,7 @@ function render() {
     if (f.account && a.accountId !== f.account && a.accountType !== f.account) return false;
     if (f.symbol && a.symbol && underlyingSymbol(a.symbol) !== f.symbol) return false;
     if (f.exchange && listingExchange(a) !== f.exchange) return false;
+    if (!rowPriceOk([a.unitPrice])) return false;
     return true;
   });
   const incomeCad = incomeActs
@@ -3321,6 +3366,9 @@ function render() {
     let openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
     if (state.filters.exchange) {
       openLots = openLots.filter((l) => listingExchange({ securityId: l.securityId, buyActivityId: l.activityId }) === state.filters.exchange);
+    }
+    if (priceFilterOn()) {
+      openLots = openLots.filter((l) => rowPriceOk([l.price]));
     }
     const openSort = state.sort.open || { key: "date", dir: "desc" };
     const openSorted = sortRows(openLots, (l) => ({
@@ -3441,7 +3489,7 @@ function render() {
       tabBody;
   }
 
-  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange);
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange || priceFilterOn());
 
   const drawer = state.selected
     ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
@@ -3475,6 +3523,16 @@ function render() {
     '<div class="field"><label>Exchange</label><select id="exchange"><option value="">All</option>' +
     exchanges.map((a) => "<option " + (state.filters.exchange === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
     "</select></div>" +
+    '<div class="field"><label>Price</label><select id="priceOp">' +
+    [["", "All"], ["between", "Between"], ["under", "Under"], ["equal", "Equal"], ["over", "Over"]].map(function (o) {
+      return "<option " + (state.filters.priceOp === o[0] ? "selected" : "") + " value='" + esc(o[0]) + "'>" + esc(o[1]) + "</option>";
+    }).join("") +
+    "</select></div>" +
+    (state.filters.priceOp === "between"
+      ? '<div class="field price-pair"><input type="number" step="any" id="priceMin" placeholder="From" value="' + esc(state.filters.priceMin) + '"/><input type="number" step="any" id="priceMax" placeholder="To" value="' + esc(state.filters.priceMax) + '"/></div>'
+      : (state.filters.priceOp
+        ? '<div class="field"><input type="number" step="any" id="priceMin" placeholder="Price" value="' + esc(state.filters.priceMin) + '"/></div>'
+        : "")) +
     (filtersActive ? '<button type="button" class="reset" id="resetFilters">Reset filters</button>' : "") +
     "</div></div>" +
     '<div class="menu-wrap">' +
@@ -4753,6 +4811,9 @@ function bind() {
       state.filters.symbol = "";
       state.filters.account = "";
       state.filters.exchange = "";
+      state.filters.priceOp = "";
+      state.filters.priceMin = "";
+      state.filters.priceMax = "";
       state.filterOpen = true;
       persist();
       render();
@@ -4848,7 +4909,7 @@ function bind() {
     stopWatch();
     state.activities = [];
     state.notes = {};
-    state.filters = { from: "", to: "", account: "", symbol: "", q: "" };
+    state.filters = { from: "", to: "", account: "", exchange: "", symbol: "", q: "", priceOp: "", priceMin: "", priceMax: "" };
     state.reports = [];
     state.selected = null;
     state.checkedGroups = {};
@@ -4867,6 +4928,22 @@ function bind() {
     document.getElementById("account").addEventListener("change", (e) => { state.filters.account = e.target.value; state.filterOpen = true; persist(); render(); });
     const exchangeSel = document.getElementById("exchange");
     if (exchangeSel) exchangeSel.addEventListener("change", (e) => { state.filters.exchange = e.target.value; state.filterOpen = true; persist(); render(); });
+    const priceOpSel = document.getElementById("priceOp");
+    if (priceOpSel) priceOpSel.addEventListener("change", (e) => {
+      state.filters.priceOp = e.target.value;
+      if (!state.filters.priceOp) {
+        state.filters.priceMin = "";
+        state.filters.priceMax = "";
+      }
+      if (state.filters.priceOp !== "between") state.filters.priceMax = "";
+      state.filterOpen = true;
+      persist();
+      render();
+    });
+    const priceMin = document.getElementById("priceMin");
+    if (priceMin) priceMin.addEventListener("change", (e) => { state.filters.priceMin = e.target.value; state.filterOpen = true; persist(); render(); });
+    const priceMax = document.getElementById("priceMax");
+    if (priceMax) priceMax.addEventListener("change", (e) => { state.filters.priceMax = e.target.value; state.filterOpen = true; persist(); render(); });
   }
   const yearSel = document.getElementById("year");
   if (yearSel) {
