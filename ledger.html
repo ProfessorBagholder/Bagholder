@@ -3483,16 +3483,6 @@ function activitySecurityId(t) {
 }
 
 function exchangeLabel(sec) {
-  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
-  const micMap = {
-    XTSV: "TSX-V",
-    XTSX: "TSX",
-    XNAS: "NASDAQ",
-    XNYS: "NYSE",
-    XASE: "NYSE American",
-    ARCX: "NYSE Arca",
-  };
-  if (micMap[mic]) return micMap[mic];
   const raw = String((sec && sec.primaryExchange) || "").trim();
   const up = raw.toUpperCase();
   const alias = {
@@ -3505,7 +3495,17 @@ function exchangeLabel(sec) {
     TSX: "TSX",
   };
   if (alias[up]) return alias[up];
-  return raw;
+  if (raw) return raw;
+  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
+  const micMap = {
+    XTSV: "TSX-V",
+    XTSX: "TSX",
+    XNAS: "NASDAQ",
+    XNYS: "NYSE",
+    XASE: "NYSE American",
+    ARCX: "NYSE Arca",
+  };
+  return micMap[mic] || "";
 }
 
 function listingLine(t) {
