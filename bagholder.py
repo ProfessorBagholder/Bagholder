@@ -1684,6 +1684,52 @@ def fetch_nickname_nav_history(sess, accounts):
     return points, errors
 
 
+def refresh_nav_only(allow_refresh=True):
+    """Pull daily NAV only. Does not pull activity."""
+    store.ensure()
+    sess = load_session()
+    if not sess or not sess.get("access_token"):
+        return {"ok": False, "error": "not connected"}
+    identity = _identity_from(sess)
+    if not identity:
+        try:
+            info = token_info(sess)
+        except Exception:
+            info = {}
+        identity = _identity_from(info or {})
+    if not identity:
+        return {"ok": False, "error": "no identity"}
+    accounts = (load_book() or {}).get("accounts") or []
+    if not accounts:
+        return {"ok": False, "error": "no accounts stored"}
+    try:
+        try:
+            nav_history = fetch_nav_history(sess, identity)
+        except PermissionError:
+            raise
+        except Exception:
+            nav_history = []
+        combined = []
+        for rec in nav_history:
+            tagged = dict(rec)
+            tagged["accountId"] = ""
+            combined.append(tagged)
+        nickname_pts, nav_errors = fetch_nickname_nav_history(sess, accounts)
+        combined.extend(nickname_pts)
+        store.replace_nav(combined)
+        nicks = sorted({_s(p.get("accountId")) for p in combined if _s(p.get("accountId"))})
+        return {
+            "ok": True,
+            "allDays": sum(1 for p in combined if not _s(p.get("accountId"))),
+            "accounts": len(nicks),
+            "errors": nav_errors,
+        }
+    except PermissionError:
+        if allow_refresh and refresh_session(load_session() or {}):
+            return refresh_nav_only(allow_refresh=False)
+        return {"ok": False, "error": "Session expired. Connect again."}
+
+
 def fetch_all_accounts(sess, identity_id):
     accounts = []
     cursor = None
