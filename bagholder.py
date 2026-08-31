@@ -703,12 +703,13 @@ def signed_cash(item):
     amount = abs(_num(item.get("amount")))
     typ = _upper(item.get("type")).replace("-", "_")
     sub = _upper(item.get("subType")).replace("-", "_")
-    if typ in ("DIY_BUY", "WITHDRAWAL") or (
+    if typ in ("DIY_BUY", "OPTIONS_BUY", "WITHDRAWAL") or (
         typ == "INTERNAL_TRANSFER" and "SOURCE" in sub
     ):
         return -amount
     if typ in (
         "DIY_SELL",
+        "OPTIONS_SELL",
         "DEPOSIT",
         "CONTRIBUTION",
         "DIVIDEND",
@@ -954,6 +955,20 @@ def map_activity(item, accounts=None):
         else:
             activity_type, activity_sub = "Trade", "SELL"
         quantity = -abs(qty_abs)
+    elif typ == "OPTIONS_BUY":
+        category = "trade"
+        if _is_to_close(sub):
+            activity_type, activity_sub = "OPTIONS_BUY", "BUYTOCLOSE"
+        else:
+            activity_type, activity_sub = "OPTIONS_BUY", "BUYTOOPEN"
+        quantity = abs(qty_abs)
+    elif typ == "OPTIONS_SELL":
+        category = "trade"
+        if _is_to_close(sub):
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOCLOSE"
+        else:
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOOPEN"
+        quantity = -abs(qty_abs)
     elif typ in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE"):
         category = "option_event"
         keep = "ASSIGN" if "ASSIGN" in typ else ("EXERCISE" if "EXERCISE" in typ else "EXPIR")
@@ -1138,7 +1153,7 @@ def save_accounts_snapshot(book):
     """Write accounts / balances / NAV. Never rebuilds the activity table."""
     store.replace_accounts(book.get("accounts") or [])
     store.replace_balances(book.get("balances") or [])
-    store.replace_nav(book.get("navHistory") or [])
+    store.upsert_nav(book.get("navHistory") or [])
     if book.get("syncedAt"):
         store.set_meta("synced_at", book["syncedAt"])
 
@@ -1565,14 +1580,21 @@ def _nav_points_from_payload(data):
     return points, page
 
 
-def _paginate_nav_history(sess, operation, extra_variables, query=None):
+def _paginate_nav_history(sess, operation, extra_variables, query=None, since_date=None):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    year0 = 2020
+    since = _s(since_date)[:10]
+    if since and since > today:
+        return []
+    year0 = int(since[:4]) if since else 2020
     year1 = int(today[:4])
     points = []
     for year in range(year0, year1 + 1):
         start = f"{year}-01-01"
+        if since and start < since:
+            start = since
         end = today if year == year1 else f"{year}-12-31"
+        if start > end:
+            continue
         cursor = None
         for _ in range(8):
             variables = dict(extra_variables)
@@ -1593,7 +1615,7 @@ def _paginate_nav_history(sess, operation, extra_variables, query=None):
     return [by_date[d] for d in sorted(by_date)]
 
 
-def fetch_nav_history(sess, identity_id):
+def fetch_nav_history(sess, identity_id, since_date=None):
     """Identity-wide Wealthsimple net liquidation (All / accountId '')."""
     return _paginate_nav_history(
         sess,
@@ -1605,10 +1627,11 @@ def fetch_nav_history(sess, identity_id):
             "includeNetDeposits": True,
         },
         query=Q_IDENTITY_HISTORICAL_FINANCIALS,
+        since_date=since_date,
     )
 
 
-def fetch_account_nav_history(sess, account_id):
+def fetch_account_nav_history(sess, account_id, since_date=None):
     """Daily NAV for one Wealthsimple account via FetchAccountHistoricalFinancials."""
     aid = _s(account_id).strip()
     if not aid:
@@ -1623,6 +1646,7 @@ def fetch_account_nav_history(sess, account_id):
             "first": 400,
         },
         query=Q_FETCH_ACCOUNT_HISTORICAL_FINANCIALS,
+        since_date=since_date,
     )
 
 
@@ -1667,10 +1691,12 @@ def fetch_nickname_nav_history(sess, accounts):
     """Per-filter-nickname daily NAV. Returns (points, public_errors)."""
     points = []
     errors = []
+    last_by = store.nav_last_dates()
     for nick, ids in sorted(nav_account_groups(accounts).items()):
         _set_sync_step("Fetching equity history for %s…" % nick)
         try:
-            series = [fetch_account_nav_history(sess, aid) for aid in ids]
+            since = last_by.get(nick)
+            series = [fetch_account_nav_history(sess, aid, since_date=since) for aid in ids]
             pts = merge_nav_points(series)
         except Exception as e:
             public = _public_sync_error(e)
@@ -1703,8 +1729,9 @@ def refresh_nav_only(allow_refresh=True):
     if not accounts:
         return {"ok": False, "error": "no accounts stored"}
     try:
+        last_by = store.nav_last_dates()
         try:
-            nav_history = fetch_nav_history(sess, identity)
+            nav_history = fetch_nav_history(sess, identity, since_date=last_by.get(""))
         except PermissionError:
             raise
         except Exception:
@@ -1716,7 +1743,7 @@ def refresh_nav_only(allow_refresh=True):
             combined.append(tagged)
         nickname_pts, nav_errors = fetch_nickname_nav_history(sess, accounts)
         combined.extend(nickname_pts)
-        store.replace_nav(combined)
+        store.upsert_nav(combined)
         nicks = sorted({_s(p.get("accountId")) for p in combined if _s(p.get("accountId"))})
         return {
             "ok": True,
@@ -2008,8 +2035,9 @@ def run_sync(allow_refresh=True, force_activity=True):
         _set_sync_step("Fetching balances…")
         balances = fetch_balances(sess, list(acc_by_id.keys()))
         _set_sync_step("Fetching equity history…")
+        last_by = store.nav_last_dates()
         try:
-            nav_history = fetch_nav_history(sess, identity)
+            nav_history = fetch_nav_history(sess, identity, since_date=last_by.get(""))
         except Exception:
             nav_history = []
         combined = []

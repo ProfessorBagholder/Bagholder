@@ -503,6 +503,9 @@ svg.chart .chart-axis-lbl { pointer-events: none; }
   font-size: 12px;
 }
 .b-table td.name { font-family: var(--sans); }
+.b-table tbody tr { cursor: pointer; }
+.b-table tbody tr:hover { background: var(--bg-hover); }
+.b-table tbody tr.selected { background: var(--accent-dim); }
 .bar-cell { width: 90px; }
 .mini-bar {
   height: 4px;
@@ -1582,7 +1585,7 @@ function matchFifo(activities) {
       const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
       const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
       const commission = entryCommission + exitCommission;
-      const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+      const rawPnl = (lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched) * optionMultiplier(lot.symbol);
       const trade = {
         id: "",
         accountId: lot.accountId,
@@ -1626,7 +1629,7 @@ function matchFifo(activities) {
           const exitCommission = fill.qty > 0 ? a.commission * (matched / fill.qty) : 0;
           const entryCommission = lot.qty > 0 ? lot.commission * (matched / lot.qty) : 0;
           const commission = entryCommission + exitCommission;
-          const rawPnl = lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched;
+          const rawPnl = (lot.direction === "LONG" ? (a.unitPrice - lot.price) * matched : (lot.price - a.unitPrice) * matched) * optionMultiplier(a.symbol);
           const trade = {
             id: "",
             accountId: lot.accountId,
@@ -1745,8 +1748,8 @@ function applyFx(trades) {
     const qty = t.quantity;
     const entryC = t.entryCommission || 0;
     const exitC = t.exitCommission || 0;
-    const entryNotional = t.entryPrice * qty;
-    const exitNotional = t.exitPrice * qty;
+    const entryNotional = t.entryPrice * qty * optionMultiplier(t.symbol);
+    const exitNotional = t.exitPrice * qty * optionMultiplier(t.symbol);
     let pnlCad;
     if (t.openDirection === "SHORT") {
       pnlCad = toCad(entryNotional - entryC, ccy, t.entryDate) - toCad(exitNotional + exitC, ccy, t.exitDate);
@@ -2125,6 +2128,16 @@ function underlyingSymbol(symbol) {
   return s;
 }
 
+function isOptionSymbol(symbol) {
+  const u = String(symbol || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (!u) return false;
+  if (/\b(PUT|CALL)\b/.test(u) || /\s[CP]$/.test(u)) return true;
+  if (/^[A-Z][A-Z0-9.]{0,9} \d{6}[CP]\d+/.test(u)) return true;
+  return false;
+}
+function optionMultiplier(symbol) {
+  return isOptionSymbol(symbol) ? 100 : 1;
+}
 function blotterTickerMatch(t, q) {
   const qq = String(q || "").trim().toUpperCase();
   if (!qq) return true;
@@ -2782,7 +2795,7 @@ function closedTradesForBlotter() {
       quantity: t.quantity,
       entryPrice: t.entryPrice,
       exitPrice: t.exitPrice,
-      pnlCad: t.pnlCad,
+      pnlCad: t.pnl,
       holdDays: t.holdDays,
       currency: t.currency,
       tag: n.tag || "",
@@ -2804,7 +2817,7 @@ function closedBlotterRowHtml(t) {
     "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
     "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
     "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
-    "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</td>" +
+    "<td class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</td>" +
     "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
     "<td>" + esc(t.currency) + "</td>" +
     "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
@@ -2816,6 +2829,20 @@ function closedBlotterBodyHtml(rows) {
   return rows.map(closedBlotterRowHtml).join("") || "<tr><td colspan='13' class='sans'>No closed trades match.</td></tr>";
 }
 
+function bindSymbolBreakdownClicks() {
+  document.querySelectorAll(".b-table tbody tr[data-symbol]").forEach(function (tr) {
+    tr.addEventListener("click", function () {
+      var sym = tr.getAttribute("data-symbol");
+      if (!sym) return;
+      state.filters.symbol = sym;
+      state.tab = "closed";
+      state.filterOpen = false;
+      state.pickFirstClosed = true;
+      persist();
+      render();
+    });
+  });
+}
 function bindClosedBlotterClicks(root) {
   const scope = root || document;
   scope.querySelectorAll("table#closedBlotter tbody tr[data-id]").forEach((tr) => {
@@ -3072,8 +3099,9 @@ function breakdownTable(rows, title) {
     return map[sort.key];
   }, sort.dir);
   const body = sorted.map((r) => {
+    const on = state.filters.symbol === r.key;
     return (
-      "<tr><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
+      "<tr data-symbol='" + esc(r.key) + "'" + (on ? " class='selected'" : "") + "><td class='name'>" + esc(r.label) + "</td><td class='" + pnlClass(r.pnlCad) + "'>" +
       esc(formatCad(r.pnlCad, 2)) + "</td><td>" + r.trades + "</td><td>" + formatPct(r.winRate) +
       "</td></tr>"
     );
@@ -3100,6 +3128,11 @@ function render() {
   const closedFx = applyFx(closed);
   const visible = filteredTrades(closedFx);
   const grouped = groupClosedByExit(visible);
+  if (state.pickFirstClosed) {
+    state.pickFirstClosed = false;
+    if (grouped.length === 1) state.selected = grouped[0];
+    else state.selected = null;
+  }
   const closedForMetrics = groupClosedByClose(visible);
   const incomeActs = state.activities.filter((a) => {
     const f = state.filters;
@@ -3363,7 +3396,7 @@ function innerBuysSellsHtml(t) {
       }[innerSort.key];
     }, innerSort.dir);
     const rows = sorted.map(function (a) {
-      const cash = toCad(a.netCashAmount, a.currency, a.transactionDate);
+      const cash = a.netCashAmount;
       return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activitySubType || "") + "</td><td>" +
         (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
         "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(cash) + "'>" +
@@ -3393,8 +3426,8 @@ function innerBuysSellsHtml(t) {
   const rows = sortedSlices.map(function (s) {
     return "<tr><td>" + esc(s.entryDate) + "</td><td>" + esc(s.exitDate) + "</td><td>" +
       formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + "</td><td>" + formatNumber(s.entryPrice) +
-      "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnlCad) + "'>" +
-      esc(formatCad(s.pnlCad, 2)) + "</td></tr>";
+      "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnl) + "'>" +
+      esc(formatCad(s.pnl, 2)) + "</td></tr>";
   }).join("");
   const head = sortTh("innerSlice", [
     { key: "entryDate", label: "In" },
@@ -3422,7 +3455,7 @@ function renderDrawer(t) {
     "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
     "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
     "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
-    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
     "</div>" + innerBuysSellsHtml(t) +
@@ -3902,7 +3935,7 @@ function renderSplitModal() {
     return "<label><input type='checkbox' class='split-pick' data-key='" + esc(k) + "'" + checked + "/><span>" +
       esc(s.entryDate) + " in · " + esc(s.exitDate) + " out · " +
       formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + " @ " + formatNumber(s.entryPrice) +
-      " → " + formatNumber(s.exitPrice) + " · " + esc(formatCad(s.pnlCad, 2)) + "</span></label>";
+      " → " + formatNumber(s.exitPrice) + " · " + esc(formatCad(s.pnl, 2)) + "</span></label>";
   }).join("");
   return (
     '<div class="modal-overlay" id="splitOverlay">' +
@@ -4616,6 +4649,7 @@ function bind() {
     });
   });
   bindClosedBlotterClicks();
+  bindSymbolBreakdownClicks();
   const overlay = document.getElementById("overlay");
   const closeDrawer = document.getElementById("closeDrawer");
   if (overlay) overlay.addEventListener("click", () => { state.selected = null; render(); });
