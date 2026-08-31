@@ -3407,9 +3407,9 @@ function innerBuysSellsHtml(t) {
       { key: "side", label: "Side" },
       { key: "quantity", label: "Qty" },
       { key: "unitPrice", label: "Price" },
-      { key: "netCashAmount", label: "Cash" },
+      { key: "netCashAmount", label: "Amount" },
     ]);
-    return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+    return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
   }
   if (!slices.length) return "";
   const sliceSort = state.sort.innerSlice || { key: "exitDate", dir: "desc" };
@@ -3437,7 +3437,7 @@ function innerBuysSellsHtml(t) {
     { key: "exitPrice", label: "Exit" },
     { key: "pnlCad", label: "P&amp;L" },
   ]);
-  return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+  return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 function renderDrawer(t) {
