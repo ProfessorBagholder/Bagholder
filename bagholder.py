@@ -12,6 +12,7 @@ Open the printed http://127.0.0.1 URL (the dashboard), not Wealthsimple.
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import re
@@ -1110,6 +1111,30 @@ def _ssl_context():
     return _SSL_CTX
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _http_body_text(raw, headers=None):
+    """Decode HTTP body bytes. Decompress gzip when the payload is still compressed."""
+    if not raw:
+        return ""
+    encoding = ""
+    if headers is not None:
+        try:
+            encoding = (headers.get("Content-Encoding") or "").strip().lower()
+        except Exception:
+            encoding = ""
+    gzip_magic = raw.startswith(_GZIP_MAGIC)
+    # urllib may leave gzip bodies compressed. Magic bytes are the reliable check;
+    # Content-Encoding alone is not enough, and must not cause a second decompress.
+    if gzip_magic or (encoding == "gzip" and gzip_magic):
+        try:
+            raw = gzip.decompress(raw)
+        except OSError:
+            pass
+    return raw.decode("utf-8", "replace")
+
+
 def _http_json(method, url, body=None, headers=None, timeout=60):
     hdrs = {
         "Accept": "application/json",
@@ -1127,14 +1152,22 @@ def _http_json(method, url, body=None, headers=None, timeout=60):
     try:
         with urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             raw = resp.read()
-            if not raw:
+            text = _http_body_text(raw, getattr(resp, "headers", None))
+            if not text:
                 return {}
-            return json.loads(raw.decode("utf-8"))
+            try:
+                return json.loads(text)
+            except ValueError:
+                return {
+                    "error": "invalid_json",
+                    "_http_status": getattr(resp, "status", None) or 200,
+                }
     except HTTPError as e:
         raw = e.read() if e.fp else b""
+        text = _http_body_text(raw, getattr(e, "headers", None))
         parsed = None
         try:
-            parsed = json.loads(raw.decode("utf-8")) if raw else {}
+            parsed = json.loads(text) if text else {}
         except ValueError:
             parsed = {"error": "http_%s" % e.code}
         parsed = parsed or {}
@@ -1202,7 +1235,7 @@ def scrape_client_id():
             hdrs["User-Agent"] = ua
         req = Request(LOGIN_URL, headers=hdrs)
         with urlopen(req, timeout=20, context=_ssl_context()) as resp:
-            html = resp.read().decode("utf-8", "replace")
+            html = _http_body_text(resp.read(), getattr(resp, "headers", None))
         m = re.search(r'<script[^>]+src="([^"]*app-[a-f0-9]+\.js[^"]*)"', html, re.I)
         if not m:
             return ""
@@ -1213,7 +1246,7 @@ def scrape_client_id():
             js_url = "https://my.wealthsimple.com" + js_url
         req2 = Request(js_url, headers=hdrs)
         with urlopen(req2, timeout=20, context=_ssl_context()) as resp:
-            js = resp.read().decode("utf-8", "replace")
+            js = _http_body_text(resp.read(), getattr(resp, "headers", None))
         m2 = re.search(r'production:.*?clientId:"([a-f0-9]+)"', js, re.S)
         if m2:
             save_client_id(m2.group(1))
@@ -1224,9 +1257,11 @@ def scrape_client_id():
 
 
 def client_id_for(sess):
+    """Session or cached file only. Do not scrape at refresh time."""
     if sess and sess.get("client_id"):
+        save_client_id(sess["client_id"])
         return sess["client_id"]
-    return scrape_client_id()
+    return cached_client_id()
 
 
 def _ws_session_headers(sess, headers):
@@ -1238,13 +1273,62 @@ def _ws_session_headers(sess, headers):
     return headers
 
 
+def _set_public_error(msg):
+    with _lock:
+        _state["error"] = msg or ""
+
+
+def _oauth_error_code(data):
+    """Short OAuth `error` field only. Never tokens, client_id values, or raw bodies."""
+    err = (data or {}).get("error")
+    if not isinstance(err, str):
+        return ""
+    err = err.strip()
+    if not err:
+        return ""
+    if re.fullmatch(r"[a-f0-9]{32,}", err, re.I):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", err):
+        return ""
+    return _public_sync_error(err)
+
+
+def _refresh_failure_message(data):
+    status = (data or {}).get("_http_status")
+    oauth_err = _oauth_error_code(data)
+    parts = []
+    if status:
+        parts.append("Wealthsimple token refresh HTTP %s" % status)
+    if oauth_err:
+        parts.append(oauth_err)
+    return " ".join(parts) if parts else "Wealthsimple token refresh failed"
+
+
+def _expires_at_as_timestamp(data):
+    """Store Wealthsimple expiry as the same timestamp string the cookie uses."""
+    raw = (data or {}).get("expires_at")
+    if isinstance(raw, str) and "T" in raw.strip():
+        return raw.strip()
+    unix = None
+    if isinstance(raw, (int, float)):
+        unix = float(raw)
+    elif data and data.get("expires_in") is not None:
+        unix = time.time() + int(data["expires_in"])
+    if unix is None:
+        return None
+    dt = datetime.fromtimestamp(unix, timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def refresh_session(sess):
     """refresh_token grant. Do not send Authorization."""
     rt = (sess or {}).get("refresh_token")
     if not rt:
+        _set_public_error("missing refresh token")
         return False
     cid = client_id_for(sess)
     if not cid:
+        _set_public_error("session has no client id")
         return False
     body = {
         "grant_type": "refresh_token",
@@ -1260,14 +1344,14 @@ def refresh_session(sess):
     )
     data = _http_json("POST", OAUTH + "/token", body, headers)
     if not data or not data.get("access_token"):
+        _set_public_error(_refresh_failure_message(data))
         return False
     sess["access_token"] = data["access_token"]
     if data.get("refresh_token"):
         sess["refresh_token"] = data["refresh_token"]
-    if data.get("expires_at"):
-        sess["expires_at"] = data["expires_at"]
-    elif data.get("expires_in"):
-        sess["expires_at"] = int(time.time()) + int(data["expires_in"])
+    stamped = _expires_at_as_timestamp(data)
+    if stamped:
+        sess["expires_at"] = stamped
     sess["client_id"] = cid
     save_session(sess)
     return True
@@ -1288,6 +1372,36 @@ def token_info(sess):
     if data and data.get("_http_status") in (401, 403):
         return {}
     return data or {}
+
+
+def client_id_from_token_info(info):
+    """OAuth application uid that issued these tokens. Unofficial token/info shape."""
+    if not isinstance(info, dict):
+        return ""
+    uid = info.get("application_uid")
+    if uid:
+        return str(uid).strip()
+    app = info.get("application")
+    if isinstance(app, dict) and app.get("uid"):
+        return str(app.get("uid")).strip()
+    return ""
+
+
+def apply_token_info_client_id(sess, info=None):
+    """Write token/info application uid to the session and CLIENT_ID_PATH. Do not scrape."""
+    if not sess or not sess.get("access_token"):
+        return ""
+    if info is None:
+        try:
+            info = token_info(sess) or {}
+        except Exception:
+            info = {}
+    cid = client_id_from_token_info(info)
+    if not cid:
+        return ""
+    sess["client_id"] = cid
+    save_client_id(cid)
+    return cid
 
 
 IDENTITY_KEYS = (
@@ -1597,6 +1711,9 @@ def ensure_fresh_token(sess=None):
     """
     sess = sess if sess is not None else load_session()
     if not sess or not sess.get("refresh_token"):
+        with _lock:
+            _state["connected"] = False
+            _state["error"] = "missing refresh token"
         return False
     with _lock:
         connected = bool(_state.get("connected"))
@@ -1607,6 +1724,8 @@ def ensure_fresh_token(sess=None):
         _state["connected"] = bool(ok)
         if ok:
             _state["error"] = ""
+        elif not (_state.get("error") or "").strip():
+            _state["error"] = "Wealthsimple token refresh failed"
     return ok
 
 
@@ -1633,23 +1752,7 @@ def run_sync(allow_refresh=True, force_activity=True):
             with _lock:
                 _state["connected"] = False
             return False
-        ok = True
-        try:
-            if token_refresh_needed(sess):
-                ok = refresh_session(sess)
-                sess = load_session() or sess
-            info = token_info(sess) if sess and sess.get("access_token") else {}
-            if not info or info.get("error") or info.get("_http_status"):
-                ok = refresh_session(sess)
-                sess = load_session() or sess
-                info = token_info(sess) if ok else {}
-            elif not sess.get("identity_canonical_id") and info.get("identity_canonical_id"):
-                sess["identity_canonical_id"] = info.get("identity_canonical_id")
-                save_session(sess)
-        except Exception:
-            ok = refresh_session(sess)
-            sess = load_session() or sess
-            info = token_info(sess) if ok else {}
+        info = {}
         if not sess or not sess.get("access_token"):
             with _lock:
                 _state["connected"] = False
@@ -1756,24 +1859,34 @@ def boot_session():
             snap = store.snapshot()
             _state["lastSync"] = snap.get("syncedAt") or ""
         return
-    ok = False
-    if sess.get("refresh_token"):
-        ok = ensure_fresh_token(sess)
-        sess = load_session() or sess
-    if not ok and sess.get("access_token"):
-        info = token_info(sess)
-        ok = bool(info) and not info.get("error") and not info.get("_http_status")
-        if ok:
+    info = {}
+    info_ok = False
+    if sess.get("access_token"):
+        try:
+            info = token_info(sess) or {}
+        except Exception:
+            info = {}
+        info_ok = bool(info) and not info.get("error") and not info.get("_http_status")
+        if info_ok:
+            apply_token_info_client_id(sess, info)
             if info.get("identity_canonical_id") and not sess.get("identity_canonical_id"):
                 sess["identity_canonical_id"] = info["identity_canonical_id"]
-                save_session(sess)
             if info.get("email"):
                 sess["email"] = info["email"]
-                save_session(sess)
+            save_session(sess)
+    ok = bool(info_ok)
+    if not ok and sess.get("refresh_token"):
+        ok = refresh_session(sess)
+        sess = load_session() or sess
     with _lock:
         _state["connected"] = bool(ok)
         if ok:
             _state["error"] = ""
+        elif not (_state.get("error") or "").strip():
+            if not (sess or {}).get("refresh_token"):
+                _state["error"] = "missing refresh token"
+            else:
+                _state["error"] = "Wealthsimple token refresh failed"
         _state["email"] = (sess or {}).get("email") or ""
         book = load_book()
         _state["lastSync"] = book.get("syncedAt") or ""
@@ -2271,15 +2384,19 @@ def capture_tokens(body):
         if body.get(k):
             sess[k] = body[k]
     ident = _identity_from(body) or _identity_from(sess)
-    if not ident:
+    info = {}
+    if sess.get("access_token"):
         try:
-            ident = _identity_from(token_info(sess) or {})
+            info = token_info(sess) or {}
         except Exception:
-            ident = ""
+            info = {}
+    if not ident:
+        ident = _identity_from(info)
     if ident:
         sess["identity_canonical_id"] = ident
     if not sess.get("session_id"):
         sess["session_id"] = str(uuid.uuid4())
+    apply_token_info_client_id(sess, info)
     if not sess.get("client_id"):
         cid = scrape_client_id()
         if cid:
@@ -2289,10 +2406,6 @@ def capture_tokens(body):
         if ua:
             sess["user_agent"] = ua
     save_session(sess)
-    try:
-        refresh_session(sess)
-    except Exception:
-        pass
     with _lock:
         _state["connected"] = True
         _state["capturing"] = False
@@ -2532,6 +2645,11 @@ class Handler(BaseHTTPRequestHandler):
             result = capture_tokens(body)
             self._send(200, result)
             return
+        if path == "/api/refresh":
+            self._read_json()
+            result = refresh_now()
+            self._send(200, result)
+            return
         if path == "/api/sync":
             self._read_json()
             sess = load_session()
@@ -2554,6 +2672,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, result)
             return
         self._send(404, {"ok": False, "error": "not found"})
+
+
+
+def refresh_now():
+    """Token POST only. Always POST, even if expiry is not near."""
+    sess = load_session()
+    if not sess or not sess.get("refresh_token"):
+        with _lock:
+            _state["connected"] = False
+            _state["error"] = "not connected"
+        return {"ok": False, "error": "not connected", "connected": False}
+    ok = refresh_session(sess)
+    with _lock:
+        _state["connected"] = bool(ok)
+        if ok:
+            _state["error"] = ""
+        err = (_state.get("error") or "").strip()
+    return {"ok": bool(ok), "error": err, "connected": bool(ok)}
 
 
 def auto_sync_loop():
@@ -2607,7 +2743,6 @@ def main():
     except Exception:
         pass
     if _state.get("connected"):
-        threading.Thread(target=ensure_fresh_token, name="bagholder-boot-token", daemon=True).start()
         if store.activity_pull_due(interval_sec=ACTIVITY_PULL_SEC):
             threading.Thread(target=run_sync, name="bagholder-boot-sync", daemon=True).start()
     try:

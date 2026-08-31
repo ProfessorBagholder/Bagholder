@@ -98,6 +98,12 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   gap: 8px;
   flex-shrink: 0;
 }
+.watch-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .watch-status {
   font-size: 10px;
   color: var(--text-mute);
@@ -107,6 +113,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.watch-copy {
+  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 1;
+  padding: 3px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-mute);
+}
+.watch-copy:hover { background: var(--bg-hover); color: var(--text); }
+.watch-copy[hidden] { display: none; }
 .menu-wrap { position: relative; }
 .menu-btn {
   width: 36px;
@@ -2193,7 +2211,7 @@ const state = {
   tab: "closed",
   dropActive: false,
   watchStatus: "",
-  ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", syncStartedAt: 0 },
+  ws: { available: false, connected: false, email: "", syncing: false, capturing: false, error: "", lastSync: "", activityCount: 0, accounts: [], syncStep: "", syncStartedAt: 0, refreshing: false, refreshResult: "" },
   connectOpen: false,
   tradeOpen: false,
   sort: {
@@ -2988,7 +3006,7 @@ function render() {
     '<input id="file" type="file" accept=".csv,text/csv" multiple style="display:none"/>' +
     '<input id="folder" type="file" webkitdirectory multiple accept=".csv,text/csv" style="display:none"/>' +
     '<div class="header-actions">' +
-    '<span class="watch-status" id="watchStatus">' + esc(wsStatusText() || state.watchStatus) + "</span>" +
+    watchStatusHtml() +
     '<div class="menu-wrap">' +
     '<button class="menu-btn' + (state.filterOpen ? " on" : "") + '" type="button" id="filterBtn" aria-label="Filters">' +
     '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3.5h12L9.2 9.2V13l-2.4 1.2V9.2L2 3.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>' +
@@ -3160,10 +3178,87 @@ let watchTimer = null;
 let watchHandle = null;
 let watchPrints = new Map();
 
+function watchStatusFullText() {
+  return wsStatusText() || state.watchStatus || "";
+}
+
+function watchStatusNeedsCopy(full, el) {
+  if (!full) return false;
+  if (state.ws.error) return true;
+  if (state.ws.refreshResult) return true;
+  if (el && el.scrollWidth > el.clientWidth + 1) return true;
+  return full.length > 32;
+}
+
+function paintWatchStatus() {
+  const el = document.getElementById("watchStatus");
+  const wrap = document.getElementById("watchStatusWrap");
+  if (!el) return;
+  const full = watchStatusFullText();
+  el.textContent = full;
+  if (full) {
+    el.setAttribute("title", full);
+    if (wrap) wrap.setAttribute("title", full);
+  } else {
+    el.removeAttribute("title");
+    if (wrap) wrap.removeAttribute("title");
+  }
+  const btn = document.getElementById("watchCopy");
+  if (!btn) return;
+  btn.hidden = !watchStatusNeedsCopy(full, el);
+}
+
+function copyWatchStatus(ev) {
+  if (ev) ev.stopPropagation();
+  const el = document.getElementById("watchStatus");
+  const btn = document.getElementById("watchCopy");
+  const text = watchStatusFullText() || (el && el.getAttribute("title")) || "";
+  if (!text) return;
+  const label = "Copy";
+  function done() {
+    if (!btn) return;
+    btn.textContent = "Copied";
+    if (window.__watchCopyTimer) clearTimeout(window.__watchCopyTimer);
+    window.__watchCopyTimer = setTimeout(function () {
+      if (btn) btn.textContent = label;
+    }, 1200);
+  }
+  function fallback() {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    done();
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+function watchStatusHtml() {
+  const full = watchStatusFullText();
+  const showCopy = watchStatusNeedsCopy(full, null);
+  const title = full ? ' title="' + esc(full) + '"' : "";
+  return (
+    '<div class="watch-status-wrap" id="watchStatusWrap"' + title + ">" +
+    '<span class="watch-status" id="watchStatus"' + title + ">" + esc(full) + "</span>" +
+    '<button type="button" class="watch-copy" id="watchCopy"' +
+    (showCopy ? "" : " hidden") +
+    ' aria-label="Copy status">Copy</button>' +
+    "</div>"
+  );
+}
+
 function setWatchStatus(text) {
   state.watchStatus = text || "";
-  const el = document.getElementById("watchStatus");
-  if (el) el.textContent = state.watchStatus;
+  paintWatchStatus();
 }
 
 function stopWatch() {
@@ -3369,9 +3464,11 @@ function relSync(iso) {
 
 function wsStatusText() {
   if (!HAS_LOCAL_API && !state.ws.available) return "";
+  if (state.ws.refreshing) return "Refreshing session…";
   if (state.ws.syncing) return state.ws.syncStep || "Syncing transactions";
   if (state.ws.capturing || (state.connectOpen && !state.ws.connected)) return "Waiting for Wealthsimple login…";
   if (state.ws.error) return state.ws.error;
+  if (state.ws.refreshResult) return state.ws.refreshResult;
   if (state.ws.connected && state.ws.lastSync) {
     const rel = relSync(state.ws.lastSync);
     if (rel) return rel;
@@ -3387,6 +3484,7 @@ function menuItemsHtml() {
   }
   if (HAS_LOCAL_API && state.ws.connected) {
     html += '<button type="button" id="syncNow">Sync now</button>';
+    html += '<button type="button" id="refreshSession">Refresh session</button>';
     html += '<button type="button" class="danger" id="disconnectWs">Disconnect</button>';
   }
   if (HAS_LOCAL_API) html += '<div class="sep"></div>';
@@ -3501,8 +3599,7 @@ function applyWsStatus(st) {
   state.ws.syncStep = st.syncStep || "";
   if (st.syncing && !state.ws.syncStartedAt) state.ws.syncStartedAt = Date.now();
   if (!st.syncing) state.ws.syncStartedAt = 0;
-  const el = document.getElementById("watchStatus");
-  if (el) el.textContent = wsStatusText() || state.watchStatus || "";
+  paintWatchStatus();
   const changed = (state.ws.lastSync && state.ws.lastSync !== prevSync) || (state.ws.activityCount !== prevCount);
   return changed;
 }
@@ -3544,10 +3641,7 @@ function pollWsStatus() {
       return fetchWsBook();
     }
     if (screenChanged) render();
-    else {
-      const el = document.getElementById("watchStatus");
-      if (el) el.textContent = wsStatusText() || state.watchStatus || "";
-    }
+    else paintWatchStatus();
   });
 }
 
@@ -3639,6 +3733,29 @@ function confirmConnect() {
         };
         waitSync();
       });
+    });
+  });
+}
+
+function refreshSessionNow() {
+  if (!HAS_LOCAL_API || !state.ws.connected) return;
+  state.menuOpen = false;
+  state.ws.refreshing = true;
+  state.ws.refreshResult = "";
+  state.ws.error = "";
+  render();
+  api("POST", "/api/refresh").then(function (res) {
+    state.ws.refreshing = false;
+    return api("GET", "/api/status").then(function (s2) {
+      applyWsStatus(s2);
+      if (state.ws.error) {
+        state.ws.refreshResult = "";
+      } else if (res && res.ok) {
+        state.ws.refreshResult = "Wealthsimple token refresh ok";
+      } else {
+        state.ws.refreshResult = (res && res.error) || "Wealthsimple token refresh failed";
+      }
+      render();
     });
   });
 }
@@ -3898,6 +4015,9 @@ function bindDocumentOnce() {
 
 function bind() {
   bindDocumentOnce();
+  const watchCopy = document.getElementById("watchCopy");
+  if (watchCopy) watchCopy.addEventListener("click", copyWatchStatus);
+  paintWatchStatus();
   const file = document.getElementById("file");
   const folder = document.getElementById("folder");
   file.addEventListener("change", () => {
@@ -3976,6 +4096,8 @@ function bind() {
   if (connectOverlay) connectOverlay.addEventListener("click", closeConnect);
   const syncNowBtn = document.getElementById("syncNow");
   if (syncNowBtn) syncNowBtn.addEventListener("click", (e) => { e.stopPropagation(); syncNow(); });
+  const refreshSessionBtn = document.getElementById("refreshSession");
+  if (refreshSessionBtn) refreshSessionBtn.addEventListener("click", (e) => { e.stopPropagation(); refreshSessionNow(); });
   const disconnectBtn = document.getElementById("disconnectWs");
   if (disconnectBtn) disconnectBtn.addEventListener("click", (e) => { e.stopPropagation(); disconnectWs(); });
   const addTrade = document.getElementById("addTrade");

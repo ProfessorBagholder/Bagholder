@@ -10,10 +10,14 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-ACTIVITY_PULL_SEC = 24 * 60 * 60
+ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
+ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
+ACTIVITY_PULL_HOUR = 14
+ACTIVITY_PULL_MINUTE = 0
 
 _home = None
 _lock = threading.RLock()
@@ -245,7 +249,28 @@ def incremental_start_date():
     return day
 
 
-def activity_pull_due(now=None, interval_sec=ACTIVITY_PULL_SEC):
+def _in_activity_pull_tz(dt):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ACTIVITY_PULL_TZ)
+
+
+def activity_pull_due(now=None, interval_sec=None):
+    """Due at 2:00 PM Mountain, Monday-Friday, after market close.
+
+    interval_sec is ignored. One pull per weekday after 2:00 PM.
+    """
+    now = _in_activity_pull_tz(now or datetime.now(timezone.utc))
+    if now.weekday() not in ACTIVITY_PULL_WEEKDAYS:
+        return False
+    close = now.replace(
+        hour=ACTIVITY_PULL_HOUR,
+        minute=ACTIVITY_PULL_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    if now < close:
+        return False
     last = get_meta("last_activity_pull")
     if not last:
         return True
@@ -253,14 +278,10 @@ def activity_pull_due(now=None, interval_sec=ACTIVITY_PULL_SEC):
         if last.endswith("Z"):
             last = last[:-1] + "+00:00"
         then = datetime.fromisoformat(last)
-        if then.tzinfo is None:
-            then = then.replace(tzinfo=timezone.utc)
+        then = _in_activity_pull_tz(then)
     except ValueError:
         return True
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    return (now - then).total_seconds() >= interval_sec
+    return then < close
 
 
 def mark_activity_pulled(when=None):
