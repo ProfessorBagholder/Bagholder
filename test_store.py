@@ -449,6 +449,11 @@ class StoreTest(unittest.TestCase):
         src = bagholder.ledger_path().with_name("bagholder.py").read_text(encoding="utf-8")
         self.assertIn('"listingsFilling": bool(_state.get("listingsFilling"))', src)
 
+    def test_ledger_executions_heading_includes_count(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("Executions (' + acts.length + ')", html)
+        self.assertNotIn('section-title">Executions</h3>', html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
