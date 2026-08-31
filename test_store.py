@@ -595,5 +595,29 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertNotIn("_http_status", data)
 
 
+
+    def test_trade_groups_roundtrip(self):
+        groups = [
+            {"id": "g_one", "locked": True, "members": ["a|b|1.00000000", "c|d|2.00000000"]},
+            {"id": "g_one", "locked": False, "members": ["dup"]},
+            {"id": "", "members": ["x"]},
+            {"id": "g_empty", "members": []},
+            {"id": "g_two", "locked": 1, "members": ["x", "x", "y"]},
+        ]
+        saved = store.save_trade_groups(groups)
+        self.assertEqual([g["id"] for g in saved], ["g_one", "g_two"])
+        self.assertEqual(saved[0]["members"], ["a|b|1.00000000", "c|d|2.00000000"])
+        self.assertEqual(saved[1]["members"], ["x", "y"])
+        self.assertTrue(saved[0]["locked"])
+        self.assertTrue(saved[1]["locked"])
+        snap = store.snapshot()
+        self.assertEqual(snap["tradeGroups"], saved)
+        self.assertEqual(store.trade_groups(), saved)
+
+    def test_trade_groups_rejects_non_list(self):
+        store.set_meta("trade_groups", "{}")
+        self.assertEqual(store.trade_groups(), [])
+        self.assertEqual(store.save_trade_groups(None), [])
+
 if __name__ == "__main__":
     unittest.main()
