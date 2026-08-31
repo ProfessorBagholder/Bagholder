@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from unittest import mock
 
 import bagholder
@@ -143,6 +144,21 @@ class StoreTest(unittest.TestCase):
         stored = store.snapshot()["activities"][0]
         self.assertEqual(stored["occurredAt"], "2024-06-15T13:45:22.123Z")
         self.assertTrue("T" in stored["occurredAt"])
+
+    def test_activity_pull_due_weekdays_at_2pm_mountain(self):
+        mt = ZoneInfo("America/Edmonton")
+        monday_1359 = datetime(2026, 8, 31, 13, 59, tzinfo=mt)
+        monday_1400 = datetime(2026, 8, 31, 14, 0, tzinfo=mt)
+        monday_1500 = datetime(2026, 8, 31, 15, 0, tzinfo=mt)
+        saturday = datetime(2026, 8, 29, 15, 0, tzinfo=mt)
+        self.assertFalse(store.activity_pull_due(now=monday_1359))
+        self.assertTrue(store.activity_pull_due(now=monday_1400))
+        self.assertTrue(store.activity_pull_due(now=monday_1500))
+        self.assertFalse(store.activity_pull_due(now=saturday))
+        store.mark_activity_pulled("2026-08-31T20:05:00Z")
+        self.assertFalse(store.activity_pull_due(now=monday_1500))
+        tuesday_1400 = datetime(2026, 9, 1, 14, 0, tzinfo=mt)
+        self.assertTrue(store.activity_pull_due(now=tuesday_1400))
 
     def test_daily_path_does_not_page_whole_history_when_rows_exist(self):
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
