@@ -434,6 +434,33 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertIn('title="', html)
         self.assertIn("navigator.clipboard.writeText", html)
 
+    def test_menu_has_refresh_session(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('id="refreshSession"', html)
+        self.assertIn("Refresh session", html)
+        self.assertIn("/api/refresh", html)
+
+    def test_refresh_now_posts_when_expiry_is_not_near(self):
+        sess = {
+            "refresh_token": "r",
+            "client_id": FAKE_CLIENT_ID,
+            "expires_at": "2099-01-01T00:00:00.000Z",
+        }
+        bagholder.save_session(sess)
+        with bagholder._lock:
+            bagholder._state["connected"] = True
+            bagholder._state["error"] = ""
+        with mock.patch.object(
+            bagholder,
+            "refresh_session",
+            return_value=True,
+        ) as refresh:
+            result = bagholder.refresh_now()
+        refresh.assert_called_once()
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(bagholder._state["connected"])
+        self.assertEqual(bagholder._state["error"], "")
+
     def test_refresh_session_without_client_id_does_not_scrape_or_post(self):
         bagholder.save_session({"refresh_token": "r"})
         self.assertFalse(bagholder.CLIENT_ID_PATH.exists())

@@ -2645,6 +2645,11 @@ class Handler(BaseHTTPRequestHandler):
             result = capture_tokens(body)
             self._send(200, result)
             return
+        if path == "/api/refresh":
+            self._read_json()
+            result = refresh_now()
+            self._send(200, result)
+            return
         if path == "/api/sync":
             self._read_json()
             sess = load_session()
@@ -2667,6 +2672,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, result)
             return
         self._send(404, {"ok": False, "error": "not found"})
+
+
+
+def refresh_now():
+    """Token POST only. Always POST, even if expiry is not near."""
+    sess = load_session()
+    if not sess or not sess.get("refresh_token"):
+        with _lock:
+            _state["connected"] = False
+            _state["error"] = "not connected"
+        return {"ok": False, "error": "not connected", "connected": False}
+    ok = refresh_session(sess)
+    with _lock:
+        _state["connected"] = bool(ok)
+        if ok:
+            _state["error"] = ""
+        err = (_state.get("error") or "").strip()
+    return {"ok": bool(ok), "error": err, "connected": bool(ok)}
 
 
 def auto_sync_loop():

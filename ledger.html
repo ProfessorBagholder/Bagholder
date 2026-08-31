@@ -3481,6 +3481,7 @@ function menuItemsHtml() {
   }
   if (HAS_LOCAL_API && state.ws.connected) {
     html += '<button type="button" id="syncNow">Sync now</button>';
+    html += '<button type="button" id="refreshSession">Refresh session</button>';
     html += '<button type="button" class="danger" id="disconnectWs">Disconnect</button>';
   }
   if (HAS_LOCAL_API) html += '<div class="sep"></div>';
@@ -3729,6 +3730,19 @@ function confirmConnect() {
         };
         waitSync();
       });
+    });
+  });
+}
+
+function refreshSessionNow() {
+  if (!HAS_LOCAL_API || !state.ws.connected) return;
+  state.menuOpen = false;
+  setWatchStatus("Refreshing session…");
+  render();
+  api("POST", "/api/refresh").then(function () {
+    return api("GET", "/api/status").then(function (s2) {
+      applyWsStatus(s2);
+      render();
     });
   });
 }
@@ -4069,6 +4083,8 @@ function bind() {
   if (connectOverlay) connectOverlay.addEventListener("click", closeConnect);
   const syncNowBtn = document.getElementById("syncNow");
   if (syncNowBtn) syncNowBtn.addEventListener("click", (e) => { e.stopPropagation(); syncNow(); });
+  const refreshSessionBtn = document.getElementById("refreshSession");
+  if (refreshSessionBtn) refreshSessionBtn.addEventListener("click", (e) => { e.stopPropagation(); refreshSessionNow(); });
   const disconnectBtn = document.getElementById("disconnectWs");
   if (disconnectBtn) disconnectBtn.addEventListener("click", (e) => { e.stopPropagation(); disconnectWs(); });
   const addTrade = document.getElementById("addTrade");
