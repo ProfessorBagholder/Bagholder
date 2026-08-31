@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -618,6 +619,141 @@ class WealthsimpleHttpTest(unittest.TestCase):
         store.set_meta("trade_groups", "{}")
         self.assertEqual(store.trade_groups(), [])
         self.assertEqual(store.save_trade_groups(None), [])
+
+    def test_nav_history_migrates_date_pk_to_account_date(self):
+        path = store.db_path()
+        conn = sqlite3.connect(str(path))
+        conn.execute("DROP TABLE nav_history")
+        conn.execute(
+            """
+            CREATE TABLE nav_history (
+                date TEXT PRIMARY KEY,
+                equity REAL,
+                currency TEXT,
+                net_deposits REAL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO nav_history (date, equity, currency, net_deposits) "
+            "VALUES (?, ?, ?, ?)",
+            ("2024-01-02", 1000.0, "CAD", 100.0),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            ("schema_version", "1"),
+        )
+        conn.commit()
+        conn.close()
+        store.ensure()
+        snap = store.snapshot()
+        self.assertEqual(store.get_meta("schema_version"), "2")
+        self.assertEqual(len(snap["navHistory"]), 1)
+        self.assertEqual(snap["navHistory"][0]["date"], "2024-01-02")
+        self.assertEqual(snap["navHistory"][0]["equity"], 1000.0)
+        self.assertEqual(snap["navHistory"][0]["netDeposits"], 100.0)
+        self.assertNotIn("accountId", snap["navHistory"][0])
+        self.assertEqual(snap["navByAccount"], {})
+        info_conn = sqlite3.connect(str(path))
+        info_conn.row_factory = sqlite3.Row
+        pk = {r["name"] for r in info_conn.execute("PRAGMA table_info(nav_history)") if r["pk"]}
+        info_conn.close()
+        self.assertEqual(pk, {"account_id", "date"})
+
+    def test_replace_nav_by_account_and_snapshot(self):
+        store.replace_nav(
+            [
+                {"date": "2024-01-01", "equity": 10, "currency": "CAD", "netDeposits": 1, "accountId": ""},
+                {"date": "2024-01-02", "equity": 11, "net_deposits": 2},
+                {"date": "2024-01-01", "equity": 5, "currency": "CAD", "accountId": "TFSA"},
+                {"date": "2024-01-02", "equity": 6, "account_id": "TFSA", "netDeposits": 3},
+                {"date": "2024-01-01", "equity": 7, "accountId": "RRSP"},
+            ]
+        )
+        snap = store.snapshot()
+        self.assertEqual([p["date"] for p in snap["navHistory"]], ["2024-01-01", "2024-01-02"])
+        self.assertEqual(snap["navHistory"][0]["equity"], 10)
+        self.assertEqual(set(snap["navByAccount"]), {"TFSA", "RRSP"})
+        self.assertEqual(snap["navByAccount"]["TFSA"][0]["equity"], 5)
+        self.assertEqual(snap["navByAccount"]["TFSA"][1]["netDeposits"], 3)
+        self.assertNotIn("accountId", snap["navByAccount"]["TFSA"][0])
+        store.replace_nav(
+            [
+                {"date": "2024-06-01", "equity": 20, "accountId": ""},
+                {"date": "2024-06-01", "equity": 8, "accountId": "TFSA"},
+            ]
+        )
+        snap = store.snapshot()
+        self.assertEqual([p["date"] for p in snap["navHistory"]], ["2024-06-01"])
+        self.assertEqual(set(snap["navByAccount"]), {"TFSA"})
+        self.assertNotIn("RRSP", snap["navByAccount"])
+
+    def test_nav_account_groups_joins_same_nickname(self):
+        groups = bagholder.nav_account_groups(
+            [
+                {"id": "cad-1", "nickname": "TFSA", "currency": "CAD"},
+                {"id": "usd-1", "nickname": "TFSA", "currency": "USD"},
+                {"id": "rrsp-1", "nickname": "", "unifiedAccountType": "RRSP"},
+            ]
+        )
+        self.assertEqual(groups["TFSA"], ["cad-1", "usd-1"])
+        self.assertEqual(groups["RRSP"], ["rrsp-1"])
+
+    def test_fetch_nav_history_identity_wide_omits_account_ids(self):
+        calls = []
+
+        def fake_graphql(sess, operation, variables, query=None):
+            calls.append((operation, dict(variables), query))
+            return {"identity": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {}}}}}
+
+        with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+            bagholder.fetch_nav_history({"access_token": "t"}, "ident-1")
+        self.assertTrue(calls)
+        for op, variables, query in calls:
+            self.assertEqual(op, "IdentityHistoricalFinancialsQuery")
+            self.assertNotIn("accountIds", variables)
+            self.assertIs(query, bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS)
+        self.assertNotIn("$accountIds", bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS)
+        self.assertNotIn("accounts: $accountIds", bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS)
+
+    def test_fetch_nav_history_with_account_ids_uses_filter(self):
+        calls = []
+
+        def fake_graphql(sess, operation, variables, query=None):
+            calls.append((operation, dict(variables), query))
+            return {"identity": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {}}}}}
+
+        with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+            bagholder.fetch_nav_history({"access_token": "t"}, "ident-1", account_ids=["a", "b", ""])
+        self.assertTrue(calls)
+        for op, variables, query in calls:
+            self.assertEqual(op, "IdentityHistoricalFinancialsQuery")
+            self.assertEqual(variables.get("accountIds"), ["a", "b"])
+            self.assertIs(query, bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS_ACCOUNTS)
+        self.assertIn("$accountIds: [ID!]", bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS_ACCOUNTS)
+        self.assertIn("accounts: $accountIds", bagholder.Q_IDENTITY_HISTORICAL_FINANCIALS_ACCOUNTS)
+
+    def test_fetch_nav_history_empty_list_is_identity_wide(self):
+        calls = []
+
+        def fake_graphql(sess, operation, variables, query=None):
+            calls.append(variables)
+            return {"identity": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {}}}}}
+
+        with mock.patch.object(bagholder, "graphql", side_effect=fake_graphql):
+            bagholder.fetch_nav_history({"access_token": "t"}, "ident-1", account_ids=[])
+        self.assertTrue(calls)
+        for variables in calls:
+            self.assertNotIn("accountIds", variables)
+
+    def test_ledger_nav_follows_account_filter(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("navByAccount", html)
+        self.assertIn("ledger.navByAccount.v1", html)
+        self.assertIn("function yearsFromNavOrActivities", html)
+        self.assertIn("const hist = navHist();", html)
+        self.assertIn("state.navByAccount = (book && book.navByAccount", html)
+        self.assertNotIn("const hist = state.navHistory || [];", html)
 
 if __name__ == "__main__":
     unittest.main()
