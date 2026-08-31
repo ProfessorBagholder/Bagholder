@@ -2240,6 +2240,8 @@ const state = {
     activity: { key: "transactionDate", dir: "desc" },
     open: { key: "date", dir: "desc" },
     symbol: { key: "pnlCad", dir: "desc" },
+    inner: { key: "when", dir: "desc" },
+    innerSlice: { key: "exitDate", dir: "desc" },
   },
 };
 
@@ -3285,22 +3287,60 @@ function innerBuysSellsHtml(t) {
   const acts = activitiesInGroup(t);
   const slices = t.slices || [];
   if (acts.length) {
-    const rows = acts.map(function (a) {
+    const innerSort = state.sort.inner || { key: "when", dir: "desc" };
+    const sorted = sortRows(acts, function (a) {
+      return {
+        when: activityWhen(a),
+        activityType: a.activityType,
+        activitySubType: a.activitySubType,
+        quantity: a.quantity,
+        unitPrice: a.unitPrice,
+        netCashAmount: a.netCashAmount,
+      }[innerSort.key];
+    }, innerSort.dir);
+    const rows = sorted.map(function (a) {
       return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activityType || "") + "</td><td>" +
         esc(a.activitySubType || "") + "</td><td>" + (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
         "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(a.netCashAmount) + "'>" +
         esc(formatMoney(a.netCashAmount, a.currency)) + "</td></tr>";
     }).join("");
-    return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table><thead><tr><th>When</th><th>Type</th><th>Sub</th><th>Qty</th><th>Price</th><th>Cash</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+    const head = sortTh("inner", [
+      { key: "when", label: "When" },
+      { key: "activityType", label: "Type" },
+      { key: "activitySubType", label: "Sub" },
+      { key: "quantity", label: "Qty" },
+      { key: "unitPrice", label: "Price" },
+      { key: "netCashAmount", label: "Cash" },
+    ]);
+    return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
   }
   if (!slices.length) return "";
-  const rows = slices.map(function (s) {
+  const sliceSort = state.sort.innerSlice || { key: "exitDate", dir: "desc" };
+  const sortedSlices = sortRows(slices, function (s) {
+    return {
+      entryDate: s.entryDate,
+      exitDate: s.exitDate,
+      quantity: s.quantity,
+      entryPrice: s.entryPrice,
+      exitPrice: s.exitPrice,
+      pnlCad: s.pnlCad,
+    }[sliceSort.key];
+  }, sliceSort.dir);
+  const rows = sortedSlices.map(function (s) {
     return "<tr><td>" + esc(s.entryDate) + "</td><td>" + esc(s.exitDate) + "</td><td>" +
       formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + "</td><td>" + formatNumber(s.entryPrice) +
       "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnlCad) + "'>" +
       esc(formatCad(s.pnlCad, 2)) + "</td></tr>";
   }).join("");
-  return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table><thead><tr><th>In</th><th>Out</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+  const head = sortTh("innerSlice", [
+    { key: "entryDate", label: "In" },
+    { key: "exitDate", label: "Out" },
+    { key: "quantity", label: "Qty" },
+    { key: "entryPrice", label: "Entry" },
+    { key: "exitPrice", label: "Exit" },
+    { key: "pnlCad", label: "P&amp;L" },
+  ]);
+  return '<div class="inner-acts"><h3 class="section-title">Buys and sells</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 function renderDrawer(t) {
