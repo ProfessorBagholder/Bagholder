@@ -444,8 +444,53 @@ query IdentityHistoricalFinancialsQuery(
 }
 """.strip()
 
+Q_FETCH_ACCOUNT_HISTORICAL_FINANCIALS = """
+query FetchAccountHistoricalFinancials(
+  $id: ID!
+  $currency: Currency!
+  $startDate: Date
+  $resolution: DateResolution!
+  $endDate: Date
+  $first: Int
+  $cursor: String
+) {
+  account(id: $id) {
+    id
+    financials {
+      historicalDaily(
+        currency: $currency
+        startDate: $startDate
+        resolution: $resolution
+        endDate: $endDate
+        first: $first
+        after: $cursor
+      ) {
+        edges {
+          node {
+            date
+            netLiquidationValueV2 { amount currency __typename }
+            netDepositsV2 { amount currency __typename }
+            __typename
+          }
+          __typename
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+""".strip()
+
 QUERIES = {
     "IdentityHistoricalFinancialsQuery": Q_IDENTITY_HISTORICAL_FINANCIALS,
+    "FetchAccountHistoricalFinancials": Q_FETCH_ACCOUNT_HISTORICAL_FINANCIALS,
     "FetchAllAccountFinancials": Q_FETCH_ALL_ACCOUNT_FINANCIALS,
     "FetchActivityFeedItems": Q_FETCH_ACTIVITY_FEED_ITEMS,
     "FetchAccountsWithBalance": Q_FETCH_ACCOUNTS_WITH_BALANCE,
@@ -695,6 +740,26 @@ def _account_type(account_id, accounts):
     if not rec or not isinstance(rec, dict):
         return ""
     return _s(rec.get("nickname") or rec.get("unifiedAccountType") or rec.get("type"))
+
+
+def nav_account_groups(accounts):
+    """Filter nickname -> Wealthsimple account ids. CAD+USD with the same nickname share a group."""
+    if isinstance(accounts, dict):
+        recs = [v for v in accounts.values() if isinstance(v, dict)]
+    else:
+        recs = [a for a in (accounts or []) if isinstance(a, dict)]
+    groups = {}
+    for acc in recs:
+        aid = _s(acc.get("id")).strip()
+        if not aid:
+            continue
+        nick = _s(acc.get("nickname") or acc.get("unifiedAccountType") or acc.get("type")).strip()
+        if not nick:
+            continue
+        bucket = groups.setdefault(nick, [])
+        if aid not in bucket:
+            bucket.append(aid)
+    return groups
 
 
 def fifo_pool_ids(accounts):
@@ -1424,7 +1489,7 @@ def _identity_from(obj):
     return ""
 
 
-def graphql(sess, operation, variables):
+def graphql(sess, operation, variables, query=None):
     token = sess.get("access_token") or ""
     headers = {
         "Authorization": "Bearer " + token,
@@ -1443,7 +1508,7 @@ def graphql(sess, operation, variables):
         headers["x-ws-session-id"] = sess["session_id"]
     body = {
         "operationName": operation,
-        "query": QUERIES[operation],
+        "query": query if query is not None else QUERIES[operation],
         "variables": {k: v for k, v in variables.items() if v is not None},
     }
     data = _http_json("POST", GRAPHQL, body, headers, timeout=90)
@@ -1463,35 +1528,44 @@ def graphql(sess, operation, variables):
 
 
 
+def _money_amount(node, *keys):
+    """First present Money.amount from netLiquidationValue / V2 (or deposits)."""
+    if not isinstance(node, dict):
+        return None, None
+    for key in keys:
+        money = node.get(key)
+        if not isinstance(money, dict) or money.get("amount") is None:
+            continue
+        try:
+            return float(money["amount"]), money.get("currency") or "CAD"
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
+
 def _nav_points_from_payload(data):
     points = []
-    ident = (data or {}).get("identity") or {}
-    hist = ((ident.get("financials") or {}).get("historicalDaily") or {})
+    blob = data or {}
+    ident = blob.get("identity") or {}
+    acc = blob.get("account") or {}
+    fin = ident.get("financials") if ident.get("financials") is not None else acc.get("financials")
+    hist = ((fin or {}).get("historicalDaily") or {})
     for edge in hist.get("edges") or []:
         node = (edge or {}).get("node") or {}
-        nlv = node.get("netLiquidationValue") or {}
-        amt = nlv.get("amount")
+        amt, cur = _money_amount(node, "netLiquidationValue", "netLiquidationValueV2")
         d = (node.get("date") or "")[:10]
         if not d or amt is None:
             continue
-        try:
-            rec = {"date": d, "equity": float(amt), "currency": nlv.get("currency") or "CAD"}
-        except (TypeError, ValueError):
-            continue
-        nd = node.get("netDeposits") or {}
-        nd_amt = nd.get("amount")
+        rec = {"date": d, "equity": amt, "currency": cur or "CAD"}
+        nd_amt, _nd_cur = _money_amount(node, "netDeposits", "netDepositsV2")
         if nd_amt is not None:
-            try:
-                rec["netDeposits"] = float(nd_amt)
-            except (TypeError, ValueError):
-                pass
+            rec["netDeposits"] = nd_amt
         points.append(rec)
     page = hist.get("pageInfo") or {}
     return points, page
 
 
-def fetch_nav_history(sess, identity_id):
-    """Wealthsimple net liquidation (equity after margin), identity-wide."""
+def _paginate_nav_history(sess, operation, extra_variables, query=None):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     year0 = 2020
     year1 = int(today[:4])
@@ -1501,19 +1575,11 @@ def fetch_nav_history(sess, identity_id):
         end = today if year == year1 else f"{year}-12-31"
         cursor = None
         for _ in range(8):
-            data = graphql(
-                sess,
-                "IdentityHistoricalFinancialsQuery",
-                {
-                    "identityId": identity_id,
-                    "currency": "CAD",
-                    "startDate": start,
-                    "endDate": end,
-                    "limit": 400,
-                    "cursor": cursor,
-                    "includeNetDeposits": True,
-                },
-            )
+            variables = dict(extra_variables)
+            variables["startDate"] = start
+            variables["endDate"] = end
+            variables["cursor"] = cursor
+            data = graphql(sess, operation, variables, query=query)
             chunk, page = _nav_points_from_payload(data)
             points.extend(chunk)
             if not page.get("hasNextPage"):
@@ -1525,6 +1591,143 @@ def fetch_nav_history(sess, identity_id):
     for rec in points:
         by_date[rec["date"]] = rec
     return [by_date[d] for d in sorted(by_date)]
+
+
+def fetch_nav_history(sess, identity_id):
+    """Identity-wide Wealthsimple net liquidation (All / accountId '')."""
+    return _paginate_nav_history(
+        sess,
+        "IdentityHistoricalFinancialsQuery",
+        {
+            "identityId": identity_id,
+            "currency": "CAD",
+            "limit": 400,
+            "includeNetDeposits": True,
+        },
+        query=Q_IDENTITY_HISTORICAL_FINANCIALS,
+    )
+
+
+def fetch_account_nav_history(sess, account_id):
+    """Daily NAV for one Wealthsimple account via FetchAccountHistoricalFinancials."""
+    aid = _s(account_id).strip()
+    if not aid:
+        return []
+    return _paginate_nav_history(
+        sess,
+        "FetchAccountHistoricalFinancials",
+        {
+            "id": aid,
+            "currency": "CAD",
+            "resolution": "DAILY",
+            "first": 400,
+        },
+        query=Q_FETCH_ACCOUNT_HISTORICAL_FINANCIALS,
+    )
+
+
+def merge_nav_points(series_list):
+    """Sum equity (and netDeposits when present) by date across account series."""
+    by_date = {}
+    for series in series_list or []:
+        for rec in series or []:
+            if not isinstance(rec, dict):
+                continue
+            d = _s(rec.get("date"))[:10]
+            if not d:
+                continue
+            equity = rec.get("equity")
+            if equity is None:
+                continue
+            try:
+                eq = float(equity)
+            except (TypeError, ValueError):
+                continue
+            cur = by_date.get(d)
+            if cur is None:
+                cur = {
+                    "date": d,
+                    "equity": 0.0,
+                    "currency": _s(rec.get("currency") or "CAD") or "CAD",
+                }
+                by_date[d] = cur
+            cur["equity"] += eq
+            if rec.get("currency"):
+                cur["currency"] = _s(rec.get("currency")) or cur["currency"]
+            nd = rec.get("netDeposits")
+            if nd is not None:
+                try:
+                    cur["netDeposits"] = cur.get("netDeposits", 0.0) + float(nd)
+                except (TypeError, ValueError):
+                    pass
+    return [by_date[d] for d in sorted(by_date)]
+
+
+def fetch_nickname_nav_history(sess, accounts):
+    """Per-filter-nickname daily NAV. Returns (points, public_errors)."""
+    points = []
+    errors = []
+    for nick, ids in sorted(nav_account_groups(accounts).items()):
+        _set_sync_step("Fetching equity history for %s…" % nick)
+        try:
+            series = [fetch_account_nav_history(sess, aid) for aid in ids]
+            pts = merge_nav_points(series)
+        except Exception as e:
+            public = _public_sync_error(e)
+            errors.append("%s: %s" % (nick, public))
+            sys.stderr.write("NAV history failed for %s: %s\n" % (nick, public))
+            continue
+        for rec in pts:
+            tagged = dict(rec)
+            tagged["accountId"] = nick
+            points.append(tagged)
+    return points, errors
+
+
+def refresh_nav_only(allow_refresh=True):
+    """Pull daily NAV only. Does not pull activity."""
+    store.ensure()
+    sess = load_session()
+    if not sess or not sess.get("access_token"):
+        return {"ok": False, "error": "not connected"}
+    identity = _identity_from(sess)
+    if not identity:
+        try:
+            info = token_info(sess)
+        except Exception:
+            info = {}
+        identity = _identity_from(info or {})
+    if not identity:
+        return {"ok": False, "error": "no identity"}
+    accounts = (load_book() or {}).get("accounts") or []
+    if not accounts:
+        return {"ok": False, "error": "no accounts stored"}
+    try:
+        try:
+            nav_history = fetch_nav_history(sess, identity)
+        except PermissionError:
+            raise
+        except Exception:
+            nav_history = []
+        combined = []
+        for rec in nav_history:
+            tagged = dict(rec)
+            tagged["accountId"] = ""
+            combined.append(tagged)
+        nickname_pts, nav_errors = fetch_nickname_nav_history(sess, accounts)
+        combined.extend(nickname_pts)
+        store.replace_nav(combined)
+        nicks = sorted({_s(p.get("accountId")) for p in combined if _s(p.get("accountId"))})
+        return {
+            "ok": True,
+            "allDays": sum(1 for p in combined if not _s(p.get("accountId"))),
+            "accounts": len(nicks),
+            "errors": nav_errors,
+        }
+    except PermissionError:
+        if allow_refresh and refresh_session(load_session() or {}):
+            return refresh_nav_only(allow_refresh=False)
+        return {"ok": False, "error": "Session expired. Connect again."}
 
 
 def fetch_all_accounts(sess, identity_id):
@@ -1809,6 +2012,13 @@ def run_sync(allow_refresh=True, force_activity=True):
             nav_history = fetch_nav_history(sess, identity)
         except Exception:
             nav_history = []
+        combined = []
+        for rec in nav_history:
+            tagged = dict(rec)
+            tagged["accountId"] = ""
+            combined.append(tagged)
+        nickname_pts, nav_errors = fetch_nickname_nav_history(sess, accounts)
+        combined.extend(nickname_pts)
         store.apply_wealthsimple_mapped(mapped)
         synced = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _set_sync_step("Saving…")
@@ -1816,17 +2026,20 @@ def run_sync(allow_refresh=True, force_activity=True):
             {
                 "accounts": [slim_account(a) for a in accounts],
                 "balances": balances,
-                "navHistory": nav_history,
+                "navHistory": combined,
                 "syncedAt": synced,
             }
         )
         store.mark_activity_pulled(synced)
+        nav_err_line = ""
+        if nav_errors:
+            nav_err_line = "NAV history failed for " + "; ".join(nav_errors)
         with _lock:
             _state["connected"] = True
             _state["email"] = email
             _state["lastSync"] = synced
             _state["capturing"] = False
-            _state["error"] = ""
+            _state["error"] = nav_err_line
             _state["syncStep"] = ""
         return True
     except PermissionError:
@@ -2624,6 +2837,7 @@ class Handler(BaseHTTPRequestHandler):
                     "accounts": book.get("accounts") or [],
                     "balances": book.get("balances") or [],
                     "navHistory": book.get("navHistory") or [],
+                    "navByAccount": book.get("navByAccount") or {},
                     "syncedAt": book.get("syncedAt") or "",
                     "tradeGroups": book.get("tradeGroups") or [],
                 },

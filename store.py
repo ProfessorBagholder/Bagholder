@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
 ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
 ACTIVITY_PULL_HOUR = 14
@@ -134,10 +134,12 @@ def _init_schema(conn):
         );
 
         CREATE TABLE IF NOT EXISTS nav_history (
-            date TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL DEFAULT '',
+            date TEXT NOT NULL,
             equity REAL,
             currency TEXT,
-            net_deposits REAL
+            net_deposits REAL,
+            PRIMARY KEY (account_id, date)
         );
 
         CREATE TABLE IF NOT EXISTS grouped_trades (
@@ -146,11 +148,54 @@ def _init_schema(conn):
         );
         """
     )
+    _migrate_nav_history(conn)
     conn.execute(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         ("schema_version", str(SCHEMA_VERSION)),
     )
     conn.commit()
+
+
+def _migrate_nav_history(conn):
+    """Rebuild nav_history with PRIMARY KEY (account_id, date). Old rows get account_id ''."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='nav_history'"
+    ).fetchone()
+    if not row:
+        return
+    info = conn.execute("PRAGMA table_info(nav_history)").fetchall()
+    cols = {r["name"]: r for r in info}
+    pk_cols = {r["name"] for r in info if r["pk"]}
+    if "account_id" in cols and pk_cols == {"account_id", "date"}:
+        return
+    conn.execute(
+        """
+        CREATE TABLE nav_history_new (
+            account_id TEXT NOT NULL DEFAULT '',
+            date TEXT NOT NULL,
+            equity REAL,
+            currency TEXT,
+            net_deposits REAL,
+            PRIMARY KEY (account_id, date)
+        )
+        """
+    )
+    if "account_id" in cols:
+        conn.execute(
+            "INSERT INTO nav_history_new "
+            "(account_id, date, equity, currency, net_deposits) "
+            "SELECT COALESCE(account_id, ''), date, equity, currency, net_deposits "
+            "FROM nav_history"
+        )
+    else:
+        conn.execute(
+            "INSERT INTO nav_history_new "
+            "(account_id, date, equity, currency, net_deposits) "
+            "SELECT '', date, equity, currency, net_deposits FROM nav_history"
+        )
+    conn.execute("DROP TABLE nav_history")
+    conn.execute("ALTER TABLE nav_history_new RENAME TO nav_history")
 
 
 def ensure():
@@ -731,11 +776,24 @@ def replace_balances(balances):
             conn.close()
 
 
+def _nav_point_from_row(r):
+    rec = {
+        "date": r["date"],
+        "equity": r["equity"],
+        "currency": r["currency"] or "CAD",
+    }
+    if r["net_deposits"] is not None:
+        rec["netDeposits"] = r["net_deposits"]
+    return rec
+
+
 def replace_nav(points):
+    """Replace the whole nav_history table from identity-wide + per-nickname series."""
     with _lock:
         conn = _connect()
         try:
             _init_schema(conn)
+            conn.execute("DELETE FROM nav_history")
             for rec in points or []:
                 if not isinstance(rec, dict):
                     continue
@@ -745,18 +803,21 @@ def replace_nav(points):
                 equity = _num(rec.get("equity"), None)
                 if equity is None:
                     continue
+                account_id = _s(rec.get("accountId") if rec.get("accountId") is not None else rec.get("account_id"))
                 conn.execute(
-                    "INSERT INTO nav_history (date, equity, currency, net_deposits) "
-                    "VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(date) DO UPDATE SET "
+                    "INSERT INTO nav_history "
+                    "(account_id, date, equity, currency, net_deposits) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(account_id, date) DO UPDATE SET "
                     "equity = excluded.equity, "
                     "currency = excluded.currency, "
                     "net_deposits = excluded.net_deposits",
                     (
+                        account_id,
                         day,
                         equity,
                         _s(rec.get("currency") or "CAD"),
-                        _num(rec.get("netDeposits") or rec.get("net_deposits"), None),
+                        _num(rec.get("netDeposits") if rec.get("netDeposits") is not None else rec.get("net_deposits"), None),
                     ),
                 )
             conn.commit()
@@ -840,17 +901,16 @@ def snapshot():
                     }
                 )
             nav = []
+            nav_by_account = {}
             for r in conn.execute(
-                "SELECT * FROM nav_history ORDER BY date"
+                "SELECT * FROM nav_history ORDER BY account_id, date"
             ).fetchall():
-                rec = {
-                    "date": r["date"],
-                    "equity": r["equity"],
-                    "currency": r["currency"] or "CAD",
-                }
-                if r["net_deposits"] is not None:
-                    rec["netDeposits"] = r["net_deposits"]
-                nav.append(rec)
+                rec = _nav_point_from_row(r)
+                aid = r["account_id"] or ""
+                if not aid:
+                    nav.append(rec)
+                else:
+                    nav_by_account.setdefault(aid, []).append(rec)
             synced = get_meta("synced_at")
             groups_raw = get_meta("trade_groups")
             try:
@@ -862,6 +922,7 @@ def snapshot():
                 "accounts": accounts,
                 "balances": balances,
                 "navHistory": nav,
+                "navByAccount": nav_by_account,
                 "syncedAt": synced,
                 "tradeGroups": groups,
             }
