@@ -438,6 +438,7 @@ class StoreTest(unittest.TestCase):
     def test_ledger_uses_listing_line(self):
         html = bagholder.ledger_path().read_text(encoding="utf-8")
         self.assertIn("function listingLine(", html)
+        self.assertIn("function listingTicker(", html)
         self.assertIn("book.securities", html)
         self.assertIn("esc(listingLine(t))", html)
         self.assertNotIn('esc(t.side) + " " + formatNumber(t.quantity', html)
@@ -448,6 +449,34 @@ class StoreTest(unittest.TestCase):
         self.assertIn("state.ws.listingsFilling || state.ws.syncStep) pollWsStatus", html)
         src = bagholder.ledger_path().with_name("bagholder.py").read_text(encoding="utf-8")
         self.assertIn('"listingsFilling": bool(_state.get("listingsFilling"))', src)
+
+    def test_ledger_executions_heading_includes_count(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("Executions (' + acts.length + ')", html)
+        self.assertNotIn('section-title">Executions</h3>', html)
+        self.assertIn(".inner-acts table.blotter th { position: static; }", html)
+
+    def test_ledger_exchange_filter(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('<label>Exchange</label>', html)
+        self.assertIn("function listingExchange(", html)
+        self.assertIn("function knownExchanges(", html)
+        self.assertIn("f.exchange && listingExchange(t) !== f.exchange", html)
+
+    def test_ledger_prefers_listed_one_over_alpha(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function isAlphaVenue(", html)
+        self.assertIn("function preferredListing(", html)
+        self.assertIn('exch === "ALPHA EXCHANGE"', html)
+        self.assertIn("return preferredListing(sec);", html)
+
+    def test_ledger_listing_filters_drive_nav_tiles(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function listingFiltersOn(", html)
+        self.assertIn("function closedYearReturn(", html)
+        self.assertIn("listingFiltersOn()", html)
+        self.assertIn("realizedPnlCurve(closedForMetrics)", html)
+        self.assertIn("closedAnnualizedReturn(closedFx || [], years)", html)
 
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10

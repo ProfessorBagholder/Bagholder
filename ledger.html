@@ -288,6 +288,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .inner-acts { margin-top: 12px; }
 .inner-acts table { width: 100%; font-size: 12px; }
 .inner-acts th, .inner-acts td { padding: 4px 6px; text-align: left; }
+.inner-acts table.blotter th { position: static; }
 
 /* Layout */
 .main {
@@ -1789,6 +1790,82 @@ function formatReturn(r) {
   return pct;
 }
 
+function listingFiltersOn() {
+  const f = state.filters || {};
+  return !!(f.symbol || f.exchange);
+}
+
+function tradeCostCad(t) {
+  const qty = Number(t.quantity) || 0;
+  const entry = Number(t.entryPrice) || 0;
+  const notional = Math.abs(entry * qty * optionMultiplier(t.symbol));
+  if (!(notional > 0)) return 0;
+  const ccy = String((t && t.currency) || "CAD").toUpperCase();
+  if (ccy !== "USD") return notional;
+  const cad = toCad(notional, ccy, t.entryDate);
+  return Number.isFinite(cad) ? Math.abs(cad) : 0;
+}
+
+function closedYearReturn(trades, year) {
+  const from = year + "-01-01";
+  const to = clampToToday(year + "-12-31");
+  let pnl = 0;
+  let cost = 0;
+  let n = 0;
+  for (let i = 0; i < (trades || []).length; i++) {
+    const tr = trades[i];
+    const d = String((tr && tr.exitDate) || "").slice(0, 10);
+    if (d < from || d > to) continue;
+    pnl += Number(tr.pnlCad) || 0;
+    cost += tradeCostCad(tr);
+    n += 1;
+  }
+  if (!n || !(cost > 0)) return null;
+  return pnl / cost;
+}
+
+function yearsFromClosed(trades) {
+  const years = new Set();
+  for (let i = 0; i < (trades || []).length; i++) {
+    const d = String((trades[i] && trades[i].exitDate) || "").slice(0, 4);
+    if (/^\d{4}$/.test(d)) years.add(d);
+  }
+  return Array.from(years).sort().reverse();
+}
+
+function closedAnnualizedReturn(trades, years) {
+  const ys = (years || []).slice().sort();
+  let prod = 1;
+  let days = 0;
+  let from = "";
+  let to = "";
+  let firstYear = "";
+  let lastYear = "";
+  for (let i = 0; i < ys.length; i++) {
+    const y = ys[i];
+    const r = closedYearReturn(trades, y);
+    if (r == null || !Number.isFinite(r) || r <= -1) continue;
+    const wfrom = y + "-01-01";
+    const wto = clampToToday(y + "-12-31");
+    const d = isoDayDiff(wfrom, wto);
+    if (!(d >= 30)) continue;
+    prod *= (1 + r);
+    days += d;
+    if (!from) {
+      from = wfrom;
+      firstYear = y;
+    }
+    to = wto;
+    lastYear = y;
+  }
+  if (!from || !(days > 0)) {
+    return { rate: null, from: "", to: "", years: 0, firstYear: "", lastYear: "" };
+  }
+  const yrs = days / 365.25;
+  const rate = yrs >= 1 / 12 ? Math.pow(prod, 1 / yrs) - 1 : prod - 1;
+  return { rate: rate, from: from, to: to, years: yrs, firstYear: firstYear, lastYear: lastYear };
+}
+
 function spyOn(date) {
   let d = String(date || "").slice(0, 10);
   if (!d) return null;
@@ -1988,10 +2065,21 @@ function clampToToday(iso) {
   return iso > today ? today : iso;
 }
 
-function compareRow(year, activities) {
-  const w = yearWindow(activities, year);
-  const mine = bookReturn(activities, w.from, w.to, w.start, w.flowAfter);
-  const idx = spyReturn(w.from, w.to);
+function compareRow(year, activities, closedFx) {
+  let mine;
+  let idxFrom;
+  let idxTo;
+  if (listingFiltersOn()) {
+    mine = closedYearReturn(closedFx || [], year);
+    idxFrom = year + "-01-01";
+    idxTo = clampToToday(year + "-12-31");
+  } else {
+    const w = yearWindow(activities, year);
+    mine = bookReturn(activities, w.from, w.to, w.start, w.flowAfter);
+    idxFrom = w.from;
+    idxTo = w.to;
+  }
+  const idx = spyReturn(idxFrom, idxTo);
   const vs = (mine != null && idx != null) ? mine - idx : null;
   return (
     "<tr><td class=\"year\">" + esc(year) + "</td>" +
@@ -2011,7 +2099,7 @@ function renderCompare(closedFx, selectedYear, years, activities) {
     (years || []).forEach((y) => ys.push(y));
   }
   if (!ys.length) return "";
-  const body = ys.map((y) => compareRow(y, activities)).join("");
+  const body = ys.map((y) => compareRow(y, activities, closedFx)).join("");
   return (
     '<div class="compare"><table><thead><tr>' +
     "<th>Year</th><th class=\"num\">Return</th><th class=\"num\">S&amp;P 500</th><th class=\"num\">vs S&amp;P</th>" +
@@ -2064,9 +2152,11 @@ function formatYearSpan(years) {
   return months + " mo";
 }
 
-function renderAnnualized(activities, years) {
-  const a = accountAnnualizedReturn(activities, years);
-  const sub = formatYearSpan(a.years) || "No NAV history";
+function renderAnnualized(activities, years, closedFx) {
+  const a = listingFiltersOn()
+    ? closedAnnualizedReturn(closedFx || [], years)
+    : accountAnnualizedReturn(activities, years);
+  const sub = formatYearSpan(a.years) || (listingFiltersOn() ? "No closed trades" : "No NAV history");
   const cls = a.rate == null ? "flat" : pnlClass(a.rate);
   return kpiCard("Avg annualized return", formatReturn(a.rate), esc(sub), cls, "annual");
 }
@@ -2250,7 +2340,7 @@ const state = {
   navByAccount: {},
   menuOpen: false,
   filterOpen: false,
-  filters: { from: "", to: "", account: "", symbol: "", q: "" },
+  filters: { from: "", to: "", account: "", exchange: "", symbol: "", q: "" },
   reports: [],
   selected: null,
   tab: "closed",
@@ -2445,6 +2535,7 @@ function filteredTrades(closedFx) {
     if (f.to && t.exitDate > f.to) return false;
     if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
     if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
+    if (f.exchange && listingExchange(t) !== f.exchange) return false;
     return true;
   });
 }
@@ -3149,6 +3240,7 @@ function render() {
     if (f.to && a.transactionDate > f.to) return false;
     if (f.account && a.accountId !== f.account && a.accountType !== f.account) return false;
     if (f.symbol && a.symbol && underlyingSymbol(a.symbol) !== f.symbol) return false;
+    if (f.exchange && listingExchange(a) !== f.exchange) return false;
     return true;
   });
   const incomeCad = incomeActs
@@ -3158,12 +3250,15 @@ function render() {
     .filter((a) => a.category === "fee")
     .reduce((s, a) => s + toCad(a.netCashAmount, a.currency, a.transactionDate), 0);
   const m = computeMetrics(closedForMetrics, open.length, incomeCad, feesCad);
-  const curve = equityCurve(state.activities, state.filters.from, state.filters.to);
+  const curve = listingFiltersOn()
+    ? realizedPnlCurve(closedForMetrics)
+    : equityCurve(state.activities, state.filters.from, state.filters.to);
   const monthly = monthlyPnl(closedForMetrics);
   const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
-  const years = yearsFromActivities(state.activities);
+  const exchanges = knownExchanges();
+  const years = listingFiltersOn() ? yearsFromClosed(closedForMetrics) : yearsFromActivities(state.activities);
   const selectedYear = yearFromRange(state.filters.from, state.filters.to);
   const pf = m.profitFactor === Infinity ? "∞" : Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "—";
 
@@ -3222,7 +3317,10 @@ function render() {
         );
       }).join("");
 
-    const openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
+    let openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
+    if (state.filters.exchange) {
+      openLots = openLots.filter((l) => listingExchange({ securityId: l.securityId, buyActivityId: l.activityId }) === state.filters.exchange);
+    }
     const openSort = state.sort.open || { key: "date", dir: "desc" };
     const openSorted = sortRows(openLots, (l) => ({
       date: l.date,
@@ -3326,8 +3424,8 @@ function render() {
       kpiCard("Biggest loser", esc(formatCad(m.maxLossPnl, 2)), m.maxLossSymbol ? esc(m.maxLossSymbol) : "—", m.maxLossPnl < 0 ? "neg" : "flat") +
       "</div>" +
       '<div class="grid-2">' +
-      renderCompare(closedFx, selectedYear, years, state.activities) +
-      renderAnnualized(state.activities, years) +
+      renderCompare(closedForMetrics, selectedYear, years, state.activities) +
+      renderAnnualized(state.activities, years, closedForMetrics) +
       "</div>" +
       '<div class="grid-2">' +
       '<div class="panel"><h3 class="section-title">Equity Curve</h3><div class="chart-wrap" id="equityChart">' + svgEquity(curve) + '<div class="chart-tip" id="equityTip" hidden></div></div></div>' +
@@ -3342,7 +3440,7 @@ function render() {
       tabBody;
   }
 
-  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account);
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange);
 
   const drawer = state.selected
     ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
@@ -3372,6 +3470,9 @@ function render() {
     "</select></div>" +
     '<div class="field"><label>Account</label><select id="account"><option value="">All</option>' +
     accounts.map((a) => "<option " + (state.filters.account === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="field"><label>Exchange</label><select id="exchange"><option value="">All</option>' +
+    exchanges.map((a) => "<option " + (state.filters.exchange === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
     "</select></div>" +
     (filtersActive ? '<button type="button" class="reset" id="resetFilters">Reset filters</button>' : "") +
     "</div></div>" +
@@ -3418,7 +3519,7 @@ function innerBuysSellsHtml(t) {
       { key: "unitPrice", label: "Price" },
       { key: "netCashAmount", label: "Amount" },
     ]);
-    return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+    return '<div class="inner-acts"><h3 class="section-title">Executions (' + acts.length + ')</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
   }
   if (!slices.length) return "";
   const sliceSort = state.sort.innerSlice || { key: "exitDate", dir: "desc" };
@@ -3446,7 +3547,7 @@ function innerBuysSellsHtml(t) {
     { key: "exitPrice", label: "Exit" },
     { key: "pnlCad", label: "P&amp;L" },
   ]);
-  return '<div class="inner-acts"><h3 class="section-title">Executions</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+  return '<div class="inner-acts"><h3 class="section-title">Executions (' + slices.length + ')</h3><table class="blotter"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 
@@ -3508,16 +3609,72 @@ function exchangeLabel(sec) {
   return micMap[mic] || "";
 }
 
-function listingLine(t) {
+function listingTicker(sym) {
+  const s = String(sym || "").trim();
+  const m = s.match(/^(.+)\.(TO|V|CN|NE)$/i);
+  return m ? m[1] : s;
+}
+
+function isAlphaVenue(sec) {
+  const exch = String((sec && sec.primaryExchange) || "").toUpperCase();
+  const mic = String((sec && sec.primaryMic) || "").toUpperCase();
+  return exch === "ALPHA EXCHANGE" || exch === "ALPHA" || mic === "XATS";
+}
+
+function preferredListing(sec) {
+  if (!sec || !isAlphaVenue(sec)) return sec;
+  const sym = listingTicker(sec.symbol);
+  const ccy = String(sec.currency || "");
+  if (!sym) return sec;
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    const other = list[i];
+    if (!other || other.id === sec.id) continue;
+    if (other.underlyingId) continue;
+    if (listingTicker(other.symbol) !== sym) continue;
+    if (ccy && String(other.currency || "") && String(other.currency || "") !== ccy) continue;
+    if (isAlphaVenue(other)) continue;
+    if (!exchangeLabel(other)) continue;
+    return other;
+  }
+  return sec;
+}
+
+function listingSecurity(t) {
   let sec = securityById(activitySecurityId(t));
   if (sec && sec.underlyingId) {
     const under = securityById(sec.underlyingId);
     if (under) sec = under;
   }
+  return preferredListing(sec);
+}
+
+function listingExchange(t) {
+  return exchangeLabel(listingSecurity(t));
+}
+
+function knownExchanges() {
+  const set = {};
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    let sec = list[i];
+    if (sec && sec.underlyingId) {
+      const under = securityById(sec.underlyingId);
+      if (under) sec = under;
+    }
+    sec = preferredListing(sec);
+    const e = exchangeLabel(sec);
+    if (e) set[e] = true;
+  }
+  return Object.keys(set).sort();
+}
+
+function listingLine(t) {
+  const sec = listingSecurity(t);
   const fallback = String((t && t.symbol) || "");
   if (!sec || !sec.name) return fallback;
   const exch = exchangeLabel(sec);
-  const sym = String(sec.symbol || "").trim();
+  const sym = listingTicker(sec.symbol);
   if (exch && sym) return sec.name + " · " + exch + ": " + sym;
   if (exch) return sec.name + " · " + exch;
   return sec.name;
@@ -4594,6 +4751,7 @@ function bind() {
       state.filters.to = "";
       state.filters.symbol = "";
       state.filters.account = "";
+      state.filters.exchange = "";
       state.filterOpen = true;
       persist();
       render();
@@ -4706,6 +4864,8 @@ function bind() {
     document.getElementById("to").addEventListener("change", (e) => { state.filters.to = e.target.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("symbol").addEventListener("change", (e) => { state.filters.symbol = e.target.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("account").addEventListener("change", (e) => { state.filters.account = e.target.value; state.filterOpen = true; persist(); render(); });
+    const exchangeSel = document.getElementById("exchange");
+    if (exchangeSel) exchangeSel.addEventListener("change", (e) => { state.filters.exchange = e.target.value; state.filterOpen = true; persist(); render(); });
   }
   const yearSel = document.getElementById("year");
   if (yearSel) {
