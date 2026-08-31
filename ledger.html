@@ -2794,7 +2794,7 @@ function closedTradesForBlotter() {
       quantity: t.quantity,
       entryPrice: t.entryPrice,
       exitPrice: t.exitPrice,
-      pnlCad: t.pnlCad,
+      pnlCad: t.pnl,
       holdDays: t.holdDays,
       currency: t.currency,
       tag: n.tag || "",
@@ -2816,7 +2816,7 @@ function closedBlotterRowHtml(t) {
     "<td>" + esc(t.openDirection === "SHORT" ? "COVER" : t.side) + "</td>" +
     "<td>" + formatNumber(t.quantity, t.quantity % 1 ? 4 : 0) + "</td>" +
     "<td>" + formatNumber(t.entryPrice) + "</td><td>" + formatNumber(t.exitPrice) + "</td>" +
-    "<td class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</td>" +
+    "<td class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</td>" +
     "<td>" + esc(formatHold(t.holdDays)) + "</td>" +
     "<td>" + esc(t.currency) + "</td>" +
     "<td>" + (n.tag ? "<span class='tag-chip'>" + esc(n.tag) + "</span>" : "") + "</td>" +
@@ -3425,8 +3425,8 @@ function innerBuysSellsHtml(t) {
   const rows = sortedSlices.map(function (s) {
     return "<tr><td>" + esc(s.entryDate) + "</td><td>" + esc(s.exitDate) + "</td><td>" +
       formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + "</td><td>" + formatNumber(s.entryPrice) +
-      "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnlCad) + "'>" +
-      esc(formatCad(s.pnlCad, 2)) + "</td></tr>";
+      "</td><td>" + formatNumber(s.exitPrice) + "</td><td class='" + pnlClass(s.pnl) + "'>" +
+      esc(formatCad(s.pnl, 2)) + "</td></tr>";
   }).join("");
   const head = sortTh("innerSlice", [
     { key: "entryDate", label: "In" },
@@ -3454,7 +3454,7 @@ function renderDrawer(t) {
     "<div><dt>Out</dt><dd>" + esc(t.exitDate) + "</dd></div>" +
     "<div><dt>Entry</dt><dd>" + formatNumber(t.entryPrice) + "</dd></div>" +
     "<div><dt>Exit</dt><dd>" + formatNumber(t.exitPrice) + "</dd></div>" +
-    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnlCad) + "'>" + esc(formatCad(t.pnlCad, 2)) + "</dd></div>" +
+    "<div><dt>P&amp;L</dt><dd class='" + pnlClass(t.pnl) + "'>" + esc(formatCad(t.pnl, 2)) + "</dd></div>" +
     "<div><dt>Hold</dt><dd>" + esc(formatHold(t.holdDays)) + "</dd></div>" +
     "<div><dt>Currency</dt><dd>" + esc(t.currency) + "</dd></div>" +
     "</div>" + innerBuysSellsHtml(t) +
@@ -3934,7 +3934,7 @@ function renderSplitModal() {
     return "<label><input type='checkbox' class='split-pick' data-key='" + esc(k) + "'" + checked + "/><span>" +
       esc(s.entryDate) + " in · " + esc(s.exitDate) + " out · " +
       formatNumber(s.quantity, s.quantity % 1 ? 4 : 0) + " @ " + formatNumber(s.entryPrice) +
-      " → " + formatNumber(s.exitPrice) + " · " + esc(formatCad(s.pnlCad, 2)) + "</span></label>";
+      " → " + formatNumber(s.exitPrice) + " · " + esc(formatCad(s.pnl, 2)) + "</span></label>";
   }).join("");
   return (
     '<div class="modal-overlay" id="splitOverlay">' +
