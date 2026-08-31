@@ -2251,7 +2251,7 @@ const state = {
   navByAccount: {},
   menuOpen: false,
   filterOpen: false,
-  filters: { from: "", to: "", account: "", symbol: "", q: "" },
+  filters: { from: "", to: "", account: "", exchange: "", symbol: "", q: "" },
   reports: [],
   selected: null,
   tab: "closed",
@@ -2446,6 +2446,7 @@ function filteredTrades(closedFx) {
     if (f.to && t.exitDate > f.to) return false;
     if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
     if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
+    if (f.exchange && listingExchange(t) !== f.exchange) return false;
     return true;
   });
 }
@@ -3150,6 +3151,7 @@ function render() {
     if (f.to && a.transactionDate > f.to) return false;
     if (f.account && a.accountId !== f.account && a.accountType !== f.account) return false;
     if (f.symbol && a.symbol && underlyingSymbol(a.symbol) !== f.symbol) return false;
+    if (f.exchange && listingExchange(a) !== f.exchange) return false;
     return true;
   });
   const incomeCad = incomeActs
@@ -3164,6 +3166,7 @@ function render() {
   const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
+  const exchanges = knownExchanges();
   const years = yearsFromActivities(state.activities);
   const selectedYear = yearFromRange(state.filters.from, state.filters.to);
   const pf = m.profitFactor === Infinity ? "∞" : Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : "—";
@@ -3223,7 +3226,10 @@ function render() {
         );
       }).join("");
 
-    const openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
+    let openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
+    if (state.filters.exchange) {
+      openLots = openLots.filter((l) => listingExchange({ securityId: l.securityId, buyActivityId: l.activityId }) === state.filters.exchange);
+    }
     const openSort = state.sort.open || { key: "date", dir: "desc" };
     const openSorted = sortRows(openLots, (l) => ({
       date: l.date,
@@ -3343,7 +3349,7 @@ function render() {
       tabBody;
   }
 
-  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account);
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange);
 
   const drawer = state.selected
     ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
@@ -3373,6 +3379,9 @@ function render() {
     "</select></div>" +
     '<div class="field"><label>Account</label><select id="account"><option value="">All</option>' +
     accounts.map((a) => "<option " + (state.filters.account === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="field"><label>Exchange</label><select id="exchange"><option value="">All</option>' +
+    exchanges.map((a) => "<option " + (state.filters.exchange === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
     "</select></div>" +
     (filtersActive ? '<button type="button" class="reset" id="resetFilters">Reset filters</button>' : "") +
     "</div></div>" +
@@ -3515,12 +3524,36 @@ function listingTicker(sym) {
   return m ? m[1] : s;
 }
 
-function listingLine(t) {
+function listingSecurity(t) {
   let sec = securityById(activitySecurityId(t));
   if (sec && sec.underlyingId) {
     const under = securityById(sec.underlyingId);
     if (under) sec = under;
   }
+  return sec;
+}
+
+function listingExchange(t) {
+  return exchangeLabel(listingSecurity(t));
+}
+
+function knownExchanges() {
+  const set = {};
+  const list = state.securities || [];
+  for (let i = 0; i < list.length; i++) {
+    let sec = list[i];
+    if (sec && sec.underlyingId) {
+      const under = securityById(sec.underlyingId);
+      if (under) sec = under;
+    }
+    const e = exchangeLabel(sec);
+    if (e) set[e] = true;
+  }
+  return Object.keys(set).sort();
+}
+
+function listingLine(t) {
+  const sec = listingSecurity(t);
   const fallback = String((t && t.symbol) || "");
   if (!sec || !sec.name) return fallback;
   const exch = exchangeLabel(sec);
@@ -4601,6 +4634,7 @@ function bind() {
       state.filters.to = "";
       state.filters.symbol = "";
       state.filters.account = "";
+      state.filters.exchange = "";
       state.filterOpen = true;
       persist();
       render();
@@ -4713,6 +4747,8 @@ function bind() {
     document.getElementById("to").addEventListener("change", (e) => { state.filters.to = e.target.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("symbol").addEventListener("change", (e) => { state.filters.symbol = e.target.value; state.filterOpen = true; persist(); render(); });
     document.getElementById("account").addEventListener("change", (e) => { state.filters.account = e.target.value; state.filterOpen = true; persist(); render(); });
+    const exchangeSel = document.getElementById("exchange");
+    if (exchangeSel) exchangeSel.addEventListener("change", (e) => { state.filters.exchange = e.target.value; state.filterOpen = true; persist(); render(); });
   }
   const yearSel = document.getElementById("year");
   if (yearSel) {

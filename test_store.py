@@ -456,6 +456,13 @@ class StoreTest(unittest.TestCase):
         self.assertNotIn('section-title">Executions</h3>', html)
         self.assertIn(".inner-acts table.blotter th { position: static; }", html)
 
+    def test_ledger_exchange_filter(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('<label>Exchange</label>', html)
+        self.assertIn("function listingExchange(", html)
+        self.assertIn("function knownExchanges(", html)
+        self.assertIn("f.exchange && listingExchange(t) !== f.exchange", html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
