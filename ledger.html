@@ -1744,6 +1744,7 @@ function toCad(amount, currency, date) {
 function applyFx(trades) {
   return trades.map((t) => {
     const ccy = (t.currency || "CAD").toUpperCase();
+    if (ccy !== "USD") return Object.assign({}, t, { pnlCad: t.pnl });
     const qty = t.quantity;
     const entryC = t.entryCommission || 0;
     const exitC = t.exitCommission || 0;
