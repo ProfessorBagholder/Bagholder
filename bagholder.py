@@ -1960,12 +1960,13 @@ def fill_listings(sess, from_sync=False):
         if _state.get("syncing") and not from_sync:
             return False
         _state["listingsFilling"] = True
-        _state["syncStep"] = "Looking up listings…"
+        _state["syncStep"] = "Attaching listing ids…"
     try:
         if store.needs_security_id_backfill():
             walk_ok = True
             known = store.canonical_ids()
             mapped = []
+            _set_sync_step("Attaching listing ids…")
             for aid in _account_ids_for_backfill():
                 try:
                     raw_items = fetch_activities_for_account(
@@ -1993,7 +1994,15 @@ def fill_listings(sess, from_sync=False):
         seen = set()
         pending = list(missing)
         to_upsert = []
+        total = len(pending)
+        if pending:
+            _set_sync_step(
+                "Looking up company names, %s left" % total if total else "Looking up company names…"
+            )
         while pending:
+            left = len(pending)
+            if total:
+                _set_sync_step("Looking up company names, %s left" % left)
             sid = pending.pop(0)
             if not sid or sid in seen:
                 continue
@@ -2013,8 +2022,7 @@ def fill_listings(sess, from_sync=False):
     finally:
         with _lock:
             _state["listingsFilling"] = False
-            if _state.get("syncStep") == "Looking up listings…":
-                _state["syncStep"] = ""
+            _state["syncStep"] = ""
 
 
 def slim_account(acc):
@@ -2915,6 +2923,7 @@ def status_payload():
             "accountCount": len(book.get("accounts") or []),
             "capturing": bool(_state["capturing"]),
             "syncing": bool(_state["syncing"]),
+            "listingsFilling": bool(_state.get("listingsFilling")),
             "syncStep": _state.get("syncStep") or "",
             "error": _state["error"] or "",
         }

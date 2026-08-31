@@ -442,6 +442,13 @@ class StoreTest(unittest.TestCase):
         self.assertIn("esc(listingLine(t))", html)
         self.assertNotIn('esc(t.side) + " " + formatNumber(t.quantity', html)
 
+    def test_ledger_shows_background_step_on_status_line(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("listingsFilling || state.ws.syncStep", html)
+        self.assertIn("state.ws.listingsFilling || state.ws.syncStep) pollWsStatus", html)
+        src = bagholder.ledger_path().with_name("bagholder.py").read_text(encoding="utf-8")
+        self.assertIn('"listingsFilling": bool(_state.get("listingsFilling"))', src)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
