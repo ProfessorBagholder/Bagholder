@@ -3291,23 +3291,22 @@ function innerBuysSellsHtml(t) {
     const sorted = sortRows(acts, function (a) {
       return {
         when: activityWhen(a),
-        activityType: a.activityType,
-        activitySubType: a.activitySubType,
+        side: a.activitySubType,
         quantity: a.quantity,
         unitPrice: a.unitPrice,
         netCashAmount: a.netCashAmount,
       }[innerSort.key];
     }, innerSort.dir);
     const rows = sorted.map(function (a) {
-      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activityType || "") + "</td><td>" +
-        esc(a.activitySubType || "") + "</td><td>" + (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
-        "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(a.netCashAmount) + "'>" +
-        esc(formatMoney(a.netCashAmount, a.currency)) + "</td></tr>";
+      const cash = toCad(a.netCashAmount, a.currency, a.transactionDate);
+      return "<tr><td>" + esc(activityWhen(a)) + "</td><td>" + esc(a.activitySubType || "") + "</td><td>" +
+        (a.quantity ? formatNumber(a.quantity, a.quantity % 1 ? 4 : 0) : "") +
+        "</td><td>" + (a.unitPrice ? formatNumber(a.unitPrice) : "") + "</td><td class='" + pnlClass(cash) + "'>" +
+        esc(formatCad(cash, 2)) + "</td></tr>";
     }).join("");
     const head = sortTh("inner", [
       { key: "when", label: "When" },
-      { key: "activityType", label: "Type" },
-      { key: "activitySubType", label: "Sub" },
+      { key: "side", label: "Side" },
       { key: "quantity", label: "Qty" },
       { key: "unitPrice", label: "Price" },
       { key: "netCashAmount", label: "Cash" },
