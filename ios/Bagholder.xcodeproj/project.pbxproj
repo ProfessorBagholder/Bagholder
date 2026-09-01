@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000050 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* App.swift */; };
+		A10000000000000000000059 /* WSPull.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004B /* WSPull.swift */; };
 		A10000000000000000000051 /* WebShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000041 /* WebShell.swift */; };
 		A10000000000000000000052 /* LocalServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000042 /* LocalServer.swift */; };
 		A10000000000000000000053 /* BookAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000043 /* BookAPI.swift */; };
@@ -32,6 +33,7 @@
 		A10000000000000000000017 /* Bagholder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bagholder.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000026 /* SpikeLoopback.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpikeLoopback.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000040 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		A1000000000000000000004B /* WSPull.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSPull.swift; sourceTree = "<group>"; };
 		A10000000000000000000041 /* WebShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebShell.swift; sourceTree = "<group>"; };
 		A10000000000000000000042 /* LocalServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServer.swift; sourceTree = "<group>"; };
 		A10000000000000000000043 /* BookAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookAPI.swift; sourceTree = "<group>"; };
@@ -78,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000040 /* App.swift */,
+				A1000000000000000000004B /* WSPull.swift */,
 				A10000000000000000000041 /* WebShell.swift */,
 				A10000000000000000000042 /* LocalServer.swift */,
 				A10000000000000000000043 /* BookAPI.swift */,
@@ -216,6 +219,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000050 /* App.swift in Sources */,
+				A10000000000000000000059 /* WSPull.swift in Sources */,
 				A10000000000000000000051 /* WebShell.swift in Sources */,
 				A10000000000000000000052 /* LocalServer.swift in Sources */,
 				A10000000000000000000053 /* BookAPI.swift in Sources */,

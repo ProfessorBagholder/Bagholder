@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import WebKit
+import Security
 
 @main
 struct BagholderApp: App {
@@ -51,7 +52,12 @@ private enum HomeLayout {
 }
 
 struct RootView: View {
+    @StateObject private var session: SessionStore
+    @StateObject private var journal: Journal
+
     init() {
+        _session = StateObject(wrappedValue: SessionStore())
+        _journal = StateObject(wrappedValue: Journal())
         let page = UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
         let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
         let appearance = UITabBarAppearance()
@@ -72,12 +78,12 @@ struct RootView: View {
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView()
+                HomeView(session: session, journal: journal)
             }
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
 
             NavigationStack {
-                ClosedTradesView()
+                ClosedTradesView(journal: journal)
             }
             .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
 
@@ -95,12 +101,19 @@ struct RootView: View {
         .toolbarBackground(HomeColor.page, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .background(HomeColor.page.ignoresSafeArea())
+        .onAppear { journal.handle(session: session) }
+        .onChange(of: session.pullToken) { _, _ in
+            journal.handle(session: session)
+        }
     }
 }
 
 struct HomeView: View {
+    @ObservedObject var session: SessionStore
+    @ObservedObject var journal: Journal
     @State private var showSettings = false
-    @StateObject private var session = SessionStore()
+
+    private var live: WSPullResult? { journal.isLive ? journal.result : nil }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -121,13 +134,26 @@ struct HomeView: View {
             .frame(height: 36)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(HomeExample.realizedPnL)
+                Text(live.map { WSPull.formatCad($0.metrics.realizedPnlCad, digits: 2) } ?? HomeExample.realizedPnL)
                     .font(.system(size: 38, weight: .bold))
                     .tracking(-1.4)
                     .lineSpacing(0)
                 Text("Realized P&L")
                     .font(.system(size: 15))
                     .foregroundStyle(HomeColor.muted)
+                if journal.phase == .pulling {
+                    Text("Pulling…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(HomeColor.muted)
+                } else if journal.phase == .needsConnect {
+                    Text("Session expired. Connect again.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(HomeColor.loss)
+                } else if case .failed(let msg) = journal.phase {
+                    Text(msg)
+                        .font(.system(size: 13))
+                        .foregroundStyle(HomeColor.loss)
+                }
             }
             .padding(.horizontal, HomeLayout.side)
 
@@ -140,47 +166,47 @@ struct HomeView: View {
             ) {
                 MetricCard(
                     title: "Biggest winner",
-                    value: HomeExample.biggestWinner,
-                    subtitle: HomeExample.biggestWinnerSymbol,
+                    value: live.map { $0.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad($0.metrics.maxWinPnl, digits: 2) } ?? HomeExample.biggestWinner,
+                    subtitle: live.map { $0.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : $0.metrics.maxWinSymbol } ?? HomeExample.biggestWinnerSymbol,
                     valueColor: HomeColor.profit
                 )
                 MetricCard(
                     title: "Biggest loser",
-                    value: HomeExample.biggestLoser,
-                    subtitle: HomeExample.biggestLoserSymbol,
+                    value: live.map { $0.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad($0.metrics.maxLossPnl, digits: 2) } ?? HomeExample.biggestLoser,
+                    subtitle: live.map { $0.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : $0.metrics.maxLossSymbol } ?? HomeExample.biggestLoserSymbol,
                     valueColor: HomeColor.loss
                 )
                 MetricCard(
                     title: "Profit factor",
-                    value: HomeExample.profitFactor,
-                    subtitle: HomeExample.profitFactorSubtitle
+                    value: live.map { WSPull.formatProfitFactor($0.metrics.profitFactor) } ?? HomeExample.profitFactor,
+                    subtitle: live.map { WSPull.formatCad($0.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad($0.metrics.grossLoss, digits: 2) + " L" } ?? HomeExample.profitFactorSubtitle
                 )
                 MetricCard(
                     title: "Expectancy",
-                    value: HomeExample.expectancy,
-                    subtitle: HomeExample.expectancySubtitle
+                    value: live.map { WSPull.formatCad($0.metrics.expectancy, digits: 2) } ?? HomeExample.expectancy,
+                    subtitle: live.map { WSPull.formatCad($0.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad($0.metrics.avgLoss, digits: 2) } ?? HomeExample.expectancySubtitle
                 )
                 MetricCard(
                     title: "Win rate",
-                    value: HomeExample.winRate,
-                    subtitle: HomeExample.winRateSubtitle
+                    value: live.map { WSPull.formatWinRate($0.metrics.winRate) } ?? HomeExample.winRate,
+                    subtitle: live.map { "\($0.metrics.winCount) W, \($0.metrics.lossCount) L" } ?? HomeExample.winRateSubtitle
                 )
                 MetricCard(
                     title: "Avg annualized",
-                    value: HomeExample.avgAnnualized,
-                    subtitle: HomeExample.avgAnnualizedSubtitle
+                    value: live.map { $0.avgAnnualized } ?? HomeExample.avgAnnualized,
+                    subtitle: live.map { $0.avgAnnualizedSubtitle.isEmpty ? WSPull.emDash : $0.avgAnnualizedSubtitle } ?? HomeExample.avgAnnualizedSubtitle
                 )
             }
             .padding(.horizontal, HomeLayout.side)
             .padding(.top, 12)
 
-            EquityCurveCard()
+            EquityCurveCard(points: live.map { $0.nav })
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, HomeLayout.gutter)
-            MonthlyPnLCard()
+            MonthlyPnLCard(bars: live.map { $0.monthly })
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, HomeLayout.gutter)
-            AnnualPerformanceCard()
+            AnnualPerformanceCard(years: live.map { $0.years } )
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, HomeLayout.gutter)
                 .padding(.bottom, 12)
@@ -226,15 +252,23 @@ struct MetricCard: View {
 }
 
 struct EquityCurveCard: View {
+    var points: [WSNavPoint]? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Equity Curve")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(HomeColor.muted)
                 .padding(.bottom, 4)
-            EquityCurveDrawing()
-                .frame(height: HomeLayout.chartHeight)
-                .accessibilityLabel("Example equity curve")
+            if let points {
+                LiveEquityCurveDrawing(points: points)
+                    .frame(height: HomeLayout.chartHeight)
+                    .accessibilityLabel("Equity curve")
+            } else {
+                EquityCurveDrawing()
+                    .frame(height: HomeLayout.chartHeight)
+                    .accessibilityLabel("Example equity curve")
+            }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -280,15 +314,23 @@ private struct EquityCurveDrawing: View {
 }
 
 struct MonthlyPnLCard: View {
+    var bars: [WSMonthBar]? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Monthly P&L")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(HomeColor.muted)
                 .padding(.bottom, 4)
-            MonthlyPnLDrawing()
-                .frame(height: HomeLayout.chartHeight)
-                .accessibilityLabel("Example monthly P&L")
+            if let bars {
+                LiveMonthlyPnLDrawing(bars: bars)
+                    .frame(height: HomeLayout.chartHeight)
+                    .accessibilityLabel("Monthly P&L")
+            } else {
+                MonthlyPnLDrawing()
+                    .frame(height: HomeLayout.chartHeight)
+                    .accessibilityLabel("Example monthly P&L")
+            }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -346,6 +388,15 @@ private struct MonthlyPnLDrawing: View {
 
 
 struct AnnualPerformanceCard: View {
+    var years: [WSYearRow]? = nil
+
+    private var rows: [(year: String, ret: String, spy: String, vs: String)] {
+        if let years {
+            return years.map { ($0.year, $0.ret, $0.spy, $0.vs) }
+        }
+        return HomeExample.years
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Annual performance")
@@ -365,7 +416,7 @@ struct AnnualPerformanceCard: View {
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(HomeColor.muted)
             .padding(.bottom, 4)
-            ForEach(Array(HomeExample.years.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack {
                     Text(row.year)
                         .foregroundStyle(.black)
@@ -387,7 +438,7 @@ struct AnnualPerformanceCard: View {
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(HomeColor.tile)
         )
-        .accessibilityLabel("Example annual performance")
+        .accessibilityLabel(years == nil ? "Example annual performance" : "Annual performance")
     }
 
     private func percentText(_ value: String) -> Text {
@@ -399,11 +450,38 @@ struct AnnualPerformanceCard: View {
 }
 
 struct ClosedTradesView: View {
+    @ObservedObject var journal: Journal
+
     var body: some View {
         List {
             Section("Closed trades") {
-                Text("None yet")
-                    .foregroundStyle(.secondary)
+                if journal.phase == .pulling {
+                    Text("Pulling…")
+                        .foregroundStyle(.secondary)
+                } else if let result = journal.result {
+                    if result.closed.isEmpty {
+                        Text("None yet")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(result.closed.reversed().enumerated()), id: \.offset) { _, t in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(t.symbol)
+                                        .font(.body.weight(.semibold))
+                                    Text(t.displaySide)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(WSPull.formatCad(t.pnlCad, digits: 2))
+                                    .foregroundStyle(t.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+                            }
+                        }
+                    }
+                } else {
+                    Text("None yet")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .navigationTitle("Closed trades")
@@ -423,8 +501,133 @@ struct EmptyTabView: View {
     }
 }
 
+
+final class Journal: ObservableObject {
+    enum Phase: Equatable {
+        case idle
+        case pulling
+        case ready
+        case needsConnect
+        case failed(String)
+    }
+
+    @Published var phase: Phase = .idle
+    @Published var result: WSPullResult?
+    private var task: Task<Void, Never>?
+
+    var isLive: Bool { phase == .ready && result != nil }
+
+    func handle(session: SessionStore) {
+        if !session.connected {
+            task?.cancel()
+            task = nil
+            phase = .idle
+            result = nil
+            return
+        }
+        pull()
+    }
+
+    private func pull() {
+        task?.cancel()
+        phase = .pulling
+        result = nil
+        task = Task { [weak self] in
+            guard let rec = Keychain.load(),
+                  let cookie = rec["oauth_cookie"] as? String
+            else {
+                await MainActor.run { self?.phase = .needsConnect }
+                return
+            }
+            let wssdi = rec["wssdi"] as? String
+            do {
+                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi)
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.result = snap
+                    self?.phase = .ready
+                }
+            } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
+                if Task.isCancelled { return }
+                await MainActor.run { self?.phase = .needsConnect }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run { self?.phase = .failed("Pull failed") }
+            }
+        }
+    }
+}
+
+private struct LiveEquityCurveDrawing: View {
+    let points: [WSNavPoint]
+
+    var body: some View {
+        Canvas { context, size in
+            guard !points.isEmpty else { return }
+            let vals = points.map(\.equity)
+            let lo = vals.min() ?? 0
+            let hi = vals.max() ?? 1
+            let span: Double = (hi - lo) == 0 ? 1.0 : (hi - lo)
+            let n = CGFloat(max(points.count - 1, 1))
+            func pt(_ i: Int) -> CGPoint {
+                let x = CGFloat(i) / n * size.width
+                let y = size.height - CGFloat((vals[i] - lo) / span) * (size.height - 4) - 2
+                return CGPoint(x: x, y: y)
+            }
+            var fill = Path()
+            fill.move(to: CGPoint(x: 0, y: size.height))
+            for i in points.indices { fill.addLine(to: pt(i)) }
+            fill.addLine(to: CGPoint(x: size.width, y: size.height))
+            fill.closeSubpath()
+            context.fill(fill, with: .color(HomeColor.profit.opacity(0.12)))
+            var line = Path()
+            line.move(to: pt(0))
+            if points.count == 1 {
+                line.addLine(to: CGPoint(x: size.width, y: pt(0).y))
+            }
+            for i in 1..<points.count { line.addLine(to: pt(i)) }
+            context.stroke(
+                line,
+                with: .color(HomeColor.profit),
+                style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+            )
+        }
+    }
+}
+
+private struct LiveMonthlyPnLDrawing: View {
+    let bars: [WSMonthBar]
+
+    var body: some View {
+        Canvas { context, size in
+            let shown = Array(bars.suffix(18))
+            let sx = size.width / 330
+            let sy = size.height / 72
+            var zero = Path()
+            zero.move(to: CGPoint(x: 8 * sx, y: 36 * sy))
+            zero.addLine(to: CGPoint(x: 322 * sx, y: 36 * sy))
+            context.stroke(zero, with: .color(HomeColor.hairline), lineWidth: 1)
+            let peak = shown.map { abs($0.pnl) }.max() ?? 1
+            let scale = peak > 0 ? 28.0 / peak : 0.0
+            let n = CGFloat(max(shown.count, 1))
+            let pitch: CGFloat = shown.count <= 7 ? 40 : (300 / n)
+            let barW: CGFloat = min(22, max(8, pitch * 0.55))
+            let startX: CGFloat = shown.count <= 7 ? 22 : 15
+            for (i, bar) in shown.enumerated() {
+                let h = CGFloat(abs(bar.pnl) * scale)
+                let x = (startX + CGFloat(i) * pitch) * sx
+                let y = bar.pnl >= 0 ? (36 - h) * sy : 36 * sy
+                let rect = CGRect(x: x, y: y, width: barW * sx, height: max(h, 1) * sy)
+                let path = Path(roundedRect: rect, cornerRadius: 3)
+                context.fill(path, with: .color(bar.pnl >= 0 ? HomeColor.profit : HomeColor.loss))
+            }
+        }
+    }
+}
+
 final class SessionStore: ObservableObject {
     @Published var connected = false
+    @Published var pullToken = 0
 
     init() {
         connected = Keychain.hasSession()
@@ -433,6 +636,7 @@ final class SessionStore: ObservableObject {
     func saveOAuthCookie(_ value: String, wssdi: String?) {
         Keychain.save(oauthCookie: value, wssdi: wssdi)
         connected = true
+        pullToken += 1
     }
 
     func disconnect() {
@@ -449,6 +653,7 @@ final class SessionStore: ObservableObject {
             completionHandler: {}
         )
         connected = false
+        pullToken += 1
     }
 }
 
