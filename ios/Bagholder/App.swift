@@ -431,13 +431,17 @@ struct ClosedTradesView: View {
         journal.result?.activities ?? []
     }
 
+    private var listings: [WSSecurityListing] {
+        journal.result?.listings ?? []
+    }
+
     var body: some View {
         List {
             if !rows.isEmpty {
                 Section {
                     ForEach(rows) { t in
                         NavigationLink {
-                            ClosedTradeDetailView(trade: t, activities: activities)
+                            ClosedTradeDetailView(trade: t, activities: activities, listings: listings)
                         } label: {
                             ClosedTradeRow(trade: t)
                         }
@@ -488,6 +492,7 @@ private struct ClosedTradeRow: View {
 private struct ClosedTradeDetailView: View {
     let trade: WSClosedTrade
     let activities: [WSActivity]
+    let listings: [WSSecurityListing]
 
     private var executionActs: [WSActivity] {
         WSPull.activitiesInGroup(trade, activities: activities)
@@ -497,14 +502,13 @@ private struct ClosedTradeDetailView: View {
         executionActs.isEmpty ? trade.slices.count : executionActs.count
     }
 
+    private var listingLine: String {
+        WSPull.listingLine(trade, activities: activities, listings: listings)
+    }
+
     var body: some View {
         List {
             Section {
-                if !trade.name.isEmpty, trade.name != trade.symbol {
-                    Text(trade.name)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
                 fact("In", trade.entryDate)
                 fact("Out", trade.exitDate)
                 fact("Entry", WSPull.formatCad(trade.entryPrice, digits: 2))
@@ -514,9 +518,29 @@ private struct ClosedTradeDetailView: View {
                         .foregroundStyle(HomeColor.signed(trade.pnl))
                         .monospacedDigit()
                 }
-                fact("P&L %", WSPull.formatPct(WSPull.closedPnlPct(trade)))
+                LabeledContent("P&L %") {
+                    Text(WSPull.formatPct(WSPull.closedPnlPct(trade)))
+                        .foregroundStyle(HomeColor.signed(trade.pnl))
+                        .monospacedDigit()
+                }
                 fact("Hold", WSPull.formatHold(trade.holdDays))
                 fact("Currency", trade.currency)
+            } header: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(trade.symbol)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                    Text(listingLine)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .textCase(nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
             }
             Section {
                 if executionActs.isEmpty && trade.slices.isEmpty {

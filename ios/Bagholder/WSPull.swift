@@ -40,6 +40,128 @@ struct WSActivity: Equatable, Codable {
     var rawType: String
     var aftType: String
     var counterSymbol: String
+    var securityId: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case id, canonicalId, occurredAt, transactionDate, accountId, fifoId
+        case accountType, activityType, activitySubType, description, direction
+        case symbol, name, currency, quantity, unitPrice, commission, netCashAmount
+        case category, rawType, aftType, counterSymbol, securityId
+    }
+
+    init(
+        id: String,
+        canonicalId: String,
+        occurredAt: String,
+        transactionDate: String,
+        accountId: String,
+        fifoId: String,
+        accountType: String,
+        activityType: String,
+        activitySubType: String,
+        description: String,
+        direction: String,
+        symbol: String,
+        name: String,
+        currency: String,
+        quantity: Double,
+        unitPrice: Double,
+        commission: Double,
+        netCashAmount: Double,
+        category: String,
+        rawType: String,
+        aftType: String,
+        counterSymbol: String,
+        securityId: String = ""
+    ) {
+        self.id = id
+        self.canonicalId = canonicalId
+        self.occurredAt = occurredAt
+        self.transactionDate = transactionDate
+        self.accountId = accountId
+        self.fifoId = fifoId
+        self.accountType = accountType
+        self.activityType = activityType
+        self.activitySubType = activitySubType
+        self.description = description
+        self.direction = direction
+        self.symbol = symbol
+        self.name = name
+        self.currency = currency
+        self.quantity = quantity
+        self.unitPrice = unitPrice
+        self.commission = commission
+        self.netCashAmount = netCashAmount
+        self.category = category
+        self.rawType = rawType
+        self.aftType = aftType
+        self.counterSymbol = counterSymbol
+        self.securityId = securityId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        canonicalId = try c.decode(String.self, forKey: .canonicalId)
+        occurredAt = try c.decode(String.self, forKey: .occurredAt)
+        transactionDate = try c.decode(String.self, forKey: .transactionDate)
+        accountId = try c.decode(String.self, forKey: .accountId)
+        fifoId = try c.decode(String.self, forKey: .fifoId)
+        accountType = try c.decode(String.self, forKey: .accountType)
+        activityType = try c.decode(String.self, forKey: .activityType)
+        activitySubType = try c.decode(String.self, forKey: .activitySubType)
+        description = try c.decode(String.self, forKey: .description)
+        direction = try c.decode(String.self, forKey: .direction)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        name = try c.decode(String.self, forKey: .name)
+        currency = try c.decode(String.self, forKey: .currency)
+        quantity = try c.decode(Double.self, forKey: .quantity)
+        unitPrice = try c.decode(Double.self, forKey: .unitPrice)
+        commission = try c.decode(Double.self, forKey: .commission)
+        netCashAmount = try c.decode(Double.self, forKey: .netCashAmount)
+        category = try c.decode(String.self, forKey: .category)
+        rawType = try c.decode(String.self, forKey: .rawType)
+        aftType = try c.decode(String.self, forKey: .aftType)
+        counterSymbol = try c.decode(String.self, forKey: .counterSymbol)
+        securityId = try c.decodeIfPresent(String.self, forKey: .securityId) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(canonicalId, forKey: .canonicalId)
+        try c.encode(occurredAt, forKey: .occurredAt)
+        try c.encode(transactionDate, forKey: .transactionDate)
+        try c.encode(accountId, forKey: .accountId)
+        try c.encode(fifoId, forKey: .fifoId)
+        try c.encode(accountType, forKey: .accountType)
+        try c.encode(activityType, forKey: .activityType)
+        try c.encode(activitySubType, forKey: .activitySubType)
+        try c.encode(description, forKey: .description)
+        try c.encode(direction, forKey: .direction)
+        try c.encode(symbol, forKey: .symbol)
+        try c.encode(name, forKey: .name)
+        try c.encode(currency, forKey: .currency)
+        try c.encode(quantity, forKey: .quantity)
+        try c.encode(unitPrice, forKey: .unitPrice)
+        try c.encode(commission, forKey: .commission)
+        try c.encode(netCashAmount, forKey: .netCashAmount)
+        try c.encode(category, forKey: .category)
+        try c.encode(rawType, forKey: .rawType)
+        try c.encode(aftType, forKey: .aftType)
+        try c.encode(counterSymbol, forKey: .counterSymbol)
+        try c.encode(securityId, forKey: .securityId)
+    }
+}
+
+struct WSSecurityListing: Equatable, Codable {
+    var id: String
+    var symbol: String
+    var name: String
+    var primaryExchange: String
+    var primaryMic: String
+    var currency: String
+    var underlyingId: String
 }
 
 struct WSClosedTrade: Identifiable, Codable {
@@ -124,9 +246,10 @@ struct WSPullResult: Codable {
     var avgAnnualized: String
     var avgAnnualizedSubtitle: String
     var activities: [WSActivity] = []
+    var listings: [WSSecurityListing] = []
 
     enum CodingKeys: String, CodingKey {
-        case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities
+        case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities, listings
     }
 
     init(
@@ -137,7 +260,8 @@ struct WSPullResult: Codable {
         years: [WSYearRow],
         avgAnnualized: String,
         avgAnnualizedSubtitle: String,
-        activities: [WSActivity] = []
+        activities: [WSActivity] = [],
+        listings: [WSSecurityListing] = []
     ) {
         self.closed = closed
         self.metrics = metrics
@@ -147,6 +271,7 @@ struct WSPullResult: Codable {
         self.avgAnnualized = avgAnnualized
         self.avgAnnualizedSubtitle = avgAnnualizedSubtitle
         self.activities = activities
+        self.listings = listings
     }
 
     init(from decoder: Decoder) throws {
@@ -159,6 +284,7 @@ struct WSPullResult: Codable {
         avgAnnualized = try c.decode(String.self, forKey: .avgAnnualized)
         avgAnnualizedSubtitle = try c.decode(String.self, forKey: .avgAnnualizedSubtitle)
         activities = try c.decodeIfPresent([WSActivity].self, forKey: .activities) ?? []
+        listings = try c.decodeIfPresent([WSSecurityListing].self, forKey: .listings) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -171,6 +297,7 @@ struct WSPullResult: Codable {
         try c.encode(avgAnnualized, forKey: .avgAnnualized)
         try c.encode(avgAnnualizedSubtitle, forKey: .avgAnnualizedSubtitle)
         try c.encode(activities, forKey: .activities)
+        try c.encode(listings, forKey: .listings)
     }
 }
 
@@ -438,6 +565,18 @@ fragment Activity on ActivityFeedItem {
   fees
   reference
   __typename
+}
+"""
+
+    static let qFetchSecurity = """
+query FetchSecurity($securityId: ID!) {
+  security(id: $securityId) {
+    id
+    currency
+    stock { name primaryExchange primaryMic symbol }
+    optionDetails { underlyingSecurity { id currency } }
+    __typename
+  }
 }
 """
 
@@ -714,6 +853,9 @@ query IdentityHistoricalFinancialsQuery(
         let monthly = monthlyPnl(closedForMetrics)
         let yearRows = annualRows(nav: nav, spy: spy, activities: mapped)
         let ann = accountAnnualizedReturn(nav: nav, years: yearRows.map(\.year).sorted())
+        progress("Fetching listings…")
+        let listingSess = sess
+        let listings = await fetchListings(listingSess, activities: activities)
         return WSPullResult(
             closed: closedFx,
             metrics: metrics,
@@ -722,7 +864,8 @@ query IdentityHistoricalFinancialsQuery(
             years: yearRows,
             avgAnnualized: formatReturn(ann.rate),
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
-            activities: activities
+            activities: activities,
+            listings: listings
         )
     }
 
@@ -826,6 +969,66 @@ query IdentityHistoricalFinancialsQuery(
         var byDate: [String: WSNavPoint] = [:]
         for rec in points { byDate[rec.date] = rec }
         return byDate.keys.sorted().compactMap { byDate[$0] }
+    }
+
+
+    private static func fetchSecurity(_ sess: WSSession, securityId: String) async -> WSSecurityListing? {
+        let sid = securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sid.isEmpty { return nil }
+        do {
+            let data = try await graphql(
+                sess,
+                operation: "FetchSecurity",
+                variables: ["securityId": sid],
+                query: qFetchSecurity
+            )
+            let sec = J.dict(data["security"])
+            if sec.isEmpty { return nil }
+            let stock = J.dict(sec["stock"])
+            let option = J.dict(sec["optionDetails"])
+            let under = J.dict(option["underlyingSecurity"])
+            let id = J.str(sec, "id")
+            return WSSecurityListing(
+                id: id.isEmpty ? sid : id,
+                symbol: J.str(stock, "symbol"),
+                name: J.str(stock, "name"),
+                primaryExchange: J.str(stock, "primaryExchange"),
+                primaryMic: J.str(stock, "primaryMic"),
+                currency: J.str(sec, "currency"),
+                underlyingId: J.str(under, "id")
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func fetchListings(_ sess: WSSession, activities: [WSActivity]) async -> [WSSecurityListing] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for a in activities {
+            let sid = a.securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if sid.isEmpty || seen.contains(sid) { continue }
+            seen.insert(sid)
+            ids.append(sid)
+        }
+        var byId: [String: WSSecurityListing] = [:]
+        var underIds: [String] = []
+        for sid in ids {
+            if let rec = await fetchSecurity(sess, securityId: sid) {
+                byId[rec.id] = rec
+                let uid = rec.underlyingId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !uid.isEmpty && !seen.contains(uid) {
+                    seen.insert(uid)
+                    underIds.append(uid)
+                }
+            }
+        }
+        for sid in underIds {
+            if let rec = await fetchSecurity(sess, securityId: sid) {
+                byId[rec.id] = rec
+            }
+        }
+        return Array(byId.values)
     }
 
     private static func navPointsFromPayload(_ data: [String: Any]) -> ([WSNavPoint], [String: Any]) {
@@ -1202,7 +1405,8 @@ query IdentityHistoricalFinancialsQuery(
             category: category,
             rawType: s(item["type"]),
             aftType: s(item["aftTransactionType"]),
-            counterSymbol: assetSymbol(item, key: "counterAssetSymbol")
+            counterSymbol: assetSymbol(item, key: "counterAssetSymbol"),
+            securityId: s(item["securityId"])
         )
     }
 
@@ -1632,6 +1836,117 @@ query IdentityHistoricalFinancialsQuery(
         if ["SELL", "SELLTOOPEN", "STO", "SELLTOCLOSE", "STC"].contains(s) { return "SELL" }
         if s.contains("SELL") { return "SELL" }
         return "BUY"
+    }
+
+    static func listingTicker(_ sym: String) -> String {
+        let s = sym.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = s.split(separator: ".")
+        if parts.count >= 2 {
+            let suf = String(parts[parts.count - 1]).uppercased()
+            if ["TO", "V", "CN", "NE"].contains(suf) {
+                return parts.dropLast().joined(separator: ".")
+            }
+        }
+        return s
+    }
+
+    static func exchangeLabel(_ sec: WSSecurityListing) -> String {
+        let raw = sec.primaryExchange.trimmingCharacters(in: .whitespacesAndNewlines)
+        let up = raw.uppercased()
+        let alias: [String: String] = [
+            "TSXV": "TSX-V",
+            "TSX-V": "TSX-V",
+            "TSX VENTURE": "TSX-V",
+            "CDNX": "TSX-V",
+            "VENTURE": "TSX-V",
+            "TORONTO": "TSX",
+            "TSX": "TSX",
+        ]
+        if let a = alias[up] { return a }
+        if !raw.isEmpty { return raw }
+        let mic = sec.primaryMic.uppercased()
+        let micMap: [String: String] = [
+            "XTSV": "TSX-V",
+            "XTSX": "TSX",
+            "XNAS": "NASDAQ",
+            "XNYS": "NYSE",
+            "XASE": "NYSE American",
+            "ARCX": "NYSE Arca",
+        ]
+        return micMap[mic] ?? ""
+    }
+
+    private static func isAlphaVenue(_ sec: WSSecurityListing) -> Bool {
+        let exch = sec.primaryExchange.uppercased()
+        let mic = sec.primaryMic.uppercased()
+        return exch == "ALPHA EXCHANGE" || exch == "ALPHA" || mic == "XATS"
+    }
+
+    private static func preferredListing(_ sec: WSSecurityListing, listings: [WSSecurityListing]) -> WSSecurityListing {
+        if !isAlphaVenue(sec) { return sec }
+        let sym = listingTicker(sec.symbol)
+        let ccy = sec.currency
+        if sym.isEmpty { return sec }
+        for other in listings {
+            if other.id == sec.id { continue }
+            if !other.underlyingId.isEmpty { continue }
+            if listingTicker(other.symbol) != sym { continue }
+            if !ccy.isEmpty && !other.currency.isEmpty && other.currency != ccy { continue }
+            if isAlphaVenue(other) { continue }
+            if exchangeLabel(other).isEmpty { continue }
+            return other
+        }
+        return sec
+    }
+
+    private static func activitySecurityId(_ t: WSClosedTrade, activities: [WSActivity]) -> String {
+        var ids: [String] = []
+        if !t.buyActivityId.isEmpty { ids.append(t.buyActivityId) }
+        if !t.sellActivityId.isEmpty { ids.append(t.sellActivityId) }
+        for s in t.slices {
+            if !s.buyActivityId.isEmpty { ids.append(s.buyActivityId) }
+            if !s.sellActivityId.isEmpty { ids.append(s.sellActivityId) }
+        }
+        var byAct: [String: WSActivity] = [:]
+        for a in activities { byAct[a.id] = a }
+        for id in ids {
+            if let a = byAct[id] {
+                let sid = a.securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sid.isEmpty { return sid }
+            }
+        }
+        return ""
+    }
+
+    private static func listingSecurity(
+        _ t: WSClosedTrade,
+        activities: [WSActivity],
+        listings: [WSSecurityListing]
+    ) -> WSSecurityListing? {
+        var byId: [String: WSSecurityListing] = [:]
+        for s in listings { byId[s.id] = s }
+        let sid = activitySecurityId(t, activities: activities)
+        guard var sec = byId[sid] else { return nil }
+        if !sec.underlyingId.isEmpty, let under = byId[sec.underlyingId] {
+            sec = under
+        }
+        return preferredListing(sec, listings: listings)
+    }
+
+    static func listingLine(
+        _ t: WSClosedTrade,
+        activities: [WSActivity],
+        listings: [WSSecurityListing]
+    ) -> String {
+        let fallback = t.symbol
+        guard let sec = listingSecurity(t, activities: activities, listings: listings), !sec.name.isEmpty else {
+            return fallback
+        }
+        let exch = exchangeLabel(sec)
+        let sym = listingTicker(sec.symbol)
+        if !exch.isEmpty && !sym.isEmpty { return sec.name + " · " + exch + ": " + sym }
+        if !exch.isEmpty { return sec.name + " · " + exch }
+        return sec.name
     }
 
 
