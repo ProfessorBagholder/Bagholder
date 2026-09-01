@@ -1869,6 +1869,96 @@ query IdentityHistoricalFinancialsQuery(
         }
     }
 
+    /// ledger.html groupClosedByExit with no saved groups: defaultGroupsUntilSideChange.
+    static func closedTradesTable(_ trades: [WSClosedTrade]) -> [WSClosedTrade] {
+        let grouped = defaultGroupsUntilSideChange(trades)
+        return grouped.sorted { a, b in
+            if a.exitDate != b.exitDate { return a.exitDate > b.exitDate }
+            return a.id > b.id
+        }
+    }
+
+    private static func sliceMemberKey(_ t: WSClosedTrade) -> String {
+        if !t.buyActivityId.isEmpty && !t.sellActivityId.isEmpty {
+            return [t.buyActivityId, t.sellActivityId, jsToFixed(t.quantity, digits: 8)].joined(separator: "|")
+        }
+        return t.id
+    }
+
+    private static func groupLaneKey(_ t: WSClosedTrade) -> String {
+        [t.accountId, t.symbol, t.currency].joined(separator: "|")
+    }
+
+    private static func groupIdForKeys(_ keys: [String]) -> String {
+        let s = keys.sorted().joined(separator: "\n")
+        var h: UInt32 = 2_166_136_261
+        for u in s.utf8 {
+            h ^= UInt32(u)
+            h = h &* 16_777_619
+        }
+        return "g_" + String(h, radix: 16) + "_" + String(keys.count)
+    }
+
+    private static func collapseClosedGroup(_ slices: [WSClosedTrade], id: String) -> WSClosedTrade {
+        var g = slices[0]
+        g.id = id
+        g.quantity = 0
+        g.pnl = 0
+        g.pnlCad = 0
+        g.commission = 0
+        var entryN = 0.0
+        var exitN = 0.0
+        g.entryDate = slices[0].entryDate
+        g.exitDate = slices[0].exitDate
+        for s in slices {
+            g.quantity += s.quantity
+            g.pnl += s.pnl
+            g.pnlCad += s.pnlCad
+            g.commission += s.commission
+            entryN += s.entryPrice * s.quantity
+            exitN += s.exitPrice * s.quantity
+            if s.entryDate < g.entryDate { g.entryDate = s.entryDate }
+            if s.exitDate > g.exitDate { g.exitDate = s.exitDate }
+        }
+        g.entryPrice = g.quantity != 0 ? entryN / g.quantity : 0
+        g.exitPrice = g.quantity != 0 ? exitN / g.quantity : slices[0].exitPrice
+        g.holdDays = daysBetween(g.entryDate, g.exitDate)
+        return g
+    }
+
+    private static func defaultGroupsUntilSideChange(_ slices: [WSClosedTrade]) -> [WSClosedTrade] {
+        var lanes: [String: [WSClosedTrade]] = [:]
+        var laneOrder: [String] = []
+        for s in slices {
+            let k = groupLaneKey(s)
+            if lanes[k] == nil { laneOrder.append(k) }
+            lanes[k, default: []].append(s)
+        }
+        var out: [WSClosedTrade] = []
+        for k in laneOrder {
+            var list = lanes[k] ?? []
+            list.sort { a, b in
+                if a.exitDate != b.exitDate { return a.exitDate < b.exitDate }
+                if a.entryDate != b.entryDate { return a.entryDate < b.entryDate }
+                return sliceMemberKey(a) < sliceMemberKey(b)
+            }
+            var cur: [WSClosedTrade] = []
+            var dir: String?
+            func flush() {
+                if cur.isEmpty { return }
+                out.append(collapseClosedGroup(cur, id: groupIdForKeys(cur.map(sliceMemberKey))))
+                cur = []
+            }
+            for s in list {
+                if let d = dir, s.openDirection != d { flush() }
+                dir = s.openDirection
+                cur.append(s)
+            }
+            flush()
+        }
+        return out
+    }
+
     private static func loadCachedFx() -> [String: Double] {
         guard let obj = UserDefaults.standard.dictionary(forKey: fxCacheKey) else { return [:] }
         var map: [String: Double] = [:]

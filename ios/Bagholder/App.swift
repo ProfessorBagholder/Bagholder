@@ -418,9 +418,13 @@ struct ClosedTradesView: View {
 
     var body: some View {
         List {
-            Section("Closed trades") {
-                if let result = journal.result, !result.closed.isEmpty {
-                    ForEach(Array(result.closed.reversed().enumerated()), id: \.offset) { _, t in
+            if let result = journal.result {
+                let rows = WSPull.closedTradesTable(result.closed)
+                if rows.isEmpty {
+                    Text("None yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(rows) { t in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(t.symbol)
@@ -434,10 +438,10 @@ struct ClosedTradesView: View {
                                 .foregroundStyle(t.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
                         }
                     }
-                } else {
-                    Text("None yet")
-                        .foregroundStyle(.secondary)
                 }
+            } else {
+                Text("None yet")
+                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Closed trades")
