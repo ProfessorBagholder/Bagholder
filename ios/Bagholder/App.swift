@@ -86,8 +86,8 @@ struct MockTabBar: View {
                 .overlay(alignment: .top) {
                     HomeColor.hairline.frame(height: 0.5)
                 }
-                .ignoresSafeArea(edges: .bottom)
         }
+        .ignoresSafeArea(edges: .bottom)
     }
 
     private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
