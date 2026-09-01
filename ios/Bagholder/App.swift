@@ -813,8 +813,17 @@ final class Journal: ObservableObject {
                 return
             }
             let wssdi = rec["wssdi"] as? String
+            let storedActs = self.result?.activities ?? []
+            let storedNav = self.result?.nav ?? []
+            let storedListings = self.result?.listings ?? []
             do {
-                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi) { [weak self] step in
+                let snap = try await WSPull.run(
+                    oauthCookie: cookie,
+                    wssdi: wssdi,
+                    storedActivities: storedActs,
+                    storedNav: storedNav,
+                    storedListings: storedListings
+                ) { [weak self] step in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         if gen == self.pullGeneration {

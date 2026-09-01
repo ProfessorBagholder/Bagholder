@@ -1003,6 +1003,9 @@ query IdentityHistoricalFinancialsQuery(
     static func run(
         oauthCookie: String,
         wssdi: String?,
+        storedActivities: [WSActivity] = [],
+        storedNav: [WSNavPoint] = [],
+        storedListings: [WSSecurityListing] = [],
         onProgress: (@Sendable (String) -> Void)? = nil
     ) async throws -> WSPullResult {
         func progress(_ msg: String) { onProgress?(msg) }
@@ -1046,6 +1049,8 @@ query IdentityHistoricalFinancialsQuery(
             if !aid.isEmpty { accById[aid] = a }
         }
         let pools = fifoPoolIds(accounts)
+        let bounds = activitySyncBounds(stored: storedActivities)
+        let known: Set<String> = bounds.fullHistory ? [] : knownCanonicalIds(storedActivities)
         var mapped: [WSActivity] = []
         let withIds = accounts.filter { !J.str($0, "id").isEmpty }
         let total = withIds.count
@@ -1058,7 +1063,12 @@ query IdentityHistoricalFinancialsQuery(
             } else {
                 progress("Syncing transactions (\(x)/\(total)) \(nick)")
             }
-            let rawItems = try await fetchActivities(box, accountId: aid)
+            let rawItems = try await fetchActivities(
+                box,
+                accountId: aid,
+                startDate: bounds.startDate,
+                knownCanonicalIds: known
+            )
             for it in rawItems {
                 mapped.append(contentsOf: mapActivityRows(it, accounts: accById))
             }
@@ -1067,11 +1077,22 @@ query IdentityHistoricalFinancialsQuery(
             let aid = mapped[i].accountId
             mapped[i].fifoId = pools[aid] ?? aid
         }
-        let fifo = matchFifo(mapped)
-        let activities = mapped
+        var merged = mergeActivities(stored: storedActivities, incoming: mapped)
+        for i in merged.indices {
+            let aid = merged[i].accountId
+            merged[i].fifoId = pools[aid] ?? aid
+        }
+        let activities = merged
+        let fifo = matchFifo(activities)
         progress("Fetching balances…")
         progress("Fetching equity history…")
-        let nav = try await fetchNavHistory(box, identityId: box.sess.identityCanonicalId)
+        let sinceNav = storedNav.isEmpty ? nil : storedNav.map(\.date).filter { !$0.isEmpty }.max()
+        let fetchedNav = try await fetchNavHistory(
+            box,
+            identityId: box.sess.identityCanonicalId,
+            sinceDate: sinceNav
+        )
+        let nav = mergeNav(stored: storedNav, incoming: fetchedNav)
         progress("Fetching S&P 500…")
         async let spyTask = ensureSpyPrices()
         async let fxTask = ensureFxRates(activities: activities)
@@ -1082,7 +1103,7 @@ query IdentityHistoricalFinancialsQuery(
         let closedForMetrics = groupClosedByClose(closedFx)
         let metrics = computeMetrics(closedForMetrics)
         let monthly = monthlyPnl(closedForMetrics)
-        let yearRows = annualRows(nav: nav, spy: spy, activities: mapped)
+        let yearRows = annualRows(nav: nav, spy: spy, activities: activities)
         let ann = accountAnnualizedReturn(nav: nav, years: yearRows.map(\.year).sorted())
         return WSPullResult(
             closed: closedFx,
@@ -1093,7 +1114,7 @@ query IdentityHistoricalFinancialsQuery(
             avgAnnualized: formatReturn(ann.rate),
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
             activities: activities,
-            listings: []
+            listings: storedListings
         )
     }
 
@@ -1126,29 +1147,128 @@ query IdentityHistoricalFinancialsQuery(
         return accounts
     }
 
-    private static func fetchActivities(_ box: TokenBox, accountId: String) async throws -> [[String: Any]] {
-        var items: [[String: Any]] = []
-        var cursor: String? = nil
+    private static func activityFetchCondition(accountId: String, startDate: String?) -> [String: Any] {
         let end = Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: Date()) ?? Date()
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 0)!
         let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: end)
-        let endDate = String(format: "%04d-%02d-%02dT%02d:%02d:%02d.999Z", c.year ?? 0, c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
+        let endDate = String(
+            format: "%04d-%02d-%02dT%02d:%02d:%02d.999Z",
+            c.year ?? 0, c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0, c.second ?? 0
+        )
+        var cond: [String: Any] = [
+            "endDate": endDate,
+            "accountIds": [accountId],
+        ]
+        if let startDate {
+            var raw = startDate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty {
+                if !raw.contains("T") {
+                    raw = String(raw.prefix(10)) + "T00:00:00.000Z"
+                }
+                cond["startDate"] = raw
+            }
+        }
+        return cond
+    }
+
+    private static func activitySyncBounds(stored: [WSActivity]) -> (startDate: String?, fullHistory: Bool) {
+        if stored.isEmpty {
+            return (nil, true)
+        }
+        var newest = ""
+        for a in stored {
+            let occurred = a.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let day = a.transactionDate.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pick = occurred.isEmpty ? day : occurred
+            if pick > newest { newest = pick }
+        }
+        if newest.isEmpty {
+            return (nil, false)
+        }
+        let head = newest.split(separator: "T", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? newest
+        let start = String(head.prefix(10))
+        if start.count < 10 {
+            return (nil, false)
+        }
+        return (start, false)
+    }
+
+    private static func knownCanonicalIds(_ stored: [WSActivity]) -> Set<String> {
+        var ids = Set<String>()
+        for a in stored {
+            let cid = a.canonicalId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cid.isEmpty { ids.insert(cid) }
+        }
+        return ids
+    }
+
+    private static func activityMergeKey(_ a: WSActivity) -> String {
+        let cid = a.canonicalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cid.isEmpty { return cid }
+        return a.id.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func mergeActivities(stored: [WSActivity], incoming: [WSActivity]) -> [WSActivity] {
+        var byKey: [String: WSActivity] = [:]
+        var order: [String] = []
+        var noKey: [WSActivity] = []
+        func put(_ a: WSActivity) {
+            let k = activityMergeKey(a)
+            if k.isEmpty {
+                noKey.append(a)
+                return
+            }
+            if byKey[k] == nil {
+                order.append(k)
+                byKey[k] = a
+            }
+        }
+        for a in stored { put(a) }
+        for a in incoming { put(a) }
+        return order.compactMap { byKey[$0] } + noKey
+    }
+
+    private static func mergeNav(stored: [WSNavPoint], incoming: [WSNavPoint]) -> [WSNavPoint] {
+        var byDate: [String: WSNavPoint] = [:]
+        for rec in stored { byDate[rec.date] = rec }
+        for rec in incoming { byDate[rec.date] = rec }
+        return byDate.keys.sorted().compactMap { byDate[$0] }
+    }
+
+    private static func fetchActivities(
+        _ box: TokenBox,
+        accountId: String,
+        startDate: String?,
+        knownCanonicalIds: Set<String>
+    ) async throws -> [[String: Any]] {
+        var items: [[String: Any]] = []
+        var cursor: String? = nil
+        let bounded: Bool = {
+            guard let startDate else { return false }
+            return !startDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
         while true {
             var variables: [String: Any] = [
                 "first": 100,
                 "orderBy": "OCCURRED_AT_DESC",
-                "condition": [
-                    "endDate": endDate,
-                    "accountIds": [accountId],
-                ] as [String: Any],
+                "condition": activityFetchCondition(accountId: accountId, startDate: startDate),
             ]
             if let cursor { variables["cursor"] = cursor }
             let data = try await graphql(box, operation: "FetchActivityFeedItems", variables: variables, query: qFetchActivityFeedItems)
             let feed = J.dict(data["activityFeedItems"])
+            var newOnPage = 0
             for edge in J.arr(feed["edges"]) {
                 let node = J.dict(J.dict(edge)["node"])
-                if !node.isEmpty { items.append(node) }
+                if node.isEmpty { continue }
+                items.append(node)
+                let cid = J.str(node, "canonicalId").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cid.isEmpty && !knownCanonicalIds.contains(cid) {
+                    newOnPage += 1
+                }
+            }
+            if bounded && !knownCanonicalIds.isEmpty && newOnPage == 0 {
+                break
             }
             let page = J.dict(feed["pageInfo"])
             if !J.bool(page["hasNextPage"]) { break }
@@ -1159,14 +1279,22 @@ query IdentityHistoricalFinancialsQuery(
         return items
     }
 
-    private static func fetchNavHistory(_ box: TokenBox, identityId: String) async throws -> [WSNavPoint] {
+    private static func fetchNavHistory(_ box: TokenBox, identityId: String, sinceDate: String? = nil) async throws -> [WSNavPoint] {
         let today = isoDay(Date())
-        let year0 = 2015
+        let sinceDay = String((sinceDate ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(10))
+        if !sinceDay.isEmpty && sinceDay > today { return [] }
+        let year0: Int
+        if sinceDay.count >= 4, let y = Int(String(sinceDay.prefix(4))) {
+            year0 = y
+        } else {
+            year0 = 2015
+        }
         let year1 = Int(today.prefix(4)) ?? year0
         var points: [WSNavPoint] = []
         if year1 < year0 { return [] }
         for year in year0...year1 {
-            let start = "\(year)-01-01"
+            var start = "\(year)-01-01"
+            if !sinceDay.isEmpty && start < sinceDay { start = sinceDay }
             let end = year == year1 ? today : "\(year)-12-31"
             if start > end { continue }
             var cursor: String? = nil
