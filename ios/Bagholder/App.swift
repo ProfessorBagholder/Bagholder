@@ -25,6 +25,11 @@ private enum HomeExample {
     static let winRateSubtitle = "8 W, 5 L"
     static let avgAnnualized = "14.2%"
     static let avgAnnualizedSubtitle = "4.2 yrs"
+    static let years: [(year: String, ret: String, spy: String, vs: String)] = [
+        ("2026", "+18.4%", "+9.2%", "+9.2%"),
+        ("2025", "+11.0%", "+14.1%", "\u{2212}3.1%"),
+        ("2024", "+22.6%", "+23.3%", "\u{2212}0.7%"),
+    ]
 }
 
 private enum HomeColor {
@@ -96,6 +101,7 @@ struct HomeView: View {
     @State private var showSettings = false
 
     var body: some View {
+        ScrollView(showsIndicators: false) {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Spacer(minLength: 0)
@@ -172,8 +178,11 @@ struct HomeView: View {
             MonthlyPnLCard()
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, HomeLayout.gutter)
-
-            Spacer(minLength: 0)
+            AnnualPerformanceCard()
+                .padding(.horizontal, HomeLayout.side)
+                .padding(.top, HomeLayout.gutter)
+                .padding(.bottom, 12)
+        }
         }
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
@@ -330,6 +339,60 @@ private struct MonthlyPnLDrawing: View {
                 )
             }
         }
+    }
+}
+
+
+struct AnnualPerformanceCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Annual performance")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(HomeColor.muted)
+                .padding(.bottom, 6)
+            HStack {
+                Text("Year")
+                    .frame(width: 48, alignment: .leading)
+                Text("Return")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Text("S&P 500")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Text("vs S&P")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(HomeColor.muted)
+            .padding(.bottom, 4)
+            ForEach(Array(HomeExample.years.enumerated()), id: \.offset) { _, row in
+                HStack {
+                    Text(row.year)
+                        .foregroundStyle(.black)
+                        .frame(width: 48, alignment: .leading)
+                    percentText(row.ret)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    percentText(row.spy)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    percentText(row.vs)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.vertical, 5)
+            }
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
+                .fill(HomeColor.tile)
+        )
+        .accessibilityLabel("Example annual performance")
+    }
+
+    private func percentText(_ value: String) -> Text {
+        let loss = value.contains("\u{2212}") || value.hasPrefix("-")
+        let profit = value.hasPrefix("+")
+        return Text(value)
+            .foregroundStyle(loss ? HomeColor.loss : profit ? HomeColor.profit : HomeColor.muted)
     }
 }
 
