@@ -79,9 +79,9 @@ struct RootView: View {
         .toolbarBackground(HomeColor.page, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .background(HomeColor.page.ignoresSafeArea())
-        .onAppear { journal.handle(session: session) }
+        .onAppear { journal.handleAppear(session: session) }
         .onChange(of: session.pullToken) { _, _ in
-            journal.handle(session: session)
+            journal.handleSessionChange(session: session)
         }
     }
 }
@@ -123,7 +123,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var waitingBody: some View {
-        if journal.phase == .pulling || (session.connected && journal.phase == .idle) {
+        if journal.phase == .pulling && journal.result == nil {
             VStack(spacing: 14) {
                 ProgressView()
                 Text("Getting trades from Wealthsimple")
@@ -456,6 +456,38 @@ struct EmptyTabView: View {
 }
 
 
+extension WSClosedTrade: Codable {}
+extension WSNavPoint: Codable {}
+extension WSMetrics: Codable {}
+extension WSMonthBar: Codable {}
+extension WSYearRow: Codable {}
+extension WSPullResult: Codable {}
+
+/// Token-free Home snapshot so the next launch can show last numbers immediately.
+private enum LastPullStore {
+    private static var url: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let dir = base.appendingPathComponent("Bagholder", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("last-pull.json")
+    }
+
+    static func load() -> WSPullResult? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WSPullResult.self, from: data)
+    }
+
+    static func save(_ result: WSPullResult) {
+        guard let data = try? JSONEncoder().encode(result) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
 final class Journal: ObservableObject {
     enum Phase: Equatable {
         case idle
@@ -469,28 +501,49 @@ final class Journal: ObservableObject {
     @Published var result: WSPullResult?
     private var task: Task<Void, Never>?
 
-    var isLive: Bool { phase == .ready && result != nil }
+    var isLive: Bool { result != nil }
 
-    func handle(session: SessionStore) {
+    init() {
+        if let snap = LastPullStore.load() {
+            result = snap
+            phase = .ready
+        }
+    }
+
+    /// First paint: leftover Keychain must not start a download.
+    /// A saved result is shown immediately and refreshed in the background.
+    func handleAppear(session: SessionStore) {
+        guard session.connected, result != nil else { return }
+        pull(showProgress: false)
+    }
+
+    /// Sign-in (`saveOAuthCookie`) starts a download. Disconnect clears the snapshot.
+    func handleSessionChange(session: SessionStore) {
         if !session.connected {
             task?.cancel()
             task = nil
             phase = .idle
             result = nil
+            LastPullStore.clear()
             return
         }
-        pull()
+        pull(showProgress: result == nil)
     }
 
-    private func pull() {
+    private func pull(showProgress: Bool) {
         task?.cancel()
-        phase = .pulling
-        result = nil
+        if showProgress {
+            phase = .pulling
+        }
         task = Task { [weak self] in
             guard let rec = Keychain.load(),
                   let cookie = rec["oauth_cookie"] as? String
             else {
-                await MainActor.run { self?.phase = .needsConnect }
+                await MainActor.run {
+                    if self?.result == nil {
+                        self?.phase = .needsConnect
+                    }
+                }
                 return
             }
             let wssdi = rec["wssdi"] as? String
@@ -500,13 +553,22 @@ final class Journal: ObservableObject {
                 await MainActor.run {
                     self?.result = snap
                     self?.phase = .ready
+                    LastPullStore.save(snap)
                 }
             } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
                 if Task.isCancelled { return }
-                await MainActor.run { self?.phase = .needsConnect }
+                await MainActor.run {
+                    if self?.result == nil {
+                        self?.phase = .needsConnect
+                    }
+                }
             } catch {
                 if Task.isCancelled { return }
-                await MainActor.run { self?.phase = .failed("Pull failed") }
+                await MainActor.run {
+                    if self?.result == nil {
+                        self?.phase = .failed("Pull failed")
+                    }
+                }
             }
         }
     }
