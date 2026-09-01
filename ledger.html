@@ -1951,16 +1951,13 @@ async function ensureSpyPrices() {
   const url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500";
   try {
     const res = await fetch(url, { headers: { Accept: "text/csv,*/*;q=0.8" } });
-    if (res.ok) {
-      const map = {};
-      const n = ingestFredSP500Csv(await res.text(), map);
-      if (n) {
-        state.spyByDate = map;
-        try { localStorage.setItem(LS_SPY, JSON.stringify(map)); } catch (e) {}
-        render();
-        return;
-      }
-    }
+    if (!res.ok) return;
+    const map = {};
+    const n = ingestFredSP500Csv(await res.text(), map);
+    if (!n) return;
+    state.spyByDate = map;
+    try { localStorage.setItem(LS_SPY, JSON.stringify(map)); } catch (e) {}
+    render();
   } catch (e) {}
 }
 
@@ -2472,7 +2469,8 @@ function persist() {
       localStorage.setItem(LS_NAV_BY_ACCOUNT, JSON.stringify(state.navByAccount || {}));
     }
     localStorage.setItem(LS_FX_TABLE, JSON.stringify(state.fxByDate || {}));
-    localStorage.setItem(LS_SPY, JSON.stringify(state.spyByDate || {}));
+    const spy = state.spyByDate || {};
+    if (Object.keys(spy).length) localStorage.setItem(LS_SPY, JSON.stringify(spy));
   } catch (e) {}
 }
 
