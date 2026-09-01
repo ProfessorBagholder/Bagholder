@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 @main
@@ -25,46 +24,92 @@ private enum HomeExample {
     static let winRateSubtitle = "8 W, 5 L"
     static let avgAnnualized = "14.2%"
     static let avgAnnualizedSubtitle = "4.2 yrs"
-    static let equity: [Double] = [1, 1.6, 2.1, 2.4, 3.2, 3.8, 4.5]
-    // Mock monthly bars: green, green, red, green (tallest), green, red, green.
-    static let monthly: [Double] = [0.6, 0.9, -0.45, 1.2, 0.55, -0.5, 0.7]
+}
+
+private enum HomeColor {
+    static let page = Color(red: 242 / 255, green: 242 / 255, blue: 247 / 255)
+    static let tile = Color.white
+    static let muted = Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
+    static let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+    static let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
+    static let selected = Color(red: 0 / 255, green: 122 / 255, blue: 255 / 255)
+    static let hairline = Color(red: 60 / 255, green: 60 / 255, blue: 67 / 255).opacity(0.18)
 }
 
 private enum HomeLayout {
     static let side: CGFloat = 16
     static let gutter: CGFloat = 8
     static let corner: CGFloat = 14
-    static let tilePadding: CGFloat = 11
-    static let tileMinHeight: CGFloat = 72
     static let chartHeight: CGFloat = 72
-    static let titleSize: CGFloat = 12
-    static let valueSize: CGFloat = 20
-    static let pnlSize: CGFloat = 38
 }
 
 struct RootView: View {
+    @State private var tab = 0
+
     var body: some View {
-        TabView {
-            NavigationStack {
-                HomeView()
+        VStack(spacing: 0) {
+            Group {
+                switch tab {
+                case 0:
+                    HomeView()
+                case 1:
+                    NavigationStack { ClosedTradesView() }
+                case 2:
+                    NavigationStack { EmptyTabView(title: "Activity") }
+                default:
+                    NavigationStack { EmptyTabView(title: "Open lots") }
+                }
             }
-            .tabItem { Label("Home", systemImage: "square.grid.2x2") }
-
-            NavigationStack {
-                ClosedTradesView()
-            }
-            .tabItem { Label("Closed trades", systemImage: "list.bullet") }
-
-            NavigationStack {
-                EmptyTabView(title: "Activity")
-            }
-            .tabItem { Label("Activity", systemImage: "doc.text") }
-
-            NavigationStack {
-                EmptyTabView(title: "Open lots")
-            }
-            .tabItem { Label("Open lots", systemImage: "hexagon") }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            MockTabBar(selection: $tab)
         }
+        .background(HomeColor.page.ignoresSafeArea())
+        .ignoresSafeArea(.keyboard)
+    }
+}
+
+struct MockTabBar: View {
+    @Binding var selection: Int
+
+    var body: some View {
+        HStack(spacing: 0) {
+            tabButton(0, title: "Home", systemImage: "square.grid.2x2")
+            tabButton(1, title: "Closed trades", systemImage: "line.3.horizontal")
+            tabButton(2, title: "Activity", systemImage: "doc.text")
+            tabButton(3, title: "Open lots", systemImage: "hexagon")
+        }
+        .padding(.top, 6)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 22)
+        .background {
+            HomeColor.tile.opacity(0.94)
+                .overlay(alignment: .top) {
+                    HomeColor.hairline.frame(height: 0.5)
+                }
+                .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
+        let on = selection == index
+        return Button {
+            selection = index
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .regular))
+                    .frame(height: 22)
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(on ? HomeColor.selected : HomeColor.muted)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
@@ -72,29 +117,30 @@ struct HomeView: View {
     @State private var showSettings = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: HomeLayout.gutter) {
-            HStack(alignment: .center, spacing: HomeLayout.gutter) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(HomeExample.realizedPnL)
-                        .font(.system(size: HomeLayout.pnlSize, weight: .bold))
-                    Text("Realized P&L")
-                        .font(.system(size: HomeLayout.titleSize))
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
                 Spacer(minLength: 0)
                 Button {
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            Circle()
-                                .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                        )
+                        .foregroundStyle(.black)
+                        .frame(width: 24, height: 24)
                 }
                 .accessibilityLabel("Settings")
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 36)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(HomeExample.realizedPnL)
+                    .font(.system(size: 38, weight: .bold))
+                    .tracking(-1.4)
+                    .lineSpacing(0)
+                Text("Realized P&L")
+                    .font(.system(size: 15))
+                    .foregroundStyle(HomeColor.muted)
             }
             .padding(.horizontal, HomeLayout.side)
 
@@ -109,13 +155,13 @@ struct HomeView: View {
                     title: "Biggest winner",
                     value: HomeExample.biggestWinner,
                     subtitle: HomeExample.biggestWinnerSymbol,
-                    valueColor: Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+                    valueColor: HomeColor.profit
                 )
                 MetricCard(
                     title: "Biggest loser",
                     value: HomeExample.biggestLoser,
                     subtitle: HomeExample.biggestLoserSymbol,
-                    valueColor: Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
+                    valueColor: HomeColor.loss
                 )
                 MetricCard(
                     title: "Profit factor",
@@ -139,17 +185,18 @@ struct HomeView: View {
                 )
             }
             .padding(.horizontal, HomeLayout.side)
+            .padding(.top, 12)
 
             EquityCurveCard()
                 .padding(.horizontal, HomeLayout.side)
+                .padding(.top, HomeLayout.gutter)
             MonthlyPnLCard()
                 .padding(.horizontal, HomeLayout.side)
+                .padding(.top, HomeLayout.gutter)
 
             Spacer(minLength: 0)
         }
-        .padding(.top, 4)
-        .background(Color(uiColor: .systemGroupedBackground))
-        .toolbar(.hidden, for: .navigationBar)
+        .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
             SettingsStubView()
         }
@@ -160,97 +207,150 @@ struct MetricCard: View {
     let title: String
     let value: String
     var subtitle: String? = nil
-    var valueColor: Color = .primary
+    var valueColor: Color = .black
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: HomeLayout.titleSize))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(HomeColor.muted)
+                .padding(.bottom, 4)
             Text(value)
-                .font(.system(size: HomeLayout.valueSize, weight: .bold))
+                .font(.system(size: 20, weight: .bold))
+                .tracking(-0.6)
                 .foregroundStyle(valueColor)
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: HomeLayout.titleSize))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(HomeColor.muted)
+                    .padding(.top, 3)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: HomeLayout.tileMinHeight, alignment: .topLeading)
-        .padding(HomeLayout.tilePadding)
+        .padding(EdgeInsets(top: 11, leading: 12, bottom: 10, trailing: 12))
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                .fill(HomeColor.tile)
         )
     }
 }
 
 struct EquityCurveCard: View {
-    private let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Equity Curve")
-                .font(.system(size: HomeLayout.titleSize))
-                .foregroundStyle(.secondary)
-            Chart {
-                ForEach(Array(HomeExample.equity.enumerated()), id: \.offset) { index, value in
-                    LineMark(
-                        x: .value("Point", index),
-                        y: .value("Equity", value)
-                    )
-                    .foregroundStyle(profit)
-                    .interpolationMethod(.catmullRom)
-                    AreaMark(
-                        x: .value("Point", index),
-                        y: .value("Equity", value)
-                    )
-                    .foregroundStyle(profit.opacity(0.18))
-                    .interpolationMethod(.catmullRom)
-                }
-            }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .frame(height: HomeLayout.chartHeight)
-            .accessibilityLabel("Example equity curve")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(HomeColor.muted)
+                .padding(.bottom, 4)
+            EquityCurveDrawing()
+                .frame(height: HomeLayout.chartHeight)
+                .accessibilityLabel("Example equity curve")
         }
-        .padding(HomeLayout.tilePadding)
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                .fill(HomeColor.tile)
         )
     }
 }
 
-struct MonthlyPnLCard: View {
-    private let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
-    private let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
-
+private struct EquityCurveDrawing: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Monthly P&L")
-                .font(.system(size: HomeLayout.titleSize))
-                .foregroundStyle(.secondary)
-            Chart {
-                ForEach(Array(HomeExample.monthly.enumerated()), id: \.offset) { index, value in
-                    BarMark(
-                        x: .value("Month", index),
-                        y: .value("P&L", value)
-                    )
-                    .foregroundStyle(value >= 0 ? profit : loss)
-                    .cornerRadius(3)
-                }
+        Canvas { context, size in
+            let sx = size.width / 330
+            let sy = size.height / 72
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * sx, y: y * sy)
             }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .frame(height: HomeLayout.chartHeight)
-            .accessibilityLabel("Example monthly P&L")
+            var fill = Path()
+            fill.move(to: pt(4, 58))
+            fill.addCurve(to: pt(80, 48), control1: pt(40, 56), control2: pt(55, 52))
+            fill.addCurve(to: pt(155, 34), control1: pt(110, 42), control2: pt(130, 46))
+            fill.addCurve(to: pt(240, 16), control1: pt(185, 18), control2: pt(210, 24))
+            fill.addCurve(to: pt(326, 6), control1: pt(270, 8), control2: pt(300, 12))
+            fill.addLine(to: pt(326, 72))
+            fill.addLine(to: pt(4, 72))
+            fill.closeSubpath()
+            context.fill(fill, with: .color(HomeColor.profit.opacity(0.12)))
+
+            var line = Path()
+            line.move(to: pt(4, 58))
+            line.addCurve(to: pt(80, 48), control1: pt(40, 56), control2: pt(55, 52))
+            line.addCurve(to: pt(155, 34), control1: pt(110, 42), control2: pt(130, 46))
+            line.addCurve(to: pt(240, 16), control1: pt(185, 18), control2: pt(210, 24))
+            line.addCurve(to: pt(326, 6), control1: pt(270, 8), control2: pt(300, 12))
+            context.stroke(
+                line,
+                with: .color(HomeColor.profit),
+                style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+            )
         }
-        .padding(HomeLayout.tilePadding)
+    }
+}
+
+struct MonthlyPnLCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Monthly P&L")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(HomeColor.muted)
+                .padding(.bottom, 4)
+            MonthlyPnLDrawing()
+                .frame(height: HomeLayout.chartHeight)
+                .accessibilityLabel("Example monthly P&L")
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                .fill(HomeColor.tile)
         )
+    }
+}
+
+private struct MonthlyPnLDrawing: View {
+    private struct Bar {
+        let x: CGFloat
+        let y: CGFloat
+        let w: CGFloat
+        let h: CGFloat
+        let profit: Bool
+    }
+
+    private let bars: [Bar] = [
+        Bar(x: 22, y: 20, w: 22, h: 16, profit: true),
+        Bar(x: 62, y: 12, w: 22, h: 24, profit: true),
+        Bar(x: 102, y: 36, w: 22, h: 18, profit: false),
+        Bar(x: 142, y: 8, w: 22, h: 28, profit: true),
+        Bar(x: 182, y: 24, w: 22, h: 12, profit: true),
+        Bar(x: 222, y: 36, w: 22, h: 14, profit: false),
+        Bar(x: 262, y: 16, w: 22, h: 20, profit: true),
+    ]
+
+    var body: some View {
+        Canvas { context, size in
+            let sx = size.width / 330
+            let sy = size.height / 72
+            var zero = Path()
+            zero.move(to: CGPoint(x: 8 * sx, y: 36 * sy))
+            zero.addLine(to: CGPoint(x: 322 * sx, y: 36 * sy))
+            context.stroke(zero, with: .color(HomeColor.hairline), lineWidth: 1)
+
+            for bar in bars {
+                let rect = CGRect(
+                    x: bar.x * sx,
+                    y: bar.y * sy,
+                    width: bar.w * sx,
+                    height: bar.h * sy
+                )
+                let path = Path(roundedRect: rect, cornerRadius: 3)
+                context.fill(
+                    path,
+                    with: .color(bar.profit ? HomeColor.profit : HomeColor.loss)
+                )
+            }
+        }
     }
 }
 
