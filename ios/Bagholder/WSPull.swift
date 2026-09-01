@@ -640,12 +640,13 @@ query IdentityHistoricalFinancialsQuery(
             mapped[i].fifoId = pools[aid] ?? aid
         }
         let fifo = matchFifo(mapped)
+        let activities = mapped
         progress("Fetching balances…")
         progress("Fetching equity history…")
         let nav = try await fetchNavHistory(sess, identityId: sess.identityCanonicalId)
         progress("Fetching S&P 500…")
         async let spyTask = ensureSpyPrices()
-        async let fxTask = ensureFxRates(activities: mapped)
+        async let fxTask = ensureFxRates(activities: activities)
         let spy = await spyTask
         let fx = await fxTask
         // ledger.html render(): applyFx(closed) then groupClosedByClose(visible) for computeMetrics.
@@ -735,7 +736,7 @@ query IdentityHistoricalFinancialsQuery(
         var points: [WSNavPoint] = []
         if year1 < year0 { return [] }
         for year in year0...year1 {
-            var start = "\(year)-01-01"
+            let start = "\(year)-01-01"
             let end = year == year1 ? today : "\(year)-12-31"
             if start > end { continue }
             var cursor: String? = nil
