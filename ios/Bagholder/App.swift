@@ -560,6 +560,9 @@ private struct ClosedTradeDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Executions (\(executionCount))")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            journal.ensureListings(for: trade)
+        }
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -788,6 +791,37 @@ final class Journal: ObservableObject {
                 }
             }
         }
+    }
+
+    func ensureListings(for trade: WSClosedTrade) {
+        let acts = result?.activities ?? []
+        let have = result?.listings ?? []
+        if !WSPull.listingLine(trade, activities: acts, listings: have).isEmpty { return }
+        guard let rec = Keychain.load(),
+              let cookie = rec["oauth_cookie"] as? String else { return }
+        let wssdi = rec["wssdi"] as? String
+        let tradeCopy = trade
+        let actsCopy = acts
+        Task { [weak self] in
+            let fetched = await WSPull.listingsForTrade(
+                tradeCopy,
+                activities: actsCopy,
+                oauthCookie: cookie,
+                wssdi: wssdi
+            )
+            if Task.isCancelled { return }
+            self?.mergeListings(fetched)
+        }
+    }
+
+    private func mergeListings(_ extra: [WSSecurityListing]) {
+        guard !extra.isEmpty, var snap = result else { return }
+        var byId: [String: WSSecurityListing] = [:]
+        for s in snap.listings { byId[s.id] = s }
+        for s in extra { byId[s.id] = s }
+        snap.listings = Array(byId.values)
+        result = snap
+        LastPullStore.save(snap)
     }
 }
 
