@@ -12,11 +12,12 @@ struct BagholderApp: App {
 struct ContentView: View {
     var body: some View {
         NavigationStack {
-            ContentUnavailableView(
-                "No activity loaded",
-                systemImage: "chart.xyaxis.line",
-                description: Text("Wealthsimple sign-in is not in this iPhone build yet.")
-            )
+            List {
+                Section("Closed trades") {
+                    Text("None yet")
+                        .foregroundStyle(.secondary)
+                }
+            }
             .navigationTitle("Bagholder")
         }
     }
