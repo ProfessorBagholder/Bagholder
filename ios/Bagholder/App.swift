@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct BagholderApp: App {
@@ -44,94 +45,50 @@ private enum HomeLayout {
 }
 
 struct RootView: View {
-    @State private var tab = 0
-    @State private var bottomInset: CGFloat = 34
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Group {
-                switch tab {
-                case 0:
-                    HomeView()
-                case 1:
-                    NavigationStack { ClosedTradesView() }
-                case 2:
-                    NavigationStack { EmptyTabView(title: "Activity") }
-                default:
-                    NavigationStack { EmptyTabView(title: "Open lots") }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear {
-                            if geo.safeAreaInsets.bottom > 0 {
-                                bottomInset = geo.safeAreaInsets.bottom
-                            }
-                        }
-                        .onChange(of: geo.safeAreaInsets.bottom) { _, value in
-                            if value > 0 {
-                                bottomInset = value
-                            }
-                        }
-                }
-            }
-            MockTabBar(selection: $tab, bottomInset: bottomInset)
-        }
-        .ignoresSafeArea(.container, edges: .bottom)
-        .background(HomeColor.page)
-    }
-}
-
-struct MockTabBar: View {
-    @Binding var selection: Int
-    var bottomInset: CGFloat
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                tabButton(0, title: "Home", systemImage: "square.grid.2x2")
-                tabButton(1, title: "Closed trades", systemImage: "line.3.horizontal")
-                tabButton(2, title: "Activity", systemImage: "doc.text")
-                tabButton(3, title: "Open lots", systemImage: "hexagon")
-            }
-            .padding(.top, 6)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 6)
-            Rectangle()
-                .fill(HomeColor.tile)
-                .frame(height: bottomInset)
-                .allowsHitTesting(false)
-        }
-        .background(HomeColor.tile)
-        .overlay(alignment: .top) {
-            HomeColor.hairline.frame(height: 0.5)
-        }
-        .clipShape(Rectangle())
-        .containerShape(Rectangle())
+    init() {
+        let page = UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
+        let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = page
+        appearance.shadowColor = .clear
+        appearance.stackedLayoutAppearance.normal.iconColor = muted
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [
+            .foregroundColor: muted
+        ]
+        appearance.inlineLayoutAppearance.normal.iconColor = muted
+        appearance.compactInlineLayoutAppearance.normal.iconColor = muted
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+        UITabBar.appearance().backgroundColor = page
     }
 
-    private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
-        let on = selection == index
-        return Button {
-            selection = index
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .regular))
-                    .frame(height: 22)
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+    var body: some View {
+        TabView {
+            NavigationStack {
+                HomeView()
             }
-            .foregroundStyle(on ? HomeColor.selected : HomeColor.muted)
-            .frame(maxWidth: .infinity)
+            .tabItem { Label("Home", systemImage: "square.grid.2x2") }
+
+            NavigationStack {
+                ClosedTradesView()
+            }
+            .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
+
+            NavigationStack {
+                EmptyTabView(title: "Activity")
+            }
+            .tabItem { Label("Activity", systemImage: "doc.text") }
+
+            NavigationStack {
+                EmptyTabView(title: "Open lots")
+            }
+            .tabItem { Label("Open lots", systemImage: "hexagon") }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(on ? .isSelected : [])
+        .tint(HomeColor.selected)
+        .toolbarBackground(HomeColor.page, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
+        .background(HomeColor.page.ignoresSafeArea())
     }
 }
 
