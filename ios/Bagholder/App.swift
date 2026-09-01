@@ -10,7 +10,25 @@ struct BagholderApp: App {
     }
 }
 
-private let emptyDash = "—"
+/// Example numbers from the locked home mock. Not live Wealthsimple data.
+private enum HomeExample {
+    static let realizedPnL = "$12,450.10"
+    static let biggestWinner = "$4,120.00"
+    static let biggestWinnerSymbol = "PLTR"
+    static let biggestLoser = "\u{2212}$890.00"
+    static let biggestLoserSymbol = "CCO"
+    static let profitFactor = "1.8"
+    static let profitFactorSubtitle = "$18,200 W, $10,100 L"
+    static let expectancy = "$210.00"
+    static let expectancySubtitle = "$1,820 \u{00B7} \u{2212}$1,260"
+    static let winRate = "62%"
+    static let winRateSubtitle = "8 W, 5 L"
+    static let avgAnnualized = "14.2%"
+    static let avgAnnualizedSubtitle = "4.2 yrs"
+    static let equity: [Double] = [1, 1.6, 2.1, 2.4, 3.2, 3.8, 4.5]
+    // Mock monthly bars: green, green, red, green (tallest), green, red, green.
+    static let monthly: [Double] = [0.6, 0.9, -0.45, 1.2, 0.55, -0.5, 0.7]
+}
 
 struct RootView: View {
     var body: some View {
@@ -45,7 +63,7 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(emptyDash)
+                    Text(HomeExample.realizedPnL)
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                     Text("Realized P&L")
                         .font(.subheadline)
@@ -61,12 +79,38 @@ struct HomeView: View {
                     ],
                     spacing: 12
                 ) {
-                    MetricCard(title: "Biggest winner", value: emptyDash)
-                    MetricCard(title: "Biggest loser", value: emptyDash)
-                    MetricCard(title: "Profit factor", value: emptyDash)
-                    MetricCard(title: "Expectancy", value: emptyDash)
-                    MetricCard(title: "Win rate", value: emptyDash)
-                    MetricCard(title: "Avg annualized", value: emptyDash)
+                    MetricCard(
+                        title: "Biggest winner",
+                        value: HomeExample.biggestWinner,
+                        subtitle: HomeExample.biggestWinnerSymbol,
+                        valueColor: Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+                    )
+                    MetricCard(
+                        title: "Biggest loser",
+                        value: HomeExample.biggestLoser,
+                        subtitle: HomeExample.biggestLoserSymbol,
+                        valueColor: Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
+                    )
+                    MetricCard(
+                        title: "Profit factor",
+                        value: HomeExample.profitFactor,
+                        subtitle: HomeExample.profitFactorSubtitle
+                    )
+                    MetricCard(
+                        title: "Expectancy",
+                        value: HomeExample.expectancy,
+                        subtitle: HomeExample.expectancySubtitle
+                    )
+                    MetricCard(
+                        title: "Win rate",
+                        value: HomeExample.winRate,
+                        subtitle: HomeExample.winRateSubtitle
+                    )
+                    MetricCard(
+                        title: "Avg annualized",
+                        value: HomeExample.avgAnnualized,
+                        subtitle: HomeExample.avgAnnualizedSubtitle
+                    )
                 }
                 .padding(.horizontal, 16)
 
@@ -98,17 +142,24 @@ struct HomeView: View {
 struct MetricCard: View {
     let title: String
     let value: String
+    var subtitle: String? = nil
+    var valueColor: Color = .primary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(valueColor)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -118,16 +169,33 @@ struct MetricCard: View {
 }
 
 struct EquityCurveCard: View {
+    private let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Equity Curve")
-                .font(.headline)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Chart {
+                ForEach(Array(HomeExample.equity.enumerated()), id: \.offset) { index, value in
+                    LineMark(
+                        x: .value("Point", index),
+                        y: .value("Equity", value)
+                    )
+                    .foregroundStyle(profit)
+                    .interpolationMethod(.catmullRom)
+                    AreaMark(
+                        x: .value("Point", index),
+                        y: .value("Equity", value)
+                    )
+                    .foregroundStyle(profit.opacity(0.18))
+                    .interpolationMethod(.catmullRom)
+                }
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
             .frame(height: 140)
-            .accessibilityLabel("Equity curve, empty until sign-in")
+            .accessibilityLabel("Example equity curve")
         }
         .padding(14)
         .background(
@@ -138,16 +206,28 @@ struct EquityCurveCard: View {
 }
 
 struct MonthlyPnLCard: View {
+    private let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+    private let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Monthly P&L")
-                .font(.headline)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Chart {
+                ForEach(Array(HomeExample.monthly.enumerated()), id: \.offset) { index, value in
+                    BarMark(
+                        x: .value("Month", index),
+                        y: .value("P&L", value)
+                    )
+                    .foregroundStyle(value >= 0 ? profit : loss)
+                    .cornerRadius(3)
+                }
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
             .frame(height: 140)
-            .accessibilityLabel("Monthly P&L, empty until sign-in")
+            .accessibilityLabel("Example monthly P&L")
         }
         .padding(14)
         .background(
