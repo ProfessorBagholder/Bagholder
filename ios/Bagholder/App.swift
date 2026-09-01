@@ -729,6 +729,7 @@ final class Journal: ObservableObject {
     /// A saved result is shown immediately and refreshed in the background.
     func handleAppear(session: SessionStore) {
         guard session.connected, result != nil else { return }
+        if phase == .pulling { return }
         pull(showProgress: false)
     }
 
@@ -771,7 +772,7 @@ final class Journal: ObservableObject {
             guard let rec = Keychain.load(),
                   let cookie = rec["oauth_cookie"] as? String
             else {
-                self.endPullFailed(gen: gen)
+                self.showPullError(gen: gen, "no session")
                 return
             }
             let wssdi = rec["wssdi"] as? String
@@ -785,7 +786,7 @@ final class Journal: ObservableObject {
                     }
                 }
                 if Task.isCancelled {
-                    self.endPullFailed(gen: gen)
+                    self.endPullCancelled(gen: gen)
                     return
                 }
                 var applied = snap
@@ -798,35 +799,51 @@ final class Journal: ObservableObject {
                 self.lastSync = Date()
                 UserDefaults.standard.set(self.lastSync, forKey: Self.lastSyncKey)
                 LastPullStore.save(applied)
+                let recNow = Keychain.load()
+                let cookieNow = (recNow?["oauth_cookie"] as? String) ?? cookie
+                let wssdiNow = (recNow?["wssdi"] as? String) ?? wssdi
                 let acts = applied.activities
-                self.startListings(cookie: cookie, wssdi: wssdi, activities: acts)
-            } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
-                self.endUnauthorized(gen: gen)
+                self.startListings(cookie: cookieNow, wssdi: wssdiNow, activities: acts)
+            } catch is CancellationError {
+                self.endPullCancelled(gen: gen)
+            } catch let url as URLError where url.code == .cancelled {
+                self.endPullCancelled(gen: gen)
+            } catch WSPullError.graphql(let msg) {
+                self.showPullError(gen: gen, msg)
+            } catch WSPullError.refresh(let msg) {
+                self.showPullError(gen: gen, msg)
+            } catch WSPullError.unauthorized {
+                self.showPullError(gen: gen, "Wealthsimple token refresh failed")
+            } catch WSPullError.noIdentity {
+                self.showPullError(gen: gen, "no identity")
+            } catch WSPullError.noSession {
+                self.showPullError(gen: gen, "no session")
+            } catch let url as URLError {
+                self.showPullError(gen: gen, url.localizedDescription)
             } catch {
-                self.endPullFailed(gen: gen)
+                self.showPullError(gen: gen, error.localizedDescription)
             }
         }
     }
 
-    private func endPullFailed(gen: Int) {
+    private func endPullCancelled(gen: Int) {
         guard gen == pullGeneration else { return }
         if result != nil {
             phase = .ready
-            syncStep = "Pull failed"
-        } else {
-            phase = .failed("Pull failed")
             syncStep = ""
         }
     }
 
-    private func endUnauthorized(gen: Int) {
+    private func showPullError(gen: Int, _ msg: String) {
         guard gen == pullGeneration else { return }
-        if result == nil {
-            phase = .needsConnect
-            syncStep = ""
-        } else {
+        let line = msg.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shown = line.isEmpty ? "Wealthsimple token refresh failed" : line
+        if result != nil {
             phase = .ready
-            syncStep = "Pull failed"
+            syncStep = shown
+        } else {
+            phase = .failed(shown)
+            syncStep = ""
         }
     }
 
@@ -966,7 +983,7 @@ final class SessionStore: ObservableObject {
     }
 }
 
-private enum Keychain {
+enum Keychain {
     static let service = "ca.bagholder.ios"
     static let account = "ws_oauth_cookie"
 

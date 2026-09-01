@@ -5,6 +5,7 @@ enum WSPullError: Error {
     case noIdentity
     case noSession
     case graphql(String)
+    case refresh(String)
 }
 
 struct WSSession {
@@ -303,6 +304,7 @@ struct WSPullResult: Codable {
 
 enum WSPull {
     static let graphqlURL = URL(string: "https://my.wealthsimple.com/graphql")!
+    static let tokenURL = URL(string: "https://api.production.wealthsimple.com/v1/oauth/v2/token")!
     static let tokenInfoURL = URL(string: "https://api.production.wealthsimple.com/v1/oauth/v2/token/info")!
     static let wsClient = "@wealthsimple/wealthsimple"
     static let graphqlVersion = "12"
@@ -696,6 +698,129 @@ query IdentityHistoricalFinancialsQuery(
         return J.str(raw)
     }
 
+    private final class TokenBox {
+        var sess: WSSession
+        var oauth: [String: Any]
+        var didRefresh = false
+        init(sess: WSSession, oauth: [String: Any]) {
+            self.sess = sess
+            self.oauth = oauth
+        }
+    }
+
+    private static func oauthErrorCode(_ data: [String: Any]) -> String {
+        let err = J.str(data, "error").trimmingCharacters(in: .whitespacesAndNewlines)
+        if err.isEmpty { return "" }
+        if err.range(of: "^[a-fA-F0-9]{32,}$", options: .regularExpression) != nil { return "" }
+        if err.range(of: "^[A-Za-z0-9_.-]{1,64}$", options: .regularExpression) == nil { return "" }
+        return err
+    }
+
+    private static func refreshFailureMessage(_ data: [String: Any]) -> String {
+        var parts: [String] = []
+        if let status = data["_http_status"] as? Int, status != 0 {
+            parts.append("Wealthsimple token refresh HTTP \(status)")
+        }
+        let oauthErr = oauthErrorCode(data)
+        if !oauthErr.isEmpty { parts.append(oauthErr) }
+        if parts.isEmpty { return "Wealthsimple token refresh failed" }
+        return parts.joined(separator: " ")
+    }
+
+    private static func expiresAtAsTimestamp(_ data: [String: Any]) -> String? {
+        if let s = data["expires_at"] as? String, s.contains("T") {
+            return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var unix: Double? = nil
+        if let n = data["expires_at"] as? NSNumber {
+            unix = n.doubleValue
+        } else if let n = data["expires_in"] as? NSNumber {
+            unix = Date().timeIntervalSince1970 + n.doubleValue
+        }
+        guard let unix else { return nil }
+        let dt = Date(timeIntervalSince1970: unix)
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(secondsFromGMT: 0)
+        fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.000'Z'"
+        return fmt.string(from: dt)
+    }
+
+    private static func parseExpires(_ raw: String) -> Date? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let patterns = [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSX",
+            "yyyy-MM-dd'T'HH:mm:ssX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        ]
+        for pattern in patterns {
+            fmt.dateFormat = pattern
+            if let d = fmt.date(from: s) { return d }
+        }
+        return ISO8601DateFormatter().date(from: s)
+    }
+
+    private static func tokenNeedsRefresh(_ sess: WSSession, now: Date = Date()) -> Bool {
+        let raw = sess.expiresAt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let exp = parseExpires(raw) else { return false }
+        return now.addingTimeInterval(300) >= exp
+    }
+
+    private static func refreshSession(_ box: TokenBox) async throws {
+        let rt = box.sess.refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rt.isEmpty { throw WSPullError.refresh("missing refresh token") }
+        let cid = box.sess.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cid.isEmpty { throw WSPullError.refresh("session has no client id") }
+        let sessCopy = box.sess
+        let cidCopy = cid
+        let rtCopy = rt
+        let headers = sessionHeaders(sessCopy, extra: [
+            "x-wealthsimple-client": wsClient,
+            "x-ws-profile": "invest",
+        ])
+        let body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": rtCopy,
+            "client_id": cidCopy,
+        ]
+        let data = try await httpJSON(
+            method: "POST",
+            url: tokenURL,
+            headers: headers,
+            body: body,
+            timeout: 60,
+            throwOnAuth: false
+        )
+        let access = J.str(data, "access_token")
+        if access.isEmpty {
+            throw WSPullError.refresh(refreshFailureMessage(data))
+        }
+        box.oauth["access_token"] = access
+        box.sess.accessToken = access
+        let newRt = J.str(data, "refresh_token")
+        if !newRt.isEmpty {
+            box.oauth["refresh_token"] = newRt
+            box.sess.refreshToken = newRt
+        }
+        if let stamped = expiresAtAsTimestamp(data) {
+            box.oauth["expires_at"] = stamped
+            box.sess.expiresAt = stamped
+        }
+        box.oauth["client_id"] = cidCopy
+        box.sess.clientId = cidCopy
+        box.didRefresh = true
+        if let json = try? JSONSerialization.data(withJSONObject: box.oauth),
+           let str = String(data: json, encoding: .utf8)
+        {
+            let wssdi = box.sess.wssdi.isEmpty ? nil : box.sess.wssdi
+            Keychain.save(oauthCookie: str, wssdi: wssdi)
+        }
+    }
+
     // MARK: - HTTP
 
     private static func httpJSON(
@@ -703,7 +828,8 @@ query IdentityHistoricalFinancialsQuery(
         url: URL,
         headers: [String: String],
         body: [String: Any]?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        throwOnAuth: Bool = true
     ) async throws -> [String: Any] {
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = method
@@ -717,10 +843,12 @@ query IdentityHistoricalFinancialsQuery(
         }
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 401 || status == 403 {
+        if throwOnAuth && (status == 401 || status == 403) {
             throw WSPullError.unauthorized
         }
-        if data.isEmpty { return [:] }
+        if data.isEmpty {
+            return ["_http_status": status]
+        }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return ["error": "invalid_json", "_http_status": status]
         }
@@ -744,7 +872,23 @@ query IdentityHistoricalFinancialsQuery(
         return try await httpJSON(method: "GET", url: tokenInfoURL, headers: headers, body: nil, timeout: 60)
     }
 
-    private static func graphql(_ sess: WSSession, operation: String, variables: [String: Any], query: String) async throws -> [String: Any] {
+    private static func graphql(_ box: TokenBox, operation: String, variables: [String: Any], query: String) async throws -> [String: Any] {
+        do {
+            return try await graphqlOnce(box.sess, operation: operation, variables: variables, query: query)
+        } catch WSPullError.unauthorized {
+            if box.didRefresh {
+                throw WSPullError.refresh("Wealthsimple token refresh HTTP 401")
+            }
+            try await refreshSession(box)
+            do {
+                return try await graphqlOnce(box.sess, operation: operation, variables: variables, query: query)
+            } catch WSPullError.unauthorized {
+                throw WSPullError.refresh("Wealthsimple token refresh HTTP 401")
+            }
+        }
+    }
+
+    private static func graphqlOnce(_ sess: WSSession, operation: String, variables: [String: Any], query: String) async throws -> [String: Any] {
         var headers: [String: String] = [
             "Authorization": "Bearer " + sess.accessToken,
             "x-wealthsimple-client": wsClient,
@@ -800,22 +944,34 @@ query IdentityHistoricalFinancialsQuery(
         onProgress: (@Sendable (String) -> Void)? = nil
     ) async throws -> WSPullResult {
         func progress(_ msg: String) { onProgress?(msg) }
-        guard var sess = session(fromCookie: oauthCookie, wssdi: wssdi) else {
+        guard let oauthObj = jsonWithAccessToken(oauthCookie),
+              let built = session(fromCookie: oauthCookie, wssdi: wssdi)
+        else {
             throw WSPullError.noSession
         }
-        if sess.identityCanonicalId.isEmpty {
-            let info = try await tokenInfo(sess)
-            sess.identityCanonicalId = identityFrom(info)
-            if sess.clientId.isEmpty {
-                sess.clientId = clientIdFromTokenInfo(info)
+        let box = TokenBox(sess: built, oauth: oauthObj)
+        if tokenNeedsRefresh(box.sess) {
+            try await refreshSession(box)
+        }
+        if box.sess.identityCanonicalId.isEmpty {
+            var info: [String: Any]
+            do {
+                info = try await tokenInfo(box.sess)
+            } catch WSPullError.unauthorized {
+                try await refreshSession(box)
+                info = try await tokenInfo(box.sess)
+            }
+            box.sess.identityCanonicalId = identityFrom(info)
+            if box.sess.clientId.isEmpty {
+                box.sess.clientId = clientIdFromTokenInfo(info)
             }
         }
-        if sess.identityCanonicalId.isEmpty {
+        if box.sess.identityCanonicalId.isEmpty {
             throw WSPullError.noIdentity
         }
 
         progress("Fetching accounts…")
-        let accounts = try await fetchAllAccounts(sess, identityId: sess.identityCanonicalId)
+        let accounts = try await fetchAllAccounts(box, identityId: box.sess.identityCanonicalId)
         var accById: [String: [String: Any]] = [:]
         for a in accounts {
             let aid = J.str(a, "id")
@@ -827,7 +983,7 @@ query IdentityHistoricalFinancialsQuery(
         for acc in accounts {
             let aid = J.str(acc, "id")
             if aid.isEmpty { continue }
-            let rawItems = try await fetchActivities(sess, accountId: aid)
+            let rawItems = try await fetchActivities(box, accountId: aid)
             for it in rawItems {
                 mapped.append(contentsOf: mapActivityRows(it, accounts: accById))
             }
@@ -840,7 +996,7 @@ query IdentityHistoricalFinancialsQuery(
         let activities = mapped
         progress("Fetching balances…")
         progress("Fetching equity history…")
-        let nav = try await fetchNavHistory(sess, identityId: sess.identityCanonicalId)
+        let nav = try await fetchNavHistory(box, identityId: box.sess.identityCanonicalId)
         progress("Fetching S&P 500…")
         async let spyTask = ensureSpyPrices()
         async let fxTask = ensureFxRates(activities: activities)
@@ -868,7 +1024,7 @@ query IdentityHistoricalFinancialsQuery(
 
     // MARK: - Fetch
 
-    private static func fetchAllAccounts(_ sess: WSSession, identityId: String) async throws -> [[String: Any]] {
+    private static func fetchAllAccounts(_ box: TokenBox, identityId: String) async throws -> [[String: Any]] {
         var accounts: [[String: Any]] = []
         var cursor: String? = nil
         while true {
@@ -878,7 +1034,7 @@ query IdentityHistoricalFinancialsQuery(
                 "startDate": "2015-01-01",
             ]
             if let cursor { variables["cursor"] = cursor }
-            let data = try await graphql(sess, operation: "FetchAllAccountFinancials", variables: variables, query: qFetchAllAccountFinancials)
+            let data = try await graphql(box, operation: "FetchAllAccountFinancials", variables: variables, query: qFetchAllAccountFinancials)
             let ident = J.dict(data["identity"])
             let conn = J.dict(ident["accounts"])
             for edge in J.arr(conn["edges"]) {
@@ -895,7 +1051,7 @@ query IdentityHistoricalFinancialsQuery(
         return accounts
     }
 
-    private static func fetchActivities(_ sess: WSSession, accountId: String) async throws -> [[String: Any]] {
+    private static func fetchActivities(_ box: TokenBox, accountId: String) async throws -> [[String: Any]] {
         var items: [[String: Any]] = []
         var cursor: String? = nil
         let end = Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: Date()) ?? Date()
@@ -913,7 +1069,7 @@ query IdentityHistoricalFinancialsQuery(
                 ] as [String: Any],
             ]
             if let cursor { variables["cursor"] = cursor }
-            let data = try await graphql(sess, operation: "FetchActivityFeedItems", variables: variables, query: qFetchActivityFeedItems)
+            let data = try await graphql(box, operation: "FetchActivityFeedItems", variables: variables, query: qFetchActivityFeedItems)
             let feed = J.dict(data["activityFeedItems"])
             for edge in J.arr(feed["edges"]) {
                 let node = J.dict(J.dict(edge)["node"])
@@ -928,7 +1084,7 @@ query IdentityHistoricalFinancialsQuery(
         return items
     }
 
-    private static func fetchNavHistory(_ sess: WSSession, identityId: String) async throws -> [WSNavPoint] {
+    private static func fetchNavHistory(_ box: TokenBox, identityId: String) async throws -> [WSNavPoint] {
         let today = isoDay(Date())
         let year0 = 2015
         let year1 = Int(today.prefix(4)) ?? year0
@@ -950,7 +1106,7 @@ query IdentityHistoricalFinancialsQuery(
                 ]
                 if let cursor { variables["cursor"] = cursor }
                 let data = try await graphql(
-                    sess,
+                    box,
                     operation: "IdentityHistoricalFinancialsQuery",
                     variables: variables,
                     query: qIdentityHistoricalFinancials
@@ -969,12 +1125,12 @@ query IdentityHistoricalFinancialsQuery(
     }
 
 
-    private static func fetchSecurity(_ sess: WSSession, securityId: String) async -> WSSecurityListing? {
+    private static func fetchSecurity(_ box: TokenBox, securityId: String) async -> WSSecurityListing? {
         let sid = securityId.trimmingCharacters(in: .whitespacesAndNewlines)
         if sid.isEmpty { return nil }
         do {
             let data = try await graphql(
-                sess,
+                box,
                 operation: "FetchSecurity",
                 variables: ["securityId": sid],
                 query: qFetchSecurity
@@ -1004,12 +1160,21 @@ query IdentityHistoricalFinancialsQuery(
         wssdi: String?,
         activities: [WSActivity]
     ) async -> [WSSecurityListing] {
-        guard let built = session(fromCookie: oauthCookie, wssdi: wssdi) else { return [] }
-        let sess = built
-        return await fetchListings(sess, activities: activities)
+        guard let oauthObj = jsonWithAccessToken(oauthCookie),
+              let built = session(fromCookie: oauthCookie, wssdi: wssdi)
+        else { return [] }
+        let box = TokenBox(sess: built, oauth: oauthObj)
+        do {
+            if tokenNeedsRefresh(box.sess) {
+                try await refreshSession(box)
+            }
+        } catch {
+            return []
+        }
+        return await fetchListings(box, activities: activities)
     }
 
-    private static func fetchListings(_ sess: WSSession, activities: [WSActivity]) async -> [WSSecurityListing] {
+    private static func fetchListings(_ box: TokenBox, activities: [WSActivity]) async -> [WSSecurityListing] {
         var seen = Set<String>()
         var ids: [String] = []
         for a in activities {
@@ -1018,8 +1183,7 @@ query IdentityHistoricalFinancialsQuery(
             seen.insert(sid)
             ids.append(sid)
         }
-        let sessCopy = sess
-        let first = await fetchSecurityBatch(sessCopy, ids: ids)
+        let first = await fetchSecurityBatch(box, ids: ids)
         var byId: [String: WSSecurityListing] = [:]
         var underIds: [String] = []
         for rec in first {
@@ -1030,16 +1194,16 @@ query IdentityHistoricalFinancialsQuery(
                 underIds.append(uid)
             }
         }
-        let second = await fetchSecurityBatch(sessCopy, ids: underIds)
+        let second = await fetchSecurityBatch(box, ids: underIds)
         for rec in second {
             byId[rec.id] = rec
         }
         return Array(byId.values)
     }
 
-    private static func fetchSecurityBatch(_ sess: WSSession, ids: [String]) async -> [WSSecurityListing] {
+    private static func fetchSecurityBatch(_ box: TokenBox, ids: [String]) async -> [WSSecurityListing] {
         if ids.isEmpty { return [] }
-        let sessCopy = sess
+        let boxCopy = box
         let idList = ids
         return await withTaskGroup(of: WSSecurityListing?.self) { group in
             var next = 0
@@ -1049,7 +1213,7 @@ query IdentityHistoricalFinancialsQuery(
                 let sid = idList[next]
                 next += 1
                 group.addTask {
-                    await fetchSecurity(sessCopy, securityId: sid)
+                    await fetchSecurity(boxCopy, securityId: sid)
                 }
             }
             var out: [WSSecurityListing] = []
@@ -1059,7 +1223,7 @@ query IdentityHistoricalFinancialsQuery(
                     let sid = idList[next]
                     next += 1
                     group.addTask {
-                        await fetchSecurity(sessCopy, securityId: sid)
+                        await fetchSecurity(boxCopy, securityId: sid)
                     }
                 }
             }
