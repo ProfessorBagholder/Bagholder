@@ -38,6 +38,7 @@ private enum HomeLayout {
 struct RootView: View {
     @StateObject private var session: SessionStore
     @StateObject private var journal: Journal
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         _session = StateObject(wrappedValue: SessionStore())
@@ -86,6 +87,11 @@ struct RootView: View {
         .toolbarBackground(.visible, for: .tabBar)
         .background(HomeColor.page.ignoresSafeArea())
         .onAppear { journal.handleAppear(session: session) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                journal.handleAppear(session: session)
+            }
+        }
         .onChange(of: session.pullToken) { _, _ in
             journal.handleSessionChange(session: session)
         }
@@ -734,9 +740,34 @@ final class Journal: ObservableObject {
     /// First paint: leftover Keychain must not start a download.
     /// A saved result is shown immediately and refreshed in the background.
     func handleAppear(session: SessionStore) {
-        guard session.connected, result != nil else { return }
+        guard session.connected else { return }
         if phase == .pulling { return }
-        pull(showProgress: false)
+        if result == nil {
+            pull(showProgress: true)
+            return
+        }
+        if Self.activityPullDue(lastSync: lastSync) {
+            pull(showProgress: false)
+        }
+    }
+
+    /// store.py activity_pull_due: America/Edmonton, Mon-Fri, at/after 14:00.
+    static func activityPullDue(lastSync: Date?, now: Date = Date()) -> Bool {
+        guard let tz = TimeZone(identifier: "America/Edmonton") else { return false }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        let weekday = cal.component(.weekday, from: now)
+        if weekday == 1 || weekday == 7 { return false }
+        var parts = cal.dateComponents([.year, .month, .day], from: now)
+        parts.hour = 14
+        parts.minute = 0
+        parts.second = 0
+        parts.nanosecond = 0
+        parts.timeZone = tz
+        guard let close = cal.date(from: parts) else { return false }
+        if now < close { return false }
+        guard let last = lastSync else { return true }
+        return last < close
     }
 
     /// Sign-in (`saveOAuthCookie`) starts a download. Disconnect clears the snapshot.
@@ -854,17 +885,21 @@ final class Journal: ObservableObject {
     }
 
     private func startListings(cookie: String, wssdi: String?, activities: [WSActivity]) {
+        let have = result?.listings ?? []
+        if !WSPull.needsListingFetch(activities: activities, have: have) { return }
         listingsTask?.cancel()
         let cookieCopy = cookie
         let wssdiCopy = wssdi
         let actsCopy = activities
+        let haveCopy = have
         listingsTask = Task { [weak self] in
             guard let self else { return }
             self.syncStep = "Fetching listings…"
             let fetched = await WSPull.fetchListings(
                 oauthCookie: cookieCopy,
                 wssdi: wssdiCopy,
-                activities: actsCopy
+                activities: actsCopy,
+                have: haveCopy
             )
             if Task.isCancelled { return }
             self.mergeListings(fetched)

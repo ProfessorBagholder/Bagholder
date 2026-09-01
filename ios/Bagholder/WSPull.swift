@@ -1047,10 +1047,17 @@ query IdentityHistoricalFinancialsQuery(
         }
         let pools = fifoPoolIds(accounts)
         var mapped: [WSActivity] = []
-        progress("Syncing transactions")
-        for acc in accounts {
+        let withIds = accounts.filter { !J.str($0, "id").isEmpty }
+        let total = withIds.count
+        for (i, acc) in withIds.enumerated() {
             let aid = J.str(acc, "id")
-            if aid.isEmpty { continue }
+            let x = i + 1
+            let nick = accountType(aid, accounts: accById)
+            if nick.isEmpty {
+                progress("Syncing transactions (\(x)/\(total))")
+            } else {
+                progress("Syncing transactions (\(x)/\(total)) \(nick)")
+            }
             let rawItems = try await fetchActivities(box, accountId: aid)
             for it in rawItems {
                 mapped.append(contentsOf: mapActivityRows(it, accounts: accById))
@@ -1223,11 +1230,41 @@ query IdentityHistoricalFinancialsQuery(
         }
     }
 
+    static func namedListingIds(_ listings: [WSSecurityListing]) -> Set<String> {
+        var named = Set<String>()
+        for s in listings {
+            let id = s.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if id.isEmpty || s.name.isEmpty { continue }
+            named.insert(id)
+        }
+        return named
+    }
+
+    static func needsListingFetch(activities: [WSActivity], have: [WSSecurityListing]) -> Bool {
+        !securityIdsNeedingFetch(activities: activities, have: have).isEmpty
+    }
+
+    private static func securityIdsNeedingFetch(activities: [WSActivity], have: [WSSecurityListing]) -> [String] {
+        let named = namedListingIds(have)
+        var seen = Set<String>()
+        var ids: [String] = []
+        for a in activities {
+            let sid = a.securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if sid.isEmpty || seen.contains(sid) || named.contains(sid) { continue }
+            seen.insert(sid)
+            ids.append(sid)
+        }
+        return ids
+    }
+
     static func fetchListings(
         oauthCookie: String,
         wssdi: String?,
-        activities: [WSActivity]
+        activities: [WSActivity],
+        have: [WSSecurityListing] = []
     ) async -> [WSSecurityListing] {
+        let ids = securityIdsNeedingFetch(activities: activities, have: have)
+        if ids.isEmpty { return [] }
         guard let oauthObj = jsonWithAccessToken(oauthCookie),
               let built = session(fromCookie: oauthCookie, wssdi: wssdi)
         else { return [] }
@@ -1240,25 +1277,27 @@ query IdentityHistoricalFinancialsQuery(
         } catch {
             return []
         }
-        return await fetchListings(box, activities: activities)
+        return await fetchListings(box, activities: activities, have: have)
     }
 
-    private static func fetchListings(_ box: TokenBox, activities: [WSActivity]) async -> [WSSecurityListing] {
+    private static func fetchListings(_ box: TokenBox, activities: [WSActivity], have: [WSSecurityListing]) async -> [WSSecurityListing] {
+        let named = namedListingIds(have)
         var seen = Set<String>()
         var ids: [String] = []
         for a in activities {
             let sid = a.securityId.trimmingCharacters(in: .whitespacesAndNewlines)
-            if sid.isEmpty || seen.contains(sid) { continue }
+            if sid.isEmpty || seen.contains(sid) || named.contains(sid) { continue }
             seen.insert(sid)
             ids.append(sid)
         }
+        if ids.isEmpty { return [] }
         let first = await fetchSecurityBatch(box, ids: ids)
         var byId: [String: WSSecurityListing] = [:]
         var underIds: [String] = []
         for rec in first {
             byId[rec.id] = rec
             let uid = rec.underlyingId.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !uid.isEmpty && !seen.contains(uid) {
+            if !uid.isEmpty && !seen.contains(uid) && !named.contains(uid) {
                 seen.insert(uid)
                 underIds.append(uid)
             }
