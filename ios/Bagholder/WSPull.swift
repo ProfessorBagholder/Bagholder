@@ -42,7 +42,7 @@ struct WSActivity: Equatable {
     var counterSymbol: String
 }
 
-struct WSClosedTrade: Identifiable {
+struct WSClosedTrade: Identifiable, Codable {
     var id: String
     var accountId: String
     var accountType: String
@@ -67,14 +67,14 @@ struct WSClosedTrade: Identifiable {
     var displaySide: String { openDirection == "SHORT" ? "COVER" : side }
 }
 
-struct WSNavPoint {
+struct WSNavPoint: Codable {
     var date: String
     var equity: Double
     var currency: String
     var netDeposits: Double?
 }
 
-struct WSMetrics {
+struct WSMetrics: Codable {
     var realizedPnlCad: Double
     var tradeCount: Int
     var winCount: Int
@@ -94,19 +94,19 @@ struct WSMetrics {
     var avgHoldDays: Double
 }
 
-struct WSMonthBar {
+struct WSMonthBar: Codable {
     var month: String
     var pnl: Double
 }
 
-struct WSYearRow {
+struct WSYearRow: Codable {
     var year: String
     var ret: String
     var spy: String
     var vs: String
 }
 
-struct WSPullResult {
+struct WSPullResult: Codable {
     var closed: [WSClosedTrade]
     var metrics: WSMetrics
     var nav: [WSNavPoint]

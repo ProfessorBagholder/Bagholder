@@ -462,12 +462,6 @@ struct EmptyTabView: View {
 }
 
 
-extension WSClosedTrade: Codable {}
-extension WSNavPoint: Codable {}
-extension WSMetrics: Codable {}
-extension WSMonthBar: Codable {}
-extension WSYearRow: Codable {}
-extension WSPullResult: Codable {}
 
 /// Token-free Home snapshot so the next launch can show last numbers immediately.
 private enum LastPullStore {
