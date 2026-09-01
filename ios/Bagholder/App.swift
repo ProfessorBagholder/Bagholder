@@ -19,6 +19,12 @@ private enum HomeColor {
     static let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
     static let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
     static let selected = Color(red: 0 / 255, green: 122 / 255, blue: 255 / 255)
+
+    static func signed(_ n: Double) -> Color {
+        if n < -0.0001 { return loss }
+        if n > 0.0001 { return profit }
+        return Color.primary
+    }
     static let hairline = Color(red: 60 / 255, green: 60 / 255, blue: 67 / 255).opacity(0.18)
 }
 
@@ -61,7 +67,7 @@ struct RootView: View {
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
 
             NavigationStack {
-                ClosedTradesView(session: session, journal: journal)
+                ClosedTradesView(journal: journal)
             }
             .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
 
@@ -414,9 +420,7 @@ struct AnnualPerformanceCard: View {
 }
 
 struct ClosedTradesView: View {
-    @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
-    @State private var showSettings = false
 
     private var rows: [WSClosedTrade] {
         guard let result = journal.result else { return [] }
@@ -454,19 +458,6 @@ struct ClosedTradesView: View {
         }
         .navigationTitle("Closed trades")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .accessibilityLabel("Settings")
-            }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(session: session)
-        }
     }
 }
 
@@ -486,10 +477,10 @@ private struct ClosedTradeRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Text(WSPull.formatCad(trade.pnlCad, digits: 2))
+            Text(WSPull.formatCad(trade.pnl, digits: 2))
                 .font(.system(size: 17, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(trade.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+                .foregroundStyle(HomeColor.signed(trade.pnl))
         }
     }
 }
@@ -519,8 +510,8 @@ private struct ClosedTradeDetailView: View {
                 fact("Entry", WSPull.formatCad(trade.entryPrice, digits: 2))
                 fact("Exit", WSPull.formatCad(trade.exitPrice, digits: 2))
                 LabeledContent("P&L $") {
-                    Text(WSPull.formatCad(trade.pnlCad, digits: 2))
-                        .foregroundStyle(trade.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+                    Text(WSPull.formatCad(trade.pnl, digits: 2))
+                        .foregroundStyle(HomeColor.signed(trade.pnl))
                         .monospacedDigit()
                 }
                 fact("P&L %", WSPull.formatPct(WSPull.closedPnlPct(trade)))
@@ -558,21 +549,29 @@ private struct ExecutionActivityRow: View {
     let activity: WSActivity
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(WSPull.executionSide(activity) + " " + WSPull.formatQty(abs(activity.quantity)))
-                    .font(.headline)
-                Text(WSPull.activityWhen(activity) + " \u{00B7} " + WSPull.formatCad(activity.unitPrice, digits: 2))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent("When") {
+                Text(WSPull.activityWhen(activity))
+                    .monospacedDigit()
             }
-            Spacer(minLength: 8)
-            Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
-                .monospacedDigit()
+            LabeledContent("Side") {
+                Text(WSPull.executionSide(activity))
+            }
+            LabeledContent("Qty") {
+                Text(WSPull.formatQty(activity.quantity))
+                    .monospacedDigit()
+            }
+            LabeledContent("Price") {
+                Text(WSPull.formatCad(activity.unitPrice, digits: 2))
+                    .monospacedDigit()
+            }
+            LabeledContent("Amount") {
+                Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
+                    .monospacedDigit()
+                    .foregroundStyle(HomeColor.signed(activity.netCashAmount))
+            }
         }
-        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .padding(.vertical, 4)
     }
 }
 
@@ -580,29 +579,34 @@ private struct ExecutionSliceRow: View {
     let slice: WSClosedTrade
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .center) {
-                Text(slice.displaySide + " " + WSPull.formatQty(slice.quantity))
-                    .font(.headline)
-                Spacer()
-                Text(WSPull.formatCad(slice.pnlCad, digits: 2))
-                    .font(.system(size: 17, weight: .semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent("In") {
+                Text(String(slice.entryDate.prefix(10)))
                     .monospacedDigit()
-                    .foregroundStyle(slice.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
             }
-            Text(
-                slice.entryDate
-                    + " \u{00B7} "
-                    + slice.exitDate
-                    + " \u{00B7} "
-                    + WSPull.formatCad(slice.entryPrice, digits: 2)
-                    + " \u{00B7} "
-                    + WSPull.formatCad(slice.exitPrice, digits: 2)
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            LabeledContent("Out") {
+                Text(String(slice.exitDate.prefix(10)))
+                    .monospacedDigit()
+            }
+            LabeledContent("Qty") {
+                Text(WSPull.formatQty(slice.quantity))
+                    .monospacedDigit()
+            }
+            LabeledContent("Entry") {
+                Text(WSPull.formatCad(slice.entryPrice, digits: 2))
+                    .monospacedDigit()
+            }
+            LabeledContent("Exit") {
+                Text(WSPull.formatCad(slice.exitPrice, digits: 2))
+                    .monospacedDigit()
+            }
+            LabeledContent("P&L") {
+                Text(WSPull.formatCad(slice.pnl, digits: 2))
+                    .monospacedDigit()
+                    .foregroundStyle(HomeColor.signed(slice.pnl))
+            }
         }
-        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .padding(.vertical, 4)
     }
 }
 
