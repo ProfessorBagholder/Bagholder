@@ -1971,11 +1971,12 @@ async function ensureSpyPrices() {
     { url: "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10y", kind: "yahoo" },
     { url: "https://stooq.com/q/d/l/?s=spy.us&i=d", kind: "stooq" },
   ];
+  const existing = state.spyByDate || {};
   for (let u = 0; u < urls.length; u++) {
     try {
       const res = await fetch(urls[u].url);
       if (!res.ok) continue;
-      const map = Object.assign({}, state.spyByDate);
+      const map = Object.assign({}, existing);
       let n = 0;
       if (urls[u].kind === "yahoo") n = ingestYahooChart(await res.json(), map);
       else n = ingestStooqCsv(await res.text(), map);
@@ -2496,7 +2497,8 @@ function persist() {
       localStorage.setItem(LS_NAV_BY_ACCOUNT, JSON.stringify(state.navByAccount || {}));
     }
     localStorage.setItem(LS_FX_TABLE, JSON.stringify(state.fxByDate || {}));
-    localStorage.setItem(LS_SPY, JSON.stringify(state.spyByDate || {}));
+    const spy = state.spyByDate || {};
+    if (Object.keys(spy).length) localStorage.setItem(LS_SPY, JSON.stringify(spy));
   } catch (e) {}
 }
 
@@ -4165,6 +4167,11 @@ function emptyStateHtml() {
     );
   }
   if (HAS_LOCAL_API && state.ws.connected && !state.ws.syncing && !state.ws.error) {
+    const savedBook = !!(state.ws.lastSync || state.ws.activityCount);
+    const bookLoaded = typeof window.__wsBookAt === "string" && window.__wsBookAt === (state.ws.lastSync || "");
+    if (savedBook && !(state.activities && state.activities.length) && !bookLoaded) {
+      return "";
+    }
     return (
       '<div class="empty"><h2>No activity yet</h2>' +
       "<p>The session is connected and the book is empty.</p>" +
@@ -4420,7 +4427,7 @@ function pollWsStatus() {
       prev.connectOpen !== state.connectOpen ||
       prev.syncStep !== state.ws.syncStep
     );
-    if (changed && state.ws.connected && state.ws.activityCount > 0 && state.ws.lastSync !== window.__wsBookAt) {
+    if (state.ws.connected && (state.ws.activityCount > 0 || state.ws.lastSync) && state.ws.lastSync !== window.__wsBookAt) {
       return fetchWsBook();
     }
     if (screenChanged) render();
@@ -4674,9 +4681,9 @@ function bootLocalApi() {
   api("GET", "/api/status").then((st) => {
     if (!st || st.ok === false) return;
     applyWsStatus(st);
-    if (st.activityCount > 0) {
+    if (st.activityCount > 0 || st.lastSync) {
       api("GET", "/api/book").then((book) => {
-        if (book && book.ok && Array.isArray(book.activities) && book.activities.length) {
+        if (book && book.ok && Array.isArray(book.activities)) {
           replaceWsActivities(book);
         }
         render();
