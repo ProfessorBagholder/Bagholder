@@ -1133,7 +1133,7 @@ query IdentityHistoricalFinancialsQuery(
         let fifo = matchFifo(activities)
         progress("Fetching balances…")
         progress("Fetching equity history…")
-        let sinceNav = storedNav.isEmpty ? nil : storedNav.map(\.date).filter { !$0.isEmpty }.max()
+        let sinceNav = navMissingDeposits(storedNav) ? nil : storedNav.map(\.date).filter { !$0.isEmpty }.max()
         let fetchedNav = try await fetchNavHistory(
             box,
             identityId: box.sess.identityCanonicalId,
@@ -1277,11 +1277,24 @@ query IdentityHistoricalFinancialsQuery(
         return order.compactMap { byKey[$0] } + noKey
     }
 
+    private static func navMissingDeposits(_ stored: [WSNavPoint]) -> Bool {
+        var seen = false
+        for p in stored {
+            let y = String(p.date.prefix(4))
+            if y != "2024" && y != "2025" && y != "2026" { continue }
+            seen = true
+            if p.netDeposits == nil { return true }
+        }
+        return !seen
+    }
+
     private static func mergeNav(stored: [WSNavPoint], incoming: [WSNavPoint]) -> [WSNavPoint] {
         var byDate: [String: WSNavPoint] = [:]
         for rec in stored { byDate[rec.date] = rec }
         for rec in incoming {
-            if rec.netDeposits == nil, let old = byDate[rec.date], old.netDeposits != nil {
+            if rec.netDeposits != nil {
+                byDate[rec.date] = rec
+            } else if let old = byDate[rec.date], old.netDeposits != nil {
                 var mixed = rec
                 mixed.netDeposits = old.netDeposits
                 byDate[rec.date] = mixed
@@ -1350,7 +1363,7 @@ query IdentityHistoricalFinancialsQuery(
         if sinceDay.count >= 4, let y = Int(String(sinceDay.prefix(4))) {
             year0 = y
         } else {
-            year0 = 2015
+            year0 = 2020
         }
         let year1 = Int(today.prefix(4)) ?? year0
         var points: [WSNavPoint] = []
