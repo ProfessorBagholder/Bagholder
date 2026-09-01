@@ -17,7 +17,7 @@ struct WSSession {
     var wssdi: String
 }
 
-struct WSActivity: Equatable {
+struct WSActivity: Equatable, Codable {
     var id: String
     var canonicalId: String
     var occurredAt: String
@@ -64,7 +64,16 @@ struct WSClosedTrade: Identifiable, Codable {
     var openDirection: String
     var buyActivityId: String
     var sellActivityId: String
+    /// FIFO member rows for a grouped Closed trades line. Not persisted.
+    var slices: [WSClosedTrade] = []
     var displaySide: String { openDirection == "SHORT" ? "COVER" : side }
+
+    enum CodingKeys: String, CodingKey {
+        case id, accountId, accountType, symbol, name, currency, side, quantity
+        case entryPrice, exitPrice, entryDate, exitDate, holdDays, commission
+        case entryCommission, exitCommission, pnl, pnlCad, openDirection
+        case buyActivityId, sellActivityId
+    }
 }
 
 struct WSNavPoint: Codable {
@@ -114,6 +123,55 @@ struct WSPullResult: Codable {
     var years: [WSYearRow]
     var avgAnnualized: String
     var avgAnnualizedSubtitle: String
+    var activities: [WSActivity] = []
+
+    enum CodingKeys: String, CodingKey {
+        case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities
+    }
+
+    init(
+        closed: [WSClosedTrade],
+        metrics: WSMetrics,
+        nav: [WSNavPoint],
+        monthly: [WSMonthBar],
+        years: [WSYearRow],
+        avgAnnualized: String,
+        avgAnnualizedSubtitle: String,
+        activities: [WSActivity] = []
+    ) {
+        self.closed = closed
+        self.metrics = metrics
+        self.nav = nav
+        self.monthly = monthly
+        self.years = years
+        self.avgAnnualized = avgAnnualized
+        self.avgAnnualizedSubtitle = avgAnnualizedSubtitle
+        self.activities = activities
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        closed = try c.decode([WSClosedTrade].self, forKey: .closed)
+        metrics = try c.decode(WSMetrics.self, forKey: .metrics)
+        nav = try c.decode([WSNavPoint].self, forKey: .nav)
+        monthly = try c.decode([WSMonthBar].self, forKey: .monthly)
+        years = try c.decode([WSYearRow].self, forKey: .years)
+        avgAnnualized = try c.decode(String.self, forKey: .avgAnnualized)
+        avgAnnualizedSubtitle = try c.decode(String.self, forKey: .avgAnnualizedSubtitle)
+        activities = try c.decodeIfPresent([WSActivity].self, forKey: .activities) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(closed, forKey: .closed)
+        try c.encode(metrics, forKey: .metrics)
+        try c.encode(nav, forKey: .nav)
+        try c.encode(monthly, forKey: .monthly)
+        try c.encode(years, forKey: .years)
+        try c.encode(avgAnnualized, forKey: .avgAnnualized)
+        try c.encode(avgAnnualizedSubtitle, forKey: .avgAnnualizedSubtitle)
+        try c.encode(activities, forKey: .activities)
+    }
 }
 
 enum WSPull {
@@ -663,7 +721,8 @@ query IdentityHistoricalFinancialsQuery(
             monthly: monthly,
             years: yearRows,
             avgAnnualized: formatReturn(ann.rate),
-            avgAnnualizedSubtitle: formatYearSpan(ann.years)
+            avgAnnualizedSubtitle: formatYearSpan(ann.years),
+            activities: activities
         )
     }
 
@@ -1472,6 +1531,94 @@ query IdentityHistoricalFinancialsQuery(
         return "$" + absS
     }
 
+    static func activityWhen(_ a: WSActivity) -> String {
+        let raw = (a.occurredAt.isEmpty ? a.transactionDate : a.occurredAt).trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty { return "" }
+        if let t = raw.firstIndex(of: "T") {
+            let day = String(raw.prefix(10))
+            let after = raw[raw.index(after: t)...]
+            let clock = String(after.prefix(5))
+            return clock.count == 5 ? day + " " + clock : day
+        }
+        return String(raw.prefix(10))
+    }
+
+    static func formatHold(_ days: Int) -> String {
+        if days == 0 { return "intraday" }
+        if days == 1 { return "1d" }
+        if days < 60 { return "\(days)d" }
+        let months = Int((Double(days) / 30.44).rounded())
+        return "\(days)d (~\(months)mo)"
+    }
+
+    static func formatCloseDate(_ ymd: String) -> String {
+        let raw = String(ymd.prefix(10))
+        let parts = raw.split(separator: "-")
+        guard parts.count == 3, let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else {
+            return raw
+        }
+        let names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        let mon = (month >= 1 && month <= 12) ? names[month] : String(parts[1])
+        let thisYear = Calendar.current.component(.year, from: Date())
+        if year == thisYear { return "\(mon) \(day)" }
+        return "\(mon) \(day), \(year)"
+    }
+
+    static func formatQty(_ n: Double) -> String {
+        if n == n.rounded() {
+            return String(Int(n.rounded()))
+        }
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_CA")
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 8
+        return f.string(from: NSNumber(value: n)) ?? String(n)
+    }
+
+    static func closedPnlPct(_ t: WSClosedTrade) -> Double? {
+        let den = t.entryPrice * t.quantity * optionMultiplier(t.symbol)
+        if den == 0 { return nil }
+        return t.pnl / den
+    }
+
+    static func formatPct(_ r: Double?) -> String {
+        guard let r, r.isFinite else { return emDash }
+        let body = jsToFixed(abs(r) * 100, digits: 1) + "%"
+        if r < 0 { return minus + body }
+        return body
+    }
+
+    static func activitiesInGroup(_ g: WSClosedTrade, activities: [WSActivity]) -> [WSActivity] {
+        var byId: [String: WSActivity] = [:]
+        for a in activities { byId[a.id] = a }
+        var seen = Set<String>()
+        var acts: [WSActivity] = []
+        let members = g.slices.isEmpty ? [g] : g.slices
+        for s in members {
+            for id in [s.buyActivityId, s.sellActivityId] {
+                if id.isEmpty || seen.contains(id) { continue }
+                seen.insert(id)
+                if let a = byId[id] { acts.append(a) }
+            }
+        }
+        acts.sort { a, b in
+            let wa = activityWhen(a)
+            let wb = activityWhen(b)
+            if wa != wb { return wa < wb }
+            return a.id < b.id
+        }
+        return acts
+    }
+
+    static func executionSide(_ a: WSActivity) -> String {
+        if let s = tradeSide(a) { return s }
+        let raw = compactType(a.activitySubType.isEmpty ? a.activityType : a.activitySubType)
+        if raw.contains("SELL") { return "SELL" }
+        return "BUY"
+    }
+
+
     static func formatReturn(_ r: Double?) -> String {
         // ledger.html formatReturn: (r * 100).toFixed(1) + "%"
         guard let r, r.isFinite else { return emDash }
@@ -1871,7 +2018,7 @@ query IdentityHistoricalFinancialsQuery(
     }
 
     /// ledger.html groupClosedByExit with no saved groups: defaultGroupsUntilSideChange.
-    static func closedTradesTable(_ trades: [WSClosedTrade]) -> [WSClosedTrade] {
+    static func closedTradesTable(_ trades: [WSClosedTrade], activities _: [WSActivity] = []) -> [WSClosedTrade] {
         let grouped = defaultGroupsUntilSideChange(trades)
         return grouped.sorted { a, b in
             if a.exitDate != b.exitDate { return a.exitDate > b.exitDate }
@@ -1924,6 +2071,7 @@ query IdentityHistoricalFinancialsQuery(
         g.entryPrice = g.quantity != 0 ? entryN / g.quantity : 0
         g.exitPrice = g.quantity != 0 ? exitN / g.quantity : slices[0].exitPrice
         g.holdDays = daysBetween(g.entryDate, g.exitDate)
+        g.slices = slices
         return g
     }
 

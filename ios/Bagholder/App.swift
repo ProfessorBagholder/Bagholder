@@ -61,7 +61,7 @@ struct RootView: View {
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
 
             NavigationStack {
-                ClosedTradesView(journal: journal)
+                ClosedTradesView(session: session, journal: journal)
             }
             .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
 
@@ -414,37 +414,195 @@ struct AnnualPerformanceCard: View {
 }
 
 struct ClosedTradesView: View {
+    @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
+    @State private var showSettings = false
+
+    private var rows: [WSClosedTrade] {
+        guard let result = journal.result else { return [] }
+        return WSPull.closedTradesTable(result.closed, activities: result.activities)
+    }
+
+    private var activities: [WSActivity] {
+        journal.result?.activities ?? []
+    }
 
     var body: some View {
         List {
-            if let result = journal.result {
-                let rows = WSPull.closedTradesTable(result.closed)
-                if rows.isEmpty {
-                    Text("None yet")
-                        .foregroundStyle(.secondary)
-                } else {
+            if !rows.isEmpty {
+                Section {
                     ForEach(rows) { t in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(t.symbol)
-                                    .font(.body.weight(.semibold))
-                                Text(t.displaySide)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(WSPull.formatCad(t.pnlCad, digits: 2))
-                                .foregroundStyle(t.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+                        NavigationLink {
+                            ClosedTradeDetailView(trade: t, activities: activities)
+                        } label: {
+                            ClosedTradeRow(trade: t)
                         }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
                 }
-            } else {
-                Text("None yet")
-                    .foregroundStyle(.secondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "No closed trades",
+                    systemImage: "list.bullet",
+                    description: Text("They show up here.")
+                )
             }
         }
         .navigationTitle("Closed trades")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(session: session)
+        }
+    }
+}
+
+private struct ClosedTradeRow: View {
+    let trade: WSClosedTrade
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(trade.symbol)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                Text(trade.displaySide + " \u{00B7} " + WSPull.formatCloseDate(trade.exitDate))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Text(WSPull.formatCad(trade.pnlCad, digits: 2))
+                .font(.system(size: 17, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(trade.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+        }
+    }
+}
+
+private struct ClosedTradeDetailView: View {
+    let trade: WSClosedTrade
+    let activities: [WSActivity]
+
+    private var executionActs: [WSActivity] {
+        WSPull.activitiesInGroup(trade, activities: activities)
+    }
+
+    private var executionCount: Int {
+        executionActs.isEmpty ? trade.slices.count : executionActs.count
+    }
+
+    var body: some View {
+        List {
+            Section {
+                if !trade.name.isEmpty, trade.name != trade.symbol {
+                    Text(trade.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                fact("In", trade.entryDate)
+                fact("Out", trade.exitDate)
+                fact("Entry", WSPull.formatCad(trade.entryPrice, digits: 2))
+                fact("Exit", WSPull.formatCad(trade.exitPrice, digits: 2))
+                LabeledContent("P&L $") {
+                    Text(WSPull.formatCad(trade.pnlCad, digits: 2))
+                        .foregroundStyle(trade.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+                        .monospacedDigit()
+                }
+                fact("P&L %", WSPull.formatPct(WSPull.closedPnlPct(trade)))
+                fact("Hold", WSPull.formatHold(trade.holdDays))
+                fact("Currency", trade.currency)
+            }
+            Section("Executions (\(executionCount))") {
+                if executionActs.isEmpty && trade.slices.isEmpty {
+                    ContentUnavailableView("No executions", systemImage: "list.bullet")
+                } else if !executionActs.isEmpty {
+                    ForEach(executionActs, id: \.id) { a in
+                        ExecutionActivityRow(activity: a)
+                    }
+                } else {
+                    ForEach(trade.slices) { s in
+                        ExecutionSliceRow(slice: s)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Executions (\(executionCount))")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        LabeledContent(label) {
+            Text(value)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct ExecutionActivityRow: View {
+    let activity: WSActivity
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(WSPull.executionSide(activity) + " " + WSPull.formatQty(abs(activity.quantity)))
+                    .font(.headline)
+                Text(WSPull.activityWhen(activity) + " \u{00B7} " + WSPull.formatCad(activity.unitPrice, digits: 2))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+    }
+}
+
+private struct ExecutionSliceRow: View {
+    let slice: WSClosedTrade
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .center) {
+                Text(slice.displaySide + " " + WSPull.formatQty(slice.quantity))
+                    .font(.headline)
+                Spacer()
+                Text(WSPull.formatCad(slice.pnlCad, digits: 2))
+                    .font(.system(size: 17, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(slice.pnlCad < 0 ? HomeColor.loss : HomeColor.profit)
+            }
+            Text(
+                slice.entryDate
+                    + " \u{00B7} "
+                    + slice.exitDate
+                    + " \u{00B7} "
+                    + WSPull.formatCad(slice.entryPrice, digits: 2)
+                    + " \u{00B7} "
+                    + WSPull.formatCad(slice.exitPrice, digits: 2)
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 }
 
