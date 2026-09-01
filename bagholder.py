@@ -43,7 +43,7 @@ GRAPHQL_VERSION = "12"
 WS_CLIENT = "@wealthsimple/wealthsimple"
 LOGIN_URL = "https://my.wealthsimple.com/app/login"
 FRED_SP500_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
-FRED_TIMEOUT_SEC = 30
+FRED_TIMEOUT_SEC = 25
 FRED_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
@@ -1348,24 +1348,81 @@ def parse_fred_sp500_csv(text):
     return out
 
 
-def refresh_spy_prices():
-    """Download FRED SP500. Keep stored prices if the fetch is empty or fails."""
-    store.ensure()
+def _set_spy_error(msg):
+    with _lock:
+        cur = _state.get("error") or ""
+        if msg:
+            _state["error"] = msg
+        elif cur.startswith("S&P 500"):
+            _state["error"] = ""
+
+
+def _curl_fred_sp500():
+    """Same path as `curl -sL --max-time 25` of the FRED CSV. Trailer is HTTP code."""
+    ua = cached_user_agent() or FRED_UA
+    curl = shutil.which("curl") or "curl"
+    args = [
+        curl,
+        "-sL",
+        "--max-time",
+        str(FRED_TIMEOUT_SEC),
+        "-A",
+        ua,
+        "-H",
+        "Accept: text/csv,*/*;q=0.8",
+        "-w",
+        "\n%{http_code}",
+        FRED_SP500_URL,
+    ]
     try:
-        ua = cached_user_agent() or FRED_UA
+        proc = subprocess.run(args, capture_output=True, timeout=FRED_TIMEOUT_SEC + 3)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("HTTP - curl timed out") from e
+    except FileNotFoundError:
         hdrs = {
             "Accept": "text/csv,*/*;q=0.8",
             "User-Agent": ua,
         }
         req = Request(FRED_SP500_URL, headers=hdrs)
-        with urlopen(req, timeout=FRED_TIMEOUT_SEC, context=_ssl_context()) as resp:
+        with urlopen(req, timeout=FRED_TIMEOUT_SEC) as resp:
             raw = resp.read()
+            status = getattr(resp, "status", None) or 200
             body = _http_body_text(raw, getattr(resp, "headers", None))
+        if int(status) != 200:
+            raise RuntimeError("HTTP %s" % status)
+        return body, "HTTP %s" % status
+    out = (proc.stdout or b"").decode("utf-8", "replace")
+    err = (proc.stderr or b"").decode("utf-8", "replace").strip()
+    lines = out.splitlines()
+    status = ""
+    if lines and lines[-1].strip().isdigit():
+        status = lines[-1].strip()
+        body = "\n".join(lines[:-1])
+    else:
+        body = out
+    status_line = "HTTP %s" % (status or "-")
+    if err:
+        status_line = "%s %s" % (status_line, err)
+    if proc.returncode != 0:
+        raise RuntimeError("%s curl exit %s" % (status_line, proc.returncode))
+    if status and status != "200":
+        raise RuntimeError(status_line)
+    return body, status_line
+
+
+def refresh_spy_prices():
+    """Download FRED SP500. Keep stored prices if the fetch is empty or fails."""
+    store.ensure()
+    try:
+        body, status_line = _curl_fred_sp500()
         mapping = parse_fred_sp500_csv(body)
         if not mapping:
+            _set_spy_error("S&P 500 empty table (%s)" % status_line)
             return store.spy_by_date()
+        _set_spy_error("")
         return store.save_spy_by_date(mapping)
-    except Exception:
+    except Exception as e:
+        _set_spy_error("S&P 500 %s" % _public_sync_error(e))
         return store.spy_by_date()
 
 

@@ -4330,6 +4330,25 @@ function replaceWsActivities(book) {
   render();
   ensureFxRates();
   ensureSpyPrices();
+  pollSpyByDateIfEmpty(book);
+}
+
+function pollSpyByDateIfEmpty(book) {
+  if (!HAS_LOCAL_API || !state.ws.connected) return;
+  const spy = (book && book.spyByDate && typeof book.spyByDate === "object" && !Array.isArray(book.spyByDate))
+    ? book.spyByDate : {};
+  if (Object.keys(spy).length) {
+    window.__spyBookPolls = 0;
+    return;
+  }
+  const n = window.__spyBookPolls || 0;
+  if (n >= 8) return;
+  window.__spyBookPolls = n + 1;
+  setTimeout(function () {
+    api("GET", "/api/book").then(function (next) {
+      if (next && next.ok && Array.isArray(next.activities)) replaceWsActivities(next);
+    });
+  }, 2000);
 }
 
 function importElapsedText() {
