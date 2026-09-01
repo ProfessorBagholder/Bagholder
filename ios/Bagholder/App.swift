@@ -963,6 +963,11 @@ final class SessionStore: ObservableObject {
         Keychain.save(oauthCookie: value, wssdi: wssdi)
         connected = true
         pullToken += 1
+        let cookieCopy = value
+        let wssdiCopy = wssdi
+        Task {
+            await WSPull.stampClientId(oauthCookie: cookieCopy, wssdi: wssdiCopy)
+        }
     }
 
     func disconnect() {

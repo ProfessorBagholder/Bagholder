@@ -667,10 +667,12 @@ query IdentityHistoricalFinancialsQuery(
         guard let oauth = jsonWithAccessToken(raw) else { return nil }
         let access = J.str(oauth, "access_token")
         if access.isEmpty { return nil }
+        var cid = clientIdFromObject(oauth)
+        if cid.isEmpty { cid = clientIdFromJWT(access) }
         return WSSession(
             accessToken: access,
             refreshToken: J.str(oauth, "refresh_token"),
-            clientId: J.str(oauth, "client_id"),
+            clientId: cid,
             identityCanonicalId: identityFrom(oauth),
             expiresAt: expiresAtString(oauth["expires_at"]),
             sessionId: J.str(oauth, "session_id"),
@@ -686,11 +688,76 @@ query IdentityHistoricalFinancialsQuery(
         return ""
     }
 
+    private static func clientIdFromObject(_ obj: [String: Any]) -> String {
+        for k in ["client_id", "clientId", "application_uid", "azp"] {
+            let v = J.str(obj, k).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { return v }
+        }
+        let app = J.dict(obj["application"])
+        for k in ["uid", "client_id", "clientId"] {
+            let v = J.str(app, k).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { return v }
+        }
+        return ""
+    }
+
     private static func clientIdFromTokenInfo(_ info: [String: Any]) -> String {
+        let fromObj = clientIdFromObject(info)
+        if !fromObj.isEmpty { return fromObj }
         let uid = J.str(info, "application_uid")
         if !uid.isEmpty { return uid }
         let app = J.dict(info["application"])
-        return J.str(app, "uid")
+        let a = J.str(app, "uid")
+        if !a.isEmpty { return a }
+        return J.str(app, "client_id")
+    }
+
+    private static func clientIdFromJWT(_ token: String) -> String {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return "" }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = payload.count % 4
+        if rem != 0 {
+            payload += String(repeating: "=", count: 4 - rem)
+        }
+        guard let data = Data(base64Encoded: payload),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return "" }
+        return clientIdFromObject(obj)
+    }
+
+    static func stampClientId(oauthCookie: String, wssdi: String?) async {
+        guard let oauthObj = jsonWithAccessToken(oauthCookie),
+              let built = session(fromCookie: oauthCookie, wssdi: wssdi)
+        else { return }
+        let box = TokenBox(sess: built, oauth: oauthObj)
+        await ensureClientId(box)
+    }
+
+    private static func persistCookie(_ box: TokenBox) {
+        guard let json = try? JSONSerialization.data(withJSONObject: box.oauth),
+              let str = String(data: json, encoding: .utf8)
+        else { return }
+        let wssdi = box.sess.wssdi.isEmpty ? nil : box.sess.wssdi
+        Keychain.save(oauthCookie: str, wssdi: wssdi)
+    }
+
+    private static func ensureClientId(_ box: TokenBox) async {
+        var cid = clientIdFromObject(box.oauth)
+        if cid.isEmpty { cid = clientIdFromJWT(box.sess.accessToken) }
+        if cid.isEmpty {
+            if let info = try? await tokenInfo(box.sess) {
+                cid = clientIdFromTokenInfo(info)
+            }
+        }
+        cid = cid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cid.isEmpty { return }
+        if box.sess.clientId == cid, J.str(box.oauth, "client_id") == cid { return }
+        box.sess.clientId = cid
+        box.oauth["client_id"] = cid
+        persistCookie(box)
     }
 
     private static func expiresAtString(_ raw: Any?) -> String {
@@ -813,12 +880,7 @@ query IdentityHistoricalFinancialsQuery(
         box.oauth["client_id"] = cidCopy
         box.sess.clientId = cidCopy
         box.didRefresh = true
-        if let json = try? JSONSerialization.data(withJSONObject: box.oauth),
-           let str = String(data: json, encoding: .utf8)
-        {
-            let wssdi = box.sess.wssdi.isEmpty ? nil : box.sess.wssdi
-            Keychain.save(oauthCookie: str, wssdi: wssdi)
-        }
+        persistCookie(box)
     }
 
     // MARK: - HTTP
@@ -950,6 +1012,7 @@ query IdentityHistoricalFinancialsQuery(
             throw WSPullError.noSession
         }
         let box = TokenBox(sess: built, oauth: oauthObj)
+        await ensureClientId(box)
         if tokenNeedsRefresh(box.sess) {
             try await refreshSession(box)
         }
@@ -963,7 +1026,12 @@ query IdentityHistoricalFinancialsQuery(
             }
             box.sess.identityCanonicalId = identityFrom(info)
             if box.sess.clientId.isEmpty {
-                box.sess.clientId = clientIdFromTokenInfo(info)
+                let cid = clientIdFromTokenInfo(info)
+                if !cid.isEmpty {
+                    box.sess.clientId = cid
+                    box.oauth["client_id"] = cid
+                    persistCookie(box)
+                }
             }
         }
         if box.sess.identityCanonicalId.isEmpty {
@@ -1165,6 +1233,7 @@ query IdentityHistoricalFinancialsQuery(
         else { return [] }
         let box = TokenBox(sess: built, oauth: oauthObj)
         do {
+            await ensureClientId(box)
             if tokenNeedsRefresh(box.sess) {
                 try await refreshSession(box)
             }
