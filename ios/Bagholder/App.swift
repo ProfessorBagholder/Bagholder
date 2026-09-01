@@ -110,7 +110,7 @@ struct HomeView: View {
         }
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
-            SettingsView(session: session)
+            SettingsView(session: session, journal: journal)
         }
         .fullScreenCover(isPresented: $showLogin) {
             ConnectLoginView(session: session, isPresented: $showLogin)
@@ -661,8 +661,11 @@ private enum LastPullStore {
     }
 
     static func save(_ result: WSPullResult) {
-        guard let data = try? JSONEncoder().encode(result) else { return }
-        try? data.write(to: url, options: .atomic)
+        let snap = result
+        Task.detached {
+            guard let data = try? JSONEncoder().encode(snap) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     static func clear() {
@@ -689,6 +692,7 @@ final class Journal: ObservableObject {
     @Published var syncStep: String = ""
     @Published var lastSync: Date?
     private var task: Task<Void, Never>?
+    private var listingsTask: Task<Void, Never>?
     private static let lastSyncKey = "bagholder.lastSync"
 
     var isLive: Bool { result != nil }
@@ -732,6 +736,8 @@ final class Journal: ObservableObject {
         if !session.connected {
             task?.cancel()
             task = nil
+            listingsTask?.cancel()
+            listingsTask = nil
             phase = .idle
             result = nil
             syncStep = ""
@@ -743,8 +749,13 @@ final class Journal: ObservableObject {
         pull(showProgress: result == nil)
     }
 
+    func refresh() {
+        pull(showProgress: true)
+    }
+
     private func pull(showProgress: Bool) {
         task?.cancel()
+        listingsTask?.cancel()
         if showProgress {
             phase = .pulling
             syncStep = "Fetching accounts…"
@@ -768,12 +779,18 @@ final class Journal: ObservableObject {
                     }
                 }
                 if Task.isCancelled { return }
-                self.result = snap
+                var applied = snap
+                if applied.listings.isEmpty, let old = self.result?.listings, !old.isEmpty {
+                    applied.listings = old
+                }
+                self.result = applied
                 self.phase = .ready
                 self.syncStep = ""
                 self.lastSync = Date()
                 UserDefaults.standard.set(self.lastSync, forKey: Self.lastSyncKey)
-                LastPullStore.save(snap)
+                LastPullStore.save(applied)
+                let acts = applied.activities
+                self.startListings(cookie: cookie, wssdi: wssdi, activities: acts)
             } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
                 if Task.isCancelled { return }
                 self.syncStep = ""
@@ -788,6 +805,42 @@ final class Journal: ObservableObject {
                 }
             }
         }
+    }
+
+    private func startListings(cookie: String, wssdi: String?, activities: [WSActivity]) {
+        listingsTask?.cancel()
+        let cookieCopy = cookie
+        let wssdiCopy = wssdi
+        let actsCopy = activities
+        listingsTask = Task { [weak self] in
+            guard let self else { return }
+            self.syncStep = "Fetching listings…"
+            let fetched = await WSPull.fetchListings(
+                oauthCookie: cookieCopy,
+                wssdi: wssdiCopy,
+                activities: actsCopy
+            )
+            if Task.isCancelled { return }
+            self.mergeListings(fetched)
+            if self.syncStep == "Fetching listings…" {
+                self.syncStep = ""
+            }
+        }
+    }
+
+    private func mergeListings(_ extra: [WSSecurityListing]) {
+        guard var snap = result else { return }
+        var byId: [String: WSSecurityListing] = [:]
+        for s in snap.listings { byId[s.id] = s }
+        for s in extra {
+            if s.name.isEmpty, let old = byId[s.id], !old.name.isEmpty {
+                continue
+            }
+            byId[s.id] = s
+        }
+        snap.listings = Array(byId.values)
+        result = snap
+        LastPullStore.save(snap)
     }
 }
 
@@ -964,6 +1017,7 @@ private func jsonWithAccessToken(_ raw: String) -> [String: Any]? {
 
 struct SettingsView: View {
     @ObservedObject var session: SessionStore
+    @ObservedObject var journal: Journal
     @Environment(\.dismiss) private var dismiss
     @State private var showLogin = false
 
@@ -973,6 +1027,10 @@ struct SettingsView: View {
                 Section {
                     if session.connected {
                         Text("Connected")
+                        Button("Refresh") {
+                            journal.refresh()
+                        }
+                        .disabled(journal.phase == .pulling)
                         Button("Disconnect", role: .destructive) {
                             session.disconnect()
                         }

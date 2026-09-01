@@ -853,9 +853,6 @@ query IdentityHistoricalFinancialsQuery(
         let monthly = monthlyPnl(closedForMetrics)
         let yearRows = annualRows(nav: nav, spy: spy, activities: mapped)
         let ann = accountAnnualizedReturn(nav: nav, years: yearRows.map(\.year).sorted())
-        progress("Fetching listings…")
-        let listingSess = sess
-        let listings = await fetchListings(listingSess, activities: activities)
         return WSPullResult(
             closed: closedFx,
             metrics: metrics,
@@ -865,7 +862,7 @@ query IdentityHistoricalFinancialsQuery(
             avgAnnualized: formatReturn(ann.rate),
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
             activities: activities,
-            listings: listings
+            listings: []
         )
     }
 
@@ -1002,6 +999,16 @@ query IdentityHistoricalFinancialsQuery(
         }
     }
 
+    static func fetchListings(
+        oauthCookie: String,
+        wssdi: String?,
+        activities: [WSActivity]
+    ) async -> [WSSecurityListing] {
+        guard let built = session(fromCookie: oauthCookie, wssdi: wssdi) else { return [] }
+        let sess = built
+        return await fetchListings(sess, activities: activities)
+    }
+
     private static func fetchListings(_ sess: WSSession, activities: [WSActivity]) async -> [WSSecurityListing] {
         var seen = Set<String>()
         var ids: [String] = []
@@ -1011,24 +1018,53 @@ query IdentityHistoricalFinancialsQuery(
             seen.insert(sid)
             ids.append(sid)
         }
+        let sessCopy = sess
+        let first = await fetchSecurityBatch(sessCopy, ids: ids)
         var byId: [String: WSSecurityListing] = [:]
         var underIds: [String] = []
-        for sid in ids {
-            if let rec = await fetchSecurity(sess, securityId: sid) {
-                byId[rec.id] = rec
-                let uid = rec.underlyingId.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !uid.isEmpty && !seen.contains(uid) {
-                    seen.insert(uid)
-                    underIds.append(uid)
-                }
+        for rec in first {
+            byId[rec.id] = rec
+            let uid = rec.underlyingId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !uid.isEmpty && !seen.contains(uid) {
+                seen.insert(uid)
+                underIds.append(uid)
             }
         }
-        for sid in underIds {
-            if let rec = await fetchSecurity(sess, securityId: sid) {
-                byId[rec.id] = rec
-            }
+        let second = await fetchSecurityBatch(sessCopy, ids: underIds)
+        for rec in second {
+            byId[rec.id] = rec
         }
         return Array(byId.values)
+    }
+
+    private static func fetchSecurityBatch(_ sess: WSSession, ids: [String]) async -> [WSSecurityListing] {
+        if ids.isEmpty { return [] }
+        let sessCopy = sess
+        let idList = ids
+        return await withTaskGroup(of: WSSecurityListing?.self) { group in
+            var next = 0
+            let total = idList.count
+            let startCount = min(6, total)
+            while next < startCount {
+                let sid = idList[next]
+                next += 1
+                group.addTask {
+                    await fetchSecurity(sessCopy, securityId: sid)
+                }
+            }
+            var out: [WSSecurityListing] = []
+            for await rec in group {
+                if let rec { out.append(rec) }
+                if next < total {
+                    let sid = idList[next]
+                    next += 1
+                    group.addTask {
+                        await fetchSecurity(sessCopy, securityId: sid)
+                    }
+                }
+            }
+            return out
+        }
     }
 
     private static func navPointsFromPayload(_ data: [String: Any]) -> ([WSNavPoint], [String: Any]) {
