@@ -1280,7 +1280,15 @@ query IdentityHistoricalFinancialsQuery(
     private static func mergeNav(stored: [WSNavPoint], incoming: [WSNavPoint]) -> [WSNavPoint] {
         var byDate: [String: WSNavPoint] = [:]
         for rec in stored { byDate[rec.date] = rec }
-        for rec in incoming { byDate[rec.date] = rec }
+        for rec in incoming {
+            if rec.netDeposits == nil, let old = byDate[rec.date], old.netDeposits != nil {
+                var mixed = rec
+                mixed.netDeposits = old.netDeposits
+                byDate[rec.date] = mixed
+            } else {
+                byDate[rec.date] = rec
+            }
+        }
         return byDate.keys.sorted().compactMap { byDate[$0] }
     }
 
@@ -1803,13 +1811,13 @@ query IdentityHistoricalFinancialsQuery(
             quantity = -abs(qtyAbs)
         } else if typ == "OPTIONS_BUY" {
             category = "trade"
-            if isToClose(sub) { activityType = "OPTIONS_BUY"; activitySub = "BUYTOCLOSE" }
-            else { activityType = "OPTIONS_BUY"; activitySub = "BUYTOOPEN" }
+            if isToClose(sub) { activityType = "Trade"; activitySub = "BUYTOCLOSE" }
+            else { activityType = "Trade"; activitySub = "BUYTOOPEN" }
             quantity = abs(qtyAbs)
         } else if typ == "OPTIONS_SELL" {
             category = "trade"
-            if isToClose(sub) { activityType = "OPTIONS_SELL"; activitySub = "SELLTOCLOSE" }
-            else { activityType = "OPTIONS_SELL"; activitySub = "SELLTOOPEN" }
+            if isToClose(sub) { activityType = "Trade"; activitySub = "SELLTOCLOSE" }
+            else { activityType = "Trade"; activitySub = "SELLTOOPEN" }
             quantity = -abs(qtyAbs)
         } else if ["EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE"].contains(typ) {
             category = "option_event"
@@ -1912,8 +1920,10 @@ query IdentityHistoricalFinancialsQuery(
         if ["BUY", "BUYTOOPEN", "BTO", "BUYTOCLOSE", "BTC"].contains(s) { return "BUY" }
         if ["SELL", "SELLTOOPEN", "STO", "SELLTOCLOSE", "STC"].contains(s) { return "SELL" }
         let t = compactType(a.activityType)
-        if ["BUYTOOPEN", "BTO", "BUYTOCLOSE", "BTC"].contains(t) { return "BUY" }
-        if ["SELLTOOPEN", "STO", "SELLTOCLOSE", "STC"].contains(t) { return "SELL" }
+        if ["BUYTOOPEN", "BTO", "BUYTOCLOSE", "BTC", "OPTIONSBUY"].contains(t) { return "BUY" }
+        if ["SELLTOOPEN", "STO", "SELLTOCLOSE", "STC", "OPTIONSSELL"].contains(t) { return "SELL" }
+        if t.contains("OPTIONSBUY") { return "BUY" }
+        if t.contains("OPTIONSSELL") { return "SELL" }
         return nil
     }
     private static func isIntentionalOpen(_ a: WSActivity) -> Bool {
@@ -2095,8 +2105,11 @@ query IdentityHistoricalFinancialsQuery(
             return Fill(activity: a, side: side, qty: qty)
         }
         fills.sort { a, b in
-            // ledger.html 1565-1571: transactionDate, fillRank, id. Date only.
-            let d = a.activity.transactionDate.compare(b.activity.transactionDate)
+            let ta = a.activity.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tb = b.activity.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sa = ta.isEmpty ? a.activity.transactionDate : ta
+            let sb = tb.isEmpty ? b.activity.transactionDate : tb
+            let d = sa.compare(sb)
             if d != .orderedSame { return d == .orderedAscending }
             let ra = fillRank(a), rb = fillRank(b)
             if ra != rb { return ra < rb }
@@ -2538,19 +2551,22 @@ query IdentityHistoricalFinancialsQuery(
         return map.keys.sorted().map { WSMonthBar(month: $0, pnl: map[$0] ?? 0) }
     }
 
+    private static func sortedNav(_ hist: [WSNavPoint]) -> [WSNavPoint] {
+        hist.sorted { $0.date < $1.date }
+    }
     private static func histNavOn(_ hist: [WSNavPoint], day: String) -> Double? {
         var v: Double? = nil
-        for p in hist {
+        for p in sortedNav(hist) {
             if p.date > day { break }
-            v = p.equity
+            if p.equity.isFinite { v = p.equity }
         }
         return v
     }
     private static func histNetDepositsOn(_ hist: [WSNavPoint], day: String) -> Double? {
         var v: Double? = nil
-        for p in hist {
+        for p in sortedNav(hist) {
             if p.date > day { break }
-            if let nd = p.netDeposits { v = nd }
+            if let nd = p.netDeposits, nd.isFinite { v = nd }
         }
         return v
     }
@@ -2588,21 +2604,23 @@ query IdentityHistoricalFinancialsQuery(
     private static func yearWindow(_ hist: [WSNavPoint], year: String) -> (from: String, to: String, start: Double?, flowAfter: String) {
         let to = clampToToday(year + "-12-31")
         let cal = year + "-01-01"
+        let hist = sortedNav(hist)
         if hist.isEmpty { return (cal, to, nil, cal) }
         let startDay = shiftIsoDate(cal, -1)
         var start = histNavOn(hist, day: startDay)
         var from = cal
         var flowAfter = startDay
         if !(start ?? 0 > 0) {
-            let first = hist.first { isoDateOnly($0.date) >= cal && isoDateOnly($0.date) <= to }
+            let first = hist.first { $0.date >= cal && $0.date <= to }
             guard let first else { return (cal, to, nil, cal) }
-            from = isoDateOnly(first.date)
+            from = first.date
             start = first.equity
             flowAfter = from
         }
-        return (isoDateOnly(from), isoDateOnly(to), start, isoDateOnly(flowAfter))
+        return (from, to, start, flowAfter)
     }
     private static func bookReturn(_ hist: [WSNavPoint], from: String, to: String, start: Double?, flowAfter: String) -> Double? {
+        let hist = sortedNav(hist)
         if hist.isEmpty { return nil }
         let after = flowAfter.isEmpty ? shiftIsoDate(from, -1) : flowAfter
         var prevEq = start ?? histNavOn(hist, day: after) ?? 0
@@ -2615,17 +2633,17 @@ query IdentityHistoricalFinancialsQuery(
             let eq = p.equity
             if !eq.isFinite || !(prevEq > 0) { return nil }
             var cf = 0.0
-            if let nd = p.netDeposits, let pn = prevNd { cf = nd - pn }
+            let nd = p.netDeposits
+            if let nd, nd.isFinite, let pn = prevNd { cf = nd - pn }
             factor *= 1 + (eq - prevEq - cf) / prevEq
             prevEq = eq
-            if let nd = p.netDeposits { prevNd = nd }
+            if let nd, nd.isFinite { prevNd = nd }
         }
         let r = factor - 1
         if !r.isFinite { return nil }
         return r
     }
     private static func isoDayDiff(_ from: String, _ to: String) -> Double {
-        // ledger.html isoDayDiff: Date.parse(day + "T12:00:00") so both ends are noon.
         guard let a = ymd(from), let b = ymd(to) else { return 0 }
         let noon: TimeInterval = 12 * 3600
         return (b.addingTimeInterval(noon).timeIntervalSince(a.addingTimeInterval(noon))) / 86400.0
@@ -2743,7 +2761,7 @@ query IdentityHistoricalFinancialsQuery(
             let w = yearWindow(nav, year: y)
             let mine = bookReturn(nav, from: w.from, to: w.to, start: w.start, flowAfter: w.flowAfter)
             // compareRow else branch: unfiltered NAV, idxFrom=w.from, idxTo=w.to (same yearWindow as bookReturn)
-            let idx = spyReturn(spy, from: isoDateOnly(w.from), to: isoDateOnly(w.to))
+            let idx = spyReturn(spy, from: w.from, to: w.to)
             let vs: Double?
             if let mine, let idx {
                 vs = mine - idx
