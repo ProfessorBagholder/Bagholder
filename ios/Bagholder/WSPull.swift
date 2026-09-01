@@ -1629,120 +1629,62 @@ query IdentityHistoricalFinancialsQuery(
         let rate = yrs >= 1.0 / 12.0 ? pow(prod, 1 / yrs) - 1 : prod - 1
         return (rate, yrs)
     }
-    /// ledger.html ensureSpyPrices (1963–1988): first successful source wins.
-    private static let spyPriceURLs: [(url: String, kind: String)] = [
-        ("https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", "yahoo"),
-        ("https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", "yahoo"),
-        ("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10y", "yahoo"),
-        ("https://stooq.com/q/d/l/?s=spy.us&i=d", "stooq"),
-    ]
-    private static let spyBrowserUA =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+    /// FRED S&P 500 daily closes (index, not SPY ETF).
+    /// GET https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500
+    /// Header: observation_date,SP500. Skip empty and "." holiday rows.
+    private static let sp500FredURL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
+    private static let sp500CacheKey = "bagholder.sp500.fred.csv"
 
-    /// ledger.html ingestYahooChart (1932–1946): adjclose else close; timestamp*1000 → ISO date.
-    private static func ingestYahooChart(_ data: [String: Any], _ map: inout [String: Double]) -> Int {
-        let chart = J.dict(data["chart"])
-        let result = J.arr(chart["result"])
-        guard let first = result.first else { return 0 }
-        let r = J.dict(first)
-        let timestamps = J.arr(r["timestamp"])
-        if timestamps.isEmpty { return 0 }
-        let indicators = J.dict(r["indicators"])
-        let adj = J.arr(J.dict(J.arr(indicators["adjclose"]).first)["adjclose"])
-        let quoteClose = J.arr(J.dict(J.arr(indicators["quote"]).first)["close"])
-        let close = adj.isEmpty ? quoteClose : adj
-        if close.isEmpty { return 0 }
-        var n = 0
-        let count = min(timestamps.count, close.count)
-        for i in 0..<count {
-            let px = J.num(close[i], default: 0)
-            if !(px > 0) { continue }
-            let ts = J.num(timestamps[i], default: 0)
-            if !(ts > 0) { continue }
-            let d = isoDay(Date(timeIntervalSince1970: ts))
-            map[d] = px
-            n += 1
-        }
-        return n
-    }
-
-    /// ledger.html ingestStooqCsv (1948–1961): Date + Close (parts[4]).
-    private static func ingestStooqCsv(_ text: String, _ map: inout [String: Double]) -> Int {
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        let lines = normalized.components(separatedBy: "\n")
-        var n = 0
-        var i = 1
-        while i < lines.count {
-            let parts = lines[i].split(separator: ",", omittingEmptySubsequences: false)
-            i += 1
-            if parts.count < 5 { continue }
-            let d = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            let px = Double(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-            if d.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) == nil || !(px > 0) { continue }
-            map[d] = px
-            n += 1
-        }
-        return n
-    }
-
-    /// ledger.html parseSpySeed (2363–2373): comma-separated YYYYMMDD:price → YYYY-MM-DD.
-    private static func parseSpySeed(_ raw: String) -> [String: Double] {
+    /// Parse FRED graph CSV into YYYY-MM-DD → close. Never mix with SPY.
+    private static func parseFredSP500Csv(_ text: String) -> [String: Double] {
         var map: [String: Double] = [:]
-        let parts = String(raw).components(separatedBy: ",")
-        for p in parts {
-            if p.count < 10 { continue }
-            let d = String(p.prefix(4)) + "-" + String(p.dropFirst(4).prefix(2)) + "-" + String(p.dropFirst(6).prefix(2))
-            let px = Double(p.dropFirst(9)) ?? 0
-            if px > 0 { map[d] = px }
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        for line in normalized.components(separatedBy: "\n") {
+            let parts = line.split(separator: ",", omittingEmptySubsequences: false)
+            if parts.count < 2 { continue }
+            let d = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let raw = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if d.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) == nil { continue }
+            if raw.isEmpty || raw == "." { continue }
+            guard let px = Double(raw), px > 0 else { continue }
+            map[d] = px
         }
         return map
     }
 
-    /// Bundle resource ios/Bagholder/SPYSeed.txt (same contents as ledger.html SPY_SEED).
-    private static func loadSpySeed() -> [String: Double] {
-        guard let url = Bundle.main.url(forResource: "SPYSeed", withExtension: "txt"),
-              let raw = try? String(contentsOf: url, encoding: .utf8)
-        else { return [:] }
-        return parseSpySeed(raw)
+    /// Last successful live FRED CSV (device cache, not a bundled price list).
+    private static func loadCachedSP500() -> [String: Double] {
+        guard let csv = UserDefaults.standard.string(forKey: sp500CacheKey), !csv.isEmpty else { return [:] }
+        return parseFredSP500Csv(csv)
     }
 
-    /// ledger.html mergeSpySeed (2375–2377): Object.assign(parseSpySeed(SPY_SEED), live).
-    private static func mergeSpySeed(_ live: [String: Double]) -> [String: Double] {
-        loadSpySeed().merging(live) { _, livePx in livePx }
+    private static func saveCachedSP500(_ csv: String) {
+        UserDefaults.standard.set(csv, forKey: sp500CacheKey)
     }
 
-    /// Download SPY. Seed first; live prices overwrite. If live URLs fail, seed remains.
+    /// Every Home pull: live FRED first. On success, cache CSV. If live fails, reuse last live cache. Else empty (em dash). Never load bundled ETF seed.
     private static func ensureSpyPrices() async -> [String: Double] {
-        let seed = loadSpySeed()
-        for entry in spyPriceURLs {
-            guard let url = URL(string: entry.url) else { continue }
-            var req = URLRequest(url: url, timeoutInterval: 45)
-            req.httpMethod = "GET"
-            req.setValue(spyBrowserUA, forHTTPHeaderField: "User-Agent")
-            req.setValue("*/*", forHTTPHeaderField: "Accept")
-            req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-            do {
-                let (data, resp) = try await URLSession.shared.data(for: req)
-                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                if status < 200 || status >= 300 { continue }
-                var live: [String: Double] = [:]
-                let n: Int
-                if entry.kind == "yahoo" {
-                    guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                    n = ingestYahooChart(obj, &live)
-                } else {
-                    let text = String(data: data, encoding: .utf8)
-                        ?? String(data: data, encoding: .isoLatin1)
-                        ?? ""
-                    n = ingestStooqCsv(text, &live)
+        guard let url = URL(string: sp500FredURL) else { return loadCachedSP500() }
+        var req = URLRequest(url: url, timeoutInterval: 45)
+        req.httpMethod = "GET"
+        req.setValue("text/csv,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if status >= 200 && status < 300 {
+                let text = String(data: data, encoding: .utf8)
+                    ?? String(data: data, encoding: .isoLatin1)
+                    ?? ""
+                let live = parseFredSP500Csv(text)
+                if !live.isEmpty {
+                    saveCachedSP500(text)
+                    return live
                 }
-                if n == 0 { continue }
-                return mergeSpySeed(live)
-            } catch {
-                continue
             }
+        } catch {
+            // live failed; fall back to last successful live cache
         }
-        return seed
+        return loadCachedSP500()
     }
 
     /// ledger.html spyOn (1914–1923): YYYY-MM-DD lookup, walk back up to 18 calendar days.
