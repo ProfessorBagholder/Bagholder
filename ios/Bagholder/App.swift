@@ -94,8 +94,10 @@ struct HomeView: View {
 
     var body: some View {
         Group {
-            if journal.isLive, let live = journal.result {
+            if let live = journal.result {
                 liveHome(live)
+            } else if session.connected || journal.phase == .pulling {
+                liveHome(nil)
             } else {
                 waitingHome
             }
@@ -123,15 +125,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var waitingBody: some View {
-        if journal.phase == .pulling && journal.result == nil {
-            VStack(spacing: 14) {
-                ProgressView()
-                Text(journal.headerStatus())
-                    .font(.system(size: 17))
-                    .foregroundStyle(.black)
-                    .multilineTextAlignment(.center)
-            }
-        } else if case .failed(let msg) = journal.phase {
+        if case .failed(let msg) = journal.phase {
             VStack(spacing: 16) {
                 Text(msg)
                     .font(.system(size: 17))
@@ -195,13 +189,15 @@ struct HomeView: View {
         .frame(height: 36)
     }
 
-    private func liveHome(_ live: WSPullResult) -> some View {
-        ScrollView(showsIndicators: false) {
+    private func liveHome(_ live: WSPullResult?) -> some View {
+        let dash = WSPull.emDash
+        let m = live?.metrics
+        return ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 settingsBar
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(WSPull.formatCad(live.metrics.realizedPnlCad, digits: 2))
+                    Text(live.map { WSPull.formatCad($0.metrics.realizedPnlCad, digits: 2) } ?? dash)
                         .font(.system(size: 38, weight: .bold))
                         .tracking(-1.4)
                         .lineSpacing(0)
@@ -220,47 +216,47 @@ struct HomeView: View {
                 ) {
                     MetricCard(
                         title: "Biggest winner",
-                        value: live.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad(live.metrics.maxWinPnl, digits: 2),
-                        subtitle: live.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : live.metrics.maxWinSymbol,
+                        value: (m?.maxWinSymbol.isEmpty == false) ? WSPull.formatCad(m!.maxWinPnl, digits: 2) : dash,
+                        subtitle: (m?.maxWinSymbol.isEmpty == false) ? m!.maxWinSymbol : dash,
                         valueColor: HomeColor.profit
                     )
                     MetricCard(
                         title: "Biggest loser",
-                        value: live.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad(live.metrics.maxLossPnl, digits: 2),
-                        subtitle: live.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : live.metrics.maxLossSymbol,
+                        value: (m?.maxLossSymbol.isEmpty == false) ? WSPull.formatCad(m!.maxLossPnl, digits: 2) : dash,
+                        subtitle: (m?.maxLossSymbol.isEmpty == false) ? m!.maxLossSymbol : dash,
                         valueColor: HomeColor.loss
                     )
                     MetricCard(
                         title: "Profit factor",
-                        value: WSPull.formatProfitFactor(live.metrics.profitFactor),
-                        subtitle: WSPull.formatCad(live.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad(live.metrics.grossLoss, digits: 2) + " L"
+                        value: live.map { WSPull.formatProfitFactor($0.metrics.profitFactor) } ?? dash,
+                        subtitle: live.map { WSPull.formatCad($0.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad($0.metrics.grossLoss, digits: 2) + " L" } ?? dash
                     )
                     MetricCard(
                         title: "Expectancy",
-                        value: WSPull.formatCad(live.metrics.expectancy, digits: 2),
-                        subtitle: WSPull.formatCad(live.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad(live.metrics.avgLoss, digits: 2)
+                        value: live.map { WSPull.formatCad($0.metrics.expectancy, digits: 2) } ?? dash,
+                        subtitle: live.map { WSPull.formatCad($0.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad($0.metrics.avgLoss, digits: 2) } ?? dash
                     )
                     MetricCard(
                         title: "Win rate",
-                        value: WSPull.formatWinRate(live.metrics.winRate),
-                        subtitle: "\(live.metrics.winCount) W, \(live.metrics.lossCount) L, \(live.metrics.evenCount) BE"
+                        value: live.map { WSPull.formatWinRate($0.metrics.winRate) } ?? dash,
+                        subtitle: live.map { "\($0.metrics.winCount) W, \($0.metrics.lossCount) L, \($0.metrics.evenCount) BE" } ?? dash
                     )
                     MetricCard(
                         title: "Avg annualized",
-                        value: live.avgAnnualized,
-                        subtitle: live.avgAnnualizedSubtitle.isEmpty ? WSPull.emDash : live.avgAnnualizedSubtitle
+                        value: live.map { $0.avgAnnualized } ?? dash,
+                        subtitle: (live?.avgAnnualizedSubtitle.isEmpty == false) ? live!.avgAnnualizedSubtitle : dash
                     )
                 }
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, 12)
 
-                EquityCurveCard(points: live.nav)
+                EquityCurveCard(points: live?.nav)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
-                MonthlyPnLCard(bars: live.monthly)
+                MonthlyPnLCard(bars: live?.monthly)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
-                AnnualPerformanceCard(years: live.years)
+                AnnualPerformanceCard(years: live?.years)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
                     .padding(.bottom, 12)
@@ -492,6 +488,7 @@ private enum LastPullStore {
     }
 }
 
+@MainActor
 final class Journal: ObservableObject {
     enum Phase: Equatable {
         case idle
@@ -567,47 +564,41 @@ final class Journal: ObservableObject {
             syncStep = "Fetching accounts…"
         }
         task = Task { [weak self] in
+            guard let self else { return }
             guard let rec = Keychain.load(),
                   let cookie = rec["oauth_cookie"] as? String
             else {
-                await MainActor.run {
-                    if self?.result == nil {
-                        self?.phase = .needsConnect
-                    }
+                if self.result == nil {
+                    self.phase = .needsConnect
                 }
                 return
             }
             let wssdi = rec["wssdi"] as? String
             do {
-                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi) { step in
-                    Task { @MainActor in
-                        self?.syncStep = step
+                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi) { [weak self] step in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.syncStep = step
                     }
                 }
                 if Task.isCancelled { return }
-                await MainActor.run {
-                    self?.result = snap
-                    self?.phase = .ready
-                    self?.syncStep = ""
-                    self?.lastSync = Date()
-                    UserDefaults.standard.set(self?.lastSync, forKey: Self.lastSyncKey)
-                    LastPullStore.save(snap)
-                }
+                self.result = snap
+                self.phase = .ready
+                self.syncStep = ""
+                self.lastSync = Date()
+                UserDefaults.standard.set(self.lastSync, forKey: Self.lastSyncKey)
+                LastPullStore.save(snap)
             } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
                 if Task.isCancelled { return }
-                await MainActor.run {
-                    self?.syncStep = ""
-                    if self?.result == nil {
-                        self?.phase = .needsConnect
-                    }
+                self.syncStep = ""
+                if self.result == nil {
+                    self.phase = .needsConnect
                 }
             } catch {
                 if Task.isCancelled { return }
-                await MainActor.run {
-                    self?.syncStep = ""
-                    if self?.result == nil {
-                        self?.phase = .failed("Pull failed")
-                    }
+                self.syncStep = ""
+                if self.result == nil {
+                    self.phase = .failed("Pull failed")
                 }
             }
         }
