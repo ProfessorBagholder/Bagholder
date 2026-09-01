@@ -633,14 +633,21 @@ query IdentityHistoricalFinancialsQuery(
             mapped[i].fifoId = pools[aid] ?? aid
         }
         let fifo = matchFifo(mapped)
-        let metrics = computeMetrics(fifo.closed)
-        let nav = try await fetchNavHistory(sess, identityId: sess.identityCanonicalId)
-        let spy = await ensureSpyPrices()
-        let monthly = monthlyPnl(fifo.closed)
-        let yearRows = annualRows(nav: nav, spy: spy)
+        async let navTask = fetchNavHistory(sess, identityId: sess.identityCanonicalId)
+        async let spyTask = ensureSpyPrices()
+        async let fxTask = ensureFxRates(activities: mapped)
+        let nav = try await navTask
+        let spy = await spyTask
+        let fx = await fxTask
+        // ledger.html render(): applyFx(closed) then groupClosedByClose(visible) for computeMetrics.
+        let closedFx = applyFx(fifo.closed, fx: fx)
+        let closedForMetrics = groupClosedByClose(closedFx)
+        let metrics = computeMetrics(closedForMetrics)
+        let monthly = monthlyPnl(closedForMetrics)
+        let yearRows = annualRows(nav: nav, spy: spy, activities: mapped)
         let ann = accountAnnualizedReturn(nav: nav, years: yearRows.map(\.year).sorted())
         return WSPullResult(
-            closed: fifo.closed,
+            closed: closedFx,
             metrics: metrics,
             nav: nav,
             monthly: monthly,
@@ -714,7 +721,7 @@ query IdentityHistoricalFinancialsQuery(
 
     private static func fetchNavHistory(_ sess: WSSession, identityId: String) async throws -> [WSNavPoint] {
         let today = isoDay(Date())
-        let year0 = 2020
+        let year0 = 2015
         let year1 = Int(today.prefix(4)) ?? year0
         var points: [WSNavPoint] = []
         if year1 < year0 { return [] }
@@ -1606,8 +1613,10 @@ query IdentityHistoricalFinancialsQuery(
         return r
     }
     private static func isoDayDiff(_ from: String, _ to: String) -> Double {
+        // ledger.html isoDayDiff: Date.parse(day + "T12:00:00") so both ends are noon.
         guard let a = ymd(from), let b = ymd(to) else { return 0 }
-        return b.timeIntervalSince(a) / 86400.0
+        let noon: TimeInterval = 12 * 3600
+        return (b.addingTimeInterval(noon).timeIntervalSince(a.addingTimeInterval(noon))) / 86400.0
     }
     private static func accountAnnualizedReturn(nav: [WSNavPoint], years: [String]) -> (rate: Double?, years: Double) {
         let ys = years.sorted()
@@ -1704,12 +1713,22 @@ query IdentityHistoricalFinancialsQuery(
         return b / a - 1
     }
 
-    private static func annualRows(nav: [WSNavPoint], spy: [String: Double]) -> [WSYearRow] {
-        let years = Array(Set(nav.map { String($0.date.prefix(4)) }.filter { $0.count == 4 })).sorted().reversed()
+    /// ledger.html yearsFromActivities (2602–2608): years from activity dates, newest first.
+    private static func yearsFromActivities(_ activities: [WSActivity]) -> [String] {
+        var years = Set<String>()
+        for a in activities {
+            let d = String(a.transactionDate.prefix(4))
+            if d.count == 4, d.allSatisfy(\.isNumber) { years.insert(d) }
+        }
+        return Array(years.sorted().reversed())
+    }
+
+    private static func annualRows(nav: [WSNavPoint], spy: [String: Double], activities: [WSActivity]) -> [WSYearRow] {
+        let years = yearsFromActivities(activities)
         return years.map { y in
             let w = yearWindow(nav, year: y)
             let mine = bookReturn(nav, from: w.from, to: w.to, start: w.start, flowAfter: w.flowAfter)
-            // compareRow else branch (ledger.html 2121–2128): unfiltered NAV, idxFrom=w.from, idxTo=w.to
+            // compareRow else branch: unfiltered NAV, idxFrom=w.from, idxTo=w.to (same yearWindow as bookReturn)
             let idx = spyReturn(spy, from: w.from, to: w.to)
             let vs: Double?
             if let mine, let idx {
@@ -1719,6 +1738,149 @@ query IdentityHistoricalFinancialsQuery(
             }
             return WSYearRow(year: y, ret: formatReturn(mine), spy: formatReturn(idx), vs: formatReturn(vs))
         }
+    }
+
+    // MARK: - FX (ledger.html toCad / applyFx / ensureFxRates)
+
+    private static let fxFallback = 1.35
+    private static let fxCacheKey = "bagholder.fx.boc.v1"
+
+    /// ledger.html rateOn (1731–1739): walk back up to 12 calendar days, else 1.35.
+    private static func rateOn(_ fx: [String: Double], date: String) -> Double {
+        var d = String(date.prefix(10))
+        if d.isEmpty { return fxFallback }
+        for _ in 0..<12 {
+            if let r = fx[d], r > 0 { return r }
+            d = shiftIsoDate(d, -1)
+        }
+        return fxFallback
+    }
+
+    /// ledger.html toCad (1742–1746): CAD (and anything not USD) uses the native amount; USD * FXUSDCAD.
+    private static func toCad(_ amount: Double, currency: String, date: String, fx: [String: Double]) -> Double {
+        if currency.uppercased() != "USD" { return amount }
+        return amount * rateOn(fx, date: date)
+    }
+
+    /// ledger.html applyFx (1748–1764): convert USD entry/exit notionals on their own dates. CAD pnlCad = pnl.
+    private static func applyFx(_ trades: [WSClosedTrade], fx: [String: Double]) -> [WSClosedTrade] {
+        trades.map { t in
+            var t = t
+            let ccy = t.currency.uppercased()
+            if ccy != "USD" {
+                t.pnlCad = t.pnl
+                return t
+            }
+            let qty = t.quantity
+            let entryC = t.entryCommission
+            let exitC = t.exitCommission
+            let entryNotional = t.entryPrice * qty * optionMultiplier(t.symbol)
+            let exitNotional = t.exitPrice * qty * optionMultiplier(t.symbol)
+            if t.openDirection == "SHORT" {
+                t.pnlCad = toCad(entryNotional - entryC, currency: ccy, date: t.entryDate, fx: fx)
+                    - toCad(exitNotional + exitC, currency: ccy, date: t.exitDate, fx: fx)
+            } else {
+                t.pnlCad = toCad(exitNotional - exitC, currency: ccy, date: t.exitDate, fx: fx)
+                    - toCad(entryNotional + entryC, currency: ccy, date: t.entryDate, fx: fx)
+            }
+            return t
+        }
+    }
+
+    /// ledger.html groupClosedByClose (2776–2819): one metrics row per close (symbol/ccy/exitDate/exitPrice/side/dir).
+    /// Sums pnlCad. Not the Closed-trades table grouping (groupClosedByExit).
+    private static func groupClosedByClose(_ trades: [WSClosedTrade]) -> [WSClosedTrade] {
+        var map: [String: WSClosedTrade] = [:]
+        var order: [String] = []
+        var entryNotional: [String: Double] = [:]
+        for s in trades {
+            let k = [
+                s.symbol,
+                s.currency,
+                s.exitDate,
+                String(format: "%.8f", s.exitPrice),
+                s.side,
+                s.openDirection,
+            ].joined(separator: "|")
+            if map[k] == nil {
+                var g = s
+                g.quantity = 0
+                g.pnl = 0
+                g.pnlCad = 0
+                g.commission = 0
+                map[k] = g
+                order.append(k)
+                entryNotional[k] = 0
+            }
+            var g = map[k]!
+            g.quantity += s.quantity
+            g.pnl += s.pnl
+            g.pnlCad += s.pnlCad
+            g.commission += s.commission
+            entryNotional[k, default: 0] += s.entryPrice * s.quantity
+            if s.entryDate < g.entryDate { g.entryDate = s.entryDate }
+            map[k] = g
+        }
+        return order.map { k in
+            var g = map[k]!
+            let en = entryNotional[k] ?? 0
+            g.entryPrice = g.quantity != 0 ? en / g.quantity : 0
+            g.holdDays = daysBetween(g.entryDate, g.exitDate)
+            return g
+        }
+    }
+
+    private static func loadCachedFx() -> [String: Double] {
+        guard let obj = UserDefaults.standard.dictionary(forKey: fxCacheKey) else { return [:] }
+        var map: [String: Double] = [:]
+        for (k, v) in obj {
+            let n = J.num(v, default: Double.nan)
+            if n > 0 { map[k] = n }
+        }
+        return map
+    }
+
+    private static func saveCachedFx(_ map: [String: Double]) {
+        UserDefaults.standard.set(map, forKey: fxCacheKey)
+    }
+
+    /// Bank of Canada FXUSDCAD daily. ledger.html ensureFxRates (1767–1786).
+    private static func ensureFxRates(activities: [WSActivity]) async -> [String: Double] {
+        let dates = activities.map(\.transactionDate).filter { !$0.isEmpty }.sorted()
+        let start = dates.first ?? "2020-01-01"
+        let end = isoDay(Date())
+        var map = loadCachedFx()
+        let keys = map.keys.sorted()
+        if let first = keys.first, let last = keys.last, first <= start, last >= shiftIsoDate(end, -5) {
+            return map
+        }
+        var comps = URLComponents(string: "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json")
+        comps?.queryItems = [
+            URLQueryItem(name: "start_date", value: start),
+            URLQueryItem(name: "end_date", value: end),
+        ]
+        guard let url = comps?.url else { return map }
+        var req = URLRequest(url: url, timeoutInterval: 45)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard status >= 200 && status < 300,
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return map }
+            for ob in J.arr(obj["observations"]) {
+                let d = J.dict(ob)
+                let day = J.str(d, "d")
+                let fx = J.dict(d["FXUSDCAD"])
+                let v = J.num(fx["v"], default: Double.nan)
+                if day.count == 10, v > 0 { map[day] = v }
+            }
+            if !map.isEmpty { saveCachedFx(map) }
+        } catch {
+            // live failed; keep cache (rateOn falls back to 1.35)
+        }
+        return map
     }
 }
 
