@@ -693,6 +693,7 @@ final class Journal: ObservableObject {
     @Published var lastSync: Date?
     private var task: Task<Void, Never>?
     private var listingsTask: Task<Void, Never>?
+    private var pullGeneration = 0
     private static let lastSyncKey = "bagholder.lastSync"
 
     var isLive: Bool { result != nil }
@@ -734,6 +735,7 @@ final class Journal: ObservableObject {
     /// Sign-in (`saveOAuthCookie`) starts a download. Disconnect clears the snapshot.
     func handleSessionChange(session: SessionStore) {
         if !session.connected {
+            pullGeneration += 1
             task?.cancel()
             task = nil
             listingsTask?.cancel()
@@ -750,12 +752,16 @@ final class Journal: ObservableObject {
     }
 
     func refresh() {
+        phase = .pulling
+        syncStep = "Fetching accounts…"
         pull(showProgress: true)
     }
 
     private func pull(showProgress: Bool) {
         task?.cancel()
         listingsTask?.cancel()
+        pullGeneration += 1
+        let gen = pullGeneration
         if showProgress {
             phase = .pulling
             syncStep = "Fetching accounts…"
@@ -765,9 +771,7 @@ final class Journal: ObservableObject {
             guard let rec = Keychain.load(),
                   let cookie = rec["oauth_cookie"] as? String
             else {
-                if self.result == nil {
-                    self.phase = .needsConnect
-                }
+                self.endPullFailed(gen: gen)
                 return
             }
             let wssdi = rec["wssdi"] as? String
@@ -775,10 +779,15 @@ final class Journal: ObservableObject {
                 let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi) { [weak self] step in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        self.syncStep = step
+                        if gen == self.pullGeneration {
+                            self.syncStep = step
+                        }
                     }
                 }
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    self.endPullFailed(gen: gen)
+                    return
+                }
                 var applied = snap
                 if applied.listings.isEmpty, let old = self.result?.listings, !old.isEmpty {
                     applied.listings = old
@@ -792,18 +801,32 @@ final class Journal: ObservableObject {
                 let acts = applied.activities
                 self.startListings(cookie: cookie, wssdi: wssdi, activities: acts)
             } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
-                if Task.isCancelled { return }
-                self.syncStep = ""
-                if self.result == nil {
-                    self.phase = .needsConnect
-                }
+                self.endUnauthorized(gen: gen)
             } catch {
-                if Task.isCancelled { return }
-                self.syncStep = ""
-                if self.result == nil {
-                    self.phase = .failed("Pull failed")
-                }
+                self.endPullFailed(gen: gen)
             }
+        }
+    }
+
+    private func endPullFailed(gen: Int) {
+        guard gen == pullGeneration else { return }
+        if result != nil {
+            phase = .ready
+            syncStep = "Pull failed"
+        } else {
+            phase = .failed("Pull failed")
+            syncStep = ""
+        }
+    }
+
+    private func endUnauthorized(gen: Int) {
+        guard gen == pullGeneration else { return }
+        if result == nil {
+            phase = .needsConnect
+            syncStep = ""
+        } else {
+            phase = .ready
+            syncStep = "Pull failed"
         }
     }
 
@@ -1029,6 +1052,7 @@ struct SettingsView: View {
                         Text("Connected")
                         Button("Refresh") {
                             journal.refresh()
+                            dismiss()
                         }
                         .disabled(journal.phase == .pulling)
                         Button("Disconnect", role: .destructive) {
