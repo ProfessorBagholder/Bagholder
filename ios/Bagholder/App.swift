@@ -126,7 +126,7 @@ struct HomeView: View {
         if journal.phase == .pulling && journal.result == nil {
             VStack(spacing: 14) {
                 ProgressView()
-                Text("Getting trades from Wealthsimple")
+                Text(journal.headerStatus())
                     .font(.system(size: 17))
                     .foregroundStyle(.black)
                     .multilineTextAlignment(.center)
@@ -173,7 +173,13 @@ struct HomeView: View {
     }
 
     private var settingsBar: some View {
-        HStack {
+        HStack(spacing: 8) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(journal.headerStatus(now: context.date))
+                    .font(.system(size: 12))
+                    .foregroundStyle(HomeColor.muted)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 0)
             Button {
                 showSettings = true
@@ -237,7 +243,7 @@ struct HomeView: View {
                     MetricCard(
                         title: "Win rate",
                         value: WSPull.formatWinRate(live.metrics.winRate),
-                        subtitle: "\(live.metrics.winCount) W, \(live.metrics.lossCount) L"
+                        subtitle: "\(live.metrics.winCount) W, \(live.metrics.lossCount) L, \(live.metrics.evenCount) BE"
                     )
                     MetricCard(
                         title: "Avg annualized",
@@ -486,6 +492,10 @@ private enum LastPullStore {
     static func clear() {
         try? FileManager.default.removeItem(at: url)
     }
+
+    static func modifiedAt() -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
 }
 
 final class Journal: ObservableObject {
@@ -499,7 +509,10 @@ final class Journal: ObservableObject {
 
     @Published var phase: Phase = .idle
     @Published var result: WSPullResult?
+    @Published var syncStep: String = ""
+    @Published var lastSync: Date?
     private var task: Task<Void, Never>?
+    private static let lastSyncKey = "bagholder.lastSync"
 
     var isLive: Bool { result != nil }
 
@@ -508,6 +521,26 @@ final class Journal: ObservableObject {
             result = snap
             phase = .ready
         }
+        lastSync = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
+            ?? LastPullStore.modifiedAt()
+    }
+
+    /// ledger.html wsStatusText / relSync.
+    func headerStatus(now: Date = Date()) -> String {
+        if !syncStep.isEmpty { return syncStep }
+        if case .failed(let msg) = phase { return msg }
+        if let lastSync { return Self.relSync(lastSync, now: now) }
+        if phase == .pulling { return "Fetching accounts…" }
+        return ""
+    }
+
+    /// ledger.html relSync (4168-4176).
+    static func relSync(_ date: Date, now: Date) -> String {
+        let sec = Int((now.timeIntervalSince(date)).rounded())
+        if sec < 45 { return "Synced just now" }
+        if sec < 120 { return "Synced 1 min ago" }
+        if sec < 3600 { return "Synced \(Int((Double(sec) / 60.0).rounded())) min ago" }
+        return "Synced \(Int((Double(sec) / 3600.0).rounded()))h ago"
     }
 
     /// First paint: leftover Keychain must not start a download.
@@ -524,6 +557,9 @@ final class Journal: ObservableObject {
             task = nil
             phase = .idle
             result = nil
+            syncStep = ""
+            lastSync = nil
+            UserDefaults.standard.removeObject(forKey: Self.lastSyncKey)
             LastPullStore.clear()
             return
         }
@@ -534,6 +570,7 @@ final class Journal: ObservableObject {
         task?.cancel()
         if showProgress {
             phase = .pulling
+            syncStep = "Fetching accounts…"
         }
         task = Task { [weak self] in
             guard let rec = Keychain.load(),
@@ -548,16 +585,24 @@ final class Journal: ObservableObject {
             }
             let wssdi = rec["wssdi"] as? String
             do {
-                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi)
+                let snap = try await WSPull.run(oauthCookie: cookie, wssdi: wssdi) { step in
+                    Task { @MainActor in
+                        self?.syncStep = step
+                    }
+                }
                 if Task.isCancelled { return }
                 await MainActor.run {
                     self?.result = snap
                     self?.phase = .ready
+                    self?.syncStep = ""
+                    self?.lastSync = Date()
+                    UserDefaults.standard.set(self?.lastSync, forKey: Self.lastSyncKey)
                     LastPullStore.save(snap)
                 }
             } catch WSPullError.unauthorized, WSPullError.noIdentity, WSPullError.noSession {
                 if Task.isCancelled { return }
                 await MainActor.run {
+                    self?.syncStep = ""
                     if self?.result == nil {
                         self?.phase = .needsConnect
                     }
@@ -565,6 +610,7 @@ final class Journal: ObservableObject {
             } catch {
                 if Task.isCancelled { return }
                 await MainActor.run {
+                    self?.syncStep = ""
                     if self?.result == nil {
                         self?.phase = .failed("Pull failed")
                     }

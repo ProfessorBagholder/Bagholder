@@ -597,7 +597,12 @@ query IdentityHistoricalFinancialsQuery(
 
     // MARK: - Public pull
 
-    static func run(oauthCookie: String, wssdi: String?) async throws -> WSPullResult {
+    static func run(
+        oauthCookie: String,
+        wssdi: String?,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> WSPullResult {
+        func progress(_ msg: String) { onProgress?(msg) }
         guard var sess = session(fromCookie: oauthCookie, wssdi: wssdi) else {
             throw WSPullError.noSession
         }
@@ -612,6 +617,7 @@ query IdentityHistoricalFinancialsQuery(
             throw WSPullError.noIdentity
         }
 
+        progress("Fetching accounts…")
         let accounts = try await fetchAllAccounts(sess, identityId: sess.identityCanonicalId)
         var accById: [String: [String: Any]] = [:]
         for a in accounts {
@@ -620,6 +626,7 @@ query IdentityHistoricalFinancialsQuery(
         }
         let pools = fifoPoolIds(accounts)
         var mapped: [WSActivity] = []
+        progress("Syncing transactions")
         for acc in accounts {
             let aid = J.str(acc, "id")
             if aid.isEmpty { continue }
@@ -633,10 +640,12 @@ query IdentityHistoricalFinancialsQuery(
             mapped[i].fifoId = pools[aid] ?? aid
         }
         let fifo = matchFifo(mapped)
-        async let navTask = fetchNavHistory(sess, identityId: sess.identityCanonicalId)
+        progress("Fetching balances…")
+        progress("Fetching equity history…")
+        let nav = try await fetchNavHistory(sess, identityId: sess.identityCanonicalId)
+        progress("Fetching S&P 500…")
         async let spyTask = ensureSpyPrices()
         async let fxTask = ensureFxRates(activities: mapped)
-        let nav = try await navTask
         let spy = await spyTask
         let fx = await fxTask
         // ledger.html render(): applyFx(closed) then groupClosedByClose(visible) for computeMetrics.
@@ -994,8 +1003,10 @@ query IdentityHistoricalFinancialsQuery(
     private static func mapActivity(_ item: [String: Any], accounts: [String: [String: Any]]) -> WSActivity? {
         if skipActivity(item) { return nil }
         let occurred = s(item["occurredAt"]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let transactionDate = dateOnly(occurred)
-        if transactionDate.isEmpty { return nil }
+        // Keep Wealthsimple date and time (occurredAt). Calendar day is only
+        // for skip/empty checks. FIFO and groupClosedByClose must see the clock.
+        if dateOnly(occurred).isEmpty { return nil }
+        let transactionDate = occurred
         let accountId = s(item["accountId"])
         let typ = upper(item["type"]).replacingOccurrences(of: "-", with: "_")
         let sub = upper(item["subType"]).replacingOccurrences(of: "-", with: "_")
@@ -1328,7 +1339,7 @@ query IdentityHistoricalFinancialsQuery(
             return Fill(activity: a, side: side, qty: qty)
         }
         fills.sort { a, b in
-            let d = a.activity.transactionDate.compare(b.activity.transactionDate)
+            let d = fillWhen(a.activity).compare(fillWhen(b.activity))
             if d != .orderedSame { return d == .orderedAscending }
             let ra = fillRank(a), rb = fillRank(b)
             if ra != rb { return ra < rb }
@@ -1472,9 +1483,10 @@ query IdentityHistoricalFinancialsQuery(
         return "\(months) mo"
     }
 
+    /// ledger.html formatPct: (n * 100).toFixed(1) + "%"
     static func formatWinRate(_ r: Double) -> String {
         if !r.isFinite { return emDash }
-        return String(format: "%.0f%%", (r * 100).rounded())
+        return jsToFixed(r * 100, digits: 1) + "%"
     }
 
     static func formatProfitFactor(_ pf: Double) -> String {
@@ -1563,10 +1575,38 @@ query IdentityHistoricalFinancialsQuery(
         }
         return v
     }
+    private static func isoDateOnly(_ s: String) -> String {
+        String(s.trimmingCharacters(in: .whitespacesAndNewlines).prefix(10))
+    }
+
+    /// Same-day FIFO order is Wealthsimple time when present (ledger.html fillWhen).
+    private static func fillWhen(_ a: WSActivity) -> String {
+        let occurred = a.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if occurred.contains("T") { return occurred }
+        return a.transactionDate.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// JavaScript Number.prototype.toFixed. POSIX decimal, half-up, no grouping.
+    private static func jsToFixed(_ n: Double, digits: Int) -> String {
+        if n.isNaN { return "NaN" }
+        if n.isInfinite { return n < 0 ? "-Infinity" : "Infinity" }
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.numberStyle = .decimal
+        f.minimumIntegerDigits = 1
+        f.minimumFractionDigits = digits
+        f.maximumFractionDigits = digits
+        f.roundingMode = .halfUp
+        f.usesGroupingSeparator = false
+        return f.string(from: NSNumber(value: n)) ?? ("0." + String(repeating: "0", count: digits))
+    }
+
     private static func shiftIsoDate(_ iso: String, _ days: Int) -> String {
-        guard let d = ymd(iso) else { return String(iso.prefix(10)) }
-        let cal = Calendar(identifier: .gregorian)
-        guard let n = cal.date(byAdding: .day, value: days, to: d) else { return String(iso.prefix(10)) }
+        let day = isoDateOnly(iso)
+        guard let d = ymd(day) else { return day }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let n = cal.date(byAdding: .day, value: days, to: d) else { return day }
         return isoDay(n)
     }
     private static func clampToToday(_ iso: String) -> String {
@@ -1582,13 +1622,13 @@ query IdentityHistoricalFinancialsQuery(
         var from = cal
         var flowAfter = startDay
         if !(start ?? 0 > 0) {
-            let first = hist.first { $0.date >= cal && $0.date <= to }
+            let first = hist.first { isoDateOnly($0.date) >= cal && isoDateOnly($0.date) <= to }
             guard let first else { return (cal, to, nil, cal) }
-            from = first.date
+            from = isoDateOnly(first.date)
             start = first.equity
             flowAfter = from
         }
-        return (from, to, start, flowAfter)
+        return (isoDateOnly(from), isoDateOnly(to), start, isoDateOnly(flowAfter))
     }
     private static func bookReturn(_ hist: [WSNavPoint], from: String, to: String, start: Double?, flowAfter: String) -> Double? {
         if hist.isEmpty { return nil }
@@ -1651,8 +1691,10 @@ query IdentityHistoricalFinancialsQuery(
         for line in normalized.components(separatedBy: "\n") {
             let parts = line.split(separator: ",", omittingEmptySubsequences: false)
             if parts.count < 2 { continue }
-            let d = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            let raw = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let quotes = CharacterSet(charactersIn: "\"")
+            var d = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: quotes)
+            d = isoDateOnly(d)
+            let raw = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: quotes)
             if d.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) == nil { continue }
             if raw.isEmpty || raw == "." { continue }
             guard let px = Double(raw), px > 0 else { continue }
@@ -1698,8 +1740,8 @@ query IdentityHistoricalFinancialsQuery(
 
     /// ledger.html spyOn (1914–1923): YYYY-MM-DD lookup, walk back up to 18 calendar days.
     private static func spyOn(_ spy: [String: Double], date: String) -> Double? {
-        var d = String(date.prefix(10))
-        if d.isEmpty { return nil }
+        var d = isoDateOnly(date)
+        if d.count != 10 { return nil }
         for _ in 0..<18 {
             if let v = spy[d], v > 0 { return v }
             d = shiftIsoDate(d, -1)
@@ -1717,7 +1759,7 @@ query IdentityHistoricalFinancialsQuery(
     private static func yearsFromActivities(_ activities: [WSActivity]) -> [String] {
         var years = Set<String>()
         for a in activities {
-            let d = String(a.transactionDate.prefix(4))
+            let d = String(isoDateOnly(a.transactionDate).prefix(4))
             if d.count == 4, d.allSatisfy(\.isNumber) { years.insert(d) }
         }
         return Array(years.sorted().reversed())
@@ -1729,7 +1771,7 @@ query IdentityHistoricalFinancialsQuery(
             let w = yearWindow(nav, year: y)
             let mine = bookReturn(nav, from: w.from, to: w.to, start: w.start, flowAfter: w.flowAfter)
             // compareRow else branch: unfiltered NAV, idxFrom=w.from, idxTo=w.to (same yearWindow as bookReturn)
-            let idx = spyReturn(spy, from: w.from, to: w.to)
+            let idx = spyReturn(spy, from: isoDateOnly(w.from), to: isoDateOnly(w.to))
             let vs: Double?
             if let mine, let idx {
                 vs = mine - idx
@@ -1794,11 +1836,12 @@ query IdentityHistoricalFinancialsQuery(
         var order: [String] = []
         var entryNotional: [String: Double] = [:]
         for s in trades {
+            // ledger.html 2780: [symbol, currency, exitDate, Number(exitPrice).toFixed(8), side, openDirection]
             let k = [
                 s.symbol,
                 s.currency,
                 s.exitDate,
-                String(format: "%.8f", s.exitPrice),
+                jsToFixed(s.exitPrice, digits: 8),
                 s.side,
                 s.openDirection,
             ].joined(separator: "|")
