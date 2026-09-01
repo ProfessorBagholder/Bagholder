@@ -973,12 +973,8 @@ query IdentityHistoricalFinancialsQuery(
 
 
     private static func fetchSecurity(_ sess: WSSession, securityId: String) async -> WSSecurityListing? {
-        await fetchSecurityResult(sess, securityId: securityId).listing
-    }
-
-    private static func fetchSecurityResult(_ sess: WSSession, securityId: String) async -> (listing: WSSecurityListing?, note: String) {
         let sid = securityId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if sid.isEmpty { return (nil, "empty securityId") }
+        if sid.isEmpty { return nil }
         do {
             let data = try await graphql(
                 sess,
@@ -987,15 +983,12 @@ query IdentityHistoricalFinancialsQuery(
                 query: qFetchSecurity
             )
             let sec = J.dict(data["security"])
-            if sec.isEmpty {
-                let keys = data.keys.sorted().joined(separator: ",")
-                return (nil, "empty security object for \(sid); keys=\(keys)")
-            }
+            if sec.isEmpty { return nil }
             let stock = J.dict(sec["stock"])
             let option = J.dict(sec["optionDetails"])
             let under = J.dict(option["underlyingSecurity"])
             let id = J.str(sec, "id")
-            let rec = WSSecurityListing(
+            return WSSecurityListing(
                 id: id.isEmpty ? sid : id,
                 symbol: J.str(stock, "symbol"),
                 name: J.str(stock, "name"),
@@ -1004,33 +997,9 @@ query IdentityHistoricalFinancialsQuery(
                 currency: J.str(sec, "currency"),
                 underlyingId: J.str(under, "id")
             )
-            return (rec, "")
-        } catch WSPullError.graphql(let msg) {
-            return (nil, msg)
         } catch {
-            return (nil, String(describing: error))
+            return nil
         }
-    }
-
-    static func listingsForTrade(
-        _ t: WSClosedTrade,
-        activities: [WSActivity],
-        oauthCookie: String,
-        wssdi: String?
-    ) async -> [WSSecurityListing] {
-        guard let built = session(fromCookie: oauthCookie, wssdi: wssdi) else { return [] }
-        let sess = built
-        let sid = activitySecurityId(t, activities: activities)
-        if sid.isEmpty { return [] }
-        let first = await fetchSecurityResult(sess, securityId: sid)
-        var out: [WSSecurityListing] = []
-        if let rec = first.listing { out.append(rec) }
-        let uid = (first.listing?.underlyingId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !uid.isEmpty {
-            let second = await fetchSecurityResult(sess, securityId: uid)
-            if let rec = second.listing { out.append(rec) }
-        }
-        return out
     }
 
     private static func fetchListings(_ sess: WSSession, activities: [WSActivity]) async -> [WSSecurityListing] {
