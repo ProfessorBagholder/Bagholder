@@ -3084,8 +3084,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             book = load_book()
             if not (book.get("spyByDate") or {}):
-                refresh_spy_prices()
-                book = load_book()
+                threading.Thread(
+                    target=refresh_spy_prices, name="bagholder-spy", daemon=True
+                ).start()
             self._send(
                 200,
                 {

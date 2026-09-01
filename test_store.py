@@ -7,6 +7,7 @@ import gzip
 import os
 import sqlite3
 import tempfile
+from pathlib import Path
 import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -1166,6 +1167,50 @@ not-a-date,1
         self.assertGreater(spy_at, 0)
         self.assertGreater(persist_at, spy_at)
         self.assertGreater(render_at, persist_at)
+
+    def test_api_book_does_not_block_on_fred(self):
+        src = Path(bagholder.__file__).read_text(encoding="utf-8")
+        idx = src.find('if path == "/api/book"')
+        self.assertGreater(idx, 0)
+        chunk = src[idx : idx + 1200]
+        self.assertIn("load_book()", chunk)
+        self.assertIn('"spyByDate"', chunk)
+        self.assertIn("threading.Thread", chunk)
+        self.assertIn("refresh_spy_prices", chunk)
+        self.assertNotIn("refresh_spy_prices()\n                book = load_book()", chunk)
+        self.assertIn("self._send(", chunk)
+        send_at = chunk.find("self._send(")
+        refresh_call = chunk.find("refresh_spy_prices()")
+        # blocking call refresh_spy_prices() must not sit before send
+        self.assertEqual(refresh_call, -1)
+
+    def test_ledger_persist_skips_empty_spy(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        persist_at = html.find("function persist()")
+        self.assertGreater(persist_at, 0)
+        chunk = html[persist_at : persist_at + 700]
+        self.assertIn("if (Object.keys(spy).length) localStorage.setItem(LS_SPY", chunk)
+        empty_at = html.find("function emptyStateHtml()")
+        empty = html[empty_at : empty_at + 2800]
+        yet = empty.find("No activity yet")
+        self.assertGreater(yet, 0)
+        before = empty[:yet]
+        self.assertIn("state.ws.lastSync", before)
+        self.assertIn("state.ws.activityCount", before)
+        self.assertIn("return \"\";", empty[empty.find("savedBook") : yet] if "savedBook" in empty else before)
+        load_at = html.find("function loadPersisted()")
+        after_load = html[load_at : load_at + 9000]
+        # still call ensureSpyPrices after boot/load
+        self.assertIn("ensureSpyPrices();", html.split("loadPersisted();", 1)[1][:800])
+
+    def test_refresh_spy_prices_not_live_fred_urlopen_only_fixture(self):
+        # Guard: tests never hit the network for FRED.
+        with mock.patch.object(bagholder, "urlopen", side_effect=AssertionError("live FRED")):
+            store.save_spy_by_date({"2014-01-02": 1831.98})
+            # fail path uses the mock; must not raise AssertionError from a real fetch
+            with mock.patch.object(bagholder, "urlopen", side_effect=RuntimeError("offline")):
+                got = bagholder.refresh_spy_prices()
+            self.assertEqual(got["2014-01-02"], 1831.98)
 
 
 if __name__ == "__main__":
