@@ -45,6 +45,7 @@ private enum HomeLayout {
 
 struct RootView: View {
     @State private var tab = 0
+    @State private var bottomInset: CGFloat = 34
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,33 +62,54 @@ struct RootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            MockTabBar(selection: $tab)
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear {
+                            if geo.safeAreaInsets.bottom > 0 {
+                                bottomInset = geo.safeAreaInsets.bottom
+                            }
+                        }
+                        .onChange(of: geo.safeAreaInsets.bottom) { _, value in
+                            if value > 0 {
+                                bottomInset = value
+                            }
+                        }
+                }
+            }
+            MockTabBar(selection: $tab, bottomInset: bottomInset)
         }
-        .background(HomeColor.page.ignoresSafeArea())
-        .ignoresSafeArea(.keyboard)
+        .ignoresSafeArea(.container, edges: .bottom)
+        .background(HomeColor.page)
     }
 }
 
 struct MockTabBar: View {
     @Binding var selection: Int
+    var bottomInset: CGFloat
 
     var body: some View {
-        HStack(spacing: 0) {
-            tabButton(0, title: "Home", systemImage: "square.grid.2x2")
-            tabButton(1, title: "Closed trades", systemImage: "line.3.horizontal")
-            tabButton(2, title: "Activity", systemImage: "doc.text")
-            tabButton(3, title: "Open lots", systemImage: "hexagon")
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                tabButton(0, title: "Home", systemImage: "square.grid.2x2")
+                tabButton(1, title: "Closed trades", systemImage: "line.3.horizontal")
+                tabButton(2, title: "Activity", systemImage: "doc.text")
+                tabButton(3, title: "Open lots", systemImage: "hexagon")
+            }
+            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
+            Rectangle()
+                .fill(HomeColor.tile)
+                .frame(height: bottomInset)
+                .allowsHitTesting(false)
         }
-        .padding(.top, 6)
-        .padding(.horizontal, 8)
-        .padding(.bottom, 22)
-        .background {
-            HomeColor.tile.opacity(0.94)
-                .overlay(alignment: .top) {
-                    HomeColor.hairline.frame(height: 0.5)
-                }
+        .background(HomeColor.tile)
+        .overlay(alignment: .top) {
+            HomeColor.hairline.frame(height: 0.5)
         }
-        .ignoresSafeArea(edges: .bottom)
+        .clipShape(Rectangle())
+        .containerShape(Rectangle())
     }
 
     private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
