@@ -90,115 +90,177 @@ struct HomeView: View {
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @State private var showSettings = false
-
-    private var live: WSPullResult? { journal.isLive ? journal.result : nil }
-    private var dash: String { WSPull.emDash }
+    @State private var showLogin = false
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer(minLength: 0)
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(.black)
-                        .frame(width: 24, height: 24)
-                }
-                .accessibilityLabel("Settings")
+        Group {
+            if journal.isLive, let live = journal.result {
+                liveHome(live)
+            } else {
+                waitingHome
             }
-            .padding(.horizontal, 14)
-            .frame(height: 36)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(live.map { WSPull.formatCad($0.metrics.realizedPnlCad, digits: 2) } ?? dash)
-                    .font(.system(size: 38, weight: .bold))
-                    .tracking(-1.4)
-                    .lineSpacing(0)
-                Text("Realized P&L")
-                    .font(.system(size: 15))
-                    .foregroundStyle(HomeColor.muted)
-                if !session.connected {
-                    Text("Connect in Settings.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.muted)
-                } else if journal.phase == .pulling {
-                    Text("Working…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.muted)
-                } else if journal.phase == .needsConnect {
-                    Text("Session expired. Connect again.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.loss)
-                } else if case .failed(let msg) = journal.phase {
-                    Text(msg)
-                        .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.loss)
-                }
-            }
-            .padding(.horizontal, HomeLayout.side)
-
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: HomeLayout.gutter),
-                    GridItem(.flexible(), spacing: HomeLayout.gutter),
-                ],
-                spacing: HomeLayout.gutter
-            ) {
-                MetricCard(
-                    title: "Biggest winner",
-                    value: live.map { $0.metrics.maxWinSymbol.isEmpty ? dash : WSPull.formatCad($0.metrics.maxWinPnl, digits: 2) } ?? dash,
-                    subtitle: live.map { $0.metrics.maxWinSymbol.isEmpty ? dash : $0.metrics.maxWinSymbol } ?? dash,
-                    valueColor: HomeColor.profit
-                )
-                MetricCard(
-                    title: "Biggest loser",
-                    value: live.map { $0.metrics.maxLossSymbol.isEmpty ? dash : WSPull.formatCad($0.metrics.maxLossPnl, digits: 2) } ?? dash,
-                    subtitle: live.map { $0.metrics.maxLossSymbol.isEmpty ? dash : $0.metrics.maxLossSymbol } ?? dash,
-                    valueColor: HomeColor.loss
-                )
-                MetricCard(
-                    title: "Profit factor",
-                    value: live.map { WSPull.formatProfitFactor($0.metrics.profitFactor) } ?? dash,
-                    subtitle: live.map { WSPull.formatCad($0.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad($0.metrics.grossLoss, digits: 2) + " L" } ?? dash
-                )
-                MetricCard(
-                    title: "Expectancy",
-                    value: live.map { WSPull.formatCad($0.metrics.expectancy, digits: 2) } ?? dash,
-                    subtitle: live.map { WSPull.formatCad($0.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad($0.metrics.avgLoss, digits: 2) } ?? dash
-                )
-                MetricCard(
-                    title: "Win rate",
-                    value: live.map { WSPull.formatWinRate($0.metrics.winRate) } ?? dash,
-                    subtitle: live.map { "\($0.metrics.winCount) W, \($0.metrics.lossCount) L" } ?? dash
-                )
-                MetricCard(
-                    title: "Avg annualized",
-                    value: live.map { $0.avgAnnualized } ?? dash,
-                    subtitle: live.map { $0.avgAnnualizedSubtitle.isEmpty ? dash : $0.avgAnnualizedSubtitle } ?? dash
-                )
-            }
-            .padding(.horizontal, HomeLayout.side)
-            .padding(.top, 12)
-
-            EquityCurveCard(points: live.map { $0.nav })
-                .padding(.horizontal, HomeLayout.side)
-                .padding(.top, HomeLayout.gutter)
-            MonthlyPnLCard(bars: live.map { $0.monthly })
-                .padding(.horizontal, HomeLayout.side)
-                .padding(.top, HomeLayout.gutter)
-            AnnualPerformanceCard(years: live.map { $0.years } )
-                .padding(.horizontal, HomeLayout.side)
-                .padding(.top, HomeLayout.gutter)
-                .padding(.bottom, 12)
-        }
         }
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session)
         }
+        .fullScreenCover(isPresented: $showLogin) {
+            ConnectLoginView(session: session, isPresented: $showLogin)
+        }
+    }
+
+    private var waitingHome: some View {
+        VStack(spacing: 0) {
+            settingsBar
+            Spacer(minLength: 0)
+            waitingBody
+                .padding(.horizontal, 40)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(HomeColor.page)
+    }
+
+    @ViewBuilder
+    private var waitingBody: some View {
+        if journal.phase == .pulling || (session.connected && journal.phase == .idle) {
+            VStack(spacing: 14) {
+                ProgressView()
+                Text("Getting trades from Wealthsimple")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.black)
+                    .multilineTextAlignment(.center)
+            }
+        } else if case .failed(let msg) = journal.phase {
+            VStack(spacing: 16) {
+                Text(msg)
+                    .font(.system(size: 17))
+                    .foregroundStyle(HomeColor.loss)
+                    .multilineTextAlignment(.center)
+                connectButton
+            }
+        } else {
+            VStack(spacing: 16) {
+                Text("Connect Wealthsimple")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .multilineTextAlignment(.center)
+                Text("Sign in to see Home.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(HomeColor.muted)
+                    .multilineTextAlignment(.center)
+                connectButton
+            }
+        }
+    }
+
+    private var connectButton: some View {
+        Button {
+            showLogin = true
+        } label: {
+            Text("Connect")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(HomeColor.selected)
+                )
+        }
+        .frame(maxWidth: 280)
+        .accessibilityLabel("Connect")
+    }
+
+    private var settingsBar: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(.black)
+                    .frame(width: 24, height: 24)
+            }
+            .accessibilityLabel("Settings")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+    }
+
+    private func liveHome(_ live: WSPullResult) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                settingsBar
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(WSPull.formatCad(live.metrics.realizedPnlCad, digits: 2))
+                        .font(.system(size: 38, weight: .bold))
+                        .tracking(-1.4)
+                        .lineSpacing(0)
+                    Text("Realized P&L")
+                        .font(.system(size: 15))
+                        .foregroundStyle(HomeColor.muted)
+                }
+                .padding(.horizontal, HomeLayout.side)
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: HomeLayout.gutter),
+                        GridItem(.flexible(), spacing: HomeLayout.gutter),
+                    ],
+                    spacing: HomeLayout.gutter
+                ) {
+                    MetricCard(
+                        title: "Biggest winner",
+                        value: live.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad(live.metrics.maxWinPnl, digits: 2),
+                        subtitle: live.metrics.maxWinSymbol.isEmpty ? WSPull.emDash : live.metrics.maxWinSymbol,
+                        valueColor: HomeColor.profit
+                    )
+                    MetricCard(
+                        title: "Biggest loser",
+                        value: live.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : WSPull.formatCad(live.metrics.maxLossPnl, digits: 2),
+                        subtitle: live.metrics.maxLossSymbol.isEmpty ? WSPull.emDash : live.metrics.maxLossSymbol,
+                        valueColor: HomeColor.loss
+                    )
+                    MetricCard(
+                        title: "Profit factor",
+                        value: WSPull.formatProfitFactor(live.metrics.profitFactor),
+                        subtitle: WSPull.formatCad(live.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad(live.metrics.grossLoss, digits: 2) + " L"
+                    )
+                    MetricCard(
+                        title: "Expectancy",
+                        value: WSPull.formatCad(live.metrics.expectancy, digits: 2),
+                        subtitle: WSPull.formatCad(live.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad(live.metrics.avgLoss, digits: 2)
+                    )
+                    MetricCard(
+                        title: "Win rate",
+                        value: WSPull.formatWinRate(live.metrics.winRate),
+                        subtitle: "\(live.metrics.winCount) W, \(live.metrics.lossCount) L"
+                    )
+                    MetricCard(
+                        title: "Avg annualized",
+                        value: live.avgAnnualized,
+                        subtitle: live.avgAnnualizedSubtitle.isEmpty ? WSPull.emDash : live.avgAnnualizedSubtitle
+                    )
+                }
+                .padding(.horizontal, HomeLayout.side)
+                .padding(.top, 12)
+
+                EquityCurveCard(points: live.nav)
+                    .padding(.horizontal, HomeLayout.side)
+                    .padding(.top, HomeLayout.gutter)
+                MonthlyPnLCard(bars: live.monthly)
+                    .padding(.horizontal, HomeLayout.side)
+                    .padding(.top, HomeLayout.gutter)
+                AnnualPerformanceCard(years: live.years)
+                    .padding(.horizontal, HomeLayout.side)
+                    .padding(.top, HomeLayout.gutter)
+                    .padding(.bottom, 12)
+            }
+        }
+        .background(HomeColor.page)
     }
 }
 
