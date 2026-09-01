@@ -283,20 +283,26 @@ struct MetricCard: View {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(HomeColor.muted)
+                .lineLimit(1)
                 .padding(.bottom, 4)
             Text(value)
                 .font(.system(size: 20, weight: .bold))
                 .tracking(-0.6)
                 .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             if let subtitle {
                 Text(subtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(HomeColor.muted)
+                    .lineLimit(1)
+                    .allowsTightening(true)
+                    .minimumScaleFactor(0.65)
                     .padding(.top, 3)
             }
         }
         .padding(EdgeInsets(top: 11, leading: 12, bottom: 10, trailing: 12))
-        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 72, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(HomeColor.tile)
