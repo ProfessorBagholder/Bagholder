@@ -1003,10 +1003,10 @@ query IdentityHistoricalFinancialsQuery(
     private static func mapActivity(_ item: [String: Any], accounts: [String: [String: Any]]) -> WSActivity? {
         if skipActivity(item) { return nil }
         let occurred = s(item["occurredAt"]).trimmingCharacters(in: .whitespacesAndNewlines)
-        // Keep Wealthsimple date and time (occurredAt). Calendar day is only
-        // for skip/empty checks. FIFO and groupClosedByClose must see the clock.
-        if dateOnly(occurred).isEmpty { return nil }
-        let transactionDate = occurred
+        // Keep Wealthsimple date and time. transactionDate stays the calendar day
+        // for FIFO / groupClosedByClose, same as bagholder.py _date_only.
+        let transactionDate = dateOnly(occurred)
+        if transactionDate.isEmpty { return nil }
         let accountId = s(item["accountId"])
         let typ = upper(item["type"]).replacingOccurrences(of: "-", with: "_")
         let sub = upper(item["subType"]).replacingOccurrences(of: "-", with: "_")
@@ -1222,11 +1222,12 @@ query IdentityHistoricalFinancialsQuery(
                 continue
             }
             let k = [a.symbol, a.transactionDate, a.currency].joined(separator: "|")
-            var g = groups[k] ?? (0, 0, a)
+            // ledger.html foldStkdis: sample is the first STKDIS in the group.
+            if groups[k] == nil { groups[k] = (0, 0, a) }
+            var g = groups[k]!
             let q = a.quantity
             if a.activitySubType == "SELL" || q < 0 { g.neg += abs(q) }
             else { g.pos += abs(q) }
-            g.sample = a
             groups[k] = g
         }
         for g in groups.values {
@@ -1271,9 +1272,9 @@ query IdentityHistoricalFinancialsQuery(
     private static func stableTradeId(_ t: WSClosedTrade) -> String {
         [
             t.accountId, t.symbol, t.currency, t.entryDate, t.exitDate,
-            String(format: "%.8f", t.quantity),
-            String(format: "%.8f", t.entryPrice),
-            String(format: "%.8f", t.exitPrice),
+            jsToFixed(t.quantity, digits: 8),
+            jsToFixed(t.entryPrice, digits: 8),
+            jsToFixed(t.exitPrice, digits: 8),
             t.side,
         ].joined(separator: "|")
     }
@@ -1339,11 +1340,12 @@ query IdentityHistoricalFinancialsQuery(
             return Fill(activity: a, side: side, qty: qty)
         }
         fills.sort { a, b in
-            let d = fillWhen(a.activity).compare(fillWhen(b.activity))
+            // ledger.html 1565-1571: transactionDate, fillRank, id. Date only.
+            let d = a.activity.transactionDate.compare(b.activity.transactionDate)
             if d != .orderedSame { return d == .orderedAscending }
             let ra = fillRank(a), rb = fillRank(b)
             if ra != rb { return ra < rb }
-            return a.activity.id < b.activity.id
+            return a.activity.id.compare(b.activity.id) == .orderedAscending
         }
         var books: [String: [Lot]] = [:]
         var bookOrder: [String] = []
@@ -1470,8 +1472,9 @@ query IdentityHistoricalFinancialsQuery(
     }
 
     static func formatReturn(_ r: Double?) -> String {
+        // ledger.html formatReturn: (r * 100).toFixed(1) + "%"
         guard let r, r.isFinite else { return emDash }
-        let pct = String(format: "%.1f%%", r * 100)
+        let pct = jsToFixed(r * 100, digits: 1) + "%"
         if r > 0 { return "+" + pct }
         return pct
     }
@@ -1577,13 +1580,6 @@ query IdentityHistoricalFinancialsQuery(
     }
     private static func isoDateOnly(_ s: String) -> String {
         String(s.trimmingCharacters(in: .whitespacesAndNewlines).prefix(10))
-    }
-
-    /// Same-day FIFO order is Wealthsimple time when present (ledger.html fillWhen).
-    private static func fillWhen(_ a: WSActivity) -> String {
-        let occurred = a.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if occurred.contains("T") { return occurred }
-        return a.transactionDate.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// JavaScript Number.prototype.toFixed. POSIX decimal, half-up, no grouping.
