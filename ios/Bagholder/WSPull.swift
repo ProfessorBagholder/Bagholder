@@ -248,6 +248,7 @@ struct WSPullResult: Codable {
     var avgAnnualizedSubtitle: String
     var activities: [WSActivity] = []
     var listings: [WSSecurityListing] = []
+    var transferredNew: Bool = true
 
     enum CodingKeys: String, CodingKey {
         case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities, listings
@@ -262,7 +263,8 @@ struct WSPullResult: Codable {
         avgAnnualized: String,
         avgAnnualizedSubtitle: String,
         activities: [WSActivity] = [],
-        listings: [WSSecurityListing] = []
+        listings: [WSSecurityListing] = [],
+        transferredNew: Bool = true
     ) {
         self.closed = closed
         self.metrics = metrics
@@ -273,6 +275,7 @@ struct WSPullResult: Codable {
         self.avgAnnualizedSubtitle = avgAnnualizedSubtitle
         self.activities = activities
         self.listings = listings
+        self.transferredNew = transferredNew
     }
 
     init(from decoder: Decoder) throws {
@@ -286,6 +289,7 @@ struct WSPullResult: Codable {
         avgAnnualizedSubtitle = try c.decode(String.self, forKey: .avgAnnualizedSubtitle)
         activities = try c.decodeIfPresent([WSActivity].self, forKey: .activities) ?? []
         listings = try c.decodeIfPresent([WSSecurityListing].self, forKey: .listings) ?? []
+        transferredNew = true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1043,6 +1047,7 @@ query IdentityHistoricalFinancialsQuery(
 
         progress("Fetching accounts…")
         let accounts = try await fetchAllAccounts(box, identityId: box.sess.identityCanonicalId)
+        progress("Checking for new rows…")
         var accById: [String: [String: Any]] = [:]
         for a in accounts {
             let aid = J.str(a, "id")
@@ -1051,26 +1056,68 @@ query IdentityHistoricalFinancialsQuery(
         let pools = fifoPoolIds(accounts)
         let bounds = activitySyncBounds(stored: storedActivities)
         let known: Set<String> = bounds.fullHistory ? [] : knownCanonicalIds(storedActivities)
+        var storedKeys = Set<String>()
+        for a in storedActivities {
+            let k = activityMergeKey(a)
+            if !k.isEmpty { storedKeys.insert(k) }
+        }
         var mapped: [WSActivity] = []
         let withIds = accounts.filter { !J.str($0, "id").isEmpty }
-        let total = withIds.count
-        for (i, acc) in withIds.enumerated() {
+        var work: [AccountActivityWork] = []
+        for acc in withIds {
             let aid = J.str(acc, "id")
-            let x = i + 1
-            let nick = accountType(aid, accounts: accById)
-            if nick.isEmpty {
-                progress("Syncing transactions (\(x)/\(total))")
-            } else {
-                progress("Syncing transactions (\(x)/\(total)) \(nick)")
-            }
-            let rawItems = try await fetchActivities(
+            let page = try await fetchActivityPage(
                 box,
                 accountId: aid,
                 startDate: bounds.startDate,
-                knownCanonicalIds: known
+                knownCanonicalIds: known,
+                cursor: nil
             )
-            for it in rawItems {
-                mapped.append(contentsOf: mapActivityRows(it, accounts: accById))
+            var hasNew = page.newCount > 0
+            if !hasNew {
+                for node in page.nodes {
+                    for row in mapActivityRows(node, accounts: accById) {
+                        let k = activityMergeKey(row)
+                        if !k.isEmpty && !storedKeys.contains(k) {
+                            hasNew = true
+                            break
+                        }
+                    }
+                    if hasNew { break }
+                }
+            }
+            if hasNew {
+                work.append(AccountActivityWork(account: acc, items: page.nodes, nextCursor: page.nextCursor))
+            }
+        }
+        if work.isEmpty {
+            progress("No new transactions")
+        }
+        if !work.isEmpty {
+            let y = work.count
+            for i in work.indices {
+                let aid = J.str(work[i].account, "id")
+                let x = i + 1
+                let nick = accountType(aid, accounts: accById)
+                if nick.isEmpty {
+                    progress("Syncing transactions (\(x)/\(y))")
+                } else {
+                    progress("Syncing transactions (\(x)/\(y)) \(nick)")
+                }
+                while let cursor = work[i].nextCursor {
+                    let page = try await fetchActivityPage(
+                        box,
+                        accountId: aid,
+                        startDate: bounds.startDate,
+                        knownCanonicalIds: known,
+                        cursor: cursor
+                    )
+                    work[i].items.append(contentsOf: page.nodes)
+                    work[i].nextCursor = page.nextCursor
+                }
+                for it in work[i].items {
+                    mapped.append(contentsOf: mapActivityRows(it, accounts: accById))
+                }
             }
         }
         for i in mapped.indices {
@@ -1114,7 +1161,8 @@ query IdentityHistoricalFinancialsQuery(
             avgAnnualized: formatReturn(ann.rate),
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
             activities: activities,
-            listings: storedListings
+            listings: storedListings,
+            transferredNew: !work.isEmpty
         )
     }
 
@@ -1236,47 +1284,54 @@ query IdentityHistoricalFinancialsQuery(
         return byDate.keys.sorted().compactMap { byDate[$0] }
     }
 
-    private static func fetchActivities(
+    private struct AccountActivityWork {
+        let account: [String: Any]
+        var items: [[String: Any]]
+        var nextCursor: String?
+    }
+
+    private static func fetchActivityPage(
         _ box: TokenBox,
         accountId: String,
         startDate: String?,
-        knownCanonicalIds: Set<String>
-    ) async throws -> [[String: Any]] {
-        var items: [[String: Any]] = []
-        var cursor: String? = nil
+        knownCanonicalIds: Set<String>,
+        cursor: String?
+    ) async throws -> (nodes: [[String: Any]], newCount: Int, nextCursor: String?) {
+        var variables: [String: Any] = [
+            "first": 100,
+            "orderBy": "OCCURRED_AT_DESC",
+            "condition": activityFetchCondition(accountId: accountId, startDate: startDate),
+        ]
+        if let cursor { variables["cursor"] = cursor }
+        let data = try await graphql(box, operation: "FetchActivityFeedItems", variables: variables, query: qFetchActivityFeedItems)
+        let feed = J.dict(data["activityFeedItems"])
+        var nodes: [[String: Any]] = []
+        var newOnPage = 0
+        for edge in J.arr(feed["edges"]) {
+            let node = J.dict(J.dict(edge)["node"])
+            if node.isEmpty { continue }
+            nodes.append(node)
+            let cid = J.str(node, "canonicalId").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cid.isEmpty && !knownCanonicalIds.contains(cid) {
+                newOnPage += 1
+            }
+        }
         let bounded: Bool = {
             guard let startDate else { return false }
             return !startDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }()
-        while true {
-            var variables: [String: Any] = [
-                "first": 100,
-                "orderBy": "OCCURRED_AT_DESC",
-                "condition": activityFetchCondition(accountId: accountId, startDate: startDate),
-            ]
-            if let cursor { variables["cursor"] = cursor }
-            let data = try await graphql(box, operation: "FetchActivityFeedItems", variables: variables, query: qFetchActivityFeedItems)
-            let feed = J.dict(data["activityFeedItems"])
-            var newOnPage = 0
-            for edge in J.arr(feed["edges"]) {
-                let node = J.dict(J.dict(edge)["node"])
-                if node.isEmpty { continue }
-                items.append(node)
-                let cid = J.str(node, "canonicalId").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !cid.isEmpty && !knownCanonicalIds.contains(cid) {
-                    newOnPage += 1
-                }
-            }
-            if bounded && !knownCanonicalIds.isEmpty && newOnPage == 0 {
-                break
-            }
-            let page = J.dict(feed["pageInfo"])
-            if !J.bool(page["hasNextPage"]) { break }
-            let next = J.str(page, "endCursor")
-            if next.isEmpty { break }
-            cursor = next
+        if bounded && !knownCanonicalIds.isEmpty && newOnPage == 0 {
+            return (nodes, newOnPage, nil)
         }
-        return items
+        let page = J.dict(feed["pageInfo"])
+        if !J.bool(page["hasNextPage"]) {
+            return (nodes, newOnPage, nil)
+        }
+        let next = J.str(page, "endCursor")
+        if next.isEmpty {
+            return (nodes, newOnPage, nil)
+        }
+        return (nodes, newOnPage, next)
     }
 
     private static func fetchNavHistory(_ box: TokenBox, identityId: String, sinceDate: String? = nil) async throws -> [WSNavPoint] {

@@ -703,6 +703,7 @@ final class Journal: ObservableObject {
     @Published var result: WSPullResult?
     @Published var syncStep: String = ""
     @Published var lastSync: Date?
+    private var noNewShownAt: Date?
     private var task: Task<Void, Never>?
     private var listingsTask: Task<Void, Never>?
     private var pullGeneration = 0
@@ -721,7 +722,15 @@ final class Journal: ObservableObject {
 
     /// ledger.html wsStatusText / relSync.
     func headerStatus(now: Date = Date()) -> String {
-        if !syncStep.isEmpty { return syncStep }
+        if !syncStep.isEmpty {
+            if syncStep == "No new transactions",
+               let shown = noNewShownAt,
+               now.timeIntervalSince(shown) >= 45 {
+                // fall through to relSync of the last real pull
+            } else {
+                return syncStep
+            }
+        }
         if case .failed(let msg) = phase { return msg }
         if let lastSync { return Self.relSync(lastSync, now: now) }
         if phase == .pulling { return "Fetching accounts…" }
@@ -800,6 +809,7 @@ final class Journal: ObservableObject {
         listingsTask?.cancel()
         pullGeneration += 1
         let gen = pullGeneration
+        noNewShownAt = nil
         if showProgress {
             phase = .pulling
             syncStep = "Fetching accounts…"
@@ -841,9 +851,15 @@ final class Journal: ObservableObject {
                 }
                 self.result = applied
                 self.phase = .ready
-                self.syncStep = ""
-                self.lastSync = Date()
-                UserDefaults.standard.set(self.lastSync, forKey: Self.lastSyncKey)
+                if applied.transferredNew {
+                    self.syncStep = ""
+                    self.noNewShownAt = nil
+                    self.lastSync = Date()
+                    UserDefaults.standard.set(self.lastSync, forKey: Self.lastSyncKey)
+                } else {
+                    self.syncStep = "No new transactions"
+                    self.noNewShownAt = Date()
+                }
                 LastPullStore.save(applied)
                 let recNow = Keychain.load()
                 let cookieNow = (recNow?["oauth_cookie"] as? String) ?? cookie
