@@ -4313,6 +4313,9 @@ function replaceWsActivities(book) {
     state.notes = Object.assign({}, book.notes, state.notes);
   }
   state.securities = (book && Array.isArray(book.securities)) ? book.securities : [];
+  if (book && book.spyByDate && typeof book.spyByDate === "object" && !Array.isArray(book.spyByDate) && Object.keys(book.spyByDate).length) {
+    state.spyByDate = book.spyByDate;
+  }
   window.__wsBookAt = state.ws.lastSync || "";
   persist();
   if (HAS_LOCAL_API && !window.__notesPushed) {
