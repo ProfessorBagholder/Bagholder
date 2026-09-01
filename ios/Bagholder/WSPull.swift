@@ -635,8 +635,9 @@ query IdentityHistoricalFinancialsQuery(
         let fifo = matchFifo(mapped)
         let metrics = computeMetrics(fifo.closed)
         let nav = try await fetchNavHistory(sess, identityId: sess.identityCanonicalId)
+        let spy = await ensureSpyPrices()
         let monthly = monthlyPnl(fifo.closed)
-        let yearRows = annualRows(nav: nav)
+        let yearRows = annualRows(nav: nav, spy: spy)
         let ann = accountAnnualizedReturn(nav: nav, years: yearRows.map(\.year).sorted())
         return WSPullResult(
             closed: fifo.closed,
@@ -1628,12 +1629,126 @@ query IdentityHistoricalFinancialsQuery(
         let rate = yrs >= 1.0 / 12.0 ? pow(prod, 1 / yrs) - 1 : prod - 1
         return (rate, yrs)
     }
-    private static func annualRows(nav: [WSNavPoint]) -> [WSYearRow] {
+    /// ledger.html ensureSpyPrices (1963–1988): first successful source wins.
+    private static let spyPriceURLs: [(url: String, kind: String)] = [
+        ("https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", "yahoo"),
+        ("https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div", "yahoo"),
+        ("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10y", "yahoo"),
+        ("https://stooq.com/q/d/l/?s=spy.us&i=d", "stooq"),
+    ]
+    private static let spyBrowserUA =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+
+    /// ledger.html ingestYahooChart (1932–1946): adjclose else close; timestamp*1000 → ISO date.
+    private static func ingestYahooChart(_ data: [String: Any], _ map: inout [String: Double]) -> Int {
+        let chart = J.dict(data["chart"])
+        let result = J.arr(chart["result"])
+        guard let first = result.first else { return 0 }
+        let r = J.dict(first)
+        let timestamps = J.arr(r["timestamp"])
+        if timestamps.isEmpty { return 0 }
+        let indicators = J.dict(r["indicators"])
+        let adj = J.arr(J.dict(J.arr(indicators["adjclose"]).first)["adjclose"])
+        let quoteClose = J.arr(J.dict(J.arr(indicators["quote"]).first)["close"])
+        let close = adj.isEmpty ? quoteClose : adj
+        if close.isEmpty { return 0 }
+        var n = 0
+        let count = min(timestamps.count, close.count)
+        for i in 0..<count {
+            let px = J.num(close[i], default: 0)
+            if !(px > 0) { continue }
+            let ts = J.num(timestamps[i], default: 0)
+            if !(ts > 0) { continue }
+            let d = isoDay(Date(timeIntervalSince1970: ts))
+            map[d] = px
+            n += 1
+        }
+        return n
+    }
+
+    /// ledger.html ingestStooqCsv (1948–1961): Date + Close (parts[4]).
+    private static func ingestStooqCsv(_ text: String, _ map: inout [String: Double]) -> Int {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        var n = 0
+        var i = 1
+        while i < lines.count {
+            let parts = lines[i].split(separator: ",", omittingEmptySubsequences: false)
+            i += 1
+            if parts.count < 5 { continue }
+            let d = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let px = Double(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            if d.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) == nil || !(px > 0) { continue }
+            map[d] = px
+            n += 1
+        }
+        return n
+    }
+
+    /// Download SPY. On any failure leave callers with an empty map (em dash).
+    private static func ensureSpyPrices() async -> [String: Double] {
+        for entry in spyPriceURLs {
+            guard let url = URL(string: entry.url) else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 45)
+            req.httpMethod = "GET"
+            req.setValue(spyBrowserUA, forHTTPHeaderField: "User-Agent")
+            req.setValue("*/*", forHTTPHeaderField: "Accept")
+            req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if status < 200 || status >= 300 { continue }
+                var map: [String: Double] = [:]
+                let n: Int
+                if entry.kind == "yahoo" {
+                    guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                    n = ingestYahooChart(obj, &map)
+                } else {
+                    let text = String(data: data, encoding: .utf8)
+                        ?? String(data: data, encoding: .isoLatin1)
+                        ?? ""
+                    n = ingestStooqCsv(text, &map)
+                }
+                if n == 0 { continue }
+                return map
+            } catch {
+                continue
+            }
+        }
+        return [:]
+    }
+
+    /// ledger.html spyOn (1914–1923): YYYY-MM-DD lookup, walk back up to 18 calendar days.
+    private static func spyOn(_ spy: [String: Double], date: String) -> Double? {
+        var d = String(date.prefix(10))
+        if d.isEmpty { return nil }
+        for _ in 0..<18 {
+            if let v = spy[d], v > 0 { return v }
+            d = shiftIsoDate(d, -1)
+        }
+        return nil
+    }
+
+    /// ledger.html spyReturn (1925–1930): b/a - 1 if both prices > 0 else null.
+    private static func spyReturn(_ spy: [String: Double], from: String, to: String) -> Double? {
+        guard let a = spyOn(spy, date: from), let b = spyOn(spy, date: to), a > 0, b > 0 else { return nil }
+        return b / a - 1
+    }
+
+    private static func annualRows(nav: [WSNavPoint], spy: [String: Double]) -> [WSYearRow] {
         let years = Array(Set(nav.map { String($0.date.prefix(4)) }.filter { $0.count == 4 })).sorted().reversed()
         return years.map { y in
             let w = yearWindow(nav, year: y)
             let mine = bookReturn(nav, from: w.from, to: w.to, start: w.start, flowAfter: w.flowAfter)
-            return WSYearRow(year: y, ret: formatReturn(mine), spy: emDash, vs: emDash)
+            // compareRow else branch (ledger.html 2121–2128): unfiltered NAV, idxFrom=w.from, idxTo=w.to
+            let idx = spyReturn(spy, from: w.from, to: w.to)
+            let vs: Double?
+            if let mine, let idx {
+                vs = mine - idx
+            } else {
+                vs = nil
+            }
+            return WSYearRow(year: y, ret: formatReturn(mine), spy: formatReturn(idx), vs: formatReturn(vs))
         }
     }
 }
