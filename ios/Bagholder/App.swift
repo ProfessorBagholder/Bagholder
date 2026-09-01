@@ -2,25 +2,22 @@ import SwiftUI
 
 @main
 struct BagholderApp: App {
-    @ObservedObject private var server = LocalServer.shared
-
-    init() {
-        LocalServer.shared.startIfNeeded()
-    }
-
     var body: some Scene {
         WindowGroup {
-            Group {
-                if let url = server.url {
-                    WebShell(url: url)
-                } else if let message = server.errorMessage {
-                    Text(message)
-                        .padding()
-                } else {
-                    ProgressView("Starting…")
-                }
-            }
-            .ignoresSafeArea()
+            ContentView()
+        }
+    }
+}
+
+struct ContentView: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "No activity loaded",
+                systemImage: "chart.xyaxis.line",
+                description: Text("Wealthsimple sign-in is not in this iPhone build yet. This screen is native Swift, not the computer dashboard.")
+            )
+            .navigationTitle("Bagholder")
         }
     }
 }
