@@ -15,7 +15,7 @@ struct ContentView: View {
             ContentUnavailableView(
                 "No activity loaded",
                 systemImage: "chart.xyaxis.line",
-                description: Text("Wealthsimple sign-in is not in this iPhone build yet. This screen is native Swift, not the computer dashboard.")
+                description: Text("Wealthsimple sign-in is not in this iPhone build yet.")
             )
             .navigationTitle("Bagholder")
         }
