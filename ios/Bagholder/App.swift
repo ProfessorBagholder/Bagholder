@@ -518,7 +518,7 @@ private struct ClosedTradeDetailView: View {
                 fact("Hold", WSPull.formatHold(trade.holdDays))
                 fact("Currency", trade.currency)
             }
-            Section("Executions (\(executionCount))") {
+            Section {
                 if executionActs.isEmpty && trade.slices.isEmpty {
                     ContentUnavailableView("No executions", systemImage: "list.bullet")
                 } else if !executionActs.isEmpty {
@@ -549,29 +549,29 @@ private struct ExecutionActivityRow: View {
     let activity: WSActivity
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("When") {
-                Text(WSPull.activityWhen(activity))
-                    .monospacedDigit()
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(WSPull.formatExecutionWhen(activity))
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Text(
+                    WSPull.executionSide(activity)
+                        + " · "
+                        + WSPull.formatQty(activity.quantity)
+                        + " · "
+                        + WSPull.formatCad(activity.unitPrice, digits: 2)
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
             }
-            LabeledContent("Side") {
-                Text(WSPull.executionSide(activity))
-            }
-            LabeledContent("Qty") {
-                Text(WSPull.formatQty(activity.quantity))
-                    .monospacedDigit()
-            }
-            LabeledContent("Price") {
-                Text(WSPull.formatCad(activity.unitPrice, digits: 2))
-                    .monospacedDigit()
-            }
-            LabeledContent("Amount") {
-                Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
-                    .monospacedDigit()
-                    .foregroundStyle(HomeColor.signed(activity.netCashAmount))
-            }
+            Spacer(minLength: 8)
+            Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
+                .font(.system(size: 17, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(HomeColor.signed(activity.netCashAmount))
         }
-        .padding(.vertical, 4)
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 }
 
@@ -579,34 +579,29 @@ private struct ExecutionSliceRow: View {
     let slice: WSClosedTrade
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("In") {
-                Text(String(slice.entryDate.prefix(10)))
-                    .monospacedDigit()
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(WSPull.formatCloseDate(slice.exitDate))
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Text(
+                    WSPull.executionSideName(slice.side)
+                        + " · "
+                        + WSPull.formatQty(slice.quantity)
+                        + " · "
+                        + WSPull.formatCad(slice.exitPrice, digits: 2)
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
             }
-            LabeledContent("Out") {
-                Text(String(slice.exitDate.prefix(10)))
-                    .monospacedDigit()
-            }
-            LabeledContent("Qty") {
-                Text(WSPull.formatQty(slice.quantity))
-                    .monospacedDigit()
-            }
-            LabeledContent("Entry") {
-                Text(WSPull.formatCad(slice.entryPrice, digits: 2))
-                    .monospacedDigit()
-            }
-            LabeledContent("Exit") {
-                Text(WSPull.formatCad(slice.exitPrice, digits: 2))
-                    .monospacedDigit()
-            }
-            LabeledContent("P&L") {
-                Text(WSPull.formatCad(slice.pnl, digits: 2))
-                    .monospacedDigit()
-                    .foregroundStyle(HomeColor.signed(slice.pnl))
-            }
+            Spacer(minLength: 8)
+            Text(WSPull.formatCad(slice.pnl, digits: 2))
+                .font(.system(size: 17, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(HomeColor.signed(slice.pnl))
         }
-        .padding(.vertical, 4)
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 }
 

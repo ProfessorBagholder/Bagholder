@@ -1543,6 +1543,17 @@ query IdentityHistoricalFinancialsQuery(
         return String(raw.prefix(10))
     }
 
+    static func formatExecutionWhen(_ a: WSActivity) -> String {
+        let raw = (a.occurredAt.isEmpty ? a.transactionDate : a.occurredAt).trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty { return "" }
+        let date = formatCloseDate(String(raw.prefix(10)))
+        if let t = raw.firstIndex(of: "T") {
+            let clock = String(raw[raw.index(after: t)...].prefix(5))
+            if clock.count == 5 { return date + ", " + clock }
+        }
+        return date
+    }
+
     static func formatHold(_ days: Int) -> String {
         if days == 0 { return "intraday" }
         if days == 1 { return "1d" }
@@ -1613,8 +1624,13 @@ query IdentityHistoricalFinancialsQuery(
 
     static func executionSide(_ a: WSActivity) -> String {
         if let s = tradeSide(a) { return s }
-        let raw = compactType(a.activitySubType.isEmpty ? a.activityType : a.activitySubType)
-        if raw.contains("SELL") { return "SELL" }
+        return executionSideName(a.activitySubType.isEmpty ? a.activityType : a.activitySubType)
+    }
+
+    static func executionSideName(_ raw: String) -> String {
+        let s = compactType(raw)
+        if ["SELL", "SELLTOOPEN", "STO", "SELLTOCLOSE", "STC"].contains(s) { return "SELL" }
+        if s.contains("SELL") { return "SELL" }
         return "BUY"
     }
 
