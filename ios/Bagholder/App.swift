@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WebKit
 
 @main
 struct BagholderApp: App {
@@ -99,6 +100,7 @@ struct RootView: View {
 
 struct HomeView: View {
     @State private var showSettings = false
+    @StateObject private var session = SessionStore()
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -186,7 +188,7 @@ struct HomeView: View {
         }
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
-            SettingsStubView()
+            SettingsView(session: session)
         }
     }
 }
@@ -421,14 +423,130 @@ struct EmptyTabView: View {
     }
 }
 
-struct SettingsStubView: View {
+final class SessionStore: ObservableObject {
+    @Published var connected = false
+
+    init() {
+        connected = Keychain.hasSession()
+    }
+
+    func saveOAuthCookie(_ value: String, wssdi: String?) {
+        Keychain.save(oauthCookie: value, wssdi: wssdi)
+        connected = true
+    }
+
+    func disconnect() {
+        Keychain.clear()
+        let store = WKWebsiteDataStore.default()
+        store.httpCookieStore.getAllCookies { cookies in
+            for cookie in cookies {
+                store.httpCookieStore.delete(cookie)
+            }
+        }
+        WKWebsiteDataStore.default().removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: Date.distantPast,
+            completionHandler: {}
+        )
+        connected = false
+    }
+}
+
+private enum Keychain {
+    static let service = "ca.bagholder.ios"
+    static let account = "ws_oauth_cookie"
+
+    static func hasSession() -> Bool {
+        guard let raw = load()?["oauth_cookie"] as? String else { return false }
+        return jsonWithAccessToken(raw) != nil
+    }
+
+    static func save(oauthCookie: String, wssdi: String?) {
+        guard jsonWithAccessToken(oauthCookie) != nil else { return }
+        var body: [String: String] = ["oauth_cookie": oauthCookie]
+        if let wssdi, !wssdi.isEmpty {
+            body["wssdi"] = wssdi
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func load() -> [String: Any]? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var out: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        guard status == errSecSuccess, let data = out as? Data,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj
+    }
+
+    static func clear() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+private func jsonWithAccessToken(_ raw: String) -> [String: Any]? {
+    var cur = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    for _ in 0..<3 {
+        if cur.contains("access_token"),
+           let data = cur.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let token = obj["access_token"] as? String,
+           !token.isEmpty
+        {
+            return obj
+        }
+        let nxt = cur.removingPercentEncoding ?? cur
+        if nxt == cur { break }
+        cur = nxt
+    }
+    return nil
+}
+
+struct SettingsView: View {
+    @ObservedObject var session: SessionStore
     @Environment(\.dismiss) private var dismiss
+    @State private var showLogin = false
 
     var body: some View {
         NavigationStack {
             List {
-                Text("Connect is not in this build yet.")
-                    .foregroundStyle(.secondary)
+                Section {
+                    if session.connected {
+                        Text("Connected")
+                        Button("Disconnect", role: .destructive) {
+                            session.disconnect()
+                        }
+                    } else {
+                        Button("Connect") {
+                            showLogin = true
+                        }
+                        Text("Opens Wealthsimple’s login. After you sign in, this screen closes.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle("Settings")
             .toolbar {
@@ -436,6 +554,127 @@ struct SettingsStubView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .fullScreenCover(isPresented: $showLogin) {
+                ConnectLoginView(session: session, isPresented: $showLogin)
+            }
         }
     }
 }
+
+struct ConnectLoginView: View {
+    @ObservedObject var session: SessionStore
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        NavigationStack {
+            WealthsimpleLoginWebView { oauth, wssdi in
+                session.saveOAuthCookie(oauth, wssdi: wssdi)
+                isPresented = false
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle("Connect")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { isPresented = false }
+                }
+            }
+        }
+    }
+}
+
+private struct WealthsimpleLoginWebView: UIViewRepresentable {
+    var onSession: (String, String?) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSession: onSession)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.navigationDelegate = context.coordinator
+        web.uiDelegate = context.coordinator
+        context.coordinator.webView = web
+        context.coordinator.start()
+        web.load(URLRequest(url: URL(string: "https://my.wealthsimple.com/app/login")!))
+        return web
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKHTTPCookieStoreObserver {
+        let onSession: (String, String?) -> Void
+        weak var webView: WKWebView?
+        private var done = false
+        private var timer: Timer?
+
+        init(onSession: @escaping (String, String?) -> Void) {
+            self.onSession = onSession
+        }
+
+        func start() {
+            WKWebsiteDataStore.default().httpCookieStore.add(self)
+            timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.inspectCookies()
+            }
+        }
+
+        func stop() {
+            timer?.invalidate()
+            timer = nil
+            WKWebsiteDataStore.default().httpCookieStore.remove(self)
+        }
+
+        func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
+            inspectCookies()
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            inspectCookies()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if navigationAction.targetFrame == nil {
+                webView.load(navigationAction.request)
+            }
+            return nil
+        }
+
+        private func inspectCookies() {
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
+                guard let self, !self.done else { return }
+                var oauth: String?
+                var wssdi: String?
+                for cookie in cookies {
+                    if cookie.name == "wssdi", !cookie.value.isEmpty {
+                        wssdi = cookie.value
+                    }
+                    if cookie.name == "_oauth2_access_v2", jsonWithAccessToken(cookie.value) != nil {
+                        oauth = cookie.value
+                    } else if oauth == nil, jsonWithAccessToken(cookie.value) != nil {
+                        oauth = cookie.value
+                    }
+                }
+                guard let oauth else { return }
+                self.done = true
+                DispatchQueue.main.async {
+                    self.stop()
+                    self.onSession(oauth, wssdi)
+                }
+            }
+        }
+    }
+}
+
