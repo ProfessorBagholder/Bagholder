@@ -42,6 +42,12 @@ GRAPHQL = "https://my.wealthsimple.com/graphql"
 GRAPHQL_VERSION = "12"
 WS_CLIENT = "@wealthsimple/wealthsimple"
 LOGIN_URL = "https://my.wealthsimple.com/app/login"
+FRED_SP500_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
+FRED_TIMEOUT_SEC = 30
+FRED_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+)
 
 
 def _data_home():
@@ -1319,6 +1325,50 @@ def save_user_agent(ua):
         pass
 
 
+def parse_fred_sp500_csv(text):
+    """Skip empty cells and '.' like ledger.html ingestFredSP500Csv."""
+    out = {}
+    blob = str(text or "")
+    for line in blob.splitlines():
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        d = parts[0].strip()
+        raw = parts[1].strip()
+        if len(d) != 10 or d[4] != "-" or d[7] != "-":
+            continue
+        if not raw or raw == ".":
+            continue
+        try:
+            px = float(raw)
+        except ValueError:
+            continue
+        if px > 0:
+            out[d] = px
+    return out
+
+
+def refresh_spy_prices():
+    """Download FRED SP500. Keep stored prices if the fetch is empty or fails."""
+    store.ensure()
+    try:
+        ua = cached_user_agent() or FRED_UA
+        hdrs = {
+            "Accept": "text/csv,*/*;q=0.8",
+            "User-Agent": ua,
+        }
+        req = Request(FRED_SP500_URL, headers=hdrs)
+        with urlopen(req, timeout=FRED_TIMEOUT_SEC, context=_ssl_context()) as resp:
+            raw = resp.read()
+            body = _http_body_text(raw, getattr(resp, "headers", None))
+        mapping = parse_fred_sp500_csv(body)
+        if not mapping:
+            return store.spy_by_date()
+        return store.save_spy_by_date(mapping)
+    except Exception:
+        return store.spy_by_date()
+
+
 def scrape_client_id():
     """Production clientId from Wealthsimple login JS. Empty if it cannot be read."""
     cached = cached_client_id()
@@ -1729,6 +1779,7 @@ def fetch_nickname_nav_history(sess, accounts):
 def refresh_nav_only(allow_refresh=True):
     """Pull daily NAV only. Does not pull activity."""
     store.ensure()
+    refresh_spy_prices()
     sess = load_session()
     if not sess or not sess.get("access_token"):
         return {"ok": False, "error": "not connected"}
@@ -2130,6 +2181,7 @@ def activity_sync_bounds():
 def run_sync(allow_refresh=True, force_activity=True):
     """GraphQL pull. Inserts new Wealthsimple rows only. Never rebuilds the table."""
     store.ensure()
+    refresh_spy_prices()
     with _lock:
         if _state["syncing"]:
             return False
@@ -3031,6 +3083,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False})
                 return
             book = load_book()
+            if not (book.get("spyByDate") or {}):
+                refresh_spy_prices()
+                book = load_book()
             self._send(
                 200,
                 {
@@ -3044,6 +3099,7 @@ class Handler(BaseHTTPRequestHandler):
                     "tradeGroups": book.get("tradeGroups") or [],
                     "notes": book.get("notes") or {},
                     "securities": book.get("securities") or [],
+                    "spyByDate": book.get("spyByDate") or {},
                 },
             )
             return

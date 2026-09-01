@@ -1103,6 +1103,69 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertIn("state.navByAccount = (book && book.navByAccount", html)
         self.assertNotIn("const hist = state.navHistory || [];", html)
 
+    def test_parse_fred_sp500_csv_skips_dot_and_empty(self):
+        csv = """DATE,SP500
+2014-01-02,1831.98
+2014-01-03,.
+2014-01-04,
+not-a-date,1
+2014-01-06,1837.49
+
+"""
+        got = bagholder.parse_fred_sp500_csv(csv)
+        self.assertEqual(got, {"2014-01-02": 1831.98, "2014-01-06": 1837.49})
+
+    def test_spy_by_date_meta_roundtrip(self):
+        self.assertEqual(store.spy_by_date(), {})
+        store.save_spy_by_date({})
+        self.assertEqual(store.spy_by_date(), {})
+        store.save_spy_by_date({"2014-01-02": 1831.98, "bad": 1, "2014-01-03": 0})
+        self.assertEqual(store.spy_by_date(), {"2014-01-02": 1831.98})
+        snap = store.snapshot()
+        self.assertEqual(snap["spyByDate"], {"2014-01-02": 1831.98})
+        book = bagholder.load_book()
+        self.assertEqual(book["spyByDate"], {"2014-01-02": 1831.98})
+
+    def test_refresh_spy_prices_fixture_csv_not_live(self):
+        csv = """DATE,SP500
+2014-01-02,1831.98
+2014-01-03,.
+2014-01-06,1837.49
+"""
+
+        def fake_urlopen(req, timeout=None, context=None):
+            self.assertEqual(timeout, bagholder.FRED_TIMEOUT_SEC)
+            self.assertIn("id=SP500", req.full_url)
+            return _FakeHTTPResp(csv)
+
+        with mock.patch.object(bagholder, "urlopen", side_effect=fake_urlopen):
+            got = bagholder.refresh_spy_prices()
+        self.assertEqual(got["2014-01-02"], 1831.98)
+        self.assertEqual(got["2014-01-06"], 1837.49)
+        self.assertNotIn("2014-01-03", got)
+        self.assertEqual(store.spy_by_date()["2014-01-02"], 1831.98)
+
+    def test_refresh_spy_prices_keeps_existing_on_fail(self):
+        store.save_spy_by_date({"2014-01-02": 1831.98})
+        with mock.patch.object(bagholder, "urlopen", side_effect=RuntimeError("offline")):
+            got = bagholder.refresh_spy_prices()
+        self.assertEqual(got, {"2014-01-02": 1831.98})
+        with mock.patch.object(bagholder, "urlopen", return_value=_FakeHTTPResp("DATE,SP500\n")):
+            got = bagholder.refresh_spy_prices()
+        self.assertEqual(got, {"2014-01-02": 1831.98})
+
+    def test_ledger_uses_python_spy_before_persist(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("book.spyByDate", html)
+        idx = html.find("function replaceWsActivities(book)")
+        self.assertGreater(idx, 0)
+        chunk = html[idx:idx + 1800]
+        spy_at = chunk.find("state.spyByDate = book.spyByDate")
+        persist_at = chunk.find("persist();")
+        render_at = chunk.find("render();")
+        self.assertGreater(spy_at, 0)
+        self.assertGreater(persist_at, spy_at)
+        self.assertGreater(render_at, persist_at)
 
 
 if __name__ == "__main__":
