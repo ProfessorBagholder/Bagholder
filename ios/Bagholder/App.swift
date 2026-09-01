@@ -30,6 +30,18 @@ private enum HomeExample {
     static let monthly: [Double] = [0.6, 0.9, -0.45, 1.2, 0.55, -0.5, 0.7]
 }
 
+private enum HomeLayout {
+    static let side: CGFloat = 16
+    static let gutter: CGFloat = 8
+    static let corner: CGFloat = 14
+    static let tilePadding: CGFloat = 11
+    static let tileMinHeight: CGFloat = 72
+    static let chartHeight: CGFloat = 72
+    static let titleSize: CGFloat = 12
+    static let valueSize: CGFloat = 20
+    static let pnlSize: CGFloat = 38
+}
+
 struct RootView: View {
     var body: some View {
         TabView {
@@ -60,79 +72,84 @@ struct HomeView: View {
     @State private var showSettings = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: HomeLayout.gutter) {
+            HStack(alignment: .center, spacing: HomeLayout.gutter) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(HomeExample.realizedPnL)
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .font(.system(size: HomeLayout.pnlSize, weight: .bold))
                     Text("Realized P&L")
-                        .font(.subheadline)
+                        .font(.system(size: HomeLayout.titleSize))
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: 12),
-                        GridItem(.flexible(), spacing: 12),
-                    ],
-                    spacing: 12
-                ) {
-                    MetricCard(
-                        title: "Biggest winner",
-                        value: HomeExample.biggestWinner,
-                        subtitle: HomeExample.biggestWinnerSymbol,
-                        valueColor: Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
-                    )
-                    MetricCard(
-                        title: "Biggest loser",
-                        value: HomeExample.biggestLoser,
-                        subtitle: HomeExample.biggestLoserSymbol,
-                        valueColor: Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
-                    )
-                    MetricCard(
-                        title: "Profit factor",
-                        value: HomeExample.profitFactor,
-                        subtitle: HomeExample.profitFactorSubtitle
-                    )
-                    MetricCard(
-                        title: "Expectancy",
-                        value: HomeExample.expectancy,
-                        subtitle: HomeExample.expectancySubtitle
-                    )
-                    MetricCard(
-                        title: "Win rate",
-                        value: HomeExample.winRate,
-                        subtitle: HomeExample.winRateSubtitle
-                    )
-                    MetricCard(
-                        title: "Avg annualized",
-                        value: HomeExample.avgAnnualized,
-                        subtitle: HomeExample.avgAnnualizedSubtitle
-                    )
-                }
-                .padding(.horizontal, 16)
-
-                EquityCurveCard()
-                    .padding(.horizontal, 16)
-                MonthlyPnLCard()
-                    .padding(.horizontal, 16)
-            }
-            .padding(.vertical, 8)
-        }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+                Spacer(minLength: 0)
                 Button {
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                        )
                 }
                 .accessibilityLabel("Settings")
             }
+            .padding(.horizontal, HomeLayout.side)
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: HomeLayout.gutter),
+                    GridItem(.flexible(), spacing: HomeLayout.gutter),
+                ],
+                spacing: HomeLayout.gutter
+            ) {
+                MetricCard(
+                    title: "Biggest winner",
+                    value: HomeExample.biggestWinner,
+                    subtitle: HomeExample.biggestWinnerSymbol,
+                    valueColor: Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
+                )
+                MetricCard(
+                    title: "Biggest loser",
+                    value: HomeExample.biggestLoser,
+                    subtitle: HomeExample.biggestLoserSymbol,
+                    valueColor: Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
+                )
+                MetricCard(
+                    title: "Profit factor",
+                    value: HomeExample.profitFactor,
+                    subtitle: HomeExample.profitFactorSubtitle
+                )
+                MetricCard(
+                    title: "Expectancy",
+                    value: HomeExample.expectancy,
+                    subtitle: HomeExample.expectancySubtitle
+                )
+                MetricCard(
+                    title: "Win rate",
+                    value: HomeExample.winRate,
+                    subtitle: HomeExample.winRateSubtitle
+                )
+                MetricCard(
+                    title: "Avg annualized",
+                    value: HomeExample.avgAnnualized,
+                    subtitle: HomeExample.avgAnnualizedSubtitle
+                )
+            }
+            .padding(.horizontal, HomeLayout.side)
+
+            EquityCurveCard()
+                .padding(.horizontal, HomeLayout.side)
+            MonthlyPnLCard()
+                .padding(.horizontal, HomeLayout.side)
+
+            Spacer(minLength: 0)
         }
+        .padding(.top, 4)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showSettings) {
             SettingsStubView()
         }
@@ -146,23 +163,23 @@ struct MetricCard: View {
     var valueColor: Color = .primary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.footnote)
+                .font(.system(size: HomeLayout.titleSize))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title3.weight(.semibold))
+                .font(.system(size: HomeLayout.valueSize, weight: .bold))
                 .foregroundStyle(valueColor)
             if let subtitle {
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.system(size: HomeLayout.titleSize))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
-        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: HomeLayout.tileMinHeight, alignment: .topLeading)
+        .padding(HomeLayout.tilePadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
@@ -172,9 +189,9 @@ struct EquityCurveCard: View {
     private let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Equity Curve")
-                .font(.subheadline)
+                .font(.system(size: HomeLayout.titleSize))
                 .foregroundStyle(.secondary)
             Chart {
                 ForEach(Array(HomeExample.equity.enumerated()), id: \.offset) { index, value in
@@ -194,12 +211,12 @@ struct EquityCurveCard: View {
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
-            .frame(height: 140)
+            .frame(height: HomeLayout.chartHeight)
             .accessibilityLabel("Example equity curve")
         }
-        .padding(14)
+        .padding(HomeLayout.tilePadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
@@ -210,9 +227,9 @@ struct MonthlyPnLCard: View {
     private let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Monthly P&L")
-                .font(.subheadline)
+                .font(.system(size: HomeLayout.titleSize))
                 .foregroundStyle(.secondary)
             Chart {
                 ForEach(Array(HomeExample.monthly.enumerated()), id: \.offset) { index, value in
@@ -226,12 +243,12 @@ struct MonthlyPnLCard: View {
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
-            .frame(height: 140)
+            .frame(height: HomeLayout.chartHeight)
             .accessibilityLabel("Example monthly P&L")
         }
-        .padding(14)
+        .padding(HomeLayout.tilePadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
