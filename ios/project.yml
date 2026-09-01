@@ -43,6 +43,7 @@ targets:
     resources:
       - path: ../ledger.html
       - path: ../favicon.png
+      - path: Bagholder/SPYSeed.txt
     scheme:
       testTargets:
         - SpikeLoopback

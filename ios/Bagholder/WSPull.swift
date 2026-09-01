@@ -1685,8 +1685,35 @@ query IdentityHistoricalFinancialsQuery(
         return n
     }
 
-    /// Download SPY. On any failure leave callers with an empty map (em dash).
+    /// ledger.html parseSpySeed (2363–2373): comma-separated YYYYMMDD:price → YYYY-MM-DD.
+    private static func parseSpySeed(_ raw: String) -> [String: Double] {
+        var map: [String: Double] = [:]
+        let parts = String(raw).components(separatedBy: ",")
+        for p in parts {
+            if p.count < 10 { continue }
+            let d = String(p.prefix(4)) + "-" + String(p.dropFirst(4).prefix(2)) + "-" + String(p.dropFirst(6).prefix(2))
+            let px = Double(p.dropFirst(9)) ?? 0
+            if px > 0 { map[d] = px }
+        }
+        return map
+    }
+
+    /// Bundle resource ios/Bagholder/SPYSeed.txt (same contents as ledger.html SPY_SEED).
+    private static func loadSpySeed() -> [String: Double] {
+        guard let url = Bundle.main.url(forResource: "SPYSeed", withExtension: "txt"),
+              let raw = try? String(contentsOf: url, encoding: .utf8)
+        else { return [:] }
+        return parseSpySeed(raw)
+    }
+
+    /// ledger.html mergeSpySeed (2375–2377): Object.assign(parseSpySeed(SPY_SEED), live).
+    private static func mergeSpySeed(_ live: [String: Double]) -> [String: Double] {
+        loadSpySeed().merging(live) { _, livePx in livePx }
+    }
+
+    /// Download SPY. Seed first; live prices overwrite. If live URLs fail, seed remains.
     private static func ensureSpyPrices() async -> [String: Double] {
+        let seed = loadSpySeed()
         for entry in spyPriceURLs {
             guard let url = URL(string: entry.url) else { continue }
             var req = URLRequest(url: url, timeoutInterval: 45)
@@ -1698,24 +1725,24 @@ query IdentityHistoricalFinancialsQuery(
                 let (data, resp) = try await URLSession.shared.data(for: req)
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if status < 200 || status >= 300 { continue }
-                var map: [String: Double] = [:]
+                var live: [String: Double] = [:]
                 let n: Int
                 if entry.kind == "yahoo" {
                     guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                    n = ingestYahooChart(obj, &map)
+                    n = ingestYahooChart(obj, &live)
                 } else {
                     let text = String(data: data, encoding: .utf8)
                         ?? String(data: data, encoding: .isoLatin1)
                         ?? ""
-                    n = ingestStooqCsv(text, &map)
+                    n = ingestStooqCsv(text, &live)
                 }
                 if n == 0 { continue }
-                return map
+                return mergeSpySeed(live)
             } catch {
                 continue
             }
         }
-        return [:]
+        return seed
     }
 
     /// ledger.html spyOn (1914–1923): YYYY-MM-DD lookup, walk back up to 18 calendar days.

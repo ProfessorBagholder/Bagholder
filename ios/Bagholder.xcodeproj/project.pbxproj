@@ -14,6 +14,7 @@
 		A10000000000000000000053 /* BookAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000043 /* BookAPI.swift */; };
 		A10000000000000000000054 /* ledger.html in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046 /* ledger.html */; };
 		A10000000000000000000055 /* favicon.png in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000047 /* favicon.png */; };
+		A1000000000000000000005A /* SPYSeed.txt in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004C /* SPYSeed.txt */; };
 		A10000000000000000000056 /* SpikeLoopbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000048 /* SpikeLoopbackTests.swift */; };
 		A10000000000000000000057 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000049 /* Network.framework */; };
 		A10000000000000000000058 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004A /* WebKit.framework */; };
@@ -34,6 +35,7 @@
 		A10000000000000000000026 /* SpikeLoopback.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpikeLoopback.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000040 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A1000000000000000000004B /* WSPull.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSPull.swift; sourceTree = "<group>"; };
+		A1000000000000000000004C /* SPYSeed.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SPYSeed.txt; sourceTree = "<group>"; };
 		A10000000000000000000041 /* WebShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebShell.swift; sourceTree = "<group>"; };
 		A10000000000000000000042 /* LocalServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServer.swift; sourceTree = "<group>"; };
 		A10000000000000000000043 /* BookAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookAPI.swift; sourceTree = "<group>"; };
@@ -81,6 +83,7 @@
 			children = (
 				A10000000000000000000040 /* App.swift */,
 				A1000000000000000000004B /* WSPull.swift */,
+				A1000000000000000000004C /* SPYSeed.txt */,
 				A10000000000000000000041 /* WebShell.swift */,
 				A10000000000000000000042 /* LocalServer.swift */,
 				A10000000000000000000043 /* BookAPI.swift */,
@@ -208,6 +211,7 @@
 			files = (
 				A10000000000000000000054 /* ledger.html in Resources */,
 				A10000000000000000000055 /* favicon.png in Resources */,
+				A1000000000000000000005A /* SPYSeed.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
