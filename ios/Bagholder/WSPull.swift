@@ -1938,15 +1938,21 @@ query IdentityHistoricalFinancialsQuery(
         activities: [WSActivity],
         listings: [WSSecurityListing]
     ) -> String {
-        let fallback = t.symbol
         guard let sec = listingSecurity(t, activities: activities, listings: listings), !sec.name.isEmpty else {
-            return fallback
+            return ""
         }
         let exch = exchangeLabel(sec)
         let sym = listingTicker(sec.symbol)
-        if !exch.isEmpty && !sym.isEmpty { return sec.name + " · " + exch + ": " + sym }
-        if !exch.isEmpty { return sec.name + " · " + exch }
-        return sec.name
+        let line: String
+        if !exch.isEmpty && !sym.isEmpty {
+            line = sec.name + " · " + exch + ": " + sym
+        } else if !exch.isEmpty {
+            line = sec.name + " · " + exch
+        } else {
+            line = sec.name
+        }
+        if line == t.symbol { return "" }
+        return line
     }
 
 

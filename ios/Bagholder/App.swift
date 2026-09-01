@@ -427,21 +427,13 @@ struct ClosedTradesView: View {
         return WSPull.closedTradesTable(result.closed, activities: result.activities)
     }
 
-    private var activities: [WSActivity] {
-        journal.result?.activities ?? []
-    }
-
-    private var listings: [WSSecurityListing] {
-        journal.result?.listings ?? []
-    }
-
     var body: some View {
         List {
             if !rows.isEmpty {
                 Section {
                     ForEach(rows) { t in
                         NavigationLink {
-                            ClosedTradeDetailView(trade: t, activities: activities, listings: listings)
+                            ClosedTradeDetailView(journal: journal, trade: t)
                         } label: {
                             ClosedTradeRow(trade: t)
                         }
@@ -490,9 +482,16 @@ private struct ClosedTradeRow: View {
 }
 
 private struct ClosedTradeDetailView: View {
+    @ObservedObject var journal: Journal
     let trade: WSClosedTrade
-    let activities: [WSActivity]
-    let listings: [WSSecurityListing]
+
+    private var activities: [WSActivity] {
+        journal.result?.activities ?? []
+    }
+
+    private var listings: [WSSecurityListing] {
+        journal.result?.listings ?? []
+    }
 
     private var executionActs: [WSActivity] {
         WSPull.activitiesInGroup(trade, activities: activities)
@@ -532,11 +531,13 @@ private struct ClosedTradeDetailView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .truncationMode(.tail)
-                    Text(listingLine)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    if !listingLine.isEmpty {
+                        Text(listingLine)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 .textCase(nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
