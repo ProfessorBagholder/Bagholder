@@ -357,12 +357,6 @@ struct EquityCurveCard: View {
                     )
                     .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
                     .chartLongPress(active: $pressActive, location: $finger)
-                    .onAppear {
-                        if ProcessInfo.processInfo.environment["BH_FORCE_HOLD"] == "equity" {
-                            pressActive = true
-                            finger = CGPoint(x: 220, y: 36)
-                        }
-                    }
                     .accessibilityLabel("Equity curve")
             } else {
                 Color.clear
@@ -441,12 +435,6 @@ struct MonthlyPnLCard: View {
                     )
                     .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
                     .chartLongPress(active: $pressActive, location: $finger)
-                    .onAppear {
-                        if ProcessInfo.processInfo.environment["BH_FORCE_HOLD"] == "monthly" {
-                            pressActive = true
-                            finger = CGPoint(x: 220, y: 36)
-                        }
-                    }
                     .accessibilityLabel("Monthly P&L")
             } else {
                 Color.clear
@@ -1225,83 +1213,44 @@ private struct ChartSizeKey: PreferenceKey {
 
 private extension View {
     func chartLongPress(active: Binding<Bool>, location: Binding<CGPoint>) -> some View {
-        overlay {
-            ChartLongPressOverlay(active: active, location: location)
-        }
+        modifier(ChartLongPressModifier(active: active, location: location))
     }
 }
 
-/// UILongPress reports location on `.began`. Sequenced SwiftUI LongPress+Drag
-/// often has a nil drag until the finger moves, so the hairline missed the first hold.
-private struct ChartLongPressOverlay: UIViewRepresentable {
+private struct ChartLongPressModifier: ViewModifier {
     @Binding var active: Bool
     @Binding var location: CGPoint
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(active: $active, location: $location)
-    }
-
-    func makeUIView(context: Context) -> ChartLongPressUIView {
-        let view = ChartLongPressUIView()
-        view.coordinator = context.coordinator
-        return view
-    }
-
-    func updateUIView(_ uiView: ChartLongPressUIView, context: Context) {
-        context.coordinator.active = $active
-        context.coordinator.location = $location
-        uiView.coordinator = context.coordinator
-    }
-
-    final class Coordinator {
-        var active: Binding<Bool>
-        var location: Binding<CGPoint>
-        init(active: Binding<Bool>, location: Binding<CGPoint>) {
-            self.active = active
-            self.location = location
-        }
-    }
-}
-
-private final class ChartLongPressUIView: UIView {
-    var coordinator: ChartLongPressOverlay.Coordinator?
-    private var origin: CGPoint?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        isOpaque = false
-        isMultipleTouchEnabled = false
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress))
-        press.minimumPressDuration = 0.28
-        press.allowableMovement = 24
-        press.cancelsTouchesInView = false
-        press.delaysTouchesBegan = false
-        addGestureRecognizer(press)
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        origin = touches.first.map { $0.location(in: self) }
-        super.touchesBegan(touches, with: event)
-    }
-
-    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            let pt = origin ?? gesture.location(in: self)
-            coordinator?.location.wrappedValue = pt
-            coordinator?.active.wrappedValue = true
-        case .changed:
-            coordinator?.location.wrappedValue = gesture.location(in: self)
-            coordinator?.active.wrappedValue = true
-        case .ended, .cancelled, .failed:
-            origin = nil
-            coordinator?.active.wrappedValue = false
-        default:
-            break
-        }
+    func body(content: Content) -> some View {
+        content
+            .gesture(
+                LongPressGesture(minimumDuration: 0.28)
+                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                    .onChanged { value in
+                        switch value {
+                        case .second(true, let drag):
+                            active = true
+                            if let drag {
+                                location = drag.location
+                            }
+                        default:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        active = false
+                    }
+            )
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        location = value.location
+                    }
+                    .onEnded { _ in
+                        active = false
+                    },
+                including: active ? .all : .none
+            )
     }
 }
 
