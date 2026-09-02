@@ -3,8 +3,31 @@ import UIKit
 import WebKit
 import Security
 
+
+enum LaunchClock {
+    static let t0 = CFAbsoluteTimeGetCurrent()
+    private static var homePainted = false
+    static func ms() -> Double { (CFAbsoluteTimeGetCurrent() - t0) * 1000 }
+    static func log(_ tag: String) {
+        NSLog("BAGHOLDER_COLD_LAUNCH %@ %.2f", tag, ms())
+    }
+    static func markHomePaint(hasNumbers: Bool) {
+        guard hasNumbers else { return }
+        guard !homePainted else { return }
+        homePainted = true
+        let line = String(format: "%.2f", ms())
+        NSLog("BAGHOLDER_COLD_LAUNCH_MS %@ hasNumbers=%@", line, hasNumbers ? "1" : "0")
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let dir = base.appendingPathComponent("Bagholder", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Data(line.utf8).write(to: dir.appendingPathComponent("cold-launch-ms.txt"), options: .atomic)
+    }
+}
+
 @main
 struct BagholderApp: App {
+    init() { LaunchClock.log("app_init") }
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -330,6 +353,18 @@ private enum HomeLayout {
     static let scrollBottomInset: CGFloat = 65
 }
 
+
+private struct HomeTabActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var homeTabActive: Bool {
+        get { self[HomeTabActiveKey.self] }
+        set { self[HomeTabActiveKey.self] = newValue }
+    }
+}
+
 struct RootView: View {
     @StateObject private var session: SessionStore
     @StateObject private var journal: Journal
@@ -351,6 +386,7 @@ struct RootView: View {
                 NavigationStack {
                     HomeView(session: session, journal: journal)
                 }
+                .environment(\.homeTabActive, tab == 0)
                 .opacity(tab == 0 ? 1 : 0)
                 .allowsHitTesting(tab == 0)
                 .zIndex(tab == 0 ? 1 : 0)
@@ -358,6 +394,7 @@ struct RootView: View {
                 NavigationStack {
                     ClosedTradesView(session: session, journal: journal)
                 }
+                .environment(\.homeTabActive, tab == 1)
                 .opacity(tab == 1 ? 1 : 0)
                 .allowsHitTesting(tab == 1)
                 .zIndex(tab == 1 ? 1 : 0)
@@ -365,6 +402,7 @@ struct RootView: View {
                 NavigationStack {
                     ActivityView(session: session, journal: journal)
                 }
+                .environment(\.homeTabActive, tab == 2)
                 .opacity(tab == 2 ? 1 : 0)
                 .allowsHitTesting(tab == 2)
                 .zIndex(tab == 2 ? 1 : 0)
@@ -372,6 +410,7 @@ struct RootView: View {
                 NavigationStack {
                     OpenLotsView(session: session, journal: journal)
                 }
+                .environment(\.homeTabActive, tab == 3)
                 .opacity(tab == 3 ? 1 : 0)
                 .allowsHitTesting(tab == 3)
                 .zIndex(tab == 3 ? 1 : 0)
@@ -414,9 +453,10 @@ struct HomeView: View {
     @State private var shown: WSPullResult?
 
     var body: some View {
+        let paint = shown ?? Self.firstPaint(journal.result, filters: filters.current)
         Group {
-            if journal.result != nil || session.connected || journal.phase == .pulling {
-                liveHome(shown)
+            if paint != nil || journal.result != nil || session.connected || journal.phase == .pulling {
+                liveHome(paint)
             } else {
                 waitingHome
             }
@@ -509,8 +549,15 @@ struct HomeView: View {
         )
     }
 
+    private static func firstPaint(_ snap: WSPullResult?, filters: JournalFilters) -> WSPullResult? {
+        guard let snap else { return nil }
+        if filters.isActive { return WSPull.dashboard(snap, filters: filters) }
+        return snap
+    }
+
     private func refreshShown() {
-        shown = journal.result.map { WSPull.dashboard($0, filters: filters.current) }
+        shown = Self.firstPaint(journal.result, filters: filters.current)
+        LaunchClock.markHomePaint(hasNumbers: shown != nil)
     }
 
     private func liveHome(_ shown: WSPullResult?) -> some View {
@@ -588,7 +635,20 @@ struct HomeView: View {
         }
         .bagholderBottomScrollClearance()
         .background(tokens.page)
+        .background(FirstHomePaintProbe(hasNumbers: shown != nil || journal.result != nil))
     }
+}
+
+private struct FirstHomePaintProbe: UIViewRepresentable {
+    var hasNumbers: Bool
+    func makeUIView(context: Context) -> UIView {
+        LaunchClock.markHomePaint(hasNumbers: hasNumbers)
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
 struct MetricCard: View {
@@ -821,6 +881,7 @@ struct AnnualPerformanceCard: View {
 
 struct ClosedTradesView: View {
     @Environment(\.homeTokens) private var tokens
+    @Environment(\.homeTabActive) private var tabActive
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
@@ -828,6 +889,7 @@ struct ClosedTradesView: View {
     @State private var showFilters = false
 
     private var rows: [WSClosedTrade] {
+        guard tabActive else { return [] }
         guard let result = journal.result else { return [] }
         let visible = WSPull.filteredTrades(
             result.closed,
@@ -1077,10 +1139,12 @@ struct ActivityView: View {
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
+    @Environment(\.homeTabActive) private var tabActive
     @State private var showSettings = false
     @State private var showFilters = false
 
     private var rows: [WSActivity] {
+        guard tabActive else { return [] }
         guard let result = journal.result else { return [] }
         return WSPull.filteredActivities(result.activities, filters: filters.current, listings: result.listings)
             .sorted { a, b in
@@ -1161,7 +1225,10 @@ struct OpenLotsView: View {
     @State private var showSettings = false
     @State private var showFilters = false
 
+    @Environment(\.homeTabActive) private var tabActive
+
     private var rows: [WSOpenLot] {
+        guard tabActive else { return [] }
         guard let result = journal.result else { return [] }
         let lots = WSPull.openLots(from: result.activities)
         return WSPull.filteredOpenLots(lots, filters: filters.current, activities: result.activities, listings: result.listings)
@@ -1235,36 +1302,89 @@ struct OpenLotsView: View {
 
 
 
-/// Token-free Home snapshot so the next launch can show last numbers immediately.
-private enum LastPullStore {
-    private static var url: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let dir = base.appendingPathComponent("Bagholder", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("last-pull.json")
+/// Compact Home numbers for first paint. Full last-pull.json is unchanged.
+private struct HomePaintBlob: Codable {
+    var metrics: WSMetrics
+    var nav: [WSNavPoint]
+    var monthly: [WSMonthBar]
+    var years: [WSYearRow]
+    var avgAnnualized: String
+    var avgAnnualizedSubtitle: String
+
+    func asResult() -> WSPullResult {
+        WSPullResult(
+            closed: [],
+            metrics: metrics,
+            nav: nav,
+            monthly: monthly,
+            years: years,
+            avgAnnualized: avgAnnualized,
+            avgAnnualizedSubtitle: avgAnnualizedSubtitle
+        )
     }
 
-    static func load() -> WSPullResult? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let snap = try? JSONDecoder().decode(WSPullResult.self, from: data) else { return nil }
-        let rematched = WSPull.rematchStored(snap)
-        if let out = try? JSONEncoder().encode(rematched) {
-            try? out.write(to: url, options: .atomic)
+    static func from(_ result: WSPullResult) -> HomePaintBlob {
+        HomePaintBlob(
+            metrics: result.metrics,
+            nav: result.nav,
+            monthly: result.monthly,
+            years: result.years,
+            avgAnnualized: result.avgAnnualized,
+            avgAnnualizedSubtitle: result.avgAnnualizedSubtitle
+        )
+    }
+}
+
+/// Token-free Home snapshot so the next launch can show last numbers immediately.
+private enum LastPullStore {
+    private static var dir: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let d = base.appendingPathComponent("Bagholder", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    private static var url: URL { dir.appendingPathComponent("last-pull.json") }
+    private static var homeURL: URL { dir.appendingPathComponent("last-home.json") }
+
+    /// First paint: compact blob if present, else full last-pull decode. Never rematchFifo.
+    static func loadForFirstPaint() -> (paint: WSPullResult, full: WSPullResult?)? {
+        if let data = try? Data(contentsOf: homeURL),
+           let blob = try? JSONDecoder().decode(HomePaintBlob.self, from: data) {
+            LaunchClock.log("lasthome_decode")
+            return (blob.asResult(), nil)
         }
-        return rematched
+        LaunchClock.log("lastpull_read")
+        guard let full = loadDecoded() else { return nil }
+        LaunchClock.log("lastpull_decode")
+        return (full, full)
+    }
+
+    static func loadDecoded() -> WSPullResult? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WSPullResult.self, from: data)
+    }
+
+    static func hasLastPull() -> Bool {
+        FileManager.default.fileExists(atPath: url.path) || FileManager.default.fileExists(atPath: homeURL.path)
     }
 
     static func save(_ result: WSPullResult) {
         let snap = result
         Task.detached {
-            guard let data = try? JSONEncoder().encode(snap) else { return }
-            try? data.write(to: url, options: .atomic)
+            if let data = try? JSONEncoder().encode(snap) {
+                try? data.write(to: url, options: .atomic)
+            }
+            if let data = try? JSONEncoder().encode(HomePaintBlob.from(snap)) {
+                try? data.write(to: homeURL, options: .atomic)
+            }
         }
     }
 
     static func clear() {
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: homeURL)
     }
 
     static func modifiedAt() -> Date? {
@@ -1290,17 +1410,63 @@ final class Journal: ObservableObject {
     private var task: Task<Void, Never>?
     private var listingsTask: Task<Void, Never>?
     private var pullGeneration = 0
+    private var rematchGeneration = 0
+    /// Compact Home paint may omit activities; do not pull until full last-pull is in `result`.
+    private var snapshotReadyForPull = true
+    private var pendingAppearSession: SessionStore?
     private static let lastSyncKey = "bagholder.lastSync"
 
     var isLive: Bool { result != nil }
 
     init() {
-        if let snap = LastPullStore.load() {
-            result = snap
+        if let loaded = LastPullStore.loadForFirstPaint() {
+            result = loaded.paint
             phase = .ready
+            if let full = loaded.full {
+                snapshotReadyForPull = true
+                scheduleRematch(preloaded: full)
+            } else {
+                snapshotReadyForPull = false
+                scheduleRematch(preloaded: nil)
+            }
         }
         lastSync = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
             ?? LastPullStore.modifiedAt()
+        LaunchClock.log("journal_init")
+    }
+
+    /// FIFO rematch after first Home paint. Does not run on appear.
+    private func scheduleRematch(preloaded: WSPullResult?) {
+        rematchGeneration += 1
+        let gen = rematchGeneration
+        Task.detached(priority: .utility) {
+            let snap = preloaded ?? LastPullStore.loadDecoded()
+            guard let snap else {
+                await MainActor.run {
+                    guard gen == self.rematchGeneration else { return }
+                    self.snapshotReadyForPull = true
+                    self.flushPendingAppear()
+                }
+                return
+            }
+            LaunchClock.log("rematch_start")
+            let rematched = WSPull.rematchStored(snap)
+            LaunchClock.log("rematch_done")
+            await MainActor.run {
+                guard gen == self.rematchGeneration else { return }
+                if self.phase == .pulling { return }
+                self.result = rematched
+                self.snapshotReadyForPull = true
+                LastPullStore.save(rematched)
+                self.flushPendingAppear()
+            }
+        }
+    }
+
+    private func flushPendingAppear() {
+        guard let session = pendingAppearSession else { return }
+        pendingAppearSession = nil
+        handleAppear(session: session)
     }
 
     /// ledger.html wsStatusText / relSync.
@@ -1332,6 +1498,8 @@ final class Journal: ObservableObject {
     /// First paint: leftover Keychain must not start a download.
     /// A saved result is shown immediately and refreshed in the background.
     func handleAppear(session: SessionStore) {
+        pendingAppearSession = session
+        guard snapshotReadyForPull else { return }
         guard session.connected else { return }
         if phase == .pulling { return }
         if result == nil {
@@ -1365,6 +1533,7 @@ final class Journal: ObservableObject {
     /// Sign-in (`saveOAuthCookie`) starts a download. Disconnect clears the snapshot.
     func handleSessionChange(session: SessionStore) {
         if !session.connected {
+            rematchGeneration += 1
             pullGeneration += 1
             task?.cancel()
             task = nil
@@ -1390,6 +1559,7 @@ final class Journal: ObservableObject {
     private func pull(showProgress: Bool) {
         task?.cancel()
         listingsTask?.cancel()
+        rematchGeneration += 1
         pullGeneration += 1
         let gen = pullGeneration
         noNewShownAt = nil
