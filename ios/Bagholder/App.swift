@@ -194,6 +194,7 @@ private enum HomeChrome {
 
 private struct AppearanceSegment: UIViewRepresentable {
     @Binding var selection: AppearanceChoice
+    var scheme: ColorScheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -208,12 +209,10 @@ private struct AppearanceSegment: UIViewRepresentable {
         let control = UISegmentedControl(items: ["Light", "Dark", "System"])
         context.coordinator.binding = $selection
         control.selectedSegmentIndex = selection.segmentIndex
-        let font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        control.setTitleTextAttributes([.font: font], for: .normal)
-        control.setTitleTextAttributes([.font: font], for: .selected)
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         control.setContentHuggingPriority(.defaultLow, for: .horizontal)
         control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        applyChrome(control)
         return control
     }
 
@@ -222,9 +221,43 @@ private struct AppearanceSegment: UIViewRepresentable {
         if control.selectedSegmentIndex != selection.segmentIndex {
             control.selectedSegmentIndex = selection.segmentIndex
         }
+        applyChrome(control)
+    }
+
+    private func applyChrome(_ control: UISegmentedControl) {
+        let dark = scheme == .dark
+        let page = dark ? UIColor.black : UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
+        let thumb = dark
+            ? UIColor(red: 44 / 255, green: 44 / 255, blue: 46 / 255, alpha: 1)
+            : UIColor.white
+        let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
+        let ink = dark ? UIColor.white : UIColor.black
         let font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        control.setTitleTextAttributes([.font: font], for: .normal)
-        control.setTitleTextAttributes([.font: font], for: .selected)
+        control.overrideUserInterfaceStyle = dark ? .dark : .light
+        control.backgroundColor = page
+        control.selectedSegmentTintColor = thumb
+        let trackImg = Self.resizableFill(page, corner: 7)
+        let thumbImg = Self.resizableFill(thumb, corner: 7)
+        control.setBackgroundImage(trackImg, for: .normal, barMetrics: .default)
+        control.setBackgroundImage(trackImg, for: .highlighted, barMetrics: .default)
+        control.setBackgroundImage(thumbImg, for: .selected, barMetrics: .default)
+        control.setBackgroundImage(thumbImg, for: [.selected, .highlighted], barMetrics: .default)
+        let div = Self.resizableFill(page, size: CGSize(width: 1, height: 1), corner: 0)
+        control.setDividerImage(div, forLeftSegmentState: .normal, rightSegmentState: .normal, barMetrics: .default)
+        control.setDividerImage(div, forLeftSegmentState: .selected, rightSegmentState: .normal, barMetrics: .default)
+        control.setDividerImage(div, forLeftSegmentState: .normal, rightSegmentState: .selected, barMetrics: .default)
+        control.setTitleTextAttributes([.font: font, .foregroundColor: muted], for: .normal)
+        control.setTitleTextAttributes([.font: font, .foregroundColor: ink], for: .selected)
+    }
+
+    private static func resizableFill(_ color: UIColor, size: CGSize = CGSize(width: 16, height: 28), corner: CGFloat) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let img = renderer.image { _ in
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: corner).fill()
+        }
+        let inset = max(corner, 1)
+        return img.resizableImage(withCapInsets: UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset))
     }
 }
 
@@ -330,6 +363,7 @@ struct RootView: View {
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .environment(\.homeTokens, tokens)
+        .environment(\.colorScheme, scheme)
         .environmentObject(filters)
         .environmentObject(appearance)
         .preferredColorScheme(appearance.preferredColorScheme)
@@ -357,22 +391,26 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var showFilters = false
     @State private var showLogin = false
+    @State private var shown: WSPullResult?
 
     var body: some View {
         Group {
-            if let live = journal.result {
-                liveHome(live)
-            } else if session.connected || journal.phase == .pulling {
-                liveHome(nil)
+            if journal.result != nil || session.connected || journal.phase == .pulling {
+                liveHome(shown)
             } else {
                 waitingHome
             }
         }
         .background(tokens.page)
         .bagholderHideNavBar()
+        .onAppear { refreshShown() }
+        .onChange(of: filters.current) { _, _ in refreshShown() }
+        .onChange(of: journal.result?.closed.count) { _, _ in refreshShown() }
+        .onChange(of: journal.result?.nav.count) { _, _ in refreshShown() }
+        .onChange(of: journal.result?.listings.count) { _, _ in refreshShown() }
+        .onChange(of: journal.phase) { _, _ in refreshShown() }
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
@@ -451,9 +489,12 @@ struct HomeView: View {
         )
     }
 
-    private func liveHome(_ live: WSPullResult?) -> some View {
+    private func refreshShown() {
+        shown = journal.result.map { WSPull.dashboard($0, filters: filters.current) }
+    }
+
+    private func liveHome(_ shown: WSPullResult?) -> some View {
         let dash = WSPull.emDash
-        let shown = live.map { WSPull.dashboard($0, filters: filters.current) }
         let m = shown?.metrics
         return ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -819,7 +860,6 @@ struct ClosedTradesView: View {
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
@@ -1084,7 +1124,6 @@ struct ActivityView: View {
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
@@ -1165,7 +1204,6 @@ struct OpenLotsView: View {
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
@@ -2302,69 +2340,91 @@ private struct PriceOpPick: View {
 }
 
 struct SettingsView: View {
-    @Environment(\.homeTokens) private var tokens
-
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var appearance: AppearanceStore
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @State private var showLogin = false
 
     var body: some View {
+        let scheme: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
+        let tokens = HomeColor.pack(for: scheme)
         NavigationStack {
-            List {
-                Section {
-                    if session.connected {
-                        Text("Connected")
-                            .foregroundStyle(tokens.ink)
-                        Button("Refresh") {
-                            journal.refresh()
-                            dismiss()
-                        }
-                        .disabled(journal.phase == .pulling)
-                        Button("Disconnect") {
-                            session.disconnect()
-                        }
-                        .foregroundStyle(tokens.loss)
-                    } else {
-                        Button("Connect") {
-                            showLogin = true
-                        }
-                        Text("Opens Wealthsimple’s login. After you sign in, this screen closes.")
-                            .font(.footnote)
-                            .foregroundStyle(tokens.muted)
+            VStack(spacing: 0) {
+                ZStack {
+                    Text("Settings")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(tokens.ink)
+                    HStack {
+                        Spacer()
+                        Button("Done") { dismiss() }
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(tokens.selected)
+                            .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 16)
                 }
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Appearance")
-                            .font(.system(size: 13))
-                            .foregroundStyle(tokens.muted)
-                        AppearanceSegment(selection: $appearance.choice)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 32)
+                .frame(height: 44)
+                .background(tokens.page)
+                List {
+                    Section {
+                        if session.connected {
+                            Button("Refresh") {
+                                journal.refresh()
+                                dismiss()
+                            }
+                            .foregroundStyle(tokens.selected)
+                            .disabled(journal.phase == .pulling)
+                            Button("Disconnect") {
+                                session.disconnect()
+                            }
+                            .foregroundStyle(tokens.loss)
+                        } else {
+                            Button("Connect") {
+                                showLogin = true
+                            }
+                            .foregroundStyle(tokens.selected)
+                        }
                     }
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(tokens.elevated)
+                    .listRowBackground(tokens.tile)
+                    .listRowSeparatorTint(tokens.hairline)
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Appearance")
+                                .font(.system(size: 13))
+                                .foregroundStyle(tokens.muted)
+                            AppearanceSegment(selection: $appearance.choice, scheme: scheme)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 32)
+                        }
+                        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                        .listRowSeparator(.hidden)
+                    }
+                    .listRowBackground(tokens.tile)
                 }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(tokens.page)
+                .listRowSeparatorTint(tokens.hairline)
+                .tint(tokens.selected)
             }
-            .listStyle(.insetGrouped)
-            .bagholderListChrome()
-            .listRowBackground(tokens.tile)
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(tokens.selected)
-                }
-            }
+            .background(tokens.page)
+            .toolbar(.hidden, for: .navigationBar)
             .fullScreenCover(isPresented: $showLogin) {
                 ConnectLoginView(session: session, isPresented: $showLogin)
+                    .environment(\.homeTokens, tokens)
+                    .environment(\.colorScheme, scheme)
+                    .preferredColorScheme(appearance.preferredColorScheme)
             }
         }
-        .presentationBackground(tokens.tile)
+        .environment(\.homeTokens, tokens)
+        .environment(\.colorScheme, scheme)
+        .preferredColorScheme(appearance.preferredColorScheme)
+        .presentationBackground(tokens.page)
+        .presentationDragIndicator(.visible)
         .tint(tokens.selected)
+        .background(tokens.page)
     }
 }
 
@@ -2383,9 +2443,14 @@ struct ConnectLoginView: View {
             .navigationTitle("Connect")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { isPresented = false }
+                        .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(tokens.selected)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(tokens.elevated))
+                        .buttonStyle(.plain)
                 }
             }
         }
