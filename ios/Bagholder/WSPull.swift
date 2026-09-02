@@ -297,9 +297,10 @@ struct WSPullResult: Codable {
     var activities: [WSActivity] = []
     var listings: [WSSecurityListing] = []
     var transferredNew: Bool = true
+    var navByAccount: [String: [WSNavPoint]] = [:]
 
     enum CodingKeys: String, CodingKey {
-        case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities, listings
+        case closed, metrics, nav, monthly, years, avgAnnualized, avgAnnualizedSubtitle, activities, listings, navByAccount
     }
 
     init(
@@ -312,7 +313,8 @@ struct WSPullResult: Codable {
         avgAnnualizedSubtitle: String,
         activities: [WSActivity] = [],
         listings: [WSSecurityListing] = [],
-        transferredNew: Bool = true
+        transferredNew: Bool = true,
+        navByAccount: [String: [WSNavPoint]] = [:]
     ) {
         self.closed = closed
         self.metrics = metrics
@@ -324,6 +326,7 @@ struct WSPullResult: Codable {
         self.activities = activities
         self.listings = listings
         self.transferredNew = transferredNew
+        self.navByAccount = navByAccount
     }
 
     init(from decoder: Decoder) throws {
@@ -338,6 +341,7 @@ struct WSPullResult: Codable {
         activities = try c.decodeIfPresent([WSActivity].self, forKey: .activities) ?? []
         listings = try c.decodeIfPresent([WSSecurityListing].self, forKey: .listings) ?? []
         transferredNew = true
+        navByAccount = try c.decodeIfPresent([String: [WSNavPoint]].self, forKey: .navByAccount) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -351,6 +355,7 @@ struct WSPullResult: Codable {
         try c.encode(avgAnnualizedSubtitle, forKey: .avgAnnualizedSubtitle)
         try c.encode(activities, forKey: .activities)
         try c.encode(listings, forKey: .listings)
+        try c.encode(navByAccount, forKey: .navByAccount)
     }
 }
 
@@ -667,6 +672,50 @@ query IdentityHistoricalFinancialsQuery(
         pageInfo {
           endCursor
           hasNextPage
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+"""
+
+    static let qFetchAccountHistoricalFinancials = """
+query FetchAccountHistoricalFinancials(
+  $id: ID!
+  $currency: Currency!
+  $startDate: Date
+  $resolution: DateResolution!
+  $endDate: Date
+  $first: Int
+  $cursor: String
+) {
+  account(id: $id) {
+    id
+    financials {
+      historicalDaily(
+        currency: $currency
+        startDate: $startDate
+        resolution: $resolution
+        endDate: $endDate
+        first: $first
+        after: $cursor
+      ) {
+        edges {
+          node {
+            date
+            netLiquidationValueV2 { amount currency __typename }
+            netDepositsV2 { amount currency __typename }
+            __typename
+          }
+          __typename
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
           __typename
         }
         __typename
@@ -1057,6 +1106,7 @@ query IdentityHistoricalFinancialsQuery(
         wssdi: String?,
         storedActivities: [WSActivity] = [],
         storedNav: [WSNavPoint] = [],
+        storedNavByAccount: [String: [WSNavPoint]] = [:],
         storedListings: [WSSecurityListing] = [],
         onProgress: (@Sendable (String) -> Void)? = nil
     ) async throws -> WSPullResult {
@@ -1188,6 +1238,25 @@ query IdentityHistoricalFinancialsQuery(
             sinceDate: sinceNav
         )
         let nav = mergeNav(stored: storedNav, incoming: fetchedNav)
+        var navByAccount = storedNavByAccount
+        for (nick, ids) in navAccountGroups(accounts) {
+            progress("Fetching equity history for \(nick)…")
+            let storedSeries = navByAccount[nick] ?? []
+            let sinceNick = navMissingDeposits(storedSeries) ? nil : storedSeries.map(\.date).filter { !$0.isEmpty }.max()
+            do {
+                var series: [[WSNavPoint]] = []
+                for aid in ids {
+                    series.append(try await fetchAccountNavHistory(box, accountId: aid, sinceDate: sinceNick))
+                }
+                navByAccount[nick] = mergeNav(stored: storedSeries, incoming: mergeNavPoints(series))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if navByAccount[nick] == nil, !storedSeries.isEmpty {
+                    navByAccount[nick] = storedSeries
+                }
+            }
+        }
         progress("Fetching S&P 500…")
         async let spyTask = ensureSpyPrices()
         async let fxTask = ensureFxRates(activities: activities)
@@ -1210,7 +1279,8 @@ query IdentityHistoricalFinancialsQuery(
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
             activities: activities,
             listings: storedListings,
-            transferredNew: !work.isEmpty
+            transferredNew: !work.isEmpty,
+            navByAccount: navByAccount
         )
     }
 
@@ -1235,7 +1305,8 @@ query IdentityHistoricalFinancialsQuery(
             avgAnnualizedSubtitle: formatYearSpan(ann.years),
             activities: snap.activities,
             listings: snap.listings,
-            transferredNew: false
+            transferredNew: false,
+            navByAccount: snap.navByAccount
         )
     }
 
@@ -1429,6 +1500,44 @@ query IdentityHistoricalFinancialsQuery(
     }
 
     private static func fetchNavHistory(_ box: TokenBox, identityId: String, sinceDate: String? = nil) async throws -> [WSNavPoint] {
+        try await paginateNavHistory(
+            box,
+            operation: "IdentityHistoricalFinancialsQuery",
+            query: qIdentityHistoricalFinancials,
+            extra: [
+                "identityId": identityId,
+                "currency": "CAD",
+                "limit": 400,
+                "includeNetDeposits": true,
+            ],
+            sinceDate: sinceDate
+        )
+    }
+
+    private static func fetchAccountNavHistory(_ box: TokenBox, accountId: String, sinceDate: String? = nil) async throws -> [WSNavPoint] {
+        let aid = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if aid.isEmpty { return [] }
+        return try await paginateNavHistory(
+            box,
+            operation: "FetchAccountHistoricalFinancials",
+            query: qFetchAccountHistoricalFinancials,
+            extra: [
+                "id": aid,
+                "currency": "CAD",
+                "resolution": "DAILY",
+                "first": 400,
+            ],
+            sinceDate: sinceDate
+        )
+    }
+
+    private static func paginateNavHistory(
+        _ box: TokenBox,
+        operation: String,
+        query: String,
+        extra: [String: Any],
+        sinceDate: String?
+    ) async throws -> [WSNavPoint] {
         let today = isoDay(Date())
         let sinceDay = String((sinceDate ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(10))
         if !sinceDay.isEmpty && sinceDay > today { return [] }
@@ -1448,20 +1557,15 @@ query IdentityHistoricalFinancialsQuery(
             if start > end { continue }
             var cursor: String? = nil
             for _ in 0..<8 {
-                var variables: [String: Any] = [
-                    "identityId": identityId,
-                    "currency": "CAD",
-                    "limit": 400,
-                    "includeNetDeposits": true,
-                    "startDate": start,
-                    "endDate": end,
-                ]
+                var variables = extra
+                variables["startDate"] = start
+                variables["endDate"] = end
                 if let cursor { variables["cursor"] = cursor }
                 let data = try await graphql(
                     box,
-                    operation: "IdentityHistoricalFinancialsQuery",
+                    operation: operation,
                     variables: variables,
-                    query: qIdentityHistoricalFinancials
+                    query: query
                 )
                 let (chunk, page) = navPointsFromPayload(data)
                 points.append(contentsOf: chunk)
@@ -1473,6 +1577,48 @@ query IdentityHistoricalFinancialsQuery(
         }
         var byDate: [String: WSNavPoint] = [:]
         for rec in points { byDate[rec.date] = rec }
+        return byDate.keys.sorted().compactMap { byDate[$0] }
+    }
+
+    private static func navAccountGroups(_ accounts: [[String: Any]]) -> [(String, [String])] {
+        var groups: [String: [String]] = [:]
+        for acc in accounts {
+            let aid = J.str(acc, "id").trimmingCharacters(in: .whitespacesAndNewlines)
+            if aid.isEmpty { continue }
+            var nick = J.str(acc, "nickname").trimmingCharacters(in: .whitespacesAndNewlines)
+            if nick.isEmpty { nick = J.str(acc, "unifiedAccountType").trimmingCharacters(in: .whitespacesAndNewlines) }
+            if nick.isEmpty { nick = J.str(acc, "type").trimmingCharacters(in: .whitespacesAndNewlines) }
+            if nick.isEmpty { continue }
+            var ids = groups[nick] ?? []
+            if !ids.contains(aid) { ids.append(aid) }
+            groups[nick] = ids
+        }
+        return groups.keys.sorted().map { ($0, groups[$0] ?? []) }
+    }
+
+    private static func mergeNavPoints(_ seriesList: [[WSNavPoint]]) -> [WSNavPoint] {
+        var byDate: [String: WSNavPoint] = [:]
+        for series in seriesList {
+            for rec in series {
+                let d = String(rec.date.prefix(10))
+                if d.isEmpty { continue }
+                if var cur = byDate[d] {
+                    cur.equity += rec.equity
+                    if !rec.currency.isEmpty { cur.currency = rec.currency }
+                    if let nd = rec.netDeposits {
+                        cur.netDeposits = (cur.netDeposits ?? 0) + nd
+                    }
+                    byDate[d] = cur
+                } else {
+                    byDate[d] = WSNavPoint(
+                        date: d,
+                        equity: rec.equity,
+                        currency: rec.currency.isEmpty ? "CAD" : rec.currency,
+                        netDeposits: rec.netDeposits
+                    )
+                }
+            }
+        }
         return byDate.keys.sorted().compactMap { byDate[$0] }
     }
 
@@ -3352,6 +3498,15 @@ query IdentityHistoricalFinancialsQuery(
         }
     }
 
+    /// ledger.html navHist: Account nickname series when set, else identity NAV.
+    private static func navHist(_ snap: WSPullResult, filters: JournalFilters) -> [WSNavPoint] {
+        let acc = filters.account
+        if !acc.isEmpty, let series = snap.navByAccount[acc], !series.isEmpty {
+            return sortedNav(series)
+        }
+        return sortedNav(snap.nav)
+    }
+
     /// Home numbers for the current filters. Unfiltered returns the snapshot unchanged.
     static func dashboard(_ snap: WSPullResult, filters: JournalFilters) -> WSPullResult {
         if !filters.isActive { return snap }
@@ -3379,10 +3534,11 @@ query IdentityHistoricalFinancialsQuery(
             out.avgAnnualizedSubtitle = sub.isEmpty ? "No closed trades" : sub
             out.nav = realizedPnlCurve(closedForMetrics)
         } else {
-            out.nav = equityCurve(sortedNav(snap.nav), from: filters.from, to: filters.to)
-            let yearRows = annualRows(nav: snap.nav, spy: spy, activities: snap.activities)
+            let hist = navHist(snap, filters: filters)
+            out.nav = equityCurve(hist, from: filters.from, to: filters.to)
+            let yearRows = annualRows(nav: hist, spy: spy, activities: snap.activities)
             out.years = yearRows
-            let ann = accountAnnualizedReturn(nav: snap.nav, years: yearRows.map(\.year).sorted())
+            let ann = accountAnnualizedReturn(nav: hist, years: yearRows.map(\.year).sorted())
             out.avgAnnualized = formatReturn(ann.rate)
             let sub = formatYearSpan(ann.years)
             out.avgAnnualizedSubtitle = sub.isEmpty ? "No NAV history" : sub

@@ -996,6 +996,7 @@ final class Journal: ObservableObject {
             let wssdi = rec["wssdi"] as? String
             let storedActs = self.result?.activities ?? []
             let storedNav = self.result?.nav ?? []
+            let storedNavByAccount = self.result?.navByAccount ?? [:]
             let storedListings = self.result?.listings ?? []
             do {
                 let snap = try await WSPull.run(
@@ -1003,6 +1004,7 @@ final class Journal: ObservableObject {
                     wssdi: wssdi,
                     storedActivities: storedActs,
                     storedNav: storedNav,
+                    storedNavByAccount: storedNavByAccount,
                     storedListings: storedListings
                 ) { [weak self] step in
                     Task { @MainActor [weak self] in
