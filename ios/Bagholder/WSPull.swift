@@ -2153,7 +2153,7 @@ query IdentityHistoricalFinancialsQuery(
             if d != .orderedSame { return d == .orderedAscending }
             let ra = fillRank(a), rb = fillRank(b)
             if ra != rb { return ra < rb }
-            return a.activity.id.compare(b.activity.id) == .orderedAscending
+            return a.activity.id.localizedCompare(b.activity.id) == .orderedAscending
         }
         var books: [String: [Lot]] = [:]
         var bookOrder: [String] = []
@@ -2261,7 +2261,7 @@ query IdentityHistoricalFinancialsQuery(
         }
         closed.sort { a, b in
             if a.exitDate != b.exitDate { return a.exitDate < b.exitDate }
-            return a.id < b.id
+            return a.id.localizedCompare(b.id) == .orderedAscending
         }
         return (closed, openCount)
     }
