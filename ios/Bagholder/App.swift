@@ -90,29 +90,25 @@ private enum HomeUIColor {
     static let elevated = token(light: 242 / 255, 242 / 255, 247 / 255, 1, dark: 44 / 255, 44 / 255, 46 / 255, 1)
 }
 
-/// SwiftUI tokens: same RGB as HomeUIColor, resolved once per appearance so
-/// Canvas and Home views do not hit dynamic UIColor on every frame.
-@MainActor
+/// Two live RGB sets. RootView publishes the active pack through the
+/// environment every time Light / Dark / System (or the system style) changes.
+/// UIKit chrome still uses HomeUIColor dynamicProvider.
 private enum HomeColor {
-    static var page: Color = light.page
-    static var tile: Color = light.tile
-    static var ink: Color = light.ink
-    static var muted: Color = light.muted
-    static var profit: Color = light.profit
-    static var loss: Color = light.loss
-    static var selected: Color = light.selected
-    static var hairline: Color = light.hairline
-    static var elevated: Color = light.elevated
-
-    private struct Pack {
+    struct Pack: Equatable {
         let page, tile, ink, muted, profit, loss, selected, hairline, elevated: Color
+
+        func signed(_ n: Double) -> Color {
+            if n < -0.0001 { return loss }
+            if n > 0.0001 { return profit }
+            return ink
+        }
     }
 
     private static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> Color {
         Color(.sRGB, red: r, green: g, blue: b, opacity: a)
     }
 
-    private static let light = Pack(
+    private static let lightPack = Pack(
         page: rgb(242 / 255, 242 / 255, 247 / 255),
         tile: rgb(1, 1, 1),
         ink: rgb(0, 0, 0),
@@ -123,7 +119,7 @@ private enum HomeColor {
         hairline: rgb(60 / 255, 60 / 255, 67 / 255, 0.18),
         elevated: rgb(242 / 255, 242 / 255, 247 / 255)
     )
-    private static let dark = Pack(
+    private static let darkPack = Pack(
         page: rgb(0, 0, 0),
         tile: rgb(28 / 255, 28 / 255, 30 / 255),
         ink: rgb(1, 1, 1),
@@ -135,23 +131,20 @@ private enum HomeColor {
         elevated: rgb(44 / 255, 44 / 255, 46 / 255)
     )
 
-    static func adopt(scheme: ColorScheme) {
-        let pack = scheme == .dark ? dark : light
-        page = pack.page
-        tile = pack.tile
-        ink = pack.ink
-        muted = pack.muted
-        profit = pack.profit
-        loss = pack.loss
-        selected = pack.selected
-        hairline = pack.hairline
-        elevated = pack.elevated
+    static func pack(for scheme: ColorScheme) -> Pack {
+        scheme == .dark ? darkPack : lightPack
     }
 
-    static func signed(_ n: Double) -> Color {
-        if n < -0.0001 { return loss }
-        if n > 0.0001 { return profit }
-        return ink
+}
+
+private struct HomeTokensKey: EnvironmentKey {
+    static let defaultValue = HomeColor.pack(for: .light)
+}
+
+private extension EnvironmentValues {
+    var homeTokens: HomeColor.Pack {
+        get { self[HomeTokensKey.self] }
+        set { self[HomeTokensKey.self] = newValue }
     }
 }
 
@@ -235,13 +228,21 @@ private struct AppearanceSegment: UIViewRepresentable {
     }
 }
 
+private struct BagholderListChrome: ViewModifier {
+    @Environment(\.homeTokens) private var tokens
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(tokens.page)
+            .listRowSeparatorTint(tokens.hairline)
+            .tint(tokens.selected)
+    }
+}
+
 private extension View {
     func bagholderListChrome() -> some View {
-        self
-            .scrollContentBackground(.hidden)
-            .background(HomeColor.page)
-            .listRowSeparatorTint(HomeColor.hairline)
-            .tint(HomeColor.selected)
+        modifier(BagholderListChrome())
     }
 
     func bagholderBottomScrollClearance() -> some View {
@@ -288,8 +289,8 @@ struct RootView: View {
     }
 
     var body: some View {
-        let paint: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
-        let _ = HomeColor.adopt(scheme: paint)
+        let scheme: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
+        let tokens = HomeColor.pack(for: scheme)
         ZStack(alignment: .bottom) {
             ZStack {
                 NavigationStack {
@@ -328,13 +329,14 @@ struct RootView: View {
                 .padding(.bottom, HomeLayout.tabBarLift)
         }
         .ignoresSafeArea(.container, edges: .bottom)
+        .environment(\.homeTokens, tokens)
         .environmentObject(filters)
         .environmentObject(appearance)
         .preferredColorScheme(appearance.preferredColorScheme)
-        .tint(HomeColor.selected)
-        .toolbarBackground(HomeColor.page, for: .navigationBar)
+        .tint(tokens.selected)
+        .toolbarBackground(tokens.page, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
-        .background(HomeColor.page.ignoresSafeArea())
+        .background(tokens.page.ignoresSafeArea())
         .onAppear { journal.handleAppear(session: session) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -348,6 +350,7 @@ struct RootView: View {
 }
 
 struct HomeView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
@@ -365,18 +368,18 @@ struct HomeView: View {
                 waitingHome
             }
         }
-        .background(HomeColor.page)
+        .background(tokens.page)
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
         .fullScreenCover(isPresented: $showLogin) {
             ConnectLoginView(session: session, isPresented: $showLogin)
@@ -393,7 +396,7 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .bagholderBottomScrollClearance()
-        .background(HomeColor.page)
+        .background(tokens.page)
     }
 
     @ViewBuilder
@@ -402,7 +405,7 @@ struct HomeView: View {
             VStack(spacing: 16) {
                 Text(msg)
                     .font(.system(size: 17))
-                    .foregroundStyle(HomeColor.loss)
+                    .foregroundStyle(tokens.loss)
                     .multilineTextAlignment(.center)
                 connectButton
             }
@@ -410,11 +413,11 @@ struct HomeView: View {
             VStack(spacing: 16) {
                 Text("Connect Wealthsimple")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(HomeColor.ink)
+                    .foregroundStyle(tokens.ink)
                     .multilineTextAlignment(.center)
                 Text("Sign in to see Home.")
                     .font(.system(size: 15))
-                    .foregroundStyle(HomeColor.muted)
+                    .foregroundStyle(tokens.muted)
                     .multilineTextAlignment(.center)
                 connectButton
             }
@@ -432,7 +435,7 @@ struct HomeView: View {
                 .padding(.vertical, 14)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(HomeColor.selected)
+                        .fill(tokens.selected)
                 )
         }
         .frame(maxWidth: 280)
@@ -461,10 +464,10 @@ struct HomeView: View {
                         .font(.system(size: 38, weight: .bold))
                         .tracking(-1.4)
                         .lineSpacing(0)
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                     Text("Realized P&L")
                         .font(.system(size: 15))
-                        .foregroundStyle(HomeColor.muted)
+                        .foregroundStyle(tokens.muted)
                 }
                 .padding(.horizontal, HomeLayout.side)
 
@@ -479,13 +482,13 @@ struct HomeView: View {
                         title: "Biggest winner",
                         value: (m?.maxWinSymbol.isEmpty == false) ? WSPull.formatCad(m!.maxWinPnl, digits: 2) : dash,
                         subtitle: (m?.maxWinSymbol.isEmpty == false) ? m!.maxWinSymbol : dash,
-                        valueColor: HomeColor.profit
+                        valueColor: tokens.profit
                     )
                     MetricCard(
                         title: "Biggest loser",
                         value: (m?.maxLossSymbol.isEmpty == false) ? WSPull.formatCad(m!.maxLossPnl, digits: 2) : dash,
                         subtitle: (m?.maxLossSymbol.isEmpty == false) ? m!.maxLossSymbol : dash,
-                        valueColor: HomeColor.loss
+                        valueColor: tokens.loss
                     )
                     MetricCard(
                         title: "Profit factor",
@@ -523,33 +526,34 @@ struct HomeView: View {
             }
         }
         .bagholderBottomScrollClearance()
-        .background(HomeColor.page)
+        .background(tokens.page)
     }
 }
 
 struct MetricCard: View {
+    @Environment(\.homeTokens) private var tokens
     let title: String
     let value: String
     var subtitle: String? = nil
-    var valueColor: Color = HomeColor.ink
+    var valueColor: Color? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
                 .lineLimit(1)
                 .padding(.bottom, 4)
             Text(value)
                 .font(.system(size: 20, weight: .bold))
                 .tracking(-0.6)
-                .foregroundStyle(valueColor)
+                .foregroundStyle(valueColor ?? tokens.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             if let subtitle {
                 Text(subtitle)
                     .font(.system(size: 12))
-                    .foregroundStyle(HomeColor.muted)
+                    .foregroundStyle(tokens.muted)
                     .lineLimit(1)
                     .allowsTightening(true)
                     .minimumScaleFactor(0.65)
@@ -560,13 +564,15 @@ struct MetricCard: View {
         .frame(maxWidth: .infinity, minHeight: 72, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(HomeColor.tile)
+                .fill(tokens.tile)
         )
     }
 }
 
 struct EquityCurveCard: View {
+    @Environment(\.homeTokens) private var tokens
     var points: [WSNavPoint]? = nil
+    @Environment(\.colorScheme) private var colorScheme
     @State private var pressActive = false
     @State private var finger = CGPoint.zero
     @State private var chartSize: CGSize = .zero
@@ -582,23 +588,23 @@ struct EquityCurveCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Equity Curve")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
             VStack(alignment: .leading, spacing: 1) {
                 if let points, let i = selectedIndex {
                     Text(WSPull.formatCad(points[i].equity, digits: 2))
                         .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                     Text(WSPull.formatChartDate(points[i].date))
                         .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.muted)
+                        .foregroundStyle(tokens.muted)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: 44, alignment: .topLeading)
             if let points, !points.isEmpty {
-                LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex)
+                LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex, scheme: colorScheme)
                     .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
@@ -614,13 +620,15 @@ struct EquityCurveCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(HomeColor.tile)
+                .fill(tokens.tile)
         )
     }
 }
 
 struct MonthlyPnLCard: View {
+    @Environment(\.homeTokens) private var tokens
     var bars: [WSMonthBar]? = nil
+    @Environment(\.colorScheme) private var colorScheme
     @State private var pressActive = false
     @State private var finger = CGPoint.zero
     @State private var chartSize: CGSize = .zero
@@ -654,24 +662,24 @@ struct MonthlyPnLCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Monthly P&L")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
             VStack(alignment: .leading, spacing: 1) {
                 if let i = selectedIndex {
                     let bar = shown[i]
                     Text(WSPull.formatAxisCad(bar.pnl, digits: 2))
                         .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(HomeColor.signed(bar.pnl))
+                        .foregroundStyle(tokens.signed(bar.pnl))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                     Text(WSPull.monthTick(bar.month))
                         .font(.system(size: 13))
-                        .foregroundStyle(HomeColor.muted)
+                        .foregroundStyle(tokens.muted)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: 44, alignment: .topLeading)
             if let bars, !bars.isEmpty {
-                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex)
+                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex, scheme: colorScheme)
                     .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
@@ -687,12 +695,13 @@ struct MonthlyPnLCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(HomeColor.tile)
+                .fill(tokens.tile)
         )
     }
 }
 
 struct AnnualPerformanceCard: View {
+    @Environment(\.homeTokens) private var tokens
     var years: [WSYearRow]? = nil
 
     private var rows: [(year: String, ret: String, spy: String, vs: String)] {
@@ -703,7 +712,7 @@ struct AnnualPerformanceCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Annual performance")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
                 .padding(.bottom, 6)
             HStack {
                 Text("Year")
@@ -716,12 +725,12 @@ struct AnnualPerformanceCard: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(HomeColor.muted)
+            .foregroundStyle(tokens.muted)
             .padding(.bottom, 4)
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack {
                     Text(row.year)
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                         .frame(width: 48, alignment: .leading)
                     percentText(row.ret)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -738,7 +747,7 @@ struct AnnualPerformanceCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
-                .fill(HomeColor.tile)
+                .fill(tokens.tile)
         )
         .accessibilityLabel("Annual performance")
     }
@@ -747,11 +756,12 @@ struct AnnualPerformanceCard: View {
         let loss = value.contains("\u{2212}") || value.hasPrefix("-")
         let profit = value.hasPrefix("+")
         return Text(value)
-            .foregroundStyle(loss ? HomeColor.loss : profit ? HomeColor.profit : HomeColor.muted)
+            .foregroundStyle(loss ? tokens.loss : profit ? tokens.profit : tokens.muted)
     }
 }
 
 struct ClosedTradesView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
@@ -793,7 +803,7 @@ struct ClosedTradesView: View {
             }
             .listStyle(.insetGrouped)
             .bagholderListChrome()
-            .listRowBackground(HomeColor.tile)
+            .listRowBackground(tokens.tile)
             .overlay {
                 if rows.isEmpty {
                     ContentUnavailableView(
@@ -805,23 +815,24 @@ struct ClosedTradesView: View {
             }
             .bagholderBottomScrollClearance()
         }
-        .background(HomeColor.page)
+        .background(tokens.page)
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
     }
 }
 
 private struct ClosedTradeRow: View {
+    @Environment(\.homeTokens) private var tokens
     let trade: WSClosedTrade
 
     var body: some View {
@@ -829,23 +840,24 @@ private struct ClosedTradeRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(trade.symbol)
                     .font(.headline)
-                    .foregroundStyle(HomeColor.ink)
+                    .foregroundStyle(tokens.ink)
                     .lineLimit(2)
                     .truncationMode(.tail)
                 Text(trade.displaySide + " \u{00B7} " + WSPull.formatCloseDate(trade.exitDate))
                     .font(.subheadline)
-                    .foregroundStyle(HomeColor.muted)
+                    .foregroundStyle(tokens.muted)
             }
             Spacer(minLength: 8)
             Text(WSPull.formatCad(trade.pnl, digits: 2))
                 .font(.system(size: 17, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(HomeColor.signed(trade.pnl))
+                .foregroundStyle(tokens.signed(trade.pnl))
         }
     }
 }
 
 private struct ClosedTradeDetailView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var journal: Journal
     let trade: WSClosedTrade
 
@@ -878,12 +890,12 @@ private struct ClosedTradeDetailView: View {
                 fact("Exit", WSPull.formatCad(trade.exitPrice, digits: 2))
                 LabeledContent("P&L $") {
                     Text(WSPull.formatCad(trade.pnl, digits: 2))
-                        .foregroundStyle(HomeColor.signed(trade.pnl))
+                        .foregroundStyle(tokens.signed(trade.pnl))
                         .monospacedDigit()
                 }
                 LabeledContent("P&L %") {
                     Text(WSPull.formatPct(WSPull.closedPnlPct(trade)))
-                        .foregroundStyle(HomeColor.signed(trade.pnl))
+                        .foregroundStyle(tokens.signed(trade.pnl))
                         .monospacedDigit()
                 }
                 fact("Hold", WSPull.formatHold(trade.holdDays))
@@ -892,13 +904,13 @@ private struct ClosedTradeDetailView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(trade.symbol)
                         .font(.headline)
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                         .lineLimit(2)
                         .truncationMode(.tail)
                     if !listingLine.isEmpty {
                         Text(listingLine)
                             .font(.subheadline)
-                            .foregroundStyle(HomeColor.muted)
+                            .foregroundStyle(tokens.muted)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -923,12 +935,12 @@ private struct ClosedTradeDetailView: View {
         }
         .listStyle(.insetGrouped)
         .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
+        .listRowBackground(tokens.tile)
         .bagholderBottomScrollClearance()
         .navigationTitle("Executions (\(executionCount))")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(HomeColor.page, for: .navigationBar)
+        .toolbarBackground(tokens.page, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
     }
 
@@ -941,6 +953,7 @@ private struct ClosedTradeDetailView: View {
 }
 
 private struct ExecutionActivityRow: View {
+    @Environment(\.homeTokens) private var tokens
     let activity: WSActivity
 
     var body: some View {
@@ -948,7 +961,7 @@ private struct ExecutionActivityRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WSPull.formatExecutionWhen(activity))
                     .font(.body)
-                    .foregroundStyle(HomeColor.ink)
+                    .foregroundStyle(tokens.ink)
                 Text(
                     WSPull.executionSide(activity)
                         + " · "
@@ -957,20 +970,21 @@ private struct ExecutionActivityRow: View {
                         + WSPull.formatCad(activity.unitPrice, digits: 2)
                 )
                 .font(.subheadline)
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
                 .monospacedDigit()
             }
             Spacer(minLength: 8)
             Text(WSPull.formatCad(activity.netCashAmount, digits: 2))
                 .font(.system(size: 17, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(HomeColor.signed(activity.netCashAmount))
+                .foregroundStyle(tokens.signed(activity.netCashAmount))
         }
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 }
 
 private struct ExecutionSliceRow: View {
+    @Environment(\.homeTokens) private var tokens
     let slice: WSClosedTrade
 
     var body: some View {
@@ -978,7 +992,7 @@ private struct ExecutionSliceRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WSPull.formatCloseDate(slice.exitDate))
                     .font(.body)
-                    .foregroundStyle(HomeColor.ink)
+                    .foregroundStyle(tokens.ink)
                 Text(
                     WSPull.executionSideName(slice.side)
                         + " · "
@@ -987,20 +1001,21 @@ private struct ExecutionSliceRow: View {
                         + WSPull.formatCad(slice.exitPrice, digits: 2)
                 )
                 .font(.subheadline)
-                .foregroundStyle(HomeColor.muted)
+                .foregroundStyle(tokens.muted)
                 .monospacedDigit()
             }
             Spacer(minLength: 8)
             Text(WSPull.formatCad(slice.pnl, digits: 2))
                 .font(.system(size: 17, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(HomeColor.signed(slice.pnl))
+                .foregroundStyle(tokens.signed(slice.pnl))
         }
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 }
 
 struct ActivityView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
@@ -1034,17 +1049,17 @@ struct ActivityView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(a.symbol.isEmpty ? (a.activityType.isEmpty ? "Activity" : a.activityType) : a.symbol)
                                         .font(.headline)
-                                        .foregroundStyle(HomeColor.ink)
+                                        .foregroundStyle(tokens.ink)
                                         .lineLimit(2)
                                     Text(WSPull.activityWhen(a) + (a.accountType.isEmpty ? "" : " · " + a.accountType))
                                         .font(.subheadline)
-                                        .foregroundStyle(HomeColor.muted)
+                                        .foregroundStyle(tokens.muted)
                                 }
                                 Spacer(minLength: 8)
                                 Text(WSPull.formatCad(a.netCashAmount, digits: 2))
                                     .font(.system(size: 17, weight: .semibold))
                                     .monospacedDigit()
-                                    .foregroundStyle(HomeColor.signed(a.netCashAmount))
+                                    .foregroundStyle(tokens.signed(a.netCashAmount))
                             }
                             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         }
@@ -1053,7 +1068,7 @@ struct ActivityView: View {
             }
             .listStyle(.insetGrouped)
             .bagholderListChrome()
-            .listRowBackground(HomeColor.tile)
+            .listRowBackground(tokens.tile)
             .overlay {
                 if rows.isEmpty {
                     ContentUnavailableView(
@@ -1065,23 +1080,24 @@ struct ActivityView: View {
             }
             .bagholderBottomScrollClearance()
         }
-        .background(HomeColor.page)
+        .background(tokens.page)
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
     }
 }
 
 struct OpenLotsView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
@@ -1114,17 +1130,17 @@ struct OpenLotsView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(lot.symbol)
                                         .font(.headline)
-                                        .foregroundStyle(HomeColor.ink)
+                                        .foregroundStyle(tokens.ink)
                                         .lineLimit(2)
                                     Text(lot.direction + " · " + WSPull.formatQty(lot.quantity) + " · " + WSPull.formatCad(lot.price, digits: 2))
                                         .font(.subheadline)
-                                        .foregroundStyle(HomeColor.muted)
+                                        .foregroundStyle(tokens.muted)
                                         .monospacedDigit()
                                 }
                                 Spacer(minLength: 8)
                                 Text(WSPull.formatCloseDate(lot.date))
                                     .font(.subheadline)
-                                    .foregroundStyle(HomeColor.muted)
+                                    .foregroundStyle(tokens.muted)
                             }
                             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         }
@@ -1133,7 +1149,7 @@ struct OpenLotsView: View {
             }
             .listStyle(.insetGrouped)
             .bagholderListChrome()
-            .listRowBackground(HomeColor.tile)
+            .listRowBackground(tokens.tile)
             .overlay {
                 if rows.isEmpty {
                     ContentUnavailableView(
@@ -1145,18 +1161,18 @@ struct OpenLotsView: View {
             }
             .bagholderBottomScrollClearance()
         }
-        .background(HomeColor.page)
+        .background(tokens.page)
         .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(HomeColor.tile)
+                .presentationBackground(tokens.tile)
         }
     }
 }
@@ -1564,25 +1580,28 @@ private final class ChartLongPressUIView: UIView {
 private struct LiveEquityCurveDrawing: View, Equatable {
     let points: [WSNavPoint]
     var selectedIndex: Int? = nil
+    var scheme: ColorScheme
 
     private static let dim: Double = 0.30
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.selectedIndex == rhs.selectedIndex
+            && lhs.scheme == rhs.scheme
             && lhs.points.count == rhs.points.count
             && lhs.points.last?.date == rhs.points.last?.date
             && lhs.points.last?.equity == rhs.points.last?.equity
     }
 
     var body: some View {
+        let tokens = HomeColor.pack(for: scheme)
         let vals = points.map(\.equity)
         let lo = vals.min() ?? 0
         let hi = vals.max() ?? 1
         let span: Double = (hi - lo) == 0 ? 1.0 : (hi - lo)
         let fillOpacity = selectedIndex != nil ? 0.12 * Self.dim : 0.12
-        let lineColor = selectedIndex != nil ? HomeColor.profit.opacity(Self.dim) : HomeColor.profit
-        let profit = HomeColor.profit
-        let hairColor = HomeColor.hairline
+        let lineColor = selectedIndex != nil ? tokens.profit.opacity(Self.dim) : tokens.profit
+        let profit = tokens.profit
+        let hairColor = tokens.hairline
         Canvas { context, size in
             guard !vals.isEmpty else { return }
             let n = CGFloat(max(points.count - 1, 1))
@@ -1645,18 +1664,21 @@ private struct LiveEquityCurveDrawing: View, Equatable {
 private struct LiveMonthlyPnLDrawing: View, Equatable {
     let bars: [WSMonthBar]
     var selectedIndex: Int? = nil
+    var scheme: ColorScheme
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.selectedIndex == rhs.selectedIndex
+            && lhs.scheme == rhs.scheme
             && lhs.bars.count == rhs.bars.count
             && lhs.bars.last?.month == rhs.bars.last?.month
             && lhs.bars.last?.pnl == rhs.bars.last?.pnl
     }
 
     var body: some View {
-        let profit = HomeColor.profit
-        let loss = HomeColor.loss
-        let hairColor = HomeColor.hairline
+        let tokens = HomeColor.pack(for: scheme)
+        let profit = tokens.profit
+        let loss = tokens.loss
+        let hairColor = tokens.hairline
         Canvas { context, size in
             let shown = Array(bars.suffix(18))
             let sx = size.width / 330
@@ -1843,6 +1865,7 @@ final class FilterStore: ObservableObject {
 }
 
 private struct FilterGearButtons: View {
+    @Environment(\.homeTokens) private var tokens
     var filtersOn: Bool
     var onFilters: () -> Void
     var onSettings: () -> Void
@@ -1853,11 +1876,11 @@ private struct FilterGearButtons: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "line.3.horizontal.decrease")
                         .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(HomeColor.muted)
+                        .foregroundStyle(tokens.muted)
                         .frame(width: 24, height: 24)
                     if filtersOn {
                         Circle()
-                            .fill(HomeColor.profit)
+                            .fill(tokens.profit)
                             .frame(width: 8, height: 8)
                             .offset(x: 2, y: -2)
                     }
@@ -1867,7 +1890,7 @@ private struct FilterGearButtons: View {
             Button(action: onSettings) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(HomeColor.muted)
+                    .foregroundStyle(tokens.muted)
                     .frame(width: 24, height: 24)
             }
             .accessibilityLabel("Settings")
@@ -1876,6 +1899,7 @@ private struct FilterGearButtons: View {
 }
 
 struct SettingsBar: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var journal: Journal
     var filtersOn: Bool
     var onFilters: () -> Void
@@ -1886,7 +1910,7 @@ struct SettingsBar: View {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 Text(journal.headerStatus(now: context.date))
                     .font(.system(size: 12))
-                    .foregroundStyle(HomeColor.muted)
+                    .foregroundStyle(tokens.muted)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -1898,6 +1922,7 @@ struct SettingsBar: View {
 }
 
 private struct ScreenTitleBar: View {
+    @Environment(\.homeTokens) private var tokens
     let title: String
     var filtersOn: Bool
     var onFilters: () -> Void
@@ -1907,7 +1932,7 @@ private struct ScreenTitleBar: View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.system(size: 34, weight: .bold))
-                .foregroundStyle(HomeColor.ink)
+                .foregroundStyle(tokens.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 8)
@@ -1919,6 +1944,7 @@ private struct ScreenTitleBar: View {
 }
 
 private struct FloatingTabBar: View {
+    @Environment(\.homeTokens) private var tokens
     @Binding var selection: Int
 
     var body: some View {
@@ -1929,7 +1955,7 @@ private struct FloatingTabBar: View {
             tabButton(3, title: "Open lots", systemImage: "hexagon")
         }
         .frame(height: HomeLayout.tabBarHeight)
-        .background(HomeColor.page)
+        .background(tokens.page)
     }
 
     private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
@@ -1946,7 +1972,7 @@ private struct FloatingTabBar: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundStyle(on ? HomeColor.selected : HomeColor.muted)
+            .foregroundStyle(on ? tokens.selected : tokens.muted)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
@@ -1956,6 +1982,7 @@ private struct FloatingTabBar: View {
 }
 
 struct FiltersSheet: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var journal: Journal
     @EnvironmentObject private var filters: FilterStore
     @Environment(\.dismiss) private var dismiss
@@ -2032,23 +2059,23 @@ struct FiltersSheet: View {
                         Button("Reset filters") {
                             filters.reset()
                         }
-                        .foregroundStyle(HomeColor.loss)
+                        .foregroundStyle(tokens.loss)
                     }
                 }
             }
             .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
             .bagholderListChrome()
-            .listRowBackground(HomeColor.tile)
+            .listRowBackground(tokens.tile)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(HomeColor.selected)
+                        .foregroundStyle(tokens.selected)
                 }
             }
         }
-        .presentationBackground(HomeColor.tile)
-        .tint(HomeColor.selected)
+        .presentationBackground(tokens.tile)
+        .tint(tokens.selected)
     }
 
     private var closedInLabel: String {
@@ -2090,6 +2117,7 @@ struct FiltersSheet: View {
 }
 
 private struct FilterStringPick: View {
+    @Environment(\.homeTokens) private var tokens
     let title: String
     let allLabel: String
     let options: [String]
@@ -2105,7 +2133,7 @@ private struct FilterStringPick: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
+        .listRowBackground(tokens.tile)
     }
 
     private func row(_ label: String, value: String) -> some View {
@@ -2114,11 +2142,11 @@ private struct FilterStringPick: View {
         } label: {
             HStack {
                 Text(label)
-                    .foregroundStyle(HomeColor.ink)
+                    .foregroundStyle(tokens.ink)
                 Spacer()
                 if selection == value {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(HomeColor.selected)
+                        .foregroundStyle(tokens.selected)
                 }
             }
         }
@@ -2126,6 +2154,7 @@ private struct FilterStringPick: View {
 }
 
 private struct ClosedInPick: View {
+    @Environment(\.homeTokens) private var tokens
     let years: [String]
     @EnvironmentObject private var filters: FilterStore
 
@@ -2140,11 +2169,11 @@ private struct ClosedInPick: View {
             } label: {
                 HStack {
                     Text("All years")
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                     Spacer()
                     if selected.isEmpty {
                         Image(systemName: "checkmark")
-                            .foregroundStyle(HomeColor.selected)
+                            .foregroundStyle(tokens.selected)
                     }
                 }
             }
@@ -2154,11 +2183,11 @@ private struct ClosedInPick: View {
                 } label: {
                     HStack {
                         Text(y)
-                            .foregroundStyle(HomeColor.ink)
+                            .foregroundStyle(tokens.ink)
                         Spacer()
                         if selected == y {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(HomeColor.selected)
+                                .foregroundStyle(tokens.selected)
                         }
                     }
                 }
@@ -2167,11 +2196,12 @@ private struct ClosedInPick: View {
         .navigationTitle("Closed in")
         .navigationBarTitleDisplayMode(.inline)
         .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
+        .listRowBackground(tokens.tile)
     }
 }
 
 private struct DateFilterPick: View {
+    @Environment(\.homeTokens) private var tokens
     let title: String
     @Binding var value: String
 
@@ -2186,11 +2216,11 @@ private struct DateFilterPick: View {
             } label: {
                 HStack {
                     Text("All")
-                        .foregroundStyle(HomeColor.ink)
+                        .foregroundStyle(tokens.ink)
                     Spacer()
                     if value.isEmpty {
                         Image(systemName: "checkmark")
-                            .foregroundStyle(HomeColor.selected)
+                            .foregroundStyle(tokens.selected)
                     }
                 }
             }
@@ -2206,7 +2236,7 @@ private struct DateFilterPick: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
+        .listRowBackground(tokens.tile)
     }
 
     private func isoDate(_ s: String) -> Date? {
@@ -2229,6 +2259,7 @@ private struct DateFilterPick: View {
 }
 
 private struct PriceOpPick: View {
+    @Environment(\.homeTokens) private var tokens
     @EnvironmentObject private var filters: FilterStore
 
     private let ops: [(String, String)] = [
@@ -2253,11 +2284,11 @@ private struct PriceOpPick: View {
                 } label: {
                     HStack {
                         Text(op.1)
-                            .foregroundStyle(HomeColor.ink)
+                            .foregroundStyle(tokens.ink)
                         Spacer()
                         if filters.current.priceOp == op.0 {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(HomeColor.selected)
+                                .foregroundStyle(tokens.selected)
                         }
                     }
                 }
@@ -2266,11 +2297,12 @@ private struct PriceOpPick: View {
         .navigationTitle("Price")
         .navigationBarTitleDisplayMode(.inline)
         .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
+        .listRowBackground(tokens.tile)
     }
 }
 
 struct SettingsView: View {
+    @Environment(\.homeTokens) private var tokens
 
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
@@ -2284,7 +2316,7 @@ struct SettingsView: View {
                 Section {
                     if session.connected {
                         Text("Connected")
-                            .foregroundStyle(HomeColor.ink)
+                            .foregroundStyle(tokens.ink)
                         Button("Refresh") {
                             journal.refresh()
                             dismiss()
@@ -2293,50 +2325,51 @@ struct SettingsView: View {
                         Button("Disconnect") {
                             session.disconnect()
                         }
-                        .foregroundStyle(HomeColor.loss)
+                        .foregroundStyle(tokens.loss)
                     } else {
                         Button("Connect") {
                             showLogin = true
                         }
                         Text("Opens Wealthsimple’s login. After you sign in, this screen closes.")
                             .font(.footnote)
-                            .foregroundStyle(HomeColor.muted)
+                            .foregroundStyle(tokens.muted)
                     }
                 }
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Appearance")
                             .font(.system(size: 13))
-                            .foregroundStyle(HomeColor.muted)
+                            .foregroundStyle(tokens.muted)
                         AppearanceSegment(selection: $appearance.choice)
                             .frame(maxWidth: .infinity)
                             .frame(height: 32)
                     }
                     .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
                     .listRowSeparator(.hidden)
-                    .listRowBackground(HomeColor.elevated)
+                    .listRowBackground(tokens.elevated)
                 }
             }
             .listStyle(.insetGrouped)
             .bagholderListChrome()
-            .listRowBackground(HomeColor.tile)
+            .listRowBackground(tokens.tile)
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(HomeColor.selected)
+                        .foregroundStyle(tokens.selected)
                 }
             }
             .fullScreenCover(isPresented: $showLogin) {
                 ConnectLoginView(session: session, isPresented: $showLogin)
             }
         }
-        .presentationBackground(HomeColor.tile)
-        .tint(HomeColor.selected)
+        .presentationBackground(tokens.tile)
+        .tint(tokens.selected)
     }
 }
 
 struct ConnectLoginView: View {
+    @Environment(\.homeTokens) private var tokens
     @ObservedObject var session: SessionStore
     @Binding var isPresented: Bool
 
@@ -2352,7 +2385,7 @@ struct ConnectLoginView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
-                        .foregroundStyle(HomeColor.selected)
+                        .foregroundStyle(tokens.selected)
                 }
             }
         }
