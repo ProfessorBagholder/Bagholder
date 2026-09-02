@@ -117,8 +117,8 @@ private enum HomeChrome {
         let hairline = HomeUIColor.hairline
 
         let tab = UITabBarAppearance()
-        tab.configureWithOpaqueBackground()
-        tab.backgroundColor = page
+        tab.configureWithTransparentBackground()
+        tab.backgroundColor = .clear
         tab.shadowColor = .clear
         let item = UITabBarItemAppearance()
         item.normal.iconColor = muted
@@ -130,10 +130,10 @@ private enum HomeChrome {
         tab.compactInlineLayoutAppearance = item
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
-        UITabBar.appearance().backgroundColor = page
+        UITabBar.appearance().backgroundColor = .clear
         UITabBar.appearance().unselectedItemTintColor = muted
         UITabBar.appearance().tintColor = selected
-        UITabBar.appearance().isTranslucent = false
+        UITabBar.appearance().isTranslucent = true
 
         let nav = UINavigationBarAppearance()
         nav.configureWithOpaqueBackground()
@@ -196,6 +196,20 @@ private extension View {
             .listRowSeparatorTint(HomeColor.hairline)
             .tint(HomeColor.selected)
     }
+
+    func bagholderBottomScrollClearance() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: HomeLayout.scrollBottomInset)
+                .allowsHitTesting(false)
+        }
+    }
+
+    func bagholderHideNavBar() -> some View {
+        self
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 private enum HomeLayout {
@@ -203,6 +217,10 @@ private enum HomeLayout {
     static let gutter: CGFloat = 8
     static let corner: CGFloat = 14
     static let chartHeight: CGFloat = 72
+    static let tabBarHeight: CGFloat = 49
+    static let tabBarLift: CGFloat = 8
+    static let tabBarSide: CGFloat = 16
+    static let scrollBottomInset: CGFloat = 65
 }
 
 struct RootView: View {
@@ -210,6 +228,7 @@ struct RootView: View {
     @StateObject private var journal: Journal
     @StateObject private var filters: FilterStore
     @StateObject private var appearance: AppearanceStore
+    @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -221,33 +240,48 @@ struct RootView: View {
     }
 
     var body: some View {
-        TabView {
-            NavigationStack {
-                HomeView(session: session, journal: journal)
-            }
-            .tabItem { Label("Home", systemImage: "square.grid.2x2") }
+        ZStack(alignment: .bottom) {
+            ZStack {
+                NavigationStack {
+                    HomeView(session: session, journal: journal)
+                }
+                .opacity(tab == 0 ? 1 : 0)
+                .allowsHitTesting(tab == 0)
+                .zIndex(tab == 0 ? 1 : 0)
 
-            NavigationStack {
-                ClosedTradesView(session: session, journal: journal)
-            }
-            .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
+                NavigationStack {
+                    ClosedTradesView(session: session, journal: journal)
+                }
+                .opacity(tab == 1 ? 1 : 0)
+                .allowsHitTesting(tab == 1)
+                .zIndex(tab == 1 ? 1 : 0)
 
-            NavigationStack {
-                ActivityView(session: session, journal: journal)
-            }
-            .tabItem { Label("Activity", systemImage: "doc.text") }
+                NavigationStack {
+                    ActivityView(session: session, journal: journal)
+                }
+                .opacity(tab == 2 ? 1 : 0)
+                .allowsHitTesting(tab == 2)
+                .zIndex(tab == 2 ? 1 : 0)
 
-            NavigationStack {
-                OpenLotsView(session: session, journal: journal)
+                NavigationStack {
+                    OpenLotsView(session: session, journal: journal)
+                }
+                .opacity(tab == 3 ? 1 : 0)
+                .allowsHitTesting(tab == 3)
+                .zIndex(tab == 3 ? 1 : 0)
             }
-            .tabItem { Label("Open lots", systemImage: "hexagon") }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea(.container, edges: .bottom)
+
+            FloatingTabBar(selection: $tab)
+                .padding(.horizontal, HomeLayout.tabBarSide)
+                .padding(.bottom, HomeLayout.tabBarLift)
         }
+        .ignoresSafeArea(.container, edges: .bottom)
         .environmentObject(filters)
         .environmentObject(appearance)
         .preferredColorScheme(appearance.preferredColorScheme)
         .tint(HomeColor.selected)
-        .toolbarBackground(HomeColor.page, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(HomeColor.page, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .background(HomeColor.page.ignoresSafeArea())
@@ -282,6 +316,7 @@ struct HomeView: View {
             }
         }
         .background(HomeColor.page)
+        .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
                 .presentationBackground(HomeColor.tile)
@@ -307,6 +342,7 @@ struct HomeView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .bagholderBottomScrollClearance()
         .background(HomeColor.page)
     }
 
@@ -434,9 +470,9 @@ struct HomeView: View {
                 AnnualPerformanceCard(years: shown?.years)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
-                    .padding(.bottom, 12)
             }
         }
+        .bagholderBottomScrollClearance()
         .background(HomeColor.page)
     }
 }
@@ -694,43 +730,43 @@ struct ClosedTradesView: View {
     }
 
     var body: some View {
-        List {
-            if !rows.isEmpty {
-                Section {
-                    ForEach(rows) { t in
-                        NavigationLink {
-                            ClosedTradeDetailView(journal: journal, trade: t)
-                        } label: {
-                            ClosedTradeRow(trade: t)
-                        }
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
-        .overlay {
-            if rows.isEmpty {
-                ContentUnavailableView(
-                    "No closed trades",
-                    systemImage: "list.bullet",
-                    description: Text("They show up here.")
-                )
-            }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsBar(
-                journal: journal,
+        VStack(spacing: 0) {
+            ScreenTitleBar(
+                title: "Closed trades",
                 filtersOn: filters.current.isActive,
                 onFilters: { showFilters = true },
                 onSettings: { showSettings = true }
             )
-            .background(HomeColor.page)
+            List {
+                if !rows.isEmpty {
+                    Section {
+                        ForEach(rows) { t in
+                            NavigationLink {
+                                ClosedTradeDetailView(journal: journal, trade: t)
+                            } label: {
+                                ClosedTradeRow(trade: t)
+                            }
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .bagholderListChrome()
+            .listRowBackground(HomeColor.tile)
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No closed trades",
+                        systemImage: "list.bullet",
+                        description: Text("They show up here.")
+                    )
+                }
+            }
+            .bagholderBottomScrollClearance()
         }
-        .navigationTitle("Closed trades")
-        .navigationBarTitleDisplayMode(.large)
+        .background(HomeColor.page)
+        .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
                 .presentationBackground(HomeColor.tile)
@@ -848,8 +884,12 @@ private struct ClosedTradeDetailView: View {
         .listStyle(.insetGrouped)
         .bagholderListChrome()
         .listRowBackground(HomeColor.tile)
+        .bagholderBottomScrollClearance()
         .navigationTitle("Executions (\(executionCount))")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(HomeColor.page, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -939,54 +979,54 @@ struct ActivityView: View {
     }
 
     var body: some View {
-        List {
-            if !rows.isEmpty {
-                Section {
-                    ForEach(rows, id: \.id) { a in
-                        HStack(alignment: .center, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(a.symbol.isEmpty ? (a.activityType.isEmpty ? "Activity" : a.activityType) : a.symbol)
-                                    .font(.headline)
-                                    .foregroundStyle(HomeColor.ink)
-                                    .lineLimit(2)
-                                Text(WSPull.activityWhen(a) + (a.accountType.isEmpty ? "" : " · " + a.accountType))
-                                    .font(.subheadline)
-                                    .foregroundStyle(HomeColor.muted)
-                            }
-                            Spacer(minLength: 8)
-                            Text(WSPull.formatCad(a.netCashAmount, digits: 2))
-                                .font(.system(size: 17, weight: .semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(HomeColor.signed(a.netCashAmount))
-                        }
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
-        .overlay {
-            if rows.isEmpty {
-                ContentUnavailableView(
-                    "No activity",
-                    systemImage: "doc.text",
-                    description: Text("It shows up here.")
-                )
-            }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsBar(
-                journal: journal,
+        VStack(spacing: 0) {
+            ScreenTitleBar(
+                title: "Activity",
                 filtersOn: filters.current.isActive,
                 onFilters: { showFilters = true },
                 onSettings: { showSettings = true }
             )
-            .background(HomeColor.page)
+            List {
+                if !rows.isEmpty {
+                    Section {
+                        ForEach(rows, id: \.id) { a in
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(a.symbol.isEmpty ? (a.activityType.isEmpty ? "Activity" : a.activityType) : a.symbol)
+                                        .font(.headline)
+                                        .foregroundStyle(HomeColor.ink)
+                                        .lineLimit(2)
+                                    Text(WSPull.activityWhen(a) + (a.accountType.isEmpty ? "" : " · " + a.accountType))
+                                        .font(.subheadline)
+                                        .foregroundStyle(HomeColor.muted)
+                                }
+                                Spacer(minLength: 8)
+                                Text(WSPull.formatCad(a.netCashAmount, digits: 2))
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(HomeColor.signed(a.netCashAmount))
+                            }
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .bagholderListChrome()
+            .listRowBackground(HomeColor.tile)
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No activity",
+                        systemImage: "doc.text",
+                        description: Text("It shows up here.")
+                    )
+                }
+            }
+            .bagholderBottomScrollClearance()
         }
-        .navigationTitle("Activity")
-        .navigationBarTitleDisplayMode(.large)
+        .background(HomeColor.page)
+        .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
                 .presentationBackground(HomeColor.tile)
@@ -1019,54 +1059,54 @@ struct OpenLotsView: View {
     }
 
     var body: some View {
-        List {
-            if !rows.isEmpty {
-                Section {
-                    ForEach(rows) { lot in
-                        HStack(alignment: .center, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(lot.symbol)
-                                    .font(.headline)
-                                    .foregroundStyle(HomeColor.ink)
-                                    .lineLimit(2)
-                                Text(lot.direction + " · " + WSPull.formatQty(lot.quantity) + " · " + WSPull.formatCad(lot.price, digits: 2))
-                                    .font(.subheadline)
-                                    .foregroundStyle(HomeColor.muted)
-                                    .monospacedDigit()
-                            }
-                            Spacer(minLength: 8)
-                            Text(WSPull.formatCloseDate(lot.date))
-                                .font(.subheadline)
-                                .foregroundStyle(HomeColor.muted)
-                        }
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .bagholderListChrome()
-        .listRowBackground(HomeColor.tile)
-        .overlay {
-            if rows.isEmpty {
-                ContentUnavailableView(
-                    "No open lots",
-                    systemImage: "hexagon",
-                    description: Text("They show up here.")
-                )
-            }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsBar(
-                journal: journal,
+        VStack(spacing: 0) {
+            ScreenTitleBar(
+                title: "Open lots",
                 filtersOn: filters.current.isActive,
                 onFilters: { showFilters = true },
                 onSettings: { showSettings = true }
             )
-            .background(HomeColor.page)
+            List {
+                if !rows.isEmpty {
+                    Section {
+                        ForEach(rows) { lot in
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(lot.symbol)
+                                        .font(.headline)
+                                        .foregroundStyle(HomeColor.ink)
+                                        .lineLimit(2)
+                                    Text(lot.direction + " · " + WSPull.formatQty(lot.quantity) + " · " + WSPull.formatCad(lot.price, digits: 2))
+                                        .font(.subheadline)
+                                        .foregroundStyle(HomeColor.muted)
+                                        .monospacedDigit()
+                                }
+                                Spacer(minLength: 8)
+                                Text(WSPull.formatCloseDate(lot.date))
+                                    .font(.subheadline)
+                                    .foregroundStyle(HomeColor.muted)
+                            }
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .bagholderListChrome()
+            .listRowBackground(HomeColor.tile)
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No open lots",
+                        systemImage: "hexagon",
+                        description: Text("They show up here.")
+                    )
+                }
+            }
+            .bagholderBottomScrollClearance()
         }
-        .navigationTitle("Open lots")
-        .navigationBarTitleDisplayMode(.large)
+        .background(HomeColor.page)
+        .bagholderHideNavBar()
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
                 .presentationBackground(HomeColor.tile)
@@ -1697,21 +1737,13 @@ final class FilterStore: ObservableObject {
     }
 }
 
-struct SettingsBar: View {
-    @ObservedObject var journal: Journal
+private struct FilterGearButtons: View {
     var filtersOn: Bool
     var onFilters: () -> Void
     var onSettings: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(journal.headerStatus(now: context.date))
-                    .font(.system(size: 12))
-                    .foregroundStyle(HomeColor.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
             Button(action: onFilters) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "line.3.horizontal.decrease")
@@ -1735,8 +1767,86 @@ struct SettingsBar: View {
             }
             .accessibilityLabel("Settings")
         }
+    }
+}
+
+struct SettingsBar: View {
+    @ObservedObject var journal: Journal
+    var filtersOn: Bool
+    var onFilters: () -> Void
+    var onSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(journal.headerStatus(now: context.date))
+                    .font(.system(size: 12))
+                    .foregroundStyle(HomeColor.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            FilterGearButtons(filtersOn: filtersOn, onFilters: onFilters, onSettings: onSettings)
+        }
         .padding(.horizontal, 14)
         .frame(height: 36)
+    }
+}
+
+private struct ScreenTitleBar: View {
+    let title: String
+    var filtersOn: Bool
+    var onFilters: () -> Void
+    var onSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 34, weight: .bold))
+                .foregroundStyle(HomeColor.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 8)
+            FilterGearButtons(filtersOn: filtersOn, onFilters: onFilters, onSettings: onSettings)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 14)
+    }
+}
+
+private struct FloatingTabBar: View {
+    @Binding var selection: Int
+
+    var body: some View {
+        HStack(spacing: 0) {
+            tabButton(0, title: "Home", systemImage: "square.grid.2x2")
+            tabButton(1, title: "Closed trades", systemImage: "line.3.horizontal")
+            tabButton(2, title: "Activity", systemImage: "doc.text")
+            tabButton(3, title: "Open lots", systemImage: "hexagon")
+        }
+        .frame(height: HomeLayout.tabBarHeight)
+        .background(HomeColor.page)
+    }
+
+    private func tabButton(_ index: Int, title: String, systemImage: String) -> some View {
+        let on = selection == index
+        return Button {
+            selection = index
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .regular))
+                    .frame(height: 22)
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(on ? HomeColor.selected : HomeColor.muted)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
