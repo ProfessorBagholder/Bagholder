@@ -1994,21 +1994,26 @@ query IdentityHistoricalFinancialsQuery(
     private static func foldStkdis(_ activities: [WSActivity]) -> [WSActivity] {
         var rest: [WSActivity] = []
         var groups: [String: (pos: Double, neg: Double, sample: WSActivity)] = [:]
+        var groupOrder: [String] = []
         for a in activities {
             if compactType(a.activityType) != "STKDIS" {
                 rest.append(a)
                 continue
             }
             let k = [a.symbol, a.transactionDate, a.currency].joined(separator: "|")
-            // ledger.html foldStkdis: sample is the first STKDIS in the group.
-            if groups[k] == nil { groups[k] = (0, 0, a) }
+            // ledger.html foldStkdis: Map insertion order, then forEach leftover BUY.
+            if groups[k] == nil {
+                groups[k] = (0, 0, a)
+                groupOrder.append(k)
+            }
             var g = groups[k]!
             let q = a.quantity
             if a.activitySubType == "SELL" || q < 0 { g.neg += abs(q) }
             else { g.pos += abs(q) }
             groups[k] = g
         }
-        for g in groups.values {
+        for k in groupOrder {
+            guard let g = groups[k] else { continue }
             let net = g.pos - g.neg
             if net > 1e-10 {
                 var a = g.sample
