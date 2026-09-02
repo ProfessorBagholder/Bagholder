@@ -17,11 +17,13 @@ enum AppearanceChoice: String, CaseIterable {
     case dark
     case system
 
-    var preferredColorScheme: ColorScheme? {
+    static let defaultsKey = "bagholder.appearance"
+
+    var interfaceStyle: UIUserInterfaceStyle {
         switch self {
         case .light: return .light
         case .dark: return .dark
-        case .system: return nil
+        case .system: return .unspecified
         }
     }
 
@@ -40,29 +42,72 @@ enum AppearanceChoice: String, CaseIterable {
         default: return .system
         }
     }
-}
 
-@MainActor
-final class AppearanceStore: ObservableObject {
-    static let defaultsKey = "bagholder.appearance"
-    @Published var choice: AppearanceChoice {
-        didSet { UserDefaults.standard.set(choice.rawValue, forKey: Self.defaultsKey) }
+    static func load() -> AppearanceChoice {
+        if let raw = UserDefaults.standard.string(forKey: defaultsKey),
+           let stored = AppearanceChoice(rawValue: raw) {
+            return stored
+        }
+        return .system
     }
 
-    init() {
-        if let raw = UserDefaults.standard.string(forKey: Self.defaultsKey),
-           let stored = AppearanceChoice(rawValue: raw) {
-            choice = stored
-        } else {
-            choice = .system
+    static func persist(_ choice: AppearanceChoice) {
+        UserDefaults.standard.set(choice.rawValue, forKey: defaultsKey)
+    }
+
+    /// One window, one assignment. `done` fires on the next runloop with elapsed ms.
+    static func apply(to window: UIWindow?, choice: AppearanceChoice, measure: Bool = true, done: ((Double) -> Void)? = nil) {
+        guard let window else {
+            done?(0)
+            return
+        }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        window.overrideUserInterfaceStyle = choice.interfaceStyle
+        DispatchQueue.main.async {
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            if measure {
+                let line = String(format: "%.2f", ms)
+                NSLog("BAGHOLDER_APPEARANCE_MS %@", line)
+                let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                    ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                let dir = base.appendingPathComponent("Bagholder", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try? Data(line.utf8).write(to: dir.appendingPathComponent("appearance-tap-ms.txt"), options: .atomic)
+            }
+            done?(ms)
         }
     }
-
-    var preferredColorScheme: ColorScheme? { choice.preferredColorScheme }
 }
 
-/// Named tokens for both appearances. Resolve from colorScheme + Appearance setting
-/// via preferredColorScheme (nil = System) and explicit RGB — nothing inverts.
+private struct WindowAppearanceGate: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        func install() {
+            guard let window = view.window else {
+                DispatchQueue.main.async(execute: install)
+                return
+            }
+            AppearanceChoice.apply(to: window, choice: .load(), measure: false)
+            if ProcessInfo.processInfo.arguments.contains("-appearance-bench") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    AppearanceChoice.apply(to: window, choice: .dark, measure: true) { _ in
+                        AppearanceChoice.apply(to: window, choice: .light, measure: true)
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.async(execute: install)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// Named tokens for both appearances. UIColor.dynamicProvider follows the window
+/// trait (overrideUserInterfaceStyle). SwiftUI Color(uiColor:) must not depend on
+/// appearance.choice in Home / RootView body.
 private enum HomeUIColor {
     static func token(
         light rL: CGFloat, _ gL: CGFloat, _ bL: CGFloat, _ aL: CGFloat,
@@ -90,9 +135,8 @@ private enum HomeUIColor {
     static let elevated = token(light: 242 / 255, 242 / 255, 247 / 255, 1, dark: 44 / 255, 44 / 255, 46 / 255, 1)
 }
 
-/// Two live RGB sets. RootView publishes the active pack through the
-/// environment every time Light / Dark / System (or the system style) changes.
-/// UIKit chrome still uses HomeUIColor dynamicProvider.
+/// Stable token pack. Colors wrap HomeUIColor dynamicProvider so Light/Dark
+/// follows the window trait without RootView / Home.body reading appearance.
 private enum HomeColor {
     struct Pack: Equatable {
         let page, tile, ink, muted, profit, loss, selected, hairline, elevated: Color
@@ -104,41 +148,21 @@ private enum HomeColor {
         }
     }
 
-    private static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> Color {
-        Color(.sRGB, red: r, green: g, blue: b, opacity: a)
-    }
-
-    private static let lightPack = Pack(
-        page: rgb(242 / 255, 242 / 255, 247 / 255),
-        tile: rgb(1, 1, 1),
-        ink: rgb(0, 0, 0),
-        muted: rgb(142 / 255, 142 / 255, 147 / 255),
-        profit: rgb(52 / 255, 199 / 255, 89 / 255),
-        loss: rgb(255 / 255, 59 / 255, 48 / 255),
-        selected: rgb(0, 122 / 255, 1),
-        hairline: rgb(60 / 255, 60 / 255, 67 / 255, 0.18),
-        elevated: rgb(242 / 255, 242 / 255, 247 / 255)
+    static let live = Pack(
+        page: Color(uiColor: HomeUIColor.page),
+        tile: Color(uiColor: HomeUIColor.tile),
+        ink: Color(uiColor: HomeUIColor.ink),
+        muted: Color(uiColor: HomeUIColor.muted),
+        profit: Color(uiColor: HomeUIColor.profit),
+        loss: Color(uiColor: HomeUIColor.loss),
+        selected: Color(uiColor: HomeUIColor.selected),
+        hairline: Color(uiColor: HomeUIColor.hairline),
+        elevated: Color(uiColor: HomeUIColor.elevated)
     )
-    private static let darkPack = Pack(
-        page: rgb(0, 0, 0),
-        tile: rgb(28 / 255, 28 / 255, 30 / 255),
-        ink: rgb(1, 1, 1),
-        muted: rgb(142 / 255, 142 / 255, 147 / 255),
-        profit: rgb(52 / 255, 199 / 255, 89 / 255),
-        loss: rgb(255 / 255, 59 / 255, 48 / 255),
-        selected: rgb(10 / 255, 132 / 255, 1),
-        hairline: rgb(84 / 255, 84 / 255, 88 / 255, 0.65),
-        elevated: rgb(44 / 255, 44 / 255, 46 / 255)
-    )
-
-    static func pack(for scheme: ColorScheme) -> Pack {
-        scheme == .dark ? darkPack : lightPack
-    }
-
 }
 
 private struct HomeTokensKey: EnvironmentKey {
-    static let defaultValue = HomeColor.pack(for: .light)
+    static let defaultValue = HomeColor.live
 }
 
 private extension EnvironmentValues {
@@ -194,14 +218,18 @@ private enum HomeChrome {
 
 private struct AppearanceSegment: UIViewRepresentable {
     @Binding var selection: AppearanceChoice
-    var scheme: ColorScheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject {
         var binding: Binding<AppearanceChoice> = .constant(.system)
         @objc func changed(_ sender: UISegmentedControl) {
-            binding.wrappedValue = AppearanceChoice.fromSegment(sender.selectedSegmentIndex)
+            let choice = AppearanceChoice.fromSegment(sender.selectedSegmentIndex)
+            AppearanceChoice.persist(choice)
+            binding.wrappedValue = choice
+            AppearanceChoice.apply(to: sender.window, choice: choice) { _ in
+                AppearanceSegment.paint(sender, window: sender.window)
+            }
         }
     }
 
@@ -212,7 +240,7 @@ private struct AppearanceSegment: UIViewRepresentable {
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         control.setContentHuggingPriority(.defaultLow, for: .horizontal)
         control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        applyChrome(control)
+        Self.paint(control, window: nil)
         return control
     }
 
@@ -221,28 +249,26 @@ private struct AppearanceSegment: UIViewRepresentable {
         if control.selectedSegmentIndex != selection.segmentIndex {
             control.selectedSegmentIndex = selection.segmentIndex
         }
-        applyChrome(control)
+        Self.paint(control, window: control.window)
     }
 
-    private func applyChrome(_ control: UISegmentedControl) {
-        let dark = scheme == .dark
-        let page = dark ? UIColor.black : UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
-        let thumb = dark
-            ? UIColor(red: 44 / 255, green: 44 / 255, blue: 46 / 255, alpha: 1)
-            : UIColor.white
-        let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
-        let ink = dark ? UIColor.white : UIColor.black
+    fileprivate static func paint(_ control: UISegmentedControl, window: UIWindow?) {
+        let traits = window?.traitCollection ?? control.traitCollection
+        let page = HomeUIColor.page.resolvedColor(with: traits)
+        let elevated = HomeUIColor.elevated.resolvedColor(with: traits)
+        let thumb = traits.userInterfaceStyle == .dark ? elevated : UIColor.white
+        let muted = HomeUIColor.muted.resolvedColor(with: traits)
+        let ink = HomeUIColor.ink.resolvedColor(with: traits)
         let font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        control.overrideUserInterfaceStyle = dark ? .dark : .light
         control.backgroundColor = page
         control.selectedSegmentTintColor = thumb
-        let trackImg = Self.resizableFill(page, corner: 7)
-        let thumbImg = Self.resizableFill(thumb, corner: 7)
+        let trackImg = resizableFill(page, corner: 7)
+        let thumbImg = resizableFill(thumb, corner: 7)
         control.setBackgroundImage(trackImg, for: .normal, barMetrics: .default)
         control.setBackgroundImage(trackImg, for: .highlighted, barMetrics: .default)
         control.setBackgroundImage(thumbImg, for: .selected, barMetrics: .default)
         control.setBackgroundImage(thumbImg, for: [.selected, .highlighted], barMetrics: .default)
-        let div = Self.resizableFill(page, size: CGSize(width: 1, height: 1), corner: 0)
+        let div = resizableFill(page, size: CGSize(width: 1, height: 1), corner: 0)
         control.setDividerImage(div, forLeftSegmentState: .normal, rightSegmentState: .normal, barMetrics: .default)
         control.setDividerImage(div, forLeftSegmentState: .selected, rightSegmentState: .normal, barMetrics: .default)
         control.setDividerImage(div, forLeftSegmentState: .normal, rightSegmentState: .selected, barMetrics: .default)
@@ -308,22 +334,18 @@ struct RootView: View {
     @StateObject private var session: SessionStore
     @StateObject private var journal: Journal
     @StateObject private var filters: FilterStore
-    @StateObject private var appearance: AppearanceStore
     @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
 
     init() {
         _session = StateObject(wrappedValue: SessionStore())
         _journal = StateObject(wrappedValue: Journal())
         _filters = StateObject(wrappedValue: FilterStore())
-        _appearance = StateObject(wrappedValue: AppearanceStore())
         HomeChrome.apply()
     }
 
     var body: some View {
-        let scheme: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
-        let tokens = HomeColor.pack(for: scheme)
+        let tokens = HomeColor.live
         ZStack(alignment: .bottom) {
             ZStack {
                 NavigationStack {
@@ -362,11 +384,9 @@ struct RootView: View {
                 .padding(.bottom, HomeLayout.tabBarLift)
         }
         .ignoresSafeArea(.container, edges: .bottom)
+        .background(WindowAppearanceGate())
         .environment(\.homeTokens, tokens)
-        .environment(\.colorScheme, scheme)
         .environmentObject(filters)
-        .environmentObject(appearance)
-        .preferredColorScheme(appearance.preferredColorScheme)
         .tint(tokens.selected)
         .toolbarBackground(tokens.page, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -613,7 +633,6 @@ struct MetricCard: View {
 struct EquityCurveCard: View {
     @Environment(\.homeTokens) private var tokens
     var points: [WSNavPoint]? = nil
-    @Environment(\.colorScheme) private var colorScheme
     @State private var pressActive = false
     @State private var finger = CGPoint.zero
     @State private var chartSize: CGSize = .zero
@@ -645,7 +664,7 @@ struct EquityCurveCard: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: 44, alignment: .topLeading)
             if let points, !points.isEmpty {
-                LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex, scheme: colorScheme)
+                LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex)
                     .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
@@ -669,7 +688,6 @@ struct EquityCurveCard: View {
 struct MonthlyPnLCard: View {
     @Environment(\.homeTokens) private var tokens
     var bars: [WSMonthBar]? = nil
-    @Environment(\.colorScheme) private var colorScheme
     @State private var pressActive = false
     @State private var finger = CGPoint.zero
     @State private var chartSize: CGSize = .zero
@@ -720,7 +738,7 @@ struct MonthlyPnLCard: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: 44, alignment: .topLeading)
             if let bars, !bars.isEmpty {
-                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex, scheme: colorScheme)
+                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex)
                     .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
@@ -1618,20 +1636,18 @@ private final class ChartLongPressUIView: UIView {
 private struct LiveEquityCurveDrawing: View, Equatable {
     let points: [WSNavPoint]
     var selectedIndex: Int? = nil
-    var scheme: ColorScheme
 
     private static let dim: Double = 0.30
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.selectedIndex == rhs.selectedIndex
-            && lhs.scheme == rhs.scheme
             && lhs.points.count == rhs.points.count
             && lhs.points.last?.date == rhs.points.last?.date
             && lhs.points.last?.equity == rhs.points.last?.equity
     }
 
     var body: some View {
-        let tokens = HomeColor.pack(for: scheme)
+        let tokens = HomeColor.live
         let vals = points.map(\.equity)
         let lo = vals.min() ?? 0
         let hi = vals.max() ?? 1
@@ -1702,18 +1718,16 @@ private struct LiveEquityCurveDrawing: View, Equatable {
 private struct LiveMonthlyPnLDrawing: View, Equatable {
     let bars: [WSMonthBar]
     var selectedIndex: Int? = nil
-    var scheme: ColorScheme
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.selectedIndex == rhs.selectedIndex
-            && lhs.scheme == rhs.scheme
             && lhs.bars.count == rhs.bars.count
             && lhs.bars.last?.month == rhs.bars.last?.month
             && lhs.bars.last?.pnl == rhs.bars.last?.pnl
     }
 
     var body: some View {
-        let tokens = HomeColor.pack(for: scheme)
+        let tokens = HomeColor.live
         let profit = tokens.profit
         let loss = tokens.loss
         let hairColor = tokens.hairline
@@ -2342,14 +2356,12 @@ private struct PriceOpPick: View {
 struct SettingsView: View {
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
-    @EnvironmentObject private var appearance: AppearanceStore
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.homeTokens) private var tokens
     @Environment(\.dismiss) private var dismiss
     @State private var showLogin = false
+    @State private var appearanceChoice = AppearanceChoice.load()
 
     var body: some View {
-        let scheme: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
-        let tokens = HomeColor.pack(for: scheme)
         NavigationStack {
             VStack(spacing: 0) {
                 ZStack {
@@ -2394,7 +2406,7 @@ struct SettingsView: View {
                             Text("Appearance")
                                 .font(.system(size: 13))
                                 .foregroundStyle(tokens.muted)
-                            AppearanceSegment(selection: $appearance.choice, scheme: scheme)
+                            AppearanceSegment(selection: $appearanceChoice)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 32)
                         }
@@ -2414,13 +2426,8 @@ struct SettingsView: View {
             .fullScreenCover(isPresented: $showLogin) {
                 ConnectLoginView(session: session, isPresented: $showLogin)
                     .environment(\.homeTokens, tokens)
-                    .environment(\.colorScheme, scheme)
-                    .preferredColorScheme(appearance.preferredColorScheme)
             }
         }
-        .environment(\.homeTokens, tokens)
-        .environment(\.colorScheme, scheme)
-        .preferredColorScheme(appearance.preferredColorScheme)
         .presentationBackground(tokens.page)
         .presentationDragIndicator(.visible)
         .tint(tokens.selected)
