@@ -1348,15 +1348,6 @@ def parse_fred_sp500_csv(text):
     return out
 
 
-def _set_spy_error(msg):
-    with _lock:
-        cur = _state.get("error") or ""
-        if msg:
-            _state["error"] = msg
-        elif cur.startswith("S&P 500"):
-            _state["error"] = ""
-
-
 def _curl_fred_sp500():
     """Same path as `curl -sL --max-time 25` of the FRED CSV. Trailer is HTTP code."""
     ua = cached_user_agent() or FRED_UA
@@ -1417,12 +1408,9 @@ def refresh_spy_prices():
         body, status_line = _curl_fred_sp500()
         mapping = parse_fred_sp500_csv(body)
         if not mapping:
-            _set_spy_error("S&P 500 empty table (%s)" % status_line)
             return store.spy_by_date()
-        _set_spy_error("")
         return store.save_spy_by_date(mapping)
-    except Exception as e:
-        _set_spy_error("S&P 500 %s" % _public_sync_error(e))
+    except Exception:
         return store.spy_by_date()
 
 

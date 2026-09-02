@@ -1173,15 +1173,17 @@ not-a-date,1
             ):
                 got = bagholder.refresh_spy_prices()
         self.assertEqual(got, {"2014-01-02": 1831.98})
-        self.assertIn("S&P 500", bagholder._state["error"])
-        self.assertIn("offline", bagholder._state["error"])
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("empty table", err)
         empty = self._fake_curl_run("DATE,SP500\n", http_code="200")
         with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
             with mock.patch.object(bagholder.subprocess, "run", side_effect=empty):
                 got = bagholder.refresh_spy_prices()
         self.assertEqual(got, {"2014-01-02": 1831.98})
-        self.assertIn("empty table", bagholder._state["error"])
-        self.assertIn("HTTP 200", bagholder._state["error"])
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("empty table", err)
 
     def test_ledger_uses_python_spy_before_persist(self):
         html = bagholder.ledger_path().read_text(encoding="utf-8")
@@ -1255,7 +1257,8 @@ not-a-date,1
                 ):
                     got = bagholder.refresh_spy_prices()
         self.assertEqual(got["2014-01-02"], 1831.98)
-        self.assertIn("S&P 500", bagholder._state["error"])
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
 
     def test_refresh_spy_prices_curl_http_error_status_line(self):
         store.save_spy_by_date({"2014-01-02": 1831.98})
@@ -1264,7 +1267,10 @@ not-a-date,1
             with mock.patch.object(bagholder.subprocess, "run", side_effect=fake_run):
                 got = bagholder.refresh_spy_prices()
         self.assertEqual(got["2014-01-02"], 1831.98)
-        self.assertIn("HTTP 503", bagholder._state["error"])
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("HTTP 503", err)
+        self.assertNotIn("empty table", err)
 
 
 if __name__ == "__main__":
