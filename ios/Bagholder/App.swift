@@ -669,7 +669,12 @@ private enum LastPullStore {
 
     static func load() -> WSPullResult? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(WSPullResult.self, from: data)
+        guard let snap = try? JSONDecoder().decode(WSPullResult.self, from: data) else { return nil }
+        let rematched = WSPull.rematchStored(snap)
+        if let out = try? JSONEncoder().encode(rematched) {
+            try? out.write(to: url, options: .atomic)
+        }
+        return rematched
     }
 
     static func save(_ result: WSPullResult) {

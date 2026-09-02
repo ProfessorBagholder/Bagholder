@@ -1166,6 +1166,31 @@ query IdentityHistoricalFinancialsQuery(
         )
     }
 
+    /// Rematch FIFO from a saved snapshot. No network. Uses bagholder.fx.boc.v1 and the FRED cache.
+    static func rematchStored(_ snap: WSPullResult) -> WSPullResult {
+        let fifo = matchFifo(snap.activities)
+        let fx = loadCachedFx()
+        let spy = loadCachedSP500()
+        let closedFx = applyFx(fifo.closed, fx: fx)
+        let closedForMetrics = groupClosedByClose(closedFx)
+        let metrics = computeMetrics(closedForMetrics)
+        let monthly = monthlyPnl(closedForMetrics)
+        let yearRows = annualRows(nav: snap.nav, spy: spy, activities: snap.activities)
+        let ann = accountAnnualizedReturn(nav: snap.nav, years: yearRows.map(\.year).sorted())
+        return WSPullResult(
+            closed: closedFx,
+            metrics: metrics,
+            nav: snap.nav,
+            monthly: monthly,
+            years: yearRows,
+            avgAnnualized: formatReturn(ann.rate),
+            avgAnnualizedSubtitle: formatYearSpan(ann.years),
+            activities: snap.activities,
+            listings: snap.listings,
+            transferredNew: false
+        )
+    }
+
     // MARK: - Fetch
 
     private static func fetchAllAccounts(_ box: TokenBox, identityId: String) async throws -> [[String: Any]] {
