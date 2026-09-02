@@ -42,12 +42,17 @@ GRAPHQL = "https://my.wealthsimple.com/graphql"
 GRAPHQL_VERSION = "12"
 WS_CLIENT = "@wealthsimple/wealthsimple"
 LOGIN_URL = "https://my.wealthsimple.com/app/login"
-FRED_SP500_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
-FRED_TIMEOUT_SEC = 25
-FRED_UA = (
+SPY_TIMEOUT_SEC = 25
+SPY_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 )
+YAHOO_SPY_URLS = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div",
+    "https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=10y&events=div",
+    "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10y",
+)
+STOOQ_SPY_URL = "https://stooq.com/q/d/l/?s=spy.us&i=d"
 
 
 def _data_home():
@@ -1325,19 +1330,70 @@ def save_user_agent(ua):
         pass
 
 
-def parse_fred_sp500_csv(text):
-    """Skip empty cells and '.' like ledger.html ingestFredSP500Csv."""
+def parse_yahoo_chart(data):
+    """Yahoo v8 chart JSON. Prefer adjclose, same as ledger.html ingestYahooChart."""
     out = {}
-    blob = str(text or "")
-    for line in blob.splitlines():
+    if isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8", "replace")
+    if isinstance(data, str):
+        blob = data.strip()
+        if not blob:
+            return out
+        try:
+            data = json.loads(blob)
+        except ValueError:
+            return out
+    if not isinstance(data, dict):
+        return out
+    chart = data.get("chart") or {}
+    results = chart.get("result") or []
+    if not results:
+        return out
+    r = results[0] or {}
+    timestamps = r.get("timestamp") or []
+    indicators = r.get("indicators") or {}
+    close = None
+    adj = indicators.get("adjclose") or []
+    if adj and isinstance(adj[0], dict):
+        close = adj[0].get("adjclose")
+    if not close:
+        quote = indicators.get("quote") or []
+        if quote and isinstance(quote[0], dict):
+            close = quote[0].get("close")
+    if not close:
+        return out
+    for i, ts in enumerate(timestamps):
+        if i >= len(close):
+            break
+        px = close[i]
+        if px is None:
+            continue
+        try:
+            px = float(px)
+        except (TypeError, ValueError):
+            continue
+        if not (px > 0):
+            continue
+        try:
+            unix = int(ts)
+        except (TypeError, ValueError):
+            continue
+        day = datetime.fromtimestamp(unix, tz=timezone.utc).strftime("%Y-%m-%d")
+        out[day] = px
+    return out
+
+
+def parse_stooq_csv(text):
+    """Stooq daily CSV: Date,Open,High,Low,Close,... Close is column 5."""
+    out = {}
+    lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for line in lines[1:]:
         parts = line.split(",")
-        if len(parts) < 2:
+        if len(parts) < 5:
             continue
         d = parts[0].strip()
-        raw = parts[1].strip()
+        raw = parts[4].strip()
         if len(d) != 10 or d[4] != "-" or d[7] != "-":
-            continue
-        if not raw or raw == ".":
             continue
         try:
             px = float(raw)
@@ -1357,34 +1413,34 @@ def _set_spy_error(msg):
             _state["error"] = ""
 
 
-def _curl_fred_sp500():
-    """Same path as `curl -sL --max-time 25` of the FRED CSV. Trailer is HTTP code."""
-    ua = cached_user_agent() or FRED_UA
+def _curl_url(url, accept="application/json,*/*;q=0.8"):
+    """curl -sL --max-time 25. Trailer is HTTP code. Do not hide status."""
+    ua = cached_user_agent() or SPY_UA
     curl = shutil.which("curl") or "curl"
     args = [
         curl,
         "-sL",
         "--max-time",
-        str(FRED_TIMEOUT_SEC),
+        str(SPY_TIMEOUT_SEC),
         "-A",
         ua,
         "-H",
-        "Accept: text/csv,*/*;q=0.8",
+        "Accept: %s" % accept,
         "-w",
         "\n%{http_code}",
-        FRED_SP500_URL,
+        url,
     ]
     try:
-        proc = subprocess.run(args, capture_output=True, timeout=FRED_TIMEOUT_SEC + 3)
+        proc = subprocess.run(args, capture_output=True, timeout=SPY_TIMEOUT_SEC + 3)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError("HTTP - curl timed out") from e
     except FileNotFoundError:
         hdrs = {
-            "Accept": "text/csv,*/*;q=0.8",
+            "Accept": accept,
             "User-Agent": ua,
         }
-        req = Request(FRED_SP500_URL, headers=hdrs)
-        with urlopen(req, timeout=FRED_TIMEOUT_SEC) as resp:
+        req = Request(url, headers=hdrs)
+        with urlopen(req, timeout=SPY_TIMEOUT_SEC) as resp:
             raw = resp.read()
             status = getattr(resp, "status", None) or 200
             body = _http_body_text(raw, getattr(resp, "headers", None))
@@ -1411,19 +1467,34 @@ def _curl_fred_sp500():
 
 
 def refresh_spy_prices():
-    """Download FRED SP500. Keep stored prices if the fetch is empty or fails."""
+    """Download Yahoo SPY (then Stooq). Keep stored prices if every fetch is empty or fails."""
     store.ensure()
-    try:
-        body, status_line = _curl_fred_sp500()
-        mapping = parse_fred_sp500_csv(body)
-        if not mapping:
-            _set_spy_error("S&P 500 empty table (%s)" % status_line)
-            return store.spy_by_date()
-        _set_spy_error("")
-        return store.save_spy_by_date(mapping)
-    except Exception as e:
-        _set_spy_error("S&P 500 %s" % _public_sync_error(e))
-        return store.spy_by_date()
+    last_error = ""
+    chain = [
+        (YAHOO_SPY_URLS[0], "yahoo", "application/json,*/*;q=0.8"),
+        (YAHOO_SPY_URLS[1], "yahoo", "application/json,*/*;q=0.8"),
+        (YAHOO_SPY_URLS[2], "yahoo", "application/json,*/*;q=0.8"),
+        (STOOQ_SPY_URL, "stooq", "text/csv,*/*;q=0.8"),
+    ]
+    for url, kind, accept in chain:
+        try:
+            body, status_line = _curl_url(url, accept)
+            if kind == "yahoo":
+                mapping = parse_yahoo_chart(body)
+            else:
+                mapping = parse_stooq_csv(body)
+            if not mapping:
+                last_error = "S&P 500 empty table (%s)" % status_line
+                continue
+            _set_spy_error("")
+            return store.save_spy_by_date(mapping)
+        except Exception as e:
+            last_error = "S&P 500 %s" % _public_sync_error(e)
+            continue
+    if last_error:
+        _set_spy_error(last_error)
+    return store.spy_by_date()
+
 
 
 def scrape_client_id():
@@ -3275,6 +3346,7 @@ def bind_server():
 def main():
     _ensure_home()
     store.ensure()
+    threading.Thread(target=refresh_spy_prices, name="bagholder-spy-boot", daemon=True).start()
     boot_session()
     httpd, port = bind_server()
     t = threading.Thread(target=auto_sync_loop, name="bagholder-auto-sync", daemon=True)
