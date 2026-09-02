@@ -316,6 +316,28 @@ struct MetricCard: View {
 
 struct EquityCurveCard: View {
     var points: [WSNavPoint]? = nil
+    @State private var pressActive = false
+    @State private var finger = CGPoint.zero
+    @State private var chartSize: CGSize = .zero
+
+    private var selectedIndex: Int? {
+        guard pressActive, let points, !points.isEmpty, chartSize.width > 0 else { return nil }
+        let n = CGFloat(max(points.count - 1, 1))
+        let i = Int((finger.x / chartSize.width * n).rounded())
+        return min(max(i, 0), points.count - 1)
+    }
+
+    private var selectedX: CGFloat {
+        guard let points, let i = selectedIndex else { return 0 }
+        let n = CGFloat(max(points.count - 1, 1))
+        return CGFloat(i) / n * chartSize.width
+    }
+
+    private var tipText: String? {
+        guard let points, let i = selectedIndex else { return nil }
+        let p = points[i]
+        return WSPull.formatChartDate(p.date) + "  " + WSPull.formatCad(p.equity, digits: 2)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -324,8 +346,22 @@ struct EquityCurveCard: View {
                 .foregroundStyle(HomeColor.muted)
                 .padding(.bottom, 4)
             if let points, !points.isEmpty {
-                LiveEquityCurveDrawing(points: points)
+                LiveEquityCurveDrawing(points: points, hairlineX: selectedIndex == nil ? nil : selectedX)
                     .frame(height: HomeLayout.chartHeight)
+                    .contentShape(Rectangle())
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
+                        }
+                    )
+                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
+                    .chartLongPress(active: $pressActive, location: $finger)
+                    .overlay(alignment: .topLeading) {
+                        if let tipText {
+                            ChartTipCapsule(text: tipText)
+                                .offset(x: tipX(selectedX), y: -22)
+                        }
+                    }
                     .accessibilityLabel("Equity curve")
             } else {
                 Color.clear
@@ -340,10 +376,59 @@ struct EquityCurveCard: View {
                 .fill(HomeColor.tile)
         )
     }
+
+    private func tipX(_ x: CGFloat) -> CGFloat {
+        min(max(x - 70, 0), max(chartSize.width - 140, 0))
+    }
 }
 
 struct MonthlyPnLCard: View {
     var bars: [WSMonthBar]? = nil
+    @State private var pressActive = false
+    @State private var finger = CGPoint.zero
+    @State private var chartSize: CGSize = .zero
+
+    private var shown: [WSMonthBar] {
+        Array((bars ?? []).suffix(18))
+    }
+
+    private var selectedIndex: Int? {
+        guard pressActive, !shown.isEmpty, chartSize.width > 0 else { return nil }
+        let sx = chartSize.width / 330
+        let n = CGFloat(max(shown.count, 1))
+        let pitch: CGFloat = shown.count <= 7 ? 40 : (300 / n)
+        let barW: CGFloat = min(22, max(8, pitch * 0.55))
+        let startX: CGFloat = shown.count <= 7 ? 22 : 15
+        var best = 0
+        var bestDist = CGFloat.infinity
+        for i in shown.indices {
+            let x = (startX + CGFloat(i) * pitch) * sx
+            let cx = x + (barW * sx) / 2
+            let d = abs(finger.x - cx)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        return best
+    }
+
+    private var selectedCenterX: CGFloat {
+        guard let i = selectedIndex else { return 0 }
+        let sx = chartSize.width / 330
+        let n = CGFloat(max(shown.count, 1))
+        let pitch: CGFloat = shown.count <= 7 ? 40 : (300 / n)
+        let barW: CGFloat = min(22, max(8, pitch * 0.55))
+        let startX: CGFloat = shown.count <= 7 ? 22 : 15
+        let x = (startX + CGFloat(i) * pitch) * sx
+        return x + (barW * sx) / 2
+    }
+
+    private var tipText: String? {
+        guard let i = selectedIndex else { return nil }
+        let r = shown[i]
+        return WSPull.monthTick(r.month) + "  " + WSPull.formatAxisCad(r.pnl, digits: 2)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -352,8 +437,22 @@ struct MonthlyPnLCard: View {
                 .foregroundStyle(HomeColor.muted)
                 .padding(.bottom, 4)
             if let bars, !bars.isEmpty {
-                LiveMonthlyPnLDrawing(bars: bars)
+                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex)
                     .frame(height: HomeLayout.chartHeight)
+                    .contentShape(Rectangle())
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
+                        }
+                    )
+                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
+                    .chartLongPress(active: $pressActive, location: $finger)
+                    .overlay(alignment: .topLeading) {
+                        if let tipText {
+                            ChartTipCapsule(text: tipText)
+                                .offset(x: tipX(selectedCenterX), y: -22)
+                        }
+                    }
                     .accessibilityLabel("Monthly P&L")
             } else {
                 Color.clear
@@ -367,6 +466,10 @@ struct MonthlyPnLCard: View {
             RoundedRectangle(cornerRadius: HomeLayout.corner, style: .continuous)
                 .fill(HomeColor.tile)
         )
+    }
+
+    private func tipX(_ x: CGFloat) -> CGFloat {
+        min(max(x - 70, 0), max(chartSize.width - 140, 0))
     }
 }
 
@@ -1123,8 +1226,76 @@ final class Journal: ObservableObject {
     }
 }
 
+private struct ChartSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
+private struct ChartTipCapsule: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.14), radius: 6, y: 1)
+            )
+            .fixedSize()
+    }
+}
+
+private extension View {
+    func chartLongPress(active: Binding<Bool>, location: Binding<CGPoint>) -> some View {
+        modifier(ChartLongPressModifier(active: active, location: location))
+    }
+}
+
+private struct ChartLongPressModifier: ViewModifier {
+    @Binding var active: Bool
+    @Binding var location: CGPoint
+
+    func body(content: Content) -> some View {
+        content
+            .gesture(
+                LongPressGesture(minimumDuration: 0.3)
+                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                    .onChanged { value in
+                        switch value {
+                        case .second(true, let drag):
+                            active = true
+                            if let drag {
+                                location = drag.location
+                            }
+                        default:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        active = false
+                    }
+            )
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        location = value.location
+                    }
+                    .onEnded { _ in
+                        active = false
+                    },
+                including: active ? .all : .none
+            )
+    }
+}
+
 private struct LiveEquityCurveDrawing: View {
     let points: [WSNavPoint]
+    var hairlineX: CGFloat? = nil
 
     var body: some View {
         Canvas { context, size in
@@ -1156,12 +1327,19 @@ private struct LiveEquityCurveDrawing: View {
                 with: .color(HomeColor.profit),
                 style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
             )
+            if let hx = hairlineX {
+                var hair = Path()
+                hair.move(to: CGPoint(x: hx, y: 0))
+                hair.addLine(to: CGPoint(x: hx, y: size.height))
+                context.stroke(hair, with: .color(Color.primary.opacity(0.28)), lineWidth: 1)
+            }
         }
     }
 }
 
 private struct LiveMonthlyPnLDrawing: View {
     let bars: [WSMonthBar]
+    var selectedIndex: Int? = nil
 
     var body: some View {
         Canvas { context, size in
@@ -1182,6 +1360,10 @@ private struct LiveMonthlyPnLDrawing: View {
                 let h = CGFloat(abs(bar.pnl) * scale)
                 let x = (startX + CGFloat(i) * pitch) * sx
                 let y = bar.pnl >= 0 ? (36 - h) * sy : 36 * sy
+                if selectedIndex == i {
+                    let hit = Path(CGRect(x: x - 2, y: 0, width: barW * sx + 4, height: size.height))
+                    context.fill(hit, with: .color(Color.black.opacity(0.06)))
+                }
                 let rect = CGRect(x: x, y: y, width: barW * sx, height: max(h, 1) * sy)
                 let path = Path(roundedRect: rect, cornerRadius: 3)
                 context.fill(path, with: .color(bar.pnl >= 0 ? HomeColor.profit : HomeColor.loss))
