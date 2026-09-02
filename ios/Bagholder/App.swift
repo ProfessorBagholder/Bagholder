@@ -90,16 +90,63 @@ private enum HomeUIColor {
     static let elevated = token(light: 242 / 255, 242 / 255, 247 / 255, 1, dark: 44 / 255, 44 / 255, 46 / 255, 1)
 }
 
+/// SwiftUI tokens: same RGB as HomeUIColor, resolved once per appearance so
+/// Canvas and Home views do not hit dynamic UIColor on every frame.
+@MainActor
 private enum HomeColor {
-    static let page = Color(uiColor: HomeUIColor.page)
-    static let tile = Color(uiColor: HomeUIColor.tile)
-    static let ink = Color(uiColor: HomeUIColor.ink)
-    static let muted = Color(uiColor: HomeUIColor.muted)
-    static let profit = Color(uiColor: HomeUIColor.profit)
-    static let loss = Color(uiColor: HomeUIColor.loss)
-    static let selected = Color(uiColor: HomeUIColor.selected)
-    static let hairline = Color(uiColor: HomeUIColor.hairline)
-    static let elevated = Color(uiColor: HomeUIColor.elevated)
+    static var page: Color = light.page
+    static var tile: Color = light.tile
+    static var ink: Color = light.ink
+    static var muted: Color = light.muted
+    static var profit: Color = light.profit
+    static var loss: Color = light.loss
+    static var selected: Color = light.selected
+    static var hairline: Color = light.hairline
+    static var elevated: Color = light.elevated
+
+    private struct Pack {
+        let page, tile, ink, muted, profit, loss, selected, hairline, elevated: Color
+    }
+
+    private static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> Color {
+        Color(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    private static let light = Pack(
+        page: rgb(242 / 255, 242 / 255, 247 / 255),
+        tile: rgb(1, 1, 1),
+        ink: rgb(0, 0, 0),
+        muted: rgb(142 / 255, 142 / 255, 147 / 255),
+        profit: rgb(52 / 255, 199 / 255, 89 / 255),
+        loss: rgb(255 / 255, 59 / 255, 48 / 255),
+        selected: rgb(0, 122 / 255, 1),
+        hairline: rgb(60 / 255, 60 / 255, 67 / 255, 0.18),
+        elevated: rgb(242 / 255, 242 / 255, 247 / 255)
+    )
+    private static let dark = Pack(
+        page: rgb(0, 0, 0),
+        tile: rgb(28 / 255, 28 / 255, 30 / 255),
+        ink: rgb(1, 1, 1),
+        muted: rgb(142 / 255, 142 / 255, 147 / 255),
+        profit: rgb(52 / 255, 199 / 255, 89 / 255),
+        loss: rgb(255 / 255, 59 / 255, 48 / 255),
+        selected: rgb(10 / 255, 132 / 255, 1),
+        hairline: rgb(84 / 255, 84 / 255, 88 / 255, 0.65),
+        elevated: rgb(44 / 255, 44 / 255, 46 / 255)
+    )
+
+    static func adopt(scheme: ColorScheme) {
+        let pack = scheme == .dark ? dark : light
+        page = pack.page
+        tile = pack.tile
+        ink = pack.ink
+        muted = pack.muted
+        profit = pack.profit
+        loss = pack.loss
+        selected = pack.selected
+        hairline = pack.hairline
+        elevated = pack.elevated
+    }
 
     static func signed(_ n: Double) -> Color {
         if n < -0.0001 { return loss }
@@ -230,6 +277,7 @@ struct RootView: View {
     @StateObject private var appearance: AppearanceStore
     @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
 
     init() {
         _session = StateObject(wrappedValue: SessionStore())
@@ -240,6 +288,8 @@ struct RootView: View {
     }
 
     var body: some View {
+        let paint: ColorScheme = appearance.choice.preferredColorScheme ?? colorScheme
+        let _ = HomeColor.adopt(scheme: paint)
         ZStack(alignment: .bottom) {
             ZStack {
                 NavigationStack {
@@ -549,15 +599,10 @@ struct EquityCurveCard: View {
             .frame(height: 44, alignment: .topLeading)
             if let points, !points.isEmpty {
                 LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex)
+                    .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
-                        }
-                    )
-                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
-                    .chartLongPress(active: $pressActive, location: $finger)
+                    .chartLongPress(active: $pressActive, location: $finger, size: $chartSize)
                     .accessibilityLabel("Equity curve")
             } else {
                 Color.clear
@@ -627,15 +672,10 @@ struct MonthlyPnLCard: View {
             .frame(height: 44, alignment: .topLeading)
             if let bars, !bars.isEmpty {
                 LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex)
+                    .equatable()
                     .frame(height: HomeLayout.chartHeight)
                     .contentShape(Rectangle())
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
-                        }
-                    )
-                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
-                    .chartLongPress(active: $pressActive, location: $finger)
+                    .chartLongPress(active: $pressActive, location: $finger, size: $chartSize)
                     .accessibilityLabel("Monthly P&L")
             } else {
                 Color.clear
@@ -1423,84 +1463,140 @@ final class Journal: ObservableObject {
     }
 }
 
-private struct ChartSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        value = nextValue()
-    }
-}
-
 private extension View {
-    func chartLongPress(active: Binding<Bool>, location: Binding<CGPoint>) -> some View {
-        modifier(ChartLongPressModifier(active: active, location: location))
+    func chartLongPress(active: Binding<Bool>, location: Binding<CGPoint>, size: Binding<CGSize>) -> some View {
+        overlay {
+            ChartLongPressOverlay(active: active, location: location, size: size)
+        }
     }
 }
 
-private struct ChartLongPressModifier: ViewModifier {
+/// UILongPress reports location on `.began`. Sequenced SwiftUI LongPress+Drag
+/// often has a nil drag until the finger moves, so the hairline missed the first hold.
+/// touchesBegan captures x immediately; when the hold recognizes, hairline is already at that x.
+private struct ChartLongPressOverlay: UIViewRepresentable {
     @Binding var active: Bool
     @Binding var location: CGPoint
+    @Binding var size: CGSize
 
-    func body(content: Content) -> some View {
-        content
-            .gesture(
-                LongPressGesture(minimumDuration: 0.28)
-                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-                    .onChanged { value in
-                        switch value {
-                        case .second(true, let drag):
-                            active = true
-                            if let drag {
-                                location = drag.location
-                            }
-                        default:
-                            break
-                        }
-                    }
-                    .onEnded { _ in
-                        active = false
-                    }
-            )
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onChanged { value in
-                        location = value.location
-                    }
-                    .onEnded { _ in
-                        active = false
-                    },
-                including: active ? .all : .none
-            )
+    func makeCoordinator() -> Coordinator {
+        Coordinator(active: $active, location: $location, size: $size)
+    }
+
+    func makeUIView(context: Context) -> ChartLongPressUIView {
+        let view = ChartLongPressUIView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ uiView: ChartLongPressUIView, context: Context) {
+        context.coordinator.active = $active
+        context.coordinator.location = $location
+        context.coordinator.size = $size
+        uiView.coordinator = context.coordinator
+    }
+
+    final class Coordinator {
+        var active: Binding<Bool>
+        var location: Binding<CGPoint>
+        var size: Binding<CGSize>
+        var lastSize: CGSize = .zero
+        init(active: Binding<Bool>, location: Binding<CGPoint>, size: Binding<CGSize>) {
+            self.active = active
+            self.location = location
+            self.size = size
+        }
+
+        func publishSize(_ s: CGSize) {
+            guard s.width > 0, s.height > 0 else { return }
+            guard s != lastSize else { return }
+            lastSize = s
+            size.wrappedValue = s
+        }
     }
 }
 
-private struct LiveEquityCurveDrawing: View {
+private final class ChartLongPressUIView: UIView {
+    var coordinator: ChartLongPressOverlay.Coordinator?
+    private var origin: CGPoint?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isMultipleTouchEnabled = false
+        isUserInteractionEnabled = true
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress))
+        press.minimumPressDuration = 0.28
+        press.allowableMovement = 24
+        press.cancelsTouchesInView = false
+        press.delaysTouchesBegan = false
+        addGestureRecognizer(press)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        origin = touches.first.map { $0.location(in: self) }
+        coordinator?.publishSize(bounds.size)
+        super.touchesBegan(touches, with: event)
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            let pt = origin ?? gesture.location(in: self)
+            coordinator?.publishSize(bounds.size)
+            coordinator?.location.wrappedValue = pt
+            coordinator?.active.wrappedValue = true
+        case .changed:
+            coordinator?.location.wrappedValue = gesture.location(in: self)
+            coordinator?.active.wrappedValue = true
+        case .ended, .cancelled, .failed:
+            origin = nil
+            coordinator?.active.wrappedValue = false
+        default:
+            break
+        }
+    }
+}
+
+private struct LiveEquityCurveDrawing: View, Equatable {
     let points: [WSNavPoint]
     var selectedIndex: Int? = nil
 
-        private static let dim: Double = 0.30
+    private static let dim: Double = 0.30
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.selectedIndex == rhs.selectedIndex
+            && lhs.points.count == rhs.points.count
+            && lhs.points.last?.date == rhs.points.last?.date
+            && lhs.points.last?.equity == rhs.points.last?.equity
+    }
 
     var body: some View {
+        let vals = points.map(\.equity)
+        let lo = vals.min() ?? 0
+        let hi = vals.max() ?? 1
+        let span: Double = (hi - lo) == 0 ? 1.0 : (hi - lo)
+        let fillOpacity = selectedIndex != nil ? 0.12 * Self.dim : 0.12
+        let lineColor = selectedIndex != nil ? HomeColor.profit.opacity(Self.dim) : HomeColor.profit
+        let profit = HomeColor.profit
+        let hairColor = HomeColor.hairline
         Canvas { context, size in
-            guard !points.isEmpty else { return }
-            let vals = points.map(\.equity)
-            let lo = vals.min() ?? 0
-            let hi = vals.max() ?? 1
-            let span: Double = (hi - lo) == 0 ? 1.0 : (hi - lo)
+            guard !vals.isEmpty else { return }
             let n = CGFloat(max(points.count - 1, 1))
             func pt(_ i: Int) -> CGPoint {
                 let x = CGFloat(i) / n * size.width
                 let y = size.height - CGFloat((vals[i] - lo) / span) * (size.height - 4) - 2
                 return CGPoint(x: x, y: y)
             }
-            let held = selectedIndex != nil
-            let fillOpacity = held ? 0.12 * Self.dim : 0.12
-            let lineColor = held ? HomeColor.profit.opacity(Self.dim) : HomeColor.profit
             var fill = Path()
             fill.move(to: CGPoint(x: 0, y: size.height))
             for i in points.indices { fill.addLine(to: pt(i)) }
             fill.addLine(to: CGPoint(x: size.width, y: size.height))
             fill.closeSubpath()
-            context.fill(fill, with: .color(HomeColor.profit.opacity(fillOpacity)))
+            context.fill(fill, with: .color(profit.opacity(fillOpacity)))
             var line = Path()
             line.move(to: pt(0))
             if points.count == 1 {
@@ -1527,31 +1623,40 @@ private struct LiveEquityCurveDrawing: View {
                 }
                 context.stroke(
                     fullStroke,
-                    with: .color(HomeColor.profit),
+                    with: .color(profit),
                     style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
                 )
-                var hair = Path()
-                hair.move(to: CGPoint(x: hit.x, y: 0))
-                hair.addLine(to: CGPoint(x: hit.x, y: size.height))
+                var hairlinePath = Path()
+                hairlinePath.move(to: CGPoint(x: hit.x, y: 0))
+                hairlinePath.addLine(to: CGPoint(x: hit.x, y: size.height))
                 context.stroke(
-                    hair,
-                    with: .color(HomeColor.hairline),
+                    hairlinePath,
+                    with: .color(hairColor),
                     style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
                 )
                 let r: CGFloat = 4
                 let dot = Path(ellipseIn: CGRect(x: hit.x - r, y: hit.y - r, width: r * 2, height: r * 2))
-                context.fill(dot, with: .color(HomeColor.profit))
+                context.fill(dot, with: .color(profit))
             }
         }
     }
 }
 
-private struct LiveMonthlyPnLDrawing: View {
+private struct LiveMonthlyPnLDrawing: View, Equatable {
     let bars: [WSMonthBar]
     var selectedIndex: Int? = nil
 
-    
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.selectedIndex == rhs.selectedIndex
+            && lhs.bars.count == rhs.bars.count
+            && lhs.bars.last?.month == rhs.bars.last?.month
+            && lhs.bars.last?.pnl == rhs.bars.last?.pnl
+    }
+
     var body: some View {
+        let profit = HomeColor.profit
+        let loss = HomeColor.loss
+        let hairColor = HomeColor.hairline
         Canvas { context, size in
             let shown = Array(bars.suffix(18))
             let sx = size.width / 330
@@ -1559,7 +1664,7 @@ private struct LiveMonthlyPnLDrawing: View {
             var zero = Path()
             zero.move(to: CGPoint(x: 8 * sx, y: 36 * sy))
             zero.addLine(to: CGPoint(x: 322 * sx, y: 36 * sy))
-            context.stroke(zero, with: .color(HomeColor.hairline), lineWidth: 1)
+            context.stroke(zero, with: .color(hairColor), lineWidth: 1)
             let peak = shown.map { abs($0.pnl) }.max() ?? 1
             let scale = peak > 0 ? 28.0 / peak : 0.0
             let n = CGFloat(max(shown.count, 1))
@@ -1573,18 +1678,18 @@ private struct LiveMonthlyPnLDrawing: View {
                 let rect = CGRect(x: x, y: y, width: barW * sx, height: max(h, 1) * sy)
                 let path = Path(roundedRect: rect, cornerRadius: 3)
                 let faded = selectedIndex != nil && selectedIndex != i
-                let fill = (bar.pnl >= 0 ? HomeColor.profit : HomeColor.loss).opacity(faded ? 0.32 : 1)
+                let fill = (bar.pnl >= 0 ? profit : loss).opacity(faded ? 0.32 : 1)
                 context.fill(path, with: .color(fill))
             }
             if let i = selectedIndex, shown.indices.contains(i) {
                 let x = (startX + CGFloat(i) * pitch) * sx
                 let cx = x + (barW * sx) / 2
-                var hair = Path()
-                hair.move(to: CGPoint(x: cx, y: 0))
-                hair.addLine(to: CGPoint(x: cx, y: size.height))
+                var hairlinePath = Path()
+                hairlinePath.move(to: CGPoint(x: cx, y: 0))
+                hairlinePath.addLine(to: CGPoint(x: cx, y: size.height))
                 context.stroke(
-                    hair,
-                    with: .color(HomeColor.hairline),
+                    hairlinePath,
+                    with: .color(hairColor),
                     style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
                 )
             }
