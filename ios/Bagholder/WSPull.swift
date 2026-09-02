@@ -2491,6 +2491,53 @@ query FetchAccountHistoricalFinancials(
         return "$" + absS
     }
 
+    static func formatAxisCad(_ n: Double, digits: Int = 2) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_CA")
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = digits
+        f.maximumFractionDigits = digits
+        let absS = f.string(from: NSNumber(value: abs(n))) ?? String(format: "%.\(digits)f", abs(n))
+        if n < 0 { return minus + "$" + absS }
+        if n > 0 { return "+$" + absS }
+        return "$" + absS
+    }
+
+    static func monthTick(_ ym: String) -> String {
+        let parts = ym.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        let y = parts.first ?? ""
+        let m = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        let mon: String
+        if m >= 1 && m <= 12 {
+            mon = names[m - 1]
+        } else if parts.count > 1 {
+            mon = parts[1]
+        } else {
+            mon = ""
+        }
+        let yy = y.count >= 2 ? String(y.suffix(2)) : y
+        return mon + " '" + yy
+    }
+
+    static func formatChartDate(_ iso: String) -> String {
+        let parts = iso.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        if parts.count < 3 {
+            return parts.count == 2 ? monthTick(iso) : iso
+        }
+        let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        let m = Int(parts[1]) ?? 0
+        let mon = (m >= 1 && m <= 12) ? names[m - 1] : parts[1]
+        let dayS: String
+        if let day = Int(parts[2]) {
+            dayS = String(day)
+        } else {
+            dayS = parts[2]
+        }
+        let yy = parts[0].count >= 2 ? String(parts[0].suffix(2)) : parts[0]
+        return dayS + " " + mon + " '" + yy
+    }
+
     static func activityWhen(_ a: WSActivity) -> String {
         let raw = (a.occurredAt.isEmpty ? a.transactionDate : a.occurredAt).trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty { return "" }

@@ -316,16 +316,46 @@ struct MetricCard: View {
 
 struct EquityCurveCard: View {
     var points: [WSNavPoint]? = nil
+    @State private var pressActive = false
+    @State private var finger = CGPoint.zero
+    @State private var chartSize: CGSize = .zero
+
+    private var selectedIndex: Int? {
+        guard pressActive, let points, !points.isEmpty, chartSize.width > 0 else { return nil }
+        let n = CGFloat(max(points.count - 1, 1))
+        let i = Int((finger.x / chartSize.width * n).rounded())
+        return min(max(i, 0), points.count - 1)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Equity Curve")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(HomeColor.muted)
-                .padding(.bottom, 4)
+                .padding(.bottom, selectedIndex == nil ? 4 : 2)
+            if let points, let i = selectedIndex {
+                Text(WSPull.formatCad(points[i].equity, digits: 2))
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(WSPull.formatChartDate(points[i].date))
+                    .font(.system(size: 13))
+                    .foregroundStyle(HomeColor.muted)
+                    .padding(.top, 1)
+                    .padding(.bottom, 6)
+            }
             if let points, !points.isEmpty {
-                LiveEquityCurveDrawing(points: points)
+                LiveEquityCurveDrawing(points: points, selectedIndex: selectedIndex)
                     .frame(height: HomeLayout.chartHeight)
+                    .contentShape(Rectangle())
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
+                        }
+                    )
+                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
+                    .chartLongPress(active: $pressActive, location: $finger)
                     .accessibilityLabel("Equity curve")
             } else {
                 Color.clear
@@ -344,16 +374,65 @@ struct EquityCurveCard: View {
 
 struct MonthlyPnLCard: View {
     var bars: [WSMonthBar]? = nil
+    @State private var pressActive = false
+    @State private var finger = CGPoint.zero
+    @State private var chartSize: CGSize = .zero
+
+    private var shown: [WSMonthBar] {
+        Array((bars ?? []).suffix(18))
+    }
+
+    private var selectedIndex: Int? {
+        guard pressActive, !shown.isEmpty, chartSize.width > 0 else { return nil }
+        let sx = chartSize.width / 330
+        let n = CGFloat(max(shown.count, 1))
+        let pitch: CGFloat = shown.count <= 7 ? 40 : (300 / n)
+        let barW: CGFloat = min(22, max(8, pitch * 0.55))
+        let startX: CGFloat = shown.count <= 7 ? 22 : 15
+        var best = 0
+        var bestDist = CGFloat.infinity
+        for i in shown.indices {
+            let x = (startX + CGFloat(i) * pitch) * sx
+            let cx = x + (barW * sx) / 2
+            let d = abs(finger.x - cx)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        return best
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Monthly P&L")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(HomeColor.muted)
-                .padding(.bottom, 4)
+                .padding(.bottom, selectedIndex == nil ? 4 : 2)
+            if let i = selectedIndex {
+                let bar = shown[i]
+                Text(WSPull.formatAxisCad(bar.pnl, digits: 2))
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(HomeColor.signed(bar.pnl))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(WSPull.monthTick(bar.month))
+                    .font(.system(size: 13))
+                    .foregroundStyle(HomeColor.muted)
+                    .padding(.top, 1)
+                    .padding(.bottom, 6)
+            }
             if let bars, !bars.isEmpty {
-                LiveMonthlyPnLDrawing(bars: bars)
+                LiveMonthlyPnLDrawing(bars: bars, selectedIndex: selectedIndex)
                     .frame(height: HomeLayout.chartHeight)
+                    .contentShape(Rectangle())
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChartSizeKey.self, value: geo.size)
+                        }
+                    )
+                    .onPreferenceChange(ChartSizeKey.self) { chartSize = $0 }
+                    .chartLongPress(active: $pressActive, location: $finger)
                     .accessibilityLabel("Monthly P&L")
             } else {
                 Color.clear
@@ -1123,8 +1202,62 @@ final class Journal: ObservableObject {
     }
 }
 
+private struct ChartSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
+private extension View {
+    func chartLongPress(active: Binding<Bool>, location: Binding<CGPoint>) -> some View {
+        modifier(ChartLongPressModifier(active: active, location: location))
+    }
+}
+
+private struct ChartLongPressModifier: ViewModifier {
+    @Binding var active: Bool
+    @Binding var location: CGPoint
+
+    func body(content: Content) -> some View {
+        content
+            .gesture(
+                LongPressGesture(minimumDuration: 0.28)
+                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                    .onChanged { value in
+                        switch value {
+                        case .second(true, let drag):
+                            active = true
+                            if let drag {
+                                location = drag.location
+                            }
+                        default:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        active = false
+                    }
+            )
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        location = value.location
+                    }
+                    .onEnded { _ in
+                        active = false
+                    },
+                including: active ? .all : .none
+            )
+    }
+}
+
 private struct LiveEquityCurveDrawing: View {
     let points: [WSNavPoint]
+    var selectedIndex: Int? = nil
+
+    private static let hairGray = Color(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
+    private static let dim: Double = 0.30
 
     var body: some View {
         Canvas { context, size in
@@ -1139,12 +1272,15 @@ private struct LiveEquityCurveDrawing: View {
                 let y = size.height - CGFloat((vals[i] - lo) / span) * (size.height - 4) - 2
                 return CGPoint(x: x, y: y)
             }
+            let held = selectedIndex != nil
+            let fillOpacity = held ? 0.12 * Self.dim : 0.12
+            let lineColor = held ? HomeColor.profit.opacity(Self.dim) : HomeColor.profit
             var fill = Path()
             fill.move(to: CGPoint(x: 0, y: size.height))
             for i in points.indices { fill.addLine(to: pt(i)) }
             fill.addLine(to: CGPoint(x: size.width, y: size.height))
             fill.closeSubpath()
-            context.fill(fill, with: .color(HomeColor.profit.opacity(0.12)))
+            context.fill(fill, with: .color(HomeColor.profit.opacity(fillOpacity)))
             var line = Path()
             line.move(to: pt(0))
             if points.count == 1 {
@@ -1153,15 +1289,48 @@ private struct LiveEquityCurveDrawing: View {
             for i in 1..<points.count { line.addLine(to: pt(i)) }
             context.stroke(
                 line,
-                with: .color(HomeColor.profit),
+                with: .color(lineColor),
                 style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
             )
+            if let i = selectedIndex, points.indices.contains(i) {
+                let hit = pt(i)
+                var fullStroke = Path()
+                let loI = max(0, i - 1)
+                let hiI = min(points.count - 1, i + 1)
+                fullStroke.move(to: pt(loI))
+                if loI != hiI {
+                    for j in (loI + 1)...hiI { fullStroke.addLine(to: pt(j)) }
+                } else {
+                    fullStroke.addLine(to: CGPoint(x: min(hit.x + 6, size.width), y: hit.y))
+                    fullStroke.move(to: hit)
+                    fullStroke.addLine(to: CGPoint(x: max(hit.x - 6, 0), y: hit.y))
+                }
+                context.stroke(
+                    fullStroke,
+                    with: .color(HomeColor.profit),
+                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+                )
+                var hair = Path()
+                hair.move(to: CGPoint(x: hit.x, y: 0))
+                hair.addLine(to: CGPoint(x: hit.x, y: size.height))
+                context.stroke(
+                    hair,
+                    with: .color(Self.hairGray),
+                    style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
+                )
+                let r: CGFloat = 4
+                let dot = Path(ellipseIn: CGRect(x: hit.x - r, y: hit.y - r, width: r * 2, height: r * 2))
+                context.fill(dot, with: .color(HomeColor.profit))
+            }
         }
     }
 }
 
 private struct LiveMonthlyPnLDrawing: View {
     let bars: [WSMonthBar]
+    var selectedIndex: Int? = nil
+
+    private static let hairGray = Color(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
 
     var body: some View {
         Canvas { context, size in
@@ -1184,7 +1353,21 @@ private struct LiveMonthlyPnLDrawing: View {
                 let y = bar.pnl >= 0 ? (36 - h) * sy : 36 * sy
                 let rect = CGRect(x: x, y: y, width: barW * sx, height: max(h, 1) * sy)
                 let path = Path(roundedRect: rect, cornerRadius: 3)
-                context.fill(path, with: .color(bar.pnl >= 0 ? HomeColor.profit : HomeColor.loss))
+                let faded = selectedIndex != nil && selectedIndex != i
+                let fill = (bar.pnl >= 0 ? HomeColor.profit : HomeColor.loss).opacity(faded ? 0.32 : 1)
+                context.fill(path, with: .color(fill))
+            }
+            if let i = selectedIndex, shown.indices.contains(i) {
+                let x = (startX + CGFloat(i) * pitch) * sx
+                let cx = x + (barW * sx) / 2
+                var hair = Path()
+                hair.move(to: CGPoint(x: cx, y: 0))
+                hair.addLine(to: CGPoint(x: cx, y: size.height))
+                context.stroke(
+                    hair,
+                    with: .color(Self.hairGray),
+                    style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
+                )
             }
         }
     }
