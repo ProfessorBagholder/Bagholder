@@ -238,6 +238,54 @@ struct WSYearRow: Codable {
     var vs: String
 }
 
+struct JournalFilters: Codable, Equatable {
+    var from: String = ""
+    var to: String = ""
+    var account: String = ""
+    var exchange: String = ""
+    var symbol: String = ""
+    var priceOp: String = ""
+    var priceMin: String = ""
+    var priceMax: String = ""
+
+    var isActive: Bool {
+        !from.isEmpty || !to.isEmpty || !account.isEmpty || !exchange.isEmpty || !symbol.isEmpty || priceFilterOn
+    }
+
+    var listingFiltersOn: Bool {
+        !symbol.isEmpty || !exchange.isEmpty || priceFilterOn
+    }
+
+    var priceFilterOn: Bool {
+        if priceOp.isEmpty { return false }
+        if priceOp == "between" { return Self.parsePrice(priceMin) != nil && Self.parsePrice(priceMax) != nil }
+        return Self.parsePrice(priceMin) != nil
+    }
+
+    static func parsePrice(_ s: String) -> Double? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return nil }
+        guard let n = Double(t), n.isFinite else { return nil }
+        return n
+    }
+}
+
+struct WSOpenLot: Identifiable {
+    var id: String
+    var accountId: String
+    var accountType: String
+    var symbol: String
+    var name: String
+    var currency: String
+    var quantity: Double
+    var price: Double
+    var date: String
+    var commission: Double
+    var direction: String
+    var activityId: String
+    var securityId: String
+}
+
 struct WSPullResult: Codable {
     var closed: [WSClosedTrade]
     var metrics: WSMetrics
@@ -2099,6 +2147,7 @@ query IdentityHistoricalFinancialsQuery(
         var name: String
         var currency: String
         var activityId: String
+        var securityId: String
     }
 
     private static func tickerWasReplaced(_ activities: [WSActivity], accountId: String, symbol: String, currency: String, byDate: String) -> Bool {
@@ -2128,7 +2177,7 @@ query IdentityHistoricalFinancialsQuery(
         return true
     }
 
-    private static func matchFifo(_ activities: [WSActivity]) -> (closed: [WSClosedTrade], openCount: Int) {
+    private static func matchFifo(_ activities: [WSActivity]) -> (closed: [WSClosedTrade], open: [WSOpenLot]) {
         struct Fill { var activity: WSActivity; var side: String; var qty: Double }
         func fillRank(_ f: Fill) -> Int {
             let t = compactType(f.activity.activityType)
@@ -2249,21 +2298,38 @@ query IdentityHistoricalFinancialsQuery(
                         symbol: a.symbol,
                         name: a.name,
                         currency: a.currency,
-                        activityId: a.id
+                        activityId: a.id,
+                        securityId: a.securityId
                     ))
                 }
             }
             books[k] = book
         }
-        var openCount = 0
+        var open: [WSOpenLot] = []
         for book in books.values {
-            for lot in book where lot.qty > 1e-10 { openCount += 1 }
+            for lot in book where lot.qty > 1e-10 {
+                open.append(WSOpenLot(
+                    id: lot.activityId + "|" + lot.symbol + "|" + lot.date,
+                    accountId: lot.accountId,
+                    accountType: lot.accountType,
+                    symbol: lot.symbol,
+                    name: lot.name,
+                    currency: lot.currency,
+                    quantity: lot.qty,
+                    price: lot.price,
+                    date: lot.date,
+                    commission: lot.commission,
+                    direction: lot.direction,
+                    activityId: lot.activityId,
+                    securityId: lot.securityId
+                ))
+            }
         }
         closed.sort { a, b in
             if a.exitDate != b.exitDate { return a.exitDate < b.exitDate }
             return a.id.localizedCompare(b.id) == .orderedAscending
         }
-        return (closed, openCount)
+        return (closed, open)
     }
 
     // MARK: - Metrics / NAV years (ledger.html)
@@ -2462,19 +2528,50 @@ query IdentityHistoricalFinancialsQuery(
         return ""
     }
 
+    private static func listingBySecurityId(_ sid: String, listings: [WSSecurityListing]) -> WSSecurityListing? {
+        let key = sid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if key.isEmpty { return nil }
+        var byId: [String: WSSecurityListing] = [:]
+        for s in listings { byId[s.id] = s }
+        guard var sec = byId[key] else { return nil }
+        if !sec.underlyingId.isEmpty, let under = byId[sec.underlyingId] {
+            sec = under
+        }
+        return preferredListing(sec, listings: listings)
+    }
+
     private static func listingSecurity(
         _ t: WSClosedTrade,
         activities: [WSActivity],
         listings: [WSSecurityListing]
     ) -> WSSecurityListing? {
-        var byId: [String: WSSecurityListing] = [:]
-        for s in listings { byId[s.id] = s }
-        let sid = activitySecurityId(t, activities: activities)
-        guard var sec = byId[sid] else { return nil }
-        if !sec.underlyingId.isEmpty, let under = byId[sec.underlyingId] {
-            sec = under
+        listingBySecurityId(activitySecurityId(t, activities: activities), listings: listings)
+    }
+
+    static func listingExchange(
+        securityId: String,
+        activityId: String,
+        activities: [WSActivity],
+        listings: [WSSecurityListing]
+    ) -> String {
+        var sid = securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sid.isEmpty && !activityId.isEmpty {
+            for a in activities where a.id == activityId {
+                let got = a.securityId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !got.isEmpty { sid = got; break }
+            }
         }
-        return preferredListing(sec, listings: listings)
+        guard let sec = listingBySecurityId(sid, listings: listings) else { return "" }
+        return exchangeLabel(sec)
+    }
+
+    static func listingExchange(_ t: WSClosedTrade, activities: [WSActivity], listings: [WSSecurityListing]) -> String {
+        guard let sec = listingSecurity(t, activities: activities, listings: listings) else { return "" }
+        return exchangeLabel(sec)
+    }
+
+    static func listingExchange(_ a: WSActivity, listings: [WSSecurityListing]) -> String {
+        listingExchange(securityId: a.securityId, activityId: a.id, activities: [a], listings: listings)
     }
 
     static func listingLine(
@@ -3053,6 +3150,244 @@ query IdentityHistoricalFinancialsQuery(
             // live failed; keep cache (rateOn falls back to 1.35)
         }
         return map
+    }
+
+    // MARK: - Filters (ledger.html)
+
+    static func yearFromRange(from: String, to: String) -> String {
+        let a = from
+        let b = to
+        if a.count >= 10, b.count >= 10,
+           a.hasSuffix("-01-01"), b.hasSuffix("-12-31"),
+           a.prefix(4) == b.prefix(4) {
+            return String(a.prefix(4))
+        }
+        return ""
+    }
+
+    static func filterAccountNames(_ activities: [WSActivity]) -> [String] {
+        uniqueSorted(activities.map { $0.accountType.trimmingCharacters(in: .whitespacesAndNewlines) })
+    }
+
+    static func filterSymbolNames(_ activities: [WSActivity]) -> [String] {
+        uniqueSorted(activities.map { underlyingSymbol($0.symbol) }.filter { $0 != emDash })
+    }
+
+    static func filterExchangeNames(_ listings: [WSSecurityListing]) -> [String] {
+        var set = Set<String>()
+        var byId: [String: WSSecurityListing] = [:]
+        for s in listings { byId[s.id] = s }
+        for raw in listings {
+            var sec = raw
+            if !sec.underlyingId.isEmpty, let under = byId[sec.underlyingId] { sec = under }
+            sec = preferredListing(sec, listings: listings)
+            let e = exchangeLabel(sec)
+            if !e.isEmpty { set.insert(e) }
+        }
+        return Array(set).sorted()
+    }
+
+    static func filterClosedYears(_ activities: [WSActivity]) -> [String] {
+        yearsFromActivities(activities)
+    }
+
+    static func openLots(from activities: [WSActivity]) -> [WSOpenLot] {
+        matchFifo(activities).open
+    }
+
+    private static func uniqueSorted(_ arr: [String]) -> [String] {
+        Array(Set(arr.filter { !$0.isEmpty })).sorted()
+    }
+
+    private static func priceMatches(_ px: Double, op: String, a: String, b: String) -> Bool {
+        if !px.isFinite { return false }
+        let x = JournalFilters.parsePrice(a)
+        let y = JournalFilters.parsePrice(b)
+        if op == "between" {
+            guard let x, let y else { return true }
+            let lo = min(x, y)
+            let hi = max(x, y)
+            return px >= lo && px <= hi
+        }
+        guard let x else { return true }
+        if op == "under" { return px < x }
+        if op == "over" { return px > x }
+        if op == "equal" { return (px * 10000).rounded() == (x * 10000).rounded() }
+        return true
+    }
+
+    private static func rowPriceOk(_ prices: [Double], filters: JournalFilters) -> Bool {
+        if !filters.priceFilterOn { return true }
+        let list = prices.filter { $0.isFinite }
+        if list.isEmpty { return false }
+        for p in list {
+            if !priceMatches(p, op: filters.priceOp, a: filters.priceMin, b: filters.priceMax) { return false }
+        }
+        return true
+    }
+
+    static func filteredTrades(_ closedFx: [WSClosedTrade], filters: JournalFilters, activities: [WSActivity], listings: [WSSecurityListing]) -> [WSClosedTrade] {
+        closedFx.filter { t in
+            if !filters.from.isEmpty && t.exitDate < filters.from { return false }
+            if !filters.to.isEmpty && t.exitDate > filters.to { return false }
+            if !filters.account.isEmpty && t.accountId != filters.account && t.accountType != filters.account { return false }
+            if !filters.symbol.isEmpty && underlyingSymbol(t.symbol) != filters.symbol { return false }
+            if !filters.exchange.isEmpty {
+                if listingExchange(t, activities: activities, listings: listings) != filters.exchange { return false }
+            }
+            if !rowPriceOk([t.entryPrice, t.exitPrice], filters: filters) { return false }
+            return true
+        }
+    }
+
+    static func filteredActivities(_ activities: [WSActivity], filters: JournalFilters, listings: [WSSecurityListing]) -> [WSActivity] {
+        activities.filter { a in
+            let day = isoDateOnly(a.transactionDate)
+            if !filters.from.isEmpty && day < filters.from { return false }
+            if !filters.to.isEmpty && day > filters.to { return false }
+            if !filters.account.isEmpty && a.accountId != filters.account && a.accountType != filters.account { return false }
+            if !filters.symbol.isEmpty && !a.symbol.isEmpty && underlyingSymbol(a.symbol) != filters.symbol { return false }
+            if !filters.exchange.isEmpty {
+                if listingExchange(a, listings: listings) != filters.exchange { return false }
+            }
+            if !rowPriceOk([a.unitPrice], filters: filters) { return false }
+            return true
+        }
+    }
+
+    static func filteredOpenLots(_ lots: [WSOpenLot], filters: JournalFilters, activities: [WSActivity], listings: [WSSecurityListing]) -> [WSOpenLot] {
+        lots.filter { l in
+            if !filters.account.isEmpty && l.accountId != filters.account && l.accountType != filters.account { return false }
+            if !filters.exchange.isEmpty {
+                let ex = listingExchange(securityId: l.securityId, activityId: l.activityId, activities: activities, listings: listings)
+                if ex != filters.exchange { return false }
+            }
+            if !rowPriceOk([l.price], filters: filters) { return false }
+            return true
+        }
+    }
+
+    private static func tradeCostCad(_ t: WSClosedTrade, fx: [String: Double]) -> Double {
+        let qty = t.quantity
+        let entry = t.entryPrice
+        let notional = abs(entry * qty * optionMultiplier(t.symbol))
+        if !(notional > 0) { return 0 }
+        let ccy = t.currency.uppercased()
+        if ccy != "USD" { return notional }
+        let cad = toCad(notional, currency: ccy, date: t.entryDate, fx: fx)
+        return cad.isFinite ? abs(cad) : 0
+    }
+
+    private static func closedYearReturn(_ trades: [WSClosedTrade], year: String, fx: [String: Double]) -> Double? {
+        let from = year + "-01-01"
+        let to = clampToToday(year + "-12-31")
+        var pnl = 0.0
+        var cost = 0.0
+        var n = 0
+        for tr in trades {
+            let d = isoDateOnly(tr.exitDate)
+            if d < from || d > to { continue }
+            pnl += tr.pnlCad
+            cost += tradeCostCad(tr, fx: fx)
+            n += 1
+        }
+        if n == 0 || !(cost > 0) { return nil }
+        return pnl / cost
+    }
+
+    private static func yearsFromClosed(_ trades: [WSClosedTrade]) -> [String] {
+        var years = Set<String>()
+        for t in trades {
+            let d = String(isoDateOnly(t.exitDate).prefix(4))
+            if d.count == 4, d.allSatisfy(\.isNumber) { years.insert(d) }
+        }
+        return Array(years.sorted().reversed())
+    }
+
+    private static func closedAnnualizedReturn(_ trades: [WSClosedTrade], years: [String], fx: [String: Double]) -> (rate: Double?, years: Double) {
+        let ys = years.sorted()
+        var prod = 1.0
+        var days = 0.0
+        var from = ""
+        for y in ys {
+            guard let r = closedYearReturn(trades, year: y, fx: fx), r.isFinite, r > -1 else { continue }
+            let wfrom = y + "-01-01"
+            let wto = clampToToday(y + "-12-31")
+            let d = isoDayDiff(wfrom, wto)
+            if !(d >= 30) { continue }
+            prod *= (1 + r)
+            days += d
+            if from.isEmpty { from = wfrom }
+        }
+        if from.isEmpty || !(days > 0) { return (nil, 0) }
+        let yrs = days / 365.25
+        let rate = yrs >= 1.0 / 12.0 ? pow(prod, 1 / yrs) - 1 : prod - 1
+        return (rate, yrs)
+    }
+
+    private static func realizedPnlCurve(_ trades: [WSClosedTrade]) -> [WSNavPoint] {
+        let sorted = trades.sorted { a, b in
+            if a.exitDate != b.exitDate { return a.exitDate < b.exitDate }
+            return a.id.localizedCompare(b.id) == .orderedAscending
+        }
+        var points: [WSNavPoint] = []
+        var equity = 0.0
+        for t in sorted {
+            equity += t.pnlCad
+            if let last = points.last, last.date == t.exitDate {
+                points[points.count - 1].equity = equity
+            } else {
+                points.append(WSNavPoint(date: t.exitDate, equity: equity, currency: "CAD", netDeposits: nil))
+            }
+        }
+        return points
+    }
+
+    private static func equityCurve(_ hist: [WSNavPoint], from: String, to: String) -> [WSNavPoint] {
+        hist.filter { p in
+            if p.date.isEmpty { return false }
+            if !from.isEmpty && p.date < from { return false }
+            if !to.isEmpty && p.date > to { return false }
+            return true
+        }
+    }
+
+    /// Home numbers for the current filters. Unfiltered returns the snapshot unchanged.
+    static func dashboard(_ snap: WSPullResult, filters: JournalFilters) -> WSPullResult {
+        if !filters.isActive { return snap }
+        let visible = filteredTrades(snap.closed, filters: filters, activities: snap.activities, listings: snap.listings)
+        let closedForMetrics = groupClosedByClose(visible)
+        var out = snap
+        out.metrics = computeMetrics(closedForMetrics)
+        out.monthly = monthlyPnl(closedForMetrics)
+        let spy = loadCachedSP500()
+        let fx = loadCachedFx()
+        if filters.listingFiltersOn {
+            let years = yearsFromClosed(closedForMetrics)
+            out.years = years.map { y in
+                let mine = closedYearReturn(closedForMetrics, year: y, fx: fx)
+                let idxFrom = y + "-01-01"
+                let idxTo = clampToToday(y + "-12-31")
+                let idx = spyReturn(spy, from: idxFrom, to: idxTo)
+                let vs: Double?
+                if let mine, let idx { vs = mine - idx } else { vs = nil }
+                return WSYearRow(year: y, ret: formatReturn(mine), spy: formatReturn(idx), vs: formatReturn(vs))
+            }
+            let ann = closedAnnualizedReturn(closedForMetrics, years: years.sorted(), fx: fx)
+            out.avgAnnualized = formatReturn(ann.rate)
+            let sub = formatYearSpan(ann.years)
+            out.avgAnnualizedSubtitle = sub.isEmpty ? "No closed trades" : sub
+            out.nav = realizedPnlCurve(closedForMetrics)
+        } else {
+            out.nav = equityCurve(sortedNav(snap.nav), from: filters.from, to: filters.to)
+            let yearRows = annualRows(nav: snap.nav, spy: spy, activities: snap.activities)
+            out.years = yearRows
+            let ann = accountAnnualizedReturn(nav: snap.nav, years: yearRows.map(\.year).sorted())
+            out.avgAnnualized = formatReturn(ann.rate)
+            let sub = formatYearSpan(ann.years)
+            out.avgAnnualizedSubtitle = sub.isEmpty ? "No NAV history" : sub
+        }
+        return out
     }
 }
 

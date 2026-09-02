@@ -38,11 +38,13 @@ private enum HomeLayout {
 struct RootView: View {
     @StateObject private var session: SessionStore
     @StateObject private var journal: Journal
+    @StateObject private var filters: FilterStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         _session = StateObject(wrappedValue: SessionStore())
         _journal = StateObject(wrappedValue: Journal())
+        _filters = StateObject(wrappedValue: FilterStore())
         let page = UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
         let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
         let appearance = UITabBarAppearance()
@@ -68,20 +70,21 @@ struct RootView: View {
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
 
             NavigationStack {
-                ClosedTradesView(journal: journal)
+                ClosedTradesView(session: session, journal: journal)
             }
             .tabItem { Label("Closed trades", systemImage: "line.3.horizontal") }
 
             NavigationStack {
-                EmptyTabView(title: "Activity")
+                ActivityView(session: session, journal: journal)
             }
             .tabItem { Label("Activity", systemImage: "doc.text") }
 
             NavigationStack {
-                EmptyTabView(title: "Open lots")
+                OpenLotsView(session: session, journal: journal)
             }
             .tabItem { Label("Open lots", systemImage: "hexagon") }
         }
+        .environmentObject(filters)
         .tint(HomeColor.selected)
         .toolbarBackground(HomeColor.page, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
@@ -101,7 +104,9 @@ struct RootView: View {
 struct HomeView: View {
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
+    @EnvironmentObject private var filters: FilterStore
     @State private var showSettings = false
+    @State private var showFilters = false
     @State private var showLogin = false
 
     var body: some View {
@@ -117,6 +122,12 @@ struct HomeView: View {
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
+        }
+        .sheet(isPresented: $showFilters) {
+            FiltersSheet(journal: journal)
+                .environmentObject(filters)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .fullScreenCover(isPresented: $showLogin) {
             ConnectLoginView(session: session, isPresented: $showLogin)
@@ -179,37 +190,24 @@ struct HomeView: View {
     }
 
     private var settingsBar: some View {
-        HStack(spacing: 8) {
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(journal.headerStatus(now: context.date))
-                    .font(.system(size: 12))
-                    .foregroundStyle(HomeColor.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            Button {
-                showSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(.black)
-                    .frame(width: 24, height: 24)
-            }
-            .accessibilityLabel("Settings")
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 36)
+        SettingsBar(
+            journal: journal,
+            filtersOn: filters.current.isActive,
+            onFilters: { showFilters = true },
+            onSettings: { showSettings = true }
+        )
     }
 
     private func liveHome(_ live: WSPullResult?) -> some View {
         let dash = WSPull.emDash
-        let m = live?.metrics
+        let shown = live.map { WSPull.dashboard($0, filters: filters.current) }
+        let m = shown?.metrics
         return ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 settingsBar
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(live.map { WSPull.formatCad($0.metrics.realizedPnlCad, digits: 2) } ?? dash)
+                    Text(shown.map { WSPull.formatCad($0.metrics.realizedPnlCad, digits: 2) } ?? dash)
                         .font(.system(size: 38, weight: .bold))
                         .tracking(-1.4)
                         .lineSpacing(0)
@@ -240,35 +238,35 @@ struct HomeView: View {
                     )
                     MetricCard(
                         title: "Profit factor",
-                        value: live.map { WSPull.formatProfitFactor($0.metrics.profitFactor) } ?? dash,
-                        subtitle: live.map { WSPull.formatCad($0.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad($0.metrics.grossLoss, digits: 2) + " L" } ?? dash
+                        value: shown.map { WSPull.formatProfitFactor($0.metrics.profitFactor) } ?? dash,
+                        subtitle: shown.map { WSPull.formatCad($0.metrics.grossProfit, digits: 2) + " W, " + WSPull.formatCad($0.metrics.grossLoss, digits: 2) + " L" } ?? dash
                     )
                     MetricCard(
                         title: "Expectancy",
-                        value: live.map { WSPull.formatCad($0.metrics.expectancy, digits: 2) } ?? dash,
-                        subtitle: live.map { WSPull.formatCad($0.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad($0.metrics.avgLoss, digits: 2) } ?? dash
+                        value: shown.map { WSPull.formatCad($0.metrics.expectancy, digits: 2) } ?? dash,
+                        subtitle: shown.map { WSPull.formatCad($0.metrics.avgWin, digits: 2) + " \u{00B7} " + WSPull.formatCad($0.metrics.avgLoss, digits: 2) } ?? dash
                     )
                     MetricCard(
                         title: "Win rate",
-                        value: live.map { WSPull.formatWinRate($0.metrics.winRate) } ?? dash,
-                        subtitle: live.map { "\($0.metrics.winCount) W, \($0.metrics.lossCount) L, \($0.metrics.evenCount) BE" } ?? dash
+                        value: shown.map { WSPull.formatWinRate($0.metrics.winRate) } ?? dash,
+                        subtitle: shown.map { "\($0.metrics.winCount) W, \($0.metrics.lossCount) L, \($0.metrics.evenCount) BE" } ?? dash
                     )
                     MetricCard(
                         title: "Avg annualized",
-                        value: live.map { $0.avgAnnualized } ?? dash,
-                        subtitle: (live?.avgAnnualizedSubtitle.isEmpty == false) ? live!.avgAnnualizedSubtitle : dash
+                        value: shown.map { $0.avgAnnualized } ?? dash,
+                        subtitle: (shown?.avgAnnualizedSubtitle.isEmpty == false) ? shown!.avgAnnualizedSubtitle : dash
                     )
                 }
                 .padding(.horizontal, HomeLayout.side)
                 .padding(.top, 12)
 
-                EquityCurveCard(points: live?.nav)
+                EquityCurveCard(points: shown?.nav)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
-                MonthlyPnLCard(bars: live?.monthly)
+                MonthlyPnLCard(bars: shown?.monthly)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
-                AnnualPerformanceCard(years: live?.years)
+                AnnualPerformanceCard(years: shown?.years)
                     .padding(.horizontal, HomeLayout.side)
                     .padding(.top, HomeLayout.gutter)
                     .padding(.bottom, 12)
@@ -432,11 +430,21 @@ struct AnnualPerformanceCard: View {
 }
 
 struct ClosedTradesView: View {
+    @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
+    @EnvironmentObject private var filters: FilterStore
+    @State private var showSettings = false
+    @State private var showFilters = false
 
     private var rows: [WSClosedTrade] {
         guard let result = journal.result else { return [] }
-        return WSPull.closedTradesTable(result.closed, activities: result.activities)
+        let visible = WSPull.filteredTrades(
+            result.closed,
+            filters: filters.current,
+            activities: result.activities,
+            listings: result.listings
+        )
+        return WSPull.closedTradesTable(visible, activities: result.activities)
     }
 
     var body: some View {
@@ -464,8 +472,26 @@ struct ClosedTradesView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SettingsBar(
+                journal: journal,
+                filtersOn: filters.current.isActive,
+                onFilters: { showFilters = true },
+                onSettings: { showSettings = true }
+            )
+            .background(HomeColor.page)
+        }
         .navigationTitle("Closed trades")
         .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(session: session, journal: journal)
+        }
+        .sheet(isPresented: $showFilters) {
+            FiltersSheet(journal: journal)
+                .environmentObject(filters)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -642,16 +668,156 @@ private struct ExecutionSliceRow: View {
     }
 }
 
-struct EmptyTabView: View {
-    let title: String
+struct ActivityView: View {
+    @ObservedObject var session: SessionStore
+    @ObservedObject var journal: Journal
+    @EnvironmentObject private var filters: FilterStore
+    @State private var showSettings = false
+    @State private var showFilters = false
+
+    private var rows: [WSActivity] {
+        guard let result = journal.result else { return [] }
+        return WSPull.filteredActivities(result.activities, filters: filters.current, listings: result.listings)
+            .sorted { a, b in
+                let da = WSPull.activityWhen(a)
+                let db = WSPull.activityWhen(b)
+                if da != db { return da > db }
+                return a.id > b.id
+            }
+    }
 
     var body: some View {
-        ContentUnavailableView(
-            "None yet",
-            systemImage: "tray",
-            description: Text("Nothing to show until sign-in.")
-        )
-        .navigationTitle(title)
+        List {
+            if !rows.isEmpty {
+                Section {
+                    ForEach(rows, id: \.id) { a in
+                        HStack(alignment: .center, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(a.symbol.isEmpty ? (a.activityType.isEmpty ? "Activity" : a.activityType) : a.symbol)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                Text(WSPull.activityWhen(a) + (a.accountType.isEmpty ? "" : " · " + a.accountType))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Text(WSPull.formatCad(a.netCashAmount, digits: 2))
+                                .font(.system(size: 17, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(HomeColor.signed(a.netCashAmount))
+                        }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "No activity",
+                    systemImage: "doc.text",
+                    description: Text("It shows up here.")
+                )
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SettingsBar(
+                journal: journal,
+                filtersOn: filters.current.isActive,
+                onFilters: { showFilters = true },
+                onSettings: { showSettings = true }
+            )
+            .background(HomeColor.page)
+        }
+        .navigationTitle("Activity")
+        .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(session: session, journal: journal)
+        }
+        .sheet(isPresented: $showFilters) {
+            FiltersSheet(journal: journal)
+                .environmentObject(filters)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+struct OpenLotsView: View {
+    @ObservedObject var session: SessionStore
+    @ObservedObject var journal: Journal
+    @EnvironmentObject private var filters: FilterStore
+    @State private var showSettings = false
+    @State private var showFilters = false
+
+    private var rows: [WSOpenLot] {
+        guard let result = journal.result else { return [] }
+        let lots = WSPull.openLots(from: result.activities)
+        return WSPull.filteredOpenLots(lots, filters: filters.current, activities: result.activities, listings: result.listings)
+            .sorted { a, b in
+                if a.date != b.date { return a.date > b.date }
+                return a.id > b.id
+            }
+    }
+
+    var body: some View {
+        List {
+            if !rows.isEmpty {
+                Section {
+                    ForEach(rows) { lot in
+                        HStack(alignment: .center, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(lot.symbol)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                Text(lot.direction + " · " + WSPull.formatQty(lot.quantity) + " · " + WSPull.formatCad(lot.price, digits: 2))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                            Spacer(minLength: 8)
+                            Text(WSPull.formatCloseDate(lot.date))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "No open lots",
+                    systemImage: "hexagon",
+                    description: Text("They show up here.")
+                )
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SettingsBar(
+                journal: journal,
+                filtersOn: filters.current.isActive,
+                onFilters: { showFilters = true },
+                onSettings: { showSettings = true }
+            )
+            .background(HomeColor.page)
+        }
+        .navigationTitle("Open lots")
+        .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(session: session, journal: journal)
+        }
+        .sheet(isPresented: $showFilters) {
+            FiltersSheet(journal: journal)
+                .environmentObject(filters)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -1131,7 +1297,390 @@ private func jsonWithAccessToken(_ raw: String) -> [String: Any]? {
     return nil
 }
 
+@MainActor
+final class FilterStore: ObservableObject {
+    static let defaultsKey = "bagholder.filters"
+    @Published var current: JournalFilters {
+        didSet { persist() }
+    }
+
+    init() {
+        if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+           let decoded = try? JSONDecoder().decode(JournalFilters.self, from: data) {
+            current = decoded
+        } else {
+            current = JournalFilters()
+        }
+    }
+
+    func persist() {
+        guard let data = try? JSONEncoder().encode(current) else { return }
+        UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    }
+
+    func reset() {
+        current = JournalFilters()
+    }
+
+    func setClosedIn(_ year: String) {
+        if year.isEmpty {
+            current.from = ""
+            current.to = ""
+        } else {
+            current.from = year + "-01-01"
+            current.to = year + "-12-31"
+        }
+    }
+}
+
+struct SettingsBar: View {
+    @ObservedObject var journal: Journal
+    var filtersOn: Bool
+    var onFilters: () -> Void
+    var onSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(journal.headerStatus(now: context.date))
+                    .font(.system(size: 12))
+                    .foregroundStyle(HomeColor.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Button(action: onFilters) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(.black)
+                        .frame(width: 24, height: 24)
+                    if filtersOn {
+                        Circle()
+                            .fill(Color(uiColor: .systemGreen))
+                            .frame(width: 8, height: 8)
+                            .offset(x: 2, y: -2)
+                    }
+                }
+            }
+            .accessibilityLabel("Filters")
+            Button(action: onSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(.black)
+                    .frame(width: 24, height: 24)
+            }
+            .accessibilityLabel("Settings")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+    }
+}
+
+struct FiltersSheet: View {
+    @ObservedObject var journal: Journal
+    @EnvironmentObject private var filters: FilterStore
+    @Environment(\.dismiss) private var dismiss
+
+    private var activities: [WSActivity] { journal.result?.activities ?? [] }
+    private var listings: [WSSecurityListing] { journal.result?.listings ?? [] }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    NavigationLink {
+                        FilterStringPick(
+                            title: "Account",
+                            allLabel: "All",
+                            options: WSPull.filterAccountNames(activities),
+                            selection: accountBinding
+                        )
+                    } label: {
+                        LabeledContent("Account", value: filters.current.account.isEmpty ? "All" : filters.current.account)
+                    }
+                    NavigationLink {
+                        FilterStringPick(
+                            title: "Exchange",
+                            allLabel: "All",
+                            options: WSPull.filterExchangeNames(listings),
+                            selection: exchangeBinding
+                        )
+                    } label: {
+                        LabeledContent("Exchange", value: filters.current.exchange.isEmpty ? "All" : filters.current.exchange)
+                    }
+                    NavigationLink {
+                        FilterStringPick(
+                            title: "Symbol",
+                            allLabel: "All",
+                            options: WSPull.filterSymbolNames(activities),
+                            selection: symbolBinding
+                        )
+                    } label: {
+                        LabeledContent("Symbol", value: filters.current.symbol.isEmpty ? "All" : filters.current.symbol)
+                    }
+                    NavigationLink {
+                        ClosedInPick(years: WSPull.filterClosedYears(activities))
+                    } label: {
+                        LabeledContent("Closed in", value: closedInLabel)
+                    }
+                    NavigationLink {
+                        DateFilterPick(title: "From", value: fromBinding)
+                    } label: {
+                        LabeledContent("From", value: filters.current.from.isEmpty ? "All" : filters.current.from)
+                    }
+                    NavigationLink {
+                        DateFilterPick(title: "To", value: toBinding)
+                    } label: {
+                        LabeledContent("To", value: filters.current.to.isEmpty ? "All" : filters.current.to)
+                    }
+                    NavigationLink {
+                        PriceOpPick()
+                    } label: {
+                        LabeledContent("Price", value: priceOpLabel)
+                    }
+                    if filters.current.priceOp == "between" {
+                        TextField("From", text: priceMinBinding)
+                            .keyboardType(.decimalPad)
+                        TextField("To", text: priceMaxBinding)
+                            .keyboardType(.decimalPad)
+                    } else if !filters.current.priceOp.isEmpty {
+                        TextField("Price", text: priceMinBinding)
+                            .keyboardType(.decimalPad)
+                    }
+                }
+                if filters.current.isActive {
+                    Section {
+                        Button("Reset filters", role: .destructive) {
+                            filters.reset()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(HomeColor.selected)
+                }
+            }
+        }
+        .tint(HomeColor.selected)
+    }
+
+    private var closedInLabel: String {
+        let y = WSPull.yearFromRange(from: filters.current.from, to: filters.current.to)
+        return y.isEmpty ? "All years" : y
+    }
+
+    private var priceOpLabel: String {
+        switch filters.current.priceOp {
+        case "between": return "Between"
+        case "under": return "Under"
+        case "equal": return "Equal"
+        case "over": return "Over"
+        default: return "All"
+        }
+    }
+
+    private var accountBinding: Binding<String> {
+        Binding(get: { filters.current.account }, set: { filters.current.account = $0 })
+    }
+    private var exchangeBinding: Binding<String> {
+        Binding(get: { filters.current.exchange }, set: { filters.current.exchange = $0 })
+    }
+    private var symbolBinding: Binding<String> {
+        Binding(get: { filters.current.symbol }, set: { filters.current.symbol = $0 })
+    }
+    private var fromBinding: Binding<String> {
+        Binding(get: { filters.current.from }, set: { filters.current.from = $0 })
+    }
+    private var toBinding: Binding<String> {
+        Binding(get: { filters.current.to }, set: { filters.current.to = $0 })
+    }
+    private var priceMinBinding: Binding<String> {
+        Binding(get: { filters.current.priceMin }, set: { filters.current.priceMin = $0 })
+    }
+    private var priceMaxBinding: Binding<String> {
+        Binding(get: { filters.current.priceMax }, set: { filters.current.priceMax = $0 })
+    }
+}
+
+private struct FilterStringPick: View {
+    let title: String
+    let allLabel: String
+    let options: [String]
+    @Binding var selection: String
+
+    var body: some View {
+        List {
+            row(allLabel, value: "")
+            ForEach(options, id: \.self) { opt in
+                row(opt, value: opt)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func row(_ label: String, value: String) -> some View {
+        Button {
+            selection = value
+        } label: {
+            HStack {
+                Text(label)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if selection == value {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(HomeColor.selected)
+                }
+            }
+        }
+    }
+}
+
+private struct ClosedInPick: View {
+    let years: [String]
+    @EnvironmentObject private var filters: FilterStore
+
+    private var selected: String {
+        WSPull.yearFromRange(from: filters.current.from, to: filters.current.to)
+    }
+
+    var body: some View {
+        List {
+            Button {
+                filters.setClosedIn("")
+            } label: {
+                HStack {
+                    Text("All years")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if selected.isEmpty {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(HomeColor.selected)
+                    }
+                }
+            }
+            ForEach(years, id: \.self) { y in
+                Button {
+                    filters.setClosedIn(y)
+                } label: {
+                    HStack {
+                        Text(y)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if selected == y {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(HomeColor.selected)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Closed in")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct DateFilterPick: View {
+    let title: String
+    @Binding var value: String
+
+    private var picked: Date {
+        isoDate(value) ?? Date()
+    }
+
+    var body: some View {
+        List {
+            Button {
+                value = ""
+            } label: {
+                HStack {
+                    Text("All")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if value.isEmpty {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(HomeColor.selected)
+                    }
+                }
+            }
+            DatePicker(
+                "Date",
+                selection: Binding(
+                    get: { picked },
+                    set: { value = isoString($0) }
+                ),
+                displayedComponents: .date
+            )
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func isoDate(_ s: String) -> Date? {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "America/Edmonton") ?? .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: String(s.prefix(10)))
+    }
+
+    private func isoString(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "America/Edmonton") ?? .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
+    }
+}
+
+private struct PriceOpPick: View {
+    @EnvironmentObject private var filters: FilterStore
+
+    private let ops: [(String, String)] = [
+        ("", "All"),
+        ("between", "Between"),
+        ("under", "Under"),
+        ("equal", "Equal"),
+        ("over", "Over"),
+    ]
+
+    var body: some View {
+        List {
+            ForEach(ops, id: \.0) { op in
+                Button {
+                    filters.current.priceOp = op.0
+                    if op.0.isEmpty {
+                        filters.current.priceMin = ""
+                        filters.current.priceMax = ""
+                    } else if op.0 != "between" {
+                        filters.current.priceMax = ""
+                    }
+                } label: {
+                    HStack {
+                        Text(op.1)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if filters.current.priceOp == op.0 {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(HomeColor.selected)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Price")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 struct SettingsView: View {
+
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
     @Environment(\.dismiss) private var dismiss
