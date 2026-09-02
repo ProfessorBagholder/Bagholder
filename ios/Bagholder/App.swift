@@ -12,20 +12,190 @@ struct BagholderApp: App {
     }
 }
 
+enum AppearanceChoice: String, CaseIterable {
+    case light
+    case dark
+    case system
+
+    var preferredColorScheme: ColorScheme? {
+        switch self {
+        case .light: return .light
+        case .dark: return .dark
+        case .system: return nil
+        }
+    }
+
+    var segmentIndex: Int {
+        switch self {
+        case .light: return 0
+        case .dark: return 1
+        case .system: return 2
+        }
+    }
+
+    static func fromSegment(_ index: Int) -> AppearanceChoice {
+        switch index {
+        case 0: return .light
+        case 1: return .dark
+        default: return .system
+        }
+    }
+}
+
+@MainActor
+final class AppearanceStore: ObservableObject {
+    static let defaultsKey = "bagholder.appearance"
+    @Published var choice: AppearanceChoice {
+        didSet { UserDefaults.standard.set(choice.rawValue, forKey: Self.defaultsKey) }
+    }
+
+    init() {
+        if let raw = UserDefaults.standard.string(forKey: Self.defaultsKey),
+           let stored = AppearanceChoice(rawValue: raw) {
+            choice = stored
+        } else {
+            choice = .system
+        }
+    }
+
+    var preferredColorScheme: ColorScheme? { choice.preferredColorScheme }
+}
+
+/// Named tokens for both appearances. Resolve from colorScheme + Appearance setting
+/// via preferredColorScheme (nil = System) and explicit RGB — nothing inverts.
+private enum HomeUIColor {
+    static func token(
+        light rL: CGFloat, _ gL: CGFloat, _ bL: CGFloat, _ aL: CGFloat,
+        dark rD: CGFloat, _ gD: CGFloat, _ bD: CGFloat, _ aD: CGFloat
+    ) -> UIColor {
+        let light = UIColor(red: rL, green: gL, blue: bL, alpha: aL)
+        let dark = UIColor(red: rD, green: gD, blue: bD, alpha: aD)
+        return UIColor { tc in
+            tc.userInterfaceStyle == .dark ? dark : light
+        }
+    }
+
+    static let page = token(light: 242 / 255, 242 / 255, 247 / 255, 1, dark: 0, 0, 0, 1)
+    static let tile = token(light: 1, 1, 1, 1, dark: 28 / 255, 28 / 255, 30 / 255, 1)
+    static let ink = token(light: 0, 0, 0, 1, dark: 1, 1, 1, 1)
+    static let muted = token(light: 142 / 255, 142 / 255, 147 / 255, 1, dark: 142 / 255, 142 / 255, 147 / 255, 1)
+    static let profit = token(light: 52 / 255, 199 / 255, 89 / 255, 1, dark: 52 / 255, 199 / 255, 89 / 255, 1)
+    static let loss = token(light: 255 / 255, 59 / 255, 48 / 255, 1, dark: 255 / 255, 59 / 255, 48 / 255, 1)
+    static let selected = token(light: 0, 122 / 255, 1, 1, dark: 10 / 255, 132 / 255, 1, 1)
+    static let hairline = token(
+        light: 60 / 255, 60 / 255, 67 / 255, 0.18,
+        dark: 84 / 255, 84 / 255, 88 / 255, 0.65
+    )
+    /// Dark: #2C2C2E Cancel chip + selected-tab pill. Light Cancel chip is page.
+    static let elevated = token(light: 242 / 255, 242 / 255, 247 / 255, 1, dark: 44 / 255, 44 / 255, 46 / 255, 1)
+}
+
 private enum HomeColor {
-    static let page = Color(red: 242 / 255, green: 242 / 255, blue: 247 / 255)
-    static let tile = Color.white
-    static let muted = Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
-    static let profit = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
-    static let loss = Color(red: 255 / 255, green: 59 / 255, blue: 48 / 255)
-    static let selected = Color(red: 0 / 255, green: 122 / 255, blue: 255 / 255)
+    static let page = Color(uiColor: HomeUIColor.page)
+    static let tile = Color(uiColor: HomeUIColor.tile)
+    static let ink = Color(uiColor: HomeUIColor.ink)
+    static let muted = Color(uiColor: HomeUIColor.muted)
+    static let profit = Color(uiColor: HomeUIColor.profit)
+    static let loss = Color(uiColor: HomeUIColor.loss)
+    static let selected = Color(uiColor: HomeUIColor.selected)
+    static let hairline = Color(uiColor: HomeUIColor.hairline)
+    static let elevated = Color(uiColor: HomeUIColor.elevated)
 
     static func signed(_ n: Double) -> Color {
         if n < -0.0001 { return loss }
         if n > 0.0001 { return profit }
-        return Color.primary
+        return ink
     }
-    static let hairline = Color(red: 60 / 255, green: 60 / 255, blue: 67 / 255).opacity(0.18)
+}
+
+private enum HomeChrome {
+    static func apply() {
+        let page = HomeUIColor.page
+        let muted = HomeUIColor.muted
+        let selected = HomeUIColor.selected
+        let ink = HomeUIColor.ink
+        let hairline = HomeUIColor.hairline
+
+        let tab = UITabBarAppearance()
+        tab.configureWithOpaqueBackground()
+        tab.backgroundColor = page
+        tab.shadowColor = .clear
+        let item = UITabBarItemAppearance()
+        item.normal.iconColor = muted
+        item.normal.titleTextAttributes = [.foregroundColor: muted]
+        item.selected.iconColor = selected
+        item.selected.titleTextAttributes = [.foregroundColor: selected]
+        tab.stackedLayoutAppearance = item
+        tab.inlineLayoutAppearance = item
+        tab.compactInlineLayoutAppearance = item
+        UITabBar.appearance().standardAppearance = tab
+        UITabBar.appearance().scrollEdgeAppearance = tab
+        UITabBar.appearance().backgroundColor = page
+        UITabBar.appearance().unselectedItemTintColor = muted
+        UITabBar.appearance().tintColor = selected
+        UITabBar.appearance().isTranslucent = false
+
+        let nav = UINavigationBarAppearance()
+        nav.configureWithOpaqueBackground()
+        nav.backgroundColor = page
+        nav.shadowColor = .clear
+        nav.titleTextAttributes = [.foregroundColor: ink]
+        nav.largeTitleTextAttributes = [.foregroundColor: ink]
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        UINavigationBar.appearance().compactAppearance = nav
+        UINavigationBar.appearance().tintColor = selected
+        UINavigationBar.appearance().isTranslucent = false
+
+        UITableView.appearance().backgroundColor = page
+        UITableView.appearance().separatorColor = hairline
+    }
+}
+
+private struct AppearanceSegment: UIViewRepresentable {
+    @Binding var selection: AppearanceChoice
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject {
+        var binding: Binding<AppearanceChoice> = .constant(.system)
+        @objc func changed(_ sender: UISegmentedControl) {
+            binding.wrappedValue = AppearanceChoice.fromSegment(sender.selectedSegmentIndex)
+        }
+    }
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: ["Light", "Dark", "System"])
+        context.coordinator.binding = $selection
+        control.selectedSegmentIndex = selection.segmentIndex
+        let font = UIFont.systemFont(ofSize: 13, weight: .medium)
+        control.setTitleTextAttributes([.font: font], for: .normal)
+        control.setTitleTextAttributes([.font: font], for: .selected)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.binding = $selection
+        if control.selectedSegmentIndex != selection.segmentIndex {
+            control.selectedSegmentIndex = selection.segmentIndex
+        }
+        let font = UIFont.systemFont(ofSize: 13, weight: .medium)
+        control.setTitleTextAttributes([.font: font], for: .normal)
+        control.setTitleTextAttributes([.font: font], for: .selected)
+    }
+}
+
+private extension View {
+    func bagholderListChrome() -> some View {
+        self
+            .scrollContentBackground(.hidden)
+            .background(HomeColor.page)
+            .listRowSeparatorTint(HomeColor.hairline)
+            .tint(HomeColor.selected)
+    }
 }
 
 private enum HomeLayout {
@@ -39,27 +209,15 @@ struct RootView: View {
     @StateObject private var session: SessionStore
     @StateObject private var journal: Journal
     @StateObject private var filters: FilterStore
+    @StateObject private var appearance: AppearanceStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         _session = StateObject(wrappedValue: SessionStore())
         _journal = StateObject(wrappedValue: Journal())
         _filters = StateObject(wrappedValue: FilterStore())
-        let page = UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
-        let muted = UIColor(red: 142 / 255, green: 142 / 255, blue: 147 / 255, alpha: 1)
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = page
-        appearance.shadowColor = .clear
-        appearance.stackedLayoutAppearance.normal.iconColor = muted
-        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [
-            .foregroundColor: muted
-        ]
-        appearance.inlineLayoutAppearance.normal.iconColor = muted
-        appearance.compactInlineLayoutAppearance.normal.iconColor = muted
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
-        UITabBar.appearance().backgroundColor = page
+        _appearance = StateObject(wrappedValue: AppearanceStore())
+        HomeChrome.apply()
     }
 
     var body: some View {
@@ -85,9 +243,13 @@ struct RootView: View {
             .tabItem { Label("Open lots", systemImage: "hexagon") }
         }
         .environmentObject(filters)
+        .environmentObject(appearance)
+        .preferredColorScheme(appearance.preferredColorScheme)
         .tint(HomeColor.selected)
         .toolbarBackground(HomeColor.page, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
+        .toolbarBackground(HomeColor.page, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .background(HomeColor.page.ignoresSafeArea())
         .onAppear { journal.handleAppear(session: session) }
         .onChange(of: scenePhase) { _, phase in
@@ -122,12 +284,14 @@ struct HomeView: View {
         .background(HomeColor.page)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
+                .presentationBackground(HomeColor.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(HomeColor.tile)
         }
         .fullScreenCover(isPresented: $showLogin) {
             ConnectLoginView(session: session, isPresented: $showLogin)
@@ -160,7 +324,7 @@ struct HomeView: View {
             VStack(spacing: 16) {
                 Text("Connect Wealthsimple")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(HomeColor.ink)
                     .multilineTextAlignment(.center)
                 Text("Sign in to see Home.")
                     .font(.system(size: 15))
@@ -211,6 +375,7 @@ struct HomeView: View {
                         .font(.system(size: 38, weight: .bold))
                         .tracking(-1.4)
                         .lineSpacing(0)
+                        .foregroundStyle(HomeColor.ink)
                     Text("Realized P&L")
                         .font(.system(size: 15))
                         .foregroundStyle(HomeColor.muted)
@@ -280,7 +445,7 @@ struct MetricCard: View {
     let title: String
     let value: String
     var subtitle: String? = nil
-    var valueColor: Color = .black
+    var valueColor: Color = HomeColor.ink
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -336,7 +501,7 @@ struct EquityCurveCard: View {
                 if let points, let i = selectedIndex {
                     Text(WSPull.formatCad(points[i].equity, digits: 2))
                         .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(Color.primary)
+                        .foregroundStyle(HomeColor.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                     Text(WSPull.formatChartDate(points[i].date))
@@ -480,7 +645,7 @@ struct AnnualPerformanceCard: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack {
                     Text(row.year)
-                        .foregroundStyle(.black)
+                        .foregroundStyle(HomeColor.ink)
                         .frame(width: 48, alignment: .leading)
                     percentText(row.ret)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -544,6 +709,8 @@ struct ClosedTradesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
         .overlay {
             if rows.isEmpty {
                 ContentUnavailableView(
@@ -566,12 +733,14 @@ struct ClosedTradesView: View {
         .navigationBarTitleDisplayMode(.large)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
+                .presentationBackground(HomeColor.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(HomeColor.tile)
         }
     }
 }
@@ -584,12 +753,12 @@ private struct ClosedTradeRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(trade.symbol)
                     .font(.headline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(HomeColor.ink)
                     .lineLimit(2)
                     .truncationMode(.tail)
                 Text(trade.displaySide + " \u{00B7} " + WSPull.formatCloseDate(trade.exitDate))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HomeColor.muted)
             }
             Spacer(minLength: 8)
             Text(WSPull.formatCad(trade.pnl, digits: 2))
@@ -647,13 +816,13 @@ private struct ClosedTradeDetailView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(trade.symbol)
                         .font(.headline)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(HomeColor.ink)
                         .lineLimit(2)
                         .truncationMode(.tail)
                     if !listingLine.isEmpty {
                         Text(listingLine)
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HomeColor.muted)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -677,6 +846,8 @@ private struct ClosedTradeDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
         .navigationTitle("Executions (\(executionCount))")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -697,7 +868,7 @@ private struct ExecutionActivityRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WSPull.formatExecutionWhen(activity))
                     .font(.body)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(HomeColor.ink)
                 Text(
                     WSPull.executionSide(activity)
                         + " · "
@@ -706,7 +877,7 @@ private struct ExecutionActivityRow: View {
                         + WSPull.formatCad(activity.unitPrice, digits: 2)
                 )
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HomeColor.muted)
                 .monospacedDigit()
             }
             Spacer(minLength: 8)
@@ -727,7 +898,7 @@ private struct ExecutionSliceRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WSPull.formatCloseDate(slice.exitDate))
                     .font(.body)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(HomeColor.ink)
                 Text(
                     WSPull.executionSideName(slice.side)
                         + " · "
@@ -736,7 +907,7 @@ private struct ExecutionSliceRow: View {
                         + WSPull.formatCad(slice.exitPrice, digits: 2)
                 )
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HomeColor.muted)
                 .monospacedDigit()
             }
             Spacer(minLength: 8)
@@ -776,11 +947,11 @@ struct ActivityView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(a.symbol.isEmpty ? (a.activityType.isEmpty ? "Activity" : a.activityType) : a.symbol)
                                     .font(.headline)
-                                    .foregroundStyle(.primary)
+                                    .foregroundStyle(HomeColor.ink)
                                     .lineLimit(2)
                                 Text(WSPull.activityWhen(a) + (a.accountType.isEmpty ? "" : " · " + a.accountType))
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(HomeColor.muted)
                             }
                             Spacer(minLength: 8)
                             Text(WSPull.formatCad(a.netCashAmount, digits: 2))
@@ -794,6 +965,8 @@ struct ActivityView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
         .overlay {
             if rows.isEmpty {
                 ContentUnavailableView(
@@ -816,12 +989,14 @@ struct ActivityView: View {
         .navigationBarTitleDisplayMode(.large)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
+                .presentationBackground(HomeColor.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(HomeColor.tile)
         }
     }
 }
@@ -852,17 +1027,17 @@ struct OpenLotsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(lot.symbol)
                                     .font(.headline)
-                                    .foregroundStyle(.primary)
+                                    .foregroundStyle(HomeColor.ink)
                                     .lineLimit(2)
                                 Text(lot.direction + " · " + WSPull.formatQty(lot.quantity) + " · " + WSPull.formatCad(lot.price, digits: 2))
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(HomeColor.muted)
                                     .monospacedDigit()
                             }
                             Spacer(minLength: 8)
                             Text(WSPull.formatCloseDate(lot.date))
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HomeColor.muted)
                         }
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
@@ -870,6 +1045,8 @@ struct OpenLotsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
         .overlay {
             if rows.isEmpty {
                 ContentUnavailableView(
@@ -892,12 +1069,14 @@ struct OpenLotsView: View {
         .navigationBarTitleDisplayMode(.large)
         .sheet(isPresented: $showSettings) {
             SettingsView(session: session, journal: journal)
+                .presentationBackground(HomeColor.tile)
         }
         .sheet(isPresented: $showFilters) {
             FiltersSheet(journal: journal)
                 .environmentObject(filters)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(HomeColor.tile)
         }
     }
 }
@@ -1258,8 +1437,7 @@ private struct LiveEquityCurveDrawing: View {
     let points: [WSNavPoint]
     var selectedIndex: Int? = nil
 
-    private static let hairGray = Color(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
-    private static let dim: Double = 0.30
+        private static let dim: Double = 0.30
 
     var body: some View {
         Canvas { context, size in
@@ -1317,7 +1495,7 @@ private struct LiveEquityCurveDrawing: View {
                 hair.addLine(to: CGPoint(x: hit.x, y: size.height))
                 context.stroke(
                     hair,
-                    with: .color(Self.hairGray),
+                    with: .color(HomeColor.hairline),
                     style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
                 )
                 let r: CGFloat = 4
@@ -1332,8 +1510,7 @@ private struct LiveMonthlyPnLDrawing: View {
     let bars: [WSMonthBar]
     var selectedIndex: Int? = nil
 
-    private static let hairGray = Color(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
-
+    
     var body: some View {
         Canvas { context, size in
             let shown = Array(bars.suffix(18))
@@ -1367,7 +1544,7 @@ private struct LiveMonthlyPnLDrawing: View {
                 hair.addLine(to: CGPoint(x: cx, y: size.height))
                 context.stroke(
                     hair,
-                    with: .color(Self.hairGray),
+                    with: .color(HomeColor.hairline),
                     style: StrokeStyle(lineWidth: 1, dash: [3.5, 2.5])
                 )
             }
@@ -1539,11 +1716,11 @@ struct SettingsBar: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "line.3.horizontal.decrease")
                         .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(HomeColor.muted)
                         .frame(width: 24, height: 24)
                     if filtersOn {
                         Circle()
-                            .fill(Color(uiColor: .systemGreen))
+                            .fill(HomeColor.profit)
                             .frame(width: 8, height: 8)
                             .offset(x: 2, y: -2)
                     }
@@ -1553,7 +1730,7 @@ struct SettingsBar: View {
             Button(action: onSettings) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(HomeColor.muted)
                     .frame(width: 24, height: 24)
             }
             .accessibilityLabel("Settings")
@@ -1637,14 +1814,17 @@ struct FiltersSheet: View {
                 }
                 if filters.current.isActive {
                     Section {
-                        Button("Reset filters", role: .destructive) {
+                        Button("Reset filters") {
                             filters.reset()
                         }
+                        .foregroundStyle(HomeColor.loss)
                     }
                 }
             }
             .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
+            .bagholderListChrome()
+            .listRowBackground(HomeColor.tile)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -1652,6 +1832,7 @@ struct FiltersSheet: View {
                 }
             }
         }
+        .presentationBackground(HomeColor.tile)
         .tint(HomeColor.selected)
     }
 
@@ -1708,6 +1889,8 @@ private struct FilterStringPick: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
     }
 
     private func row(_ label: String, value: String) -> some View {
@@ -1716,7 +1899,7 @@ private struct FilterStringPick: View {
         } label: {
             HStack {
                 Text(label)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(HomeColor.ink)
                 Spacer()
                 if selection == value {
                     Image(systemName: "checkmark")
@@ -1742,7 +1925,7 @@ private struct ClosedInPick: View {
             } label: {
                 HStack {
                     Text("All years")
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(HomeColor.ink)
                     Spacer()
                     if selected.isEmpty {
                         Image(systemName: "checkmark")
@@ -1756,7 +1939,7 @@ private struct ClosedInPick: View {
                 } label: {
                     HStack {
                         Text(y)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(HomeColor.ink)
                         Spacer()
                         if selected == y {
                             Image(systemName: "checkmark")
@@ -1768,6 +1951,8 @@ private struct ClosedInPick: View {
         }
         .navigationTitle("Closed in")
         .navigationBarTitleDisplayMode(.inline)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
     }
 }
 
@@ -1786,7 +1971,7 @@ private struct DateFilterPick: View {
             } label: {
                 HStack {
                     Text("All")
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(HomeColor.ink)
                     Spacer()
                     if value.isEmpty {
                         Image(systemName: "checkmark")
@@ -1805,6 +1990,8 @@ private struct DateFilterPick: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
     }
 
     private func isoDate(_ s: String) -> Date? {
@@ -1851,7 +2038,7 @@ private struct PriceOpPick: View {
                 } label: {
                     HStack {
                         Text(op.1)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(HomeColor.ink)
                         Spacer()
                         if filters.current.priceOp == op.0 {
                             Image(systemName: "checkmark")
@@ -1863,6 +2050,8 @@ private struct PriceOpPick: View {
         }
         .navigationTitle("Price")
         .navigationBarTitleDisplayMode(.inline)
+        .bagholderListChrome()
+        .listRowBackground(HomeColor.tile)
     }
 }
 
@@ -1870,6 +2059,7 @@ struct SettingsView: View {
 
     @ObservedObject var session: SessionStore
     @ObservedObject var journal: Journal
+    @EnvironmentObject private var appearance: AppearanceStore
     @Environment(\.dismiss) private var dismiss
     @State private var showLogin = false
 
@@ -1879,34 +2069,55 @@ struct SettingsView: View {
                 Section {
                     if session.connected {
                         Text("Connected")
+                            .foregroundStyle(HomeColor.ink)
                         Button("Refresh") {
                             journal.refresh()
                             dismiss()
                         }
                         .disabled(journal.phase == .pulling)
-                        Button("Disconnect", role: .destructive) {
+                        Button("Disconnect") {
                             session.disconnect()
                         }
+                        .foregroundStyle(HomeColor.loss)
                     } else {
                         Button("Connect") {
                             showLogin = true
                         }
                         Text("Opens Wealthsimple’s login. After you sign in, this screen closes.")
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HomeColor.muted)
                     }
                 }
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Appearance")
+                            .font(.system(size: 13))
+                            .foregroundStyle(HomeColor.muted)
+                        AppearanceSegment(selection: $appearance.choice)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                    }
+                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(HomeColor.elevated)
+                }
             }
+            .listStyle(.insetGrouped)
+            .bagholderListChrome()
+            .listRowBackground(HomeColor.tile)
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(HomeColor.selected)
                 }
             }
             .fullScreenCover(isPresented: $showLogin) {
                 ConnectLoginView(session: session, isPresented: $showLogin)
             }
         }
+        .presentationBackground(HomeColor.tile)
+        .tint(HomeColor.selected)
     }
 }
 
@@ -1926,6 +2137,7 @@ struct ConnectLoginView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .foregroundStyle(HomeColor.selected)
                 }
             }
         }
