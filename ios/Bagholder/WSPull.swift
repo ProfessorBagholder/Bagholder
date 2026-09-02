@@ -2117,12 +2117,9 @@ query IdentityHistoricalFinancialsQuery(
             if qty <= 0 { return nil }
             return Fill(activity: a, side: side, qty: qty)
         }
+        // ledger.html matchFifo fills.sort (1565-1571): transactionDate, fillRank, id.
         fills.sort { a, b in
-            let ta = a.activity.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
-            let tb = b.activity.occurredAt.trimmingCharacters(in: .whitespacesAndNewlines)
-            let sa = ta.isEmpty ? a.activity.transactionDate : ta
-            let sb = tb.isEmpty ? b.activity.transactionDate : tb
-            let d = sa.compare(sb)
+            let d = a.activity.transactionDate.compare(b.activity.transactionDate)
             if d != .orderedSame { return d == .orderedAscending }
             let ra = fillRank(a), rb = fillRank(b)
             if ra != rb { return ra < rb }
@@ -2716,9 +2713,12 @@ query IdentityHistoricalFinancialsQuery(
         UserDefaults.standard.set(csv, forKey: sp500CacheKey)
     }
 
-    /// Every Home pull: live FRED first. On success, cache CSV. If live fails, reuse last live cache. Else empty (em dash). Never load bundled ETF seed.
+    /// Every Home pull: live FRED first. If parse is empty/HTML, keep cache.
+    /// If live newest date is older than cache newest date, keep cache (truncated CSV).
+    /// Else save live and use it. Never Yahoo. Never bundled ETF seed.
     private static func ensureSpyPrices() async -> [String: Double] {
-        guard let url = URL(string: sp500FredURL) else { return loadCachedSP500() }
+        let cached = loadCachedSP500()
+        guard let url = URL(string: sp500FredURL) else { return cached }
         var req = URLRequest(url: url, timeoutInterval: 45)
         req.httpMethod = "GET"
         req.setValue("text/csv,*/*;q=0.8", forHTTPHeaderField: "Accept")
@@ -2731,6 +2731,11 @@ query IdentityHistoricalFinancialsQuery(
                     ?? ""
                 let live = parseFredSP500Csv(text)
                 if !live.isEmpty {
+                    let liveLast = live.keys.max() ?? ""
+                    let cachedLast = cached.keys.max() ?? ""
+                    if !cached.isEmpty && liveLast < cachedLast {
+                        return cached
+                    }
                     saveCachedSP500(text)
                     return live
                 }
@@ -2738,7 +2743,7 @@ query IdentityHistoricalFinancialsQuery(
         } catch {
             // live failed; fall back to last successful live cache
         }
-        return loadCachedSP500()
+        return cached
     }
 
     /// ledger.html spyOn (1914–1923): YYYY-MM-DD lookup, walk back up to 18 calendar days.
