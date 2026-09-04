@@ -271,7 +271,8 @@ def _relabel_option_closes(conn):
         "activity_type = 'ASSIGN', "
         "activity_sub_type = 'BUYTOCLOSE', "
         "category = 'option_event', "
-        "quantity = ABS(quantity) "
+        "quantity = ABS(quantity), "
+        "unit_price = 0 "
         f"WHERE {raw} LIKE '%ASSIGN%'"
     )
     conn.execute(

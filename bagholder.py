@@ -1023,7 +1023,8 @@ def map_activity(item, accounts=None):
         else:
             activity_sub = "SELL"
         quantity = -abs(qty_abs) if activity_sub == "SELL" else abs(qty_abs)
-        if abs(cash) < 1e-12:
+        # Strike cash on ASSIGN is share delivery, not option buyback.
+        if "ASSIGN" in typ or abs(cash) < 1e-12:
             unit_price = 0.0
         if not is_opt:
             symbol = symbol or _asset_symbol(item)

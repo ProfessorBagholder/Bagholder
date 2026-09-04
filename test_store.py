@@ -225,19 +225,22 @@ class StoreTest(unittest.TestCase):
             _ws_item(
                 type="OPTIONS_ASSIGN",
                 subType="ASSIGNED",
-                assetSymbol="LUNR",
+                assetSymbol="ASTS",
                 contractType="CALL",
-                strikePrice=12,
-                expiryDate="2027-01-15",
-                assetQuantity=3,
-                amount=0,
+                strikePrice=31,
+                expiryDate="2025-03-07",
+                assetQuantity=1,
+                amount=3100,
+                amountSign="negative",
+                currency="USD",
             )
         )
         self.assertEqual(assign["category"], "option_event")
         self.assertEqual(assign["activityType"], "ASSIGN")
         self.assertEqual(assign["activitySubType"], "BUYTOCLOSE")
-        self.assertEqual(assign["quantity"], 3)
+        self.assertEqual(assign["quantity"], 1)
         self.assertEqual(assign["unitPrice"], 0)
+        self.assertEqual(assign["symbol"], "ASTS 07MAR25 31.00 CALL")
 
     def test_map_activity_option_unit_price_is_per_share(self):
         cheap = bagholder.map_activity(
@@ -471,6 +474,23 @@ class StoreTest(unittest.TestCase):
                     "source": "wealthsimple",
                     "rawType": "OPTIONS_ASSIGN",
                 },
+                {
+                    "canonicalId": "opt-asg-strike",
+                    "occurredAt": "2025-03-07T21:00:00Z",
+                    "transactionDate": "2025-03-07",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "ASSIGN",
+                    "activitySubType": "BUYTOCLOSE",
+                    "symbol": "ASTS 07MAR25 31.00 CALL",
+                    "currency": "USD",
+                    "quantity": 1,
+                    "unitPrice": 31,
+                    "netCashAmount": -3100,
+                    "category": "option_event",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_ASSIGN",
+                },
             ]
         )
         store.ensure()
@@ -501,6 +521,9 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(asg["activityType"], "ASSIGN")
         self.assertEqual(asg["activitySubType"], "BUYTOCLOSE")
         self.assertEqual(asg["quantity"], 2)
+        strike = by_id["opt-asg-strike"]
+        self.assertEqual(strike["unitPrice"], 0)
+        self.assertEqual(strike["activitySubType"], "BUYTOCLOSE")
 
     def test_insert_if_new_by_canonical_id(self):
         row = bagholder.map_activity(_ws_item())
@@ -1213,6 +1236,39 @@ if (stoOnly.unmatched.length) throw new Error("STO without buy unmatched " + JSO
 if (stoOnly.open.length !== 1 || stoOnly.open[0].direction !== "SHORT" || stoOnly.open[0].quantity !== 4) {
   throw new Error("STO should open short " + JSON.stringify(stoOnly.open));
 }
+
+const asts = matchFifo([
+  act({
+    id: "asts-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 4.7475,
+    netCashAmount: 474.75,
+    transactionDate: "2025-01-15",
+    symbol: "ASTS 07MAR25 31.00 CALL",
+  }),
+  act({
+    id: "asts-asg",
+    category: "option_event",
+    activityType: "ASSIGN",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_ASSIGN",
+    quantity: 1,
+    unitPrice: 31,
+    netCashAmount: -3100,
+    transactionDate: "2025-03-07",
+    symbol: "ASTS 07MAR25 31.00 CALL",
+  }),
+]);
+if (asts.unmatched.length) throw new Error("ASTS assign unmatched " + JSON.stringify(asts.unmatched));
+if (asts.open.length) throw new Error("ASTS assign should close short " + JSON.stringify(asts.open));
+if (asts.closed.length !== 1 || asts.closed[0].exitPrice !== 0 || asts.closed[0].openDirection !== "SHORT") {
+  throw new Error("ASTS assign trade " + JSON.stringify(asts.closed));
+}
+if (Math.abs(asts.closed[0].pnl - 474.75) > 1e-6) throw new Error("ASTS assign pnl " + asts.closed[0].pnl + " want 474.75");
 
 console.log("ok");
 """

@@ -1541,6 +1541,7 @@ function normalizeOptionActivity(activity) {
     if (raw.includes("ASSIGN")) {
       a.activityType = "ASSIGN";
       a.activitySubType = "BUYTOCLOSE";
+      a.unitPrice = 0;
     } else if (raw.includes("SHORTEXPIR")) {
       a.activityType = "EXPIR";
       a.activitySubType = "BUY";
@@ -1551,7 +1552,7 @@ function normalizeOptionActivity(activity) {
       a.activityType = "EXERCISE";
       a.activitySubType = "SELL";
     }
-    if (Math.abs(cash) < 1e-12) a.unitPrice = 0;
+    if (raw.includes("ASSIGN") || Math.abs(cash) < 1e-12) a.unitPrice = 0;
     const q = Math.abs(Number(a.quantity) || 0);
     if (q > 0) a.quantity = a.activitySubType === "SELL" ? -q : q;
   }
@@ -1666,6 +1667,9 @@ function inferZeroQtyOptionFills(fills) {
         a.quantity = f.side === "SELL" ? -qty : qty;
         f.qty = qty;
       }
+    }
+    if (isOptionSymbol(a.symbol) && (compactType(a.rawType).includes("ASSIGN") || compactType(a.activityType).includes("ASSIGN"))) {
+      a.unitPrice = 0;
     }
     if (f.qty > 0) {
       const closingDir = f.side === "BUY" ? "SHORT" : "LONG";
