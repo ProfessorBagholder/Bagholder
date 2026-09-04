@@ -1797,7 +1797,7 @@ function formatReturn(r) {
 
 function listingFiltersOn() {
   const f = state.filters || {};
-  return !!(f.symbol || f.exchange || priceFilterOn());
+  return !!(f.symbol || f.exchange || f.kind || priceFilterOn());
 }
 
 function parsePrice(s) {
@@ -2272,6 +2272,14 @@ function isOptionSymbol(symbol) {
   if (/^[A-Z][A-Z0-9.]{0,9} \d{6}[CP]\d+/.test(u)) return true;
   return false;
 }
+function kindMatches(symbol) {
+  const k = (state.filters && state.filters.kind) || "";
+  if (!k) return true;
+  const opt = isOptionSymbol(symbol);
+  if (k === "options") return opt;
+  if (k === "shares") return !opt;
+  return true;
+}
 function optionMultiplier(symbol) {
   return isOptionSymbol(symbol) ? 100 : 1;
 }
@@ -2387,7 +2395,7 @@ const state = {
   navByAccount: {},
   menuOpen: false,
   filterOpen: false,
-  filters: { from: "", to: "", account: "", exchange: "", symbol: "", q: "", priceOp: "", priceMin: "", priceMax: "" },
+  filters: { from: "", to: "", account: "", exchange: "", symbol: "", kind: "", q: "", priceOp: "", priceMin: "", priceMax: "" },
   reports: [],
   selected: null,
   tab: "closed",
@@ -2447,6 +2455,12 @@ function formatAxisCad(n, digits) {
   const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   if (n < 0) return "−$" + abs;
   if (n > 0) return "+$" + abs;
+  return "$" + abs;
+}
+function formatAxisLevelCad(n, digits) {
+  digits = digits == null ? 0 : digits;
+  const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (n < 0) return "−$" + abs;
   return "$" + abs;
 }
 function formatPct(n) {
@@ -2617,6 +2631,7 @@ function filteredTrades(closedFx) {
     if (f.account && t.accountId !== f.account && t.accountType !== f.account) return false;
     if (f.symbol && underlyingSymbol(t.symbol) !== f.symbol) return false;
     if (f.exchange && listingExchange(t) !== f.exchange) return false;
+    if (!kindMatches(t.symbol)) return false;
     if (!rowPriceOk([t.entryPrice, t.exitPrice])) return false;
     return true;
   });
@@ -3157,7 +3172,7 @@ function svgEquity(points) {
     const gy = padT + (innerH * g) / 3;
     const gv = maxY - ((maxY - minY) * g) / 3;
     grid.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="#262c36"/>');
-    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisCad(gv, 0) + "</text>");
+    grid.push('<text x="' + (padL - 2) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisLevelCad(gv, 0) + "</text>");
   }
   const hits = points.map((p, i) => {
     const x0 = i === 0 ? padL : (x(i - 1) + x(i)) / 2;
@@ -3323,6 +3338,7 @@ function render() {
     if (f.account && a.accountId !== f.account && a.accountType !== f.account) return false;
     if (f.symbol && a.symbol && underlyingSymbol(a.symbol) !== f.symbol) return false;
     if (f.exchange && listingExchange(a) !== f.exchange) return false;
+    if (!kindMatches(a.symbol)) return false;
     if (!rowPriceOk([a.unitPrice])) return false;
     return true;
   });
@@ -3403,6 +3419,9 @@ function render() {
     let openLots = !state.filters.account ? open : open.filter((l) => l.accountId === state.filters.account || l.accountType === state.filters.account);
     if (state.filters.exchange) {
       openLots = openLots.filter((l) => listingExchange({ securityId: l.securityId, buyActivityId: l.activityId }) === state.filters.exchange);
+    }
+    if (state.filters.kind) {
+      openLots = openLots.filter((l) => kindMatches(l.symbol));
     }
     if (priceFilterOn()) {
       openLots = openLots.filter((l) => rowPriceOk([l.price]));
@@ -3526,7 +3545,7 @@ function render() {
       tabBody;
   }
 
-  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange || priceFilterOn());
+  const filtersActive = !!(state.filters.from || state.filters.to || state.filters.symbol || state.filters.account || state.filters.exchange || state.filters.kind || priceFilterOn());
 
   const drawer = state.selected
     ? renderDrawer(grouped.find((t) => t.id === state.selected.id) || state.selected)
@@ -3559,6 +3578,11 @@ function render() {
     "</select></div>" +
     '<div class="field"><label>Exchange</label><select id="exchange"><option value="">All</option>' +
     exchanges.map((a) => "<option " + (state.filters.exchange === a ? "selected" : "") + " value='" + esc(a) + "'>" + esc(a) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="field"><label>Kind</label><select id="kind">' +
+    [["", "All"], ["shares", "Shares"], ["options", "Options"]].map(function (o) {
+      return "<option " + (state.filters.kind === o[0] ? "selected" : "") + " value='" + esc(o[0]) + "'>" + esc(o[1]) + "</option>";
+    }).join("") +
     "</select></div>" +
     '<div class="field"><label>Price</label><select id="priceOp">' +
     [["", "All"], ["between", "Between"], ["under", "Under"], ["equal", "Equal"], ["over", "Over"]].map(function (o) {
@@ -4855,6 +4879,7 @@ function bind() {
       state.filters.symbol = "";
       state.filters.account = "";
       state.filters.exchange = "";
+      state.filters.kind = "";
       state.filters.priceOp = "";
       state.filters.priceMin = "";
       state.filters.priceMax = "";
@@ -4953,7 +4978,7 @@ function bind() {
     stopWatch();
     state.activities = [];
     state.notes = {};
-    state.filters = { from: "", to: "", account: "", exchange: "", symbol: "", q: "", priceOp: "", priceMin: "", priceMax: "" };
+    state.filters = { from: "", to: "", account: "", exchange: "", symbol: "", kind: "", q: "", priceOp: "", priceMin: "", priceMax: "" };
     state.reports = [];
     state.selected = null;
     state.checkedGroups = {};
@@ -4972,6 +4997,8 @@ function bind() {
     document.getElementById("account").addEventListener("change", (e) => { state.filters.account = e.target.value; state.filterOpen = true; persist(); render(); });
     const exchangeSel = document.getElementById("exchange");
     if (exchangeSel) exchangeSel.addEventListener("change", (e) => { state.filters.exchange = e.target.value; state.filterOpen = true; persist(); render(); });
+    const kindSel = document.getElementById("kind");
+    if (kindSel) kindSel.addEventListener("change", (e) => { state.filters.kind = e.target.value; state.filterOpen = true; persist(); render(); });
     const priceOpSel = document.getElementById("priceOp");
     if (priceOpSel) priceOpSel.addEventListener("change", (e) => {
       state.filters.priceOp = e.target.value;
