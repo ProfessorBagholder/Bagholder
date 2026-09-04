@@ -1250,7 +1250,9 @@ function mapStatement(row, bookId) {
     unitPrice = 0;
   }
   if (parsed.fillParsed && unitPrice === 0 && parsed.quantity > 0 && compactCode !== "STKDIS" && compactCode !== "STKDIV") {
-    unitPrice = Math.abs(netCashAmount) / parsed.quantity;
+    // Statement amount is full cash. Options are premium × 100; Sync WS unitPrice is per-share.
+    const denom = parsed.quantity * optionMultiplier(parsed.symbol);
+    unitPrice = denom > 0 ? Math.abs(netCashAmount) / denom : 0;
   }
   if (category === "option_event" && parsed.fillParsed) {
     if (parsed.contractSigned < 0) activitySubType = "BUY";

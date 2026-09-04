@@ -496,6 +496,12 @@ class StoreTest(unittest.TestCase):
         self.assertIn("rowPriceOk([t.entryPrice, t.exitPrice])", html)
         self.assertIn("priceFilterOn()", html)
 
+    def test_statement_option_unit_price_divides_by_multiplier(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("parsed.quantity * optionMultiplier(parsed.symbol)", html)
+        self.assertIn("Math.abs(netCashAmount) / denom", html)
+        self.assertNotIn("Math.abs(netCashAmount) / parsed.quantity", html)
+
 def time_now_minus():
     return datetime.now(timezone.utc).timestamp() - 10
 
