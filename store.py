@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 SCHEMA_VERSION = 3
+OPTION_UNIT_PRICE_SCALE_META = "option_unit_price_scale_v1"
 ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
 ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
 ACTIVITY_PULL_HOUR = 14
@@ -256,12 +257,13 @@ def _cash_near(a, b, rel=0.02, abs_tol=0.02):
 
 
 def _scale_option_unit_prices(conn):
-    """Fix Sync rows where option unit_price is 100× high (cash ≈ price × qty).
+    """One-shot: divide option unit_price by 100 when cash ≈ price × qty.
 
     Wealthsimple option `amount` is contract cash. Correct per-share price is
     amount / (qty × 100). The old `unit_price > 20` heuristic left cheap
-    contracts 100× high. Sync never replaces existing rows, so repair on open.
-    Already-correct rows (cash ≈ price × qty × 100) are left alone.
+    contracts 100× high. Sync never replaces existing rows. Already-correct
+    rows (cash ≈ price × qty × 100) are left alone. Caller runs this only
+    when meta option_unit_price_scale_v1 is missing, then stamps the key.
     """
     rows = conn.execute(
         "SELECT id, symbol, quantity, unit_price, net_cash_amount FROM activities"
@@ -290,7 +292,17 @@ def ensure():
         try:
             _init_schema(conn)
             _relabel_option_trades(conn)
-            _scale_option_unit_prices(conn)
+            stamped = conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (OPTION_UNIT_PRICE_SCALE_META,),
+            ).fetchone()
+            if not stamped:
+                _scale_option_unit_prices(conn)
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (OPTION_UNIT_PRICE_SCALE_META, "1"),
+                )
             conn.commit()
         finally:
             conn.close()

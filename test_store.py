@@ -201,14 +201,29 @@ class StoreTest(unittest.TestCase):
                 },
             ]
         )
+        # setUp already ran ensure() on an empty DB and stamped the one-shot key.
+        conn = sqlite3.connect(str(store.db_path()))
+        try:
+            conn.execute(
+                "DELETE FROM meta WHERE key = ?",
+                (store.OPTION_UNIT_PRICE_SCALE_META,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         store.ensure()
         by_id = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
         self.assertAlmostEqual(by_id["opt-cheap-1"]["unitPrice"], 0.1125)
         self.assertAlmostEqual(by_id["opt-ok-1"]["unitPrice"], 13.3)
         self.assertAlmostEqual(by_id["share-ok-1"]["unitPrice"], 10.0)
-        store.ensure()
+        self.assertEqual(store.get_meta(store.OPTION_UNIT_PRICE_SCALE_META), "1")
+        with mock.patch.object(store, "_scale_option_unit_prices") as scale:
+            store.ensure()
+            scale.assert_not_called()
         again = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
         self.assertAlmostEqual(again["opt-cheap-1"]["unitPrice"], 0.1125)
+        self.assertAlmostEqual(again["opt-ok-1"]["unitPrice"], 13.3)
+        self.assertAlmostEqual(again["share-ok-1"]["unitPrice"], 10.0)
 
     def test_relabel_stored_options_sell(self):
         store.apply_wealthsimple_mapped(
