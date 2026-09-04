@@ -241,12 +241,56 @@ def _relabel_option_trades(conn):
     )
 
 
+def _is_option_symbol(symbol):
+    compact = _s(symbol).strip().upper()
+    if not compact:
+        return False
+    padded = " " + compact + " "
+    if " CALL " in padded or " PUT " in padded:
+        return True
+    return compact.endswith(" C") or compact.endswith(" P")
+
+
+def _cash_near(a, b, rel=0.02, abs_tol=0.02):
+    return abs(a - b) <= max(abs_tol, rel * max(abs(a), abs(b), 1e-9))
+
+
+def _scale_option_unit_prices(conn):
+    """Fix Sync rows where option unit_price is 100× high (cash ≈ price × qty).
+
+    Wealthsimple option `amount` is contract cash. Correct per-share price is
+    amount / (qty × 100). The old `unit_price > 20` heuristic left cheap
+    contracts 100× high. Sync never replaces existing rows, so repair on open.
+    Already-correct rows (cash ≈ price × qty × 100) are left alone.
+    """
+    rows = conn.execute(
+        "SELECT id, symbol, quantity, unit_price, net_cash_amount FROM activities"
+    ).fetchall()
+    for row in rows:
+        if not _is_option_symbol(row["symbol"]):
+            continue
+        qty = abs(_num(row["quantity"], 0.0) or 0.0)
+        px = abs(_num(row["unit_price"], 0.0) or 0.0)
+        cash = abs(_num(row["net_cash_amount"], 0.0) or 0.0)
+        if qty <= 0 or px <= 0 or cash <= 0:
+            continue
+        implied = px * qty
+        if _cash_near(cash, implied * 100.0):
+            continue
+        if _cash_near(cash, implied):
+            conn.execute(
+                "UPDATE activities SET unit_price = ? WHERE id = ?",
+                (px / 100.0, row["id"]),
+            )
+
+
 def ensure():
     with _lock:
         conn = _connect()
         try:
             _init_schema(conn)
             _relabel_option_trades(conn)
+            _scale_option_unit_prices(conn)
             conn.commit()
         finally:
             conn.close()

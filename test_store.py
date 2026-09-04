@@ -111,6 +111,105 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["quantity"], 5)
         self.assertEqual(row["netCashAmount"], -150)
 
+    def test_map_activity_option_unit_price_is_per_share(self):
+        cheap = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_SELL",
+                subType="LIMIT_ORDER",
+                assetSymbol="DRAM",
+                contractType="CALL",
+                strikePrice=1,
+                expiryDate="2027-02-19",
+                assetQuantity=10,
+                amount=112.5,
+                amountSign="positive",
+            )
+        )
+        self.assertAlmostEqual(cheap["unitPrice"], 0.1125)
+        pricey = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_SELL",
+                subType="LIMIT_ORDER",
+                assetSymbol="SOXL",
+                contractType="CALL",
+                strikePrice=20,
+                expiryDate="2027-02-19",
+                assetQuantity=10,
+                amount=13300,
+                amountSign="positive",
+            )
+        )
+        self.assertAlmostEqual(pricey["unitPrice"], 13.3)
+        share_item = _ws_item(amount=100, assetQuantity=10)
+        share = bagholder.map_activity(share_item)
+        self.assertFalse(bagholder._is_option(share_item))
+        self.assertAlmostEqual(share["unitPrice"], 10.0)
+
+    def test_scale_stored_option_unit_price_missing_multiplier(self):
+        store.apply_wealthsimple_mapped(
+            [
+                {
+                    "canonicalId": "opt-cheap-1",
+                    "occurredAt": "2026-08-31T14:16:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SELL",
+                    "activitySubType": "SELLTOOPEN",
+                    "symbol": "DRAM 19FEB27 1.00 CALL",
+                    "currency": "USD",
+                    "quantity": -10,
+                    "unitPrice": 11.25,
+                    "netCashAmount": 112.5,
+                    "category": "trade",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_SELL",
+                },
+                {
+                    "canonicalId": "opt-ok-1",
+                    "occurredAt": "2026-08-31T14:17:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SELL",
+                    "activitySubType": "SELLTOOPEN",
+                    "symbol": "SOXL 19FEB27 20.00 CALL",
+                    "currency": "USD",
+                    "quantity": -10,
+                    "unitPrice": 13.3,
+                    "netCashAmount": 13300,
+                    "category": "trade",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_SELL",
+                },
+                {
+                    "canonicalId": "share-ok-1",
+                    "occurredAt": "2026-08-31T14:18:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "Trade",
+                    "activitySubType": "BUY",
+                    "symbol": "AAA",
+                    "currency": "CAD",
+                    "quantity": 10,
+                    "unitPrice": 10.0,
+                    "netCashAmount": -100,
+                    "category": "trade",
+                    "source": "wealthsimple",
+                    "rawType": "DIY_BUY",
+                },
+            ]
+        )
+        store.ensure()
+        by_id = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
+        self.assertAlmostEqual(by_id["opt-cheap-1"]["unitPrice"], 0.1125)
+        self.assertAlmostEqual(by_id["opt-ok-1"]["unitPrice"], 13.3)
+        self.assertAlmostEqual(by_id["share-ok-1"]["unitPrice"], 10.0)
+        store.ensure()
+        again = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
+        self.assertAlmostEqual(again["opt-cheap-1"]["unitPrice"], 0.1125)
+
     def test_relabel_stored_options_sell(self):
         store.apply_wealthsimple_mapped(
             [
