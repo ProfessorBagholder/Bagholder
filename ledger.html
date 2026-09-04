@@ -3172,7 +3172,7 @@ function svgEquity(points) {
     return '<rect class="equity-hit" data-pnl-tip="' + tip + '" x="' + x0.toFixed(1) + '" y="' + padT + '" width="' + Math.max(1, x1 - x0).toFixed(1) + '" height="' + innerH.toFixed(1) + '" fill="#fff" fill-opacity="0" pointer-events="all"/>';
   }).join("");
   return (
-    '<svg viewBox=\"0 0 ' + w + ' ' + h + '\" class=\"chart\" preserveAspectRatio=\"none\">' +
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" class="chart" preserveAspectRatio="none">' +
     grid.join("") +
     '<line x1="' + padL + '" y1="' + zero + '" x2="' + (w - padR) + '" y2="' + zero + '" stroke="#343b47" stroke-dasharray="3 3"/>' +
     '<path d="' + d + '" fill="none" stroke="' + (cls === "pos" ? "#3ecf8e" : "#ef6b73") + '" stroke-width="2" pointer-events="none"/>' +
