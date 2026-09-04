@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -609,6 +611,50 @@ class StoreTest(unittest.TestCase):
         self.assertIn('id="priceOp"', html)
         self.assertIn("rowPriceOk([t.entryPrice, t.exitPrice])", html)
         self.assertIn("priceFilterOn()", html)
+
+    def test_ledger_kind_filter(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn('<label>Kind</label>', html)
+        self.assertIn('id="kind"', html)
+        self.assertIn('["", "All"], ["shares", "Shares"], ["options", "Options"]', html)
+        self.assertIn("function kindMatches(", html)
+        self.assertIn("kindMatches(t.symbol)", html)
+        self.assertIn("kindMatches(a.symbol)", html)
+        self.assertIn("f.kind || priceFilterOn()", html)
+        self.assertIn("state.filters.kind = e.target.value", html)
+        self.assertIn('state.filters.kind = "";', html)
+
+        m_opt = re.search(r"function isOptionSymbol\(symbol\) \{.*?\n\}", html, re.S)
+        m_kind = re.search(r"function kindMatches\(symbol\) \{.*?\n\}", html, re.S)
+        self.assertIsNotNone(m_opt)
+        self.assertIsNotNone(m_kind)
+        script = (
+            "const state = { filters: { kind: '' } };\n"
+            + m_opt.group(0) + "\n"
+            + m_kind.group(0) + "\n"
+            + """
+const share = "AAPL";
+const optCall = "QNC 19FEB27 3.00 CALL";
+const occ = "AAPL 250117C00150000";
+function check(kind, symbol, want) {
+  state.filters.kind = kind;
+  const got = kindMatches(symbol);
+  if (got !== want) throw new Error(kind + " " + symbol + " expected " + want + " got " + got);
+}
+check("", share, true);
+check("", optCall, true);
+check("shares", share, true);
+check("shares", optCall, false);
+check("shares", occ, false);
+check("options", share, false);
+check("options", optCall, true);
+check("options", occ, true);
+console.log("ok");
+"""
+        )
+        proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
 
     def test_statement_option_unit_price_divides_by_multiplier(self):
         html = bagholder.ledger_path().read_text(encoding="utf-8")
