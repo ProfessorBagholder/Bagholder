@@ -940,9 +940,11 @@ def map_activity(item, accounts=None):
 
     unit_price = 0.0
     if qty_abs:
-        unit_price = amount_abs / qty_abs
-        if is_opt and unit_price > 20:
-            unit_price = unit_price / 100.0
+        # WS option `amount` is full contract cash (per-share × 100 × contracts).
+        if is_opt:
+            unit_price = amount_abs / (qty_abs * 100.0)
+        else:
+            unit_price = amount_abs / qty_abs
 
     activity_type = "Other"
     activity_sub = sub or typ

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 SCHEMA_VERSION = 3
+OPTION_UNIT_PRICE_SCALE_META = "option_unit_price_scale_v1"
 ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
 ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
 ACTIVITY_PULL_HOUR = 14
@@ -241,12 +242,67 @@ def _relabel_option_trades(conn):
     )
 
 
+def _is_option_symbol(symbol):
+    compact = _s(symbol).strip().upper()
+    if not compact:
+        return False
+    padded = " " + compact + " "
+    if " CALL " in padded or " PUT " in padded:
+        return True
+    return compact.endswith(" C") or compact.endswith(" P")
+
+
+def _cash_near(a, b, rel=0.02, abs_tol=0.02):
+    return abs(a - b) <= max(abs_tol, rel * max(abs(a), abs(b), 1e-9))
+
+
+def _scale_option_unit_prices(conn):
+    """One-shot: divide option unit_price by 100 when cash ≈ price × qty.
+
+    Wealthsimple option `amount` is contract cash. Correct per-share price is
+    amount / (qty × 100). The old `unit_price > 20` heuristic left cheap
+    contracts 100× high. Sync never replaces existing rows. Already-correct
+    rows (cash ≈ price × qty × 100) are left alone. Caller runs this only
+    when meta option_unit_price_scale_v1 is missing, then stamps the key.
+    """
+    rows = conn.execute(
+        "SELECT id, symbol, quantity, unit_price, net_cash_amount FROM activities"
+    ).fetchall()
+    for row in rows:
+        if not _is_option_symbol(row["symbol"]):
+            continue
+        qty = abs(_num(row["quantity"], 0.0) or 0.0)
+        px = abs(_num(row["unit_price"], 0.0) or 0.0)
+        cash = abs(_num(row["net_cash_amount"], 0.0) or 0.0)
+        if qty <= 0 or px <= 0 or cash <= 0:
+            continue
+        implied = px * qty
+        if _cash_near(cash, implied * 100.0):
+            continue
+        if _cash_near(cash, implied):
+            conn.execute(
+                "UPDATE activities SET unit_price = ? WHERE id = ?",
+                (px / 100.0, row["id"]),
+            )
+
+
 def ensure():
     with _lock:
         conn = _connect()
         try:
             _init_schema(conn)
             _relabel_option_trades(conn)
+            stamped = conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (OPTION_UNIT_PRICE_SCALE_META,),
+            ).fetchone()
+            if not stamped:
+                _scale_option_unit_prices(conn)
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (OPTION_UNIT_PRICE_SCALE_META, "1"),
+                )
             conn.commit()
         finally:
             conn.close()
