@@ -2449,6 +2449,12 @@ function formatAxisCad(n, digits) {
   if (n > 0) return "+$" + abs;
   return "$" + abs;
 }
+function formatAxisLevelCad(n, digits) {
+  digits = digits == null ? 0 : digits;
+  const abs = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (n < 0) return "−$" + abs;
+  return "$" + abs;
+}
 function formatPct(n) {
   if (!Number.isFinite(n)) return "—";
   return (n * 100).toFixed(1) + "%";
@@ -3157,7 +3163,7 @@ function svgEquity(points) {
     const gy = padT + (innerH * g) / 3;
     const gv = maxY - ((maxY - minY) * g) / 3;
     grid.push('<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="#262c36"/>');
-    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisCad(gv, 0) + "</text>");
+    grid.push('<text x="' + (padL - 6) + '" y="' + (gy + 3) + '" text-anchor="end" fill="#6b7380" font-size="10">' + formatAxisLevelCad(gv, 0) + "</text>");
   }
   const hits = points.map((p, i) => {
     const x0 = i === 0 ? padL : (x(i - 1) + x(i)) / 2;
