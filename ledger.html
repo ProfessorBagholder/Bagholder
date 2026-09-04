@@ -1456,7 +1456,14 @@ function openingDirection(activity, side) {
     if (isCloseOnly(activity)) return null;
     return "LONG";
   }
-  if (isIntentionalOpen(activity)) return "SHORT";
+  if (side === "SELL") {
+    if (isOptionSymbol(activity.symbol)) {
+      if (isCloseOnly(activity)) return null;
+      return "SHORT";
+    }
+    if (isIntentionalOpen(activity)) return "SHORT";
+    return null;
+  }
   return null;
 }
 
@@ -1470,9 +1477,14 @@ function formatUnmatchedWarning(unmatched) {
   }
   const sells = unmatched.filter((u) => u.side === "SELL");
   const buys = unmatched.filter((u) => u.side !== "SELL");
+  const shareSells = sells.filter((u) => !isOptionSymbol(u.symbol));
+  const optSells = sells.filter((u) => isOptionSymbol(u.symbol));
   const parts = [];
-  if (sells.length) {
-    parts.push(sells.length + " sell" + (sells.length === 1 ? "" : "s") + " had no matching buy (not counted as shorts): " + sells.slice(0, 8).map(detail).join("; "));
+  if (shareSells.length) {
+    parts.push(shareSells.length + " sell" + (shareSells.length === 1 ? "" : "s") + " had no matching buy (not counted as shorts): " + shareSells.slice(0, 8).map(detail).join("; "));
+  }
+  if (optSells.length) {
+    parts.push(optSells.length + " option sell" + (optSells.length === 1 ? "" : "s") + " had no matching long: " + optSells.slice(0, 8).map(detail).join("; "));
   }
   if (buys.length) {
     parts.push(buys.length + " close" + (buys.length === 1 ? "" : "s") + " had no matching open: " + buys.slice(0, 8).map(detail).join("; "));
@@ -1518,32 +1530,63 @@ function normalizeOptionActivity(activity) {
   if (raw.includes("MULTILEG")) {
     a.category = "trade";
     if (cash < 0 || compactType(a.direction) === "DEBIT") {
-      if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
-        a.activityType = "OPTIONS_BUY";
-        a.activitySubType = "BUYTOCLOSE";
-      }
-    } else if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
+      a.activityType = "OPTIONS_BUY";
+      a.activitySubType = "BUYTOCLOSE";
+    } else {
       a.activityType = "OPTIONS_SELL";
-      a.activitySubType = "SELLTOCLOSE";
+      a.activitySubType = "SELLTOOPEN";
     }
   } else if (raw.includes("EXPIR") || raw.includes("ASSIGN") || raw.includes("EXERCISE")) {
     a.category = "option_event";
-    const t = compactType(a.activityType);
-    if (!(t.includes("EXPIR") || t.includes("ASSIGN") || t.includes("EXERCISE"))) {
-      a.activityType = raw.includes("ASSIGN") ? "ASSIGN" : (raw.includes("EXERCISE") ? "EXERCISE" : "EXPIR");
-    } else if (t.includes("ASSIGN")) {
+    if (raw.includes("ASSIGN")) {
       a.activityType = "ASSIGN";
-    } else if (t.includes("EXERCISE")) {
-      a.activityType = "EXERCISE";
-    } else {
+      a.activitySubType = "BUYTOCLOSE";
+    } else if (raw.includes("SHORTEXPIR")) {
       a.activityType = "EXPIR";
-    }
-    if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
-      a.activitySubType = raw.includes("ASSIGN") ? "BUYTOCLOSE" : "BUY";
+      a.activitySubType = "BUY";
+    } else if (raw.includes("EXPIR")) {
+      a.activityType = "EXPIR";
+      a.activitySubType = "SELL";
+    } else {
+      a.activityType = "EXERCISE";
+      a.activitySubType = "SELL";
     }
     if (Math.abs(cash) < 1e-12) a.unitPrice = 0;
+    const q = Math.abs(Number(a.quantity) || 0);
+    if (q > 0) a.quantity = a.activitySubType === "SELL" ? -q : q;
   }
   return a;
+}
+
+function setOptionFillSide(f, side, sub) {
+  f.side = side;
+  f.activity.activitySubType = sub;
+  const q = Math.abs(Number(f.activity.quantity) || 0);
+  if (q > 0) f.activity.quantity = side === "SELL" ? -q : q;
+}
+
+function resolveOptionFillSide(f, rem) {
+  const a = f.activity;
+  const raw = compactType(a.rawType) + compactType(a.activityType);
+  const isExpirish = raw.includes("EXPIR") || raw.includes("ASSIGN") || raw.includes("EXERCISE");
+  if (isExpirish) {
+    if (raw.includes("ASSIGN") || raw.includes("SHORTEXPIR")) {
+      setOptionFillSide(f, "BUY", raw.includes("ASSIGN") ? "BUYTOCLOSE" : "BUY");
+    } else if (raw.includes("EXPIR") && !raw.includes("SHORT")) {
+      setOptionFillSide(f, "SELL", "SELL");
+    } else if (f.side === "BUY" && rem.LONG > 1e-10 && rem.SHORT <= 1e-10) {
+      setOptionFillSide(f, "SELL", "SELL");
+    } else if (f.side === "SELL" && rem.SHORT > 1e-10 && rem.LONG <= 1e-10) {
+      setOptionFillSide(f, "BUY", "BUY");
+    }
+    return;
+  }
+  if (!(raw.includes("MULTILEG") || isCloseOnly(a))) return;
+  if (f.side === "BUY") {
+    a.activitySubType = rem.SHORT > 1e-10 ? "BUYTOCLOSE" : "BUYTOOPEN";
+  } else if (f.side === "SELL") {
+    a.activitySubType = rem.LONG > 1e-10 ? "SELLTOCLOSE" : "SELLTOOPEN";
+  }
 }
 
 function isCleanOptionQty(cash, qty) {
@@ -1589,6 +1632,7 @@ function inferZeroQtyOptionFills(fills) {
     const a = f.activity;
     if (!f.side) continue;
     const rem = remOf(a);
+    if (isOptionSymbol(a.symbol)) resolveOptionFillSide(f, rem);
     let qty = Math.abs(Number(a.quantity) || 0);
     const cash = Number(a.netCashAmount) || 0;
     if (isOptionSymbol(a.symbol) && qty === 0) {

@@ -993,13 +993,14 @@ def map_activity(item, accounts=None):
         quantity = -abs(qty_abs)
     elif "MULTILEG" in typ:
         # WS filled combo / roll legs often have null assetQuantity.
-        # Prefer close-only: debit covers, credit closes a long (or is unmatched).
+        # Credit is covered-call premium: sell-to-open a short, not close a long.
+        # Debit prefers BUYTOCLOSE; FIFO opens LONG if no short exists.
         category = "trade"
         if cash < 0:
             activity_type, activity_sub = "OPTIONS_BUY", "BUYTOCLOSE"
             quantity = abs(qty_abs)
         else:
-            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOCLOSE"
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOOPEN"
             quantity = -abs(qty_abs) if qty_abs else 0.0
     elif (
         typ in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE")
@@ -1010,16 +1011,14 @@ def map_activity(item, accounts=None):
         category = "option_event"
         keep = "ASSIGN" if "ASSIGN" in typ else ("EXERCISE" if "EXERCISE" in typ else "EXPIR")
         activity_type = keep
-        covering = (
-            "ASSIGN" in typ
-            or "EXPIR" in typ
-            or "SHORT" in typ
-            or "COVER" in _compact(sub)
-            or _is_to_close(sub)
-        )
+        short_expir = "SHORT_EXPIR" in typ or ("SHORT" in typ and "EXPIR" in typ)
         if "ASSIGN" in typ:
             activity_sub = "BUYTOCLOSE"
-        elif covering:
+        elif short_expir:
+            activity_sub = "BUY"
+        elif "EXPIR" in typ:
+            activity_sub = "SELL"
+        elif "COVER" in _compact(sub) or _is_to_close(sub):
             activity_sub = "BUY"
         else:
             activity_sub = "SELL"

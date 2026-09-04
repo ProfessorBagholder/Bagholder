@@ -244,26 +244,26 @@ def _relabel_option_trades(conn):
 
 
 def _relabel_option_closes(conn):
-    """OPTIONS_MULTILEG / *EXPIR* / *ASSIGN* were stored as category other.
+    """OPTIONS_MULTILEG / *EXPIR* / *ASSIGN* close and open semantics.
 
-    Sync never replaces existing rows. Reclassify so FIFO can close shorts.
+    Sync never replaces existing rows. Re-touch even if PR #22 already
+    set category trade/option_event with the old close-only labels.
     """
+    raw = "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_'))"
     conn.execute(
         "UPDATE activities SET "
         "activity_type = 'OPTIONS_BUY', "
         "activity_sub_type = 'BUYTOCLOSE', "
         "category = 'trade' "
-        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%MULTILEG%' "
-        "AND IFNULL(category,'') IN ('other', '') "
+        f"WHERE {raw} LIKE '%MULTILEG%' "
         "AND IFNULL(net_cash_amount, 0) < 0"
     )
     conn.execute(
         "UPDATE activities SET "
         "activity_type = 'OPTIONS_SELL', "
-        "activity_sub_type = 'SELLTOCLOSE', "
+        "activity_sub_type = 'SELLTOOPEN', "
         "category = 'trade' "
-        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%MULTILEG%' "
-        "AND IFNULL(category,'') IN ('other', '') "
+        f"WHERE {raw} LIKE '%MULTILEG%' "
         "AND IFNULL(net_cash_amount, 0) >= 0"
     )
     conn.execute(
@@ -272,11 +272,7 @@ def _relabel_option_closes(conn):
         "activity_sub_type = 'BUYTOCLOSE', "
         "category = 'option_event', "
         "quantity = ABS(quantity) "
-        "WHERE ("
-        "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%ASSIGN%' "
-        "OR UPPER(REPLACE(IFNULL(activity_type,''), '-', '_')) LIKE '%ASSIGN%'"
-        ") "
-        "AND IFNULL(category,'') IN ('other', '')"
+        f"WHERE {raw} LIKE '%ASSIGN%'"
     )
     conn.execute(
         "UPDATE activities SET "
@@ -285,11 +281,17 @@ def _relabel_option_closes(conn):
         "category = 'option_event', "
         "quantity = ABS(quantity), "
         "unit_price = CASE WHEN ABS(IFNULL(net_cash_amount, 0)) < 1e-12 THEN 0 ELSE unit_price END "
-        "WHERE ("
-        "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%EXPIR%' "
-        "OR UPPER(REPLACE(IFNULL(activity_type,''), '-', '_')) LIKE '%EXPIR%'"
-        ") "
-        "AND IFNULL(category,'') IN ('other', '')"
+        f"WHERE {raw} LIKE '%SHORT%EXPIR%'"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'EXPIR', "
+        "activity_sub_type = 'SELL', "
+        "category = 'option_event', "
+        "quantity = -ABS(quantity), "
+        "unit_price = CASE WHEN ABS(IFNULL(net_cash_amount, 0)) < 1e-12 THEN 0 ELSE unit_price END "
+        f"WHERE {raw} LIKE '%EXPIR%' "
+        f"AND {raw} NOT LIKE '%SHORT%'"
     )
 
 
