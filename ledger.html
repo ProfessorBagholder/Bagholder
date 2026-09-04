@@ -2455,6 +2455,14 @@ function kindMatches(symbol) {
   if (k === "shares") return !opt;
   return true;
 }
+function metricsSymbolKey(symbol) {
+  const k = (state.filters && state.filters.kind) || "";
+  if (k === "options") {
+    const full = String(symbol || "").trim();
+    return full || "—";
+  }
+  return underlyingSymbol(symbol);
+}
 function optionMultiplier(symbol) {
   return isOptionSymbol(symbol) ? 100 : 1;
 }
@@ -2493,7 +2501,7 @@ function computeMetrics(trades, openLotCount, incomeCad, feesCad) {
   const bySym = new Map();
   for (let i = 0; i < trades.length; i++) {
     const t = trades[i];
-    const k = underlyingSymbol(t.symbol);
+    const k = metricsSymbolKey(t.symbol);
     bySym.set(k, (bySym.get(k) || 0) + t.pnlCad);
   }
   let maxWinSymbol = "";
@@ -3528,7 +3536,7 @@ function render() {
     ? realizedPnlCurve(closedForMetrics)
     : equityCurve(state.activities, state.filters.from, state.filters.to);
   const monthly = monthlyPnl(closedForMetrics);
-  const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
+  const bySymbol = breakdown(closedForMetrics, (t) => metricsSymbolKey(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
   const exchanges = knownExchanges();

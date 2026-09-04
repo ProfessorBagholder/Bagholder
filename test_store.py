@@ -892,18 +892,20 @@ class StoreTest(unittest.TestCase):
         self.assertIn("state.filters.kind = e.target.value", html)
         self.assertIn('state.filters.kind = "";', html)
 
-        m_opt = re.search(r"function isOptionSymbol\(symbol\) \{.*?\n\}", html, re.S)
-        m_kind = re.search(r"function kindMatches\(symbol\) \{.*?\n\}", html, re.S)
-        self.assertIsNotNone(m_opt)
-        self.assertIsNotNone(m_kind)
+        self.assertIn("function metricsSymbolKey(", html)
+        self.assertIn("metricsSymbolKey(t.symbol)", html)
         script = (
             "const state = { filters: { kind: '' } };\n"
-            + m_opt.group(0) + "\n"
-            + m_kind.group(0) + "\n"
+            + _extract_js_function(html, "underlyingSymbol") + "\n"
+            + _extract_js_function(html, "isOptionSymbol") + "\n"
+            + _extract_js_function(html, "kindMatches") + "\n"
+            + _extract_js_function(html, "metricsSymbolKey") + "\n"
             + """
 const share = "AAPL";
 const optCall = "QNC 19FEB27 3.00 CALL";
 const occ = "AAPL 250117C00150000";
+const lunrJan = "LUNR 15JAN27 12.00 CALL";
+const lunrAug = "LUNR 22AUG25 8.00 CALL";
 function check(kind, symbol, want) {
   state.filters.kind = kind;
   const got = kindMatches(symbol);
@@ -917,6 +919,14 @@ check("shares", occ, false);
 check("options", share, false);
 check("options", optCall, true);
 check("options", occ, true);
+state.filters.kind = "options";
+if (metricsSymbolKey(lunrJan) !== lunrJan) throw new Error("options key should be full contract");
+if (metricsSymbolKey(lunrAug) !== lunrAug) throw new Error("options key should keep each contract");
+if (metricsSymbolKey(lunrJan) === metricsSymbolKey(lunrAug)) throw new Error("options should not roll up LUNR contracts");
+state.filters.kind = "";
+if (metricsSymbolKey(lunrJan) !== "LUNR") throw new Error("All should roll up to underlying");
+state.filters.kind = "shares";
+if (metricsSymbolKey(lunrJan) !== "LUNR") throw new Error("Shares should roll up to underlying");
 console.log("ok");
 """
         )
