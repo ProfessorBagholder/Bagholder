@@ -8,6 +8,12 @@ Use at your own risk. The app will have you log into the actual Wealthsimple web
 
 ## Run
 
+This installs timezone data Windows does not ship (needed for America/Edmonton).
+
+```
+python -m pip install -r requirements.txt
+```
+
 ```
 python3 bagholder.py
 ```
