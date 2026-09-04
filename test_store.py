@@ -938,6 +938,8 @@ console.log("ok");
         html = bagholder.ledger_path().read_text(encoding="utf-8")
         self.assertIn("function inferZeroQtyOptionFills(", html)
         self.assertIn("function normalizeOptionActivity(", html)
+        self.assertIn("function foldOptionRolls(", html)
+        self.assertIn("foldOptionRolls(closed, open)", html)
         names = (
             "compactType",
             "isIntentionalOpen",
@@ -954,8 +956,10 @@ console.log("ok");
             "inferStandaloneOptionQty",
             "inferZeroQtyOptionFills",
             "matchFifo",
+            "foldOptionRolls",
             "isOptionSymbol",
             "optionMultiplier",
+            "underlyingSymbol",
             "daysBetween",
             "stableTradeId",
         )
@@ -1279,6 +1283,64 @@ if (asts.closed.length !== 1 || asts.closed[0].exitPrice !== 0 || asts.closed[0]
   throw new Error("ASTS assign trade " + JSON.stringify(asts.closed));
 }
 if (Math.abs(asts.closed[0].pnl - 474.75) > 1e-6) throw new Error("ASTS assign pnl " + asts.closed[0].pnl + " want 474.75");
+
+const roll = matchFifo([
+  act({
+    id: "aug-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 3,
+    netCashAmount: 300,
+    transactionDate: "2026-01-01",
+    symbol: "ZZZ 21AUG26 10.00 CALL",
+  }),
+  act({
+    id: "aug-cover",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_BUY",
+    quantity: 1,
+    unitPrice: 1,
+    netCashAmount: -100,
+    transactionDate: "2026-08-15",
+    symbol: "ZZZ 21AUG26 10.00 CALL",
+  }),
+  act({
+    id: "jan-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 2,
+    netCashAmount: 200,
+    transactionDate: "2026-08-15",
+    symbol: "ZZZ 15JAN27 12.00 CALL",
+  }),
+  act({
+    id: "jan-cover",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_BUY",
+    quantity: 1,
+    unitPrice: 0.5,
+    netCashAmount: -50,
+    transactionDate: "2026-12-01",
+    symbol: "ZZZ 15JAN27 12.00 CALL",
+  }),
+]);
+if (roll.unmatched.length) throw new Error("roll unmatched " + JSON.stringify(roll.unmatched));
+if (roll.open.length) throw new Error("roll should leave no open " + JSON.stringify(roll.open));
+if (roll.closed.length !== 1) throw new Error("roll should be one far trade, got " + roll.closed.length + " " + JSON.stringify(roll.closed));
+if (roll.closed[0].symbol !== "ZZZ 15JAN27 12.00 CALL") throw new Error("far symbol " + roll.closed[0].symbol);
+if (Math.abs(roll.closed[0].entryPrice - 4) > 1e-9) throw new Error("rolled basis " + roll.closed[0].entryPrice + " want 4");
+if (Math.abs(roll.closed[0].pnl - 350) > 1e-6) throw new Error("rolled pnl " + roll.closed[0].pnl + " want 350");
+if (roll.closed.some((t) => t.symbol.indexOf("AUG26") >= 0)) throw new Error("near cover should be folded away");
 
 console.log("ok");
 """

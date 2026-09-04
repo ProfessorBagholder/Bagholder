@@ -1893,7 +1893,78 @@ function matchFifo(activities) {
     }
   }
   closed.sort((a, b) => a.exitDate.localeCompare(b.exitDate) || a.id.localeCompare(b.id));
+  foldOptionRolls(closed, open);
   return { closed, open, unmatched };
+}
+
+function foldOptionRolls(closed, open) {
+  if (!closed || !closed.length) return;
+  function rollBook(t) {
+    return [fifoAccount(t), String((t && t.currency) || ""), underlyingSymbol(t.symbol)].join("::");
+  }
+  function dayOf(s) {
+    return String(s || "").slice(0, 10);
+  }
+  const covers = closed.filter((t) => t.openDirection === "SHORT" && isOptionSymbol(t.symbol));
+  covers.sort((a, b) => dayOf(a.entryDate).localeCompare(dayOf(b.entryDate)) || dayOf(a.exitDate).localeCompare(dayOf(b.exitDate)) || String(a.id).localeCompare(String(b.id)));
+  const drop = {};
+  for (let i = 0; i < covers.length; i++) {
+    const cover = covers[i];
+    if (drop[cover.id]) continue;
+    const d = dayOf(cover.exitDate);
+    if (!d) continue;
+    const under = underlyingSymbol(cover.symbol);
+    if (!under || under === "—") continue;
+    const ck = rollBook(cover);
+    const closedCands = [];
+    for (let j = 0; j < closed.length; j++) {
+      const t = closed[j];
+      if (!t || t.id === cover.id || drop[t.id]) continue;
+      if (t.openDirection !== "SHORT" || !isOptionSymbol(t.symbol)) continue;
+      if (t.symbol === cover.symbol) continue;
+      if (rollBook(t) !== ck) continue;
+      if (dayOf(t.entryDate) !== d) continue;
+      closedCands.push(t);
+    }
+    const openCands = [];
+    for (let j = 0; j < (open || []).length; j++) {
+      const l = open[j];
+      if (!l || l.direction !== "SHORT" || !isOptionSymbol(l.symbol)) continue;
+      if (l.symbol === cover.symbol) continue;
+      if (rollBook(l) !== ck) continue;
+      if (dayOf(l.date) !== d) continue;
+      openCands.push(l);
+    }
+    const kind = closedCands.length ? "closed" : "open";
+    const cands = kind === "closed" ? closedCands : openCands;
+    if (!cands.length) continue;
+    const cq = Math.abs(Number(cover.quantity) || 0);
+    cands.sort((a, b) => {
+      const da = Math.abs(Math.abs(Number(a.quantity) || 0) - cq);
+      const db = Math.abs(Math.abs(Number(b.quantity) || 0) - cq);
+      if (da !== db) return da - db;
+      return String(a.symbol || "").localeCompare(String(b.symbol || ""));
+    });
+    const row = cands[0];
+    const qty = Math.abs(Number(row.quantity) || 0);
+    if (!(qty > 0)) continue;
+    const adj = (Number(cover.pnl) || 0) / (qty * optionMultiplier(row.symbol));
+    if (kind === "closed") {
+      row.entryPrice = Number(row.entryPrice) + adj;
+      const raw = (row.openDirection === "SHORT" ? (row.entryPrice - row.exitPrice) : (row.exitPrice - row.entryPrice)) * qty * optionMultiplier(row.symbol);
+      row.pnl = raw - (Number(row.commission) || 0);
+      row.pnlCad = row.pnl;
+      row.id = stableTradeId(row);
+    } else {
+      row.price = Number(row.price) + adj;
+    }
+    drop[cover.id] = true;
+  }
+  const ids = Object.keys(drop);
+  if (!ids.length) return;
+  for (let i = closed.length - 1; i >= 0; i--) {
+    if (drop[closed[i].id]) closed.splice(i, 1);
+  }
 }
 
 const FX_FALLBACK = 1.35;
