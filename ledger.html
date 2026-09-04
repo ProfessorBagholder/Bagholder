@@ -3136,7 +3136,7 @@ function sortTh(tab, cols) {
 }
 
 function svgEquity(points) {
-  const w = 640, h = 220, padL = 52, padR = 12, padT = 16, padB = 28;
+  const w = 640, h = 220, padL = 76, padR = 12, padT = 16, padB = 28;
   if (!points.length) {
     return '<svg viewBox="0 0 640 220" class="chart"><text x="320" y="110" text-anchor="middle" fill="#6b7380" font-size="12">No equity yet</text></svg>';
   }
@@ -3195,7 +3195,7 @@ function formatChartDate(iso) {
 }
 
 function svgMonthly(rows) {
-  const w = 640, h = 220, padL = 52, padR = 16, padT = 16, padB = 44;
+  const w = 640, h = 220, padL = 76, padR = 16, padT = 16, padB = 44;
   if (!rows.length) {
     return '<svg viewBox="0 0 640 220" class="chart"><text x="320" y="110" text-anchor="middle" fill="#6b7380" font-size="12">No monthly P&amp;L</text></svg>';
   }
