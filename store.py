@@ -240,6 +240,60 @@ def _relabel_option_trades(conn):
         "AND UPPER(REPLACE(IFNULL(activity_sub_type,''), '-', '_')) "
         "NOT IN ('SELL', 'SELLTOOPEN', 'STO', 'SELLTOCLOSE', 'STC', 'COVER')"
     )
+    _relabel_option_closes(conn)
+
+
+def _relabel_option_closes(conn):
+    """OPTIONS_MULTILEG / *EXPIR* / *ASSIGN* close and open semantics.
+
+    Sync never replaces existing rows. Re-touch even if PR #22 already
+    set category trade/option_event with the old close-only labels.
+    """
+    raw = "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_'))"
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'OPTIONS_BUY', "
+        "activity_sub_type = 'BUYTOCLOSE', "
+        "category = 'trade' "
+        f"WHERE {raw} LIKE '%MULTILEG%' "
+        "AND IFNULL(net_cash_amount, 0) < 0"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'OPTIONS_SELL', "
+        "activity_sub_type = 'SELLTOOPEN', "
+        "category = 'trade' "
+        f"WHERE {raw} LIKE '%MULTILEG%' "
+        "AND IFNULL(net_cash_amount, 0) >= 0"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'ASSIGN', "
+        "activity_sub_type = 'BUYTOCLOSE', "
+        "category = 'option_event', "
+        "quantity = ABS(quantity), "
+        "unit_price = 0 "
+        f"WHERE {raw} LIKE '%ASSIGN%'"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'EXPIR', "
+        "activity_sub_type = 'BUY', "
+        "category = 'option_event', "
+        "quantity = ABS(quantity), "
+        "unit_price = CASE WHEN ABS(IFNULL(net_cash_amount, 0)) < 1e-12 THEN 0 ELSE unit_price END "
+        f"WHERE {raw} LIKE '%SHORT%EXPIR%'"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'EXPIR', "
+        "activity_sub_type = 'SELL', "
+        "category = 'option_event', "
+        "quantity = -ABS(quantity), "
+        "unit_price = CASE WHEN ABS(IFNULL(net_cash_amount, 0)) < 1e-12 THEN 0 ELSE unit_price END "
+        f"WHERE {raw} LIKE '%EXPIR%' "
+        f"AND {raw} NOT LIKE '%SHORT%'"
+    )
 
 
 def _is_option_symbol(symbol):

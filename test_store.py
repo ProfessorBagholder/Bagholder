@@ -21,6 +21,25 @@ import store
 FAKE_CLIENT_ID = "ab" * 32
 
 
+def _extract_js_function(html, name):
+    token = "function " + name + "("
+    start = html.find(token)
+    if start < 0:
+        raise AssertionError("missing JS function " + name)
+    i = html.find("{", start)
+    depth = 0
+    while i < len(html):
+        ch = html[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start : i + 1]
+        i += 1
+    raise AssertionError("unbalanced JS function " + name)
+
+
 class _FakeHTTPResp:
     def __init__(self, body, headers=None, status=200):
         if isinstance(body, (bytes, bytearray)):
@@ -112,6 +131,116 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["category"], "trade")
         self.assertEqual(row["quantity"], 5)
         self.assertEqual(row["netCashAmount"], -150)
+
+    def test_map_activity_options_multileg_debit_is_buy_to_close(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_MULTILEG",
+                subType="FILLED",
+                status="FILLED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=None,
+                amount=128,
+                amountSign="negative",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["activityType"], "OPTIONS_BUY")
+        self.assertEqual(row["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(row["quantity"], 0)
+        self.assertEqual(row["unitPrice"], 0)
+        self.assertEqual(row["netCashAmount"], -128)
+        self.assertEqual(row["symbol"], "LUNR 15JAN27 12.00 CALL")
+
+    def test_map_activity_options_multileg_credit_is_sell_to_open(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_MULTILEG",
+                subType="FILLED",
+                status="FILLED",
+                assetSymbol="BBAI",
+                contractType="CALL",
+                strikePrice=10,
+                expiryDate="2028-01-21",
+                assetQuantity=None,
+                amount=56,
+                amountSign="positive",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["activityType"], "OPTIONS_SELL")
+        self.assertEqual(row["activitySubType"], "SELLTOOPEN")
+        self.assertEqual(row["quantity"], 0)
+        self.assertEqual(row["unitPrice"], 0)
+        self.assertEqual(row["netCashAmount"], 56)
+        self.assertEqual(row["symbol"], "BBAI 21JAN28 10.00 CALL")
+
+    def test_map_activity_options_short_expiry_covers_short(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_SHORT_EXPIRY",
+                subType="EXPIRED",
+                status="POSTED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=16,
+                amount=0,
+                amountSign="negative",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "option_event")
+        self.assertEqual(row["activityType"], "EXPIR")
+        self.assertEqual(row["activitySubType"], "BUY")
+        self.assertEqual(row["quantity"], 16)
+        self.assertEqual(row["unitPrice"], 0)
+        self.assertEqual(row["netCashAmount"], 0)
+
+    def test_map_activity_options_expiry_sells_long_assign_covers_short(self):
+        expiry = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_EXPIRY",
+                subType="EXPIRED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2025-08-22",
+                assetQuantity=4,
+                amount=0,
+            )
+        )
+        self.assertEqual(expiry["category"], "option_event")
+        self.assertEqual(expiry["activityType"], "EXPIR")
+        self.assertEqual(expiry["activitySubType"], "SELL")
+        self.assertEqual(expiry["quantity"], -4)
+        self.assertEqual(expiry["unitPrice"], 0)
+        assign = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_ASSIGN",
+                subType="ASSIGNED",
+                assetSymbol="ASTS",
+                contractType="CALL",
+                strikePrice=31,
+                expiryDate="2025-03-07",
+                assetQuantity=1,
+                amount=3100,
+                amountSign="negative",
+                currency="USD",
+            )
+        )
+        self.assertEqual(assign["category"], "option_event")
+        self.assertEqual(assign["activityType"], "ASSIGN")
+        self.assertEqual(assign["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(assign["quantity"], 1)
+        self.assertEqual(assign["unitPrice"], 0)
+        self.assertEqual(assign["symbol"], "ASTS 07MAR25 31.00 CALL")
 
     def test_map_activity_option_unit_price_is_per_share(self):
         cheap = bagholder.map_activity(
@@ -256,6 +385,145 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["category"], "trade")
         self.assertEqual(row["quantity"], -35)
         self.assertEqual(row["netCashAmount"], 1050)
+
+    def test_relabel_stored_options_multileg_and_expiry(self):
+        store.apply_wealthsimple_mapped(
+            [
+                {
+                    "canonicalId": "opt-ml-1",
+                    "occurredAt": "2026-08-31T14:16:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_MULTILEG",
+                    "activitySubType": "FILLED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": 0,
+                    "unitPrice": 0,
+                    "netCashAmount": -128,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_MULTILEG",
+                },
+                {
+                    "canonicalId": "opt-ml-credit",
+                    "occurredAt": "2026-08-31T14:16:59Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SELL",
+                    "activitySubType": "SELLTOCLOSE",
+                    "symbol": "BBAI 21JAN28 10.00 CALL",
+                    "currency": "USD",
+                    "quantity": 0,
+                    "unitPrice": 0,
+                    "netCashAmount": 56,
+                    "category": "trade",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_MULTILEG",
+                },
+                {
+                    "canonicalId": "opt-exp-1",
+                    "occurredAt": "2026-08-31T14:17:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SHORT_EXPIRY",
+                    "activitySubType": "EXPIRED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": 5,
+                    "unitPrice": 0,
+                    "netCashAmount": 0,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_SHORT_EXPIRY",
+                },
+                {
+                    "canonicalId": "opt-long-exp",
+                    "occurredAt": "2026-08-31T14:17:59Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "EXPIR",
+                    "activitySubType": "BUY",
+                    "symbol": "LUNR 22AUG25 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": 4,
+                    "unitPrice": 0,
+                    "netCashAmount": 0,
+                    "category": "option_event",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_EXPIRY",
+                },
+                {
+                    "canonicalId": "opt-asg-1",
+                    "occurredAt": "2026-08-31T14:18:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_ASSIGN",
+                    "activitySubType": "ASSIGNED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": -2,
+                    "unitPrice": 0,
+                    "netCashAmount": 0,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_ASSIGN",
+                },
+                {
+                    "canonicalId": "opt-asg-strike",
+                    "occurredAt": "2025-03-07T21:00:00Z",
+                    "transactionDate": "2025-03-07",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "ASSIGN",
+                    "activitySubType": "BUYTOCLOSE",
+                    "symbol": "ASTS 07MAR25 31.00 CALL",
+                    "currency": "USD",
+                    "quantity": 1,
+                    "unitPrice": 31,
+                    "netCashAmount": -3100,
+                    "category": "option_event",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_ASSIGN",
+                },
+            ]
+        )
+        store.ensure()
+        by_id = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
+        ml = by_id["opt-ml-1"]
+        self.assertEqual(ml["category"], "trade")
+        self.assertEqual(ml["activityType"], "OPTIONS_BUY")
+        self.assertEqual(ml["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(ml["quantity"], 0)
+        self.assertEqual(ml["netCashAmount"], -128)
+        credit = by_id["opt-ml-credit"]
+        self.assertEqual(credit["category"], "trade")
+        self.assertEqual(credit["activityType"], "OPTIONS_SELL")
+        self.assertEqual(credit["activitySubType"], "SELLTOOPEN")
+        self.assertEqual(credit["netCashAmount"], 56)
+        exp = by_id["opt-exp-1"]
+        self.assertEqual(exp["category"], "option_event")
+        self.assertEqual(exp["activityType"], "EXPIR")
+        self.assertEqual(exp["activitySubType"], "BUY")
+        self.assertEqual(exp["quantity"], 5)
+        long_exp = by_id["opt-long-exp"]
+        self.assertEqual(long_exp["category"], "option_event")
+        self.assertEqual(long_exp["activityType"], "EXPIR")
+        self.assertEqual(long_exp["activitySubType"], "SELL")
+        self.assertEqual(long_exp["quantity"], -4)
+        asg = by_id["opt-asg-1"]
+        self.assertEqual(asg["category"], "option_event")
+        self.assertEqual(asg["activityType"], "ASSIGN")
+        self.assertEqual(asg["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(asg["quantity"], 2)
+        strike = by_id["opt-asg-strike"]
+        self.assertEqual(strike["unitPrice"], 0)
+        self.assertEqual(strike["activitySubType"], "BUYTOCLOSE")
 
     def test_insert_if_new_by_canonical_id(self):
         row = bagholder.map_activity(_ws_item())
@@ -624,18 +892,20 @@ class StoreTest(unittest.TestCase):
         self.assertIn("state.filters.kind = e.target.value", html)
         self.assertIn('state.filters.kind = "";', html)
 
-        m_opt = re.search(r"function isOptionSymbol\(symbol\) \{.*?\n\}", html, re.S)
-        m_kind = re.search(r"function kindMatches\(symbol\) \{.*?\n\}", html, re.S)
-        self.assertIsNotNone(m_opt)
-        self.assertIsNotNone(m_kind)
+        self.assertIn("function metricsSymbolKey(", html)
+        self.assertIn("metricsSymbolKey(t.symbol)", html)
         script = (
             "const state = { filters: { kind: '' } };\n"
-            + m_opt.group(0) + "\n"
-            + m_kind.group(0) + "\n"
+            + _extract_js_function(html, "underlyingSymbol") + "\n"
+            + _extract_js_function(html, "isOptionSymbol") + "\n"
+            + _extract_js_function(html, "kindMatches") + "\n"
+            + _extract_js_function(html, "metricsSymbolKey") + "\n"
             + """
 const share = "AAPL";
 const optCall = "QNC 19FEB27 3.00 CALL";
 const occ = "AAPL 250117C00150000";
+const lunrJan = "LUNR 15JAN27 12.00 CALL";
+const lunrAug = "LUNR 22AUG25 8.00 CALL";
 function check(kind, symbol, want) {
   state.filters.kind = kind;
   const got = kindMatches(symbol);
@@ -649,11 +919,433 @@ check("shares", occ, false);
 check("options", share, false);
 check("options", optCall, true);
 check("options", occ, true);
+state.filters.kind = "options";
+if (metricsSymbolKey(lunrJan) !== lunrJan) throw new Error("options key should be full contract");
+if (metricsSymbolKey(lunrAug) !== lunrAug) throw new Error("options key should keep each contract");
+if (metricsSymbolKey(lunrJan) === metricsSymbolKey(lunrAug)) throw new Error("options should not roll up LUNR contracts");
+state.filters.kind = "";
+if (metricsSymbolKey(lunrJan) !== "LUNR") throw new Error("All should roll up to underlying");
+state.filters.kind = "shares";
+if (metricsSymbolKey(lunrJan) !== "LUNR") throw new Error("Shares should roll up to underlying");
 console.log("ok");
 """
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    def test_ledger_infers_multileg_qty_and_closes_short_calls(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function inferZeroQtyOptionFills(", html)
+        self.assertIn("function normalizeOptionActivity(", html)
+        self.assertIn("function foldOptionRolls(", html)
+        self.assertIn("foldOptionRolls(closed, open)", html)
+        names = (
+            "compactType",
+            "isIntentionalOpen",
+            "isCloseOnly",
+            "openingDirection",
+            "fifoAccount",
+            "tickerWasReplaced",
+            "foldStkdis",
+            "tradeSide",
+            "normalizeOptionActivity",
+            "setOptionFillSide",
+            "resolveOptionFillSide",
+            "isCleanOptionQty",
+            "inferStandaloneOptionQty",
+            "inferZeroQtyOptionFills",
+            "matchFifo",
+            "foldOptionRolls",
+            "isOptionSymbol",
+            "optionMultiplier",
+            "underlyingSymbol",
+            "daysBetween",
+            "stableTradeId",
+        )
+        parts = [_extract_js_function(html, n) for n in names]
+        script = "\n".join(parts) + r"""
+function act(o) {
+  return Object.assign({
+    id: o.id,
+    accountId: "acct-1",
+    accountType: "Trading",
+    symbol: "LUNR 15JAN27 12.00 CALL",
+    name: "LUNR",
+    currency: "USD",
+    commission: 0,
+    category: o.category || "other",
+    activityType: o.activityType,
+    activitySubType: o.activitySubType,
+    rawType: o.rawType || "",
+    quantity: o.quantity,
+    unitPrice: o.unitPrice || 0,
+    netCashAmount: o.netCashAmount || 0,
+    transactionDate: o.transactionDate,
+  }, o);
+}
+const lunr = [
+  act({
+    id: "sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -16,
+    unitPrice: 6.2225,
+    netCashAmount: 9956,
+    transactionDate: "2026-01-10",
+  }),
+  act({
+    id: "ml1",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: -128,
+    transactionDate: "2026-03-01",
+  }),
+  act({
+    id: "ml2",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: -2025,
+    transactionDate: "2026-03-01",
+  }),
+];
+const lunrFifo = matchFifo(lunr);
+if (lunrFifo.open.length) throw new Error("LUNR short should be closed, open=" + JSON.stringify(lunrFifo.open));
+if (lunrFifo.closed.length !== 2) throw new Error("expected 2 closed legs, got " + lunrFifo.closed.length);
+const byQty = lunrFifo.closed.slice().sort((a, b) => a.quantity - b.quantity);
+if (byQty[0].quantity !== 1 || Math.abs(byQty[0].exitPrice - 1.28) > 1e-9) {
+  throw new Error("qty1 close " + JSON.stringify(byQty[0]));
+}
+if (byQty[1].quantity !== 15 || Math.abs(byQty[1].exitPrice - 1.35) > 1e-9) {
+  throw new Error("qty15 close " + JSON.stringify(byQty[1]));
+}
+if (byQty[0].openDirection !== "SHORT" || byQty[1].openDirection !== "SHORT") {
+  throw new Error("expected SHORT cover");
+}
+const pnl = lunrFifo.closed.reduce((s, t) => s + t.pnl, 0);
+const want = (6.2225 - 1.28) * 1 * 100 + (6.2225 - 1.35) * 15 * 100;
+if (Math.abs(pnl - want) > 1e-6) throw new Error("pnl " + pnl + " want " + want);
+
+const expiry = [
+  act({
+    id: "sto2",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -5,
+    unitPrice: 2,
+    netCashAmount: 1000,
+    transactionDate: "2026-01-10",
+    symbol: "ABC 15JAN27 10.00 CALL",
+  }),
+  act({
+    id: "exp",
+    category: "other",
+    activityType: "OPTIONS_SHORT_EXPIRY",
+    activitySubType: "EXPIRED",
+    rawType: "OPTIONS_SHORT_EXPIRY",
+    quantity: 5,
+    unitPrice: 0,
+    netCashAmount: 0,
+    transactionDate: "2027-01-15",
+    symbol: "ABC 15JAN27 10.00 CALL",
+  }),
+];
+const expFifo = matchFifo(expiry);
+if (expFifo.open.length) throw new Error("expiry should close short");
+if (expFifo.closed.length !== 1) throw new Error("expiry closed " + expFifo.closed.length);
+if (expFifo.closed[0].exitPrice !== 0 || expFifo.closed[0].quantity !== 5) {
+  throw new Error("expiry trade " + JSON.stringify(expFifo.closed[0]));
+}
+if (Math.abs(expFifo.closed[0].pnl - 1000) > 1e-9) throw new Error("expiry pnl " + expFifo.closed[0].pnl);
+
+const share = matchFifo([
+  act({
+    id: "sbuy",
+    category: "trade",
+    activityType: "Trade",
+    activitySubType: "BUY",
+    rawType: "DIY_BUY",
+    quantity: 10,
+    unitPrice: 12,
+    netCashAmount: -120,
+    transactionDate: "2026-01-10",
+    symbol: "AAA",
+    currency: "CAD",
+  }),
+  act({
+    id: "ssell",
+    category: "trade",
+    activityType: "Trade",
+    activitySubType: "SELL",
+    rawType: "DIY_SELL",
+    quantity: -10,
+    unitPrice: 15,
+    netCashAmount: 150,
+    transactionDate: "2026-02-10",
+    symbol: "AAA",
+    currency: "CAD",
+  }),
+]);
+if (share.closed.length !== 1 || share.closed[0].quantity !== 10) {
+  throw new Error("share close broken " + JSON.stringify(share));
+}
+if (isOptionSymbol("AAA") || !isOptionSymbol("LUNR 15JAN27 12.00 CALL")) {
+  throw new Error("kind option detection");
+}
+
+const covered = matchFifo([
+  act({
+    id: "bbai-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -3,
+    unitPrice: 1.2,
+    netCashAmount: 360,
+    transactionDate: "2026-01-05",
+    symbol: "BBAI 21JAN28 10.00 CALL",
+  }),
+  act({
+    id: "bbai-cr1",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOCLOSE",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: 14,
+    transactionDate: "2026-02-01",
+    symbol: "BBAI 21JAN28 10.00 CALL",
+  }),
+  act({
+    id: "bbai-cr2",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: 56,
+    transactionDate: "2026-02-01",
+    symbol: "BBAI 21JAN28 10.00 CALL",
+  }),
+]);
+if (covered.unmatched.length) throw new Error("BBAI credit unmatched " + JSON.stringify(covered.unmatched));
+if (covered.closed.length) throw new Error("BBAI credits should add shorts, closed=" + JSON.stringify(covered.closed));
+const bbaiOpen = covered.open.reduce((s, l) => s + l.quantity, 0);
+if (bbaiOpen < 3) throw new Error("BBAI short should grow from STO+credits, open=" + JSON.stringify(covered.open));
+if (!covered.open.every((l) => l.direction === "SHORT")) throw new Error("BBAI not short");
+
+const longExp = matchFifo([
+  act({
+    id: "lunr-bto",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOOPEN",
+    rawType: "OPTIONS_BUY",
+    quantity: 2,
+    unitPrice: 0.4,
+    netCashAmount: -80,
+    transactionDate: "2025-07-01",
+    symbol: "LUNR 22AUG25 8.00 CALL",
+  }),
+  act({
+    id: "lunr-exp",
+    category: "option_event",
+    activityType: "EXPIR",
+    activitySubType: "BUY",
+    rawType: "OPTIONS_EXPIRY",
+    quantity: 2,
+    unitPrice: 0,
+    netCashAmount: 0,
+    transactionDate: "2025-08-22",
+    symbol: "LUNR 22AUG25 8.00 CALL",
+  }),
+]);
+if (longExp.unmatched.length) throw new Error("LUNR long expiry unmatched " + JSON.stringify(longExp.unmatched));
+if (longExp.open.length) throw new Error("LUNR long should expire closed " + JSON.stringify(longExp.open));
+if (longExp.closed.length !== 1 || longExp.closed[0].openDirection !== "LONG" || longExp.closed[0].exitPrice !== 0) {
+  throw new Error("LUNR long expiry trade " + JSON.stringify(longExp.closed));
+}
+if (Math.abs(longExp.closed[0].pnl + 80) > 1e-9) throw new Error("long expiry pnl " + longExp.closed[0].pnl);
+
+const spyDay = matchFifo([
+  act({
+    id: "spy-bto",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOOPEN",
+    rawType: "OPTIONS_BUY",
+    quantity: 1,
+    unitPrice: 1.1,
+    netCashAmount: -110,
+    transactionDate: "2025-07-17",
+    symbol: "SPY 17JUL25 624.00 PUT",
+  }),
+  act({
+    id: "spy-exp",
+    category: "other",
+    activityType: "OPTIONS_EXPIRY",
+    activitySubType: "EXPIRED",
+    rawType: "OPTIONS_EXPIRY",
+    quantity: 1,
+    unitPrice: 0,
+    netCashAmount: 0,
+    transactionDate: "2025-07-17",
+    symbol: "SPY 17JUL25 624.00 PUT",
+  }),
+]);
+if (spyDay.unmatched.length) throw new Error("SPY expiry unmatched " + JSON.stringify(spyDay.unmatched));
+if (spyDay.open.length || spyDay.closed.length !== 1 || spyDay.closed[0].openDirection !== "LONG") {
+  throw new Error("SPY same-day expiry " + JSON.stringify(spyDay));
+}
+
+const putDebit = matchFifo([
+  act({
+    id: "put-ml",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: -90,
+    transactionDate: "2026-01-30",
+    symbol: "BBAI 30JAN26 6.00 PUT",
+  }),
+]);
+if (putDebit.unmatched.length) throw new Error("PUT debit unmatched " + JSON.stringify(putDebit.unmatched));
+if (putDebit.open.length !== 1 || putDebit.open[0].direction !== "LONG") {
+  throw new Error("PUT debit should open long " + JSON.stringify(putDebit.open));
+}
+
+const stoOnly = matchFifo([
+  act({
+    id: "sto-only",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -4,
+    unitPrice: 2,
+    netCashAmount: 800,
+    transactionDate: "2026-01-01",
+    symbol: "XYZ 15JAN27 5.00 CALL",
+  }),
+]);
+if (stoOnly.unmatched.length) throw new Error("STO without buy unmatched " + JSON.stringify(stoOnly.unmatched));
+if (stoOnly.open.length !== 1 || stoOnly.open[0].direction !== "SHORT" || stoOnly.open[0].quantity !== 4) {
+  throw new Error("STO should open short " + JSON.stringify(stoOnly.open));
+}
+
+const asts = matchFifo([
+  act({
+    id: "asts-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 4.7475,
+    netCashAmount: 474.75,
+    transactionDate: "2025-01-15",
+    symbol: "ASTS 07MAR25 31.00 CALL",
+  }),
+  act({
+    id: "asts-asg",
+    category: "option_event",
+    activityType: "ASSIGN",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_ASSIGN",
+    quantity: 1,
+    unitPrice: 31,
+    netCashAmount: -3100,
+    transactionDate: "2025-03-07",
+    symbol: "ASTS 07MAR25 31.00 CALL",
+  }),
+]);
+if (asts.unmatched.length) throw new Error("ASTS assign unmatched " + JSON.stringify(asts.unmatched));
+if (asts.open.length) throw new Error("ASTS assign should close short " + JSON.stringify(asts.open));
+if (asts.closed.length !== 1 || asts.closed[0].exitPrice !== 0 || asts.closed[0].openDirection !== "SHORT") {
+  throw new Error("ASTS assign trade " + JSON.stringify(asts.closed));
+}
+if (Math.abs(asts.closed[0].pnl - 474.75) > 1e-6) throw new Error("ASTS assign pnl " + asts.closed[0].pnl + " want 474.75");
+
+const roll = matchFifo([
+  act({
+    id: "aug-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 3,
+    netCashAmount: 300,
+    transactionDate: "2026-01-01",
+    symbol: "ZZZ 21AUG26 10.00 CALL",
+  }),
+  act({
+    id: "aug-cover",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_BUY",
+    quantity: 1,
+    unitPrice: 1,
+    netCashAmount: -100,
+    transactionDate: "2026-08-15",
+    symbol: "ZZZ 21AUG26 10.00 CALL",
+  }),
+  act({
+    id: "jan-sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -1,
+    unitPrice: 2,
+    netCashAmount: 200,
+    transactionDate: "2026-08-15",
+    symbol: "ZZZ 15JAN27 12.00 CALL",
+  }),
+  act({
+    id: "jan-cover",
+    category: "trade",
+    activityType: "OPTIONS_BUY",
+    activitySubType: "BUYTOCLOSE",
+    rawType: "OPTIONS_BUY",
+    quantity: 1,
+    unitPrice: 0.5,
+    netCashAmount: -50,
+    transactionDate: "2026-12-01",
+    symbol: "ZZZ 15JAN27 12.00 CALL",
+  }),
+]);
+if (roll.unmatched.length) throw new Error("roll unmatched " + JSON.stringify(roll.unmatched));
+if (roll.open.length) throw new Error("roll should leave no open " + JSON.stringify(roll.open));
+if (roll.closed.length !== 1) throw new Error("roll should be one far trade, got " + roll.closed.length + " " + JSON.stringify(roll.closed));
+if (roll.closed[0].symbol !== "ZZZ 15JAN27 12.00 CALL") throw new Error("far symbol " + roll.closed[0].symbol);
+if (Math.abs(roll.closed[0].entryPrice - 4) > 1e-9) throw new Error("rolled basis " + roll.closed[0].entryPrice + " want 4");
+if (Math.abs(roll.closed[0].pnl - 350) > 1e-6) throw new Error("rolled pnl " + roll.closed[0].pnl + " want 350");
+if (roll.closed.some((t) => t.symbol.indexOf("AUG26") >= 0)) throw new Error("near cover should be folded away");
+
+console.log("ok");
+"""
+        proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("ok", proc.stdout)
 
     def test_statement_option_unit_price_divides_by_multiplier(self):
