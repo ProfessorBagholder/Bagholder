@@ -240,6 +240,57 @@ def _relabel_option_trades(conn):
         "AND UPPER(REPLACE(IFNULL(activity_sub_type,''), '-', '_')) "
         "NOT IN ('SELL', 'SELLTOOPEN', 'STO', 'SELLTOCLOSE', 'STC', 'COVER')"
     )
+    _relabel_option_closes(conn)
+
+
+def _relabel_option_closes(conn):
+    """OPTIONS_MULTILEG / *EXPIR* / *ASSIGN* were stored as category other.
+
+    Sync never replaces existing rows. Reclassify so FIFO can close shorts.
+    """
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'OPTIONS_BUY', "
+        "activity_sub_type = 'BUYTOCLOSE', "
+        "category = 'trade' "
+        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%MULTILEG%' "
+        "AND IFNULL(category,'') IN ('other', '') "
+        "AND IFNULL(net_cash_amount, 0) < 0"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'OPTIONS_SELL', "
+        "activity_sub_type = 'SELLTOCLOSE', "
+        "category = 'trade' "
+        "WHERE UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%MULTILEG%' "
+        "AND IFNULL(category,'') IN ('other', '') "
+        "AND IFNULL(net_cash_amount, 0) >= 0"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'ASSIGN', "
+        "activity_sub_type = 'BUYTOCLOSE', "
+        "category = 'option_event', "
+        "quantity = ABS(quantity) "
+        "WHERE ("
+        "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%ASSIGN%' "
+        "OR UPPER(REPLACE(IFNULL(activity_type,''), '-', '_')) LIKE '%ASSIGN%'"
+        ") "
+        "AND IFNULL(category,'') IN ('other', '')"
+    )
+    conn.execute(
+        "UPDATE activities SET "
+        "activity_type = 'EXPIR', "
+        "activity_sub_type = 'BUY', "
+        "category = 'option_event', "
+        "quantity = ABS(quantity), "
+        "unit_price = CASE WHEN ABS(IFNULL(net_cash_amount, 0)) < 1e-12 THEN 0 ELSE unit_price END "
+        "WHERE ("
+        "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_')) LIKE '%EXPIR%' "
+        "OR UPPER(REPLACE(IFNULL(activity_type,''), '-', '_')) LIKE '%EXPIR%'"
+        ") "
+        "AND IFNULL(category,'') IN ('other', '')"
+    )
 
 
 def _is_option_symbol(symbol):

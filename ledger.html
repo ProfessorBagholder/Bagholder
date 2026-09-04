@@ -1511,6 +1511,130 @@ function tickerWasReplaced(activities, accountId, symbol, currency, byDate) {
   return true;
 }
 
+function normalizeOptionActivity(activity) {
+  const a = Object.assign({}, activity);
+  const raw = compactType(a.rawType) + compactType(a.activityType);
+  const cash = Number(a.netCashAmount) || 0;
+  if (raw.includes("MULTILEG")) {
+    a.category = "trade";
+    if (cash < 0 || compactType(a.direction) === "DEBIT") {
+      if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
+        a.activityType = "OPTIONS_BUY";
+        a.activitySubType = "BUYTOCLOSE";
+      }
+    } else if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
+      a.activityType = "OPTIONS_SELL";
+      a.activitySubType = "SELLTOCLOSE";
+    }
+  } else if (raw.includes("EXPIR") || raw.includes("ASSIGN") || raw.includes("EXERCISE")) {
+    a.category = "option_event";
+    const t = compactType(a.activityType);
+    if (!(t.includes("EXPIR") || t.includes("ASSIGN") || t.includes("EXERCISE"))) {
+      a.activityType = raw.includes("ASSIGN") ? "ASSIGN" : (raw.includes("EXERCISE") ? "EXERCISE" : "EXPIR");
+    } else if (t.includes("ASSIGN")) {
+      a.activityType = "ASSIGN";
+    } else if (t.includes("EXERCISE")) {
+      a.activityType = "EXERCISE";
+    } else {
+      a.activityType = "EXPIR";
+    }
+    if (!tradeSide(a) || compactType(a.activitySubType) === "FILLED") {
+      a.activitySubType = raw.includes("ASSIGN") ? "BUYTOCLOSE" : "BUY";
+    }
+    if (Math.abs(cash) < 1e-12) a.unitPrice = 0;
+  }
+  return a;
+}
+
+function isCleanOptionQty(cash, qty) {
+  if (!(qty > 0) || !Number.isFinite(qty)) return false;
+  const px = Math.abs(cash) / (qty * 100);
+  if (!Number.isFinite(px) || px < 0) return false;
+  if (Math.abs(px * 100 - Math.round(px * 100)) < 1e-6) return true;
+  if (Math.abs(px * 10000 - Math.round(px * 10000)) < 1e-4) return true;
+  return false;
+}
+
+function inferStandaloneOptionQty(cash) {
+  const absCash = Math.abs(cash);
+  if (!(absCash > 0)) return 0;
+  const maxQty = Math.min(10000, Math.max(1, Math.round(absCash)));
+  for (let q = 1; q <= maxQty; q++) {
+    if (isCleanOptionQty(absCash, q)) return q;
+  }
+  return 1;
+}
+
+function inferZeroQtyOptionFills(fills) {
+  const remaining = new Map();
+  function remOf(a) {
+    const k = fifoAccount(a) + "::" + a.symbol + "::" + a.currency;
+    if (!remaining.has(k)) remaining.set(k, { LONG: 0, SHORT: 0 });
+    return remaining.get(k);
+  }
+  const zerosByBook = new Map();
+  for (let i = 0; i < fills.length; i++) {
+    const f = fills[i];
+    const qty = Math.abs(Number(f.activity.quantity) || 0);
+    const cash = Number(f.activity.netCashAmount) || 0;
+    if (!isOptionSymbol(f.activity.symbol) || !f.side) continue;
+    if (qty === 0 && Math.abs(cash) > 1e-9) {
+      const k = fifoAccount(f.activity) + "::" + f.activity.symbol + "::" + f.activity.currency;
+      if (!zerosByBook.has(k)) zerosByBook.set(k, []);
+      zerosByBook.get(k).push(i);
+    }
+  }
+  for (let i = 0; i < fills.length; i++) {
+    const f = fills[i];
+    const a = f.activity;
+    if (!f.side) continue;
+    const rem = remOf(a);
+    let qty = Math.abs(Number(a.quantity) || 0);
+    const cash = Number(a.netCashAmount) || 0;
+    if (isOptionSymbol(a.symbol) && qty === 0) {
+      const closingDir = f.side === "BUY" ? "SHORT" : "LONG";
+      const openSz = rem[closingDir] || 0;
+      if (Math.abs(cash) > 1e-9) {
+        const k = fifoAccount(a) + "::" + a.symbol + "::" + a.currency;
+        const upcoming = (zerosByBook.get(k) || []).filter((j) => j > i).length;
+        if (openSz > 0 && upcoming === 0) {
+          qty = openSz;
+        } else if (openSz > 0) {
+          let picked = 0;
+          const cap = Math.max(1, Math.floor(openSz + 1e-9));
+          for (let q = 1; q <= cap; q++) {
+            if (isCleanOptionQty(cash, q)) {
+              picked = q;
+              break;
+            }
+          }
+          qty = picked || inferStandaloneOptionQty(cash);
+          if (qty > openSz) qty = openSz;
+        } else {
+          qty = inferStandaloneOptionQty(cash);
+        }
+        a.unitPrice = qty > 0 ? Math.abs(cash) / (qty * 100) : 0;
+      } else if (openSz > 0 && isCloseOnly(a)) {
+        qty = openSz;
+        a.unitPrice = 0;
+      }
+      if (qty > 0) {
+        a.quantity = f.side === "SELL" ? -qty : qty;
+        f.qty = qty;
+      }
+    }
+    if (f.qty > 0) {
+      const closingDir = f.side === "BUY" ? "SHORT" : "LONG";
+      const opening = openingDirection(a, f.side);
+      let left = f.qty;
+      const closeAmt = Math.min(left, rem[closingDir] || 0);
+      rem[closingDir] -= closeAmt;
+      left -= closeAmt;
+      if (left > 1e-10 && opening) rem[opening] += left;
+    }
+  }
+}
+
 function foldStkdis(activities) {
   // Name-change STKDIS is +N and -N of the same ticker on one day.
   // Net those to zero so they do not close real lots at $0. Leftover +N opens at $0.
@@ -1547,10 +1671,6 @@ function foldStkdis(activities) {
 }
 
 function matchFifo(activities) {
-  const fills = foldStkdis(activities)
-    .filter((a) => (a.category === "trade" || a.category === "option_event") && a.symbol)
-    .map((a) => ({ activity: a, side: tradeSide(a), qty: Math.abs(a.quantity) }))
-    .filter((f) => f.side && f.qty > 0);
   function fillRank(f) {
     // Same-day option order without timestamps:
     // STO, BTC (cover), BTO, STC, then plain stock SELL.
@@ -1564,14 +1684,21 @@ function matchFifo(activities) {
     if (blob.includes("TOCLOSE") || t === "STC" || s === "STC") return 3;
     return 4;
   }
+  const fills = foldStkdis(activities)
+    .map(normalizeOptionActivity)
+    .filter((a) => (a.category === "trade" || a.category === "option_event") && a.symbol)
+    .map((a) => ({ activity: a, side: tradeSide(a), qty: Math.abs(Number(a.quantity) || 0) }))
+    .filter((f) => f.side);
   fills.sort((a, b) => {
-    const d = a.activity.transactionDate.localeCompare(b.activity.transactionDate);
+    const d = String(a.activity.transactionDate || "").localeCompare(String(b.activity.transactionDate || ""));
     if (d !== 0) return d;
     const ra = fillRank(a);
     const rb = fillRank(b);
     if (ra !== rb) return ra - rb;
-    return a.activity.id.localeCompare(b.activity.id);
+    return String(a.activity.id || "").localeCompare(String(b.activity.id || ""));
   });
+  inferZeroQtyOptionFills(fills);
+  const usable = fills.filter((f) => f.qty > 0);
   const books = new Map();
   const closed = [];
   const unmatched = [];
@@ -1580,7 +1707,7 @@ function matchFifo(activities) {
     if (!books.has(k)) books.set(k, []);
     return books.get(k);
   }
-  for (const fill of fills) {
+  for (const fill of usable) {
     const a = fill.activity;
     const book = getBook(a);
     const closingDir = fill.side === "BUY" ? "SHORT" : "LONG";

@@ -866,8 +866,14 @@ def _human_desc(item, typ, sub, symbol, qty, px, cash):
         return "Fee refund" if t == "REFUND" else "Fee"
     if t in ("STOCK_DISTRIBUTION", "STKDIS", "SPIN", "SPINOFF"):
         return f"Stock distribution: {symbol}" if symbol else "Stock distribution"
-    if t in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE"):
-        return f"{t.title()} {symbol}".strip()
+    if (
+        t in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE")
+        or "EXPIR" in t
+        or "ASSIGN" in t
+        or "EXERCISE" in t
+    ):
+        label = "Assign" if "ASSIGN" in t else ("Exercise" if "EXERCISE" in t else "Expir")
+        return f"{label} {symbol}".strip()
     if symbol:
         return f"{t}: {symbol}"
     return t.replace("_", " ").title() or "Activity"
@@ -985,13 +991,41 @@ def map_activity(item, accounts=None):
         else:
             activity_type, activity_sub = "OPTIONS_SELL", "SELLTOOPEN"
         quantity = -abs(qty_abs)
-    elif typ in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE"):
+    elif "MULTILEG" in typ:
+        # WS filled combo / roll legs often have null assetQuantity.
+        # Prefer close-only: debit covers, credit closes a long (or is unmatched).
+        category = "trade"
+        if cash < 0:
+            activity_type, activity_sub = "OPTIONS_BUY", "BUYTOCLOSE"
+            quantity = abs(qty_abs)
+        else:
+            activity_type, activity_sub = "OPTIONS_SELL", "SELLTOCLOSE"
+            quantity = -abs(qty_abs) if qty_abs else 0.0
+    elif (
+        typ in ("EXPIR", "EXPIRY", "EXPIRE", "ASSIGN", "ASSIGNMENT", "EXERCISE")
+        or "EXPIR" in typ
+        or "ASSIGN" in typ
+        or "EXERCISE" in typ
+    ):
         category = "option_event"
         keep = "ASSIGN" if "ASSIGN" in typ else ("EXERCISE" if "EXERCISE" in typ else "EXPIR")
         activity_type = keep
-        covering = "ASSIGN" in typ or "COVER" in _compact(sub) or _is_to_close(sub)
-        activity_sub = "BUY" if covering else "SELL"
+        covering = (
+            "ASSIGN" in typ
+            or "EXPIR" in typ
+            or "SHORT" in typ
+            or "COVER" in _compact(sub)
+            or _is_to_close(sub)
+        )
+        if "ASSIGN" in typ:
+            activity_sub = "BUYTOCLOSE"
+        elif covering:
+            activity_sub = "BUY"
+        else:
+            activity_sub = "SELL"
         quantity = -abs(qty_abs) if activity_sub == "SELL" else abs(qty_abs)
+        if abs(cash) < 1e-12:
+            unit_price = 0.0
         if not is_opt:
             symbol = symbol or _asset_symbol(item)
     elif typ in ("DEPOSIT", "CONTRIBUTION"):

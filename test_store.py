@@ -21,6 +21,25 @@ import store
 FAKE_CLIENT_ID = "ab" * 32
 
 
+def _extract_js_function(html, name):
+    token = "function " + name + "("
+    start = html.find(token)
+    if start < 0:
+        raise AssertionError("missing JS function " + name)
+    i = html.find("{", start)
+    depth = 0
+    while i < len(html):
+        ch = html[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start : i + 1]
+        i += 1
+    raise AssertionError("unbalanced JS function " + name)
+
+
 class _FakeHTTPResp:
     def __init__(self, body, headers=None, status=200):
         if isinstance(body, (bytes, bytearray)):
@@ -112,6 +131,111 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["category"], "trade")
         self.assertEqual(row["quantity"], 5)
         self.assertEqual(row["netCashAmount"], -150)
+
+    def test_map_activity_options_multileg_debit_is_buy_to_close(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_MULTILEG",
+                subType="FILLED",
+                status="FILLED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=None,
+                amount=128,
+                amountSign="negative",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["activityType"], "OPTIONS_BUY")
+        self.assertEqual(row["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(row["quantity"], 0)
+        self.assertEqual(row["unitPrice"], 0)
+        self.assertEqual(row["netCashAmount"], -128)
+        self.assertEqual(row["symbol"], "LUNR 15JAN27 12.00 CALL")
+
+    def test_map_activity_options_multileg_credit_is_sell_to_close(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_MULTILEG",
+                subType="FILLED",
+                status="FILLED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=2,
+                amount=200,
+                amountSign="positive",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "trade")
+        self.assertEqual(row["activityType"], "OPTIONS_SELL")
+        self.assertEqual(row["activitySubType"], "SELLTOCLOSE")
+        self.assertEqual(row["quantity"], -2)
+        self.assertAlmostEqual(row["unitPrice"], 1.0)
+        self.assertEqual(row["netCashAmount"], 200)
+
+    def test_map_activity_options_short_expiry_covers_short(self):
+        row = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_SHORT_EXPIRY",
+                subType="EXPIRED",
+                status="POSTED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=16,
+                amount=0,
+                amountSign="negative",
+                currency="USD",
+            )
+        )
+        self.assertEqual(row["category"], "option_event")
+        self.assertEqual(row["activityType"], "EXPIR")
+        self.assertEqual(row["activitySubType"], "BUY")
+        self.assertEqual(row["quantity"], 16)
+        self.assertEqual(row["unitPrice"], 0)
+        self.assertEqual(row["netCashAmount"], 0)
+
+    def test_map_activity_options_expiry_and_assign_cover_shorts(self):
+        expiry = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_EXPIRY",
+                subType="EXPIRED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=4,
+                amount=0,
+            )
+        )
+        self.assertEqual(expiry["category"], "option_event")
+        self.assertEqual(expiry["activityType"], "EXPIR")
+        self.assertEqual(expiry["activitySubType"], "BUY")
+        self.assertEqual(expiry["quantity"], 4)
+        assign = bagholder.map_activity(
+            _ws_item(
+                type="OPTIONS_ASSIGN",
+                subType="ASSIGNED",
+                assetSymbol="LUNR",
+                contractType="CALL",
+                strikePrice=12,
+                expiryDate="2027-01-15",
+                assetQuantity=3,
+                amount=0,
+            )
+        )
+        self.assertEqual(assign["category"], "option_event")
+        self.assertEqual(assign["activityType"], "ASSIGN")
+        self.assertEqual(assign["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(assign["quantity"], 3)
+        self.assertEqual(assign["unitPrice"], 0)
 
     def test_map_activity_option_unit_price_is_per_share(self):
         cheap = bagholder.map_activity(
@@ -256,6 +380,81 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["category"], "trade")
         self.assertEqual(row["quantity"], -35)
         self.assertEqual(row["netCashAmount"], 1050)
+
+    def test_relabel_stored_options_multileg_and_expiry(self):
+        store.apply_wealthsimple_mapped(
+            [
+                {
+                    "canonicalId": "opt-ml-1",
+                    "occurredAt": "2026-08-31T14:16:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_MULTILEG",
+                    "activitySubType": "FILLED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": 0,
+                    "unitPrice": 0,
+                    "netCashAmount": -128,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_MULTILEG",
+                },
+                {
+                    "canonicalId": "opt-exp-1",
+                    "occurredAt": "2026-08-31T14:17:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_SHORT_EXPIRY",
+                    "activitySubType": "EXPIRED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": 5,
+                    "unitPrice": 0,
+                    "netCashAmount": 0,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_SHORT_EXPIRY",
+                },
+                {
+                    "canonicalId": "opt-asg-1",
+                    "occurredAt": "2026-08-31T14:18:58Z",
+                    "transactionDate": "2026-08-31",
+                    "accountId": "acct-1",
+                    "accountType": "Trading",
+                    "activityType": "OPTIONS_ASSIGN",
+                    "activitySubType": "ASSIGNED",
+                    "symbol": "LUNR 15JAN27 12.00 CALL",
+                    "currency": "USD",
+                    "quantity": -2,
+                    "unitPrice": 0,
+                    "netCashAmount": 0,
+                    "category": "other",
+                    "source": "wealthsimple",
+                    "rawType": "OPTIONS_ASSIGN",
+                },
+            ]
+        )
+        store.ensure()
+        by_id = {a["canonicalId"]: a for a in store.snapshot()["activities"]}
+        ml = by_id["opt-ml-1"]
+        self.assertEqual(ml["category"], "trade")
+        self.assertEqual(ml["activityType"], "OPTIONS_BUY")
+        self.assertEqual(ml["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(ml["quantity"], 0)
+        self.assertEqual(ml["netCashAmount"], -128)
+        exp = by_id["opt-exp-1"]
+        self.assertEqual(exp["category"], "option_event")
+        self.assertEqual(exp["activityType"], "EXPIR")
+        self.assertEqual(exp["activitySubType"], "BUY")
+        self.assertEqual(exp["quantity"], 5)
+        asg = by_id["opt-asg-1"]
+        self.assertEqual(asg["category"], "option_event")
+        self.assertEqual(asg["activityType"], "ASSIGN")
+        self.assertEqual(asg["activitySubType"], "BUYTOCLOSE")
+        self.assertEqual(asg["quantity"], 2)
 
     def test_insert_if_new_by_canonical_id(self):
         row = bagholder.map_activity(_ws_item())
@@ -654,6 +853,176 @@ console.log("ok");
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    def test_ledger_infers_multileg_qty_and_closes_short_calls(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("function inferZeroQtyOptionFills(", html)
+        self.assertIn("function normalizeOptionActivity(", html)
+        names = (
+            "compactType",
+            "isIntentionalOpen",
+            "isCloseOnly",
+            "openingDirection",
+            "fifoAccount",
+            "tickerWasReplaced",
+            "foldStkdis",
+            "tradeSide",
+            "normalizeOptionActivity",
+            "isCleanOptionQty",
+            "inferStandaloneOptionQty",
+            "inferZeroQtyOptionFills",
+            "matchFifo",
+            "isOptionSymbol",
+            "optionMultiplier",
+            "daysBetween",
+            "stableTradeId",
+        )
+        parts = [_extract_js_function(html, n) for n in names]
+        script = "\n".join(parts) + r"""
+function act(o) {
+  return Object.assign({
+    id: o.id,
+    accountId: "acct-1",
+    accountType: "Trading",
+    symbol: "LUNR 15JAN27 12.00 CALL",
+    name: "LUNR",
+    currency: "USD",
+    commission: 0,
+    category: o.category || "other",
+    activityType: o.activityType,
+    activitySubType: o.activitySubType,
+    rawType: o.rawType || "",
+    quantity: o.quantity,
+    unitPrice: o.unitPrice || 0,
+    netCashAmount: o.netCashAmount || 0,
+    transactionDate: o.transactionDate,
+  }, o);
+}
+const lunr = [
+  act({
+    id: "sto",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -16,
+    unitPrice: 6.2225,
+    netCashAmount: 9956,
+    transactionDate: "2026-01-10",
+  }),
+  act({
+    id: "ml1",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: -128,
+    transactionDate: "2026-03-01",
+  }),
+  act({
+    id: "ml2",
+    category: "other",
+    activityType: "OPTIONS_MULTILEG",
+    activitySubType: "FILLED",
+    rawType: "OPTIONS_MULTILEG",
+    quantity: 0,
+    unitPrice: 0,
+    netCashAmount: -2025,
+    transactionDate: "2026-03-01",
+  }),
+];
+const lunrFifo = matchFifo(lunr);
+if (lunrFifo.open.length) throw new Error("LUNR short should be closed, open=" + JSON.stringify(lunrFifo.open));
+if (lunrFifo.closed.length !== 2) throw new Error("expected 2 closed legs, got " + lunrFifo.closed.length);
+const byQty = lunrFifo.closed.slice().sort((a, b) => a.quantity - b.quantity);
+if (byQty[0].quantity !== 1 || Math.abs(byQty[0].exitPrice - 1.28) > 1e-9) {
+  throw new Error("qty1 close " + JSON.stringify(byQty[0]));
+}
+if (byQty[1].quantity !== 15 || Math.abs(byQty[1].exitPrice - 1.35) > 1e-9) {
+  throw new Error("qty15 close " + JSON.stringify(byQty[1]));
+}
+if (byQty[0].openDirection !== "SHORT" || byQty[1].openDirection !== "SHORT") {
+  throw new Error("expected SHORT cover");
+}
+const pnl = lunrFifo.closed.reduce((s, t) => s + t.pnl, 0);
+const want = (6.2225 - 1.28) * 1 * 100 + (6.2225 - 1.35) * 15 * 100;
+if (Math.abs(pnl - want) > 1e-6) throw new Error("pnl " + pnl + " want " + want);
+
+const expiry = [
+  act({
+    id: "sto2",
+    category: "trade",
+    activityType: "OPTIONS_SELL",
+    activitySubType: "SELLTOOPEN",
+    rawType: "OPTIONS_SELL",
+    quantity: -5,
+    unitPrice: 2,
+    netCashAmount: 1000,
+    transactionDate: "2026-01-10",
+    symbol: "ABC 15JAN27 10.00 CALL",
+  }),
+  act({
+    id: "exp",
+    category: "other",
+    activityType: "OPTIONS_SHORT_EXPIRY",
+    activitySubType: "EXPIRED",
+    rawType: "OPTIONS_SHORT_EXPIRY",
+    quantity: 5,
+    unitPrice: 0,
+    netCashAmount: 0,
+    transactionDate: "2027-01-15",
+    symbol: "ABC 15JAN27 10.00 CALL",
+  }),
+];
+const expFifo = matchFifo(expiry);
+if (expFifo.open.length) throw new Error("expiry should close short");
+if (expFifo.closed.length !== 1) throw new Error("expiry closed " + expFifo.closed.length);
+if (expFifo.closed[0].exitPrice !== 0 || expFifo.closed[0].quantity !== 5) {
+  throw new Error("expiry trade " + JSON.stringify(expFifo.closed[0]));
+}
+if (Math.abs(expFifo.closed[0].pnl - 1000) > 1e-9) throw new Error("expiry pnl " + expFifo.closed[0].pnl);
+
+const share = matchFifo([
+  act({
+    id: "sbuy",
+    category: "trade",
+    activityType: "Trade",
+    activitySubType: "BUY",
+    rawType: "DIY_BUY",
+    quantity: 10,
+    unitPrice: 12,
+    netCashAmount: -120,
+    transactionDate: "2026-01-10",
+    symbol: "AAA",
+    currency: "CAD",
+  }),
+  act({
+    id: "ssell",
+    category: "trade",
+    activityType: "Trade",
+    activitySubType: "SELL",
+    rawType: "DIY_SELL",
+    quantity: -10,
+    unitPrice: 15,
+    netCashAmount: 150,
+    transactionDate: "2026-02-10",
+    symbol: "AAA",
+    currency: "CAD",
+  }),
+]);
+if (share.closed.length !== 1 || share.closed[0].quantity !== 10) {
+  throw new Error("share close broken " + JSON.stringify(share));
+}
+if (isOptionSymbol("AAA") || !isOptionSymbol("LUNR 15JAN27 12.00 CALL")) {
+  throw new Error("kind option detection");
+}
+console.log("ok");
+"""
+        proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("ok", proc.stdout)
 
     def test_statement_option_unit_price_divides_by_multiplier(self):
