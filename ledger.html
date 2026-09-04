@@ -2609,8 +2609,8 @@ function ingestText(name, text) {
   ensureSpyPrices();
 }
 
-function filteredTrades(closedFx) {
-  const f = state.filters;
+function filteredTrades(closedFx, filterOverrides) {
+  const f = Object.assign({}, state.filters || {}, filterOverrides || {});
   return closedFx.filter((t) => {
     if (f.from && t.exitDate < f.from) return false;
     if (f.to && t.exitDate > f.to) return false;
@@ -3316,6 +3316,9 @@ function render() {
     else state.selected = null;
   }
   const closedForMetrics = groupClosedByClose(visible);
+  // Biggest winner/loser + By symbol: identity-wide by underlying (ignore account
+  // filter) so flat symbols match WS symbol realized. Other KPIs stay scoped.
+  const closedForSymbolRanks = groupClosedByClose(filteredTrades(closedFx, { account: "" }));
   const incomeActs = state.activities.filter((a) => {
     const f = state.filters;
     if (f.from && a.transactionDate < f.from) return false;
@@ -3333,11 +3336,16 @@ function render() {
     .filter((a) => a.category === "fee")
     .reduce((s, a) => s + toCad(a.netCashAmount, a.currency, a.transactionDate), 0);
   const m = computeMetrics(closedForMetrics, open.length, incomeCad, feesCad);
+  const symbolRanks = computeMetrics(closedForSymbolRanks, open.length, 0, 0);
+  m.maxWinPnl = symbolRanks.maxWinPnl;
+  m.maxWinSymbol = symbolRanks.maxWinSymbol;
+  m.maxLossPnl = symbolRanks.maxLossPnl;
+  m.maxLossSymbol = symbolRanks.maxLossSymbol;
   const curve = listingFiltersOn()
     ? realizedPnlCurve(closedForMetrics)
     : equityCurve(state.activities, state.filters.from, state.filters.to);
   const monthly = monthlyPnl(closedForMetrics);
-  const bySymbol = breakdown(closedForMetrics, (t) => underlyingSymbol(t.symbol));
+  const bySymbol = breakdown(closedForSymbolRanks, (t) => underlyingSymbol(t.symbol));
   const symbols = unique(state.activities.map((a) => underlyingSymbol(a.symbol)).filter((x) => x && x !== "—"));
   const accounts = unique(state.activities.map((a) => a.accountType).concat((state.ws.accounts || []).map((a) => a.nickname || a.unifiedAccountType)).map((a) => String(a || "").trim()));
   const exchanges = knownExchanges();
