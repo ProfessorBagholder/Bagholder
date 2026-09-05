@@ -1060,6 +1060,42 @@ def save_trade_notes(notes):
     return clean
 
 
+def _clean_spy_by_date(raw):
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, val in raw.items():
+        d = str(key or "").strip()
+        if len(d) != 10 or d[4] != "-" or d[7] != "-":
+            continue
+        try:
+            px = float(val)
+        except (TypeError, ValueError):
+            continue
+        if px > 0:
+            out[d] = px
+    return out
+
+
+def spy_by_date():
+    raw = get_meta("spy_by_date")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return _clean_spy_by_date(data)
+
+
+def save_spy_by_date(mapping):
+    clean = _clean_spy_by_date(mapping if isinstance(mapping, dict) else {})
+    if not clean:
+        return spy_by_date()
+    set_meta("spy_by_date", json.dumps(clean))
+    return clean
+
+
 def _security_from_row(r):
     return {
         "id": r["id"],
@@ -1226,6 +1262,11 @@ def snapshot():
                 notes = _clean_trade_notes(json.loads(notes_raw) if notes_raw else {})
             except ValueError:
                 notes = {}
+            spy_raw = get_meta("spy_by_date")
+            try:
+                spy = _clean_spy_by_date(json.loads(spy_raw) if spy_raw else {})
+            except ValueError:
+                spy = {}
             securities = [
                 _security_from_row(r)
                 for r in conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
@@ -1240,6 +1281,7 @@ def snapshot():
                 "tradeGroups": groups,
                 "notes": notes,
                 "securities": securities,
+                "spyByDate": spy,
             }
         finally:
             conn.close()

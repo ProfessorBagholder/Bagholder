@@ -42,6 +42,12 @@ GRAPHQL = "https://my.wealthsimple.com/graphql"
 GRAPHQL_VERSION = "12"
 WS_CLIENT = "@wealthsimple/wealthsimple"
 LOGIN_URL = "https://my.wealthsimple.com/app/login"
+FRED_SP500_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
+FRED_TIMEOUT_SEC = 25
+FRED_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+)
 
 
 def _data_home():
@@ -1321,6 +1327,95 @@ def save_user_agent(ua):
         pass
 
 
+def parse_fred_sp500_csv(text):
+    """Skip empty cells and '.' like ledger.html ingestFredSP500Csv."""
+    out = {}
+    blob = str(text or "")
+    for line in blob.splitlines():
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        d = parts[0].strip()
+        raw = parts[1].strip()
+        if len(d) != 10 or d[4] != "-" or d[7] != "-":
+            continue
+        if not raw or raw == ".":
+            continue
+        try:
+            px = float(raw)
+        except ValueError:
+            continue
+        if px > 0:
+            out[d] = px
+    return out
+
+
+def _curl_fred_sp500():
+    """Same path as `curl -sL --max-time 25` of the FRED CSV. Trailer is HTTP code."""
+    ua = cached_user_agent() or FRED_UA
+    curl = shutil.which("curl") or "curl"
+    args = [
+        curl,
+        "-sL",
+        "--max-time",
+        str(FRED_TIMEOUT_SEC),
+        "-A",
+        ua,
+        "-H",
+        "Accept: text/csv,*/*;q=0.8",
+        "-w",
+        "\n%{http_code}",
+        FRED_SP500_URL,
+    ]
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=FRED_TIMEOUT_SEC + 3)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("HTTP - curl timed out") from e
+    except FileNotFoundError:
+        hdrs = {
+            "Accept": "text/csv,*/*;q=0.8",
+            "User-Agent": ua,
+        }
+        req = Request(FRED_SP500_URL, headers=hdrs)
+        with urlopen(req, timeout=FRED_TIMEOUT_SEC) as resp:
+            raw = resp.read()
+            status = getattr(resp, "status", None) or 200
+            body = _http_body_text(raw, getattr(resp, "headers", None))
+        if int(status) != 200:
+            raise RuntimeError("HTTP %s" % status)
+        return body, "HTTP %s" % status
+    out = (proc.stdout or b"").decode("utf-8", "replace")
+    err = (proc.stderr or b"").decode("utf-8", "replace").strip()
+    lines = out.splitlines()
+    status = ""
+    if lines and lines[-1].strip().isdigit():
+        status = lines[-1].strip()
+        body = "\n".join(lines[:-1])
+    else:
+        body = out
+    status_line = "HTTP %s" % (status or "-")
+    if err:
+        status_line = "%s %s" % (status_line, err)
+    if proc.returncode != 0:
+        raise RuntimeError("%s curl exit %s" % (status_line, proc.returncode))
+    if status and status != "200":
+        raise RuntimeError(status_line)
+    return body, status_line
+
+
+def refresh_spy_prices():
+    """Download FRED SP500. Keep stored prices if the fetch is empty or fails."""
+    store.ensure()
+    try:
+        body, status_line = _curl_fred_sp500()
+        mapping = parse_fred_sp500_csv(body)
+        if not mapping:
+            return store.spy_by_date()
+        return store.save_spy_by_date(mapping)
+    except Exception:
+        return store.spy_by_date()
+
+
 def scrape_client_id():
     """Production clientId from Wealthsimple login JS. Empty if it cannot be read."""
     cached = cached_client_id()
@@ -1731,6 +1826,7 @@ def fetch_nickname_nav_history(sess, accounts):
 def refresh_nav_only(allow_refresh=True):
     """Pull daily NAV only. Does not pull activity."""
     store.ensure()
+    refresh_spy_prices()
     sess = load_session()
     if not sess or not sess.get("access_token"):
         return {"ok": False, "error": "not connected"}
@@ -2132,6 +2228,7 @@ def activity_sync_bounds():
 def run_sync(allow_refresh=True, force_activity=True):
     """GraphQL pull. Inserts new Wealthsimple rows only. Never rebuilds the table."""
     store.ensure()
+    refresh_spy_prices()
     with _lock:
         if _state["syncing"]:
             return False
@@ -3033,6 +3130,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False})
                 return
             book = load_book()
+            if not (book.get("spyByDate") or {}):
+                threading.Thread(
+                    target=refresh_spy_prices, name="bagholder-spy", daemon=True
+                ).start()
             self._send(
                 200,
                 {
@@ -3046,6 +3147,7 @@ class Handler(BaseHTTPRequestHandler):
                     "tradeGroups": book.get("tradeGroups") or [],
                     "notes": book.get("notes") or {},
                     "securities": book.get("securities") or [],
+                    "spyByDate": book.get("spyByDate") or {},
                 },
             )
             return

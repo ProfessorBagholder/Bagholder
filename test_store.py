@@ -7,6 +7,7 @@ import gzip
 import os
 import sqlite3
 import tempfile
+from pathlib import Path
 import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -1223,6 +1224,173 @@ class WealthsimpleHttpTest(unittest.TestCase):
         self.assertIn("state.navByAccount = (book && book.navByAccount", html)
         self.assertNotIn("const hist = state.navHistory || [];", html)
 
+    def test_parse_fred_sp500_csv_skips_dot_and_empty(self):
+        csv = """DATE,SP500
+2014-01-02,1831.98
+2014-01-03,.
+2014-01-04,
+not-a-date,1
+2014-01-06,1837.49
+
+"""
+        got = bagholder.parse_fred_sp500_csv(csv)
+        self.assertEqual(got, {"2014-01-02": 1831.98, "2014-01-06": 1837.49})
+
+    def test_spy_by_date_meta_roundtrip(self):
+        self.assertEqual(store.spy_by_date(), {})
+        store.save_spy_by_date({})
+        self.assertEqual(store.spy_by_date(), {})
+        store.save_spy_by_date({"2014-01-02": 1831.98, "bad": 1, "2014-01-03": 0})
+        self.assertEqual(store.spy_by_date(), {"2014-01-02": 1831.98})
+        snap = store.snapshot()
+        self.assertEqual(snap["spyByDate"], {"2014-01-02": 1831.98})
+        book = bagholder.load_book()
+        self.assertEqual(book["spyByDate"], {"2014-01-02": 1831.98})
+
+    def _fake_curl_run(self, csv, returncode=0, stderr=b"", http_code="200"):
+        payload = csv if csv.endswith("\n") or not csv else csv + "\n"
+        stdout = (payload + http_code).encode("utf-8")
+
+        def fake_run(args, capture_output=True, timeout=None):
+            self.assertEqual(args[0], "/usr/bin/curl")
+            self.assertIn("-sL", args)
+            self.assertIn("--max-time", args)
+            self.assertIn("25", args)
+            self.assertIn(bagholder.FRED_SP500_URL, args)
+            self.assertIsNone(getattr(fake_run, "context", None))
+            class Result:
+                pass
+            r = Result()
+            r.returncode = returncode
+            r.stdout = stdout
+            r.stderr = stderr if isinstance(stderr, bytes) else str(stderr).encode("utf-8")
+            return r
+
+        return fake_run
+
+    def test_refresh_spy_prices_fixture_csv_not_live(self):
+        csv = """DATE,SP500
+2014-01-02,1831.98
+2014-01-03,.
+2014-01-06,1837.49
+"""
+        fake_run = self._fake_curl_run(csv)
+        with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
+            with mock.patch.object(bagholder.subprocess, "run", side_effect=fake_run):
+                with mock.patch.object(bagholder, "urlopen", side_effect=AssertionError("live FRED")):
+                    got = bagholder.refresh_spy_prices()
+        self.assertEqual(got["2014-01-02"], 1831.98)
+        self.assertEqual(got["2014-01-06"], 1837.49)
+        self.assertNotIn("2014-01-03", got)
+        self.assertEqual(store.spy_by_date()["2014-01-02"], 1831.98)
+        self.assertFalse((bagholder._state.get("error") or "").startswith("S&P 500"))
+
+    def test_refresh_spy_prices_keeps_existing_on_fail(self):
+        store.save_spy_by_date({"2014-01-02": 1831.98})
+        with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
+            with mock.patch.object(
+                bagholder.subprocess, "run", side_effect=RuntimeError("offline")
+            ):
+                got = bagholder.refresh_spy_prices()
+        self.assertEqual(got, {"2014-01-02": 1831.98})
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("empty table", err)
+        empty = self._fake_curl_run("DATE,SP500\n", http_code="200")
+        with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
+            with mock.patch.object(bagholder.subprocess, "run", side_effect=empty):
+                got = bagholder.refresh_spy_prices()
+        self.assertEqual(got, {"2014-01-02": 1831.98})
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("empty table", err)
+
+    def test_ledger_uses_python_spy_before_persist(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        self.assertIn("book.spyByDate", html)
+        idx = html.find("function replaceWsActivities(book)")
+        self.assertGreater(idx, 0)
+        chunk = html[idx:idx + 1800]
+        spy_at = chunk.find("state.spyByDate = book.spyByDate")
+        persist_at = chunk.find("persist();")
+        render_at = chunk.find("render();")
+        self.assertGreater(spy_at, 0)
+        self.assertGreater(persist_at, spy_at)
+        self.assertGreater(render_at, persist_at)
+
+    def test_api_book_does_not_block_on_fred(self):
+        src = Path(bagholder.__file__).read_text(encoding="utf-8")
+        idx = src.find('if path == "/api/book"')
+        self.assertGreater(idx, 0)
+        chunk = src[idx : idx + 1200]
+        self.assertIn("load_book()", chunk)
+        self.assertIn('"spyByDate"', chunk)
+        self.assertIn("threading.Thread", chunk)
+        self.assertIn("refresh_spy_prices", chunk)
+        self.assertNotIn("refresh_spy_prices()\n                book = load_book()", chunk)
+        self.assertIn("self._send(", chunk)
+        send_at = chunk.find("self._send(")
+        refresh_call = chunk.find("refresh_spy_prices()")
+        # blocking call refresh_spy_prices() must not sit before send
+        self.assertEqual(refresh_call, -1)
+
+    def test_ledger_persist_skips_empty_spy(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        persist_at = html.find("function persist()")
+        self.assertGreater(persist_at, 0)
+        chunk = html[persist_at : persist_at + 700]
+        self.assertIn("if (Object.keys(spy).length) localStorage.setItem(LS_SPY", chunk)
+        empty_at = html.find("function emptyStateHtml()")
+        empty = html[empty_at : empty_at + 2800]
+        yet = empty.find("No activity yet")
+        self.assertGreater(yet, 0)
+        before = empty[:yet]
+        self.assertIn("state.ws.lastSync", before)
+        self.assertIn("state.ws.activityCount", before)
+        self.assertIn("return \"\";", empty[empty.find("savedBook") : yet] if "savedBook" in empty else before)
+        load_at = html.find("function loadPersisted()")
+        after_load = html[load_at : load_at + 9000]
+        # still call ensureSpyPrices after boot/load
+        self.assertIn("ensureSpyPrices();", html.split("loadPersisted();", 1)[1][:800])
+
+    def test_ledger_polls_book_until_spy_dates(self):
+        html = bagholder.ledger_path().read_text(encoding="utf-8")
+        idx = html.find("function replaceWsActivities(book)")
+        self.assertGreater(idx, 0)
+        chunk = html[idx:idx + 2800]
+        self.assertIn("pollSpyByDateIfEmpty(book)", chunk)
+        helper = html.find("function pollSpyByDateIfEmpty(book)")
+        self.assertGreater(helper, 0)
+        h = html[helper:helper + 900]
+        self.assertIn('api("GET", "/api/book")', h)
+        self.assertIn("state.ws.connected", h)
+        self.assertIn("book.spyByDate", h)
+        self.assertIn("__spyBookPolls", h)
+
+    def test_refresh_spy_prices_not_live_fred_urlopen_only_fixture(self):
+        # Guard: tests never hit the network for FRED.
+        store.save_spy_by_date({"2014-01-02": 1831.98})
+        with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
+            with mock.patch.object(bagholder, "urlopen", side_effect=AssertionError("live FRED")):
+                with mock.patch.object(
+                    bagholder.subprocess, "run", side_effect=RuntimeError("offline")
+                ):
+                    got = bagholder.refresh_spy_prices()
+        self.assertEqual(got["2014-01-02"], 1831.98)
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+
+    def test_refresh_spy_prices_curl_http_error_status_line(self):
+        store.save_spy_by_date({"2014-01-02": 1831.98})
+        fake_run = self._fake_curl_run("nope", returncode=0, http_code="503")
+        with mock.patch.object(bagholder.shutil, "which", return_value="/usr/bin/curl"):
+            with mock.patch.object(bagholder.subprocess, "run", side_effect=fake_run):
+                got = bagholder.refresh_spy_prices()
+        self.assertEqual(got["2014-01-02"], 1831.98)
+        err = bagholder._state.get("error") or ""
+        self.assertFalse(err.startswith("S&P 500"))
+        self.assertNotIn("HTTP 503", err)
+        self.assertNotIn("empty table", err)
 
 
 if __name__ == "__main__":
