@@ -14,6 +14,7 @@ import gzip
 import json
 import os
 import re
+import sys
 import ssl
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -1096,15 +1097,22 @@ def fetch_history(rec, start, end, ssl_context=None):
     most of it (see _pick_covering); the winner is remembered."""
     span_start = datetime.strptime(start, "%Y-%m-%d")
     answers = []
+    notes = []
     for source, key in ordered_candidates(rec):
         try:
             bars = fetch_daily_from(source, key, rec, start, end, ssl_context)
-        except Exception:
+            notes.append("%s %s %d bars" % (source, key, len(bars)))
+        except Exception as e:
             bars = []
+            notes.append("%s %s %s" % (source, key, type(e).__name__))
         answers.append((source, key, bars))
         if bars and datetime.strptime(bars[0]["date"], "%Y-%m-%d") <= span_start + timedelta(days=COVERAGE_SLACK_DAYS):
             break   # covered: no need to ask the rest
-    return _pick_covering(rec, answers, span_start, lambda b: datetime.strptime(b["date"], "%Y-%m-%d"))
+    out = _pick_covering(rec, answers, span_start, lambda b: datetime.strptime(b["date"], "%Y-%m-%d"))
+    if not out[0]:
+        # an empty chart is a question someone will ask: say what every source answered
+        sys.stderr.write("bagholder chart: %s (%s, %s) daily %s..%s: %s\n" % (rec.get("symbol"), rec.get("exchange") or "no venue", rec.get("currency"), start, end, "; ".join(notes) or "no source"))
+    return out
 
 
 def ensure_history(rec, start, end, ssl_context=None, now=None):
@@ -1403,19 +1411,25 @@ def fetch_intraday(rec, start_ts, end_ts, ssl_context=None, on_demand=True):
     start_day = datetime.fromtimestamp(start_ts, tz=timezone.utc).date().isoformat()
     span_start = datetime.fromtimestamp(start_ts, tz=timezone.utc).replace(tzinfo=None)
     answers = []
+    notes = []
     for source, key in ordered_candidates(rec):
         reach = source_intraday_reach(source)
         if not reach or start_day < reach or (not on_demand and source in ON_DEMAND_ONLY_SOURCES):
+            notes.append("%s %s skipped" % (source, key))
             continue
         try:
             by_tf = fetch_intraday_from(source, key, rec, start_ts, end_ts, ssl_context)
-        except Exception:
+            notes.append("%s %s %d bars" % (source, key, len(by_tf.get("1h") or [])))
+        except Exception as e:
             by_tf = {}
+            notes.append("%s %s %s" % (source, key, type(e).__name__))
         answers.append((source, key, by_tf.get("1h") or [], by_tf))
         if by_tf.get("1h") and datetime.fromtimestamp(by_tf["1h"][0]["time"], tz=timezone.utc).replace(tzinfo=None) <= span_start + timedelta(days=COVERAGE_SLACK_DAYS):
             break
     bars, source = _pick_covering(rec, [(a[0], a[1], a[2]) for a in answers], span_start, lambda b: datetime.fromtimestamp(b["time"], tz=timezone.utc).replace(tzinfo=None))
     if not bars:
+        if on_demand:
+            sys.stderr.write("bagholder chart: %s (%s, %s) hourly from %s: %s\n" % (rec.get("symbol"), rec.get("exchange") or "no venue", rec.get("currency"), start_day, "; ".join(notes) or "no source"))
         return {}, ""
     return next(a[3] for a in answers if a[0] == source and a[2] is bars), source
 
