@@ -2129,14 +2129,14 @@ function exposureCardsHtml(pf) {
   const sec = exposureSlices(pf.sectors, 12).items, reg = exposureSlices(pf.regions).items;
   const width = (x, items) => { const m = Math.max(0, ...items.map((y) => y.share)); return Math.max(0.6, m > 0 ? x.share / m * 100 : 0).toFixed(2) + "%"; };
   const bar = (x, items, side) => '<div style="display:flex;justify-content:' + (side === "l" ? "flex-start" : "flex-end") + '"><div class="xbar" style="width:' + width(x, items) + ';background:' + x.color + '"></div></div>';
-  const row = (x, items, side) => !x ? "<div></div>" : side === "l"
-    ? '<div class="xrow"><span class="xname">' + esc(x.label) + "</span>" + bar(x, items, side) + '<span class="tab" style="text-align:right">' + pctPlain(x.share) + "</span></div>"
-    : '<div class="xrow r"><span class="tab">' + pctPlain(x.share) + "</span>" + bar(x, items, side) + '<span class="xname" style="text-align:right">' + esc(x.label) + "</span></div>";
+  const row = (x, items, side, i) => !x ? "<div></div>" : side === "l"
+    ? '<div class="xrow" data-side="l" data-slice="' + i + '"><span class="xname">' + esc(x.label) + "</span>" + bar(x, items, side) + '<span class="tab" style="text-align:right">' + pctPlain(x.share) + "</span></div>"
+    : '<div class="xrow r" data-side="r" data-slice="' + i + '"><span class="tab">' + pctPlain(x.share) + "</span>" + bar(x, items, side) + '<span class="xname" style="text-align:right">' + esc(x.label) + "</span></div>";
   let rows = "";
-  for (let i = 0; i < Math.max(sec.length, reg.length); i++) rows += row(sec[i], sec, "l") + row(reg[i], reg, "r");
+  for (let i = 0; i < Math.max(sec.length, reg.length); i++) rows += row(sec[i], sec, "l", i) + row(reg[i], reg, "r", i);
   return '<div class="card elev-sm" style="padding:16px 18px 14px">' +
     '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:12px"><h5>Sectors</h5><h5>Regions</h5></div>' +
-    (rows ? '<div style="display:grid;grid-template-columns:1fr 1fr;column-gap:56px;row-gap:8px">' + rows + "</div>"
+    (rows ? '<div id="xbarPlot" data-hover="xbar" style="display:grid;grid-template-columns:1fr 1fr;column-gap:56px;row-gap:8px">' + rows + "</div>"
       : '<div class="muted" style="font-size:12.5px">No open positions in scope.</div>') + "</div>";
 }
 function donutHover(e, key) {
@@ -2148,6 +2148,16 @@ function donutHover(e, key) {
   const x = i >= 0 ? d.items[i] : null;
   centre.innerHTML = x ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>"
     : '<div class="lbl">' + esc(d.centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(d.total) + "</div>";
+}
+// hovering a bar dims the other rows on its side, as a slice dims the rest of its donut
+function xbarHover(e) {
+  const plot = document.getElementById("xbarPlot"); if (!plot) return;
+  const el = e.target.closest("[data-slice]");
+  plot.querySelectorAll(".xrow").forEach((r) => {
+    const on = !el || r.dataset.side !== el.dataset.side || r.dataset.slice === el.dataset.slice;
+    r.querySelector(".xbar").style.opacity = on ? "1" : ".35";
+    [...r.children].forEach((c) => { if (!c.querySelector(".xbar")) c.style.opacity = on ? "1" : ".45"; });
+  });
 }
 function ppieHover(e) { donutHover(e, "ppie"); }
 function ppieLeave() { ppieHover({ target: document.body }); }
@@ -2793,13 +2803,13 @@ function bind() {
   document.addEventListener("mousemove", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
-    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover(e, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (h.dataset.hover === "ppie") donutHover(e, h.dataset.hover); else if (h.dataset.hover === "xbar") xbarHover(e);
   });
   document.addEventListener("mouseout", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
-    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover({ target: document.body }, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie") donutHover({ target: document.body }, h.dataset.hover); else if (h.dataset.hover === "xbar") xbarHover({ target: document.body });
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
   });
   // the Theme row opens its list on hover, as a submenu does; the click stays for touch
