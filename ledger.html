@@ -2099,7 +2099,7 @@ function donutCardHtml(key, title, centreLabel, items, total, empty) {
     '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>' + esc(title) + "</h5></div>" +
     (items.length ? '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' +
       '<div style="position:relative;flex:none;width:max(200px, min(' + SIZE + 'px, 100% - 140px));aspect-ratio:1/1"><svg viewBox="0 0 120 120" style="width:100%;height:100%;display:block">' + arcs + "</svg>" +
-      '<div id="' + key + 'Centre" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none"><div class="lbl">' + esc(centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(total) + "</div></div></div>" +
+      '<div id="' + key + 'Centre" style="position:absolute;inset:21%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none"><div class="lbl">' + esc(centreLabel) + "</div>" + (total == null ? "" : '<div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(total) + "</div>") + "</div></div>" +
       '<div id="' + key + 'Legend" class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">' +
       items.map((x, i) => '<span data-slice="' + i + '" style="display:contents"><span style="width:9px;height:9px;border-radius:2px;background:' + x.color + '"></span><span style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(x.label) + '</span><span class="tab" style="text-align:right;white-space:nowrap">' + pctPlain(x.share) + "</span></span>").join("") +
       "</div></div>" : '<div class="muted empty" style="flex:1;font-size:12px">' + esc(empty) + "</div>") + "</div>";
@@ -2121,10 +2121,10 @@ function exposureSlices(rows) {
 }
 function exposureCardsHtml(pf) {
   const sec = exposureSlices(pf.sectors), reg = exposureSlices(pf.regions);
-  const total = pf.marketValue || 0;   // the centre reads what Allocation's does
+  // the centre reads the card's word at rest, the hovered slice's name and share otherwise
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch">' +
-    donutCardHtml("xsec", "Sectors", "Market value", sec.items, total, "No open positions in scope.") +
-    donutCardHtml("xreg", "Regions", "Market value", reg.items, total, "No open positions in scope.") + "</div>";
+    donutCardHtml("xsec", "Sectors", "Sector", sec.items, null, "No open positions in scope.") +
+    donutCardHtml("xreg", "Regions", "Region", reg.items, null, "No open positions in scope.") + "</div>";
 }
 function donutHover(e, key) {
   const el = e.target.closest("[data-slice]"); const plot = document.getElementById(key + "Plot"); if (!plot) return;
@@ -2133,8 +2133,10 @@ function donutHover(e, key) {
   plot.querySelectorAll("#" + key + "Legend [data-slice]").forEach((s) => { const on = i < 0 || +s.dataset.slice === i; [...s.children].forEach((c) => { c.style.opacity = on ? "1" : ".45"; }); });
   const centre = document.getElementById(key + "Centre"); const d = _donuts[key]; if (!centre || !d) return;
   const x = i >= 0 ? d.items[i] : null;
-  centre.innerHTML = x ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>"
-    : '<div class="lbl">' + esc(d.centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(d.total) + "</div>";
+  // a card with a total reads value and share on hover; one without (Sectors, Regions) the name and its share
+  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + pctPlain(x.share) + "</div>"
+      : '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
+    : '<div class="lbl">' + esc(d.centreLabel) + "</div>" + (d.total == null ? "" : '<div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(d.total) + "</div>");
 }
 function ppieHover(e) { donutHover(e, "ppie"); }
 function ppieLeave() { ppieHover({ target: document.body }); }
