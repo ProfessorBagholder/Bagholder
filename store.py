@@ -19,6 +19,7 @@ FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
 OPTION_UNIT_PRICE_SCALE_META = "option_unit_price_scale_v1"
+OPTION_RELABEL_META = "option_relabel_rows_v1"
 ACTIVITY_PULL_TZ = ZoneInfo("America/Edmonton")
 ACTIVITY_PULL_WEEKDAYS = (0, 1, 2, 3, 4)
 ACTIVITY_PULL_HOUR = 14
@@ -64,8 +65,40 @@ def _ensure_home():
     return path
 
 
-def _connect():
-    _ensure_home()
+# Connections are pooled. Opening one and running the schema script again for
+# every read cost about a millisecond here and ten times that on a small
+# machine, and a model request makes eighteen of them. A borrowed connection
+# goes back to the pool on close(), so no call site changes.
+_pool = []
+_pool_path = None
+_POOL_MAX = 4
+
+
+class _Borrowed:
+    """A pooled connection. close() returns it to the pool instead of closing it.
+
+    Whether the schema has been built travels with the connection rather than in
+    a table of addresses: CPython hands a freed connection's address straight to
+    the next one, and a new connection wearing an old address must not be taken
+    for one that has already been through the migrations."""
+
+    __slots__ = ("_conn", "_entry")
+
+    def __init__(self, entry):
+        object.__setattr__(self, "_entry", entry)
+        object.__setattr__(self, "_conn", entry["conn"])
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_conn"), name, value)
+
+    def close(self):
+        _release(self)
+
+
+def _open_connection():
     path = db_path()
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -76,6 +109,83 @@ def _connect():
     except OSError:
         pass
     return conn
+
+
+def _drop_pool():
+    """Close every pooled connection: the database being read has changed."""
+    global _pool, _pool_path
+    for entry in _pool:
+        try:
+            entry["conn"].close()
+        except sqlite3.Error:
+            pass
+    _pool = []
+    _pool_path = None
+
+
+def _connect():
+    """A connection from the pool, or a new one. Give it back with close()."""
+    global _pool_path
+    _ensure_home()
+    path = str(db_path())
+    with _lock:
+        if _pool_path != path:
+            _drop_pool()
+            _pool_path = path
+        entry = _pool.pop() if _pool else {"conn": _open_connection(), "ready": False}
+    return _Borrowed(entry)
+
+
+def _release(borrowed):
+    entry = object.__getattribute__(borrowed, "_entry")
+    conn = entry["conn"]
+    # A call site that raised between its execute and its commit used to have
+    # the work thrown away with the connection. A pooled connection outlives
+    # the call, so the half-written transaction is rolled back here instead of
+    # being handed to the next borrower to commit as its own.
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+    except sqlite3.Error:
+        entry["ready"] = False
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        return
+    with _lock:
+        if _pool_path == str(db_path()) and len(_pool) < _POOL_MAX:
+            _pool.append(entry)
+            return
+    entry["ready"] = False
+    try:
+        conn.close()
+    except sqlite3.Error:
+        pass
+
+
+def close_all():
+    """Release every pooled connection. For tests and for a home that moves."""
+    with _lock:
+        _drop_pool()
+
+
+def _ready(conn):
+    """The schema, once per connection. Creating what is missing and running the
+    migrations is the same work every time on a database that has already been
+    through it, and a single model request asked for it eighteen times. The
+    stamped schema version is still read every time, so a database that is
+    replaced or rolled back under a live connection is migrated as before."""
+    entry = object.__getattribute__(conn, "_entry") if isinstance(conn, _Borrowed) else None
+    if entry is not None and entry["ready"]:
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None and str(row["value"]) == str(SCHEMA_VERSION):
+            return
+        entry["ready"] = False
+    _init_schema(conn)
 
 
 def _init_schema(conn):
@@ -366,6 +476,8 @@ def _init_schema(conn):
         ("schema_version", str(SCHEMA_VERSION)),
     )
     conn.commit()
+    if isinstance(conn, _Borrowed):
+        object.__getattribute__(conn, "_entry")["ready"] = True
 
 
 def _migrate_nav_history(conn):
@@ -413,6 +525,30 @@ def _ensure_activity_security_id(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(activities)").fetchall()}
     if "security_id" not in cols:
         conn.execute("ALTER TABLE activities ADD COLUMN security_id TEXT")
+
+
+def _relabel_when_rows_changed(conn):
+    """Relabel newly arrived option rows, and nothing else.
+
+    Sync never replaces a stored row, so rows land with Wealthsimple's own
+    labels and have to be relabelled after every pull. Doing it on every read
+    instead meant six UPDATE statements over the whole table each time the page
+    asked for anything. The fingerprint of the rows is stamped once they are
+    relabelled; an unchanged table is left alone."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, MAX(COALESCE(occurred_at, transaction_date)) AS m FROM activities"
+    ).fetchone()
+    key = "%s|%s" % (row["n"], row["m"])
+    stamped = conn.execute("SELECT value FROM meta WHERE key = ?", (OPTION_RELABEL_META,)).fetchone()
+    if stamped and stamped["value"] == key:
+        return False
+    _relabel_option_trades(conn)
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (OPTION_RELABEL_META, key),
+    )
+    return True
 
 
 def _relabel_option_trades(conn):
@@ -541,8 +677,8 @@ def ensure():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
-            _relabel_option_trades(conn)
+            _ready(conn)
+            _relabel_when_rows_changed(conn)
             stamped = conn.execute(
                 "SELECT value FROM meta WHERE key = ?",
                 (OPTION_UNIT_PRICE_SCALE_META,),
@@ -563,7 +699,7 @@ def get_meta(key, default=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = ?", (key,)
             ).fetchone()
@@ -578,7 +714,7 @@ def set_meta(key, value):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -593,7 +729,7 @@ def activity_count():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute("SELECT COUNT(*) AS n FROM activities").fetchone()
             return int(row["n"] if row else 0)
         finally:
@@ -604,7 +740,7 @@ def canonical_ids():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT canonical_id FROM activities "
                 "WHERE canonical_id IS NOT NULL AND canonical_id != ''"
@@ -618,7 +754,7 @@ def newest_ws_occurred_at():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute(
                 "SELECT occurred_at, transaction_date FROM activities "
                 "WHERE source = 'wealthsimple' "
@@ -932,7 +1068,7 @@ def insert_activity(act, canonical_id=None, assigned_id=None):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(_INSERT_SQL, _insert_params(act, aid, canonical_id))
             conn.commit()
             row = conn.execute(
@@ -973,7 +1109,7 @@ def find_link_candidates(act):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT * FROM activities "
                 "WHERE canonical_id IS NULL OR canonical_id = ''"
@@ -994,7 +1130,7 @@ def stamp_canonical_id(activity_id, canonical_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "UPDATE activities SET canonical_id = ? WHERE id = ? "
                 "AND (canonical_id IS NULL OR canonical_id = '')",
@@ -1040,7 +1176,7 @@ def _revise_wealthsimple_row(cid, row):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             stored = conn.execute("SELECT * FROM activities WHERE canonical_id = ?", (cid,)).fetchone()
             if not stored:
                 return False
@@ -1087,7 +1223,7 @@ def apply_wealthsimple_mapped(rows):
                 with _lock:
                     conn = _connect()
                     try:
-                        _init_schema(conn)
+                        _ready(conn)
                         conn.execute(
                             "UPDATE activities SET security_id = ? "
                             "WHERE canonical_id = ? "
@@ -1119,7 +1255,7 @@ def merge_local_rows(rows):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             existing_counts = {}
             for a in _all_activities(conn):
                 k = field_match_key(a)
@@ -1162,7 +1298,7 @@ def replace_accounts(accounts):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM accounts")
             for acc in accounts or []:
                 if not isinstance(acc, dict):
@@ -1195,7 +1331,7 @@ def replace_balances(balances):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM balances")
             for b in balances or []:
                 if not isinstance(b, dict):
@@ -1232,7 +1368,7 @@ def nav_last_dates():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT account_id, MAX(date) AS last FROM nav_history GROUP BY account_id"
             ).fetchall()
@@ -1283,7 +1419,7 @@ def replace_margin(rows):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM margin")
             now = _now_iso()
             for m in rows or []:
@@ -1303,7 +1439,7 @@ def upsert_nav(points):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             _write_nav_points(conn, points)
             conn.commit()
         finally:
@@ -1315,7 +1451,7 @@ def replace_nav(points):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM nav_history")
             _write_nav_points(conn, points)
             conn.commit()
@@ -1476,7 +1612,7 @@ def fx_rates(pair=FX_PAIR):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT date, rate FROM fx_rates WHERE pair = ? ORDER BY date", (pair,)
             ).fetchall()
@@ -1489,7 +1625,7 @@ def fx_last_date(pair=FX_PAIR):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute(
                 "SELECT MAX(date) AS d FROM fx_rates WHERE pair = ?", (pair,)
             ).fetchone()
@@ -1505,7 +1641,7 @@ def upsert_fx_rates(mapping, pair=FX_PAIR):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO fx_rates(pair, date, rate) VALUES (?, ?, ?)",
                 [(pair, d, v) for d, v in sorted(clean.items())],
@@ -1520,7 +1656,7 @@ def benchmark_prices(symbol=BENCHMARK_SYMBOL):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT date, close FROM benchmark_prices WHERE symbol = ? ORDER BY date",
                 (symbol,),
@@ -1534,7 +1670,7 @@ def benchmark_last_date(symbol=BENCHMARK_SYMBOL):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute(
                 "SELECT MAX(date) AS d FROM benchmark_prices WHERE symbol = ?", (symbol,)
             ).fetchone()
@@ -1550,7 +1686,7 @@ def upsert_benchmark_prices(mapping, symbol=BENCHMARK_SYMBOL):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO benchmark_prices(symbol, date, close) VALUES (?, ?, ?)",
                 [(symbol, d, v) for d, v in sorted(clean.items())],
@@ -1566,7 +1702,7 @@ def distributions():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             out = {}
             for r in conn.execute("SELECT * FROM distributions ORDER BY symbol, ex_date DESC").fetchall():
                 out.setdefault(r["symbol"], []).append(
@@ -1593,7 +1729,7 @@ def upsert_distributions(symbol, rows, source="tmx"):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.executemany(
                 "INSERT INTO distributions(symbol, ex_date, pay_date, amount, currency, source) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(symbol, ex_date, source) DO UPDATE SET pay_date = excluded.pay_date, amount = excluded.amount, currency = excluded.currency",
@@ -1609,7 +1745,7 @@ def quotes():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             out = {}
             for r in conn.execute("SELECT * FROM quotes").fetchall():
                 out[r["symbol"]] = {
@@ -1635,7 +1771,7 @@ def upsert_quote(symbol, rec, source="tmx"):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO quotes(symbol, price, price_change, percent_change, prev_close, dividend_amount, "
                 "dividend_frequency, ex_dividend_date, source, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -1667,7 +1803,7 @@ def quote_fetched_at():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return {r["symbol"]: r["fetched_at"] or "" for r in conn.execute("SELECT symbol, fetched_at FROM quotes").fetchall()}
         finally:
             conn.close()
@@ -1678,7 +1814,7 @@ def distributions_fetched_at():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return {r["symbol"]: r["fetched_at"] or "" for r in conn.execute("SELECT symbol, fetched_at FROM distribution_fetches").fetchall()}
         finally:
             conn.close()
@@ -1692,7 +1828,7 @@ def price_history(symbol, start="", end=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT date, open, high, low, close, volume FROM price_history WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date",
                 (sym, _s(start)[:10] or "0000-01-01", _s(end)[:10] or "9999-12-31"),
@@ -1718,7 +1854,7 @@ def upsert_price_history(symbol, bars, source=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             newest = conn.execute("SELECT MAX(date) FROM price_history WHERE symbol = ?", (sym,)).fetchone()[0] or ""
             conn.executemany("INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", clean)
             if newest:
@@ -1738,7 +1874,7 @@ def history_fetch(symbol):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT start, fetched_at FROM history_fetches WHERE symbol = ?", (sym,)).fetchone()
             return {"start": r["start"], "fetchedAt": r["fetched_at"]} if r else None
         finally:
@@ -1752,7 +1888,7 @@ def mark_history_fetched(symbol, start, when):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO history_fetches(symbol, start, fetched_at) VALUES (?, ?, ?) ON CONFLICT(symbol) DO UPDATE SET start = MIN(history_fetches.start, excluded.start), fetched_at = excluded.fetched_at",
                 (sym, _s(start)[:10], _s(when)),
@@ -1809,7 +1945,7 @@ def price_bars(symbol, tf, start_ts=0, end_ts=2 ** 40):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute("SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts", (sym, _s(tf), int(start_ts), int(end_ts))).fetchall()
             return [{"time": r["ts"], "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"], "volume": r["volume"]} for r in rows]
         finally:
@@ -1830,7 +1966,7 @@ def upsert_price_bars(symbol, tf, bars, source=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             newest = conn.execute("SELECT MAX(ts) FROM price_bars WHERE symbol = ? AND tf = ?", (sym, _s(tf))).fetchone()[0]
             conn.executemany("INSERT OR IGNORE INTO price_bars(symbol, tf, ts, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", clean)
             if newest is not None:
@@ -1849,7 +1985,7 @@ def bar_fetch(symbol, tf):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT start_ts, fetched_at FROM bar_fetches WHERE symbol = ? AND tf = ?", (sym, _s(tf))).fetchone()
             return {"startTs": r["start_ts"], "fetchedAt": r["fetched_at"]} if r else None
         finally:
@@ -1863,7 +1999,7 @@ def mark_bars_fetched(symbol, tf, start_ts, when):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO bar_fetches(symbol, tf, start_ts, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(symbol, tf) DO UPDATE SET start_ts = MIN(bar_fetches.start_ts, excluded.start_ts), fetched_at = excluded.fetched_at",
                 (sym, _s(tf), int(start_ts), _s(when)),
@@ -1880,7 +2016,7 @@ def mark_distributions_fetched(symbol, when):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO distribution_fetches(symbol, fetched_at) VALUES (?, ?) ON CONFLICT(symbol) DO UPDATE SET fetched_at = excluded.fetched_at",
                 (sym, _s(when)),
@@ -1898,7 +2034,7 @@ def dividend_symbols():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute(
                 "SELECT DISTINCT a.symbol AS symbol, a.currency AS currency, s.primary_exchange AS exchange "
                 "FROM activities a LEFT JOIN securities s ON s.id = a.security_id "
@@ -2006,7 +2142,7 @@ def data_summary():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             count = lambda sql: int(conn.execute(sql).fetchone()[0] or 0)
             journal_raw = conn.execute("SELECT value FROM meta WHERE key = ?", (JOURNAL_META,)).fetchone()
             try:
@@ -2043,7 +2179,7 @@ def clear_synced_data(keep_journal=True, keep_market=True):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             for table in ("activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"):
                 conn.execute("DELETE FROM %s" % table)
             keys = list(SYNC_META_KEYS) + ["trade_groups", "trade_notes"]
@@ -2068,7 +2204,7 @@ def book_version():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             parts = []
             for sql in (
                 "SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
@@ -2110,39 +2246,86 @@ def save_tiles(rows):
     return clean
 
 
-def data_version():
-    """Cheap fingerprint of everything the derived model depends on."""
+def status_counts():
+    """What the header needs: how many activities and accounts are stored, and
+    when the last sync finished. The page asks for this every thirty seconds;
+    reading the tables themselves to count their rows cost a tenth of a second
+    and thirty megabytes for two numbers and a date."""
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
+            acts = conn.execute("SELECT COUNT(*) AS n FROM activities").fetchone()["n"]
+            accounts = conn.execute("SELECT COUNT(*) AS n FROM accounts").fetchone()["n"]
+            row = conn.execute("SELECT value FROM meta WHERE key = 'synced_at'").fetchone()
+            return {
+                "activityCount": int(acts or 0),
+                "accountCount": int(accounts or 0),
+                "syncedAt": (row["value"] if row else "") or "",
+            }
+        finally:
+            conn.close()
+
+
+# The tables and meta keys the derived model reads. `quotes` is kept apart:
+# prices move every minute, and everything else in the model stands still while
+# they do, so a build can reuse what it already has.
+_VERSION_SQL = (
+    "SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
+    "SELECT COUNT(*), MAX(date) FROM nav_history",
+    "SELECT COUNT(*), MAX(date) FROM fx_rates",
+    "SELECT COUNT(*), MAX(date) FROM benchmark_prices",
+    "SELECT COUNT(*), MAX(ex_date) FROM distributions",
+    "SELECT COUNT(*), MAX(fetched_at) FROM securities",
+    "SELECT COUNT(*), SUM(quantity) FROM balances",
+    "SELECT COUNT(*), MAX(id) FROM accounts",
+    "SELECT COUNT(*), MAX(fetched_at) FROM margin",
+    "SELECT COUNT(*), MAX(fetched_at) FROM exposures",
+    "SELECT COUNT(*), MAX(added_at) FROM watchlist",
+    "SELECT COUNT(*), MAX(fetched_at) FROM news",
+    "SELECT COUNT(*), MAX(fetched_at) FROM universes",
+    "SELECT COUNT(*), SUM(COALESCE(net_liquidation_value, 0)) FROM accounts",
+)
+# the prices themselves, not only the stamp: two quotes written in the same
+# second used to leave the fingerprint unchanged, and the page kept the old price
+_QUOTES_SQL = "SELECT COUNT(*), MAX(fetched_at), TOTAL(price) FROM quotes"
+_VERSION_META = ("synced_at", "trade_groups", "trade_notes", JOURNAL_META, TILES_META)
+
+
+def versions():
+    """(everything, everything but the quotes) in one pass.
+
+    The first says whether the derived model is current at all. The second says
+    whether anything but a price has moved: when it has not, the match, the
+    closed trades, the cashflow and the equity curve are still good and only the
+    open positions have to be marked again."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
             parts = []
-            for sql in (
-                "SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
-                "SELECT COUNT(*), MAX(date) FROM nav_history",
-                "SELECT COUNT(*), MAX(date) FROM fx_rates",
-                "SELECT COUNT(*), MAX(date) FROM benchmark_prices",
-                "SELECT COUNT(*), MAX(ex_date) FROM distributions",
-                "SELECT COUNT(*), MAX(fetched_at) FROM quotes",
-                "SELECT COUNT(*), MAX(fetched_at) FROM securities",
-                "SELECT COUNT(*), SUM(quantity) FROM balances",
-                "SELECT COUNT(*), MAX(id) FROM accounts",
-                "SELECT COUNT(*), MAX(fetched_at) FROM margin",
-                "SELECT COUNT(*), MAX(fetched_at) FROM exposures",
-                "SELECT COUNT(*), MAX(added_at) FROM watchlist",
-                "SELECT COUNT(*), MAX(fetched_at) FROM news",
-                "SELECT COUNT(*), MAX(fetched_at) FROM universes",
-                "SELECT COUNT(*), SUM(COALESCE(net_liquidation_value, 0)) FROM accounts",
-            ):
+            for sql in _VERSION_SQL:
                 row = conn.execute(sql).fetchone()
                 parts.append("%s:%s" % (row[0], row[1]))
-            for key in ("synced_at", "trade_groups", "trade_notes", JOURNAL_META, TILES_META):
+            for key in _VERSION_META:
                 row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
                 val = (row["value"] if row else "") or ""
                 parts.append("%s:%s:%s" % (key, len(val), hash(val)))
-            return "|".join(parts)
+            core = "|".join(parts)
+            row = conn.execute(_QUOTES_SQL).fetchone()
+            return core + "|q:%s:%s:%s" % (row[0], row[1], row[2]), core
         finally:
             conn.close()
+
+
+def data_version():
+    """Cheap fingerprint of everything the derived model depends on."""
+    return versions()[0]
+
+
+def core_version():
+    """The same, without the quotes."""
+    return versions()[1]
 
 
 def _security_from_row(r):
@@ -2161,7 +2344,7 @@ def upsert_securities(rows):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             now = _now_iso()
             for raw in rows or []:
                 if not isinstance(raw, dict):
@@ -2207,7 +2390,7 @@ def list_securities():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
             return [_security_from_row(r) for r in rows]
         finally:
@@ -2228,7 +2411,7 @@ def missing_security_ids(ids):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             have = set()
             for i in range(0, len(wanted), 400):
                 chunk = wanted[i : i + 400]
@@ -2246,7 +2429,7 @@ def needs_security_id_backfill():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             row = conn.execute(
                 "SELECT 1 AS n FROM activities "
                 "WHERE source = 'wealthsimple' "
@@ -2264,7 +2447,7 @@ def snapshot(activities=True):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             activities = _all_activities(conn) if activities else []
             accounts = []
             for r in conn.execute("SELECT * FROM accounts ORDER BY id").fetchall():
@@ -2400,7 +2583,7 @@ def insert_order(row):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             now = _now_iso()
             conn.execute(
                 "INSERT INTO orders (id, created_at, account_id, account, security_id, symbol, currency, side, type, quantity, "
@@ -2444,7 +2627,7 @@ def update_order(order_id, patch):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("UPDATE orders SET " + ", ".join(sets) + " WHERE id = ?", vals)
             conn.commit()
         finally:
@@ -2456,7 +2639,7 @@ def list_orders(limit=200):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             rows = conn.execute("SELECT * FROM orders ORDER BY created_at DESC, rowid DESC LIMIT ?", (int(limit),)).fetchall()
             return [_order_from_row(r) for r in rows]
         finally:
@@ -2467,7 +2650,7 @@ def get_order(order_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT * FROM orders WHERE id = ?", (_s(order_id),)).fetchone()
             return _order_from_row(r) if r else None
         finally:
@@ -2498,7 +2681,7 @@ def insert_bracket(b):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             now = _now_iso()
             conn.execute(
                 "INSERT INTO brackets (id, order_id, created_at, account_id, security_id, symbol, currency, quantity, tif, sl_kind, sl_price, sl_trail, "
@@ -2529,7 +2712,7 @@ def update_bracket(bracket_id, patch):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("UPDATE brackets SET " + ", ".join(sets) + " WHERE id = ?", vals)
             conn.commit()
         finally:
@@ -2540,7 +2723,7 @@ def list_brackets(statuses=None):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             if statuses:
                 marks = ",".join("?" for _ in statuses)
                 rows = conn.execute("SELECT * FROM brackets WHERE status IN (%s) ORDER BY created_at" % marks, list(statuses)).fetchall()
@@ -2555,7 +2738,7 @@ def get_bracket(bracket_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT * FROM brackets WHERE id = ?", (_s(bracket_id),)).fetchone()
             return _bracket_from_row(r) if r else None
         finally:
@@ -2566,7 +2749,7 @@ def bracket_for_order(order_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT * FROM brackets WHERE order_id = ? ORDER BY created_at DESC LIMIT 1", (_s(order_id),)).fetchone()
             return _bracket_from_row(r) if r else None
         finally:
@@ -2580,7 +2763,7 @@ def symbol_for_security(security_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT symbol FROM activities WHERE security_id = ? AND symbol IS NOT NULL AND symbol != '' ORDER BY occurred_at DESC LIMIT 1", (_s(security_id),)).fetchone()
             return _s(r["symbol"]) if r else ""
         finally:
@@ -2593,7 +2776,7 @@ def replace_exposure(key, rec):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute(
                 "INSERT INTO exposures (key, sectors, countries, coverage, source, as_of, industry, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET sectors = excluded.sectors, countries = excluded.countries, coverage = excluded.coverage, source = excluded.source, "
@@ -2620,7 +2803,7 @@ def exposure_record(key):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT * FROM exposures WHERE key = ?", (_s(key),)).fetchone()
             return _exposure_from_row(r) if r else None
         finally:
@@ -2639,7 +2822,7 @@ def list_watchlist():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return [_watch_from_row(r) for r in conn.execute("SELECT * FROM watchlist ORDER BY added_at, symbol").fetchall()]
         finally:
             conn.close()
@@ -2655,7 +2838,7 @@ def add_watch(symbol, exchange="", name="", currency="", security_id="", now=Non
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("INSERT OR IGNORE INTO watchlist (symbol, exchange, name, currency, security_id, added_at) VALUES (?, ?, ?, ?, ?, ?)",
                          (sym, ex, _s(name), _s(currency).upper(), _s(security_id), when))
             conn.execute("UPDATE watchlist SET name = CASE WHEN COALESCE(name, '') = '' THEN ? ELSE name END, "
@@ -2672,7 +2855,7 @@ def remove_watch(symbol, exchange=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             cur = conn.execute("DELETE FROM watchlist WHERE symbol = ? AND exchange = ?", (_s(symbol).strip().upper(), _s(exchange).strip().upper()))
             conn.commit()
             return cur.rowcount > 0
@@ -2699,7 +2882,7 @@ def replace_news(symbol, exchange, source, rows, now=None):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (sym, ex))
             conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                              [(_s(r.get("id")), sym, ex, _s(source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when) for r in rows or [] if r.get("id")])
@@ -2714,7 +2897,7 @@ def news_fetched_at():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return {r["key"][len("news_fetched:"):]: r["value"] for r in conn.execute("SELECT key, value FROM meta WHERE key LIKE 'news_fetched:%'").fetchall()}
         finally:
             conn.close()
@@ -2724,7 +2907,7 @@ def forget_news(symbol, exchange):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (_s(symbol).strip().upper(), _s(exchange).strip().upper()))
             conn.execute("DELETE FROM meta WHERE key = ?", ("news_fetched:" + news_key(symbol, exchange),))
             conn.commit()
@@ -2737,7 +2920,7 @@ def trim_news(keep):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM news WHERE rowid NOT IN (SELECT rowid FROM news ORDER BY published_at DESC, id LIMIT ?)", (int(keep),))
             conn.commit()
         finally:
@@ -2760,7 +2943,7 @@ def replace_universe(key, rows, now=None):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             conn.execute("DELETE FROM universes WHERE key = ?", (key,))
             conn.executemany("INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                              [(key, _s(r.get("symbol")), _s(r.get("name")), r.get("value"), r.get("percentChange"), _s(r.get("sector")), _s(r.get("country")), when) for r in rows or [] if r.get("symbol")])
@@ -2774,7 +2957,7 @@ def exposures_map():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return {r["key"]: _exposure_from_row(r) for r in conn.execute("SELECT * FROM exposures").fetchall()}
         finally:
             conn.close()
@@ -2786,7 +2969,7 @@ def sold_since(account_id, security_id, since_iso, symbol=""):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             if _s(security_id):
                 r = conn.execute("SELECT SUM(quantity) AS q FROM activities WHERE account_id = ? AND security_id = ? AND activity_type = 'Trade' AND activity_sub_type = 'SELL' AND occurred_at > ?",
                                  (_s(account_id), _s(security_id), _s(since_iso))).fetchone()
@@ -2803,7 +2986,7 @@ def position_quantity(account_id, security_id):
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             r = conn.execute("SELECT SUM(quantity) AS q FROM balances WHERE account_id = ? AND security_id = ?", (_s(account_id), _s(security_id))).fetchone()
             return None if r is None or r["q"] is None else float(r["q"])
         finally:
@@ -2814,7 +2997,7 @@ def balances_count():
     with _lock:
         conn = _connect()
         try:
-            _init_schema(conn)
+            _ready(conn)
             return int(conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0])
         finally:
             conn.close()

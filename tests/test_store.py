@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -3500,3 +3501,218 @@ class WatchlistTest(unittest.TestCase):
         needing = market.quote_symbols_needing_refresh([{"symbol": "AAPL", "exchange": "NEO", "currency": "CAD", "kind": "Shares"},
                                                         {"symbol": "AAPL", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares", "quoteKey": "AAPL@NASDAQ"}])
         self.assertEqual([(k, src) for k, src, _ in needing], [("AAPL", "cboe_ca"), ("AAPL@NASDAQ", "tmx")], "the held CDR and the watched US listing keep separate quotes")
+
+
+class ConnectionPoolTest(unittest.TestCase):
+    """Reads must not reopen the database and re-run the schema every time."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_a_connection_is_borrowed_and_returned(self):
+        first = store._connect()
+        inner = object.__getattribute__(first, "_conn")
+        first.close()
+        second = store._connect()
+        self.assertIs(object.__getattribute__(second, "_conn"), inner, "the same connection comes back")
+        second.close()
+
+    def test_the_schema_is_built_once_per_connection(self):
+        runs = []
+        original = store._init_schema
+        store._init_schema = lambda conn: (runs.append(1), original(conn))[1]
+        try:
+            for _ in range(6):
+                store.activity_count()
+                store.data_version()
+        finally:
+            store._init_schema = original
+        self.assertEqual(runs, [], "a connection that has been through it is left alone")
+
+    def test_a_database_that_moves_is_opened_again(self):
+        store.activity_count()
+        with tempfile.TemporaryDirectory() as other:
+            store.set_home(other)
+            os.environ["BAGHOLDER_HOME"] = other
+            store.ensure()
+            store.insert_local({"id": "x1", "transactionDate": "2026-01-01", "symbol": "ZZZ",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 1.0, "netCashAmount": -1.0, "currency": "CAD"})
+            self.assertEqual(store.activity_count(), 1, "the new home is read, not the old pool")
+        store.set_home(self.tmp.name)
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        self.assertEqual(store.activity_count(), 0, "and the first home is still its own")
+
+
+class StatusCountsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_the_counts_match_the_snapshot_without_reading_the_rows(self):
+        for i in range(4):
+            store.insert_local({"id": "m%d" % i, "transactionDate": "2026-01-0%d" % (i + 1), "symbol": "AAA",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 2.0, "netCashAmount": -2.0, "currency": "CAD"})
+        store.replace_accounts([{"id": "a1", "nickname": "One"}, {"id": "a2", "nickname": "Two"}])
+        store.set_meta("synced_at", "2026-09-12T10:00:00Z")
+        snap = store.snapshot()
+        counts = store.status_counts()
+        self.assertEqual(counts["activityCount"], len(snap["activities"]))
+        self.assertEqual(counts["accountCount"], len(snap["accounts"]))
+        self.assertEqual(counts["syncedAt"], snap["syncedAt"])
+
+    def test_the_option_relabel_runs_once_until_the_rows_change(self):
+        conn = store._connect()
+        try:
+            conn.execute("DELETE FROM meta WHERE key = ?", (store.OPTION_RELABEL_META,))
+            conn.commit()
+        finally:
+            conn.close()
+        runs = []
+        original = store._relabel_option_trades
+        store._relabel_option_trades = lambda conn: runs.append(1)
+        try:
+            store.ensure()
+            store.ensure()
+            store.ensure()
+            self.assertEqual(len(runs), 1, "an unchanged table is relabelled once")
+            store.insert_local({"id": "o1", "transactionDate": "2026-02-02", "symbol": "AAA",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 2.0, "netCashAmount": -2.0, "currency": "CAD"})
+            store.ensure()
+            self.assertEqual(len(runs), 2, "a new row is relabelled")
+        finally:
+            store._relabel_option_trades = original
+
+
+class VersionsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_a_price_moves_the_version_but_not_the_core(self):
+        store.upsert_quote("AAA", {"price": 10.0, "currency": "CAD"}, source="tmx")
+        full_before, core_before = store.versions()
+        store.upsert_quote("AAA", {"price": 11.0, "currency": "CAD"}, source="tmx")
+        full_after, core_after = store.versions()
+        self.assertNotEqual(full_before, full_after, "the page is told the price moved")
+        self.assertEqual(core_before, core_after, "but nothing else did, so the match is kept")
+        self.assertEqual(store.data_version(), full_after)
+        self.assertEqual(store.core_version(), core_after)
+
+    def test_a_row_moves_both(self):
+        full_before, core_before = store.versions()
+        store.insert_local({"id": "r1", "transactionDate": "2026-03-03", "symbol": "BBB",
+                            "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                            "unitPrice": 3.0, "netCashAmount": -3.0, "currency": "CAD"})
+        full_after, core_after = store.versions()
+        self.assertNotEqual(full_before, full_after)
+        self.assertNotEqual(core_before, core_after)
+
+
+class PooledConnectionSafetyTest(unittest.TestCase):
+    """What a pooled connection must never carry to the next borrower."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_an_abandoned_transaction_is_rolled_back_not_handed_on(self):
+        conn = store._connect()
+        store._ready(conn)
+        conn.execute("INSERT INTO meta(key, value) VALUES ('probe', 'uncommitted')")
+        conn.close()   # a call site that raised before its commit
+        nxt = store._connect()
+        try:
+            self.assertFalse(nxt.in_transaction, "the next borrower starts clean")
+            self.assertIsNone(nxt.execute("SELECT value FROM meta WHERE key='probe'").fetchone(),
+                              "and cannot see, or commit, the abandoned write")
+            nxt.commit()
+        finally:
+            nxt.close()
+        self.assertEqual(store.get_meta("probe"), "", "the abandoned write never lands")
+
+    def test_a_fresh_connection_is_never_mistaken_for_a_prepared_one(self):
+        # CPython gives a freed connection's address to the next one, so
+        # readiness cannot be remembered by address.
+        store.close_all()
+        built = []
+        original = store._init_schema
+        store._init_schema = lambda conn: (built.append(1), original(conn))[1]
+        try:
+            for _ in range(8):
+                conn = store._connect()
+                store._ready(conn)
+                conn.close()
+                store.close_all()      # the pooled connection is dropped each time
+        finally:
+            store._init_schema = original
+        self.assertEqual(len(built), 8, "every new connection builds its own schema")
+
+    def test_concurrent_readers_and_writers_agree(self):
+        errors = []
+        done = threading.Barrier(5, timeout=20)
+
+        def writer():
+            try:
+                for i in range(40):
+                    store.upsert_quote("SYM%d" % (i % 5), {"price": float(i), "currency": "CAD"}, source="tmx")
+                done.wait()
+            except Exception as e:   # pragma: no cover - the assert below reports it
+                errors.append(repr(e))
+
+        def reader():
+            try:
+                for _ in range(40):
+                    store.data_version()
+                    store.status_counts()
+                    store.quotes()
+                done.wait()
+            except Exception as e:   # pragma: no cover
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(20)
+        self.assertEqual(errors, [], "no reader or writer failed")
+        self.assertLessEqual(len(store._pool), store._POOL_MAX, "the pool does not grow without bound")

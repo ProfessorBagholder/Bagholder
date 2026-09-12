@@ -28,6 +28,7 @@ later exits; whatever is still held shows under positions.
 from __future__ import annotations
 
 import json
+import functools
 import re
 import threading
 from datetime import date, datetime, timedelta, timezone
@@ -69,17 +70,31 @@ def _num(v, default=0.0):
     return f
 
 
+# Symbols and account names are normalised in the inner loops of the FIFO
+# match: half a million calls over a few dozen distinct strings for one book.
+# The results depend on nothing but the string, so they are remembered.
+@functools.lru_cache(maxsize=8192)
+def _compact(s):
+    return re.sub(r"[\s_\-]+", "", s.strip().upper())
+
+
 def compact(s):
-    return re.sub(r"[\s_\-]+", "", _s(s).strip().upper())
+    return _compact(_s(s))
+
+
+@functools.lru_cache(maxsize=8192)
+def _norm_account_name(s):
+    return _SPACE_RE.sub(" ", s).strip()
 
 
 def norm_account_name(s):
     """Nicknames mix ASCII and en-space separators; equality filters need one."""
-    return _SPACE_RE.sub(" ", _s(s)).strip()
+    return _norm_account_name(_s(s))
 
 
-def is_option_symbol(symbol):
-    u = _SPACE_RE.sub(" ", _s(symbol).strip().upper())
+@functools.lru_cache(maxsize=8192)
+def _is_option_symbol(symbol):
+    u = _SPACE_RE.sub(" ", symbol.strip().upper())
     if not u:
         return False
     if re.search(r"\b(PUT|CALL)\b", u) or re.search(r"\s[CP]$", u):
@@ -87,6 +102,10 @@ def is_option_symbol(symbol):
     if re.match(r"^[A-Z][A-Z0-9.]{0,9} \d{6}[CP]\d+", u):
         return True
     return False
+
+
+def is_option_symbol(symbol):
+    return _is_option_symbol(_s(symbol))
 
 
 def underlying_symbol(symbol):
@@ -2104,6 +2123,7 @@ def build_base(snapshot, market, journal, today=None, book=None):
         "universes": {k: [dict(r) for r in v] for k, v in (snapshot.get("universes") or {}).items()},
         "cashCurrencies": securities.cash_currencies(),
         "activityCount": book["rawCount"],
+        "lastPrices": last_prices,
     }
 
 
@@ -3050,7 +3070,7 @@ def build_view(base, filters=None):
 # --------------------------------------------------------------------------
 
 _cache_lock = threading.Lock()
-_cache = {"version": None, "base": None}
+_cache = {"version": None, "core": None, "base": None, "inputs": None}
 # The matched book outlives the base: a quote tick changes the data version every
 # minute, but the FIFO match only changes with the activity rows, the securities
 # or the day, so it is kept across ticks and the activity rows are not re-read.
@@ -3062,10 +3082,17 @@ def base_model(force=False):
     # anything else measured "to today" must roll over at midnight even when
     # nothing in the database has changed
     today = today_local()
-    version = store.data_version() + "|" + today
+    full, core = store.versions()
+    version = full + "|" + today
+    core_key = core + "|" + today
     with _cache_lock:
         if not force and _cache["base"] is not None and _cache["version"] == version:
             return _cache["base"]
+        marked = None
+        if not force and _cache["base"] is not None and _cache["core"] == core_key:
+            marked = (_cache["base"], _cache["inputs"])
+    if marked is not None:
+        return _remark(marked[0], marked[1], today, version, core_key)
     book_key = store.book_version() + "|" + today
     with _cache_lock:
         book = _book["book"] if not force and _book["key"] == book_key else None
@@ -3083,10 +3110,42 @@ def base_model(force=False):
     base = build_base(snapshot, market, journal, today, book=book)
     with _cache_lock:
         _cache["version"] = version
+        _cache["core"] = core_key
         _cache["base"] = base
+        _cache["inputs"] = {
+            "accounts": snapshot.get("accounts") or [],
+            "balances": snapshot.get("balances") or [],
+            "journal": journal,
+        }
         _book["key"] = book_key
         _book["book"] = book
     return base
+
+
+def _remark(base, inputs, today, version, core_key):
+    """A price tick and nothing else: mark the open positions at the new quotes
+    and keep the rest of the model as it stands. Re-matching the whole book,
+    collapsing every closed trade and walking the cashflow again for a price
+    that moved a cent was what made a modest machine unusable."""
+    quotes = (store.market_data().get("quotes")) or {}
+    fresh = dict(base)
+    fresh["quotes"] = quotes
+    fresh["positions"] = build_positions(
+        base["openLots"],
+        base["lastPrices"],
+        inputs["balances"],
+        inputs["accounts"],
+        base["securities"],
+        inputs["journal"],
+        today,
+        quotes,
+        base["actsById"],
+    )
+    with _cache_lock:
+        _cache["version"] = version
+        _cache["core"] = core_key
+        _cache["base"] = fresh
+    return fresh
 
 
 # What a trade or holding row carries only when it is the one open on the page:
@@ -3191,12 +3250,26 @@ def apply_journal(entries):
             p["grade"] = e.get("grade", "")
             p["thesis"] = e.get("thesis", "")
             p["tags"] = list(e.get("tags", []))
-        _cache["version"] = store.data_version()
+        # the next price tick marks the positions again from these inputs: it
+        # must carry the journal that was just written, not the one before it
+        if _cache["inputs"] is not None:
+            _cache["inputs"]["journal"] = entries
+        full, core = store.versions()
+        _cache["version"] = full
+        _cache["core"] = core + "|" + _s(base.get("today"))
 
 
-def invalidate():
+def invalidate(book=False):
+    """Forget the derived model. The FIFO match is kept: `_book` carries the
+    fingerprint of the rows it was built from, so the next build rebuilds it
+    exactly when the activities or the securities have changed. A quote, a
+    headline or a heatmap tile changes none of those, and re-matching the whole
+    book for one of them was the largest repeated cost on a slow machine."""
     with _cache_lock:
         _cache["version"] = None
+        _cache["core"] = None
         _cache["base"] = None
-        _book["key"] = None
-        _book["book"] = None
+        _cache["inputs"] = None
+        if book:
+            _book["key"] = None
+            _book["book"] = None
