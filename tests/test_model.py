@@ -2594,3 +2594,216 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PriceTickTest(unittest.TestCase):
+    """A quote moving must not match the book again, and must give the same model."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        model.invalidate(book=True)
+        store.save_tiles([])
+        for row in (
+            buy("b1", "AAA", 100, 10, "2026-01-05", accountType="Trading"),
+            sell("s1", "AAA", 100, 12, "2026-02-05", accountType="Trading"),
+            buy("b2", "BBB", 20, 50, "2026-03-05", accountType="Trading"),
+        ):
+            store.insert_local(row)
+        store.replace_accounts([{"id": "acct-1", "nickname": "Trading", "unifiedAccountType": "TFSA", "currency": "CAD"}])
+        store.upsert_quote("BBB", {"price": 60.0, "currency": "CAD"}, source="tmx")
+        model.invalidate(book=True)
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+        model.invalidate(book=True)
+
+    def test_a_price_tick_marks_the_same_model_without_rematching(self):
+        first = model.base_model()
+        self.assertTrue(first["positions"], "the open BBB lot is a position")
+        self.assertTrue(first["trades"], "and the closed AAA round trip is a trade")
+        built = []
+        original = model.build_book
+        model.build_book = lambda *a, **k: (built.append(1), original(*a, **k))[1]
+        try:
+            store.upsert_quote("BBB", {"price": 70.0, "currency": "CAD"}, source="tmx")
+            marked = model.base_model()
+            self.assertEqual(built, [], "a price tick does not match the book again")
+            model.invalidate(book=True)
+            full = model.base_model(force=True)
+        finally:
+            model.build_book = original
+        self.assertEqual(marked["positions"], full["positions"], "marked positions equal a full rebuild")
+        self.assertEqual(marked["trades"], full["trades"], "and so do the closed trades")
+        self.assertEqual(marked["cashflow"], full["cashflow"])
+        self.assertEqual(marked["equity"], full["equity"])
+        self.assertEqual(
+            model.slim(model.build_view(marked, None)),
+            model.slim(model.build_view(full, None)),
+            "the page is served exactly what a full rebuild would have produced",
+        )
+
+    def test_a_new_row_does_match_the_book_again(self):
+        model.base_model()
+        built = []
+        original = model.build_book
+        model.build_book = lambda *a, **k: (built.append(1), original(*a, **k))[1]
+        try:
+            store.insert_local(buy("b3", "CCC", 5, 20, "2026-04-05", accountType="Trading"))
+            model.base_model()
+        finally:
+            model.build_book = original
+        self.assertEqual(len(built), 1, "an activity row is a new book")
+
+    def test_invalidate_keeps_the_match_and_book_true_drops_it(self):
+        model.base_model()
+        model.invalidate()
+        self.assertIsNotNone(model._book["book"], "a quote or a headline does not throw the match away")
+        model.invalidate(book=True)
+        self.assertIsNone(model._book["book"], "new rows do")
+
+    def test_a_grade_written_survives_the_next_price_tick(self):
+        base = model.base_model()
+        position = base["positions"][0]
+        store.save_journal_entry(position["id"], {"grade": "A", "thesis": "held", "tags": ["core"]})
+        model.apply_journal(store.journal())
+        store.upsert_quote("BBB", {"price": 80.0, "currency": "CAD"}, source="tmx")
+        marked = model.base_model()
+        again = [p for p in marked["positions"] if p["id"] == position["id"]]
+        self.assertEqual(again[0]["grade"], "A", "the grade is marked in, not dropped with the old journal")
+        self.assertEqual(again[0]["tags"], ["core"])
+
+
+class ModelRequestRefreshTest(unittest.TestCase):
+    """The request path must not start a refresh per request."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        model.invalidate(book=True)
+        store.save_tiles([])
+        bagholder._jobs.clear()
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), bagholder.Handler)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+        bagholder._jobs.clear()
+
+    def _get(self, path):
+        req = Request("http://127.0.0.1:%d%s" % (self.port, path), headers={"X-Bagholder": "1"})
+        with urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def test_twenty_page_loads_start_one_quote_read(self):
+        gate = threading.Event()
+        started = []
+
+        def slow_quotes():
+            started.append(1)
+            gate.wait(3)
+            return 0
+
+        with mock.patch.object(bagholder, "refresh_quotes", bagholder.single_flight("quotes")(slow_quotes)), \
+             mock.patch.object(market, "is_stale", lambda **k: False), \
+             mock.patch.object(market, "quote_symbols_needing_refresh", lambda *a, **k: [("AAA", "tmx", "AAA")]):
+            for _ in range(20):
+                self.assertTrue(self._get("/api/model?filters=%7B%7D")["ok"])
+            gate.set()
+            time.sleep(0.3)
+        self.assertEqual(len(started), 1, "one quote read, not one per request")
+
+    def test_the_status_payload_does_not_read_the_activity_table(self):
+        reads = []
+        original = store.snapshot
+        store.snapshot = lambda *a, **k: (reads.append(1), original(*a, **k))[1]
+        try:
+            self.assertTrue(self._get("/api/status")["ok"])
+        finally:
+            store.snapshot = original
+        self.assertEqual(reads, [], "the header's counts come from the database, not from every row in it")
+
+
+class SingleFlightTest(unittest.TestCase):
+    """One refresh of a kind at a time, and a request path that cannot pile them up."""
+
+    def setUp(self):
+        bagholder._jobs.clear()
+
+    def tearDown(self):
+        bagholder._jobs.clear()
+
+    def test_a_second_call_returns_at_once_instead_of_running(self):
+        started = threading.Event()
+        release = threading.Event()
+        ran = []
+
+        @bagholder.single_flight("test-job")
+        def work():
+            ran.append(1)
+            started.set()
+            release.wait(2)
+            return "done"
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        self.assertTrue(started.wait(2), "the first call is running")
+        self.assertEqual(work(), 0, "the second is told the kind is busy and does nothing")
+        self.assertEqual(len(ran), 1)
+        release.set()
+        t.join(2)
+        self.assertEqual(work(), "done", "once it is free the next call runs")
+        self.assertEqual(len(ran), 2)
+
+    def test_a_kick_starts_one_thread_and_then_holds_for_the_cooldown(self):
+        calls = []
+        gate = threading.Event()
+
+        @bagholder.single_flight("test-kick")
+        def work():
+            calls.append(1)
+            gate.wait(2)
+
+        bagholder._COOLDOWN["test-kick"] = 30.0
+        try:
+            self.assertTrue(bagholder.kick("test-kick", work), "the first request starts it")
+            for _ in range(20):
+                bagholder.kick("test-kick", work)   # a page reload, a filter, a poll
+            gate.set()
+            time.sleep(0.2)
+            self.assertEqual(len(calls), 1, "twenty more requests start nothing")
+            self.assertFalse(bagholder.kick("test-kick", work), "and the cooldown holds after it finishes")
+        finally:
+            bagholder._COOLDOWN.pop("test-kick", None)
+
+    def test_the_cooldown_expires(self):
+        calls = []
+
+        @bagholder.single_flight("test-cool")
+        def work():
+            calls.append(1)
+
+        bagholder._COOLDOWN["test-cool"] = 0.05
+        try:
+            bagholder.kick("test-cool", work)
+            time.sleep(0.3)
+            self.assertTrue(bagholder.kick("test-cool", work), "a source is tried again once its cooldown passes")
+            time.sleep(0.2)
+            self.assertEqual(len(calls), 2)
+        finally:
+            bagholder._COOLDOWN.pop("test-cool", None)

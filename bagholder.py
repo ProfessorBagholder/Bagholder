@@ -1735,6 +1735,62 @@ def _expires_at_as_timestamp(data):
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+# Background refreshes: one of a kind at a time.
+#
+# A page open, a filter change, a poll and a background loop can all ask for the
+# same refresh within a second of each other. Each used to start its own thread,
+# and every thread built its own copy of the model and then dropped the cached
+# one, so the next request rebuilt it and started another thread. On a machine
+# where a source answers slowly the threads outlived the requests that made
+# them and piled up until nothing was left for the page.
+_jobs_lock = threading.Lock()
+_jobs = {}
+
+
+def _job(name):
+    return _jobs.setdefault(name, {"running": False, "until": 0.0})
+
+
+def single_flight(name, busy=0):
+    """Run the wrapped function only when no other call to it is in flight.
+    A call that finds one running returns `busy` at once instead of queueing."""
+    def wrap(fn):
+        def inner(*args, **kwargs):
+            with _jobs_lock:
+                job = _job(name)
+                if job["running"]:
+                    return busy
+                job["running"] = True
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                with _jobs_lock:
+                    _job(name)["running"] = False
+                    _job(name)["until"] = time.time() + _COOLDOWN.get(name, 0)
+        inner.__name__ = getattr(fn, "__name__", name)
+        inner.__doc__ = fn.__doc__
+        return inner
+    return wrap
+
+
+# How long a kind of refresh waits after one finishes before a request may ask
+# for it again. The background loops keep their own clocks; this only stops the
+# request path from asking a source that is slow, rate-limited or down on every
+# page the user opens.
+_COOLDOWN = {"quotes": 60.0, "market": 300.0}
+
+
+def kick(name, fn):
+    """Start a background refresh unless one is running or its cooldown holds.
+    True when a thread was started."""
+    with _jobs_lock:
+        job = _job(name)
+        if job["running"] or time.time() < job["until"]:
+            return False
+    threading.Thread(target=fn, name="bagholder-" + name, daemon=True).start()
+    return True
+
+
 _refresh_lock = threading.Lock()
 _refused_refresh_token = None  # a token Wealthsimple answered invalid_grant to; never posted again this run
 
@@ -5488,6 +5544,7 @@ def news_listings():
     return out
 
 
+@single_flight("news")
 def refresh_news():
     """The wires for every listing whose news is older than fifteen minutes. Never raises."""
     try:
@@ -5508,6 +5565,7 @@ def news_loop():
             return
 
 
+@single_flight("universes")
 def refresh_universes():
     """The market heatmaps' tiles: the TSX 60 from TMX, the US market from Nasdaq's screener. Never raises."""
     try:
@@ -5551,7 +5609,8 @@ def qty_text(q):
 
 
 def status_payload():
-    book = load_book()
+    counts = store.status_counts()
+    update = update_status()
     sess = load_session()
     with _lock:
         connected = bool(_state["connected"] and sess and sess.get("access_token"))
@@ -5559,9 +5618,9 @@ def status_payload():
             "ok": True,
             "connected": connected,
             "email": _state["email"] or (sess or {}).get("email") or "",
-            "lastSync": _state["lastSync"] or book.get("syncedAt") or "",
-            "activityCount": len(book.get("activities") or []),
-            "accountCount": len(book.get("accounts") or []),
+            "lastSync": _state["lastSync"] or counts["syncedAt"] or "",
+            "activityCount": counts["activityCount"],
+            "accountCount": counts["accountCount"],
             "capturing": bool(_state["capturing"]),
             "syncing": bool(_state["syncing"]),
             "listingsFilling": bool(_state.get("listingsFilling")),
@@ -5571,9 +5630,9 @@ def status_payload():
             "protocol": PROTOCOL,
             "startedAt": STARTED_AT,
             "version": APP_VERSION,
-            "latestVersion": str(update_status().get("latest") or ""),
-            "updateAvailable": bool(update_status().get("updateAvailable")),
-            "updateUrl": IMAGE_PAGE if UPDATES_OFF else str(update_status().get("url") or REPO_URL),
+            "latestVersion": str(update.get("latest") or ""),
+            "updateAvailable": bool(update.get("updateAvailable")),
+            "updateUrl": IMAGE_PAGE if UPDATES_OFF else str(update.get("url") or REPO_URL),
             "canUpdate": can_update(),
             "updateBy": "image" if UPDATES_OFF else "app",
             "loginView": LOGIN_VIEW,
@@ -5595,6 +5654,7 @@ def _payer_symbols():
         return []
 
 
+@single_flight("market", busy={})
 def refresh_market_data():
     """USD/CAD, S&P 500 and declared distributions for the derived model. Never raises."""
     try:
@@ -5607,6 +5667,7 @@ def refresh_market_data():
         return {"fx": 0, "benchmark": 0, "distributions": 0, "quotes": 0, "skipped": True}
 
 
+@single_flight("quotes")
 def refresh_quotes():
     """Prices for held positions and watched listings, at most every QUOTE_REFRESH_MINUTES. Never raises."""
     try:
@@ -5619,6 +5680,7 @@ def refresh_quotes():
         return 0
 
 
+@single_flight("periodic")
 def refresh_periodic_market():
     """USD/CAD, S&P 500 and declared distributions on their own clocks. Never raises."""
     try:
@@ -5630,6 +5692,7 @@ def refresh_periodic_market():
         return {"fx": 0, "benchmark": 0, "distributions": 0, "skipped": True}
 
 
+@single_flight("archive", busy=())
 def archive_intraday_bars():
     """Keep intraday bars for everything traded or held in the past year, a few
     instruments per call so the sources are never hammered. Never raises."""
@@ -5674,7 +5737,7 @@ def scan_watched_folder():
             return None
         result = csvimport.scan_folder()
         if result.get("ok") and result.get("added"):
-            model.invalidate()
+            model.invalidate(book=True)
         return result
     except Exception:
         return None
@@ -6234,9 +6297,9 @@ class Handler(BaseHTTPRequestHandler):
             query = self.path.split("?", 1)[1] if "?" in self.path else ""
             try:
                 if market.is_stale(symbols=_payer_symbols()):
-                    threading.Thread(target=refresh_market_data, name="bagholder-market", daemon=True).start()
+                    kick("market", refresh_market_data)
                 elif market.quote_symbols_needing_refresh(model.held_symbols() + model.quote_symbols()):   # the watchlist's and the tile row's quotes too
-                    threading.Thread(target=refresh_quotes, name="bagholder-quotes", daemon=True).start()
+                    kick("quotes", refresh_quotes)
             except Exception:
                 pass
             try:
@@ -6359,7 +6422,7 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 _state["lastSync"] = ""
                 _state["error"] = ""
-            model.invalidate()
+            model.invalidate(book=True)
             summary["ok"] = True
             summary["sessionPresent"] = bool(load_session())
             self._send(200, summary)
@@ -6428,7 +6491,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/book/append":
             body = self._read_json()
             result = append_manual(body)
-            model.invalidate()
+            model.invalidate(book=True)
             self._send(200, result)
             return
         if path == "/api/import":
@@ -6440,7 +6503,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             report = csvimport.import_text(_s(body.get("name")) or "upload.csv", text)
             if report.get("added"):
-                model.invalidate()
+                model.invalidate(book=True)
             self._send(200, report)
             return
         if path == "/api/watch":
@@ -6452,7 +6515,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             result = csvimport.scan_folder(force=True)
             if result.get("added"):
-                model.invalidate()
+                model.invalidate(book=True)
             result["status"] = csvimport.status()
             self._send(200, result)
             return
@@ -6460,7 +6523,7 @@ class Handler(BaseHTTPRequestHandler):
             self._read_json()
             result = csvimport.scan_folder(force=True)
             if result.get("ok") and result.get("added"):
-                model.invalidate()
+                model.invalidate(book=True)
             result["status"] = csvimport.status()
             self._send(200 if result.get("ok") else 400, result)
             return

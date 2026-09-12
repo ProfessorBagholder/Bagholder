@@ -3500,3 +3500,139 @@ class WatchlistTest(unittest.TestCase):
         needing = market.quote_symbols_needing_refresh([{"symbol": "AAPL", "exchange": "NEO", "currency": "CAD", "kind": "Shares"},
                                                         {"symbol": "AAPL", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares", "quoteKey": "AAPL@NASDAQ"}])
         self.assertEqual([(k, src) for k, src, _ in needing], [("AAPL", "cboe_ca"), ("AAPL@NASDAQ", "tmx")], "the held CDR and the watched US listing keep separate quotes")
+
+
+class ConnectionPoolTest(unittest.TestCase):
+    """Reads must not reopen the database and re-run the schema every time."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_a_connection_is_borrowed_and_returned(self):
+        first = store._connect()
+        inner = object.__getattribute__(first, "_conn")
+        first.close()
+        second = store._connect()
+        self.assertIs(object.__getattribute__(second, "_conn"), inner, "the same connection comes back")
+        second.close()
+
+    def test_the_schema_is_built_once_per_connection(self):
+        runs = []
+        original = store._init_schema
+        store._init_schema = lambda conn: (runs.append(1), original(conn))[1]
+        try:
+            for _ in range(6):
+                store.activity_count()
+                store.data_version()
+        finally:
+            store._init_schema = original
+        self.assertEqual(runs, [], "a connection that has been through it is left alone")
+
+    def test_a_database_that_moves_is_opened_again(self):
+        store.activity_count()
+        with tempfile.TemporaryDirectory() as other:
+            store.set_home(other)
+            os.environ["BAGHOLDER_HOME"] = other
+            store.ensure()
+            store.insert_local({"id": "x1", "transactionDate": "2026-01-01", "symbol": "ZZZ",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 1.0, "netCashAmount": -1.0, "currency": "CAD"})
+            self.assertEqual(store.activity_count(), 1, "the new home is read, not the old pool")
+        store.set_home(self.tmp.name)
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        self.assertEqual(store.activity_count(), 0, "and the first home is still its own")
+
+
+class StatusCountsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_the_counts_match_the_snapshot_without_reading_the_rows(self):
+        for i in range(4):
+            store.insert_local({"id": "m%d" % i, "transactionDate": "2026-01-0%d" % (i + 1), "symbol": "AAA",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 2.0, "netCashAmount": -2.0, "currency": "CAD"})
+        store.replace_accounts([{"id": "a1", "nickname": "One"}, {"id": "a2", "nickname": "Two"}])
+        store.set_meta("synced_at", "2026-09-12T10:00:00Z")
+        snap = store.snapshot()
+        counts = store.status_counts()
+        self.assertEqual(counts["activityCount"], len(snap["activities"]))
+        self.assertEqual(counts["accountCount"], len(snap["accounts"]))
+        self.assertEqual(counts["syncedAt"], snap["syncedAt"])
+
+    def test_the_option_relabel_runs_once_until_the_rows_change(self):
+        conn = store._connect()
+        try:
+            conn.execute("DELETE FROM meta WHERE key = ?", (store.OPTION_RELABEL_META,))
+            conn.commit()
+        finally:
+            conn.close()
+        runs = []
+        original = store._relabel_option_trades
+        store._relabel_option_trades = lambda conn: runs.append(1)
+        try:
+            store.ensure()
+            store.ensure()
+            store.ensure()
+            self.assertEqual(len(runs), 1, "an unchanged table is relabelled once")
+            store.insert_local({"id": "o1", "transactionDate": "2026-02-02", "symbol": "AAA",
+                                "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                                "unitPrice": 2.0, "netCashAmount": -2.0, "currency": "CAD"})
+            store.ensure()
+            self.assertEqual(len(runs), 2, "a new row is relabelled")
+        finally:
+            store._relabel_option_trades = original
+
+
+class VersionsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_a_price_moves_the_version_but_not_the_core(self):
+        store.upsert_quote("AAA", {"price": 10.0, "currency": "CAD"}, source="tmx")
+        full_before, core_before = store.versions()
+        store.upsert_quote("AAA", {"price": 11.0, "currency": "CAD"}, source="tmx")
+        full_after, core_after = store.versions()
+        self.assertNotEqual(full_before, full_after, "the page is told the price moved")
+        self.assertEqual(core_before, core_after, "but nothing else did, so the match is kept")
+        self.assertEqual(store.data_version(), full_after)
+        self.assertEqual(store.core_version(), core_after)
+
+    def test_a_row_moves_both(self):
+        full_before, core_before = store.versions()
+        store.insert_local({"id": "r1", "transactionDate": "2026-03-03", "symbol": "BBB",
+                            "category": "trade", "activitySubType": "BUY", "quantity": 1,
+                            "unitPrice": 3.0, "netCashAmount": -3.0, "currency": "CAD"})
+        full_after, core_after = store.versions()
+        self.assertNotEqual(full_before, full_after)
+        self.assertNotEqual(core_before, core_after)
