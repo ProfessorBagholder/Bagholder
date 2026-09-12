@@ -1554,7 +1554,9 @@ class SourceHealthTest(unittest.TestCase):
                     raise URLError("no route")
                 def get(url, *a, **k):
                     raise HTTPError(url, 429, "Too Many Requests", {}, None)
+                # the POST path still speaks urlopen; reads go over a kept connection
                 with mock.patch.object(market, "urlopen", side_effect=lambda req, **k: (_ for _ in ()).throw(URLError("no route") if b"graphql" in (req.data or b"") or "tmx" in req.full_url else HTTPError(req.full_url, 429, "Too Many Requests", {}, None))), \
+                     mock.patch.object(market, "_fetch_once", side_effect=lambda url, *a, **k: (_ for _ in ()).throw(URLError("no route") if "tmx" in url else HTTPError(url, 429, "Too Many Requests", {}, None))), \
                      mock.patch.object(market, "YAHOO_MIN_INTERVAL_SEC", 0):
                     market._yahoo_backoff_until = 0.0
                     bars, src = market.fetch_history(rec, "2026-02-01", "2026-02-10")
@@ -1573,7 +1575,8 @@ class SourceHealthTest(unittest.TestCase):
                 self.assertEqual(market.chart_reason(rec, "1d"), "No bars for this span from TMX Money or Yahoo Finance.")
                 # a 404 is the symbol, not the source
                 market._health.clear()
-                with mock.patch.object(market, "urlopen", side_effect=lambda req, **k: (_ for _ in ()).throw(HTTPError(req.full_url, 404, "Not Found", {}, None))):
+                with mock.patch.object(market, "urlopen", side_effect=lambda req, **k: (_ for _ in ()).throw(HTTPError(req.full_url, 404, "Not Found", {}, None))), \
+                     mock.patch.object(market, "_fetch_once", side_effect=lambda url, *a, **k: (_ for _ in ()).throw(HTTPError(url, 404, "Not Found", {}, None))):
                     with self.assertRaises(HTTPError):
                         market._get_text("https://query1.finance.yahoo.com/v8/finance/chart/GONE.CN")
                 self.assertEqual(market.source_health(), [], "a missing symbol leaves the source's health alone")

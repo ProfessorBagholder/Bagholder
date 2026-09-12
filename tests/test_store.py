@@ -3716,3 +3716,90 @@ class PooledConnectionSafetyTest(unittest.TestCase):
             t.join(20)
         self.assertEqual(errors, [], "no reader or writer failed")
         self.assertLessEqual(len(store._pool), store._POOL_MAX, "the pool does not grow without bound")
+
+
+class KeptConnectionTest(unittest.TestCase):
+    """The transport keeps a connection per host, and falls back where it must."""
+
+    def setUp(self):
+        market.close_connections()
+
+    def tearDown(self):
+        market.close_connections()
+
+    def test_a_read_gives_its_connection_back_and_the_next_one_takes_it(self):
+        calls = []
+
+        class FakeResponse:
+            status = 200
+            will_close = False
+            def read(self): return b"ok"
+            def getheader(self, name): return None
+
+        class FakeConn:
+            def __init__(self, *a, **k): calls.append("open")
+            def request(self, method, path, body=None, headers=None): calls.append("request")
+            def getresponse(self): return FakeResponse()
+            def close(self): calls.append("close")
+
+        with mock.patch.object(market.http.client, "HTTPSConnection", FakeConn), \
+             mock.patch.object(market, "_proxied", return_value=False):
+            for _ in range(3):
+                market._fetch("https://example.invalid/x", None, {"User-Agent": "t"}, 5)
+        self.assertEqual(calls.count("open"), 1, "one connection for three reads")
+        self.assertEqual(calls.count("request"), 3)
+
+    def test_a_connection_the_server_closed_is_retried_once(self):
+        state = {"first": True}
+
+        class FakeResponse:
+            status = 200
+            will_close = False
+            def read(self): return b"ok"
+            def getheader(self, name): return None
+
+        class FakeConn:
+            def __init__(self, *a, **k): pass
+            def request(self, method, path, body=None, headers=None):
+                if state["first"]:
+                    state["first"] = False
+                    raise OSError("closed by peer")
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+
+        with mock.patch.object(market.http.client, "HTTPSConnection", FakeConn), \
+             mock.patch.object(market, "_proxied", return_value=False):
+            self.assertEqual(market._fetch("https://example.invalid/x", None, {}, 5), b"ok")
+
+    def test_a_proxied_host_goes_the_old_way(self):
+        seen = []
+
+        class FakeResp:
+            status = 200
+            def read(self): return b"via urllib"
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with mock.patch.object(market, "_proxied", return_value=True), \
+             mock.patch.object(market, "urlopen", side_effect=lambda req, **k: (seen.append(req.full_url), FakeResp())[1]):
+            self.assertEqual(market._fetch("https://example.invalid/x", None, {}, 5), b"via urllib")
+        self.assertEqual(len(seen), 1, "a proxy means urllib, which knows how to reach one")
+
+    def test_a_refusal_still_reads_as_one(self):
+        class FakeResponse:
+            status = 404
+            will_close = True
+            def read(self): return b""
+            def getheader(self, name): return None
+
+        class FakeConn:
+            def __init__(self, *a, **k): pass
+            def request(self, *a, **k): pass
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+
+        with mock.patch.object(market.http.client, "HTTPSConnection", FakeConn), \
+             mock.patch.object(market, "_proxied", return_value=False):
+            with self.assertRaises(Exception) as caught:
+                market._fetch("https://example.invalid/missing", None, {}, 5)
+        self.assertEqual(getattr(caught.exception, "code", None), 404, "a symbol a source does not carry is still a 404")

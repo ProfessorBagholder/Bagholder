@@ -5693,24 +5693,61 @@ def refresh_periodic_market():
 
 
 @single_flight("archive", busy=())
-def archive_intraday_bars():
+def archive_intraday_bars(limit=None):
     """Keep intraday bars for everything traded or held in the past year, a few
     instruments per call so the sources are never hammered. Never raises."""
     try:
         recs = model.intraday_archive_symbols()
-        return market.archive_daily(recs, _ssl_context()) + market.archive_intraday(recs, _ssl_context())
+        limit = market.ARCHIVE_BATCH if limit is None else max(1, int(limit))
+        return (market.archive_daily(recs, _ssl_context(), limit=limit)
+                + market.archive_intraday(recs, _ssl_context(), limit=limit))
     except Exception:
         return []
 
 
+# The backfill is paced by the processor time it actually costs, not by a count
+# of instruments: the same batch is a blink on a laptop and seconds on a small
+# board, and only the board should slow down. After each pass the loop rests as
+# long as that pass burned, so the backfill never takes more than half of one
+# core whatever the machine, and a quick one still sweeps in well under a
+# minute. Waiting on a source is not processor time, so a slow network does not
+# slow the sweep down.
+ARCHIVE_DUTY = 1.0
+ARCHIVE_PASS_SEC = 1.0      # a pass this long keeps the page from ever queueing behind one
+ARCHIVE_MIN_SEC = 0.5
+ARCHIVE_IDLE_SEC = 5 * 60   # nothing to do: look again in five minutes
+
+
+def _cpu_clock():
+    """Processor time of the calling thread, or the wall clock where the
+    platform has no such counter."""
+    try:
+        return time.thread_time()
+    except (AttributeError, OSError):
+        return time.monotonic()
+
+
 def archive_loop():
     """Sweeps the archive until every instrument is kept, then tops up once a day
-    per instrument. While there is a backlog the next pass follows at once; when a
-    pass finds nothing to do the loop rests five minutes."""
+    per instrument. Each pass is measured: the batch grows on a machine that
+    swallows it and shrinks on one that labours, and the rest between passes is
+    proportional to the work done, so a fast machine finishes the sweep in
+    seconds and a slow one stays answerable while it catches up."""
     delay = 20
+    batch = market.ARCHIVE_BATCH
     while not _stop.wait(delay):
-        worked = archive_intraday_bars()
-        delay = 5 if len(worked) >= market.ARCHIVE_BATCH else 5 * 60
+        started = _cpu_clock()
+        worked = archive_intraday_bars(limit=batch)
+        spent = max(0.0, _cpu_clock() - started)
+        if not worked:
+            delay = ARCHIVE_IDLE_SEC
+            batch = market.ARCHIVE_BATCH
+            continue
+        if spent > ARCHIVE_PASS_SEC and batch > 1:
+            batch = max(1, batch // 2)
+        elif spent < ARCHIVE_PASS_SEC / 3 and batch < market.ARCHIVE_BATCH:
+            batch = min(market.ARCHIVE_BATCH, batch * 2)
+        delay = max(ARCHIVE_MIN_SEC, spent * ARCHIVE_DUTY)
 
 
 def quote_loop():

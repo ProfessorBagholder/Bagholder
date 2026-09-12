@@ -1980,6 +1980,21 @@ def upsert_price_bars(symbol, tf, bars, source=""):
             conn.close()
 
 
+def last_bar_time(symbol, tf):
+    """The newest stored bar's time, or None. Reading every bar of an instrument
+    to look at the last one cost eight milliseconds a top-up and grows with the
+    archive; this is one indexed lookup."""
+    sym = _s(symbol).strip().upper()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            row = conn.execute("SELECT MAX(ts) AS ts FROM price_bars WHERE symbol = ? AND tf = ?", (sym, _s(tf))).fetchone()
+            return row["ts"] if row and row["ts"] is not None else None
+        finally:
+            conn.close()
+
+
 def bar_fetch(symbol, tf):
     sym = _s(symbol).strip().upper()
     with _lock:
