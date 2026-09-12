@@ -10,7 +10,9 @@ Every public function swallows network errors and returns what is stored.
 
 from __future__ import annotations
 
+import atexit
 import gzip
+import http.client
 import json
 import time
 from urllib.parse import quote
@@ -21,8 +23,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from urllib.error import HTTPError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, getproxies, proxy_bypass, urlopen
 
 import store
 
@@ -169,12 +172,120 @@ def source_health():
     return [dict(snap[k], key=k, name=SOURCE_LABELS.get(k, k)) for k in SOURCE_LABELS if k in snap]
 
 
+# One connection per host, kept open between requests.
+#
+# Every read used to open a new TLS connection, and for a request this small the
+# handshake is the whole cost: measured here, 7.7 ms of processor time against
+# 1.1 ms on a connection already open. A machine whose processor is a tenth as
+# fast pays that difference on every quote, every headline and every instrument
+# the archive keeps, which is what pinned a small board at a full core while the
+# archive caught up. urllib opens a connection per request and cannot be told
+# otherwise, so reads go through http.client and give the connection back. A
+# proxy in the environment sends them to urllib, which knows how to reach one.
+HTTP_POOL_PER_HOST = 2
+HTTP_REDIRECT_MAX = 5
+_http_lock = threading.Lock()
+_http_idle = {}
+
+
+def _proxied(host):
+    """True when the environment puts a proxy between this host and us."""
+    try:
+        proxies = getproxies()
+        if not proxies.get("https") and not proxies.get("http"):
+            return False
+        return not proxy_bypass(host)
+    except Exception:
+        return True   # anything unexpected: let urllib decide, as it always did
+
+
+def _take_connection(key, ctx, timeout):
+    with _http_lock:
+        idle = _http_idle.get(key)
+        if idle:
+            return idle.pop()
+    return http.client.HTTPSConnection(key[0], key[1], timeout=timeout, context=ctx)
+
+
+def _give_connection(key, conn):
+    with _http_lock:
+        idle = _http_idle.setdefault(key, [])
+        if len(idle) < HTTP_POOL_PER_HOST:
+            idle.append(conn)
+            return
+    _shut(conn)
+
+
+def _shut(conn):
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def close_connections():
+    """Drop every kept connection. For tests, and for a source that misbehaves."""
+    with _http_lock:
+        pools = list(_http_idle.values())
+        _http_idle.clear()
+    for idle in pools:
+        for conn in idle:
+            _shut(conn)
+
+
+atexit.register(close_connections)
+
+
+def _fetch_once(url, ctx, headers, timeout, method="GET", body=None):
+    """(status, location, body) over a kept connection. Raises like urlopen does."""
+    parts = urlparse(url)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not host or _proxied(host):
+        req = Request(url, data=body, headers=headers, method=method)
+        with urlopen(req, timeout=timeout, context=ctx) as resp:
+            return getattr(resp, "status", 200), None, resp.read()
+    key = (host, parts.port or 443)
+    path = parts.path or "/"
+    if parts.query:
+        path = path + "?" + parts.query
+    hdrs = dict(headers)
+    hdrs.setdefault("Connection", "keep-alive")
+    last = None
+    for attempt in (0, 1):
+        conn = _take_connection(key, ctx, timeout)
+        try:
+            conn.request(method, path, body=body, headers=hdrs)
+            resp = conn.getresponse()
+            body = resp.read()
+        except (http.client.HTTPException, OSError) as e:
+            _shut(conn)
+            last = e
+            continue   # a connection the server had already closed: ask again on a new one
+        if resp.will_close:
+            _shut(conn)
+        else:
+            _give_connection(key, conn)
+        return resp.status, resp.getheader("Location"), body
+    raise last
+
+
+def _fetch(url, ctx, headers, timeout, method="GET", payload=None):
+    seen = url
+    for _ in range(HTTP_REDIRECT_MAX):
+        status, location, body = _fetch_once(seen, ctx, headers, timeout, method, payload)
+        if status in (301, 302, 303, 307, 308) and location and method == "GET":
+            seen = location if "://" in location else urlparse(seen)._replace(path=location, query="").geturl()
+            continue
+        if status >= 400:
+            raise HTTPError(seen, status, "HTTP %s" % status, None, None)
+        return body
+    raise HTTPError(seen, 310, "too many redirects", None, None)
+
+
 def _get_text(url, ssl_context=None, headers=None):
-    req = Request(url, headers=headers or {"User-Agent": UA, "Accept": "text/csv,application/json,*/*;q=0.8"})
     ctx = ssl_context or default_ssl_context()
     try:
-        with urlopen(req, timeout=TIMEOUT_SEC, context=ctx) as resp:
-            raw = resp.read()
+        raw = _fetch(url, ctx, headers or {"User-Agent": UA, "Accept": "text/csv,application/json,*/*;q=0.8"}, TIMEOUT_SEC)
     except Exception as e:
         if getattr(e, "code", None) != 404:   # a symbol a source does not carry is not the source failing
             note_source(source_of_url(url), False, e)
@@ -312,11 +423,10 @@ def _post_json(url, payload, ssl_context=None, headers=None):
     body = json.dumps(payload).encode("utf-8")
     hdrs = {"User-Agent": UA, "Content-Type": "application/json", "Accept": "*/*"}
     hdrs.update(headers or {})
-    req = Request(url, data=body, headers=hdrs, method="POST")
+    hdrs["Content-Length"] = str(len(body))
     ctx = ssl_context or default_ssl_context()
     try:
-        with urlopen(req, timeout=TIMEOUT_SEC, context=ctx) as resp:
-            raw = resp.read()
+        raw = _fetch(url, ctx, hdrs, TIMEOUT_SEC, method="POST", payload=body)
     except Exception as e:
         note_source(source_of_url(url), False, e)
         raise
@@ -542,6 +652,8 @@ def fetch_tmx_quote(tmx_sym, ssl_context=None):
 
 
 def _num(v, default=0.0):
+    if type(v) is float:   # what a JSON feed gives for a price, a million times per archive pass
+        return v
     try:
         if v is None or v == "":
             return default
@@ -1372,6 +1484,39 @@ def aggregate_daily(bars, tf):
     return out
 
 
+# Midnight UTC of a calendar day, remembered: a year of minute bars names the
+# same two hundred and fifty days over and over.
+_DAY_EPOCH = {}
+
+
+def _day_epoch(day):
+    ts = _DAY_EPOCH.get(day)
+    if ts is None:
+        ts = int(datetime(int(day[0:4]), int(day[5:7]), int(day[8:10]), tzinfo=timezone.utc).timestamp())
+        if len(_DAY_EPOCH) > 4096:
+            _DAY_EPOCH.clear()
+        _DAY_EPOCH[day] = ts
+    return ts
+
+
+def _minute_stamp(text):
+    """(epoch, day, minute of day, offset) from `2026-09-02T09:30:00-04:00`.
+
+    A year of minute bars for one instrument is forty thousand of these, and
+    building a datetime for each, then asking it for its timestamp, its date and
+    its offset, was most of what archiving an instrument cost. The shape TMX
+    sends is read directly; anything else goes the long way round."""
+    try:
+        if len(text) == 25 and text[4] == "-" and text[10] == "T" and text[13] == ":" and text[22] == ":" and text[19] in "+-":
+            minute = int(text[11:13]) * 60 + int(text[14:16])
+            offset = (int(text[20:22]) * 3600 + int(text[23:25])) * (-1 if text[19] == "-" else 1)
+            return _day_epoch(text[:10]) + minute * 60 + int(text[17:19]) - offset, text[:10], minute, offset
+    except ValueError:
+        pass
+    dt = datetime.fromisoformat(text)   # raises ValueError, as before, on anything unreadable
+    return int(dt.timestamp()), dt.date().isoformat(), dt.hour * 60 + dt.minute, int((dt.utcoffset() or timedelta(0)).total_seconds())
+
+
 def parse_tmx_minutes(data):
     """One-minute bars from TMX's chart feed: [{time, open, high, low, close, volume, minute}],
     where `minute` is the exchange-local minute of day, oldest first."""
@@ -1381,13 +1526,13 @@ def parse_tmx_minutes(data):
         if not isinstance(r, dict) or not r.get("dateTime"):
             continue
         try:
-            dt = datetime.fromisoformat(str(r["dateTime"]))
+            stamp, day, minute, offset = _minute_stamp(str(r["dateTime"]))
         except ValueError:
             continue
         close = _num(r.get("close"), None)
         if not close or close <= 0:
             continue
-        out.append({"time": int(dt.timestamp()), "day": dt.date().isoformat(), "minute": dt.hour * 60 + dt.minute, "offset": int((dt.utcoffset() or timedelta(0)).total_seconds()),
+        out.append({"time": stamp, "day": day, "minute": minute, "offset": offset,
                     "open": _num(r.get("open"), None), "high": _num(r.get("high"), None), "low": _num(r.get("low"), None), "close": close, "volume": _num(r.get("volume"), None)})
     out.sort(key=lambda b: b["time"])
     return out
@@ -1641,8 +1786,8 @@ def ensure_intraday(rec, tf, start, end, ssl_context=None, now=None, max_age_hou
     if not covered:
         fetch_from = start_ts
     elif needs_recent and not fresh:
-        stored = store.price_bars(sym, tf, 0, 2 ** 40)
-        fetch_from = max(start_ts, (stored[-1]["time"] if stored else start_ts) - 2 * 86400)
+        newest = store.last_bar_time(sym, tf)
+        fetch_from = max(start_ts, (newest if newest is not None else start_ts) - 2 * 86400)
     if fetch_from is not None:
         by_tf, source = fetch_intraday(rec, fetch_from, int(now.timestamp()), ssl_context, on_demand=on_demand)
         for k in INTRADAY_SECONDS:   # one fetch fills every intraday timeframe, so a miss covers them all
