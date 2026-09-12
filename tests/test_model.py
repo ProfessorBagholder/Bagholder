@@ -2791,6 +2791,36 @@ class SingleFlightTest(unittest.TestCase):
         finally:
             bagholder._COOLDOWN.pop("test-kick", None)
 
+    def test_a_busy_refresh_returns_what_its_caller_expects(self):
+        # the archive loop measures what it did; a busy answer must not be None
+        gate = threading.Event()
+
+        @bagholder.single_flight("test-shape", busy=())
+        def archive():
+            gate.wait(2)
+            return ["AAA", "BBB"]
+
+        t = threading.Thread(target=archive, daemon=True)
+        t.start()
+        time.sleep(0.1)
+        busy = archive()
+        self.assertEqual(len(busy), 0, "a busy archive pass reports no work, and can still be measured")
+        gate.set()
+        t.join(2)
+
+        @bagholder.single_flight("test-shape-2", busy={})
+        def market():
+            gate.wait(2)
+            return {"fx": 1}
+
+        gate.clear()
+        t2 = threading.Thread(target=market, daemon=True)
+        t2.start()
+        time.sleep(0.1)
+        self.assertEqual(market().get("quotes"), None, "and a busy market read answers a dict, as its caller reads one")
+        gate.set()
+        t2.join(2)
+
     def test_the_cooldown_expires(self):
         calls = []
 

@@ -71,17 +71,22 @@ def _ensure_home():
 # goes back to the pool on close(), so no call site changes.
 _pool = []
 _pool_path = None
-_pool_ready = set()
 _POOL_MAX = 4
 
 
 class _Borrowed:
-    """A pooled connection. close() returns it to the pool instead of closing it."""
+    """A pooled connection. close() returns it to the pool instead of closing it.
 
-    __slots__ = ("_conn",)
+    Whether the schema has been built travels with the connection rather than in
+    a table of addresses: CPython hands a freed connection's address straight to
+    the next one, and a new connection wearing an old address must not be taken
+    for one that has already been through the migrations."""
 
-    def __init__(self, conn):
-        object.__setattr__(self, "_conn", conn)
+    __slots__ = ("_conn", "_entry")
+
+    def __init__(self, entry):
+        object.__setattr__(self, "_entry", entry)
+        object.__setattr__(self, "_conn", entry["conn"])
 
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_conn"), name)
@@ -99,10 +104,6 @@ def _open_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
-    # WAL keeps the database consistent through a crash of the app or the
-    # machine; NORMAL drops the fsync on every commit, which a card-backed
-    # disk charges dearly for. Only a power cut can lose the last commits.
-    conn.execute("PRAGMA synchronous=NORMAL")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -113,14 +114,13 @@ def _open_connection():
 def _drop_pool():
     """Close every pooled connection: the database being read has changed."""
     global _pool, _pool_path
-    for conn in _pool:
+    for entry in _pool:
         try:
-            conn.close()
+            entry["conn"].close()
         except sqlite3.Error:
             pass
     _pool = []
     _pool_path = None
-    _pool_ready.clear()
 
 
 def _connect():
@@ -132,18 +132,33 @@ def _connect():
         if _pool_path != path:
             _drop_pool()
             _pool_path = path
-        conn = _pool.pop() if _pool else _open_connection()
-    return _Borrowed(conn)
+        entry = _pool.pop() if _pool else {"conn": _open_connection(), "ready": False}
+    return _Borrowed(entry)
 
 
 def _release(borrowed):
-    conn = object.__getattribute__(borrowed, "_conn")
+    entry = object.__getattribute__(borrowed, "_entry")
+    conn = entry["conn"]
+    # A call site that raised between its execute and its commit used to have
+    # the work thrown away with the connection. A pooled connection outlives
+    # the call, so the half-written transaction is rolled back here instead of
+    # being handed to the next borrower to commit as its own.
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+    except sqlite3.Error:
+        entry["ready"] = False
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        return
     with _lock:
         if _pool_path == str(db_path()) and len(_pool) < _POOL_MAX:
-            _pool.append(conn)
+            _pool.append(entry)
             return
+    entry["ready"] = False
     try:
-        _pool_ready.discard(id(conn))
         conn.close()
     except sqlite3.Error:
         pass
@@ -155,25 +170,21 @@ def close_all():
         _drop_pool()
 
 
-def _conn_key(conn):
-    return id(object.__getattribute__(conn, "_conn")) if isinstance(conn, _Borrowed) else id(conn)
-
-
 def _ready(conn):
     """The schema, once per connection. Creating what is missing and running the
     migrations is the same work every time on a database that has already been
     through it, and a single model request asked for it eighteen times. The
     stamped schema version is still read every time, so a database that is
     replaced or rolled back under a live connection is migrated as before."""
-    key = _conn_key(conn)
-    if key in _pool_ready:
+    entry = object.__getattribute__(conn, "_entry") if isinstance(conn, _Borrowed) else None
+    if entry is not None and entry["ready"]:
         try:
             row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         except sqlite3.Error:
             row = None
         if row is not None and str(row["value"]) == str(SCHEMA_VERSION):
             return
-        _pool_ready.discard(key)
+        entry["ready"] = False
     _init_schema(conn)
 
 
@@ -465,7 +476,8 @@ def _init_schema(conn):
         ("schema_version", str(SCHEMA_VERSION)),
     )
     conn.commit()
-    _pool_ready.add(_conn_key(conn))
+    if isinstance(conn, _Borrowed):
+        object.__getattribute__(conn, "_entry")["ready"] = True
 
 
 def _migrate_nav_history(conn):

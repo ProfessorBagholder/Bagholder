@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -3636,3 +3637,82 @@ class VersionsTest(unittest.TestCase):
         full_after, core_after = store.versions()
         self.assertNotEqual(full_before, full_after)
         self.assertNotEqual(core_before, core_after)
+
+
+class PooledConnectionSafetyTest(unittest.TestCase):
+    """What a pooled connection must never carry to the next borrower."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.close_all()
+        store.ensure()
+
+    def tearDown(self):
+        store.close_all()
+        self.tmp.cleanup()
+        store.set_home(None)
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_an_abandoned_transaction_is_rolled_back_not_handed_on(self):
+        conn = store._connect()
+        store._ready(conn)
+        conn.execute("INSERT INTO meta(key, value) VALUES ('probe', 'uncommitted')")
+        conn.close()   # a call site that raised before its commit
+        nxt = store._connect()
+        try:
+            self.assertFalse(nxt.in_transaction, "the next borrower starts clean")
+            self.assertIsNone(nxt.execute("SELECT value FROM meta WHERE key='probe'").fetchone(),
+                              "and cannot see, or commit, the abandoned write")
+            nxt.commit()
+        finally:
+            nxt.close()
+        self.assertEqual(store.get_meta("probe"), "", "the abandoned write never lands")
+
+    def test_a_fresh_connection_is_never_mistaken_for_a_prepared_one(self):
+        # CPython gives a freed connection's address to the next one, so
+        # readiness cannot be remembered by address.
+        store.close_all()
+        built = []
+        original = store._init_schema
+        store._init_schema = lambda conn: (built.append(1), original(conn))[1]
+        try:
+            for _ in range(8):
+                conn = store._connect()
+                store._ready(conn)
+                conn.close()
+                store.close_all()      # the pooled connection is dropped each time
+        finally:
+            store._init_schema = original
+        self.assertEqual(len(built), 8, "every new connection builds its own schema")
+
+    def test_concurrent_readers_and_writers_agree(self):
+        errors = []
+        done = threading.Barrier(5, timeout=20)
+
+        def writer():
+            try:
+                for i in range(40):
+                    store.upsert_quote("SYM%d" % (i % 5), {"price": float(i), "currency": "CAD"}, source="tmx")
+                done.wait()
+            except Exception as e:   # pragma: no cover - the assert below reports it
+                errors.append(repr(e))
+
+        def reader():
+            try:
+                for _ in range(40):
+                    store.data_version()
+                    store.status_counts()
+                    store.quotes()
+                done.wait()
+            except Exception as e:   # pragma: no cover
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(20)
+        self.assertEqual(errors, [], "no reader or writer failed")
+        self.assertLessEqual(len(store._pool), store._POOL_MAX, "the pool does not grow without bound")
