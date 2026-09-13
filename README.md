@@ -18,7 +18,9 @@ A local-first trading journal for Wealthsimple users. It runs on your own comput
 
 A minute and a half through every tab, with sound.
 
-https://github.com/user-attachments/assets/7902d464-1cbc-4634-b21c-5f311263567b
+https://github.com/ProfessorBagholder/Bagholder/releases/download/v1.24.1/bagholder-promo.mp4
+
+Music: "Inspired" by Kevin MacLeod (incompetech.com), licensed under [Creative Commons: By Attribution 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Screenshots
 
