@@ -364,11 +364,19 @@ html.panel-open{overflow:hidden}
 .bh-skfade{position:absolute;inset:0;pointer-events:none;opacity:1;transition:opacity .3s ease;z-index:3}
 .bh-skfade.out{opacity:0}
 .bh-noanim,.bh-noanim .tk,.bh-noanim .tk-scrim,.bh-noanim .card{animation:none!important}
+/* A figure that changes rolls to its new value, a digit at a time, the ones
+   column leading. The window is one line tall and the strip inside it carries
+   0 to 9; only the strip moves. */
+.rl-w{display:inline-block;height:1.15em;overflow:hidden;vertical-align:bottom;user-select:none}
+.rl-s{display:block;transition:transform .58s var(--ease-travel)}
+.rl-s b{display:block;height:1.15em;font-weight:inherit}
+.rl-plain{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:reduce){
   .heat-tile,.heat-blk,.tabind{transition:background .3s ease,color .16s ease,opacity .2s ease}
   .heat-tile.bh-new,.tk,#confirmDlg .card,.bh-skin{animation:bhfade .2s ease both}
   .bhsk{animation:none}
   .wl-row.wl-new{animation:none;background:rgba(var(--accent-rgb),.12)}
+  .rl-s{transition:none}
   .bh-check{animation:none;stroke-dashoffset:0}
   .bh-pop{animation:none}
 }
@@ -3063,6 +3071,99 @@ function crossFadeSkeleton(skeleton) {
     setTimeout(() => skeleton.remove(), 380),
   ];
 }
+// A figure that changes rolls to its new value rather than cutting to it: each
+// digit is a strip of 0 to 9 that slides, the ones column leading and each
+// column to its left following 18ms later, which is what makes it read as a
+// counter rather than a wave. Only digits roll; a dollar sign, a separator or a
+// minus is not a wheel. At rest the figure is ordinary text, so it can be read
+// and copied as before; the strips exist only for the second the roll takes.
+const REEL_MS = 580;
+const REEL_STAGGER = 18;
+const _reelValues = {};
+let _reelTimers = [];
+
+function reelKey(el) {
+  const tile = el.closest(".kpi");
+  const label = tile && tile.querySelector(".lbl");
+  const sym = tile && tile.dataset.sym;
+  return (state.page || "") + "|" + (sym || (label ? label.textContent : "") || "");
+}
+// Two figures roll into one another only when they are the same shape: same
+// length, and the same non-digits in the same places. Anything else is a
+// different number, not the same number moved, and is simply set.
+function reelComparable(a, b) {
+  if (!a || !b || a.length !== b.length || a === b) return false;
+  let digits = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    const dx = x >= "0" && x <= "9", dy = y >= "0" && y <= "9";
+    if (dx !== dy) return false;
+    if (!dx && x !== y) return false;
+    if (dx) digits++;
+  }
+  return digits > 0;
+}
+function reelStrip(from, to, delay) {
+  const w = document.createElement("span");
+  w.className = "rl-w";
+  const strip = document.createElement("span");
+  strip.className = "rl-s";
+  for (let d = 0; d <= 9; d++) { const b = document.createElement("b"); b.textContent = String(d); strip.appendChild(b); }
+  strip.style.transform = "translateY(-" + (Number(from) * 1.15).toFixed(2) + "em)";
+  strip.style.transitionDelay = delay + "ms";
+  w.appendChild(strip);
+  w.dataset.to = to;
+  return w;
+}
+function rollFigure(el, from, to) {
+  const frag = document.createDocumentFragment();
+  const plain = document.createElement("span");
+  plain.className = "rl-plain";
+  plain.textContent = to;
+  frag.appendChild(plain);
+  const wheels = [];
+  let right = 0;
+  for (let i = to.length - 1; i >= 0; i--) if (to[i] >= "0" && to[i] <= "9") right++;
+  let seen = 0;
+  const parts = [];
+  for (let i = 0; i < to.length; i++) {
+    const ch = to[i];
+    if (ch >= "0" && ch <= "9") {
+      seen++;
+      parts.push({ digit: true, from: from[i], to: ch, delay: (right - seen) * REEL_STAGGER });
+    } else {
+      parts.push({ digit: false, ch: ch });
+    }
+  }
+  const holder = document.createElement("span");
+  holder.setAttribute("aria-hidden", "true");
+  parts.forEach((p) => {
+    if (!p.digit) { holder.appendChild(document.createTextNode(p.ch)); return; }
+    const w = reelStrip(p.from, p.to, p.delay);
+    holder.appendChild(w);
+    wheels.push(w);
+  });
+  frag.appendChild(holder);
+  el.textContent = "";
+  el.appendChild(frag);
+  void el.offsetHeight;   // the strips start on the old digits; settle that before asking for the new ones
+  wheels.forEach((w) => { w.firstChild.style.transform = "translateY(-" + (Number(w.dataset.to) * 1.15).toFixed(2) + "em)"; });
+  const done = REEL_MS + right * REEL_STAGGER + 60;
+  _reelTimers.push(setTimeout(() => { if (el.isConnected) el.textContent = to; }, done));
+}
+function mountReels() {
+  _reelTimers.forEach(clearTimeout);
+  _reelTimers = [];
+  const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  document.querySelectorAll(".kpi .v").forEach((el) => {
+    const key = reelKey(el);
+    const to = el.textContent;
+    const from = _reelValues[key];
+    _reelValues[key] = to;
+    if (still || !reelComparable(from, to)) return;
+    rollFigure(el, from, to);
+  });
+}
 const _keptScroll = {};
 function render() {
   const root = document.getElementById("app");
@@ -3111,6 +3212,7 @@ function render() {
   if (state.sel) { const open = selById(state.sel); if (open && open.fills === undefined) loadTradeDetail(open.id); }
   mountTradeChart();
   mountHeatmap();
+  mountReels();
   spaceAxisLabels();
 }
 // The 2px bar under the active tab slides and resizes rather than jumping. It is
