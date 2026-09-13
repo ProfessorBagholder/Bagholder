@@ -334,6 +334,17 @@ One filter set applies to every page: Date (presets 1D 1W 1M 3M 6M YTD 1Y 5Y, ye
 - Scrollbars appear only while scrolling and only inside tables.
 - Colours come from theme tokens only.
 
+### Motion
+
+Two easings and three durations cover every transition, and the further a thing travels the longer it takes: movement and resizing use `cubic-bezier(.22,1,.36,1)`, colour and opacity use `ease` and are always quicker. Hover, colour and opacity take .12–.2 s; entrances, dialogs and panels .22–.3 s; the tab indicator and the heatmap's re-tiling .36–.42 s. Colours are the theme's own tokens, so every transition reads correctly in all three themes.
+
+- **The heatmap re-tiles rather than snapping.** Changing the universe or the sizer moves each symbol's rectangle to its new slot over .42 s, with its sector frame travelling too; a rectangle that joins fades up from 94%, one that leaves is removed. Cells are kept under their symbol across a redraw, which is what makes them travel instead of the text swapping inside stationary boxes. Only a cell that leads to a holding takes a pointer and brightens on hover.
+- **The tab indicator** is a 2 px bar under the active tab that slides and resizes between tabs over .36 s, measured from the tab itself and re-measured after a redraw, on resize and once the webfont settles. It fades out rather than collapsing when a trade or holding is open.
+- **Panels and dialogs** arrive once: a side panel slides 26 px from the right over .3 s, a dialog rises 8 px and scales from 98% over .24 s, and their scrims fade over .18 s. A panel already on screen when the model reloads does not play its entrance again.
+- **Loading shows the shape of the page that is coming.** Each tab has its own silhouette — tiles, chart and list cards on the dashboard and cashflow; toolbar, header row and fourteen body rows on trades; index tiles, the treemap block and two lists on markets; tiles, a donut and a holdings list on portfolio — so nothing changes shape when the data lands: the page resolves rather than reflowing. The skeleton is not swapped for the page; it is lifted over it and faded out over .3 s while the page arrives underneath with its own entrance. The position and the fade are committed separately, and the unmount hangs off its own timer rather than a frame callback, which never fires in a background tab. Bars pulse on a stagger and vary in width, so the field reads as content rather than as a loading graphic. Spinners are kept for actions whose length is genuinely unknown.
+- **A row just added to the watchlist** is tinted and the tint decays over .6 s. Row hover is instant and deliberately so.
+- `prefers-reduced-motion` keeps the colour and opacity transitions and drops the rest: the heatmap's geometry, the entrances' movement, and the skeleton's pulse.
+
 ### The store
 
 One SQLite file, opened through a small pool of connections rather than a new one per read: creating what is missing and running the migrations is the same work every time on a database that has already been through it, and a single model request asked for it eighteen times. The stamped schema version is still read on every borrow, so a database replaced or rolled back under a running app is migrated as it always was. Durability is not traded for speed: every commit is still flushed, because a thesis or a grade is the one thing in the file that cannot be fetched again. The relabelling of newly synced option rows is stamped with the fingerprint of the rows it ran on, so it follows a sync instead of running on every read.
