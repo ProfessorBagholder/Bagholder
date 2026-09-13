@@ -108,7 +108,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .wl-row{padding:8px 6px 8px 16px}
 .wl-row.go{cursor:pointer}
 .wl-row:hover{background:rgba(var(--ink-rgb),var(--hover))}
-.wl-row.wl-new{background:rgba(var(--accent-rgb),.12)}
+.wl-row.wl-new{animation:bhland .6s ease}   /* the row just added is tinted, and the tint decays; hover stays instant */
 .wl-trash svg{width:14px;height:14px}
 .wl-trash{width:22px;height:22px;border-radius:6px;border:0;background:transparent;color:var(--ink60);opacity:.45;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:opacity .12s}
 .wl-row:hover .wl-trash{opacity:1}
@@ -329,6 +329,49 @@ html.panel-open{overflow:hidden}
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:60px 20px}
 .spin{display:inline-block;width:10px;height:10px;border:2px solid rgba(var(--ink-rgb),.25);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;vertical-align:middle;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
+/* Motion. Two easings and three durations cover everything: the further a thing
+   travels the longer it takes, and colour and opacity are always quicker than
+   movement. */
+:root{--ease-travel:cubic-bezier(.22,1,.36,1);--t-micro:.16s;--t-el:.26s;--t-layout:.4s}
+@keyframes bhtile{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+@keyframes bhpanel{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
+@keyframes bhfade{from{opacity:0}to{opacity:1}}
+@keyframes bhrise{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes bhin{from{opacity:0;filter:blur(7px);transform:translateY(5px)}to{opacity:1;filter:blur(0);transform:none}}
+@keyframes bhpulse{0%,100%{opacity:.5}50%{opacity:.85}}
+@keyframes bhdraw{to{stroke-dashoffset:0}}
+@keyframes bhpop{from{transform:scale(.8)}to{transform:none}}
+@keyframes bhland{from{background:rgba(var(--accent-rgb),.12)}to{background:transparent}}
+.heat-tile{transition:left .42s var(--ease-travel),top .42s var(--ease-travel),width .42s var(--ease-travel),height .42s var(--ease-travel),background .3s ease,filter .14s}
+.heat-blk{transition:left .42s var(--ease-travel),top .42s var(--ease-travel),width .42s var(--ease-travel),height .42s var(--ease-travel)}
+.heat-tile.bh-new{animation:bhtile .26s ease both}
+.heat-tile.go:hover{filter:brightness(1.18)}
+.tabbar{position:relative}
+.tabind{position:absolute;bottom:0;height:2px;border-radius:2px 2px 0 0;background:var(--accent);pointer-events:none;opacity:0;transition:left .36s var(--ease-travel),width .36s var(--ease-travel),opacity .2s ease}
+.tabbtn{transition:color .18s ease}
+.tabbtn.on{box-shadow:none}
+.tk{animation:bhpanel .3s var(--ease-travel) both}
+.tk-scrim{animation:bhfade .18s ease both}
+#confirmDlg{animation:bhfade .18s ease both}
+#confirmDlg .card{animation:bhrise .24s var(--ease-travel) both}
+.btn,.pill,.mseg-opt,.chip .cv,.chip .cx{transition:background .16s ease,color .16s ease}
+.tk-go{transition:color .24s ease,background .24s ease,box-shadow .24s ease}
+.bh-check{stroke-dasharray:26;stroke-dashoffset:26;animation:bhdraw .36s cubic-bezier(.4,0,.2,1) .05s forwards}
+.bh-pop{animation:bhpop .3s var(--ease-travel) both}
+.bhsk{border-radius:4px;background:rgba(var(--ink-rgb),.11);animation:bhpulse 1.35s ease-in-out infinite}
+.bh-skin{animation:bhin .5s var(--ease-travel) both}
+.bh-skwrap{position:relative}
+.bh-skfade{position:absolute;inset:0;pointer-events:none;opacity:1;transition:opacity .3s ease;z-index:3}
+.bh-skfade.out{opacity:0}
+.bh-noanim,.bh-noanim .tk,.bh-noanim .tk-scrim,.bh-noanim .card{animation:none!important}
+@media (prefers-reduced-motion:reduce){
+  .heat-tile,.heat-blk,.tabind{transition:background .3s ease,color .16s ease,opacity .2s ease}
+  .heat-tile.bh-new,.tk,#confirmDlg .card,.bh-skin{animation:bhfade .2s ease both}
+  .bhsk{animation:none}
+  .wl-row.wl-new{animation:none;background:rgba(var(--accent-rgb),.12)}
+  .bh-check{animation:none;stroke-dashoffset:0}
+  .bh-pop{animation:none}
+}
 html{scrollbar-gutter:stable}
 .scroll::-webkit-scrollbar,.scroll-xy::-webkit-scrollbar{width:9px;height:9px}
 .scroll::-webkit-scrollbar-thumb,.scroll-xy::-webkit-scrollbar-thumb{background:transparent;border-radius:6px;border:2px solid transparent}
@@ -975,7 +1018,7 @@ function chips() {
 function tabsHtml() {
   const t = (id, label) => '<button class="tabbtn' + (state.page === id && !((id === "trades" || id === "portfolio") && state.sel) ? " on" : "") + '" data-act="page" data-arg=\'' + attr({ page: id }) + "'>" + label + "</button>";
   const sel = (state.page === "trades" || state.page === "portfolio") && state.sel ? selById(state.sel) : null;
-  return '<div style="display:flex;gap:22px;padding:0 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">' +
+  return '<div class="tabbar" style="display:flex;gap:22px;padding:0 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)"><div class="tabind" id="tabInd"></div>' +
     t("dashboard", "Dashboard") + t("trades", "Trades") + t("portfolio", "Portfolio") + t("markets", "Markets") + t("cashflow", "Cashflow") +
     (sel ? '<div style="display:flex;align-items:center;gap:6px;flex:none;min-width:0;white-space:nowrap;margin-left:6px"><span style="font-size:13px;color:rgba(var(--ink-rgb),.4)">›</span><span style="font:500 13px Inter,system-ui;padding:11px 0;max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)">' + esc(symText(sel.symbol)) + "</span></div>" : "") +
     '<div style="margin-left:auto;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 0"><div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;overflow-x:auto;padding-bottom:1px">' +
@@ -2458,17 +2501,73 @@ function heatmapLayout(tiles, W, H) {
   });
   return { blocks, cells };
 }
+// The heatmap is drawn in place, not thrown away and rebuilt: each cell is kept
+// under its symbol and each sector frame under its label, so changing the
+// universe or the sizer moves a cell to its new slot instead of swapping the
+// text inside a stationary box. A node that is re-created has no previous
+// geometry to travel from and its transition parks at the start value.
+function heatNode(cls) {
+  const el = document.createElement("div");
+  el.className = cls;
+  return el;
+}
+function heatPlace(el, x, y, w, h) {
+  el.style.left = x.toFixed(1) + "px";
+  el.style.top = y.toFixed(1) + "px";
+  el.style.width = w.toFixed(1) + "px";
+  el.style.height = h.toFixed(1) + "px";
+}
 function mountHeatmap() {
   const box = document.getElementById("heatBox"); if (!box || !state.model) return;
   const tiles = heatTiles(state.model.markets || {});
   const W = box.clientWidth, H = box.clientHeight;
-  if (!tiles.length || !W) { box.innerHTML = ""; return; }
+  if (!tiles.length || !W) { box.textContent = ""; return; }
   const lay = heatmapLayout(tiles, W, H);
-  box.innerHTML = lay.blocks.map((g) => '<div class="heat-blk" style="left:' + g.x.toFixed(1) + 'px;top:' + g.y.toFixed(1) + 'px;width:' + g.w.toFixed(1) + 'px;height:' + g.h.toFixed(1) + 'px"><div class="heat-hd">' + esc(g.label) +
-      '<span class="num" style="margin-left:auto;font-weight:400;color:' + (g.chg == null ? "var(--ink55)" : g.chg >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(g.chg) + "</span></div></div>").join("") +
-    lay.cells.map((c) => '<div class="heat-tile' + (c.id ? " go" : "") + '"' + (c.id ? ' data-act="heatOpen" data-arg=\'' + attr({ id: c.id }) + "'" : "") + ' style="left:' + (c.x + 1).toFixed(1) + 'px;top:' + (c.y + 1).toFixed(1) + 'px;width:' + Math.max(0, c.w - 2).toFixed(1) + 'px;height:' + Math.max(0, c.h - 2).toFixed(1) + 'px;background:' + heatColor(c.percentChange) + '">' +
-      '<div class="heat-sym" style="font-size:' + (c.big ? 16 : c.mid ? 13 : 11) + 'px">' + esc(c.other ? c.symbol : bareSymbol(c.symbol)) + "</div>" +
-      (c.mid ? '<div class="heat-chg" style="font-size:' + (c.big ? 12 : 11) + 'px">' + signedPct(c.percentChange) + "</div>" : "") + "</div>").join("");
+  const had = box.childElementCount > 0;
+  const seen = new Set();
+  lay.blocks.forEach((g) => {
+    const key = "b:" + g.label;
+    seen.add(key);
+    let el = box.querySelector('[data-key="' + cssKey(key) + '"]');
+    if (!el) {
+      el = heatNode("heat-blk");
+      el.dataset.key = key;
+      el.appendChild(heatNode("heat-hd"));
+      box.appendChild(el);
+    }
+    heatPlace(el, g.x, g.y, g.w, g.h);
+    const hd = el.firstElementChild;
+    hd.innerHTML = esc(g.label) + '<span class="num" style="margin-left:auto;font-weight:400;color:' +
+      (g.chg == null ? "var(--ink55)" : g.chg >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(g.chg) + "</span>";
+  });
+  lay.cells.forEach((c) => {
+    const key = "c:" + c.symbol;
+    seen.add(key);
+    let el = box.querySelector('[data-key="' + cssKey(key) + '"]');
+    const fresh = !el;
+    if (fresh) {
+      el = heatNode("heat-tile");
+      el.dataset.key = key;
+      el.appendChild(heatNode("heat-sym"));
+      el.appendChild(heatNode("heat-chg"));
+      box.appendChild(el);
+      if (had) el.classList.add("bh-new");   // the first draw is not an arrival
+    }
+    el.className = "heat-tile" + (c.id ? " go" : "") + (fresh && had ? " bh-new" : "");
+    if (c.id) { el.dataset.act = "heatOpen"; el.dataset.arg = JSON.stringify({ id: c.id }); }
+    else { delete el.dataset.act; delete el.dataset.arg; }
+    heatPlace(el, c.x + 1, c.y + 1, Math.max(0, c.w - 2), Math.max(0, c.h - 2));
+    el.style.background = heatColor(c.percentChange);
+    const sym = el.children[0], chg = el.children[1];
+    sym.style.fontSize = (c.big ? 16 : c.mid ? 13 : 11) + "px";
+    sym.textContent = c.other ? c.symbol : bareSymbol(c.symbol);
+    chg.hidden = !c.mid;
+    if (c.mid) { chg.style.fontSize = (c.big ? 12 : 11) + "px"; chg.textContent = signedPct(c.percentChange); }
+  });
+  [...box.children].forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
+}
+function cssKey(key) {
+  return key.replace(/["\\]/g, "\\$&");
 }
 function msegHtml(act, key, opts, cur) {
   return '<span class="mseg">' + opts.map((o) => o === "|" ? '<span class="mseg-div"></span>' : '<button class="mseg-opt' + (o[0] === cur ? " on" : "") + '" data-act="' + act + '" data-arg=\'' + attr({ [key]: o[0] }) + "'>" + o[1] + "</button>").join("") + "</span>";
@@ -2864,16 +2963,105 @@ function emptyHtml() {
     '<div class="dim" style="font-size:12.5px;max-width:420px">' + body + "</div>" + action +
     (s.error ? '<div class="status-err" style="font-size:12px">' + esc(s.error) + "</div>" : "") + "</div>";
 }
+// The page that is coming, in silhouette. Each tab has its own, so nothing
+// changes shape when the data lands: the page resolves rather than reflowing.
+// Bar widths and stagger vary on purpose; a field of identical bars reads as a
+// loading graphic rather than as content.
+function skBar(w, h, delay, extra) {
+  return '<div class="bhsk" style="width:' + w + ';height:' + (h || 9) + 'px;animation-delay:' + (delay || 0) + 'ms' + (extra || "") + '"></div>';
+}
+function skCard(height, inner) {
+  return '<div class="card elev-sm" style="padding:16px 18px;height:' + height + 'px;display:flex;flex-direction:column;gap:10px;overflow:hidden">' + inner + "</div>";
+}
+function skTiles(height, n) {
+  const widths = ["58%", "40%", "52%", "46%", "62%", "44%"];
+  let out = '<div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">';
+  for (let i = 0; i < (n || 6); i++) {
+    out += '<div class="card elev-sm" style="padding:14px 16px;height:' + height + 'px;display:flex;flex-direction:column;gap:10px">' +
+      skBar("46%", 8, i * 70) + skBar(widths[i % widths.length], 15, i * 70 + 40) + "</div>";
+  }
+  return out + "</div>";
+}
+function skRows(n, delayStep) {
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    out += '<div style="display:flex;align-items:center;gap:12px;padding:7px 0">' + skBar("22%", 10, i * (delayStep || 90)) +
+      skBar("14%", 10, i * (delayStep || 90) + 30, ";margin-left:auto") + skBar("12%", 10, i * (delayStep || 90) + 60) + "</div>";
+  }
+  return out;
+}
+function skeletonHtml() {
+  const page = state.page;
+  const pad = 'style="padding:20px;display:flex;flex-direction:column;gap:14px"';
+  if (page === "trades") {
+    let rows = "";
+    for (let r = 0; r < 14; r++) {
+      let cells = "";
+      for (let c = 0; c < 7; c++) cells += skBar(["18%", "11%", "9%", "12%", "10%", "13%", "9%"][c], 10, ((r + c) % 8) * 24);
+      rows += '<div style="display:flex;align-items:center;gap:14px;padding:8px 0">' + cells + "</div>";
+    }
+    return '<div id="pageSkel" ' + pad + '><div style="display:flex;align-items:center;gap:14px">' + skBar("120px", 15) + skBar("60px", 11) +
+      skBar("180px", 24, 40, ";margin-left:auto;border-radius:6px") + "</div>" +
+      '<div class="card elev-sm" style="padding:14px 18px;display:flex;flex-direction:column;gap:6px">' +
+      '<div style="display:flex;gap:14px;padding-bottom:8px">' + ["18%", "11%", "9%", "12%", "10%", "13%", "9%"].map((w, i) => skBar(w, 8, i * 24)).join("") + "</div>" + rows + "</div></div>";
+  }
+  if (page === "markets") {
+    return '<div id="pageSkel" ' + pad + '>' + skTiles(76) +
+      skCard(470, '<div style="display:flex;gap:14px;align-items:center">' + skBar("90px", 13) + skBar("220px", 22, 40, ";margin-left:0;border-radius:6px") + "</div>" +
+        '<div class="bhsk" style="width:100%;height:430px;border-radius:5px;animation-delay:120ms"></div>') +
+      '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' +
+      skCard(302, skBar("90px", 13) + skRows(7)) + skCard(302, skBar("80px", 13) + skRows(6)) + "</div></div>";
+  }
+  if (page === "portfolio") {
+    return '<div id="pageSkel" ' + pad + '>' + skTiles(97) +
+      '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' +
+      skCard(302, skBar("90px", 13) + skRows(8)) +
+      skCard(302, '<div style="display:flex;align-items:center;gap:16px;padding-top:10px"><div class="bhsk" style="width:188px;height:188px;border-radius:50%"></div><div style="flex:1;display:flex;flex-direction:column;gap:9px">' +
+        [0, 1, 2, 3, 4].map((i) => skBar(["70%", "55%", "62%", "48%", "58%"][i], 10, i * 90)).join("") + "</div></div>") + "</div></div>";
+  }
+  // dashboard and cashflow share a silhouette: tiles, then a chart card beside a list card
+  return '<div id="pageSkel" ' + pad + '>' + skTiles(97) +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' +
+    skCard(302, skBar("90px", 13) + '<div class="bhsk" style="width:100%;flex:1;border-radius:6px;animation-delay:110ms"></div>') +
+    skCard(302, skBar("80px", 13) + skRows(7)) + "</div>" +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' +
+    skCard(302, skBar("90px", 13) + '<div class="bhsk" style="width:100%;flex:1;border-radius:6px;animation-delay:140ms"></div>') +
+    skCard(302, skBar("80px", 13) + skRows(7)) + "</div></div>";
+}
 function pageHtml() {
   const m = state.model;
   if (state.loadError && !m) return '<div class="empty"><div class="status-err">' + esc(state.loadError) + '</div><button class="btn btn-secondary" data-act="reload">Retry</button></div>';
-  if (!m) return '<div class="empty muted"><span class="spin"></span>Loading…</div>';
+  if (!m) return skeletonHtml();
   if (!m.activityCount) return emptyHtml();
   if (state.page === "trades") return tradesHtml(m);
   if (state.page === "portfolio") return portfolioHtml(m);
   if (state.page === "cashflow") return cashflowHtml(m);
   if (state.page === "markets") return marketsHtml(m);
   return dashboardHtml(m);
+}
+// The skeleton is not swapped for the page; it is lifted over it and faded out
+// while the page arrives underneath, so there is never a frame with nothing on
+// screen and never a hard cut. The position and the fade are committed in
+// separate frames, or the layer parks at full opacity; and the unmount hangs off
+// its own timer rather than a frame callback, which never fires in a background
+// tab and would leave the skeleton sitting over the loaded app.
+let _skelTimers = [];
+function crossFadeSkeleton(skeleton) {
+  const page = document.getElementById("page");
+  if (!page) return;
+  _skelTimers.forEach(clearTimeout);
+  page.querySelectorAll(".bh-skfade").forEach((old) => old.remove());
+  skeleton.removeAttribute("id");
+  skeleton.className = "bh-skfade";
+  skeleton.style.padding = "20px";
+  page.appendChild(skeleton);
+  void skeleton.offsetHeight;   // the layer has just been re-parented: settle its start value, or the fade parks at full opacity
+  const content = page.firstElementChild;
+  if (content && content !== skeleton) content.classList.add("bh-skin");
+  _skelTimers = [
+    setTimeout(() => skeleton.classList.add("out"), 32),
+    setTimeout(() => skeleton.remove(), 380),
+  ];
 }
 const _keptScroll = {};
 function render() {
@@ -2889,7 +3077,16 @@ function render() {
   // its host and timeframe pills are carried over and put back in the new page.
   const keepChart = _chart && state.sel && _chartFor === state.sel ? document.getElementById("tradeChart") : null;
   const keepPills = keepChart ? document.getElementById("chartTf") : null;
-  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
+  // the heatmap's cells travel to their new slots, which they can only do if the
+  // nodes holding them outlive the redraw
+  const keepHeat = state.page === "markets" ? document.getElementById("heatBox") : null;
+  const keepTab = document.getElementById("tabInd");
+  // A panel already on screen is redrawn with the rest of the page whenever the
+  // model reloads. It should not slide in again every time, so only a panel that
+  // was not there a moment ago plays its entrance.
+  const standing = ["tkWrap", "odWrap", "confirmDlg"].filter((id) => document.getElementById(id));
+  const leavingSkeleton = document.getElementById("pageSkel");
+  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
   if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen));   // the wheel over a panel must not move the page behind it
@@ -2906,11 +3103,30 @@ function render() {
     const pills = document.getElementById("chartTf");
     if (host && pills && keepPills) { host.replaceWith(keepChart); pills.replaceWith(keepPills); }
   }
+  if (keepHeat) { const fresh = document.getElementById("heatBox"); if (fresh) fresh.replaceWith(keepHeat); }
+  if (keepTab) { const fresh = document.getElementById("tabInd"); if (fresh) fresh.replaceWith(keepTab); }
+  standing.forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("bh-noanim"); });
+  if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
+  placeTabIndicator();
   if (state.sel) { const open = selById(state.sel); if (open && open.fills === undefined) loadTradeDetail(open.id); }
   mountTradeChart();
   mountHeatmap();
   spaceAxisLabels();
 }
+// The 2px bar under the active tab slides and resizes rather than jumping. It is
+// driven by the active button's own measurements, taken after a redraw and again
+// once the webfont settles: measuring before that gives a bar a few pixels wrong.
+function placeTabIndicator() {
+  const bar = document.getElementById("tabInd");
+  if (!bar) return;
+  const on = bar.parentElement.querySelector(".tabbtn.on");
+  if (!on) { bar.style.opacity = "0"; return; }
+  bar.style.left = on.offsetLeft + "px";
+  bar.style.width = on.offsetWidth + "px";
+  bar.style.opacity = "1";
+}
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeTabIndicator);
+window.addEventListener("resize", placeTabIndicator);
 function renderHeaderOnly() {
   const hdr = document.getElementById("hdr");
   if (!hdr) return render();
