@@ -18,7 +18,7 @@ A local-first trading journal for Wealthsimple users. It runs on your own comput
 
 A minute and a half through every tab, with sound.
 
-https://github.com/user-attachments/assets/3b74dc36-f09a-475d-b48f-e0f02c7e8ec9
+https://github.com/user-attachments/assets/8f5caa03-569f-4a74-ac80-32c9c06a6b57
 
 Music: "Inspired" by Kevin MacLeod (incompetech.com), licensed under [Creative Commons: By Attribution 4.0](https://creativecommons.org/licenses/by/4.0/).
 
