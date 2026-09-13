@@ -11,7 +11,11 @@ COPY docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
 WORKDIR /app
-COPY bagholder.py model.py market.py store.py csvimport.py ledger.html lightweight-charts.js favicon.png ./
+# Every module, not a list of them: the app grew four modules after this file
+# was written and each one was missing from the image, which crashed on the
+# first import. The repository's Python files are the app's own; the tests, the
+# phone apps and the docs are kept out by .dockerignore.
+COPY *.py ledger.html lightweight-charts.js favicon.png ./
 
 RUN mkdir -p /data
 
