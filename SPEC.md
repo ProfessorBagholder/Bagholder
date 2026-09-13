@@ -346,6 +346,10 @@ Two easings and three durations cover every transition, and the further a thing 
 - **A row just added to the watchlist** is tinted and the tint decays over .6 s. Row hover is instant and deliberately so.
 - `prefers-reduced-motion` keeps the colour and opacity transitions and drops the rest: the heatmap's geometry, the entrances' movement, the skeleton's pulse, and the digit roll, which sets its figure directly.
 
+### What a published copy carries
+
+The image copies every Python file in the repository, not a list of them, and the release archive carries everything tracked. A list was kept by hand once: four modules were added after it was written, every image built for three days crashed on its first import, and nothing noticed until a user reported it. Tests now read the Dockerfile and the tracked files and fail if anything the app imports would be missing, and a copy of only the published files is asked to import the app.
+
 ### The store
 
 One SQLite file, opened through a small pool of connections rather than a new one per read: creating what is missing and running the migrations is the same work every time on a database that has already been through it, and a single model request asked for it eighteen times. The stamped schema version is still read on every borrow, so a database replaced or rolled back under a running app is migrated as it always was. Durability is not traded for speed: every commit is still flushed, because a thesis or a grade is the one thing in the file that cannot be fetched again. The relabelling of newly synced option rows is stamped with the fingerprint of the rows it ran on, so it follows a sync instead of running on every read.
