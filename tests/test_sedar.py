@@ -199,5 +199,36 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(r["error"]["code"], -32601)
 
 
+
+
+class ScopeCacheTest(unittest.TestCase):
+    """The document scope is cached briefly so a run of a profile's documents walks the
+    issuer chain once, not once per document."""
+    def setUp(self):
+        import sedar
+        self.sedar = sedar
+        sedar._scope_cache.clear()
+        self._walk = sedar._scoped_documents_uncached
+
+    def tearDown(self):
+        self.sedar._scoped_documents_uncached = self._walk
+        self.sedar._scope_cache.clear()
+
+    def test_a_second_call_uses_the_cache_and_does_not_rewalk(self):
+        calls = []
+        self.sedar._scoped_documents_uncached = lambda profile_no, name=None: (calls.append(profile_no) or "<html>appDocumentLink</html>")
+        a = self.sedar._scoped_documents("000012345")
+        b = self.sedar._scoped_documents("000012345")
+        self.assertEqual(a, b)
+        self.assertEqual(calls, ["000012345"], "the issuer chain is walked once, then served from cache")
+
+    def test_a_failed_walk_is_not_cached(self):
+        calls = []
+        self.sedar._scoped_documents_uncached = lambda profile_no, name=None: (calls.append(1) or None)
+        self.assertIsNone(self.sedar._scoped_documents("000099999"))
+        self.assertIsNone(self.sedar._scoped_documents("000099999"))
+        self.assertEqual(len(calls), 2, "a None result is retried, never cached")
+
+
 if __name__ == "__main__":
     unittest.main()

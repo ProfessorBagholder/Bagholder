@@ -466,7 +466,24 @@ def list_filings(query=None, profile_no=None, limit=SEARCH_LIMIT):
     }
 
 
+_scope_cache = {}            # profile_no -> (expiry_ts, docs_html); short-lived so a run
+SCOPE_TTL = 120              # of documents reuses one issuer walk instead of re-walking each
+
+
 def _scoped_documents(profile_no, name=None):
+    """The issuer's document search page, cached for a short window so enriching a
+    run of a profile's filings walks the reporting-issuer -> issuer -> documents
+    chain once, not once per document. A stale-URL download drops the cache."""
+    hit = _scope_cache.get(profile_no)
+    if hit and hit[0] > time.time():
+        return hit[1]
+    html = _scoped_documents_uncached(profile_no, name)
+    if html is not None:
+        _scope_cache[profile_no] = (time.time() + SCOPE_TTL, html)
+    return html
+
+
+def _scoped_documents_uncached(profile_no, name=None):
     """The document search results for one profile, or None if the chain could not
     be walked. SEDAR+ has no profile parameter on the document search; the way in
     is the issuer's own page: search the reporting-issuer list for the profile,
@@ -538,6 +555,7 @@ def _download_bytes(profile_no, doc_id, name=None):
         except Exception as e:
             raise SedarUnavailable("document fetch failed: %s" % e)
     if not _is_document(r):
+        _scope_cache.pop(profile_no, None)   # the scoped URLs went stale; re-walk next time
         raise SedarUnavailable("document did not download (status %s)" % r.status_code)
     return r.content, r.headers.get("content-type", "application/pdf")
 

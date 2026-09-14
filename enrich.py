@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import html as _html
 import re
-import shutil
-import subprocess
 
 import localmodel
+import pdftext
 
 MAX_TEXT = 8000            # characters of the filing fed to the model
 _TAGS = re.compile(r"<[^>]+>")
@@ -90,18 +89,11 @@ def html_text(data):
 
 
 def pdf_text(data):
-    """Readable text from a PDF via pdftotext (poppler), or "" when it is not on the
-    path. No pure-Python fallback: extracting text from an arbitrary PDF without a
-    real engine is unreliable, and a wrong summary is worse than none."""
-    exe = shutil.which("pdftotext")
-    if not exe:
-        return ""
-    try:
-        out = subprocess.run([exe, "-q", "-nopgbrk", "-", "-"], input=data,
-                             capture_output=True, timeout=30)
-        return _WS.sub(" ", out.stdout.decode("utf-8", "replace")).strip()
-    except Exception:
-        return ""
+    """Readable text from a PDF, via the pdftext engine (a system pdftotext if the
+    user has one, else the auto-provisioned pdfminer.six). "" while the engine is
+    still installing or if the PDF has no recoverable text; asking kicks provisioning
+    in the background."""
+    return _WS.sub(" ", pdftext.text(data)).strip()
 
 
 def document_text(data, content_type=""):
@@ -125,8 +117,11 @@ def summary_available():
 
 
 def summary_status():
-    """The model's provisioning state, for the UI: off / downloading / starting /
-    ready / failed."""
+    """Provisioning state for the UI and for retry decisions: while either the model
+    or the PDF engine is still being fetched, report a not-ready state so a row is
+    tried again once both are up. off / downloading / starting / ready / failed."""
+    if pdftext.pending():
+        return "downloading"
     return localmodel.status()
 
 
@@ -137,8 +132,10 @@ def summarize(text):
     text = (text or "").strip()
     if not text:
         return ""
-    out = _WS.sub(" ", localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)).strip().strip('"')
-    m = re.match(r"(.+?[.!?])(\s|$)", out)           # keep it to one sentence
+    out = localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)
+    out = re.sub(r"<\|[^>]*\|>", " ", out)             # drop any chat-template special tokens
+    out = _WS.sub(" ", out).strip().strip('"').strip()
+    m = re.match(r"(.+?[.!?])(\s|$)", out)             # keep it to one sentence
     return (m.group(1) if m else out)[:240]
 
 

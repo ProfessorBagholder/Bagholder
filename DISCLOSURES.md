@@ -75,8 +75,10 @@ with the `mcpb` CLI (`npx @anthropic-ai/mcpb pack`) and open the resulting
 ## What each filing is about
 
 A filing list tells you the type, date and source, not what a document contains.
-Two enrichments (`enrich.py`) fill that in, both local and both on demand — a
-document is read only when you open its row, never in bulk, and cached for good:
+Two enrichments (`enrich.py`) fill that in, both local. When a filing list is shown
+the rows are enriched on their own, top of the list first, one document at a time at
+SEDAR+'s pace (the issuer's document scope is cached for the run, so the list is read
+in one walk, not one per row), and every result is stored so a later visit is instant:
 
 - **Subject** — the document's own title, which SEDAR+ hides behind a generic file
   name. Pulled from the PDF's metadata with the standard library alone, no setup:
@@ -87,12 +89,17 @@ document is read only when you open its row, never in bulk, and cached for good:
   local model server you already run (Ollama, or anything at `BAGHOLDER_LLM_URL`)
   and uses it; if there is none, it downloads a small self-contained model file (a
   ~1.1 GB llamafile, pinned and checksum-verified) into `~/.bagholder/models/` and
-  runs it in the background. You install nothing and type no commands — the row
-  reads `Preparing summaries…` while the one-time download runs, then summaries
-  appear. `localmodel.py` manages this.
-  - SEC filings are HTML and summarize out of the box. SEDAR+ documents are PDFs,
-    and the model needs their text; that still comes from `pdftotext` (poppler) if
-    it is on the path — without it a SEDAR+ filing shows its subject but no summary.
+  runs it in the background. You install nothing and type no commands — the Summary
+  cell shows a shimmer while the one-time download runs, then summaries appear.
+  `localmodel.py` manages this. The Summary column itself appears only once a summary
+  exists; where a document's text or the model is unavailable it stays absent rather
+  than showing a wrong guess.
+  - The model needs the document's text. SEC filings are HTML and summarize out of
+    the box. SEDAR+ documents are PDFs whose subsetted fonts a naive reader cannot
+    decode, so their text comes from `pdftext.py`: a system `pdftotext` (poppler) when
+    present, otherwise `pdfminer.six`, which the app pip-installs into
+    `~/.bagholder/pylibs/` on first use (nothing to install by hand; `BAGHOLDER_NO_PDF=1`
+    turns it off). While it installs, the Summary cell shows a shimmer, then fills.
   - Overrides: `BAGHOLDER_LLM_URL` (use your own local server), `BAGHOLDER_OLLAMA_MODEL`,
     `BAGHOLDER_LLAMAFILE_URL` / `BAGHOLDER_LLAMAFILE_SHA256` (a different model file).
     The download runs an executable it fetched, so it is refused unless its SHA-256
