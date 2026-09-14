@@ -2333,8 +2333,9 @@ function ensureDiscEnrich(sym, f) {
   _discEnrichLoading[f.id] = true;
   api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
     delete _discEnrichLoading[f.id];
-    _discEnrichTried[f.id] = true;
-    if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; }
+    if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
+    // the model may still be provisioning on first use: let a later open retry
+    if (!(f.summaryStatus === "downloading" || f.summaryStatus === "starting")) _discEnrichTried[f.id] = true;
     const open = state.sel && selById(state.sel);
     if (open && discSymbol(open) === sym) render();
   });
@@ -2421,7 +2422,10 @@ function disclosuresCardHtml(t) {
       '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";
     if (!exp) return r;
     const loading = _discEnrichLoading[f.id];
-    const body = loading ? '<div class="dc-pmuted">Reading the document…</div>' : (f.summary ? '<div class="dc-sum">' + esc(f.summary) + "</div>" : "");
+    const preparing = f.summaryStatus === "downloading" || f.summaryStatus === "starting";
+    const body = loading ? '<div class="dc-pmuted">Reading the document…</div>'
+      : f.summary ? '<div class="dc-sum">' + esc(f.summary) + "</div>"
+      : preparing ? '<div class="dc-pmuted">Preparing summaries…</div>' : "";
     return r + '<div class="dc-panel">' + body +
       '<button class="dc-openbtn" data-act="discOpen" data-arg=\'' + openArg(f) + '\'>Open document ↗</button></div>';
   };

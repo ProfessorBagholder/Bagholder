@@ -5725,9 +5725,11 @@ def filings_enrich(symbol, doc_id):
     # Already read, and there is nothing further to get (we have the summary, or no
     # model to make one): return what is cached without fetching the document again.
     if attempted and (summary or not model):
-        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if not disclosures.available():
-        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     try:
         data, ct = disclosures.document(row)
     except Exception as e:
@@ -5737,8 +5739,11 @@ def filings_enrich(symbol, doc_id):
     info = enrich.enrich_document(row.get("source", ""), data, ct)
     subject = info.get("subject") or subject
     summary = info.get("summary") or summary
-    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary)
-    return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+    # persist the subject always; the summary only once it exists, so a row is
+    # re-read for its summary once the model finishes provisioning
+    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=(summary or None))
+    return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+            "summaryAvailable": enrich.summary_available(), "summaryStatus": enrich.summary_status()}
 
 
 @single_flight("universes")

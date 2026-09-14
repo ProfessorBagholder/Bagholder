@@ -55,38 +55,30 @@ class TextTest(unittest.TestCase):
 
 
 class SummaryTest(unittest.TestCase):
-    def test_summarize_returns_empty_when_no_model_answers(self):
-        saved = enrich.OLLAMA_URL
-        try:
-            enrich.OLLAMA_URL = "http://127.0.0.1:1"   # nothing listens here
-            self.assertEqual(enrich.summarize("Some filing text"), "")
-            self.assertFalse(enrich.summary_available())
-        finally:
-            enrich.OLLAMA_URL = saved
+    def setUp(self):
+        import localmodel
+        self.lm = localmodel
+        self._chat = localmodel.chat
 
-    def test_summarize_of_empty_text_is_empty(self):
+    def tearDown(self):
+        self.lm.chat = self._chat
+
+    def test_no_model_means_no_summary(self):
+        self.lm.chat = lambda prompt, max_tokens=90: ""   # the model is not up
+        self.assertEqual(enrich.summarize("Some filing text"), "")
+
+    def test_summary_of_empty_text_is_empty(self):
         self.assertEqual(enrich.summarize(""), "")
 
-    def test_summarize_keeps_one_sentence(self):
-        # stub the model call (enrich bound urlopen by name) to return a multi-sentence blob
-        saved = enrich.urlopen
-
-        class FakeResp:
-            def read(self_):
-                import json
-                return json.dumps({"response": "It announces a private placement. Extra sentence."}).encode()
-
-        try:
-            enrich.urlopen = lambda *a, **k: FakeResp()
-            self.assertEqual(enrich.summarize("text"), "It announces a private placement.")
-        finally:
-            enrich.urlopen = saved
+    def test_summary_is_kept_to_one_sentence(self):
+        self.lm.chat = lambda prompt, max_tokens=90: "It announces a private placement. Extra sentence."
+        self.assertEqual(enrich.summarize("text"), "It announces a private placement.")
 
     def test_enrich_document_gives_subject_without_a_model(self):
-        data = pdf_with_title(b"Microsoft Word - Acme Announces Buyback EN")
-        info = enrich.enrich_document("SEDAR+", data, "application/pdf")
+        self.lm.chat = lambda prompt, max_tokens=90: ""
+        info = enrich.enrich_document("SEDAR+", pdf_with_title(b"Microsoft Word - Acme Announces Buyback EN"), "application/pdf")
         self.assertEqual(info["subject"], "Acme Announces Buyback")
-        self.assertEqual(info["summary"], "")   # no model running in the test
+        self.assertEqual(info["summary"], "")
 
 
 if __name__ == "__main__":

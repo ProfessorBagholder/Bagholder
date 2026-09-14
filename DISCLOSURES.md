@@ -83,15 +83,23 @@ document is read only when you open its row, never in bulk, and cached for good:
   "News release" becomes "News release · Closing 2nd Drawdown".
 - **Summary** — one plain sentence of what the filing announces, from a language
   model running **locally**, so nothing leaves the machine and there is no key or
-  bill. To turn it on:
-  - Install [Ollama](https://ollama.com) and pull a small model, e.g. `ollama pull llama3.2`.
-    Point the app elsewhere with `BAGHOLDER_OLLAMA_URL` / `BAGHOLDER_OLLAMA_MODEL`
-    if you run a different local server or model.
-  - For SEDAR+ PDFs the model needs the text, which comes from `pdftotext` (poppler:
-    `brew install poppler`). SEC filings are HTML and need nothing extra.
+  bill. It is **automatic**: the first time you open a filing, the app looks for a
+  local model server you already run (Ollama, or anything at `BAGHOLDER_LLM_URL`)
+  and uses it; if there is none, it downloads a small self-contained model file (a
+  ~1.1 GB llamafile, pinned and checksum-verified) into `~/.bagholder/models/` and
+  runs it in the background. You install nothing and type no commands — the row
+  reads `Preparing summaries…` while the one-time download runs, then summaries
+  appear. `localmodel.py` manages this.
+  - SEC filings are HTML and summarize out of the box. SEDAR+ documents are PDFs,
+    and the model needs their text; that still comes from `pdftotext` (poppler) if
+    it is on the path — without it a SEDAR+ filing shows its subject but no summary.
+  - Overrides: `BAGHOLDER_LLM_URL` (use your own local server), `BAGHOLDER_OLLAMA_MODEL`,
+    `BAGHOLDER_LLAMAFILE_URL` / `BAGHOLDER_LLAMAFILE_SHA256` (a different model file).
+    The download runs an executable it fetched, so it is refused unless its SHA-256
+    matches the pin.
 
-  Where the model or `pdftotext` is absent the summary is simply empty and the
-  subject still shows; nothing breaks.
+  Where the model or a document's text is unavailable the summary is simply empty
+  and the subject still shows; nothing breaks.
 
 `GET /api/filings/enrich?symbol=<symbol>&id=<item id>` reads one document and
 returns `{subject, summary}`, cached on the row. It is what the page calls when you

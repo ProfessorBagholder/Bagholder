@@ -19,18 +19,12 @@ the list.
 from __future__ import annotations
 
 import html as _html
-import json
-import os
 import re
 import shutil
 import subprocess
-from urllib.request import Request, urlopen
 
-# The local model endpoint. Ollama's default; override for another host or an
-# OpenAI-compatible server that speaks the same /api/generate shape.
-OLLAMA_URL = os.environ.get("BAGHOLDER_OLLAMA_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL = os.environ.get("BAGHOLDER_OLLAMA_MODEL", "llama3.2")
-SUMMARY_TIMEOUT = float(os.environ.get("BAGHOLDER_OLLAMA_TIMEOUT", "30"))
+import localmodel
+
 MAX_TEXT = 8000            # characters of the filing fed to the model
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
@@ -126,43 +120,32 @@ _PROMPT = ("You are labelling a regulatory filing for an investor's dashboard. I
 
 
 def summary_available():
-    """Whether a local model endpoint answers. Cheap, cached per process is not worth
-    it; callers gate on this before offering the feature."""
-    try:
-        urlopen(OLLAMA_URL + "/api/tags", timeout=2).read()
-        return True
-    except Exception:
-        return False
+    """Whether a local model is up and ready right now."""
+    return localmodel.available()
+
+
+def summary_status():
+    """The model's provisioning state, for the UI: off / downloading / starting /
+    ready / failed."""
+    return localmodel.status()
 
 
 def summarize(text):
-    """One-sentence summary of a filing's text from the local model, or "" on any
-    failure (no model, timeout, empty text). Never raises."""
+    """One-sentence summary of a filing's text from the app's local model, or "" (no
+    text, or the model is not up yet — asking kicks it off in the background). Never
+    raises."""
     text = (text or "").strip()
     if not text:
         return ""
-    body = json.dumps({
-        "model": OLLAMA_MODEL,
-        "prompt": _PROMPT % text[:MAX_TEXT],
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 90},
-    }).encode("utf-8")
-    try:
-        req = Request(OLLAMA_URL + "/api/generate", data=body, headers={"Content-Type": "application/json"})
-        resp = json.loads(urlopen(req, timeout=SUMMARY_TIMEOUT).read().decode("utf-8", "replace"))
-    except Exception:
-        return ""
-    out = _WS.sub(" ", str(resp.get("response") or "")).strip().strip('"')
-    # keep it to one sentence
-    m = re.match(r"(.+?[.!?])(\s|$)", out)
+    out = _WS.sub(" ", localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)).strip().strip('"')
+    m = re.match(r"(.+?[.!?])(\s|$)", out)           # keep it to one sentence
     return (m.group(1) if m else out)[:240]
 
 
 def enrich_document(source, data, content_type=""):
-    """{subject, summary} for one downloaded document. Subject always attempted;
-    summary only when the model is reachable and the text could be read."""
+    """{subject, summary} for one downloaded document. The subject is always
+    attempted (no model needed); the summary is attempted too — it comes back empty
+    until the local model is ready, and asking starts it provisioning."""
     subject = extract_pdf_subject(data) if (data[:5] == b"%PDF-" if isinstance(data, (bytes, bytearray)) else False) else ""
-    summary = ""
-    if summary_available():
-        summary = summarize(document_text(data, content_type))
+    summary = summarize(document_text(data, content_type))
     return {"subject": subject, "summary": summary}
