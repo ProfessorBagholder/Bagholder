@@ -2565,6 +2565,141 @@ class OrdersReadBackTest(_OrdersBase):
         self.assertEqual(store.get_order(oid)["status"], "pending")
 
 
+class StopFillBooksLocallyTest(_OrdersBase):
+    """When an order Bagholder placed fills, the fill is written as a local activity
+    at once so the position updates without waiting for the next Wealthsimple sync,
+    and it reconciles (collapses) with the real Wealthsimple activity when that syncs."""
+
+    def _long(self, cid, qty, price, symbol="QNC", account="acct-tfsa", account_type="TFSA", currency="USD", date="2026-09-01"):
+        """An existing Wealthsimple-sourced long, so a later sell has something to close."""
+        signed = qty
+        store.apply_wealthsimple_mapped([{
+            "canonicalId": cid, "occurredAt": date + "T14:00:00Z", "transactionDate": date, "settlementDate": date,
+            "accountId": account, "bookId": account, "fifoId": account, "accountType": account_type,
+            "activityType": "Trade", "activitySubType": "BUY", "symbol": symbol, "name": symbol, "currency": currency,
+            "quantity": signed, "unitPrice": price, "commission": 0.0, "netCashAmount": -(qty * price), "category": "trade",
+            "source": "wealthsimple",
+        }])
+
+    def _ws_sell(self, cid, qty, price, symbol="QNC", account="acct-tfsa", account_type="TFSA", currency="USD",
+                 date="2026-09-10", sub="SELL", atype="Trade"):
+        """The real Wealthsimple activity for the sell, as a later sync would map it."""
+        return {
+            "canonicalId": cid, "occurredAt": date + "T20:47:00Z", "transactionDate": date, "settlementDate": date,
+            "accountId": account, "bookId": account, "fifoId": account, "accountType": account_type,
+            "activityType": atype, "activitySubType": sub, "symbol": symbol, "name": symbol, "currency": currency,
+            "quantity": -qty, "unitPrice": price, "commission": 0.0, "netCashAmount": qty * price, "category": "trade",
+            "source": "wealthsimple",
+        }
+
+    def _place_live(self, oid, symbol="QNC", security_id="sec-s-us", side="SELL", qty=5, account="acct-tfsa",
+                    currency="USD", typ="STOP", role="stop"):
+        store.insert_order({
+            "id": oid, "accountId": account, "account": "TFSA", "securityId": security_id, "symbol": symbol,
+            "currency": currency, "side": side, "type": typ, "quantity": qty, "stopPrice": 1.60, "tif": "UNTIL_CANCEL",
+            "status": "sent", "source": "bagholder", "role": role,
+        })
+        return oid
+
+    def _fill(self, oid, filled, avg, ws_status="FILLED", last_filled="2026-09-10T20:47:00Z", submitted=None):
+        ext = {"status": ws_status, "filledQuantity": filled, "averageFilledPrice": avg,
+               "firstFilledAtUtc": last_filled, "lastFilledAtUtc": last_filled,
+               "submittedAtUtc": last_filled, "submittedQuantity": submitted}
+        with mock.patch.object(bagholder, "graphql", return_value={"soOrdersExtendedOrder": ext}), \
+             mock.patch.object(bagholder, "_ticket_session", return_value={"access_token": "t"}):
+            return bagholder.refresh_orders(only_id=oid)
+
+    def _booked(self, symbol="QNC"):
+        return [a for a in store.snapshot()["activities"] if a["source"] == "bagholder-fill" and a["symbol"] == symbol]
+
+    def test_a_filled_order_is_booked_as_one_local_sell_that_closes_the_position(self):
+        self._long("ws-buy-1", 5, 1.40)
+        oid = self._place_live("order-stop-1", qty=5)
+        r = self._fill(oid, 5, 1.6374)
+        self.assertEqual(r["read"], 1)
+        booked = self._booked()
+        self.assertEqual(len(booked), 1, "exactly one local activity for the fill")
+        b = booked[0]
+        self.assertEqual((b["symbol"], b["accountId"], b["quantity"], b["unitPrice"]), ("QNC", "acct-tfsa", -5.0, 1.6374))
+        self.assertEqual(store.trade_side(b), "SELL")
+        self.assertEqual(b["transactionDate"], "2026-09-10", "the fill's UTC day, as the sync dates the trade")
+        self.assertIsNone(b.get("canonicalId"), "a local row, not a fabricated Wealthsimple row")
+        self.assertFalse(store.looks_like_homemade_id(b["id"]))
+        # the position is now closed
+        res = model.match_fifo(store.snapshot()["activities"])
+        self.assertEqual(res["open"], [], "the 5 shares are gone once the fill is on the book")
+        self.assertEqual(store.get_order(oid)["fillBookedQty"], 5.0)
+
+    def test_the_real_wealthsimple_sell_collapses_with_the_booked_row(self):
+        self._long("ws-buy-1", 5, 1.40)
+        oid = self._place_live("order-stop-2", qty=5)
+        self._fill(oid, 5, 1.6374)
+        before = store.activity_count()
+        self.assertEqual(len(self._booked()), 1)
+        # the equivalent Wealthsimple activity syncs the next day
+        result = store.apply_wealthsimple_mapped([self._ws_sell("ws-sell-9", 5, 1.6374)])
+        self.assertEqual((result["linked"], result["inserted"]), (1, 0), "the synced sell links to the booked row, none inserted")
+        self.assertEqual(store.activity_count(), before, "no second sell: the position is not double-counted")
+        rows = [a for a in store.snapshot()["activities"] if store.trade_side(a) == "SELL" and a["symbol"] == "QNC"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["canonicalId"], "ws-sell-9", "the booked row adopted Wealthsimple's canonical id")
+        res = model.match_fifo(store.snapshot()["activities"])
+        self.assertEqual(res["open"], [])
+        self.assertEqual(sum(t["quantity"] for t in res["closed"]), 5)
+        # a second sync of the same Wealthsimple sell matches by canonical id, never inserts again
+        store.apply_wealthsimple_mapped([self._ws_sell("ws-sell-9", 5, 1.6374)])
+        self.assertEqual(store.activity_count(), before, "the linked row is known by its canonical id on the next sync too")
+
+    def test_re_reading_the_same_fill_books_nothing_more(self):
+        self._long("ws-buy-1", 5, 1.40)
+        oid = self._place_live("order-stop-3", qty=5)
+        self._fill(oid, 5, 1.6374)
+        self.assertEqual(len(self._booked()), 1)
+        # force the order live again and read the identical fill back: the marker stops a second booking
+        store.update_order(oid, {"status": "sent"})
+        self._fill(oid, 5, 1.6374)
+        self.assertEqual(len(self._booked()), 1, "the durable fill_booked_qty marker prevents a duplicate")
+
+    def test_a_partial_fill_reduces_the_position_it_does_not_close_it(self):
+        self._long("ws-buy-1", 10, 1.40)
+        oid = self._place_live("order-stop-4", qty=10)
+        # the order ends filled for only 5 of the 10 (the rest lapsed): book the filled 5, not the ordered 10
+        self._fill(oid, 5, 1.6374, submitted=10)
+        booked = self._booked()
+        self.assertEqual(len(booked), 1)
+        self.assertEqual(booked[0]["quantity"], -5.0, "the filled quantity, never the ordered quantity")
+        res = model.match_fifo(store.snapshot()["activities"])
+        self.assertEqual(len(res["open"]), 1)
+        self.assertEqual(res["open"][0]["qty"], 5, "five shares still held")
+
+    def test_an_option_fill_nets_with_the_hundred_times_multiplier(self):
+        sym = "QNC 16JAN26 5.00 CALL"
+        self.assertTrue(model.is_option_symbol(sym))
+        # a long of two contracts opened at 1.00 a share
+        store.apply_wealthsimple_mapped([{
+            "canonicalId": "ws-opt-buy", "occurredAt": "2026-09-01T14:00:00Z", "transactionDate": "2026-09-01",
+            "settlementDate": "2026-09-01", "accountId": "acct-tfsa", "bookId": "acct-tfsa", "fifoId": "acct-tfsa",
+            "accountType": "TFSA", "activityType": "OPTIONS_BUY", "activitySubType": "BUYTOOPEN", "symbol": sym,
+            "name": sym, "currency": "USD", "quantity": 2, "unitPrice": 1.00, "commission": 0.0,
+            "netCashAmount": -200.0, "category": "trade", "source": "wealthsimple",
+        }])
+        oid = self._place_live("order-opt-1", symbol=sym, security_id="sec-o-1", side="SELL", qty=2, typ="LIMIT", role="entry")
+        self._fill(oid, 2, 1.50)
+        booked = self._booked(symbol=sym)
+        self.assertEqual(len(booked), 1)
+        b = booked[0]
+        self.assertEqual((b["quantity"], b["unitPrice"]), (-2.0, 1.50), "contracts and per-share premium, as Wealthsimple stores them")
+        self.assertAlmostEqual(b["netCashAmount"], 2 * 1.50 * 100, msg="the 100x multiplier is in the cash")
+        res = model.match_fifo(store.snapshot()["activities"])
+        self.assertEqual(res["open"], [], "the two contracts are closed")
+        self.assertAlmostEqual(sum(t["pnl"] for t in res["closed"]), (1.50 - 1.00) * 2 * 100, msg="premium change times contracts times 100")
+        # and the real Wealthsimple option sell later collapses with the booked row
+        before = store.activity_count()
+        result = store.apply_wealthsimple_mapped([self._ws_sell("ws-opt-sell", 2, 1.50, symbol=sym, sub="SELLTOCLOSE", atype="OPTIONS_SELL")])
+        self.assertEqual((result["linked"], result["inserted"]), (1, 0))
+        self.assertEqual(store.activity_count(), before, "the option position is not double-counted")
+
+
 class _EngineBase(_OrdersBase):
     """A book with a filled-able entry and a fake Wealthsimple that takes, cancels and reads orders."""
 

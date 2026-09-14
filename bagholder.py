@@ -685,7 +685,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.24.1"
+APP_VERSION = "1.25.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -4484,6 +4484,8 @@ def parse_extended_order(data):
         "avgFill": _num(o.get("averageFilledPrice"), None),
         "submittedAt": _s(o.get("submittedAtUtc")),
         "expiresAt": _s(o.get("expiredAtUtc")),
+        "firstFilledAt": _s(o.get("firstFilledAtUtc")),
+        "lastFilledAt": _s(o.get("lastFilledAtUtc")),
         "error": _s(o.get("rejectionCause") or o.get("rejectionCode")),
         "quantity": _num(o.get("submittedQuantity"), None),
         "limitPrice": _num(o.get("limitPrice"), None),
@@ -4579,6 +4581,85 @@ def kick_orders_refresh():
     return True
 
 
+def book_order_fill(order, upd):
+    """An order Bagholder placed has filled: write the fill as a local activity now,
+    so the position updates at once instead of waiting for the next Wealthsimple sync
+    to bring the closing trade. The row is an ordinary local row (a Bagholder id, a
+    non-Wealthsimple source, never a fabricated canonical id), shaped exactly like the
+    Wealthsimple trade that will later sync — same account, symbol, side, filled
+    quantity, average price and calendar day. When that real activity arrives,
+    store.apply_wealthsimple_mapped -> find_link_candidates matches it on
+    link_match_key (symbol, side, quantity, price, date, account) and stamps the
+    Wealthsimple canonical id onto this row instead of inserting a second one, so the
+    position is never double-counted. Booked once per order: the filled quantity is
+    stamped on the order row and re-polling the same fill books nothing more."""
+    if not isinstance(order, dict):
+        return False
+    # only orders Bagholder itself placed; a feed row is Wealthsimple's own and syncs on its own
+    if _s(order.get("source")) == "wealthsimple":
+        return False
+    side = _s(order.get("side")).upper()
+    if side not in ("BUY", "SELL"):
+        return False
+    account_id = _s(order.get("accountId"))
+    if not store.is_real_account(account_id):
+        return False
+    if not _s(order.get("securityId")):
+        return False
+    symbol = _s(upd.get("symbol") or order.get("symbol")).strip()
+    if not symbol:
+        return False
+    filled = _num(upd.get("filledQty") if upd.get("filledQty") is not None else order.get("filledQty"), 0.0) or 0.0
+    price = _num(upd.get("avgFill") if upd.get("avgFill") is not None else order.get("avgFill"), 0.0) or 0.0
+    if filled <= 0 or price <= 0:
+        return False
+    already = _num(order.get("fillBookedQty"), 0.0) or 0.0
+    if already + 1e-9 >= filled:
+        return False   # this fill (or more) is already on the book
+    # Wealthsimple dates the trade by its occurredAt, whose calendar day the sync takes
+    # from the (UTC) timestamp. Deriving the same day from the (UTC) fill time keeps the
+    # local row and the later synced row on one date so link_match_key reconciles them.
+    fill_time = _s(upd.get("lastFilledAt") or upd.get("firstFilledAt") or order.get("submittedAt"))
+    date = _date_only(fill_time) or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    currency = _upper(order.get("currency") or upd.get("currency") or "CAD")
+    if currency not in ("CAD", "USD"):
+        currency = "CAD"
+    accounts = store.snapshot().get("accounts") or []
+    mult = model.option_multiplier(symbol)
+    signed_qty = filled if side == "BUY" else -filled
+    cash = -(filled * price * mult) if side == "BUY" else (filled * price * mult)
+    act = {
+        "id": str(uuid.uuid4()),
+        "occurredAt": date,
+        "transactionDate": date,
+        "settlementDate": date,
+        "accountId": account_id,
+        "bookId": account_id,
+        "fifoId": fifo_pool_ids(accounts).get(account_id, account_id),
+        "accountType": _account_type(account_id, accounts),
+        "activityType": "Trade",
+        "activitySubType": side,
+        "description": ("Buy" if side == "BUY" else "Sell") + " %s %s @ %s" % (qty_text(filled), symbol, price),
+        "direction": "DEBIT" if side == "BUY" else "CREDIT",
+        "symbol": symbol,
+        "name": symbol,
+        "currency": currency,
+        "quantity": signed_qty,
+        "unitPrice": price,
+        "commission": 0.0,
+        "netCashAmount": cash,
+        "category": "trade",
+        "balance": None,
+        "securityId": _s(order.get("securityId")),
+        "source": "bagholder-fill",
+    }
+    store.insert_local(act)
+    store.mark_order_fill_booked(_s(order.get("id")), filled)
+    model.invalidate()
+    sys.stderr.write("bagholder orders: %s filled %s %s @ %s booked as a local trade until the next sync\n" % (_s(order.get("id")), qty_text(filled), symbol, price))
+    return True
+
+
 def refresh_orders(only_id=""):
     """Read every live order's state back from Wealthsimple, and the pending-order
     feed so an order placed in Wealthsimple's own app is a row too. Never raises;
@@ -4614,6 +4695,13 @@ def refresh_orders(only_id=""):
                     patch["symbol"] = name
             store.update_order(o["id"], patch)
             read += 1
+            if upd.get("status") == "filled":
+                # the order Bagholder was watching filled: book the fill locally now so the
+                # position updates without waiting for the next Wealthsimple sync
+                try:
+                    book_order_fill(store.get_order(o["id"]) or o, upd)
+                except Exception as e:
+                    sys.stderr.write("bagholder orders: %s fill not booked locally: %s\n" % (o["id"], str(e) or e.__class__.__name__))
     added = 0
     if not only_id:
         identity = _identity_from(sess)
