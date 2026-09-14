@@ -57,5 +57,5 @@ To release: bump the version, merge, then build the archive the in-app updater i
 ## Do not
 
 - Commit `.env`, `session.json`, the database, backups, or `.claude/` (all in `.gitignore`); the repository is public.
-- Add a dependency. The app runs on Python 3.9+ with the standard library, plus `tzdata` on Windows and `curl_cffi` for the SEDAR+ filings feature (`sedar.py`), which needs a browser TLS fingerprint the standard library cannot present. `curl_cffi` is optional: where it is absent that one feature reports itself unavailable and the rest of the app is unchanged. Do not add a third.
+- Add a dependency. The app runs on Python 3.9+ with the standard library, plus `tzdata` on Windows and `curl_cffi` for the SEDAR+ disclosures provider (`sedar.py`), which needs a browser TLS fingerprint the standard library cannot present. `curl_cffi` is optional: where it is absent SEDAR+ contributes nothing to the disclosures pipeline (`disclosures.py`) and the rest of the app, including the SEC EDGAR provider (`edgar.py`, standard library only), is unchanged. Do not add a third.
 - Reformat or "clean up" code you were not asked to change.

@@ -38,6 +38,7 @@ from urllib.request import Request, urlopen
 import csvimport
 import exposure
 import instruments
+import disclosures
 import market
 import news
 import sedar
@@ -5567,21 +5568,23 @@ def news_loop():
 
 
 # ---------------------------------------------------------------------------
-# SEDAR+ filings: an instrument's documents, fetched on demand and cached.
-# The source (sedar.py) needs the optional curl_cffi dependency; without it the
-# endpoint answers available:false and holds nothing, and the app is unchanged.
+# Disclosures: an instrument's regulatory filings from every source that covers
+# it (SEDAR+ for Canada, SEC EDGAR for the US, more later), merged and cached.
+# SEDAR+ needs the optional curl_cffi dependency; EDGAR needs only the standard
+# library, so US filings work even where SEDAR+ does not. See disclosures.py.
 # ---------------------------------------------------------------------------
 FILINGS_STALE_HOURS = 24
 
 
-def _issuer_name_for(symbol):
-    """The issuer name Bagholder holds for a symbol, to seed the SEDAR+ lookup;
-    falls back to the bare symbol."""
+def _instrument_meta(symbol):
+    """(issuer name, exchange, currency) Bagholder holds for a symbol, to steer the
+    sources; the name seeds the SEDAR+ lookup, exchange/currency pick the sources.
+    Falls back to the bare symbol."""
     sym = _s(symbol).strip().upper()
     for sec in store.list_securities():
-        if _s(sec.get("symbol")).strip().upper() == sym and _s(sec.get("name")).strip():
-            return sec["name"]
-    return sym
+        if _s(sec.get("symbol")).strip().upper() == sym:
+            return (_s(sec.get("name")).strip() or sym, _s(sec.get("primaryExchange")).strip(), _s(sec.get("currency")).strip())
+    return (sym, "", "")
 
 
 def _filings_stale(symbol, now=None):
@@ -5596,34 +5599,58 @@ def _filings_stale(symbol, now=None):
 
 
 def refresh_filings(symbol, name=None):
-    """Read one symbol's SEDAR+ filings and replace its stored rows. Never raises;
-    returns the count written, or -1 when the source is unavailable."""
+    """Gather one symbol's disclosures from every covering source and replace its
+    stored rows per source. Never raises; returns the total written, or -1 when no
+    source could be reached."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return 0
 
     @single_flight("filings:" + sym, busy=0)
     def run():
-        if not sedar.available():
-            return -1
+        iname, exchange, currency = _instrument_meta(sym)
+        if name:
+            iname = name
         try:
-            profile_no = store.sedar_profile(sym) or None
-            result = sedar.list_filings(query=(name or _issuer_name_for(sym)) if not profile_no else None,
-                                        profile_no=profile_no)
-            prof = (result.get("profile") or {}).get("profileNo") or profile_no or ""
-            return store.replace_filings(sym, prof, result.get("filings") or [])
-        except sedar.ProfileNotFound:
-            store.replace_filings(sym, "", [])
-            return 0
-        except sedar.SedarUnavailable as e:
-            sys.stderr.write("bagholder filings: %s failed: %s\n" % (sym, e))
+            result = disclosures.fetch(sym, name=iname, exchange=exchange, currency=currency)
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: %s failed: %s\n" % (sym, e))
             return -1
+        total = 0
+        any_reached = False
+        profile_no = ""
+        by_source = {}
+        for it in result.get("items") or []:
+            by_source.setdefault(it.get("source") or "", []).append(it)
+            if it.get("source") == sedar.SOURCE and it.get("profileNo"):
+                profile_no = it["profileNo"]
+        for src, status in (result.get("sources") or {}).items():
+            if status.get("available"):
+                any_reached = True
+            if status.get("matched") or status.get("available"):
+                total += store.replace_filings(sym, src, by_source.get(src, []))
+        store.mark_filings_fetched(sym, profile_no)
+        return total if any_reached else -1
 
     return run()
 
 
+def _source_status(sym):
+    """Per-source availability and whether the cache holds any of its rows."""
+    stored = store.filings(sym)
+    have = {r.get("source") for r in stored}
+    out = {}
+    for p in disclosures.PROVIDERS:
+        try:
+            avail = bool(p.available())
+        except Exception:
+            avail = False
+        out[p.SOURCE] = {"available": avail, "matched": p.SOURCE in have}
+    return out
+
+
 def filings_payload(symbol, refresh=False, name=None):
-    """The stored filings for a symbol, refreshing first when forced or stale."""
+    """The stored disclosures for a symbol, refreshing first when forced or stale."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
@@ -5633,7 +5660,9 @@ def filings_payload(symbol, refresh=False, name=None):
     return {
         "ok": True,
         "symbol": sym,
-        "available": sedar.available(),
+        "available": disclosures.available(),
+        "sources": _source_status(sym),
+        "categories": disclosures.CATEGORIES,
         "profileNo": store.sedar_profile(sym),
         "fetchedAt": store.filings_fetched_at(sym),
         "refreshed": bool(wrote and wrote > 0),
@@ -5643,37 +5672,27 @@ def filings_payload(symbol, refresh=False, name=None):
 
 
 def filings_document(symbol, doc_id):
-    """Fetch one of a symbol's filing documents by its id (the drm:… id from a
-    filing row). Returns (bytes, content_type) or (None, error). A document URL is
-    session-bound, so this downloads live through the issuer's profile rather than
-    from a stored URL."""
-    if not sedar.available():
-        return None, "curl_cffi not installed"
+    """Fetch one of a symbol's disclosure documents by its id. Returns (bytes,
+    content_type) or (None, error). The row's source decides how: a SEC document is
+    a static URL; a SEDAR+ document is session-bound and re-fetched live through the
+    issuer's profile."""
     sym = _s(symbol).strip().upper()
-    profile_no = store.sedar_profile(sym)
-    if not profile_no:
-        # nothing fetched yet for this symbol: resolve it now so we have a profile
-        try:
-            profile_no = (sedar.resolve_profile(_issuer_name_for(sym)) or [{}])[0].get("profileNo")
-        except (sedar.ProfileNotFound, sedar.SedarUnavailable) as e:
-            return None, str(e)
-    if not profile_no:
-        return None, "no SEDAR+ profile for %s" % sym
-    import tempfile
-    dest = os.path.join(tempfile.gettempdir(), "bagholder-filing-%s.pdf" % re.sub(r"[^A-Za-z0-9]", "", _s(doc_id)))
+    row = store.filing(sym, doc_id)
+    if not row:
+        # not cached yet: fetch this symbol's disclosures, then look again
+        refresh_filings(sym)
+        row = store.filing(sym, doc_id)
+    if not row:
+        return None, "no such document for %s" % sym
     try:
-        path, ct, _ = sedar.download(profile_no, doc_id, dest, name=_issuer_name_for(sym))
-    except (sedar.ProfileNotFound, sedar.SedarUnavailable) as e:
+        data, ct = disclosures.document(row)
+    except disclosures.SourceUnavailable as e:
         return None, str(e)
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-    return data, ct or "application/pdf"
+    except Exception as e:
+        return None, "%s: %s" % (type(e).__name__, e)
+    if not data:
+        return None, "empty document"
+    return data, ct or "application/octet-stream"
 
 
 @single_flight("universes")

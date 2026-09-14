@@ -1,6 +1,6 @@
-"""The filings store table and the app's filings glue: caching, staleness, and the
-payload the endpoint returns. The source itself (sedar.py) is stubbed so no network
-is touched; its parsers are covered in test_sedar."""
+"""The disclosures store and the app's filings glue: per-source caching, merge,
+staleness, and the payload the endpoint returns. The providers are stubbed so no
+network is touched; their parsing is covered in test_sedar and test_edgar."""
 from __future__ import annotations
 
 import os
@@ -9,28 +9,27 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 import bagholder
-import sedar
+import disclosures
 import store
 
 
-def sample(profile="000026091", n=3):
-    rows = []
-    for i in range(n):
-        url = "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W8%02d&drmKey=abc%03d&id=xy" % (i, i)
-        rows.append({
-            "id": sedar.filing_id(url),
-            "profileNo": profile,
-            "issuer": "Example Corp. (%s)" % profile,
-            "file": "Document %d.pdf" % i,
-            "submitted": "1%d Sep 2026 10:00 EDT" % i,
-            "submittedAt": "2026-09-1%dT10:00" % i,
-            "size": "100 KB",
-            "url": url,
-        })
-    return rows
+def item(source="SEC", category="Financials", i=0, profile=""):
+    tag = source.split("+")[0].lower().replace(" ", "")
+    return {
+        "id": "%s:%d" % (tag, i),
+        "source": source,
+        "category": category,
+        "date": "2026-08-%02d" % (10 + i),
+        "dateText": "2026-08-%02d" % (10 + i),
+        "type": "10-Q" if source == "SEC" else "Interim MD&A",
+        "title": "Quarterly report" if source == "SEC" else "",
+        "size": "" if source == "SEC" else "292 KB",
+        "url": "https://www.sec.gov/x/%d" % i if source == "SEC" else "https://www.sedarplus.ca/x?drmKey=%d" % i,
+        "profileNo": profile,
+    }
 
 
-class FilingsStoreTest(unittest.TestCase):
+class DisclosuresStoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["BAGHOLDER_HOME"] = self.tmp.name
@@ -42,35 +41,50 @@ class FilingsStoreTest(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
 
-    def test_rows_are_kept_per_symbol_newest_first_and_the_profile_is_remembered(self):
-        store.replace_filings("SHOP", "000026091", sample(n=3))
-        got = store.filings("SHOP")
-        self.assertEqual(len(got), 3)
-        self.assertEqual([f["submittedAt"] for f in got], sorted([f["submittedAt"] for f in got], reverse=True))
-        self.assertEqual(store.sedar_profile("SHOP"), "000026091")
-        self.assertTrue(store.filings_fetched_at("SHOP"))
+    def test_rows_from_two_sources_merge_newest_first(self):
+        store.replace_filings("SHOP", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=3)])
+        store.replace_filings("SHOP", "SEC", [item("SEC", i=2), item("SEC", i=4)])
+        rows = store.filings("SHOP")
+        self.assertEqual(len(rows), 4)
+        self.assertEqual([r["date"] for r in rows], sorted([r["date"] for r in rows], reverse=True))
+        self.assertEqual({r["source"] for r in rows}, {"SEDAR+", "SEC"})
 
-    def test_a_second_fetch_replaces_rather_than_doubles(self):
-        store.replace_filings("SHOP", "000026091", sample(n=3))
-        store.replace_filings("SHOP", "000026091", sample(n=2))
-        self.assertEqual(len(store.filings("SHOP")), 2, "the same symbol's rows are replaced, not appended")
+    def test_replacing_one_source_leaves_the_other(self):
+        store.replace_filings("SHOP", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.replace_filings("SHOP", "SEC", [item("SEC", i=1)])
+        store.replace_filings("SHOP", "SEDAR+", [item("SEDAR+", i=9)])   # refresh SEDAR+ only
+        rows = store.filings("SHOP")
+        self.assertEqual(sorted(r["source"] for r in rows), ["SEC", "SEDAR+"])
+        self.assertEqual(len([r for r in rows if r["source"] == "SEDAR+"]), 1, "SEDAR+ replaced, not appended")
+        self.assertEqual(len([r for r in rows if r["source"] == "SEC"]), 1, "SEC untouched")
 
-    def test_symbols_do_not_bleed_into_each_other(self):
-        store.replace_filings("SHOP", "000026091", sample(profile="000026091", n=2))
-        store.replace_filings("ATD", "000012345", sample(profile="000012345", n=3))
-        self.assertEqual(len(store.filings("SHOP")), 2)
-        self.assertEqual(len(store.filings("ATD")), 3)
+    def test_a_single_row_is_fetchable_by_id_for_download(self):
+        store.replace_filings("SHOP", "SEC", [item("SEC", i=7)])
+        row = store.filing("SHOP", "sec:7")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["source"], "SEC")
+        self.assertTrue(row["url"].startswith("https://www.sec.gov/"))
+        self.assertIsNone(store.filing("SHOP", "sec:999"))
+
+    def test_symbols_do_not_bleed_and_the_profile_is_remembered(self):
+        store.replace_filings("SHOP", "SEDAR+", [item("SEDAR+", i=1)])
+        store.replace_filings("ATD", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.mark_filings_fetched("ATD", "000012345")
+        self.assertEqual(len(store.filings("SHOP")), 1)
+        self.assertEqual(len(store.filings("ATD")), 2)
         self.assertEqual(store.sedar_profile("ATD"), "000012345")
 
-    def test_forget_clears_rows_and_the_stamp(self):
-        store.replace_filings("SHOP", "000026091", sample(n=2))
+    def test_forget_clears_rows_and_stamps(self):
+        store.replace_filings("SHOP", "SEC", [item("SEC", i=1)])
+        store.mark_filings_fetched("SHOP", "000037100")
         store.forget_filings("SHOP")
         self.assertEqual(store.filings("SHOP"), [])
         self.assertEqual(store.filings_fetched_at("SHOP"), "")
         self.assertEqual(store.sedar_profile("SHOP"), "")
 
     def test_data_summary_counts_filings(self):
-        store.replace_filings("SHOP", "000026091", sample(n=3))
+        store.replace_filings("SHOP", "SEC", [item("SEC", i=1), item("SEC", i=2)])
+        store.replace_filings("SHOP", "SEDAR+", [item("SEDAR+", i=1)])
         self.assertEqual(store.data_summary()["filings"], 3)
 
 
@@ -81,55 +95,59 @@ class FilingsPayloadTest(unittest.TestCase):
         store.set_home(self.tmp.name)
         bagholder.set_home(self.tmp.name)
         store.ensure()
-        self._avail = sedar.available
-        self._list = sedar.list_filings
+        self._fetch = disclosures.fetch
 
     def tearDown(self):
-        sedar.available = self._avail
-        sedar.list_filings = self._list
+        disclosures.fetch = self._fetch
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
 
-    def test_stale_is_true_until_a_fetch_then_false_within_a_day(self):
+    def stub(self, items, sources):
+        disclosures.fetch = lambda symbol, name="", exchange="", currency="", limit=200: {"items": items, "sources": sources}
+
+    def test_stale_until_a_fetch_then_fresh_within_a_day(self):
         self.assertTrue(bagholder._filings_stale("SHOP"))
-        store.replace_filings("SHOP", "000026091", sample(n=1))
+        store.mark_filings_fetched("SHOP")
         self.assertFalse(bagholder._filings_stale("SHOP"))
 
     def test_a_day_old_stamp_is_stale(self):
         old = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        store.replace_filings("SHOP", "000026091", sample(n=1), now=old)
+        store.mark_filings_fetched("SHOP", now=old)
         self.assertTrue(bagholder._filings_stale("SHOP"))
 
-    def test_payload_refreshes_when_forced_and_reads_the_source(self):
-        sedar.available = lambda: True
-        sedar.list_filings = lambda query=None, profile_no=None, limit=100: {
-            "profile": {"profileNo": "000026091", "name": "Shopify Inc."},
-            "filings": sample(n=4),
-        }
+    def test_refresh_merges_sources_and_reports_status(self):
+        self.stub(
+            [item("SEDAR+", i=1, profile="000037100"), item("SEC", i=2)],
+            {"SEDAR+": {"available": True, "matched": True, "count": 1, "error": ""},
+             "SEC": {"available": True, "matched": True, "count": 1, "error": ""}},
+        )
         out = bagholder.filings_payload("SHOP", refresh=True)
         self.assertTrue(out["ok"])
         self.assertTrue(out["available"])
         self.assertTrue(out["refreshed"])
-        self.assertEqual(out["profileNo"], "000026091")
-        self.assertEqual(len(out["filings"]), 4)
+        self.assertEqual(len(out["filings"]), 2)
+        self.assertEqual(out["profileNo"], "000037100", "the SEDAR+ profile is remembered from the items")
+        self.assertEqual(set(out["sources"]), {"SEDAR+", "SEC"})
+        self.assertIn("Financials", out["categories"])
 
-    def test_payload_reports_when_the_source_is_unavailable(self):
-        sedar.available = lambda: False
+    def test_only_one_source_matches(self):
+        self.stub(
+            [item("SEC", i=1)],
+            {"SEDAR+": {"available": True, "matched": False, "count": 0, "error": ""},
+             "SEC": {"available": True, "matched": True, "count": 1, "error": ""}},
+        )
         out = bagholder.filings_payload("NVDA", refresh=True)
+        self.assertEqual([r["source"] for r in out["filings"]], ["SEC"])
+        self.assertTrue(out["sources"]["SEC"]["matched"])
+        self.assertFalse(out["sources"]["SEDAR+"]["matched"])
+
+    def test_all_sources_unreachable_is_reported(self):
+        self.stub([], {"SEDAR+": {"available": False, "matched": False, "count": 0, "error": "curl_cffi missing"},
+                       "SEC": {"available": False, "matched": False, "count": 0, "error": "network"}})
+        out = bagholder.filings_payload("SHOP", refresh=True)
         self.assertTrue(out["ok"], "the endpoint still answers cleanly")
-        self.assertFalse(out["available"])
         self.assertTrue(out["sourceUnavailable"])
         self.assertEqual(out["filings"], [])
-
-    def test_a_missing_profile_leaves_an_empty_but_stamped_result(self):
-        sedar.available = lambda: True
-        def raise_notfound(query=None, profile_no=None, limit=100):
-            raise sedar.ProfileNotFound("no match")
-        sedar.list_filings = raise_notfound
-        out = bagholder.filings_payload("ZZZZ", refresh=True)
-        self.assertTrue(out["ok"])
-        self.assertEqual(out["filings"], [])
-        self.assertTrue(store.filings_fetched_at("ZZZZ"), "the attempt is stamped so it is not retried every open")
 
     def test_empty_symbol_is_rejected(self):
         self.assertFalse(bagholder.filings_payload("")["ok"])

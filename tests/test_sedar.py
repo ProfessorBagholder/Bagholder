@@ -151,36 +151,48 @@ class NavigationHelpersTest(unittest.TestCase):
 
 class McpServerTest(unittest.TestCase):
     def setUp(self):
-        import sedar_mcp
-        self.mcp = sedar_mcp
+        import disclosures_mcp
+        self.mcp = disclosures_mcp
 
     def test_initialize_reports_the_protocol_and_tool_capability(self):
         r = self.mcp._handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         self.assertEqual(r["result"]["protocolVersion"], self.mcp.PROTOCOL_VERSION)
         self.assertIn("tools", r["result"]["capabilities"])
-        self.assertEqual(r["result"]["serverInfo"]["name"], "sedar")
+        self.assertEqual(r["result"]["serverInfo"]["name"], "disclosures")
 
     def test_initialized_notification_gets_no_response(self):
         self.assertIsNone(self.mcp._handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
 
-    def test_tools_list_offers_the_four_filing_tools(self):
+    def test_tools_list_offers_the_disclosure_tools(self):
         r = self.mcp._handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = {t["name"] for t in r["result"]["tools"]}
-        self.assertEqual(names, {"sedar_resolve_profile", "sedar_list_filings", "sedar_newest", "sedar_download"})
+        self.assertEqual(names, {"disclosures_list", "disclosures_document", "sedar_resolve_profile"})
         for tool in r["result"]["tools"]:
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"])
 
-    def test_a_call_without_the_dependency_is_a_clean_tool_error(self):
+    def test_resolve_without_the_sedar_dependency_is_a_clean_tool_error(self):
         saved = sedar._cffi
         try:
             sedar._cffi = None
             r = self.mcp._handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                                  "params": {"name": "sedar_list_filings", "arguments": {"query": "Shopify"}}})
+                                  "params": {"name": "sedar_resolve_profile", "arguments": {"query": "Shopify"}}})
             payload = json.loads(r["result"]["content"][0]["text"])
             self.assertIn("curl_cffi", payload["error"])
         finally:
             sedar._cffi = saved
+
+    def test_disclosures_list_calls_the_pipeline(self):
+        import disclosures
+        saved = disclosures.fetch
+        try:
+            disclosures.fetch = lambda symbol, name="", exchange="", currency="", limit=100: {"items": [{"id": "sec:1", "source": "SEC"}], "sources": {}}
+            r = self.mcp._handle({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                                  "params": {"name": "disclosures_list", "arguments": {"symbol": "NVDA"}}})
+            payload = json.loads(r["result"]["content"][0]["text"])
+            self.assertEqual(payload["items"][0]["id"], "sec:1")
+        finally:
+            disclosures.fetch = saved
 
     def test_an_unknown_method_returns_a_json_rpc_error(self):
         r = self.mcp._handle({"jsonrpc": "2.0", "id": 4, "method": "no/such"})

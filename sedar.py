@@ -32,6 +32,8 @@ import threading
 import time
 from urllib.parse import urlencode
 
+import disclosures as D
+
 try:
     from curl_cffi import requests as _cffi
 except Exception:  # pragma: no cover - the optional dependency is simply absent
@@ -46,7 +48,7 @@ SEARCH_LIMIT = 100           # rows asked for in one document search
 UA_NOTE = "Bagholder, on-demand, for the account holder's own research"
 
 
-class SedarUnavailable(Exception):
+class SedarUnavailable(D.SourceUnavailable):
     """The site could not be reached or curl_cffi is not installed."""
 
 
@@ -518,17 +520,16 @@ def _is_document(response):
     return body.lstrip()[:1] != b"<"
 
 
-def download(profile_no, doc_id, dest, name=None):
-    """Download one of a profile's documents to `dest`, matched by its id (the
-    `drm:…` id from a filing row, stable across sessions). Because a document URL
-    dies with the session that produced it, this re-runs the profile's document
-    search and fetches the matching row live. Returns (path, content_type, bytes)."""
-    key = doc_id.split(":", 1)[-1] if doc_id else ""
+def _download_bytes(profile_no, doc_id, name=None):
+    """The core download: re-scope to the profile, match the document by its drmKey,
+    fetch it in that live session. Returns (bytes, content_type). A document URL is
+    session-bound, so the URL is re-minted here rather than reused from storage."""
+    key = (doc_id or "").split(":")[-1]   # accepts "drm:…", "sedar:drm:…" or a bare drmKey
     with _lock:
         html = _scoped_documents(profile_no, name)
         if html is None:
             raise SedarUnavailable("could not open the profile's documents to download from")
-        row = next((f for f in parse_filings(html) if f["id"] == doc_id or (key and key in f["url"])), None)
+        row = next((f for f in parse_filings(html) if key and key in f["url"]), None)
         if not row:
             raise ProfileNotFound("no document %r in profile %s" % (doc_id, profile_no))
         try:
@@ -538,9 +539,85 @@ def download(profile_no, doc_id, dest, name=None):
             raise SedarUnavailable("document fetch failed: %s" % e)
     if not _is_document(r):
         raise SedarUnavailable("document did not download (status %s)" % r.status_code)
+    return r.content, r.headers.get("content-type", "application/pdf")
+
+
+def download(profile_no, doc_id, dest, name=None):
+    """Download one of a profile's documents to `dest`, matched by its id (the
+    `drm:…` id from a filing row). Returns (path, content_type, bytes)."""
+    data, ct = _download_bytes(profile_no, doc_id, name)
     with open(dest, "wb") as fh:
-        fh.write(r.content)
-    return dest, r.headers.get("content-type", "application/pdf"), len(r.content)
+        fh.write(data)
+    return dest, ct, len(data)
+
+
+# --------------------------------------------------------------------------- #
+# Provider interface (see disclosures.py)
+# --------------------------------------------------------------------------- #
+SOURCE = "SEDAR+"
+CA_EXCHANGES = {"TSX", "TSXV", "TSX-V", "TSXV", "CSE", "CNSX", "NEO", "NEO EXCHANGE",
+                "CBOE CANADA", "AQL", "TSX VENTURE", "CANADIAN SECURITIES EXCHANGE"}
+
+
+def covers(symbol, exchange="", currency=""):
+    """SEDAR+ applies to Canadian listings. A US listing (currency USD) is left to
+    EDGAR; anything Canadian, or of unknown venue in CAD, is ours."""
+    ex = (exchange or "").upper()
+    cur = (currency or "").upper()
+    if cur == "USD" or ex in ("NASDAQ", "NYSE", "AMEX", "ARCA", "US"):
+        return False
+    return cur == "CAD" or ex in CA_EXCHANGES or (not ex and not cur)
+
+
+def _sedar_category(file):
+    """Map a SEDAR+ document name to the shared category vocabulary."""
+    f = (file or "").lower()
+    if "news release" in f or "press release" in f:
+        return D.NEWS
+    if any(k in f for k in ("md&a", "financial statement", "annual report", "interim", "certification", "52-109", "financial report")):
+        return D.FINANCIALS
+    if "material change" in f:
+        return D.EVENTS
+    if any(k in f for k in ("circular", "proxy", "voting results", "meeting", "information circular")):
+        return D.GOVERNANCE
+    if any(k in f for k in ("prospectus", "offering", "45-106", "exempt distribution", "45-102", "rights offering", "45-108")):
+        return D.OFFERINGS
+    if any(k in f for k in ("insider", "early warning", "45-101", "issuer bid")):
+        return D.INSIDER
+    return D.OTHER
+
+
+def _to_item(raw, profile_no):
+    return {
+        "id": "sedar:" + raw.get("id", ""),
+        "source": SOURCE,
+        "category": _sedar_category(raw.get("file")),
+        "date": raw.get("submittedAt") or "",
+        "dateText": raw.get("submitted") or "",
+        "type": raw.get("file") or "",
+        "title": "",
+        "size": raw.get("size") or "",
+        "url": raw.get("url") or "",
+        "issuer": raw.get("issuer") or "",
+        "profileNo": raw.get("profileNo") or profile_no or "",
+    }
+
+
+def fetch(symbol, name="", exchange="", currency="", limit=SEARCH_LIMIT):
+    """One Canadian issuer's SEDAR+ filings as normalized disclosure items. Resolves
+    the issuer from its name (or the bare symbol); returns [] when none matches."""
+    try:
+        result = list_filings(query=(name or symbol), limit=limit)
+    except ProfileNotFound:
+        return []
+    profile_no = (result.get("profile") or {}).get("profileNo") or ""
+    return [_to_item(r, profile_no) for r in result.get("filings") or []]
+
+
+def document(row):
+    """Download one SEDAR+ document named by a stored row (its id and profileNo).
+    Returns (bytes, content_type)."""
+    return _download_bytes((row or {}).get("profileNo") or "", (row or {}).get("id") or "", (row or {}).get("issuer"))
 
 
 # --------------------------------------------------------------------------- #
