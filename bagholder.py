@@ -688,7 +688,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.28.0"
+APP_VERSION = "1.29.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -719,7 +719,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.5"
+PROTOCOL = "2026-09-14.6"
 ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5773,8 +5773,19 @@ def filings_payload(symbol, refresh=False, name=None, exchange=None, currency=No
         "fetchedAt": store.filings_fetched_at(sym),
         "refreshed": bool(wrote and wrote > 0),
         "sourceUnavailable": wrote == -1,
-        "filings": store.filings(sym),
+        "filings": _fresh_filings(sym),
     }
+
+
+def _fresh_filings(sym):
+    """The stored filings, but with the title/summary of any row enriched by an older
+    logic version blanked, so the page treats it as unread and re-reads it once (the
+    server re-enriches it under the current logic on that read)."""
+    rows = store.filings(sym)
+    for r in rows:
+        if (r.get("enrichVersion") or 0) < ENRICH_VERSION:
+            r["subject"], r["summary"] = "", ""
+    return rows
 
 
 def filings_document(symbol, doc_id):
