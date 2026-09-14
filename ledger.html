@@ -1493,6 +1493,8 @@ function replacePanel(id, html) {
   if (old) old.querySelectorAll("[data-keep-scroll]").forEach((el) => { _keptScroll[el.dataset.keepScroll] = { top: el.scrollTop, left: el.scrollLeft }; });
   const tmp = document.createElement("div"); tmp.innerHTML = html;
   const fresh = tmp.firstElementChild;
+  // a panel redrawn in place (a tab switched, the list re-read) is not arriving: no entrance again
+  if (old) fresh.classList.add("bh-noanim");
   if (old) old.replaceWith(fresh); else document.getElementById("app").appendChild(fresh);
   fresh.querySelectorAll("[data-keep-scroll]").forEach((el) => { const k = _keptScroll[el.dataset.keepScroll]; if (k) { el.scrollTop = k.top; el.scrollLeft = k.left; } });
 }
@@ -1684,26 +1686,31 @@ function bracketLegs(b) {
   const done = b.status === "done", off = b.status === "cancelled" || b.status === "failed";
   const cancelling = (role) => (state.orders && state.orders.orders || []).some((o) => o.parentId === b.orderId && o.role === role && o.status === "cancelling");
   const amount = (price) => price && b.quantity ? money(b.quantity * price * mult, "", 2) : "";
+  // the exit that ended the bracket reads how it went, as a filled order's card does, its amount what it filled for
+  const exited = (role) => (state.orders && state.orders.orders || []).find((o) => o.parentId === b.orderId && o.role === role && o.status === "filled") || null;
+  const went = (o) => ({ line: "Filled " + qty(o.filledQty || b.quantity) + (o.avgFill ? " at " + px(o.avgFill) : ""), amount: o.avgFill ? money((o.filledQty || b.quantity) * o.avgFill * mult, "", 2) : "" });
   if (b.slKind) {
-    const line = qty(b.quantity) + " at " + px(b.slPrice) + (b.slKind === "trail" ? " · trailing " + (b.slTrailUnit === "amt" ? px(b.slTrail) : tkPlain(b.slTrail) + "%") : "");
+    let line = qty(b.quantity) + " at " + px(b.slPrice) + (b.slKind === "trail" ? " · trailing " + (b.slTrailUnit === "amt" ? px(b.slTrail) : tkPlain(b.slTrail) + "%") : "");
+    let amt = amount(b.slPrice);
     let note = "";
     if (b.status === "armed" || b.status === "firing") note = b.slMode === "watched" ? "" : stopOrder && stopOrder.status === "cancelling" ? "Cancelling" : stopOrder && ORDER_LIVE[stopOrder.status] ? "" : b.attempts ? "Retrying · " + (b.error || "") : "Placing";
     else if (b.status === "stopping") note = b.attempts ? "Retrying · " + (b.error || "") : "Placing";
     else if (b.status === "closing") note = b.outcome === "stopped" ? "Filled" : stopOrder || cancelling("stop") ? "Cancelling" : "Cancelled";
-    else if (done) note = b.outcome === "stopped" ? "Filled" : "Cancelled";
+    else if (done) { const f = b.outcome === "stopped" ? exited("stop") : null; if (f) { const w = went(f); line = w.line; amt = w.amount; } else note = b.outcome === "stopped" ? "Filled" : "Cancelled"; }
     else if (off) note = b.status === "failed" ? "Failed" : "Off";
-    legs.push({ key: "sl", label: "Stop loss", tone: "neg", line, amount: amount(b.slPrice), note, text: "Stop loss " + line });
+    legs.push({ key: "sl", label: "Stop loss", tone: "neg", line, amount: amt, note, text: "Stop loss " + line });
   }
   if (b.tpPrice) {
-    const line = qty(b.quantity) + " at " + px(b.tpPrice);
+    let line = qty(b.quantity) + " at " + px(b.tpPrice);
+    let amt = amount(b.tpPrice);
     let note = "";
     if (b.status === "armed" || b.status === "firing") note = b.status === "firing" && b.attempts ? "Retrying · " + (b.error || "") : "";
     else if (b.status === "target_placed") note = tpOrder && tpOrder.status === "filled" ? "Filled" : b.tpOrderId ? "" : b.attempts ? "Retrying · " + (b.error || "") : "Placing";
     else if (b.status === "stopping") note = "Cancelling";
     else if (b.status === "closing") note = b.outcome === "target" ? "Filled" : cancelling("target") ? "Cancelling" : "Cancelled";
-    else if (done) note = b.outcome === "target" ? "Filled" : "Cancelled";
+    else if (done) { const f = b.outcome === "target" ? exited("target") : null; if (f) { const w = went(f); line = w.line; amt = w.amount; } else note = b.outcome === "target" ? "Filled" : "Cancelled"; }
     else if (off) note = b.status === "failed" ? "Failed" : "Off";
-    legs.push({ key: "tp", label: "Take profit", tone: "pos", line, amount: amount(b.tpPrice), note, text: "Take profit " + line });
+    legs.push({ key: "tp", label: "Take profit", tone: "pos", line, amount: amt, note, text: "Take profit " + line });
   }
   return legs;
 }
@@ -1776,10 +1783,20 @@ function bracketCardHtml(b) {
   // no second row: the legs say it all, each with its amount under the position's cost at the right
   const value = entry && entry.avgFill ? money(b.quantity * entry.avgFill * orderMultiplier(entry), "", 2) : "";
   const editing = state.bracketEdit && state.bracketEdit.id === b.id;
+  const live = !!BRACKET_LIVE[b.status];
+  // the tab already says filled; only the ended tab has a state worth a word
+  const ended = !live && state.ordersTab === "cancelled" ? bracketEndWord(b) : null;
   return '<div class="od-card"><div class="od-row1"><span class="od-title"><span style="color:var(--accent-300)">Bracket</span> ' + title.slice(8) + '</span><span class="od-value num">' + value + "</span></div>" +
     bracketLegsHtml(b) + (editing ? bracketEditorHtml(b) : "") +
-    cardFootHtml(orderWhenWord(b.armedAt || b.createdAt), BRACKET_LIVE[b.status] && !editing, "bracketEdit", { id: b.id }, true, "cancelBracket", { id: b.id }) + "</div>";
+    cardFootHtml(orderWhenWord(live ? b.armedAt || b.createdAt : b.updatedAt || b.armedAt || b.createdAt), live && !editing, "bracketEdit", { id: b.id }, true, "cancelBracket", { id: b.id }, ended) + "</div>";
 }
+// how an armed bracket ended without exiting: by the person's hand, or with the position gone from under it
+function bracketEndWord(b) {
+  if (b.status === "failed") return ["Failed", "neg"];
+  return b.outcome === "cancelled by the user" || b.outcome === "both legs removed" ? ["Cancelled", ""] : ["Off", ""];
+}
+// an armed bracket that is over: with an exit of its own filled it is the sell that closed the position, else it ended without one
+function bracketExited(b) { return b.status === "done" && (b.outcome === "stopped" || b.outcome === "target"); }
 function cancelBracketNow(id) {
   const b = (state.orders && state.orders.brackets || []).find((x) => x.id === id);
   state.busy = "cancel"; render();
@@ -1823,16 +1840,22 @@ function ordersBodyHtml() {
   if (!data && state.ordersError) return '<div class="status-err" style="font-size:12px">' + esc(state.ordersError) + "</div>";
   if (!data) return '<div class="dim" style="font-size:12px"><span class="spin"></span>Loading…</div>';
   const entries = data.orders.filter((o) => o.role !== "stop" && o.role !== "target" && inOrdersScope(o.account));
-  const newest = (a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0);
   const head = (label) => '<div class="od-head"><span class="od-group">' + label + '</span><span class="od-scope">' + esc(ordersScopeLabel()) + "</span></div>";
   const tab = state.ordersTab;
+  // a bracket that was armed and is over keeps its card: dated when it ended, among the orders newest first
+  const endedBrackets = (data.brackets || []).filter((b) => b.armedAt && !BRACKET_LIVE[b.status] && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.account); })());
+  const mixed = (rows, brackets) => rows.map((o) => ({ at: o.createdAt, html: orderCardHtml(o) }))
+    .concat(brackets.map((b) => ({ at: b.updatedAt || b.armedAt, html: bracketCardHtml(b) })))
+    .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).map((c) => c.html).join("");
   if (tab === "filled") {
-    const rows = entries.filter((o) => o.status === "filled").sort(newest);
-    return head("Filled orders") + (rows.length ? rows.map(orderCardHtml).join("") : '<div class="dim" style="font-size:12px">Nothing filled yet.</div>');
+    const rows = entries.filter((o) => o.status === "filled");
+    const exits = endedBrackets.filter(bracketExited);
+    return head("Filled orders") + (rows.length || exits.length ? mixed(rows, exits) : '<div class="dim" style="font-size:12px">Nothing filled yet.</div>');
   }
   if (tab === "cancelled") {
-    const rows = entries.filter((o) => ["cancelled", "expired", "rejected", "failed", "dry"].indexOf(o.status) >= 0).sort(newest);
-    return head("Cancelled and rejected") + (rows.length ? rows.map(orderCardHtml).join("") : '<div class="dim" style="font-size:12px">Nothing cancelled or rejected.</div>');
+    const rows = entries.filter((o) => ["cancelled", "expired", "rejected", "failed", "dry"].indexOf(o.status) >= 0);
+    const offs = endedBrackets.filter((b) => !bracketExited(b));
+    return head("Cancelled and rejected") + (rows.length || offs.length ? mixed(rows, offs) : '<div class="dim" style="font-size:12px">Nothing cancelled or rejected.</div>');
   }
   // Pending: the orders resting at Wealthsimple, and each armed bracket as a card of its own, newest first together
   const cards = entries.filter((o) => ORDER_LIVE[o.status]).map((o) => ({ at: o.createdAt, html: orderCardHtml(o) }))
