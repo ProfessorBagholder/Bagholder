@@ -56,9 +56,22 @@ class ProfileNotFound(Exception):
     """No SEDAR+ reporting-issuer profile matched the query."""
 
 
+def _ensure_cffi():
+    """The curl_cffi requests module, importing it lazily so a copy installed after
+    startup (deps.py provisions it in the background) is picked up without a restart."""
+    global _cffi
+    if _cffi is None:
+        try:
+            from curl_cffi import requests as mod
+            _cffi = mod
+        except Exception:
+            _cffi = None
+    return _cffi
+
+
 def available():
     """True when the optional dependency that clears the bot gate is installed."""
-    return _cffi is not None
+    return _ensure_cffi() is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -78,9 +91,10 @@ def _pace():
 
 
 def _new_session():
-    if _cffi is None:
+    cffi = _ensure_cffi()
+    if cffi is None:
         raise SedarUnavailable("curl_cffi is not installed; run: pip install curl_cffi")
-    return _cffi.Session(impersonate=IMPERSONATE)
+    return cffi.Session(impersonate=IMPERSONATE)
 
 
 def _get_session():

@@ -102,8 +102,8 @@ class CliTest(unittest.TestCase):
     def test_a_missing_dependency_is_reported_as_json_not_a_traceback(self):
         # Run the CLI with curl_cffi forced absent; it must answer with a clean JSON error.
         script = (
-            "import sedar; sedar._cffi = None;"
-            "import sys; raise SystemExit(sedar._main(['filings', 'Shopify']))"
+            "import sys; sys.modules['curl_cffi'] = None;"   # force the import to fail
+            "import sedar; raise SystemExit(sedar._main(['filings', 'Shopify']))"
         )
         r = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
@@ -172,8 +172,11 @@ class McpServerTest(unittest.TestCase):
             self.assertTrue(tool["description"])
 
     def test_resolve_without_the_sedar_dependency_is_a_clean_tool_error(self):
-        saved = sedar._cffi
+        import sys as _sys
+        saved, had = sedar._cffi, ("curl_cffi" in _sys.modules)
+        prev = _sys.modules.get("curl_cffi")
         try:
+            _sys.modules["curl_cffi"] = None   # force the lazy import to fail
             sedar._cffi = None
             r = self.mcp._handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                   "params": {"name": "sedar_resolve_profile", "arguments": {"query": "Shopify"}}})
@@ -181,6 +184,10 @@ class McpServerTest(unittest.TestCase):
             self.assertIn("curl_cffi", payload["error"])
         finally:
             sedar._cffi = saved
+            if had:
+                _sys.modules["curl_cffi"] = prev
+            else:
+                _sys.modules.pop("curl_cffi", None)
 
     def test_disclosures_list_calls_the_pipeline(self):
         import disclosures
