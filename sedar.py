@@ -131,6 +131,37 @@ def _form_fields(html):
     return out
 
 
+_VI_PARAM_RE = re.compile(r'<input\b([^>]*class="[^"]*viewInstanceFormParameter[^"]*"[^>]*)>', re.I)
+
+
+def _vi_params(html):
+    """The form's hidden viewInstanceFormParameter inputs, which every callback carries."""
+    out = []
+    for m in _VI_PARAM_RE.finditer(html):
+        name = _NAME_RE.search(m.group(1))
+        val = _VALUE_RE.search(m.group(1))
+        if name:
+            out.append((name.group(1), _html.unescape(val.group(1)) if val else ""))
+    return out
+
+
+# The primary search trigger on a Catalyst list page: either an <… appSearchButton …>
+# (the document search) or an <… id="node…-searchButton" …> (the reporting-issuer
+# list). Its onclick names the callback node, the callback name (buttonPush or
+# fireOnChange) and the async container node. Discovered per page, since the ids
+# differ from one service to the next.
+_SEARCH_ACTION_RE = re.compile(
+    r'(?:appSearchButton|-searchButton)[^>]*?onclick="[^"]*?cat\w*Callback\(\'(W\d+)\',\'(\w+)\'[^"]*?containerNodeId:\'(W\d+)\'',
+    re.S,
+)
+
+
+def _search_action(page):
+    """(node, name, container) for a page's Search control, or None."""
+    m = _SEARCH_ACTION_RE.search(page)
+    return (m.group(1), m.group(2), m.group(3)) if m else None
+
+
 class _View:
     """One opened service instance: its page, ids and session headers."""
 
@@ -174,11 +205,18 @@ class _View:
             h["X-Requested-With"] = "XMLHttpRequest"
         return h
 
-    def callback(self, node, name, value=None, extra=None, container=None, html=None):
+    def callback(self, node, name, value=None, extra=None, container=None, json_frag=False, html=None):
         """Post the form back with one callback. `container` set means an async
-        HTML-fragment update (a search or a page change); otherwise a full-page
-        callback (a selection). Returns the response text."""
-        data = _form_fields(html if html is not None else self.page)
+        HTML-fragment update (a search or a page change); `json_frag` a JSON
+        autocomplete reply; otherwise a full-page callback (a selection). Fields in
+        `extra` override the form's own values of the same name. Returns the text."""
+        extra = dict(extra or {})
+        if json_frag:
+            # A JSON fragment callback carries only the view's hidden parameters,
+            # not the whole form (that is how the site's own autocomplete posts).
+            data = _vi_params(html if html is not None else self.page)
+        else:
+            data = [(k, v) for k, v in _form_fields(html if html is not None else self.page) if k not in extra]
         data += [("_CBNODE_", node), ("_CBNAME_", name), ("_VIKEY_", self.key)]
         if value is not None:
             data.append(("_CBVALUE_", value))
@@ -189,13 +227,15 @@ class _View:
                 ("_CBHTMLFRAGNODEID_", container),
                 ("_CBASYNCUPDATE_", "true"),
             ]
-        for k, v in (extra or {}).items():
+        if json_frag:
+            data.append(("_CBJSONFRAG_", "true"))
+        for k, v in extra.items():
             data.append((k, v))
         _pace()
         try:
             r = _get_session().post(
                 "%s/%s/viewInstance/update.html?id=%s" % (BASE, self.app, self.inst),
-                data=urlencode(data), headers=self._headers(bool(container)), timeout=TIMEOUT,
+                data=urlencode(data), headers=self._headers(bool(container) or json_frag), timeout=TIMEOUT,
             )
         except Exception as e:
             raise SedarUnavailable("callback %s/%s failed: %s" % (node, name, e))
@@ -332,13 +372,11 @@ def resolve_profile(query):
         raise ProfileNotFound("empty query")
     with _lock:
         view = _View("searchReportingIssuers")
-        btn = re.search(r"cat\w*Callback\('(W\d+)','buttonPush'", view.page)
-        cont = re.search(r"containerSelector:'#AsyncWrapper(W\d+)'", view.page)
-        html = view.callback(
-            btn.group(1) if btn else "W249", "buttonPush",
-            extra={"QueryString": q},
-            container=cont.group(1) if cont else "W122",
-        )
+        action = _search_action(view.page)
+        if not action:
+            raise SedarUnavailable("could not find the reporting-issuer search control on the page")
+        node, name, container = action
+        html = view.callback(node, name, extra={"QueryString": q}, container=container)
     rows = parse_reporting_issuers(html)
     if not rows:
         raise ProfileNotFound("no SEDAR+ profile matched %r" % q)
@@ -349,41 +387,74 @@ def resolve_profile(query):
 
 def list_filings(query=None, profile_no=None, limit=SEARCH_LIMIT):
     """Filings for one issuer, resolving the issuer from `query` when no profile
-    number is given. Returns {"profile": {...}, "filings": [...]}.
+    number is given. Returns {"profile": {...}, "filings": [...], "scoped": bool}.
 
     When neither is given, returns the newest filings across SEDAR+ (the search
-    page's default view)."""
+    page's default view). `scoped` is False when the issuer could be resolved but
+    the document search could not be constrained to it; the filings list is then
+    only what the default view holds for that profile, which may be empty."""
     profile = None
     if not profile_no and query:
         matches = resolve_profile(query)
         profile = matches[0]
         profile_no = profile["profileNo"]
+    scoped = True
     with _lock:
         view = _View("searchDocuments")
         html = view.page
         if profile_no:
-            html = _scope_to_profile(view, profile_no) or html
+            scoped_html = _scope_to_profile(view, profile_no, name=(profile or {}).get("name"))
+            if scoped_html is None:
+                scoped = False
+            else:
+                html = scoped_html
     filings = parse_filings(html)
     if profile_no:
         filings = [f for f in filings if not f["profileNo"] or f["profileNo"] == profile_no]
     return {
         "profile": profile or ({"profileNo": profile_no} if profile_no else None),
+        "scoped": scoped if profile_no else None,
         "filings": filings[: max(1, int(limit))],
     }
 
 
-def _scope_to_profile(view, profile_no):
+_AC_ITEM = re.compile(r'"id"\s*:\s*"([^"]+)"')
+
+
+def _scope_to_profile(view, profile_no, name=None):
     """Constrain the open document search to one profile, then run it. Returns the
-    result HTML, or None if the scoped search could not be built (the caller then
-    falls back to the page's default, filtering by profile number)."""
+    result HTML, or None if the search could not be scoped.
+
+    The document search filters by a profile chosen through an autocomplete: a
+    JSON lookup by name or number yields an internal id, which is then selected and
+    the search run. The nine-digit profile number is not that id, so the lookup is
+    the way in."""
     try:
-        sel = view.callback("W724", "serviceLookupSelected", value=profile_no, extra={"nodeW724ac": profile_no})
+        item_id = None
+        for term in (profile_no, name):
+            if not term:
+                continue
+            js = view.callback("W724", "serviceLookupSearch", value="search", extra={"q": term}, json_frag=True)
+            js = (js or "").strip()
+            if js and js not in ("null", "[]") and not js.startswith("<"):
+                # Prefer the item whose text carries this profile number.
+                block = None
+                for chunk in re.split(r'\}\s*,\s*\{', js):
+                    if profile_no in chunk:
+                        block = chunk
+                        break
+                m = _AC_ITEM.search(block) if block else _AC_ITEM.search(js)
+                if m:
+                    item_id = m.group(1)
+                    break
+        if not item_id:
+            return None
+        sel = view.callback("W724", "serviceLookupSelected", value=item_id, extra={"nodeW724ac": name or profile_no})
         if "viewInstanceForm" in sel and "unexpected system error" not in sel:
             view.page = sel
-        btn = re.search(r"cat\w*Callback\('(W\d+)','buttonPush'[^)]*appSearchButton", view.page) or re.search(r'id="(W\d+)"[^>]*appSearchButton', view.page)
-        cont = re.search(r"containerSelector:'#AsyncWrapper(W\d+)'", view.page)
-        node = btn.group(1) if btn else "W766"
-        return view.callback(node, "buttonPush", container=cont.group(1) if cont else "W706")
+        action = _search_action(view.page) or ("W766", "buttonPush", "W706")
+        node, cbname, container = action
+        return view.callback(node, cbname, container=container)
     except SedarUnavailable:
         return None
 
