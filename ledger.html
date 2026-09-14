@@ -111,9 +111,16 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .dc-doc span{font-size:12px;color:var(--ink60)}
 .dc-src{font-size:11.5px;font-weight:500;color:var(--accent-300);border:0;background:transparent;padding:0;font-family:var(--font);cursor:pointer;text-align:left}
 .dc-src:hover{color:var(--accent)}
-.dc-open{color:var(--ink55);visibility:hidden}
-.dc-row:hover .dc-open{visibility:visible}
-.dc-open.on{visibility:visible;color:var(--accent-300)}
+.dc-open{color:var(--ink55);visibility:hidden;border:0;background:transparent;padding:0;cursor:pointer;font:inherit;text-align:right}
+.dc-row:hover .dc-open,.dc-row.on .dc-open{visibility:visible}
+.dc-open:hover,.dc-open.lit{color:var(--accent-300)}
+.dc-subj{color:var(--ink);font-weight:400}
+.dc-doc b + .dc-subj{margin-left:2px}
+.dc-panel{margin:0 -16px;padding:2px 16px 12px;display:flex;flex-direction:column;gap:8px;background:rgba(var(--ink-rgb),.03);box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.05)}
+.dc-sum{font-size:12.5px;line-height:1.5;color:var(--ink);max-width:80ch}
+.dc-pmuted{font-size:12px;color:var(--ink55)}
+.dc-openbtn{align-self:flex-start;font:500 11.5px var(--font);color:var(--accent-300);background:transparent;border:0;padding:2px 0;cursor:pointer}
+.dc-openbtn:hover{color:var(--accent)}
 .dc-skel{height:11px;border-radius:4px;background:rgba(var(--ink-rgb),.08);animation:dcpulse 1.4s ease-in-out infinite}
 @keyframes dcpulse{0%,100%{opacity:.5}50%{opacity:.9}}
 .dc-sweep{position:relative;height:1px;margin:0 -16px;background:rgba(var(--ink-rgb),.08);overflow:hidden}
@@ -459,6 +466,7 @@ const state = {
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
+  discExpanded: null,   // the id of the disclosure row expanded to show its subject and summary
   heat: (function () { try { return Object.assign({ universe: "holdings", size: "value" }, JSON.parse(localStorage.getItem("bh2.heatmap") || "{}")); } catch (e) { return { universe: "holdings", size: "value" }; } })(),
   ordersTab: "pending",
   orderEdit: null,
@@ -484,7 +492,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.2"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -684,11 +692,14 @@ function loadTradeDetail(id) {
   _detailPending[id] = true;
   api("GET", "/api/trade?id=" + encodeURIComponent(id)).then((d) => {
     delete _detailPending[id];
-    const row = tradeById(id) || positionById(id);
-    if (!row || row.fills !== undefined) return;
-    row.legs = (d && d.ok) ? d.legs || [] : [];
-    row.fills = (d && d.ok) ? d.fills || [] : [];
-    if (state.sel === id) render();
+    // A holding can share its id with a trade; put the legs and fills on both so
+    // whichever the open view reads (the position for a holding, the trade for a
+    // trade) has them, rather than only the first one found.
+    const legs = (d && d.ok) ? d.legs || [] : [];
+    const fills = (d && d.ok) ? d.fills || [] : [];
+    let changed = false;
+    [tradeById(id), positionById(id)].forEach((row) => { if (row && row.fills === undefined) { row.legs = legs; row.fills = fills; changed = true; } });
+    if (changed && state.sel === id) render();
   });
 }
 function setFilters(patch) {
@@ -2313,6 +2324,21 @@ function refreshDisclosures(sym) {
   if (open && discSymbol(open) === sym) ensureDisclosures(open);
   render();
 }
+const _discEnrichLoading = {}, _discEnrichTried = {};
+function discFiling(sym, id) { const rec = _disc[sym]; return (rec && rec.payload ? rec.payload.filings : []).find((f) => f.id === id) || null; }
+function ensureDiscEnrich(sym, f) {
+  // read the document for its subject and (if a local model is up) a summary, once
+  if (!f || _discEnrichLoading[f.id] || f.summary) return;
+  if (_discEnrichTried[f.id]) return;
+  _discEnrichLoading[f.id] = true;
+  api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
+    delete _discEnrichLoading[f.id];
+    _discEnrichTried[f.id] = true;
+    if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; }
+    const open = state.sel && selById(state.sel);
+    if (open && discSymbol(open) === sym) render();
+  });
+}
 function discDate(item) {
   const iso = String(item.date || "").slice(0, 10);
   const d = new Date(iso + "T00:00:00");
@@ -2382,13 +2408,23 @@ function disclosuresCardHtml(t) {
     (state.discSource ? '<span class="chip"><span class="cf">Source</span><span class="cv" style="cursor:default">' + esc(state.discSource) + '</span><button class="cx" data-act="discSourceClear" aria-label="Show every source">×</button></span>' : "");
   const rightText = [(!multiSource && !state.discSource && oneSource) ? oneSource : "", p.fetchedAt ? "read " + relTime(p.fetchedAt) : ""].filter(Boolean).join(" · ");
 
-  const row = (f) => '<div class="dc-row" data-act="discOpen" data-arg=\'' + attr({ id: f.id, sym, source: f.source, url: f.url }) + '\' style="grid-template-columns:' + tmpl + '">' +
-    '<div style="font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(discDate(f)) + "</div>" +
-    '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + (f.title ? " <span>" + esc(f.title) + "</span>" : "") + "</div>" +
-    (multiCat ? '<div style="font-size:11.5px;color:var(--ink60)">' + esc(f.category) + "</div>" : "") +
-    (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
-    (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums">' + esc(f.size || "") + "</div>" : "") +
-    '<div class="dc-open' + (state.discOpening === f.id ? " on" : "") + '">' + (state.discOpening === f.id ? '<span style="font-size:11px">Opening…</span>' : "↗") + "</div></div>";
+  const openArg = (f) => attr({ id: f.id, sym, source: f.source, url: f.url });
+  const row = (f) => {
+    const exp = state.discExpanded === f.id;
+    const subj = f.subject ? ' <span class="dc-subj">· ' + esc(f.subject) + "</span>" : "";
+    const r = '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
+      '<div style="font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(discDate(f)) + "</div>" +
+      '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + subj + (f.title ? ' <span>' + esc(f.title) + "</span>" : "") + "</div>" +
+      (multiCat ? '<div style="font-size:11.5px;color:var(--ink60)">' + esc(f.category) + "</div>" : "") +
+      (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
+      (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums">' + esc(f.size || "") + "</div>" : "") +
+      '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";
+    if (!exp) return r;
+    const loading = _discEnrichLoading[f.id];
+    const body = loading ? '<div class="dc-pmuted">Reading the document…</div>' : (f.summary ? '<div class="dc-sum">' + esc(f.summary) + "</div>" : "");
+    return r + '<div class="dc-panel">' + body +
+      '<button class="dc-openbtn" data-act="discOpen" data-arg=\'' + openArg(f) + '\'>Open document ↗</button></div>';
+  };
 
   return _discCard(_discHeader(sym, mid, rightText ? '<span>' + esc(rightText) + "</span>" : "") +
     '<div class="dc-head" style="grid-template-columns:' + tmpl + '">' + gridTh("disc", cols) + "<div></div></div>" +
@@ -3411,6 +3447,7 @@ function openTrade(id) {
   state.tagDraft = "";
   state.discSource = null;
   state.discOpening = null;
+  state.discExpanded = null;
   state.page = "trades";
   state.picker = null;
   location.hash = "trades/" + encodeURIComponent(id);
@@ -3423,6 +3460,7 @@ function openHolding(id) {
   state.tagDraft = "";
   state.discSource = null;
   state.discOpening = null;
+  state.discExpanded = null;
   state.page = "portfolio";
   state.picker = null;
   location.hash = "portfolio/" + encodeURIComponent(id);
@@ -3584,6 +3622,7 @@ function act(name, arg, ev) {
     case "heatOpen": openHolding(arg.id); break;
     case "newsSym": state.newsSymbol = { symbol: arg.symbol, exchange: arg.exchange }; render(); break;
     case "newsSymClear": state.newsSymbol = null; render(); break;
+    case "discExpand": { const open = state.sel && selById(state.sel); const dsym = open ? discSymbol(open) : ""; state.discExpanded = state.discExpanded === arg.id ? null : arg.id; if (state.discExpanded && dsym) ensureDiscEnrich(dsym, discFiling(dsym, arg.id)); render(); break; }
     case "discCat": state.discCat = arg.cat; render(); break;
     case "discSource": state.discSource = arg.source; render(); break;
     case "discSourceClear": state.discSource = null; render(); break;

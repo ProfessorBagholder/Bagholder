@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -474,6 +474,9 @@ def _init_schema(conn):
             date_text TEXT,
             size TEXT,
             url TEXT,
+            subject TEXT,
+            summary TEXT,
+            enriched_at TEXT,
             fetched_at TEXT,
             PRIMARY KEY (symbol, id)
         );
@@ -2977,7 +2980,7 @@ def _ensure_filings_columns(conn):
         return
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(filings)").fetchall()}
     for col, typ in (("source", "TEXT"), ("category", "TEXT"), ("type", "TEXT"), ("title", "TEXT"),
-                     ("date", "TEXT"), ("date_text", "TEXT")):
+                     ("date", "TEXT"), ("date_text", "TEXT"), ("subject", "TEXT"), ("summary", "TEXT"), ("enriched_at", "TEXT")):
         if col not in cols:
             conn.execute("ALTER TABLE filings ADD COLUMN %s %s" % (col, typ))
     # the old columns `file`/`submitted`/`submitted_at` are left in place but unused;
@@ -2991,7 +2994,8 @@ def _filing_from_row(r):
             "profileNo": get("profile_no"), "issuer": get("issuer"),
             "type": get("type") or get("file"), "title": get("title"),
             "date": get("date") or get("submitted_at"), "dateText": get("date_text") or get("submitted"),
-            "size": get("size"), "url": get("url"), "fetchedAt": get("fetched_at")}
+            "size": get("size"), "url": get("url"), "subject": get("subject"), "summary": get("summary"), "enrichedAt": get("enriched_at"),
+            "fetchedAt": get("fetched_at")}
 
 
 def filings(symbol=None):
@@ -3020,6 +3024,25 @@ def filing(symbol, doc_id):
             _ready(conn)
             r = conn.execute("SELECT * FROM filings WHERE symbol = ? AND id = ?", (filing_key(symbol), _s(doc_id))).fetchone()
             return _filing_from_row(r) if r else None
+        finally:
+            conn.close()
+
+
+def set_filing_enrichment(symbol, doc_id, subject=None, summary=None):
+    """Persist a document's read subject and/or summary on its row (a filing never
+    changes, so this is cached for good). Missing values are left as they were."""
+    sets, args = ["enriched_at = ?"], [_now_iso()]
+    if subject is not None:
+        sets.append("subject = ?"); args.append(_s(subject))
+    if summary is not None:
+        sets.append("summary = ?"); args.append(_s(summary))
+    args += [filing_key(symbol), _s(doc_id)]
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.execute("UPDATE filings SET %s WHERE symbol = ? AND id = ?" % ", ".join(sets), args)
+            conn.commit()
         finally:
             conn.close()
 

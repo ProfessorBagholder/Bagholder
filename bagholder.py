@@ -39,6 +39,7 @@ import csvimport
 import exposure
 import instruments
 import disclosures
+import enrich
 import market
 import news
 import sedar
@@ -715,7 +716,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.1"
+PROTOCOL = "2026-09-14.2"
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5708,6 +5709,38 @@ def filings_document(symbol, doc_id):
     return data, ct or "application/octet-stream"
 
 
+def filings_enrich(symbol, doc_id):
+    """Read one document for its subject (its own title) and, when a local model is
+    reachable, a one-sentence summary. Both are cached on the row, so a document is
+    read once. Returns the current subject/summary even when nothing new could be
+    added (no source, no model), so the row can render what it has."""
+    sym = _s(symbol).strip().upper()
+    row = store.filing(sym, doc_id)
+    if not row:
+        return {"ok": False, "error": "no such document"}
+    subject = row.get("subject") or ""
+    summary = row.get("summary") or ""
+    model = enrich.summary_available()
+    attempted = bool(row.get("enrichedAt"))
+    # Already read, and there is nothing further to get (we have the summary, or no
+    # model to make one): return what is cached without fetching the document again.
+    if attempted and (summary or not model):
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+    if not disclosures.available():
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+    try:
+        data, ct = disclosures.document(row)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not data:
+        return {"ok": False, "error": "the document could not be read"}
+    info = enrich.enrich_document(row.get("source", ""), data, ct)
+    subject = info.get("subject") or subject
+    summary = info.get("summary") or summary
+    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary)
+    return {"ok": True, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": model}
+
+
 @single_flight("universes")
 def refresh_universes():
     """The market heatmaps' tiles: the TSX 60 from TMX, the US market from Nasdaq's screener. Never raises."""
@@ -6453,6 +6486,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"ok": False, "error": info})
                 return
             self._send(200, data, info or "application/pdf")
+            return
+        if path == "/api/filings/enrich":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            symbol = _query_param(query, "symbol")
+            doc_id = _query_param(query, "id")
+            if not symbol or not doc_id:
+                self._send(400, {"ok": False, "error": "symbol and id required"})
+                return
+            self._send(200, filings_enrich(symbol, doc_id))
             return
         if path == "/api/orders":
             if not self._gate():

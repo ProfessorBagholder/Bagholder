@@ -72,6 +72,31 @@ with the `mcpb` CLI (`npx @anthropic-ai/mcpb pack`) and open the resulting
     python3 sedar.py newest 30                    newest SEDAR+ filings, any issuer
     python3 sedar.py get <profileNo> <id> out.pdf download one SEDAR+ document
 
+## What each filing is about
+
+A filing list tells you the type, date and source, not what a document contains.
+Two enrichments (`enrich.py`) fill that in, both local and both on demand — a
+document is read only when you open its row, never in bulk, and cached for good:
+
+- **Subject** — the document's own title, which SEDAR+ hides behind a generic file
+  name. Pulled from the PDF's metadata with the standard library alone, no setup:
+  "News release" becomes "News release · Closing 2nd Drawdown".
+- **Summary** — one plain sentence of what the filing announces, from a language
+  model running **locally**, so nothing leaves the machine and there is no key or
+  bill. To turn it on:
+  - Install [Ollama](https://ollama.com) and pull a small model, e.g. `ollama pull llama3.2`.
+    Point the app elsewhere with `BAGHOLDER_OLLAMA_URL` / `BAGHOLDER_OLLAMA_MODEL`
+    if you run a different local server or model.
+  - For SEDAR+ PDFs the model needs the text, which comes from `pdftotext` (poppler:
+    `brew install poppler`). SEC filings are HTML and need nothing extra.
+
+  Where the model or `pdftotext` is absent the summary is simply empty and the
+  subject still shows; nothing breaks.
+
+`GET /api/filings/enrich?symbol=<symbol>&id=<item id>` reads one document and
+returns `{subject, summary}`, cached on the row. It is what the page calls when you
+open a disclosure, and what Claude can call to get the gist without the full text.
+
 ## Terms of use and pacing
 
 Everything is on demand and paced — SEDAR+ a couple of seconds between actions, SEC
