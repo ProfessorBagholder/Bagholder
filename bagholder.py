@@ -40,6 +40,7 @@ import exposure
 import instruments
 import market
 import news
+import sedar
 import universes
 import model
 import store
@@ -5565,6 +5566,100 @@ def news_loop():
             return
 
 
+# ---------------------------------------------------------------------------
+# SEDAR+ filings: an instrument's documents, fetched on demand and cached.
+# The source (sedar.py) needs the optional curl_cffi dependency; without it the
+# endpoint answers available:false and holds nothing, and the app is unchanged.
+# ---------------------------------------------------------------------------
+FILINGS_STALE_HOURS = 24
+
+
+def _issuer_name_for(symbol):
+    """The issuer name Bagholder holds for a symbol, to seed the SEDAR+ lookup;
+    falls back to the bare symbol."""
+    sym = _s(symbol).strip().upper()
+    for sec in store.list_securities():
+        if _s(sec.get("symbol")).strip().upper() == sym and _s(sec.get("name")).strip():
+            return sec["name"]
+    return sym
+
+
+def _filings_stale(symbol, now=None):
+    when = store.filings_fetched_at(symbol)
+    if not when:
+        return True
+    try:
+        age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return age > timedelta(hours=FILINGS_STALE_HOURS)
+
+
+def refresh_filings(symbol, name=None):
+    """Read one symbol's SEDAR+ filings and replace its stored rows. Never raises;
+    returns the count written, or -1 when the source is unavailable."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return 0
+
+    @single_flight("filings:" + sym, busy=0)
+    def run():
+        if not sedar.available():
+            return -1
+        try:
+            profile_no = store.sedar_profile(sym) or None
+            result = sedar.list_filings(query=(name or _issuer_name_for(sym)) if not profile_no else None,
+                                        profile_no=profile_no)
+            prof = (result.get("profile") or {}).get("profileNo") or profile_no or ""
+            return store.replace_filings(sym, prof, result.get("filings") or [])
+        except sedar.ProfileNotFound:
+            store.replace_filings(sym, "", [])
+            return 0
+        except sedar.SedarUnavailable as e:
+            sys.stderr.write("bagholder filings: %s failed: %s\n" % (sym, e))
+            return -1
+
+    return run()
+
+
+def filings_payload(symbol, refresh=False, name=None):
+    """The stored filings for a symbol, refreshing first when forced or stale."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    wrote = None
+    if refresh or _filings_stale(sym):
+        wrote = refresh_filings(sym, name=name)
+    return {
+        "ok": True,
+        "symbol": sym,
+        "available": sedar.available(),
+        "profileNo": store.sedar_profile(sym),
+        "fetchedAt": store.filings_fetched_at(sym),
+        "refreshed": bool(wrote and wrote > 0),
+        "sourceUnavailable": wrote == -1,
+        "filings": store.filings(sym),
+    }
+
+
+def filings_document(url):
+    """Fetch one filing document by its result-row URL. Returns (bytes, content_type)
+    or (None, error)."""
+    if not sedar.available():
+        return None, "curl_cffi not installed"
+    if not (url or "").startswith("https://www.sedarplus.ca/"):
+        return None, "not a SEDAR+ document url"
+    try:
+        with sedar._lock:
+            view = sedar._View("searchDocuments")
+            r = view.resource(url)
+    except sedar.SedarUnavailable as e:
+        return None, str(e)
+    if r.status_code != 200 or not r.content or r.content[:1] == b"<":
+        return None, "document did not download (status %s)" % r.status_code
+    return r.content, r.headers.get("content-type", "application/pdf")
+
+
 @single_flight("universes")
 def refresh_universes():
     """The market heatmaps' tiles: the TSX 60 from TMX, the US market from Nasdaq's screener. Never raises."""
@@ -6281,6 +6376,29 @@ class Handler(BaseHTTPRequestHandler):
             rec = {"symbol": _query_param(query, "symbol") or "", "exchange": _query_param(query, "exchange") or "", "currency": _query_param(query, "currency") or "", "kind": "Shares"}
             q = market.peek_quote(rec, _ssl_context()) if rec["symbol"] else None
             self._send(200, dict({"ok": True, "price": None, "priceChange": None, "percentChange": None}, **(q or {})))
+            return
+        if path == "/api/filings":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            symbol = _query_param(query, "symbol")
+            if not symbol:
+                self._send(400, {"ok": False, "error": "symbol required"})
+                return
+            refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
+            self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name")))
+            return
+        if path == "/api/filings/doc":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            data, info = filings_document(_query_param(query, "url") or "")
+            if data is None:
+                self._send(502, {"ok": False, "error": info})
+                return
+            self._send(200, data, info or "application/pdf")
             return
         if path == "/api/orders":
             if not self._gate():

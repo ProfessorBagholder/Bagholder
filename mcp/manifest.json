@@ -1,0 +1,22 @@
+{
+  "manifest_version": "0.2",
+  "name": "sedar",
+  "display_name": "SEDAR+ filings",
+  "version": "1.0.0",
+  "description": "Fetch Canadian securities filings from SEDAR+ and hand them to Claude: resolve an issuer to its profile, list its filings, and download a filing.",
+  "author": { "name": "Bagholder" },
+  "server": {
+    "type": "python",
+    "entry_point": "sedar_mcp.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["${__dirname}/sedar_mcp.py"]
+    }
+  },
+  "tools": [
+    { "name": "sedar_resolve_profile", "description": "Find a Canadian issuer's SEDAR+ profile number by name or ticker." },
+    { "name": "sedar_list_filings", "description": "List an issuer's SEDAR+ filings, newest first." },
+    { "name": "sedar_newest", "description": "The newest filings across all of SEDAR+." },
+    { "name": "sedar_download", "description": "Download one SEDAR+ filing to a local file." }
+  ]
+}

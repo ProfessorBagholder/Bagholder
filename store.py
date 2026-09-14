@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -460,6 +460,21 @@ def _init_schema(conn):
             request TEXT,
             updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS filings (
+            symbol TEXT NOT NULL,
+            id TEXT NOT NULL,
+            profile_no TEXT,
+            issuer TEXT,
+            file TEXT,
+            submitted TEXT,
+            submitted_at TEXT,
+            size TEXT,
+            url TEXT,
+            fetched_at TEXT,
+            PRIMARY KEY (symbol, id)
+        );
+        CREATE INDEX IF NOT EXISTS filings_submitted ON filings (symbol, submitted_at DESC);
         """
     )
     _migrate_nav_history(conn)
@@ -2177,6 +2192,7 @@ def data_summary():
                 "journal": journal_n,
                 "fxDays": count("SELECT COUNT(*) FROM fx_rates"),
                 "benchmarkDays": count("SELECT COUNT(*) FROM benchmark_prices"),
+                "filings": count("SELECT COUNT(*) FROM filings"),
                 "syncedAt": get_meta("synced_at"),
             }
         finally:
@@ -2937,6 +2953,105 @@ def trim_news(keep):
         try:
             _ready(conn)
             conn.execute("DELETE FROM news WHERE rowid NOT IN (SELECT rowid FROM news ORDER BY published_at DESC, id LIMIT ?)", (int(keep),))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# filings: an instrument's SEDAR+ documents, newest first, kept per symbol
+# ---------------------------------------------------------------------------
+def filing_key(symbol):
+    return _s(symbol).strip().upper()
+
+
+def _filing_from_row(r):
+    return {"id": r["id"], "profileNo": r["profile_no"] or "", "issuer": r["issuer"] or "", "file": r["file"] or "",
+            "submitted": r["submitted"] or "", "submittedAt": r["submitted_at"] or "", "size": r["size"] or "",
+            "url": r["url"] or "", "fetchedAt": r["fetched_at"] or ""}
+
+
+def filings(symbol=None):
+    """A symbol's filings newest first, or {symbol: [...]} for every symbol."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            if symbol is not None:
+                sym = filing_key(symbol)
+                return [_filing_from_row(r) for r in conn.execute(
+                    "SELECT * FROM filings WHERE symbol = ? ORDER BY submitted_at DESC, id", (sym,)).fetchall()]
+            out = {}
+            for r in conn.execute("SELECT * FROM filings ORDER BY symbol, submitted_at DESC, id").fetchall():
+                out.setdefault(r["symbol"], []).append(_filing_from_row(r))
+            return out
+        finally:
+            conn.close()
+
+
+def replace_filings(symbol, profile_no, rows, now=None):
+    """A symbol's filings, in place of what it had, stamped with the fetch time."""
+    sym = filing_key(symbol)
+    when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clean = []
+    for r in rows or []:
+        rid = _s(r.get("id"))
+        if not rid or not _s(r.get("file")):
+            continue
+        clean.append((sym, rid, _s(r.get("profileNo")) or _s(profile_no), _s(r.get("issuer")), _s(r.get("file")),
+                      _s(r.get("submitted")), _s(r.get("submittedAt")), _s(r.get("size")), _s(r.get("url")), when))
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.execute("DELETE FROM filings WHERE symbol = ?", (sym,))
+            conn.executemany(
+                "INSERT OR REPLACE INTO filings (symbol, id, profile_no, issuer, file, submitted, submitted_at, size, url, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", clean)
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("filings_fetched:" + sym, when))
+            if _s(profile_no):
+                conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("sedar_profile:" + sym, _s(profile_no)))
+            conn.commit()
+            return len(clean)
+        finally:
+            conn.close()
+
+
+def filings_fetched_at(symbol=None):
+    """When a symbol's filings were last read (ISO), or {symbol: when} for all."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            if symbol is not None:
+                row = conn.execute("SELECT value FROM meta WHERE key = ?", ("filings_fetched:" + filing_key(symbol),)).fetchone()
+                return row["value"] if row else ""
+            return {r["key"][len("filings_fetched:"):]: r["value"]
+                    for r in conn.execute("SELECT key, value FROM meta WHERE key LIKE 'filings_fetched:%'").fetchall()}
+        finally:
+            conn.close()
+
+
+def sedar_profile(symbol):
+    """The SEDAR+ profile number remembered for a symbol, or '' if none yet."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            row = conn.execute("SELECT value FROM meta WHERE key = ?", ("sedar_profile:" + filing_key(symbol),)).fetchone()
+            return row["value"] if row else ""
+        finally:
+            conn.close()
+
+
+def forget_filings(symbol):
+    sym = filing_key(symbol)
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.execute("DELETE FROM filings WHERE symbol = ?", (sym,))
+            conn.execute("DELETE FROM meta WHERE key IN (?, ?)", ("filings_fetched:" + sym, "sedar_profile:" + sym))
             conn.commit()
         finally:
             conn.close()

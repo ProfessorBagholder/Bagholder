@@ -7,6 +7,12 @@ FROM python:3.12-slim-bookworm
 # Docker. Passkeys need a real browser; sign in with the password and 2FA.
 RUN apt-get update && apt-get install -y --no-install-recommends chromium xvfb fonts-liberation ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# curl_cffi is the one Python dependency: it clears the SEDAR+ bot gate at the TLS
+# handshake, which the standard library cannot. Without it the Filings feature is
+# absent and the rest of the app is unchanged; the image ships with it so the
+# feature works out of the box.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
