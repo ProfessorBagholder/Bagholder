@@ -80,9 +80,12 @@ the rows are enriched on their own, top of the list first, one document at a tim
 SEDAR+'s pace (the issuer's document scope is cached for the run, so the list is read
 in one walk, not one per row), and every result is stored so a later visit is instant:
 
-- **Subject** — the document's own title, which SEDAR+ hides behind a generic file
-  name. Pulled from the PDF's metadata with the standard library alone, no setup:
-  "News release" becomes "News release · Closing 2nd Drawdown".
+- **Title** — what the filing is, one short phrase, on every row. The document's own
+  title when it exposes one (a SEDAR+ PDF's metadata: "CHARBONE - Closing 2nd
+  Drawdown"), otherwise one the local model derives from the filing's substance. For a
+  SEC filing whose primary document is a cover form (a 6-K, an 8-K), the substance is
+  in its exhibits; `edgar.content` resolves to the real content document so the title
+  and summary describe it, not the boilerplate.
 - **Summary** — one plain sentence of what the filing announces, from a language
   model running **locally**, so nothing leaves the machine and there is no key or
   bill. It is **automatic**: the first time you open a filing, the app looks for a
@@ -110,7 +113,8 @@ in one walk, not one per row), and every result is stored so a later visit is in
   and the subject still shows; nothing breaks.
 
 `GET /api/filings/enrich?symbol=<symbol>&id=<item id>` reads one document and
-returns `{subject, summary}`, cached on the row. It is what the page calls when you
+returns `{subject, summary}` (subject is the title), cached on the row and stamped
+with the enrichment logic's version so an improved version re-reads a row once. It is what the page calls when you
 open a disclosure, and what Claude can call to get the gist without the full text.
 
 ## Terms of use and pacing

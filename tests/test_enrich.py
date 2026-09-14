@@ -87,6 +87,29 @@ class SummaryTest(unittest.TestCase):
         self.lm.chat = lambda prompt, max_tokens=90: "It announces a private placement.<|eot_id|>"
         self.assertEqual(enrich.summarize("text"), "It announces a private placement.")
 
+    def test_title_strips_a_chatty_preamble_and_markdown(self):
+        self.lm.chat = lambda prompt, max_tokens=90: "Sure, here is the title: **Closing of $1.5M Drawdown**"
+        self.assertEqual(enrich.title_from_model("some filing text"), "Closing of $1.5M Drawdown")
+
+    def test_title_rejects_a_bare_form_code_or_echo(self):
+        self.lm.chat = lambda prompt, max_tokens=90: "Schedule 13G"
+        self.assertEqual(enrich.title_from_model("text"), "")   # too short to beat the type already shown
+        self.lm.chat = lambda prompt, max_tokens=90: "Here is a title for the filing"
+        self.assertEqual(enrich.title_from_model("text"), "")
+
+    def test_no_model_means_no_title(self):
+        self.lm.chat = lambda prompt, max_tokens=90: ""
+        self.assertEqual(enrich.title_from_model("text"), "")
+
+    def test_enrich_document_titles_from_the_model_when_there_is_no_pdf_subject(self):
+        # HTML (SEC) has no PDF metadata subject, so the title comes from the model
+        def chat(prompt, max_tokens=90):
+            return "Q2 2026 MD&A and interim financial statements" if "Title:" in prompt else "It reports Q2 2026 results."
+        self.lm.chat = chat
+        info = enrich.enrich_document("SEC", b"<html><body>Management discussion...</body></html>", "text/html")
+        self.assertEqual(info["subject"], "Q2 2026 MD&A and interim financial statements")
+        self.assertEqual(info["summary"], "It reports Q2 2026 results.")
+
     def test_enrich_document_gives_subject_without_a_model(self):
         self.lm.chat = lambda prompt, max_tokens=90: ""
         info = enrich.enrich_document("SEDAR+", pdf_with_title(b"Microsoft Word - Acme Announces Buyback EN"), "application/pdf")
