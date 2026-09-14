@@ -112,6 +112,43 @@ class CliTest(unittest.TestCase):
         self.assertIn("curl_cffi", payload["error"])
 
 
+class NavigationHelpersTest(unittest.TestCase):
+    """The per-issuer path walks the reporting-issuer list to the issuer's own
+    'Search and download documents' page. These pin the node discovery."""
+
+    def test_search_action_is_read_from_each_service(self):
+        docs = sedar._search_action(fixture("search_documents.html"))
+        # the trimmed document fixture has result rows but not the search control;
+        # the reporting-issuer fixture is result rows only too, so use live-shaped
+        # snippets: the control discovery is covered by the issuer fixtures below.
+        self.assertIn(sedar._search_action('<button class="appSearchButton" onclick="x catHtmlFragmentCallback(\'W766\',\'buttonPush\',null,{containerNodeId:\'W706\'})">'),
+                      [("W766", "buttonPush", "W706")])
+        self.assertEqual(
+            sedar._search_action('<button id="nodeW557-searchButton" onclick="x catHtmlFragmentCallback(\'W557\',\'fireOnChange\',null,{containerNodeId:\'W553\'})">'),
+            ("W557", "fireOnChange", "W553"))
+
+    def test_the_issuer_menu_node_is_the_issuer_not_a_header_action(self):
+        html = fixture("issuer_menu.html")
+        self.assertEqual(sedar._issuer_menu_node(html, "Shopify Inc. / Shopify Inc."), "W1118")
+        # without a name, it still skips "search for profiles" and takes the issuer
+        self.assertEqual(sedar._issuer_menu_node(html), "W1118")
+
+    def test_the_documents_menu_node_is_found_on_the_profile(self):
+        self.assertEqual(sedar._docs_menu_node(fixture("issuer_profile.html")), "W733")
+        self.assertIsNone(sedar._docs_menu_node("<div>no menu here</div>"))
+
+    def test_refresh_identity_adopts_a_new_view_instance(self):
+        view = sedar._View.__new__(sedar._View)
+        view.app = "csa-party"
+        view.inst = "oldid"
+        view.key = "oldkey"
+        ok = view.refresh_identity(fixture("issuer_profile.html"))
+        self.assertTrue(ok)
+        self.assertNotEqual(view.inst, "oldid", "the id is taken from the navigated page")
+        self.assertNotEqual(view.key, "oldkey")
+        self.assertFalse(view.refresh_identity("<div>a fragment with no instance</div>"))
+
+
 class McpServerTest(unittest.TestCase):
     def setUp(self):
         import sedar_mcp

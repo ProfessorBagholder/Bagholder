@@ -5642,22 +5642,38 @@ def filings_payload(symbol, refresh=False, name=None):
     }
 
 
-def filings_document(url):
-    """Fetch one filing document by its result-row URL. Returns (bytes, content_type)
-    or (None, error)."""
+def filings_document(symbol, doc_id):
+    """Fetch one of a symbol's filing documents by its id (the drm:… id from a
+    filing row). Returns (bytes, content_type) or (None, error). A document URL is
+    session-bound, so this downloads live through the issuer's profile rather than
+    from a stored URL."""
     if not sedar.available():
         return None, "curl_cffi not installed"
-    if not (url or "").startswith("https://www.sedarplus.ca/"):
-        return None, "not a SEDAR+ document url"
+    sym = _s(symbol).strip().upper()
+    profile_no = store.sedar_profile(sym)
+    if not profile_no:
+        # nothing fetched yet for this symbol: resolve it now so we have a profile
+        try:
+            profile_no = (sedar.resolve_profile(_issuer_name_for(sym)) or [{}])[0].get("profileNo")
+        except (sedar.ProfileNotFound, sedar.SedarUnavailable) as e:
+            return None, str(e)
+    if not profile_no:
+        return None, "no SEDAR+ profile for %s" % sym
+    import tempfile
+    dest = os.path.join(tempfile.gettempdir(), "bagholder-filing-%s.pdf" % re.sub(r"[^A-Za-z0-9]", "", _s(doc_id)))
     try:
-        with sedar._lock:
-            view = sedar._View("searchDocuments")
-            r = view.resource(url)
-    except sedar.SedarUnavailable as e:
+        path, ct, _ = sedar.download(profile_no, doc_id, dest, name=_issuer_name_for(sym))
+    except (sedar.ProfileNotFound, sedar.SedarUnavailable) as e:
         return None, str(e)
-    if r.status_code != 200 or not r.content or r.content[:1] == b"<":
-        return None, "document did not download (status %s)" % r.status_code
-    return r.content, r.headers.get("content-type", "application/pdf")
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return data, ct or "application/pdf"
 
 
 @single_flight("universes")
@@ -6394,7 +6410,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False})
                 return
             query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            data, info = filings_document(_query_param(query, "url") or "")
+            symbol = _query_param(query, "symbol")
+            doc_id = _query_param(query, "id")
+            if not symbol or not doc_id:
+                self._send(400, {"ok": False, "error": "symbol and id required"})
+                return
+            data, info = filings_document(symbol, doc_id)
             if data is None:
                 self._send(502, {"ok": False, "error": info})
                 return

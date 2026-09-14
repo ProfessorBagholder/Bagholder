@@ -60,14 +60,15 @@ TOOLS = [
     },
     {
         "name": "sedar_download",
-        "description": "Download one SEDAR+ filing to a local file, given the document URL from a filing row. Returns the saved path.",
+        "description": "Download one SEDAR+ filing to a local file. Give the issuer's profile number and the filing's id (the 'drm:…' id from sedar_list_filings). Returns the saved path.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The document's URL from a filing row (a sedarplus.ca resource link)."},
-                "dest": {"type": "string", "description": "Where to save the file. Defaults to a temp file named after the filing."},
+                "profile_no": {"type": "string", "description": "The issuer's nine-digit SEDAR+ profile number."},
+                "id": {"type": "string", "description": "The filing's id from a filing row (e.g. 'drm:cf3d9e29df3451b0')."},
+                "dest": {"type": "string", "description": "Where to save the file. Defaults to a temp file named after the id."},
             },
-            "required": ["url"],
+            "required": ["profile_no", "id"],
         },
     },
 ]
@@ -86,9 +87,9 @@ def _call(name, args):
     if name == "sedar_download":
         dest = args.get("dest")
         if not dest:
-            base = "".join(c for c in os.path.basename(args["url"].split("?")[0]) if c.isalnum()) or "filing"
+            base = "".join(c for c in str(args.get("id", "filing")) if c.isalnum()) or "filing"
             dest = os.path.join(tempfile.gettempdir(), base + ".pdf")
-        path, ct, n = sedar.download(args["url"], dest)
+        path, ct, n = sedar.download(args["profile_no"], args["id"], dest)
         return {"path": path, "contentType": ct, "bytes": n}
     raise ValueError("unknown tool %r" % name)
 

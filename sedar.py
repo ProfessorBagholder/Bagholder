@@ -162,6 +162,36 @@ def _search_action(page):
     return (m.group(1), m.group(2), m.group(3)) if m else None
 
 
+_MENU_ANCHOR = re.compile(r"<a[^>]*?catCallback\('(W\d+)','invokeMenuCb'[^>]*>(.*?)</a>", re.S)
+_DOCS_MENU_TEXT = "search and download documents for this profile"
+
+
+def _issuer_menu_node(html, name=None):
+    """On a reporting-issuer result, the menu node that opens the issuer itself —
+    the one whose link text is the issuer name, not a generic header action."""
+    fallback = None
+    want = _text(name or "")[:20].lower()
+    for m in _MENU_ANCHOR.finditer(html):
+        t = _text(m.group(2))
+        if not t or "search for profiles" in t.lower():
+            continue
+        if want and want in t.lower():
+            return m.group(1)
+        fallback = fallback or m.group(1)
+    return fallback
+
+
+def _docs_menu_node(html):
+    """On an issuer profile, the 'Search and download documents for this profile'
+    menu node."""
+    idx = html.lower().find(_DOCS_MENU_TEXT)
+    if idx < 0:
+        return None
+    start = html.rfind("<a ", 0, idx)
+    m = re.search(r"catCallback\('(W\d+)'", html[start:idx]) if start >= 0 else None
+    return m.group(1) if m else None
+
+
 class _View:
     """One opened service instance: its page, ids and session headers."""
 
@@ -240,6 +270,23 @@ class _View:
         except Exception as e:
             raise SedarUnavailable("callback %s/%s failed: %s" % (node, name, e))
         return r.text
+
+    def refresh_identity(self, html):
+        """After a full-page navigation (a menu that pushes a new view), adopt the
+        new view instance's id and key from the returned page. Each stack push is a
+        fresh instance; a callback posted to the old id is refused."""
+        m_inst = re.search(r"viewInstance/view\.html\?id=([0-9a-f]+)", html) or re.search(r"update\.html\?id=([0-9a-f]+)", html)
+        m_key = re.search(r"viewInstanceKey:'([^']+)'", html)
+        m_sid = re.search(r"sessionId:'([^']+)'", html)
+        if m_inst and m_key:
+            self.inst = m_inst.group(1)
+            self.key = m_key.group(1)
+            if m_sid:
+                self.sid = m_sid.group(1)
+            self.ref = "%s/%s/viewInstance/view.html?id=%s" % (BASE, self.app, self.inst)
+            self.page = html
+            return True
+        return False
 
     def resource(self, url_or_node, timeout=DOC_TIMEOUT):
         """GET a resource on this session: a full URL from a result row, or a node id."""
@@ -398,63 +445,55 @@ def list_filings(query=None, profile_no=None, limit=SEARCH_LIMIT):
         matches = resolve_profile(query)
         profile = matches[0]
         profile_no = profile["profileNo"]
-    scoped = True
+    scoped = None
     with _lock:
-        view = _View("searchDocuments")
-        html = view.page
         if profile_no:
-            scoped_html = _scope_to_profile(view, profile_no, name=(profile or {}).get("name"))
-            if scoped_html is None:
-                scoped = False
-            else:
-                html = scoped_html
+            html = _scoped_documents(profile_no, (profile or {}).get("name") or query)
+            scoped = html is not None
+            if html is None:
+                html = _View("searchDocuments").page   # fall back to the default view
+        else:
+            html = _View("searchDocuments").page
     filings = parse_filings(html)
     if profile_no:
         filings = [f for f in filings if not f["profileNo"] or f["profileNo"] == profile_no]
     return {
         "profile": profile or ({"profileNo": profile_no} if profile_no else None),
-        "scoped": scoped if profile_no else None,
+        "scoped": scoped,
         "filings": filings[: max(1, int(limit))],
     }
 
 
-_AC_ITEM = re.compile(r'"id"\s*:\s*"([^"]+)"')
-
-
-def _scope_to_profile(view, profile_no, name=None):
-    """Constrain the open document search to one profile, then run it. Returns the
-    result HTML, or None if the search could not be scoped.
-
-    The document search filters by a profile chosen through an autocomplete: a
-    JSON lookup by name or number yields an internal id, which is then selected and
-    the search run. The nine-digit profile number is not that id, so the lookup is
-    the way in."""
+def _scoped_documents(profile_no, name=None):
+    """The document search results for one profile, or None if the chain could not
+    be walked. SEDAR+ has no profile parameter on the document search; the way in
+    is the issuer's own page: search the reporting-issuer list for the profile,
+    open the issuer, and follow its 'Search and download documents for this
+    profile' link. Each step pushes a new view instance, so the id is refreshed
+    from every full-page response."""
     try:
-        item_id = None
-        for term in (profile_no, name):
-            if not term:
-                continue
-            js = view.callback("W724", "serviceLookupSearch", value="search", extra={"q": term}, json_frag=True)
-            js = (js or "").strip()
-            if js and js not in ("null", "[]") and not js.startswith("<"):
-                # Prefer the item whose text carries this profile number.
-                block = None
-                for chunk in re.split(r'\}\s*,\s*\{', js):
-                    if profile_no in chunk:
-                        block = chunk
-                        break
-                m = _AC_ITEM.search(block) if block else _AC_ITEM.search(js)
-                if m:
-                    item_id = m.group(1)
-                    break
-        if not item_id:
+        view = _View("searchReportingIssuers")
+        action = _search_action(view.page)
+        if not action:
             return None
-        sel = view.callback("W724", "serviceLookupSelected", value=item_id, extra={"nodeW724ac": name or profile_no})
-        if "viewInstanceForm" in sel and "unexpected system error" not in sel:
-            view.page = sel
-        action = _search_action(view.page) or ("W766", "buttonPush", "W706")
         node, cbname, container = action
-        return view.callback(node, cbname, container=container)
+        ri = view.callback(node, cbname, extra={"QueryString": profile_no}, container=container)
+        issuer_node = _issuer_menu_node(ri, name)
+        if not issuer_node:
+            return None
+        profile_page = view.callback(issuer_node, "invokeMenuCb", html=ri)
+        view.refresh_identity(profile_page)
+        docs_node = _docs_menu_node(view.page)
+        if not docs_node:
+            return None
+        docs = view.callback(docs_node, "invokeMenuCb", html=view.page)
+        view.refresh_identity(docs)
+        if "appDocumentLink" in view.page:
+            return view.page
+        action = _search_action(view.page)
+        if action:
+            return view.callback(action[0], action[1], container=action[2], html=view.page)
+        return view.page
     except SedarUnavailable:
         return None
 
@@ -467,16 +506,41 @@ def newest(limit=30):
     return parse_filings(html)[: max(1, int(limit))]
 
 
-def download(url, dest):
-    """Fetch one document by its result-row URL to `dest`; returns (path, content_type, bytes)."""
+def _is_document(response):
+    """A real document, not the site's HTML error page. Document URLs are bound to
+    the session that minted them, so a stale URL comes back as HTML; reject that."""
+    ct = (response.headers.get("content-type") or "").lower()
+    body = response.content or b""
+    if response.status_code != 200 or not body:
+        return False
+    if "text/html" in ct:
+        return False
+    return body.lstrip()[:1] != b"<"
+
+
+def download(profile_no, doc_id, dest, name=None):
+    """Download one of a profile's documents to `dest`, matched by its id (the
+    `drm:…` id from a filing row, stable across sessions). Because a document URL
+    dies with the session that produced it, this re-runs the profile's document
+    search and fetches the matching row live. Returns (path, content_type, bytes)."""
+    key = doc_id.split(":", 1)[-1] if doc_id else ""
     with _lock:
-        view = _View("searchDocuments")
-        r = view.resource(url)
-    if r.status_code != 200 or not r.content or r.content[:1] == b"<":
+        html = _scoped_documents(profile_no, name)
+        if html is None:
+            raise SedarUnavailable("could not open the profile's documents to download from")
+        row = next((f for f in parse_filings(html) if f["id"] == doc_id or (key and key in f["url"])), None)
+        if not row:
+            raise ProfileNotFound("no document %r in profile %s" % (doc_id, profile_no))
+        try:
+            r = _get_session().get(_html.unescape(row["url"]),
+                                   headers={"Referer": BASE + "/csa-party/viewInstance/view.html"}, timeout=DOC_TIMEOUT)
+        except Exception as e:
+            raise SedarUnavailable("document fetch failed: %s" % e)
+    if not _is_document(r):
         raise SedarUnavailable("document did not download (status %s)" % r.status_code)
     with open(dest, "wb") as fh:
         fh.write(r.content)
-    return dest, r.headers.get("content-type", ""), len(r.content)
+    return dest, r.headers.get("content-type", "application/pdf"), len(r.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -491,7 +555,7 @@ def _main(argv):
             "  python3 sedar.py resolve <name|number>       profiles matching an issuer\n"
             "  python3 sedar.py filings <name|number> [n]   an issuer's filings (JSON)\n"
             "  python3 sedar.py newest [n]                  newest filings across SEDAR+\n"
-            "  python3 sedar.py get <url> <dest.pdf>        download one document\n"
+            "  python3 sedar.py get <profileNo> <id> <dest.pdf>   download one document\n"
         )
         return 2
     if not available():
@@ -508,7 +572,10 @@ def _main(argv):
             limit = int(argv[1]) if len(argv) > 1 else 30
             print(json.dumps({"ok": True, "filings": newest(limit)}, indent=2))
         elif cmd == "get":
-            path, ct, n = download(argv[1], argv[2])
+            if len(argv) < 4:
+                sys.stderr.write("usage: python3 sedar.py get <profileNo> <id> <dest.pdf>\n")
+                return 2
+            path, ct, n = download(argv[1], argv[2], argv[3])
             print(json.dumps({"ok": True, "path": path, "contentType": ct, "bytes": n}))
         else:
             sys.stderr.write("unknown command %r\n" % cmd)

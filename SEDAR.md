@@ -23,7 +23,7 @@ While `bagholder.py` is running (default `http://127.0.0.1:8765`):
     GET /api/filings?symbol=SHOP            an instrument's filings, from the cache
     GET /api/filings?symbol=SHOP&refresh=1  fetch first, then return them
     GET /api/filings?symbol=SHOP&name=Shopify%20Inc.   seed the issuer lookup with a name
-    GET /api/filings/doc?url=<document url> the filing itself, as application/pdf
+    GET /api/filings/doc?symbol=SHOP&id=<filing id>  the filing itself, as application/pdf
 
 The list is cached per symbol and refreshed when it is asked for and the stored
 copy is more than a day old, or when `refresh=1` is passed. A filing never changes
@@ -34,7 +34,7 @@ once filed, so a downloaded document is final.
     python3 sedar.py resolve "Shopify"          profiles matching an issuer
     python3 sedar.py filings "Shopify" 50        an issuer's 50 newest filings (JSON)
     python3 sedar.py newest 30                   the newest filings across SEDAR+
-    python3 sedar.py get "<document url>" out.pdf download one document
+    python3 sedar.py get <profileNo> <filing id> out.pdf   download one document
 
 Each command prints JSON on stdout, so Claude Code can call it and read the result
 directly.
