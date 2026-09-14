@@ -715,7 +715,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-11.9"
+PROTOCOL = "2026-09-14.1"
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5598,21 +5598,23 @@ def _filings_stale(symbol, now=None):
     return age > timedelta(hours=FILINGS_STALE_HOURS)
 
 
-def refresh_filings(symbol, name=None):
+def refresh_filings(symbol, name=None, exchange=None, currency=None):
     """Gather one symbol's disclosures from every covering source and replace its
     stored rows per source. Never raises; returns the total written, or -1 when no
-    source could be reached."""
+    source could be reached. The instrument's name/exchange/currency steer the
+    sources; the caller may pass them (the page does), else they come from the book."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return 0
 
     @single_flight("filings:" + sym, busy=0)
     def run():
-        iname, exchange, currency = _instrument_meta(sym)
+        iname, ex, cur = _instrument_meta(sym)
         if name:
             iname = name
+        exchange_, currency_ = (exchange if exchange is not None else ex), (currency if currency is not None else cur)
         try:
-            result = disclosures.fetch(sym, name=iname, exchange=exchange, currency=currency)
+            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_)
         except Exception as e:
             sys.stderr.write("bagholder disclosures: %s failed: %s\n" % (sym, e))
             return -1
@@ -5630,33 +5632,44 @@ def refresh_filings(symbol, name=None):
             if status.get("matched") or status.get("available"):
                 total += store.replace_filings(sym, src, by_source.get(src, []))
         store.mark_filings_fetched(sym, profile_no)
+        store.set_meta("filings_sources:" + sym, json.dumps(result.get("sources") or {}))
         return total if any_reached else -1
 
     return run()
 
 
 def _source_status(sym):
-    """Per-source availability and whether the cache holds any of its rows."""
-    stored = store.filings(sym)
-    have = {r.get("source") for r in stored}
+    """Per-source status for the payload: live availability, plus whether a filer
+    was found and whether it had rows at the last read. Falls back to the cache
+    when no read has been recorded."""
+    try:
+        stored_status = json.loads(store.get_meta("filings_sources:" + sym) or "{}")
+    except ValueError:
+        stored_status = {}
+    have = {r.get("source") for r in store.filings(sym)}
     out = {}
     for p in disclosures.PROVIDERS:
         try:
             avail = bool(p.available())
         except Exception:
             avail = False
-        out[p.SOURCE] = {"available": avail, "matched": p.SOURCE in have}
+        st = stored_status.get(p.SOURCE) or {}
+        out[p.SOURCE] = {
+            "available": avail,
+            "matched": p.SOURCE in have,
+            "filer": bool(st.get("filer") or p.SOURCE in have),
+        }
     return out
 
 
-def filings_payload(symbol, refresh=False, name=None):
+def filings_payload(symbol, refresh=False, name=None, exchange=None, currency=None):
     """The stored disclosures for a symbol, refreshing first when forced or stale."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
     wrote = None
     if refresh or _filings_stale(sym):
-        wrote = refresh_filings(sym, name=name)
+        wrote = refresh_filings(sym, name=name, exchange=exchange, currency=currency)
     return {
         "ok": True,
         "symbol": sym,
@@ -6422,7 +6435,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "symbol required"})
                 return
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
-            self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name")))
+            self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
+                                            exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
             return
         if path == "/api/filings/doc":
             if not self._gate():

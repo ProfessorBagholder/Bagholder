@@ -587,15 +587,32 @@ def _sedar_category(file):
     return D.OTHER
 
 
+_LANG_TAIL = re.compile(r"[-–]\s*(English|French)\s*$", re.I)
+_LANG_PAREN = re.compile(r"\((English|French)\)\s*$", re.I)
+
+
+def _split_type_title(file):
+    """A SEDAR+ document file name into a clean type and a qualifier title, so the
+    page can show 'Interim MD&A' with '(English)' beside it. The ".pdf" is dropped
+    and a trailing language marker becomes the title; anything else stays the type."""
+    name = re.sub(r"\.pdf$", "", file or "", flags=re.I).strip()
+    for rx in (_LANG_TAIL, _LANG_PAREN):
+        m = rx.search(name)
+        if m:
+            return name[:m.start()].strip(" -–"), "(%s)" % m.group(1).title()
+    return name, ""
+
+
 def _to_item(raw, profile_no):
+    typ, title = _split_type_title(raw.get("file"))
     return {
         "id": "sedar:" + raw.get("id", ""),
         "source": SOURCE,
         "category": _sedar_category(raw.get("file")),
         "date": raw.get("submittedAt") or "",
         "dateText": raw.get("submitted") or "",
-        "type": raw.get("file") or "",
-        "title": "",
+        "type": typ,
+        "title": title,
         "size": raw.get("size") or "",
         "url": raw.get("url") or "",
         "issuer": raw.get("issuer") or "",

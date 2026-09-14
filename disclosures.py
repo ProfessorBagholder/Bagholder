@@ -27,7 +27,7 @@ EVENTS = "Material events"
 GOVERNANCE = "Governance"
 OFFERINGS = "Offerings"
 INSIDER = "Insider & ownership"
-NEWS = "News release"
+NEWS = "News releases"
 OTHER = "Other"
 CATEGORIES = [FINANCIALS, EVENTS, GOVERNANCE, OFFERINGS, INSIDER, NEWS, OTHER]
 
@@ -107,16 +107,22 @@ def fetch(symbol, name="", exchange="", currency="", limit=200):
         except Exception:
             covered = False
         if not covered:
-            sources[p.SOURCE] = {"available": _safe_available(p), "matched": False, "count": 0, "error": ""}
+            sources[p.SOURCE] = {"available": _safe_available(p), "matched": False, "filer": False, "count": 0, "error": ""}
             continue
         try:
             got = p.fetch(symbol, name=name, exchange=exchange, currency=currency) or []
             items.extend(got)
-            sources[p.SOURCE] = {"available": True, "matched": bool(got), "count": len(got), "error": ""}
+            filer = bool(got)
+            if not filer and hasattr(p, "has_filer"):
+                try:
+                    filer = bool(p.has_filer(symbol, name=name, exchange=exchange, currency=currency))
+                except Exception:
+                    filer = False
+            sources[p.SOURCE] = {"available": True, "matched": bool(got), "filer": filer, "count": len(got), "error": ""}
         except SourceUnavailable as e:
-            sources[p.SOURCE] = {"available": False, "matched": False, "count": 0, "error": str(e)}
+            sources[p.SOURCE] = {"available": False, "matched": False, "filer": False, "count": 0, "error": str(e)}
         except Exception as e:
-            sources[p.SOURCE] = {"available": True, "matched": False, "count": 0, "error": "%s: %s" % (type(e).__name__, e)}
+            sources[p.SOURCE] = {"available": True, "matched": False, "filer": False, "count": 0, "error": "%s: %s" % (type(e).__name__, e)}
     items.sort(key=_sort_key, reverse=True)
     return {"items": items[: max(1, int(limit))], "sources": sources}
 

@@ -155,7 +155,7 @@ def _safe_in_map(ticker):
 _TITLES = {
     "10-K": "Annual report", "10-Q": "Quarterly report", "8-K": "Current report",
     "20-F": "Annual report (foreign issuer)", "40-F": "Annual report (Canadian issuer)",
-    "6-K": "Report of foreign issuer", "DEF 14A": "Proxy statement", "DEFA14A": "Proxy soliciting material",
+    "6-K": "Report of foreign private issuer", "DEF 14A": "Proxy statement", "DEFA14A": "Proxy soliciting material",
     "S-1": "Registration statement", "F-1": "Registration statement", "424B4": "Prospectus",
     "3": "Initial insider ownership", "4": "Insider transaction", "5": "Annual insider statement",
     "144": "Notice of proposed sale", "SC 13D": "Beneficial ownership (activist)",
@@ -180,7 +180,14 @@ def _category(form):
 
 
 def _title(form, description):
-    return D.clean(description) or _TITLES.get((form or "").upper(), "")
+    """The plain-English title beside the form code. EDGAR often repeats the form
+    as the description ("FORM 4" for a 4); in that case use our own label so the
+    cell reads "4 · Insider transaction", not "4 · FORM 4"."""
+    d = D.clean(description)
+    f = (form or "").upper()
+    if d and d.upper() not in (f, "FORM " + f):
+        return d
+    return _TITLES.get(f, "")
 
 
 # --------------------------------------------------------------------------- #
@@ -222,6 +229,24 @@ def fetch(symbol, name="", exchange="", currency="", limit=200):
             "url": url,
         })
     return items[: max(1, int(limit))]
+
+
+def has_filer(symbol, name="", exchange="", currency=""):
+    """Whether SEC knows a filer for this instrument, cheaply (ticker map only),
+    so the pipeline can tell 'nothing filed in range' from 'no filer at all' even
+    when fetch returns no rows."""
+    ticker = _bare(symbol)
+    cik_title = None
+    try:
+        cik_title = _ticker_map().get(ticker)
+    except D.SourceUnavailable:
+        return False
+    if not cik_title:
+        return False
+    us_listed = (exchange or "").upper() in US_EXCHANGES or (currency or "").upper() == "USD"
+    if not us_listed and name and not D.names_match(name, cik_title[1]):
+        return False
+    return True
 
 
 def document(row):

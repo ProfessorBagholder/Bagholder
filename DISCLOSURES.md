@@ -9,7 +9,7 @@ item and both are open sets — a new source or a new category is additive:
   (Canadian insider), then other markets (UK, Australia, Hong Kong, Japan) as
   Bagholder adds brokerages or Wealthsimple adds listings.
 - **Category** — the kind of disclosure, the same words across sources: Financials,
-  Material events, Governance, Offerings, Insider & ownership, News release, Other.
+  Material events, Governance, Offerings, Insider & ownership, News releases, Other.
 
 A cross-listed issuer (Shopify, say) draws from more than one source at once; the
 list interleaves them by date. Third-party media coverage is **not** here — it

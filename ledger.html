@@ -101,6 +101,25 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .nw-sym{font-size:13px;font-weight:500;border:0;background:transparent;padding:0;color:var(--ink);font-family:var(--font)}
 .nw-sym.go{cursor:pointer}
 .nw-sym.go:hover{color:var(--accent-300)}
+.dc-head,.dc-row{display:grid;gap:10px;padding:0 16px;white-space:nowrap;align-items:center}
+.dc-head{padding-bottom:6px;margin:0 -16px}
+.dc-list{margin:0 -16px}
+.dc-row{padding:8px 16px 6px;cursor:pointer;border-top:1px solid rgba(var(--ink-rgb),.06)}
+.dc-row:hover{background:rgba(var(--ink-rgb),var(--hover))}
+.dc-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.dc-doc b{font-weight:500;font-size:12.5px;color:var(--ink)}
+.dc-doc span{font-size:12px;color:var(--ink60)}
+.dc-src{font-size:11.5px;font-weight:500;color:var(--accent-300);border:0;background:transparent;padding:0;font-family:var(--font);cursor:pointer;text-align:left}
+.dc-src:hover{color:var(--accent)}
+.dc-open{color:var(--ink55);visibility:hidden}
+.dc-row:hover .dc-open{visibility:visible}
+.dc-open.on{visibility:visible;color:var(--accent-300)}
+.dc-skel{height:11px;border-radius:4px;background:rgba(var(--ink-rgb),.08);animation:dcpulse 1.4s ease-in-out infinite}
+@keyframes dcpulse{0%,100%{opacity:.5}50%{opacity:.9}}
+.dc-sweep{position:relative;height:1px;margin:0 -16px;background:rgba(var(--ink-rgb),.08);overflow:hidden}
+.dc-sweep::after{content:"";position:absolute;top:0;left:0;height:100%;width:30%;background:var(--accent);animation:dcsweep 1.9s linear infinite}
+@keyframes dcsweep{0%{transform:translateX(-100%)}100%{transform:translateX(433%)}}
+@media (prefers-reduced-motion:reduce){.dc-skel,.dc-sweep::after{animation:none}}
 .wl-head,.wl-row{display:grid;grid-template-columns:minmax(0,1fr) 58px 70px 66px 22px;gap:10px;align-items:center;padding:0 16px;white-space:nowrap}
 .wl-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .wl-head{padding-bottom:6px;margin:0 -16px}
@@ -415,6 +434,7 @@ const state = {
     positions: { key: "unreal", dir: "desc" },
     bySymbol: { key: "pnl", dir: "desc" },
     execs: { key: "when", dir: "desc" },
+    disc: { key: "date", dir: "desc" },
     yoc: { key: "ttm", dir: "desc" },
     cash: { key: "date", dir: "desc" },
     orders: { key: "placed", dir: "desc" },
@@ -436,6 +456,9 @@ const state = {
   tileDrag: null,     // the tile under the pointer during a reorder
   tileOrder: null,    // the row's order while a reorder or a save is in flight
   newsScope: (function () { try { return localStorage.getItem("bh2.news") || "all"; } catch (e) { return "all"; } })(),
+  discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
+  discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
+  discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
   heat: (function () { try { return Object.assign({ universe: "holdings", size: "value" }, JSON.parse(localStorage.getItem("bh2.heatmap") || "{}")); } catch (e) { return { universe: "holdings", size: "value" }; } })(),
   ordersTab: "pending",
   orderEdit: null,
@@ -461,7 +484,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-11.9"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2256,6 +2279,121 @@ function drawTradeChart(host, t, h, tf, c, LW, provisional) {
 }
 function mountTradeChartWith(t, tf) { setChartTf(tf); mountTradeChart(); }
 function execSortValue(e, key) { if (key === "when") return e.when; if (key === "side") return e.side; if (key === "qty") return e.qty; if (key === "currency") return e.currency; if (key === "price") return e.price; return e.amount; }
+// ---------------------------------------------------------------------------
+// Disclosures: an instrument's regulatory filings from every source (SEDAR+,
+// SEC, …), on the trade/holding detail. Fetched per symbol from /api/filings
+// and cached here; the merged list is filtered by category, narrowed by source,
+// sorted by column. Columns and controls appear only when they carry more than
+// one value, so a single-source holding shows no scaffolding it will never fill.
+// ---------------------------------------------------------------------------
+const DISC_ORDER = ["Financials", "Material events", "Governance", "Offerings", "Insider & ownership", "News releases", "Other"];
+const _disc = {}, _discPending = {};
+let _discOpenTimer = 0;
+
+function discSymbol(t) { return String(listingTicker(t) || t.symbol || "").toUpperCase(); }
+
+function ensureDisclosures(t) {
+  const sym = discSymbol(t);
+  if (!sym || _disc[sym] || _discPending[sym]) return;
+  _discPending[sym] = true;
+  _disc[sym] = { loading: true };
+  const q = "symbol=" + encodeURIComponent(sym) + (t.name ? "&name=" + encodeURIComponent(t.name) : "") +
+    (t.exchange ? "&exchange=" + encodeURIComponent(t.exchange) : "") + (t.currency ? "&currency=" + encodeURIComponent(t.currency) : "");
+  api("GET", "/api/filings?" + q).then((d) => {
+    delete _discPending[sym];
+    _disc[sym] = (d && d.ok) ? { payload: d } : { error: (d && d.error) || "Could not read disclosures." };
+    const open = state.sel && selById(state.sel);
+    if (open && discSymbol(open) === sym) render();
+  });
+}
+function refreshDisclosures(sym) {
+  if (_discPending[sym]) return;
+  delete _disc[sym];
+  const open = state.sel && selById(state.sel);
+  if (open && discSymbol(open) === sym) ensureDisclosures(open);
+  render();
+}
+function discDate(item) {
+  const iso = String(item.date || "").slice(0, 10);
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return item.dateText || iso;
+  return d.getDate() + " " + MON[d.getMonth()] + " " + d.getFullYear();
+}
+function discSizeBytes(s) {
+  const m = /([\d.]+)\s*(KB|MB|GB|bytes)/i.exec(s || "");
+  if (!m) return -1;
+  const n = parseFloat(m[1]), u = m[2].toLowerCase();
+  return u === "mb" ? n * 1e6 : u === "gb" ? n * 1e9 : u === "bytes" ? n : n * 1e3;
+}
+function discSortValue(item, key) {
+  return key === "document" ? (item.type || "").toLowerCase() : key === "category" ? item.category
+    : key === "source" ? item.source : key === "size" ? discSizeBytes(item.size) : item.date;
+}
+const _discReread = (sym) => '<button data-act="discRefresh" data-arg=\'' + attr({ sym }) + '\' aria-label="Re-read disclosures" style="display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink55);cursor:pointer"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.sync + '"/></svg></button>';
+function _discCard(inner) { return '<div class="card elev-sm" style="padding:14px 16px 8px">' + inner + "</div>"; }
+function _discHeader(sym, mid, right) {
+  return '<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5>' + (mid || "") +
+    '<span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">' + (right || "") + _discReread(sym) + "</span></div>";
+}
+function disclosuresCardHtml(t) {
+  const sym = discSymbol(t);
+  const rec = _disc[sym];
+  if (!rec || rec.loading) {
+    const skel = '<div class="dc-row" style="grid-template-columns:104px minmax(0,1fr) 146px 84px 74px 22px;pointer-events:none">' +
+      ["70%", "55%", "60%", "50%", "40%"].map((w) => '<div class="dc-skel" style="width:' + w + '"></div>').join("") + "<div></div></div>";
+    return _discCard('<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5>' +
+      '<span style="font-size:11px;color:var(--ink55)">Reading disclosures…</span></div><div class="dc-sweep"></div><div class="dc-list">' +
+      new Array(6).fill(skel).join("") + "</div>");
+  }
+  if (rec.error) return _discCard(_discHeader(sym, "", "") + '<div class="muted" style="font-size:12px;padding:6px 0 10px">' + esc(rec.error) + "</div>");
+
+  const p = rec.payload || {}, all = p.filings || [], srcStatus = p.sources || {};
+  const availNames = Object.keys(srcStatus).filter((s) => srcStatus[s].available);
+  const anyFiler = Object.keys(srcStatus).some((s) => srcStatus[s].filer);
+
+  if (!all.length) {
+    const msg = anyFiler ? "Nothing filed." : "No regulatory filer for this listing.";
+    const names = anyFiler ? availNames.join(" · ") : "";
+    const right = [names, p.fetchedAt ? "read " + relTime(p.fetchedAt) : ""].filter(Boolean).join(" · ");
+    return _discCard(_discHeader(sym, "", right ? '<span>' + esc(right) + "</span>" : "") +
+      '<div class="muted" style="font-size:12px;padding:8px 0 10px">' + msg + "</div>");
+  }
+
+  const catsAll = DISC_ORDER.filter((c) => all.some((f) => f.category === c));
+  const effCat = catsAll.indexOf(state.discCat) >= 0 ? state.discCat : "all";
+  const multiCat = catsAll.length > 1;
+  const multiSource = !state.discSource && new Set(all.map((f) => f.source)).size > 1;
+  const anySize = all.some((f) => f.size);
+  const oneSource = state.discSource || (new Set(all.map((f) => f.source)).size === 1 ? all[0].source : "");
+
+  let rows = all.slice();
+  if (state.discSource) rows = rows.filter((f) => f.source === state.discSource);
+  if (effCat !== "all") rows = rows.filter((f) => f.category === effCat);
+  const s = state.sort.disc;
+  rows = sortRows(rows, s.key, s.dir, discSortValue);
+
+  const cols = [{ key: "date", label: "Date", w: "104px" }, { key: "document", label: "Document", w: "minmax(0,1fr)" }];
+  if (multiCat) cols.push({ key: "category", label: "Category", w: "146px" });
+  if (multiSource) cols.push({ key: "source", label: "Source", w: "84px" });
+  if (anySize) cols.push({ key: "size", label: "Size", w: "74px", align: "right" });
+  const tmpl = cols.map((c) => c.w).join(" ") + " 22px";
+
+  const mid = (multiCat ? msegHtml("discCat", "cat", [["all", "All"]].concat(catsAll.map((c) => [c, c])), effCat) : "") +
+    (state.discSource ? '<span class="chip"><span class="cf">Source</span><span class="cv" style="cursor:default">' + esc(state.discSource) + '</span><button class="cx" data-act="discSourceClear" aria-label="Show every source">×</button></span>' : "");
+  const rightText = [(!multiSource && !state.discSource && oneSource) ? oneSource : "", p.fetchedAt ? "read " + relTime(p.fetchedAt) : ""].filter(Boolean).join(" · ");
+
+  const row = (f) => '<div class="dc-row" data-act="discOpen" data-arg=\'' + attr({ id: f.id, sym, source: f.source, url: f.url }) + '\' style="grid-template-columns:' + tmpl + '">' +
+    '<div style="font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(discDate(f)) + "</div>" +
+    '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + (f.title ? " <span>" + esc(f.title) + "</span>" : "") + "</div>" +
+    (multiCat ? '<div style="font-size:11.5px;color:var(--ink60)">' + esc(f.category) + "</div>" : "") +
+    (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
+    (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums">' + esc(f.size || "") + "</div>" : "") +
+    '<div class="dc-open' + (state.discOpening === f.id ? " on" : "") + '">' + (state.discOpening === f.id ? '<span style="font-size:11px">Opening…</span>' : "↗") + "</div></div>";
+
+  return _discCard(_discHeader(sym, mid, rightText ? '<span>' + esc(rightText) + "</span>" : "") +
+    '<div class="dc-head" style="grid-template-columns:' + tmpl + '">' + gridTh("disc", cols) + "<div></div></div>" +
+    '<div class="scroll dc-list" style="max-height:330px">' + rows.map(row).join("") + "</div>");
+}
 function tradeDetailHtml(t, m) {
   const fact = (l, v) => '<div><div class="lbl">' + l + '</div><div class="tab" style="font-size:13px">' + v + "</div></div>";
   const s = state.sort.execs;
@@ -2288,7 +2426,7 @@ function tradeDetailHtml(t, m) {
     '<input id="tagInput" data-id="' + esc(t.id) + '" value="' + esc(state.tagDraft) + '" placeholder="' + ((t.tags || []).length ? "Add another…" : "Add a tag…") + '" aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off"></div>' +
     '<div id="tagMenu"></div>' +
 
-    "</div></div></div></div>";
+    "</div></div></div>" + disclosuresCardHtml(t) + "</div>";
 }
 function tagMenuHtml() {
   const t = state.sel ? selById(state.sel) : null;
@@ -3209,7 +3347,7 @@ function render() {
   standing.forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("bh-noanim"); });
   if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
   placeTabIndicator();
-  if (state.sel) { const open = selById(state.sel); if (open && open.fills === undefined) loadTradeDetail(open.id); }
+  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); } }
   mountTradeChart();
   mountHeatmap();
   mountReels();
@@ -3271,6 +3409,8 @@ function openTrade(id) {
   _listScrollY = window.scrollY;
   state.sel = id;
   state.tagDraft = "";
+  state.discSource = null;
+  state.discOpening = null;
   state.page = "trades";
   state.picker = null;
   location.hash = "trades/" + encodeURIComponent(id);
@@ -3281,6 +3421,8 @@ function openHolding(id) {
   _listScrollY = window.scrollY;
   state.sel = id;
   state.tagDraft = "";
+  state.discSource = null;
+  state.discOpening = null;
   state.page = "portfolio";
   state.picker = null;
   location.hash = "portfolio/" + encodeURIComponent(id);
@@ -3442,6 +3584,18 @@ function act(name, arg, ev) {
     case "heatOpen": openHolding(arg.id); break;
     case "newsSym": state.newsSymbol = { symbol: arg.symbol, exchange: arg.exchange }; render(); break;
     case "newsSymClear": state.newsSymbol = null; render(); break;
+    case "discCat": state.discCat = arg.cat; render(); break;
+    case "discSource": state.discSource = arg.source; render(); break;
+    case "discSourceClear": state.discSource = null; render(); break;
+    case "discRefresh": refreshDisclosures(arg.sym); break;
+    case "discOpen": {
+      state.discOpening = arg.id;
+      const durl = (arg.source === "SEC" && arg.url) ? arg.url : "/api/filings/doc?symbol=" + encodeURIComponent(arg.sym) + "&id=" + encodeURIComponent(arg.id);
+      window.open(durl, "_blank", "noopener");
+      render();
+      clearTimeout(_discOpenTimer); _discOpenTimer = setTimeout(() => { state.discOpening = null; render(); }, 4000);
+      break;
+    }
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
