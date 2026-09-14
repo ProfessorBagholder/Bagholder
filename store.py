@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -1550,7 +1550,7 @@ def _ensure_quote_columns(conn):
 
 def _ensure_order_columns(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(orders)").fetchall()}
-    for col, typ in (("source", "TEXT"), ("ws_status", "TEXT"), ("filled_qty", "REAL"), ("avg_fill", "REAL"), ("submitted_at", "TEXT"), ("expires_at", "TEXT"), ("parent_id", "TEXT"), ("role", "TEXT")):
+    for col, typ in (("source", "TEXT"), ("ws_status", "TEXT"), ("filled_qty", "REAL"), ("avg_fill", "REAL"), ("submitted_at", "TEXT"), ("expires_at", "TEXT"), ("parent_id", "TEXT"), ("role", "TEXT"), ("fill_booked_qty", "REAL")):
         if col not in cols:
             conn.execute("ALTER TABLE orders ADD COLUMN %s %s" % (col, typ))
     bcols = {r["name"] for r in conn.execute("PRAGMA table_info(brackets)").fetchall()}
@@ -2590,6 +2590,7 @@ def _order_from_row(r):
         "expiresAt": r["expires_at"] or "",
         "parentId": r["parent_id"] or "",
         "role": r["role"] or "entry",
+        "fillBookedQty": r["fill_booked_qty"],
     }
 
 
@@ -2668,6 +2669,26 @@ def get_order(order_id):
             _ready(conn)
             r = conn.execute("SELECT * FROM orders WHERE id = ?", (_s(order_id),)).fetchone()
             return _order_from_row(r) if r else None
+        finally:
+            conn.close()
+
+
+def mark_order_fill_booked(order_id, qty):
+    """Record that the fill of this order (up to `qty`) has been written as a local
+    activity, so a later status poll of the same order does not book it again. The
+    booked quantity only ever grows; a smaller value never lowers the marker."""
+    q = _num(qty, 0.0) or 0.0
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.execute(
+                "UPDATE orders SET fill_booked_qty = ?, updated_at = ? "
+                "WHERE id = ? AND (fill_booked_qty IS NULL OR fill_booked_qty < ?)",
+                (q, _now_iso(), _s(order_id), q),
+            )
+            conn.commit()
+            return conn.total_changes > 0
         finally:
             conn.close()
 
