@@ -688,7 +688,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.27.0"
+APP_VERSION = "1.28.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -719,8 +719,8 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.4"
-ENRICH_VERSION = 2   # bump when title/summary logic improves, so read rows are re-read once
+PROTOCOL = "2026-09-14.5"
+ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5824,6 +5824,16 @@ def filings_enrich(symbol, doc_id):
     if not disclosures.available():
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+    # a provider may parse a structured filing (e.g. a Schedule 13G) exactly — no model
+    try:
+        exact = disclosures.enrichment(row)
+    except Exception:
+        exact = None
+    if exact and (exact.get("subject") or exact.get("summary")):
+        subject, summary = exact.get("subject") or "", exact.get("summary") or ""
+        store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary, version=ENRICH_VERSION)
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     try:
         data, ct = disclosures.content(row)
     except Exception as e:
@@ -5831,11 +5841,19 @@ def filings_enrich(symbol, doc_id):
     if not data:
         return {"ok": False, "error": "the document could not be read"}
     info = enrich.enrich_document(row.get("source", ""), data, ct)
-    subject = info.get("subject") or subject
-    summary = info.get("summary") or summary
-    # persist the subject always; the summary only once it exists, so a row is
-    # re-read for its summary once the model finishes provisioning
-    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=(summary or None), version=ENRICH_VERSION)
+    new_subject = info.get("subject") or ""
+    got_summary = info.get("summary") or ""
+    if model:
+        # a complete read under the current logic: it replaces both (an empty result
+        # clears a stale junk title or non-summary), and finalizes the row at this
+        # version so it is not re-read again.
+        store.set_filing_enrichment(sym, doc_id, subject=new_subject, summary=got_summary, version=ENRICH_VERSION)
+        subject, summary = new_subject, got_summary
+    else:
+        # the model is not up yet: keep the document's own title if it has one (a PDF's
+        # metadata), do not finalize the version, so the row is re-read once it is up.
+        subject = new_subject or subject
+        store.set_filing_enrichment(sym, doc_id, subject=(new_subject or None))
     return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
             "summaryAvailable": enrich.summary_available(), "summaryStatus": enrich.summary_status()}
 

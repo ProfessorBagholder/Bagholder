@@ -183,5 +183,33 @@ class ContentResolutionTest(unittest.TestCase):
         self.assertTrue(called["url"].endswith("primary.htm"))
 
 
+
+
+class OwnershipEnrichmentTest(unittest.TestCase):
+    """A Schedule 13G is parsed to an exact title/summary from its XML, not the model."""
+    def setUp(self):
+        self._doc = edgar.document
+    def tearDown(self):
+        edgar.document = self._doc
+
+    def test_13g_yields_a_stake_title_and_summary(self):
+        xml = (b"<edgarSubmission><submissionType>SCHEDULE 13G/A</submissionType>"
+               b"<issuerName>Quantum eMotion Corp.</issuerName>"
+               b"<reportingPersonName>Capital Ventures International</reportingPersonName>"
+               b"<reportingPersonName>Susquehanna Advisors Group, Inc.</reportingPersonName>"
+               b"<classPercent>2.4</classPercent></edgarSubmission>")
+        seen = {}
+        edgar.document = lambda row: (seen.setdefault("url", row["url"]), (xml, "application/xml"))[1]
+        out = edgar.enrichment({"type": "SCHEDULE 13G/A", "source": "SEC",
+                                "url": "https://www.sec.gov/Archives/edgar/data/1/2/xslSCHEDULE_13G_X02/primary_doc.xml"})
+        self.assertNotIn("xsl", seen["url"])   # the raw XML is read, not the rendered page
+        self.assertIn("2.4%", out["subject"])
+        self.assertIn("Capital Ventures International", out["subject"])
+        self.assertIn("2.4% of Quantum eMotion Corp.", out["summary"])
+
+    def test_non_ownership_forms_defer_to_the_model(self):
+        self.assertIsNone(edgar.enrichment({"type": "6-K", "source": "SEC", "url": "https://www.sec.gov/x/y.htm"}))
+
+
 if __name__ == "__main__":
     unittest.main()

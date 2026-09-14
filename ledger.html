@@ -111,6 +111,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .dc-doc{display:flex;flex-direction:column;gap:2px;min-width:0}
 .dc-doc b{font-weight:500;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-doc .dc-meta{font-size:11px;color:var(--ink55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-title{font-size:12.5px;font-weight:500;line-height:1.35;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .dc-sumcell{font-size:12px;line-height:1.45;color:var(--ink75);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .dc-cat{font-size:11.5px;color:var(--ink60);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:1px}
 .dc-src{font-size:11.5px;font-weight:500;color:var(--accent-300);border:0;background:transparent;padding:1px 0 0;font-family:var(--font);cursor:pointer;text-align:left}
@@ -489,7 +490,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.4"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.5"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2393,8 +2394,8 @@ function disclosuresCardHtml(t) {
   const sym = discSymbol(t);
   const rec = _disc[sym];
   if (!rec || rec.loading) {
-    const skel = '<div class="dc-row" style="grid-template-columns:96px minmax(0,1.05fr) minmax(0,1.6fr) 128px 22px;pointer-events:none">' +
-      ["60%", "72%", "88%", "50%"].map((w) => '<div class="dc-skel" style="width:' + w + '"></div>').join("") + "<div></div></div>";
+    const skel = '<div class="dc-row" style="grid-template-columns:92px minmax(0,0.9fr) minmax(0,1.25fr) minmax(0,1.7fr) 22px;pointer-events:none">' +
+      ["55%", "60%", "78%", "90%"].map((w) => '<div class="dc-skel" style="width:' + w + '"></div>').join("") + "<div></div></div>";
     return _discCard('<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5>' +
       '<span style="font-size:11px;color:var(--ink55)">Reading disclosures…</span></div><div class="dc-sweep"></div><div class="dc-list">' +
       new Array(6).fill(skel).join("") + "</div>");
@@ -2427,8 +2428,10 @@ function disclosuresCardHtml(t) {
   const s = state.sort.disc;
   rows = sortRows(rows, s.key, s.dir, discSortValue);
 
-  const cols = [{ key: "date", label: "Date", w: "96px" }, { key: "document", label: "Document", w: "minmax(0,1.05fr)" }];
-  if (anySummary) cols.push({ key: "summary", label: "Summary", w: "minmax(0,1.9fr)", plain: true });
+  const cols = [{ key: "date", label: "Date", w: "92px" },
+                { key: "document", label: "Document", w: "minmax(0,0.9fr)" },
+                { key: "title", label: "Title", w: "minmax(0,1.25fr)", plain: true },
+                { key: "summary", label: "Summary", w: "minmax(0,1.7fr)", plain: true }];
   if (multiSource) cols.push({ key: "source", label: "Source", w: "84px" });
   if (anySize) cols.push({ key: "size", label: "Size", w: "66px", align: "right" });
   const tmpl = cols.map((c) => c.w).join(" ") + " 22px";
@@ -2442,16 +2445,15 @@ function disclosuresCardHtml(t) {
   const row = (f) => {
     const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
     const lang = f.title || "";
-    const head = f.subject ? esc(f.subject) : esc(f.type);
-    const metaText = f.subject ? esc(f.type) + (lang ? " · " + esc(lang) : "") : (lang ? esc(lang) : "");
-    const meta = metaText ? '<span class="dc-meta">' + metaText + "</span>"
-      : (!f.subject && enriching ? '<span class="dc-meta">' + skel("55%") + "</span>" : "");
+    const meta = lang ? '<span class="dc-meta">' + esc(lang) + "</span>" : "";
+    const titleCell = f.subject ? esc(f.subject) : (enriching ? skel("70%") : "");
     const sum = f.summary ? esc(f.summary)
       : (enriching || _discPreparing(f)) ? skel("90%") : "";
     return '<div class="dc-row" data-act="discOpen" data-arg=\'' + openArg(f) + '\' style="grid-template-columns:' + tmpl + '">' +
       '<div class="dc-date">' + esc(discDate(f)) + "</div>" +
-      '<div class="dc-doc"><b>' + head + "</b>" + meta + "</div>" +
-      (anySummary ? '<div class="dc-sumcell">' + sum + "</div>" : "") +
+      '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + meta + "</div>" +
+      '<div class="dc-title">' + titleCell + "</div>" +
+      '<div class="dc-sumcell">' + sum + "</div>" +
       (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
       (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">' + esc(f.size || "") + "</div>" : "") +
       '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";
