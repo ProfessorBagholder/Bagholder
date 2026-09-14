@@ -97,9 +97,10 @@ in one walk, not one per row), and every result is stored so a later visit is in
   - The model needs the document's text. SEC filings are HTML and summarize out of
     the box. SEDAR+ documents are PDFs whose subsetted fonts a naive reader cannot
     decode, so their text comes from `pdftext.py`: a system `pdftotext` (poppler) when
-    present, otherwise `pdfminer.six`, which the app pip-installs into
-    `~/.bagholder/pylibs/` on first use (nothing to install by hand; `BAGHOLDER_NO_PDF=1`
-    turns it off). While it installs, the Summary cell shows a shimmer, then fills.
+    present, otherwise `pdfminer.six`, which the app installs
+    for itself in the background at startup (`deps.py`), into `~/.bagholder/pylibs/`,
+    with nothing to run by hand. A summary that lands before the install finishes shows
+    a shimmer, then fills. `BAGHOLDER_NO_PDF=1` turns extraction off.
   - Overrides: `BAGHOLDER_LLM_URL` (use your own local server), `BAGHOLDER_OLLAMA_MODEL`,
     `BAGHOLDER_LLAMAFILE_URL` / `BAGHOLDER_LLAMAFILE_SHA256` (a different model file).
     The download runs an executable it fetched, so it is refused unless its SHA-256

@@ -35,6 +35,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
+import deps
+deps.activate()   # make ~/.bagholder/pylibs importable before the optional-dependency modules load
+
 import csvimport
 import exposure
 import instruments
@@ -685,7 +688,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.26.0"
+APP_VERSION = "1.26.1"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -6961,6 +6964,7 @@ def main():
     global _httpd
     _ensure_home()
     store.ensure()
+    deps.provision()   # install any missing third-party packages in the background, invisibly
     boot_session()
     httpd, port = bind_server()
     _httpd = httpd
