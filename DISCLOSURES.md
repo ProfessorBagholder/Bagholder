@@ -94,9 +94,12 @@ in one walk, not one per row), and every result is stored so a later visit is in
   `localmodel.py` manages this. The Summary column itself appears only once a summary
   exists; where a document's text or the model is unavailable it stays absent rather
   than showing a wrong guess.
-  - SEC filings are HTML and summarize out of the box. SEDAR+ documents are PDFs,
-    and the model needs their text; that still comes from `pdftotext` (poppler) if
-    it is on the path — without it a SEDAR+ filing shows its subject but no summary.
+  - The model needs the document's text. SEC filings are HTML and summarize out of
+    the box. SEDAR+ documents are PDFs whose subsetted fonts a naive reader cannot
+    decode, so their text comes from `pdftext.py`: a system `pdftotext` (poppler) when
+    present, otherwise `pdfminer.six`, which the app pip-installs into
+    `~/.bagholder/pylibs/` on first use (nothing to install by hand; `BAGHOLDER_NO_PDF=1`
+    turns it off). While it installs, the Summary cell shows a shimmer, then fills.
   - Overrides: `BAGHOLDER_LLM_URL` (use your own local server), `BAGHOLDER_OLLAMA_MODEL`,
     `BAGHOLDER_LLAMAFILE_URL` / `BAGHOLDER_LLAMAFILE_SHA256` (a different model file).
     The download runs an executable it fetched, so it is refused unless its SHA-256

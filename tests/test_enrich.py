@@ -6,6 +6,20 @@ from __future__ import annotations
 import unittest
 
 import enrich
+import pdftext
+
+
+_SAVED_PDF_DISABLED = None
+
+
+def setUpModule():
+    global _SAVED_PDF_DISABLED
+    _SAVED_PDF_DISABLED = pdftext.DISABLED
+    pdftext.DISABLED = True   # never install pdfminer or shell out during tests
+
+
+def tearDownModule():
+    pdftext.DISABLED = _SAVED_PDF_DISABLED
 
 
 def pdf_with_title(title_bytes):
@@ -41,14 +55,9 @@ class TextTest(unittest.TestCase):
         html = b"<html><head><style>.x{}</style></head><body><h1>Results</h1><script>x()</script><p>Net income up 20%</p></body></html>"
         self.assertEqual(enrich.html_text(html), "Results Net income up 20%")
 
-    def test_pdf_text_is_empty_without_pdftotext(self):
-        import shutil
-        saved = shutil.which
-        try:
-            shutil.which = lambda name: None
-            self.assertEqual(enrich.pdf_text(b"%PDF-1.7 ..."), "")
-        finally:
-            shutil.which = saved
+    def test_pdf_text_is_empty_when_no_engine(self):
+        # with the PDF engine disabled (as in tests) a PDF yields no text, never an error
+        self.assertEqual(enrich.pdf_text(b"%PDF-1.7 ..."), "")
 
     def test_document_text_routes_by_type(self):
         self.assertEqual(enrich.document_text(b"<p>hello there</p>", "text/html"), "hello there")
