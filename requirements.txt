@@ -1,1 +1,2 @@
 tzdata
+curl_cffi>=0.7

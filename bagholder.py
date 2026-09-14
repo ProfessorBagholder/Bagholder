@@ -38,8 +38,11 @@ from urllib.request import Request, urlopen
 import csvimport
 import exposure
 import instruments
+import disclosures
+import enrich
 import market
 import news
+import sedar
 import universes
 import model
 import store
@@ -713,7 +716,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-11.9"
+PROTOCOL = "2026-09-14.2"
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5653,6 +5656,184 @@ def news_loop():
             return
 
 
+# ---------------------------------------------------------------------------
+# Disclosures: an instrument's regulatory filings from every source that covers
+# it (SEDAR+ for Canada, SEC EDGAR for the US, more later), merged and cached.
+# SEDAR+ needs the optional curl_cffi dependency; EDGAR needs only the standard
+# library, so US filings work even where SEDAR+ does not. See disclosures.py.
+# ---------------------------------------------------------------------------
+FILINGS_STALE_HOURS = 24
+
+
+def _instrument_meta(symbol):
+    """(issuer name, exchange, currency) Bagholder holds for a symbol, to steer the
+    sources; the name seeds the SEDAR+ lookup, exchange/currency pick the sources.
+    Falls back to the bare symbol."""
+    sym = _s(symbol).strip().upper()
+    for sec in store.list_securities():
+        if _s(sec.get("symbol")).strip().upper() == sym:
+            return (_s(sec.get("name")).strip() or sym, _s(sec.get("primaryExchange")).strip(), _s(sec.get("currency")).strip())
+    return (sym, "", "")
+
+
+def _filings_stale(symbol, now=None):
+    when = store.filings_fetched_at(symbol)
+    if not when:
+        return True
+    try:
+        age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return age > timedelta(hours=FILINGS_STALE_HOURS)
+
+
+def refresh_filings(symbol, name=None, exchange=None, currency=None):
+    """Gather one symbol's disclosures from every covering source and replace its
+    stored rows per source. Never raises; returns the total written, or -1 when no
+    source could be reached. The instrument's name/exchange/currency steer the
+    sources; the caller may pass them (the page does), else they come from the book."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return 0
+
+    @single_flight("filings:" + sym, busy=0)
+    def run():
+        iname, ex, cur = _instrument_meta(sym)
+        if name:
+            iname = name
+        exchange_, currency_ = (exchange if exchange is not None else ex), (currency if currency is not None else cur)
+        try:
+            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_)
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: %s failed: %s\n" % (sym, e))
+            return -1
+        total = 0
+        any_reached = False
+        profile_no = ""
+        by_source = {}
+        for it in result.get("items") or []:
+            by_source.setdefault(it.get("source") or "", []).append(it)
+            if it.get("source") == sedar.SOURCE and it.get("profileNo"):
+                profile_no = it["profileNo"]
+        for src, status in (result.get("sources") or {}).items():
+            if status.get("available"):
+                any_reached = True
+            if status.get("matched") or status.get("available"):
+                total += store.replace_filings(sym, src, by_source.get(src, []))
+        store.mark_filings_fetched(sym, profile_no)
+        store.set_meta("filings_sources:" + sym, json.dumps(result.get("sources") or {}))
+        return total if any_reached else -1
+
+    return run()
+
+
+def _source_status(sym):
+    """Per-source status for the payload: live availability, plus whether a filer
+    was found and whether it had rows at the last read. Falls back to the cache
+    when no read has been recorded."""
+    try:
+        stored_status = json.loads(store.get_meta("filings_sources:" + sym) or "{}")
+    except ValueError:
+        stored_status = {}
+    have = {r.get("source") for r in store.filings(sym)}
+    out = {}
+    for p in disclosures.PROVIDERS:
+        try:
+            avail = bool(p.available())
+        except Exception:
+            avail = False
+        st = stored_status.get(p.SOURCE) or {}
+        out[p.SOURCE] = {
+            "available": avail,
+            "matched": p.SOURCE in have,
+            "filer": bool(st.get("filer") or p.SOURCE in have),
+        }
+    return out
+
+
+def filings_payload(symbol, refresh=False, name=None, exchange=None, currency=None):
+    """The stored disclosures for a symbol, refreshing first when forced or stale."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    wrote = None
+    if refresh or _filings_stale(sym):
+        wrote = refresh_filings(sym, name=name, exchange=exchange, currency=currency)
+    return {
+        "ok": True,
+        "symbol": sym,
+        "available": disclosures.available(),
+        "sources": _source_status(sym),
+        "categories": disclosures.CATEGORIES,
+        "profileNo": store.sedar_profile(sym),
+        "fetchedAt": store.filings_fetched_at(sym),
+        "refreshed": bool(wrote and wrote > 0),
+        "sourceUnavailable": wrote == -1,
+        "filings": store.filings(sym),
+    }
+
+
+def filings_document(symbol, doc_id):
+    """Fetch one of a symbol's disclosure documents by its id. Returns (bytes,
+    content_type) or (None, error). The row's source decides how: a SEC document is
+    a static URL; a SEDAR+ document is session-bound and re-fetched live through the
+    issuer's profile."""
+    sym = _s(symbol).strip().upper()
+    row = store.filing(sym, doc_id)
+    if not row:
+        # not cached yet: fetch this symbol's disclosures, then look again
+        refresh_filings(sym)
+        row = store.filing(sym, doc_id)
+    if not row:
+        return None, "no such document for %s" % sym
+    try:
+        data, ct = disclosures.document(row)
+    except disclosures.SourceUnavailable as e:
+        return None, str(e)
+    except Exception as e:
+        return None, "%s: %s" % (type(e).__name__, e)
+    if not data:
+        return None, "empty document"
+    return data, ct or "application/octet-stream"
+
+
+def filings_enrich(symbol, doc_id):
+    """Read one document for its subject (its own title) and, when a local model is
+    reachable, a one-sentence summary. Both are cached on the row, so a document is
+    read once. Returns the current subject/summary even when nothing new could be
+    added (no source, no model), so the row can render what it has."""
+    sym = _s(symbol).strip().upper()
+    row = store.filing(sym, doc_id)
+    if not row:
+        return {"ok": False, "error": "no such document"}
+    subject = row.get("subject") or ""
+    summary = row.get("summary") or ""
+    model = enrich.summary_available()
+    attempted = bool(row.get("enrichedAt"))
+    # Already read, and there is nothing further to get (we have the summary, or no
+    # model to make one): return what is cached without fetching the document again.
+    if attempted and (summary or not model):
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+    if not disclosures.available():
+        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+    try:
+        data, ct = disclosures.document(row)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not data:
+        return {"ok": False, "error": "the document could not be read"}
+    info = enrich.enrich_document(row.get("source", ""), data, ct)
+    subject = info.get("subject") or subject
+    summary = info.get("summary") or summary
+    # persist the subject always; the summary only once it exists, so a row is
+    # re-read for its summary once the model finishes provisioning
+    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=(summary or None))
+    return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+            "summaryAvailable": enrich.summary_available(), "summaryStatus": enrich.summary_status()}
+
+
 @single_flight("universes")
 def refresh_universes():
     """The market heatmaps' tiles: the TSX 60 from TMX, the US market from Nasdaq's screener. Never raises."""
@@ -6369,6 +6550,47 @@ class Handler(BaseHTTPRequestHandler):
             rec = {"symbol": _query_param(query, "symbol") or "", "exchange": _query_param(query, "exchange") or "", "currency": _query_param(query, "currency") or "", "kind": "Shares"}
             q = market.peek_quote(rec, _ssl_context()) if rec["symbol"] else None
             self._send(200, dict({"ok": True, "price": None, "priceChange": None, "percentChange": None}, **(q or {})))
+            return
+        if path == "/api/filings":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            symbol = _query_param(query, "symbol")
+            if not symbol:
+                self._send(400, {"ok": False, "error": "symbol required"})
+                return
+            refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
+            self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
+                                            exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/filings/doc":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            symbol = _query_param(query, "symbol")
+            doc_id = _query_param(query, "id")
+            if not symbol or not doc_id:
+                self._send(400, {"ok": False, "error": "symbol and id required"})
+                return
+            data, info = filings_document(symbol, doc_id)
+            if data is None:
+                self._send(502, {"ok": False, "error": info})
+                return
+            self._send(200, data, info or "application/pdf")
+            return
+        if path == "/api/filings/enrich":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            symbol = _query_param(query, "symbol")
+            doc_id = _query_param(query, "id")
+            if not symbol or not doc_id:
+                self._send(400, {"ok": False, "error": "symbol and id required"})
+                return
+            self._send(200, filings_enrich(symbol, doc_id))
             return
         if path == "/api/orders":
             if not self._gate():
