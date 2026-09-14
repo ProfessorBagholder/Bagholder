@@ -137,8 +137,10 @@ def summarize(text):
     text = (text or "").strip()
     if not text:
         return ""
-    out = _WS.sub(" ", localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)).strip().strip('"')
-    m = re.match(r"(.+?[.!?])(\s|$)", out)           # keep it to one sentence
+    out = localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)
+    out = re.sub(r"<\|[^>]*\|>", " ", out)             # drop any chat-template special tokens
+    out = _WS.sub(" ", out).strip().strip('"').strip()
+    m = re.match(r"(.+?[.!?])(\s|$)", out)             # keep it to one sentence
     return (m.group(1) if m else out)[:240]
 
 

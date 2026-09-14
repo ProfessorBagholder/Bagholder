@@ -74,6 +74,10 @@ class SummaryTest(unittest.TestCase):
         self.lm.chat = lambda prompt, max_tokens=90: "It announces a private placement. Extra sentence."
         self.assertEqual(enrich.summarize("text"), "It announces a private placement.")
 
+    def test_summary_strips_chat_template_tokens(self):
+        self.lm.chat = lambda prompt, max_tokens=90: "It announces a private placement.<|eot_id|>"
+        self.assertEqual(enrich.summarize("text"), "It announces a private placement.")
+
     def test_enrich_document_gives_subject_without_a_model(self):
         self.lm.chat = lambda prompt, max_tokens=90: ""
         info = enrich.enrich_document("SEDAR+", pdf_with_title(b"Microsoft Word - Acme Announces Buyback EN"), "application/pdf")

@@ -101,27 +101,24 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .nw-sym{font-size:13px;font-weight:500;border:0;background:transparent;padding:0;color:var(--ink);font-family:var(--font)}
 .nw-sym.go{cursor:pointer}
 .nw-sym.go:hover{color:var(--accent-300)}
-.dc-head,.dc-row{display:grid;gap:10px;padding:0 16px;white-space:nowrap;align-items:center}
-.dc-head{padding-bottom:6px;margin:0 -16px}
+.dc-head,.dc-row{display:grid;gap:10px;padding:0 16px}
+.dc-head{padding-bottom:6px;margin:0 -16px;white-space:nowrap;align-items:center}
 .dc-list{margin:0 -16px}
-.dc-row{padding:8px 16px 6px;cursor:pointer;border-top:1px solid rgba(var(--ink-rgb),.06)}
+.dc-row{padding:9px 16px;cursor:pointer;border-top:1px solid rgba(var(--ink-rgb),.06);align-items:start}
 .dc-row:hover{background:rgba(var(--ink-rgb),var(--hover))}
-.dc-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.dc-doc b{font-weight:500;font-size:12.5px;color:var(--ink)}
-.dc-doc span{font-size:12px;color:var(--ink60)}
-.dc-src{font-size:11.5px;font-weight:500;color:var(--accent-300);border:0;background:transparent;padding:0;font-family:var(--font);cursor:pointer;text-align:left}
+.dc-row > *{min-width:0}
+.dc-date{font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap;padding-top:1px}
+.dc-doc{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dc-doc b{font-weight:500;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-doc .dc-meta{font-size:11px;color:var(--ink55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-sumcell{font-size:12px;line-height:1.45;color:var(--ink75);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dc-cat{font-size:11.5px;color:var(--ink60);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:1px}
+.dc-src{font-size:11.5px;font-weight:500;color:var(--accent-300);border:0;background:transparent;padding:1px 0 0;font-family:var(--font);cursor:pointer;text-align:left}
 .dc-src:hover{color:var(--accent)}
 .dc-open{color:var(--ink55);visibility:hidden;border:0;background:transparent;padding:0;cursor:pointer;font:inherit;text-align:right}
-.dc-row:hover .dc-open,.dc-row.on .dc-open{visibility:visible}
+.dc-row:hover .dc-open{visibility:visible}
 .dc-open:hover,.dc-open.lit{color:var(--accent-300)}
-.dc-subj{color:var(--ink);font-weight:400}
-.dc-doc b + .dc-subj{margin-left:2px}
-.dc-panel{margin:0 -16px;padding:2px 16px 12px;display:flex;flex-direction:column;gap:8px;background:rgba(var(--ink-rgb),.03);box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.05)}
-.dc-sum{font-size:12.5px;line-height:1.5;color:var(--ink);max-width:80ch}
-.dc-pmuted{font-size:12px;color:var(--ink55)}
-.dc-openbtn{align-self:flex-start;font:500 11.5px var(--font);color:var(--accent-300);background:transparent;border:0;padding:2px 0;cursor:pointer}
-.dc-openbtn:hover{color:var(--accent)}
-.dc-skel{height:11px;border-radius:4px;background:rgba(var(--ink-rgb),.08);animation:dcpulse 1.4s ease-in-out infinite}
+.dc-skel{display:inline-block;height:10px;border-radius:4px;background:rgba(var(--ink-rgb),.09);animation:dcpulse 1.3s ease-in-out infinite}
 @keyframes dcpulse{0%,100%{opacity:.5}50%{opacity:.9}}
 .dc-sweep{position:relative;height:1px;margin:0 -16px;background:rgba(var(--ink-rgb),.08);overflow:hidden}
 .dc-sweep::after{content:"";position:absolute;top:0;left:0;height:100%;width:30%;background:var(--accent);animation:dcsweep 1.9s linear infinite}
@@ -492,7 +489,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.2"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.3"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -634,6 +631,7 @@ function gridTh(table, cols) {
   const s = state.sort[table];
   return cols.map((c) => {
     const on = s.key === c.key, right = c.align === "right";
+    if (c.plain) return '<div class="gth" style="text-align:' + (c.align || "left") + '"><span class="th-in">' + esc(c.label) + "</span></div>";
     return '<div class="gth' + (on ? " on" : "") + '" data-act="sort" data-arg=\'' + attr({ table, key: c.key }) + "' style=\"text-align:" + (c.align || "left") + '">' +
       '<span class="th-in" style="flex-direction:' + (right ? "row-reverse" : "row") + '">' + esc(c.label) + '<span class="arrow" style="color:' + (on ? "var(--accent)" : "transparent") + '">' + (on && s.dir === "asc" ? "▲" : "▼") + "</span></span></div>";
   }).join("");
@@ -2324,21 +2322,50 @@ function refreshDisclosures(sym) {
   if (open && discSymbol(open) === sym) ensureDisclosures(open);
   render();
 }
-const _discEnrichLoading = {}, _discEnrichTried = {};
+const _discEnrichLoading = {}, _discEnrichTried = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
 function discFiling(sym, id) { const rec = _disc[sym]; return (rec && rec.payload ? rec.payload.filings : []).find((f) => f.id === id) || null; }
-function ensureDiscEnrich(sym, f) {
-  // read the document for its subject and (if a local model is up) a summary, once
-  if (!f || _discEnrichLoading[f.id] || f.summary) return;
-  if (_discEnrichTried[f.id]) return;
+function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f && q.has(f.id)); }
+function _discStillOpen(sym) { const open = state.sel && selById(state.sel); return !!(open && discSymbol(open) === sym); }
+function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
+function enrichOne(sym, f) {
+  // read one document for its subject (from the file) and, if the local model is up, a summary
+  if (!f) return Promise.resolve();
   _discEnrichLoading[f.id] = true;
-  api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
+  return api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
     delete _discEnrichLoading[f.id];
     if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
-    // the model may still be provisioning on first use: let a later open retry
-    if (!(f.summaryStatus === "downloading" || f.summaryStatus === "starting")) _discEnrichTried[f.id] = true;
-    const open = state.sel && selById(state.sel);
-    if (open && discSymbol(open) === sym) render();
+    // done once there is nothing more to wait for; a still-provisioning model gets a later pass
+    if (!_discPreparing(f)) _discEnrichTried[f.id] = true;
+    if (_discStillOpen(sym)) render();
   });
+}
+// fill every row's subject and summary on its own, top of the list first, one document at a
+// time so SEDAR+ is asked at a person's pace; the scope is cached server-side so the run
+// walks the issuer once, and each result is stored so a later visit is instant.
+function sweepDiscEnrich(sym, rows) {
+  if (_discSweep[sym]) return;
+  const need = (f) => !_discEnrichTried[f.id] && (!f.subject || !f.summary);
+  const pending = rows.filter(need);
+  if (!pending.length) return;
+  _discSweep[sym] = true;
+  const q = new Set(pending.map((f) => f.id));
+  _discQueue[sym] = q;
+  let i = 0, sawPreparing = false;
+  const finish = () => {
+    _discSweep[sym] = false; _discQueue[sym] = null;
+    if (sawPreparing && (_discRekicks[sym] || 0) < 6 && _discStillOpen(sym)) {
+      _discRekicks[sym] = (_discRekicks[sym] || 0) + 1;
+      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); }, 15000);
+    }
+  };
+  const step = () => {
+    if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
+    while (i < pending.length && !need(pending[i])) { q.delete(pending[i].id); i++; }
+    if (i >= pending.length) return finish();
+    const f = pending[i++]; q.delete(f.id);
+    enrichOne(sym, f).then(() => { if (_discPreparing(f)) sawPreparing = true; setTimeout(step, 150); });
+  };
+  step();
 }
 function discDate(item) {
   const iso = String(item.date || "").slice(0, 10);
@@ -2366,8 +2393,8 @@ function disclosuresCardHtml(t) {
   const sym = discSymbol(t);
   const rec = _disc[sym];
   if (!rec || rec.loading) {
-    const skel = '<div class="dc-row" style="grid-template-columns:104px minmax(0,1fr) 146px 84px 74px 22px;pointer-events:none">' +
-      ["70%", "55%", "60%", "50%", "40%"].map((w) => '<div class="dc-skel" style="width:' + w + '"></div>').join("") + "<div></div></div>";
+    const skel = '<div class="dc-row" style="grid-template-columns:96px minmax(0,1.05fr) minmax(0,1.6fr) 128px 22px;pointer-events:none">' +
+      ["60%", "72%", "88%", "50%"].map((w) => '<div class="dc-skel" style="width:' + w + '"></div>').join("") + "<div></div></div>";
     return _discCard('<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:8px"><h5>Disclosures</h5>' +
       '<span style="font-size:11px;color:var(--ink55)">Reading disclosures…</span></div><div class="dc-sweep"></div><div class="dc-list">' +
       new Array(6).fill(skel).join("") + "</div>");
@@ -2391,6 +2418,7 @@ function disclosuresCardHtml(t) {
   const multiCat = catsAll.length > 1;
   const multiSource = !state.discSource && new Set(all.map((f) => f.source)).size > 1;
   const anySize = all.some((f) => f.size);
+  const anySummary = all.some((f) => f.summary);
   const oneSource = state.discSource || (new Set(all.map((f) => f.source)).size === 1 ? all[0].source : "");
 
   let rows = all.slice();
@@ -2399,10 +2427,11 @@ function disclosuresCardHtml(t) {
   const s = state.sort.disc;
   rows = sortRows(rows, s.key, s.dir, discSortValue);
 
-  const cols = [{ key: "date", label: "Date", w: "104px" }, { key: "document", label: "Document", w: "minmax(0,1fr)" }];
-  if (multiCat) cols.push({ key: "category", label: "Category", w: "146px" });
+  const cols = [{ key: "date", label: "Date", w: "96px" }, { key: "document", label: "Document", w: "minmax(0,1.05fr)" }];
+  if (anySummary) cols.push({ key: "summary", label: "Summary", w: "minmax(0,1.6fr)", plain: true });
+  if (multiCat) cols.push({ key: "category", label: "Category", w: "128px" });
   if (multiSource) cols.push({ key: "source", label: "Source", w: "84px" });
-  if (anySize) cols.push({ key: "size", label: "Size", w: "74px", align: "right" });
+  if (anySize) cols.push({ key: "size", label: "Size", w: "66px", align: "right" });
   const tmpl = cols.map((c) => c.w).join(" ") + " 22px";
 
   const mid = (multiCat ? msegHtml("discCat", "cat", [["all", "All"]].concat(catsAll.map((c) => [c, c])), effCat) : "") +
@@ -2410,26 +2439,27 @@ function disclosuresCardHtml(t) {
   const rightText = [(!multiSource && !state.discSource && oneSource) ? oneSource : "", p.fetchedAt ? "read " + relTime(p.fetchedAt) : ""].filter(Boolean).join(" · ");
 
   const openArg = (f) => attr({ id: f.id, sym, source: f.source, url: f.url });
+  const skel = (w) => '<span class="dc-skel" style="width:' + w + '"></span>';
   const row = (f) => {
-    const exp = state.discExpanded === f.id;
-    const subj = f.subject ? ' <span class="dc-subj">· ' + esc(f.subject) + "</span>" : "";
-    const r = '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
-      '<div style="font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(discDate(f)) + "</div>" +
-      '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + subj + (f.title ? ' <span>' + esc(f.title) + "</span>" : "") + "</div>" +
-      (multiCat ? '<div style="font-size:11.5px;color:var(--ink60)">' + esc(f.category) + "</div>" : "") +
+    const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
+    const lang = f.title || "";
+    const head = f.subject ? esc(f.subject) : esc(f.type);
+    const metaText = f.subject ? esc(f.type) + (lang ? " · " + esc(lang) : "") : (lang ? esc(lang) : "");
+    const meta = metaText ? '<span class="dc-meta">' + metaText + "</span>"
+      : (!f.subject && enriching ? '<span class="dc-meta">' + skel("55%") + "</span>" : "");
+    const sum = f.summary ? esc(f.summary)
+      : (enriching || _discPreparing(f)) ? skel("90%") : "";
+    return '<div class="dc-row" data-act="discOpen" data-arg=\'' + openArg(f) + '\' style="grid-template-columns:' + tmpl + '">' +
+      '<div class="dc-date">' + esc(discDate(f)) + "</div>" +
+      '<div class="dc-doc"><b>' + head + "</b>" + meta + "</div>" +
+      (anySummary ? '<div class="dc-sumcell">' + sum + "</div>" : "") +
+      (multiCat ? '<div class="dc-cat">' + esc(f.category) + "</div>" : "") +
       (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
-      (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums">' + esc(f.size || "") + "</div>" : "") +
+      (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">' + esc(f.size || "") + "</div>" : "") +
       '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";
-    if (!exp) return r;
-    const loading = _discEnrichLoading[f.id];
-    const preparing = f.summaryStatus === "downloading" || f.summaryStatus === "starting";
-    const body = loading ? '<div class="dc-pmuted">Reading the document…</div>'
-      : f.summary ? '<div class="dc-sum">' + esc(f.summary) + "</div>"
-      : preparing ? '<div class="dc-pmuted">Preparing summaries…</div>' : "";
-    return r + '<div class="dc-panel">' + body +
-      '<button class="dc-openbtn" data-act="discOpen" data-arg=\'' + openArg(f) + '\'>Open document ↗</button></div>';
   };
 
+  sweepDiscEnrich(sym, rows);
   return _discCard(_discHeader(sym, mid, rightText ? '<span>' + esc(rightText) + "</span>" : "") +
     '<div class="dc-head" style="grid-template-columns:' + tmpl + '">' + gridTh("disc", cols) + "<div></div></div>" +
     '<div class="scroll dc-list" style="max-height:330px">' + rows.map(row).join("") + "</div>");
@@ -3626,7 +3656,6 @@ function act(name, arg, ev) {
     case "heatOpen": openHolding(arg.id); break;
     case "newsSym": state.newsSymbol = { symbol: arg.symbol, exchange: arg.exchange }; render(); break;
     case "newsSymClear": state.newsSymbol = null; render(); break;
-    case "discExpand": { const open = state.sel && selById(state.sel); const dsym = open ? discSymbol(open) : ""; state.discExpanded = state.discExpanded === arg.id ? null : arg.id; if (state.discExpanded && dsym) ensureDiscEnrich(dsym, discFiling(dsym, arg.id)); render(); break; }
     case "discCat": state.discCat = arg.cat; render(); break;
     case "discSource": state.discSource = arg.source; render(); break;
     case "discSourceClear": state.discSource = null; render(); break;

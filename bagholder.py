@@ -716,7 +716,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.2"
+PROTOCOL = "2026-09-14.3"
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
