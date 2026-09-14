@@ -108,9 +108,16 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .dc-row:hover{background:rgba(var(--ink-rgb),var(--hover))}
 .dc-row > *{min-width:0}
 .dc-date{font-size:11px;color:var(--ink55);font-variant-numeric:tabular-nums;white-space:nowrap;padding-top:1px}
-.dc-doc{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dc-doc{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-doc b{font-weight:500;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dc-doc .dc-meta{font-size:11px;color:var(--ink55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-doc .dc-meta{font-size:11px;color:var(--ink55)}
+.dc-row.on{background:rgba(var(--ink-rgb),var(--hover))}
+.dc-panel{padding:2px 16px 14px;margin:0 -16px;display:flex;flex-direction:column;gap:8px;background:rgba(var(--ink-rgb),.035);box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.05)}
+.dc-xtitle{font-size:13px;font-weight:600;color:var(--ink)}
+.dc-xsum{font-size:12.5px;line-height:1.55;color:var(--ink);max-width:92ch}
+.dc-pmuted{font-size:12px;color:var(--ink55)}
+.dc-openbtn{align-self:flex-start;font:500 11.5px var(--font);color:var(--accent-300);background:transparent;border:0;padding:2px 0;cursor:pointer}
+.dc-openbtn:hover{color:var(--accent)}
 .dc-title{font-size:12.5px;font-weight:500;line-height:1.35;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .dc-sumcell{font-size:12px;line-height:1.45;color:var(--ink75);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .dc-cat{font-size:11.5px;color:var(--ink60);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:1px}
@@ -490,7 +497,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.5"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.6"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2428,10 +2435,10 @@ function disclosuresCardHtml(t) {
   const s = state.sort.disc;
   rows = sortRows(rows, s.key, s.dir, discSortValue);
 
-  const cols = [{ key: "date", label: "Date", w: "92px" },
-                { key: "document", label: "Document", w: "minmax(0,0.9fr)" },
-                { key: "title", label: "Title", w: "minmax(0,1.25fr)", plain: true },
-                { key: "summary", label: "Summary", w: "minmax(0,1.7fr)", plain: true }];
+  const cols = [{ key: "date", label: "Date", w: "88px" },
+                { key: "document", label: "Document", w: "minmax(120px,0.6fr)" },
+                { key: "title", label: "Title", w: "minmax(0,1.3fr)", plain: true },
+                { key: "summary", label: "Summary", w: "minmax(0,2fr)", plain: true }];
   if (multiSource) cols.push({ key: "source", label: "Source", w: "84px" });
   if (anySize) cols.push({ key: "size", label: "Size", w: "66px", align: "right" });
   const tmpl = cols.map((c) => c.w).join(" ") + " 22px";
@@ -2444,19 +2451,24 @@ function disclosuresCardHtml(t) {
   const skel = (w) => '<span class="dc-skel" style="width:' + w + '"></span>';
   const row = (f) => {
     const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
-    const lang = f.title || "";
-    const meta = lang ? '<span class="dc-meta">' + esc(lang) + "</span>" : "";
+    const exp = state.discExpanded === f.id;
     const titleCell = f.subject ? esc(f.subject) : (enriching ? skel("70%") : "");
     const sum = f.summary ? esc(f.summary)
       : (enriching || _discPreparing(f)) ? skel("90%") : "";
-    return '<div class="dc-row" data-act="discOpen" data-arg=\'' + openArg(f) + '\' style="grid-template-columns:' + tmpl + '">' +
+    const r = '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
       '<div class="dc-date">' + esc(discDate(f)) + "</div>" +
-      '<div class="dc-doc"><b>' + esc(f.type) + "</b>" + meta + "</div>" +
+      '<div class="dc-doc"><b>' + esc(f.type) + "</b></div>" +
       '<div class="dc-title">' + titleCell + "</div>" +
       '<div class="dc-sumcell">' + sum + "</div>" +
       (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
       (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">' + esc(f.size || "") + "</div>" : "") +
-      '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";
+      '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : (exp ? "\u2013" : "\u2197")) + "</button></div>";
+    if (!exp) return r;
+    const full = (f.subject ? '<div class="dc-xtitle">' + esc(f.subject) + "</div>" : "") +
+      (f.summary ? '<div class="dc-xsum">' + esc(f.summary) + "</div>"
+        : (enriching || _discPreparing(f)) ? '<div class="dc-pmuted">Reading the document\u2026</div>' : '<div class="dc-pmuted">No summary available.</div>') +
+      '<button class="dc-openbtn" data-act="discOpen" data-arg=\'' + openArg(f) + '\'>Open document \u2197</button>';
+    return r + '<div class="dc-panel">' + full + "</div>";
   };
 
   sweepDiscEnrich(sym, rows);
@@ -3660,6 +3672,7 @@ function act(name, arg, ev) {
     case "discSource": state.discSource = arg.source; render(); break;
     case "discSourceClear": state.discSource = null; render(); break;
     case "discRefresh": refreshDisclosures(arg.sym); break;
+    case "discExpand": { state.discExpanded = state.discExpanded === arg.id ? null : arg.id; render(); break; }
     case "discOpen": {
       state.discOpening = arg.id;
       const durl = (arg.source === "SEC" && arg.url) ? arg.url : "/api/filings/doc?symbol=" + encodeURIComponent(arg.sym) + "&id=" + encodeURIComponent(arg.id);
