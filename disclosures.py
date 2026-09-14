@@ -144,6 +144,18 @@ def document(row):
     raise SourceUnavailable("no provider for source %r" % src)
 
 
+def enrichment(row):
+    """A provider's deterministic title/summary for a structured filing it can parse
+    exactly (e.g. edgar's Schedule 13G), or None to fall back to reading the document
+    with the model."""
+    src = (row or {}).get("source") or ""
+    for p in PROVIDERS:
+        if p.SOURCE == src:
+            fn = getattr(p, "enrichment", None)
+            return fn(row) if fn else None
+    return None
+
+
 def content(row):
     """The document's readable *substance* for enrichment (title/summary): a provider
     may resolve past a cover form to the real content (see edgar.content). Falls back

@@ -253,6 +253,45 @@ def has_filer(symbol, name="", exchange="", currency=""):
 _SKIP_DOC = re.compile(r"(?:-index|-index-headers)\.(?:htm|html)$|^\d{10}-\d\d-\d{6}\.txt$|R\d+\.htm$", re.I)
 
 
+def enrichment(row):
+    """A deterministic title and summary for a structured filing the model reads
+    poorly — a Schedule 13G/13D beneficial-ownership report, whose fields (the
+    reporting person, the issuer, the percentage of class) are in its XML. Returns
+    {subject, summary} or None to fall back to the model. The raw primary_doc.xml is
+    read, not the CSS-laden rendered page the browser URL points at."""
+    typ = str((row or {}).get("type") or "").upper()
+    if not typ.startswith("SCHEDULE 13"):
+        return None
+    raw_url = re.sub(r"/xsl[^/]*/", "/", (row or {}).get("url") or "")
+    try:
+        data, _ = document({"url": raw_url})
+        xml = data.decode("utf-8", "replace")
+    except Exception:
+        return None
+    if "reportingPersonName" not in xml:
+        return None
+    def vals(tag):
+        return [m.group(1).strip() for m in re.finditer(r"<%s>([^<]+)</%s>" % (tag, tag), xml)]
+    owners = []
+    for n in vals("reportingPersonName"):
+        if n and n not in owners:
+            owners.append(n)
+    if not owners:
+        return None
+    issuer = (vals("issuerName") or [""])[0]
+    pct = (vals("classPercent") or [""])[0]
+    amended = "/A" in ((vals("submissionType") or [typ])[0])
+    who = owners[0] + (" and affiliates" if len(owners) > 1 else "")
+    single = len(owners) == 1
+    subject = (pct + "% stake \u2014 " + owners[0]) if pct else ("Beneficial ownership \u2014 " + owners[0])
+    verb = ("amends its" if single else "amend their") if amended else ("reports" if single else "report")
+    tail = " Schedule 13G report of beneficial ownership" if amended else " beneficial ownership"
+    stake = (" of " + pct + "%") if pct else ""
+    of_issuer = (" of " + issuer) if issuer else ""
+    summary = who + " " + verb + tail + stake + of_issuer + "'s common shares."
+    return {"subject": subject[:90], "summary": summary[:240]}
+
+
 def content(row):
     """(bytes, content_type) of the filing's *substance* — the largest real content
     document in the accession (the MD&A, press release, or data file), not the cover

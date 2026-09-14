@@ -85,7 +85,9 @@ in one walk, not one per row), and every result is stored so a later visit is in
   Drawdown"), otherwise one the local model derives from the filing's substance. For a
   SEC filing whose primary document is a cover form (a 6-K, an 8-K), the substance is
   in its exhibits; `edgar.content` resolves to the real content document so the title
-  and summary describe it, not the boilerplate.
+  and summary describe it, not the boilerplate. A structured filing (a Schedule
+  13G/13D) is parsed exactly from its XML by `edgar.enrichment` — the stake and the
+  holder — with no model at all.
 - **Summary** — one plain sentence of what the filing announces, from a language
   model running **locally**, so nothing leaves the machine and there is no key or
   bill. It is **automatic**: the first time you open a filing, the app looks for a
