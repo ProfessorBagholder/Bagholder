@@ -142,3 +142,15 @@ def document(row):
         if p.SOURCE == src:
             return p.document(row)
     raise SourceUnavailable("no provider for source %r" % src)
+
+
+def content(row):
+    """The document's readable *substance* for enrichment (title/summary): a provider
+    may resolve past a cover form to the real content (see edgar.content). Falls back
+    to document() for providers that do not distinguish. Returns (bytes, content_type)."""
+    src = (row or {}).get("source") or ""
+    for p in PROVIDERS:
+        if p.SOURCE == src:
+            fn = getattr(p, "content", None)
+            return fn(row) if fn else p.document(row)
+    raise SourceUnavailable("no provider for source %r" % src)

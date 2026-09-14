@@ -688,7 +688,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.26.1"
+APP_VERSION = "1.27.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -719,7 +719,8 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.3"
+PROTOCOL = "2026-09-14.4"
+ENRICH_VERSION = 2   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5812,9 +5813,11 @@ def filings_enrich(symbol, doc_id):
     subject = row.get("subject") or ""
     summary = row.get("summary") or ""
     model = enrich.summary_available()
-    attempted = bool(row.get("enrichedAt"))
-    # Already read, and there is nothing further to get (we have the summary, or no
-    # model to make one): return what is cached without fetching the document again.
+    fresh = (row.get("enrichVersion") or 0) >= ENRICH_VERSION
+    attempted = bool(row.get("enrichedAt")) and fresh
+    # Already read by the current logic, and nothing further to get (we have the
+    # summary, or no model to make one): return the cache without re-reading. A row
+    # read by older logic (no title, weaker summary) is re-read once.
     if attempted and (summary or not model):
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
@@ -5822,7 +5825,7 @@ def filings_enrich(symbol, doc_id):
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     try:
-        data, ct = disclosures.document(row)
+        data, ct = disclosures.content(row)
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if not data:
@@ -5832,7 +5835,7 @@ def filings_enrich(symbol, doc_id):
     summary = info.get("summary") or summary
     # persist the subject always; the summary only once it exists, so a row is
     # re-read for its summary once the model finishes provisioning
-    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=(summary or None))
+    store.set_filing_enrichment(sym, doc_id, subject=subject, summary=(summary or None), version=ENRICH_VERSION)
     return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
             "summaryAvailable": enrich.summary_available(), "summaryStatus": enrich.summary_status()}
 

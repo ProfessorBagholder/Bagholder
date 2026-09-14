@@ -106,9 +106,14 @@ def document_text(data, content_type=""):
 # --------------------------------------------------------------------------- #
 # Summary — a local model, optional
 # --------------------------------------------------------------------------- #
-_PROMPT = ("You are labelling a regulatory filing for an investor's dashboard. In one plain "
-           "sentence under 25 words, state what this filing announces or contains. No preamble, "
-           "no 'This filing', just the substance.\n\nFILING:\n%s\n\nONE SENTENCE:")
+_PROMPT = ("Below is the text of a company regulatory filing. In ONE short sentence, at most 20 words, "
+           "say what it contains or announces \u2014 name the actual documents, events, or figures, not the "
+           "company. If it is a cover form listing exhibits, name those exhibits. Do not restate the form "
+           "type or begin with 'This filing'.\n\nFILING TEXT:\n%s\n\nSUMMARY (one sentence):")
+
+_TITLE_PROMPT = ("Give a short, specific title for this company filing: a noun phrase of at most 8 words naming "
+                 "what it is \u2014 the documents, event, or figures it contains. Not a form code, not the company "
+                 "name alone, no quotes, no preamble.\n\nFILING TEXT:\n%s\n\nTitle:")
 
 
 def summary_available():
@@ -132,17 +137,53 @@ def summarize(text):
     text = (text or "").strip()
     if not text:
         return ""
-    out = localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)
-    out = re.sub(r"<\|[^>]*\|>", " ", out)             # drop any chat-template special tokens
-    out = _WS.sub(" ", out).strip().strip('"').strip()
+    out = _strip_preamble(localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90))
     m = re.match(r"(.+?[.!?])(\s|$)", out)             # keep it to one sentence
     return (m.group(1) if m else out)[:240]
 
 
+_PREAMBLE = re.compile(r"^\s*(sure[,!.]?\s+)?(here(?:'?s| is| are)\b[^:]*:?\s*)", re.I)
+_LABEL = re.compile(r"^\s*(title|summary|answer)\s*[:\-]\s*", re.I)
+
+
+def _strip_preamble(out):
+    """Drop a chatty preamble a small model prepends (\"Sure, here is the title:\", \"Title:\")."""
+    out = re.sub(r"<\|[^>]*\|>", " ", out or "")
+    out = _WS.sub(" ", out).strip()
+    out = re.sub(r"^[*#>\-\s]+", "", out)             # leading markdown / bullets
+    for _ in range(2):
+        out = _PREAMBLE.sub("", out)
+        out = _LABEL.sub("", out)
+        out = re.sub(r"^[*#>\-\s]+", "", out)
+    return out.strip().strip('"').strip("*").strip()
+
+
+def title_from_model(text):
+    """A short title for a filing from the local model, or "" when there is no text or
+    model, or the model only echoes a form code (which the row already shows as its
+    type). Never raises."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    out = _strip_preamble(localmodel.chat(_TITLE_PROMPT % text[:MAX_TEXT], max_tokens=40))
+    out = out.rstrip(".:").strip()
+    out = " ".join(out.split()[:9])
+    low = out.lower()
+    if len(out.split()) < 3 or "title" in low or low.startswith("here"):
+        return ""                        # a preamble echo or a bare form code is no better than the type shown
+    return out[:90]
+
+
 def enrich_document(source, data, content_type=""):
-    """{subject, summary} for one downloaded document. The subject is always
-    attempted (no model needed); the summary is attempted too — it comes back empty
-    until the local model is ready, and asking starts it provisioning."""
-    subject = extract_pdf_subject(data) if (data[:5] == b"%PDF-" if isinstance(data, (bytes, bytearray)) else False) else ""
-    summary = summarize(document_text(data, content_type))
+    """A title and a one-sentence summary for one document, both from its readable
+    text. The title (`subject`) is the document's own when it exposes one — a PDF's
+    metadata — else a short title from the model; the summary is one sentence from the
+    model. Pass the document's *content* (edgar.content resolves a cover form to its
+    exhibit) so both describe the substance, not boilerplate."""
+    is_pdf = isinstance(data, (bytes, bytearray)) and data[:5] == b"%PDF-"
+    subject = extract_pdf_subject(data) if is_pdf else ""
+    text = document_text(data, content_type)
+    summary = summarize(text)
+    if not subject:
+        subject = title_from_model(text)
     return {"subject": subject, "summary": summary}

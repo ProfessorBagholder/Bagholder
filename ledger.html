@@ -489,7 +489,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.3"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.4"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2428,8 +2428,7 @@ function disclosuresCardHtml(t) {
   rows = sortRows(rows, s.key, s.dir, discSortValue);
 
   const cols = [{ key: "date", label: "Date", w: "96px" }, { key: "document", label: "Document", w: "minmax(0,1.05fr)" }];
-  if (anySummary) cols.push({ key: "summary", label: "Summary", w: "minmax(0,1.6fr)", plain: true });
-  if (multiCat) cols.push({ key: "category", label: "Category", w: "128px" });
+  if (anySummary) cols.push({ key: "summary", label: "Summary", w: "minmax(0,1.9fr)", plain: true });
   if (multiSource) cols.push({ key: "source", label: "Source", w: "84px" });
   if (anySize) cols.push({ key: "size", label: "Size", w: "66px", align: "right" });
   const tmpl = cols.map((c) => c.w).join(" ") + " 22px";
@@ -2453,7 +2452,6 @@ function disclosuresCardHtml(t) {
       '<div class="dc-date">' + esc(discDate(f)) + "</div>" +
       '<div class="dc-doc"><b>' + head + "</b>" + meta + "</div>" +
       (anySummary ? '<div class="dc-sumcell">' + sum + "</div>" : "") +
-      (multiCat ? '<div class="dc-cat">' + esc(f.category) + "</div>" : "") +
       (multiSource ? '<button class="dc-src" data-act="discSource" data-arg=\'' + attr({ source: f.source }) + '\'>' + esc(f.source) + "</button>" : "") +
       (anySize ? '<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">' + esc(f.size || "") + "</div>" : "") +
       '<button class="dc-open' + (state.discOpening === f.id ? " lit" : "") + '" data-act="discOpen" data-arg=\'' + openArg(f) + '\' aria-label="Open document">' + (state.discOpening === f.id ? "…" : "↗") + "</button></div>";

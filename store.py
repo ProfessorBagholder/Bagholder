@@ -477,6 +477,7 @@ def _init_schema(conn):
             subject TEXT,
             summary TEXT,
             enriched_at TEXT,
+            enrich_version INTEGER,
             fetched_at TEXT,
             PRIMARY KEY (symbol, id)
         );
@@ -3001,7 +3002,7 @@ def _ensure_filings_columns(conn):
         return
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(filings)").fetchall()}
     for col, typ in (("source", "TEXT"), ("category", "TEXT"), ("type", "TEXT"), ("title", "TEXT"),
-                     ("date", "TEXT"), ("date_text", "TEXT"), ("subject", "TEXT"), ("summary", "TEXT"), ("enriched_at", "TEXT")):
+                     ("date", "TEXT"), ("date_text", "TEXT"), ("subject", "TEXT"), ("summary", "TEXT"), ("enriched_at", "TEXT"), ("enrich_version", "INTEGER")):
         if col not in cols:
             conn.execute("ALTER TABLE filings ADD COLUMN %s %s" % (col, typ))
     # the old columns `file`/`submitted`/`submitted_at` are left in place but unused;
@@ -3015,7 +3016,7 @@ def _filing_from_row(r):
             "profileNo": get("profile_no"), "issuer": get("issuer"),
             "type": get("type") or get("file"), "title": get("title"),
             "date": get("date") or get("submitted_at"), "dateText": get("date_text") or get("submitted"),
-            "size": get("size"), "url": get("url"), "subject": get("subject"), "summary": get("summary"), "enrichedAt": get("enriched_at"),
+            "size": get("size"), "url": get("url"), "subject": get("subject"), "summary": get("summary"), "enrichedAt": get("enriched_at"), "enrichVersion": get("enrich_version"),
             "fetchedAt": get("fetched_at")}
 
 
@@ -3049,14 +3050,17 @@ def filing(symbol, doc_id):
             conn.close()
 
 
-def set_filing_enrichment(symbol, doc_id, subject=None, summary=None):
-    """Persist a document's read subject and/or summary on its row (a filing never
-    changes, so this is cached for good). Missing values are left as they were."""
+def set_filing_enrichment(symbol, doc_id, subject=None, summary=None, version=None):
+    """Persist a document's read subject and/or summary on its row, stamped with the
+    enrichment logic's version so a later, better version re-reads it once. Missing
+    values are left as they were."""
     sets, args = ["enriched_at = ?"], [_now_iso()]
     if subject is not None:
         sets.append("subject = ?"); args.append(_s(subject))
     if summary is not None:
         sets.append("summary = ?"); args.append(_s(summary))
+    if version is not None:
+        sets.append("enrich_version = ?"); args.append(int(version))
     args += [filing_key(symbol), _s(doc_id)]
     with _lock:
         conn = _connect()

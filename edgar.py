@@ -16,6 +16,7 @@ fetched directly.
 from __future__ import annotations
 
 import gzip
+import re
 import json
 import os
 import ssl
@@ -247,6 +248,46 @@ def has_filer(symbol, name="", exchange="", currency=""):
     if not us_listed and name and not D.names_match(name, cik_title[1]):
         return False
     return True
+
+
+_SKIP_DOC = re.compile(r"(?:-index|-index-headers)\.(?:htm|html)$|^\d{10}-\d\d-\d{6}\.txt$|R\d+\.htm$", re.I)
+
+
+def content(row):
+    """(bytes, content_type) of the filing's *substance* — the largest real content
+    document in the accession (the MD&A, press release, or data file), not the cover
+    form, the index, or the full-submission dump. Many forms (a 6-K, an 8-K) carry
+    only boilerplate on the primary document and the actual filing in exhibits; this
+    reads what a person would. Falls back to the primary document when the accession
+    cannot be listed or holds nothing better."""
+    url = (row or {}).get("url") or ""
+    if not url.startswith("https://www.sec.gov/"):
+        return document(row)
+    base, primary = url.rsplit("/", 1)[0], url.rsplit("/", 1)[-1]
+    try:
+        items = (_get_json(base + "/index.json").get("directory", {}) or {}).get("item", []) or []
+    except Exception:
+        return document(row)
+    cands = []
+    for it in items:
+        n = str(it.get("name", ""))
+        low = n.lower()
+        if not low.endswith((".htm", ".html", ".txt", ".xml")):
+            continue
+        if "index" in low or _SKIP_DOC.search(low):
+            continue
+        cands.append((n, int(it.get("size") or 0)))
+    if not cands:
+        return document(row)
+    # the largest substantive file is the content; keep the primary as the tiebreak
+    cands.sort(key=lambda c: (-c[1], c[0] != primary))
+    best = cands[0][0]
+    if best == primary:
+        return document(row)
+    try:
+        return document({"url": base + "/" + best})
+    except Exception:
+        return document(row)
 
 
 def document(row):

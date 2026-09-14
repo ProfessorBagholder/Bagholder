@@ -151,5 +151,37 @@ class DispatcherTest(unittest.TestCase):
         self.assertEqual(ct, "application/pdf")
 
 
+
+
+class ContentResolutionTest(unittest.TestCase):
+    """content() reads a filing's substance: the largest real document in the accession,
+    skipping the cover form, the index files, and the full-submission dump."""
+    def setUp(self):
+        self._json, self._doc = edgar._get_json, edgar.document
+    def tearDown(self):
+        edgar._get_json, edgar.document = self._json, self._doc
+
+    def test_it_picks_the_largest_substantive_document(self):
+        base = "https://www.sec.gov/Archives/edgar/data/2106613/000110465926097327"
+        edgar._get_json = lambda url: {"directory": {"item": [
+            {"name": "0001104659-26-097327-index.html", "size": 3000},
+            {"name": "0001104659-26-097327.txt", "size": 106958},   # full submission dump, skipped
+            {"name": "tm2623033d1_6k.htm", "size": 1230},           # cover form
+            {"name": "tm2623033d1_ex99-1.htm", "size": 62339},      # the MD&A -> chosen
+            {"name": "tm2623033d1_ex99-3.htm", "size": 1223},
+        ]}}
+        seen = {}
+        edgar.document = lambda row: (seen.setdefault("url", row["url"]), (b"<html>MD&A</html>", "text/html"))[1]
+        data, ct = edgar.content({"url": base + "/tm2623033d1_6k.htm", "source": "SEC"})
+        self.assertTrue(seen["url"].endswith("tm2623033d1_ex99-1.htm"))
+
+    def test_it_falls_back_to_the_primary_when_the_index_is_unavailable(self):
+        edgar._get_json = lambda url: (_ for _ in ()).throw(OSError("no index"))
+        called = {}
+        edgar.document = lambda row: (called.setdefault("url", row["url"]), (b"x", "text/html"))[1]
+        edgar.content({"url": "https://www.sec.gov/Archives/edgar/data/1/2/primary.htm", "source": "SEC"})
+        self.assertTrue(called["url"].endswith("primary.htm"))
+
+
 if __name__ == "__main__":
     unittest.main()
