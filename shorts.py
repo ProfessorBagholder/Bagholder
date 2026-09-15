@@ -43,10 +43,10 @@ CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL":
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 SERIES = 8               # reports behind the run shown with the position
-ISSUE_HOURS = 12         # how often a company's share count is looked up again
-US_SHARES_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK%010d/dei/EntityCommonStockSharesOutstanding.json"
-TMX_SHARES_QUERY = ("query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) "
-                    "{ symbol shareOutStanding } }")
+FLOAT_HOURS = 12         # how often a listing's float is looked up again
+YAHOO_QUOTE_URL = "https://finance.yahoo.com/quote/%s/"
+YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+YAHOO_STATS_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
 
 _files = {}
@@ -253,43 +253,64 @@ def ca_series(symbol, exchange="", asof="", ssl_context=None, now=None, back=SER
     return sorted(out, key=lambda x: x["date"])
 
 
-def shares_outstanding(symbol, exchange, currency, where, ssl_context=None):
-    """The company's shares in issue, from the authority of the listing's own market: the
-    exchange itself for a Canadian listing, and for a US one the share count the issuer put
-    on the cover of its own last filing, which the SEC publishes.
+_yahoo = {"session": None, "crumb": ""}
 
-    Not the float. No source publishes a float for every venue the app carries — none does
-    for the CSE or Cboe Canada — and a percentage whose denominator changed from listing to
-    listing would not be the same figure twice, which is worse than a denominator that is
-    always the whole issue. Nothing is reported for an exchange-traded fund, whose units are
-    created and redeemed daily, and the row then reads as a dash rather than a wrong number."""
+
+def _yahoo_session():
+    """A session that can read Yahoo's statistics. Its own TLS handshake is the gate: the
+    standard library is refused there whatever headers it sends, and `curl_cffi` — already
+    the app's one optional dependency, for SEDAR+ — presents a browser's. Without it the
+    float is simply unknown, as it is for a listing Yahoo does not carry."""
+    if _yahoo["session"] is not None:
+        return _yahoo["session"], _yahoo["crumb"]
+    try:
+        from curl_cffi import requests as cffi
+    except Exception:
+        return None, ""
+    try:
+        session = cffi.Session(impersonate="chrome")
+        session.get(YAHOO_QUOTE_URL % "AAPL", timeout=market.TIMEOUT_SEC)
+        crumb = _s(session.get(YAHOO_CRUMB_URL, timeout=market.TIMEOUT_SEC).text).strip()
+        if not crumb or len(crumb) > 32:
+            return None, ""
+        _yahoo["session"], _yahoo["crumb"] = session, crumb
+        return session, crumb
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: yahoo would not open: %s\n" % e)
+        return None, ""
+
+
+def float_shares(symbol, exchange, currency, ssl_context=None):
+    """The listing's free float: the shares actually available to trade, which is what a
+    short position is normally measured against. Yahoo is the one source that publishes a
+    float for both markets, under the same symbol forms the app's own quotes use, and it is
+    None where Yahoo carries none — for a fund, or for a venue it does not cover. Nothing is
+    substituted for it: shares in issue is a different figure and would not be the same
+    percentage twice."""
     sym = _s(symbol).strip().upper()
-    key = "%s|%s" % (sym, where)
+    key = "%s|%s" % (sym, _s(exchange).strip().upper())
     with _lock:
         held = _shares.get(key)
-        if held and time.time() - held["at"] < ISSUE_HOURS * 3600:
-            return held["count"]
+        if held and time.time() - held["at"] < FLOAT_HOURS * 3600:
+            return held["float"]
     count = None
-    try:
-        if where == "us":
-            found = edgar._ticker_map().get(market.tmx_symbol(sym))
-            if found:
-                units = ((edgar._get_json(US_SHARES_URL % int(found[0])) or {}).get("units") or {}).get("shares") or []
-                newest = max(units, key=lambda u: _s(u.get("end")), default=None)
-                count = _num(newest.get("val")) if newest else None
-        else:
-            code = market.tmx_quote_symbol(sym, exchange, currency)
-            if code:
-                def ask(form):
-                    answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
-                                                                  "query": TMX_SHARES_QUERY}, ssl_context, market._TMX_HEADERS)
-                    return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
-                count = _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding"))
-    except Exception as e:
-        sys.stderr.write("bagholder shorts: %s share count failed: %s\n" % (sym, e))
-    count = count or None                      # a fund reports none, and reads as none
+    session, crumb = _yahoo_session()
+    if session:
+        for form in (market.yahoo_forms({"symbol": sym, "exchange": exchange, "currency": currency}) or [market.tmx_symbol(sym)]):
+            try:
+                answered = session.get(YAHOO_STATS_URL % (form, crumb), timeout=market.TIMEOUT_SEC)
+                if answered.status_code != 200:
+                    continue
+                stats = (((answered.json().get("quoteSummary") or {}).get("result") or [{}])[0] or {}).get("defaultKeyStatistics") or {}
+                raw = stats.get("floatShares")
+                count = _num(raw.get("raw") if isinstance(raw, dict) else raw)
+                if count:
+                    break
+            except Exception as e:
+                sys.stderr.write("bagholder shorts: %s float from yahoo failed: %s\n" % (form, e))
+    count = count or None
     with _lock:
-        _shares[key] = {"count": count, "at": time.time()}
+        _shares[key] = {"float": count, "at": time.time()}
     return count
 
 
@@ -407,9 +428,9 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
-    issued = shares_outstanding(sym, exchange, currency, where, ssl_context)
-    rec["sharesOut"] = issued
-    rec["ofSharesOut"] = (rec["shares"] / issued * 100) if issued and rec.get("shares") else None
+    floated = float_shares(sym, exchange, currency, ssl_context)
+    rec["float"] = floated
+    rec["ofFloat"] = (rec["shares"] / floated * 100) if floated and rec.get("shares") else None
     rec["averageVolume"] = average_volume(rec, now)
     rec["daysToCover"] = days_to_cover(rec, now)
     return rec

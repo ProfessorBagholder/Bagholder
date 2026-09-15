@@ -272,8 +272,8 @@ class SeriesTest(unittest.TestCase):
         self.assertNotIn("series", quiet)
 
 
-class SharesOutstandingTest(unittest.TestCase):
-    """The denominator under `Of shares out`, from the authority of the listing's own market."""
+class FloatTest(unittest.TestCase):
+    """The float the donut draws against: the shares actually available to trade."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -281,33 +281,67 @@ class SharesOutstandingTest(unittest.TestCase):
         store.set_home(self.tmp.name)
         store.ensure()
         shorts._shares.clear()
+        shorts._yahoo["session"] = None
 
     def tearDown(self):
         shorts._shares.clear()
+        shorts._yahoo["session"] = None
         self.tmp.cleanup()
 
-    def test_a_us_listing_takes_the_count_the_issuer_filed(self):
-        concept = {"units": {"shares": [{"end": "2026-06-01", "val": 500}, {"end": "2026-09-03", "val": 504500990}]}}
-        with mock.patch.object(shorts.edgar, "_ticker_map", return_value={"GME": (1326380, "GameStop")}), \
-             mock.patch.object(shorts.edgar, "_get_json", return_value=concept) as asked:
-            self.assertEqual(shorts.shares_outstanding("GME", "NYSE", "USD", "us"), 504500990.0)
-            self.assertEqual(shorts.shares_outstanding("GME", "NYSE", "USD", "us"), 504500990.0)
-        self.assertEqual(asked.call_count, 1)          # kept, not asked again for every view
+    def session(self, answers):
+        class Answer:
+            def __init__(self, payload, status=200):
+                self.status_code, self._payload = status, payload
+                self.text = payload if isinstance(payload, str) else ""
+            def json(self):
+                return self._payload
+        class Session:
+            def __init__(self):
+                self.asked = []
+            def get(self, url, **kw):
+                self.asked.append(url)
+                for mark, payload, status in answers:
+                    if mark in url:
+                        return Answer(payload, status)
+                return Answer({}, 404)
+        return Session()
 
-    def test_a_ticker_the_sec_does_not_list_reports_none(self):
-        with mock.patch.object(shorts.edgar, "_ticker_map", return_value={}):
-            self.assertIsNone(shorts.shares_outstanding("NOSUCH", "NYSE", "USD", "us"))
+    def use(self, session):
+        shorts._yahoo["session"], shorts._yahoo["crumb"] = session, "abc"
 
-    def test_a_canadian_listing_takes_the_exchanges_own_count(self):
-        with mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="QNC"), \
-             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 219419670}, "QNC")):
-            self.assertEqual(shorts.shares_outstanding("QNC", "TSX-V", "CAD", "ca"), 219419670.0)
+    def stats(self, value):
+        return {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": value}}}]}}
 
-    def test_a_fund_reports_no_count_rather_than_zero(self):
-        with mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="HBIX:AQL"), \
-             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 0}, "HBIX:AQL")):
-            self.assertIsNone(shorts.shares_outstanding("HBIX", "Cboe Canada", "CAD", "ca"))
+    def test_the_float_is_read_under_the_venues_own_symbol(self):
+        session = self.session([("QNC.V", self.stats(212448707), 200)])
+        self.use(session)
+        self.assertEqual(shorts.float_shares("QNC", "TSX-V", "CAD"), 212448707.0)
+        self.assertTrue(any("QNC.V" in u for u in session.asked))
 
-    def test_a_source_that_will_not_answer_is_not_a_crash(self):
-        with mock.patch.object(shorts.market, "tmx_quote_symbol", side_effect=OSError("down")):
-            self.assertIsNone(shorts.shares_outstanding("QNC", "TSX-V", "CAD", "ca"))
+    def test_a_form_the_source_does_not_carry_falls_to_the_next(self):
+        session = self.session([("QNC.TO", {}, 404), ("QNC.V", self.stats(1000.0), 200)])
+        self.use(session)
+        self.assertEqual(shorts.float_shares("QNC", "TSX-V", "CAD"), 1000.0)
+
+    def test_a_listing_with_no_float_published_reports_none(self):
+        self.use(self.session([("HBIX", self.stats(None), 200)]))
+        self.assertIsNone(shorts.float_shares("HBIX", "Cboe Canada", "CAD"))
+
+    def test_it_is_read_once_and_kept(self):
+        session = self.session([("GME", self.stats(463550645), 200)])
+        self.use(session)
+        shorts.float_shares("GME", "NYSE", "USD")
+        shorts.float_shares("GME", "NYSE", "USD")
+        self.assertEqual(len([u for u in session.asked if "GME" in u]), 1)
+
+    def test_without_the_browser_client_the_float_is_simply_unknown(self):
+        with mock.patch.object(shorts, "_yahoo_session", return_value=(None, "")):
+            self.assertIsNone(shorts.float_shares("GME", "NYSE", "USD"))
+
+    def test_the_position_is_measured_against_the_float(self):
+        self.use(self.session([("GME", self.stats(400.0), 200)]))
+        with mock.patch.object(shorts, "us_position", return_value={"shares": 100.0, "asOf": "2026-08-31"}), \
+             mock.patch.object(shorts, "us_volume", return_value={}):
+            rec = shorts.for_listing("GME", "NYSE", "USD")
+        self.assertEqual(rec["float"], 400.0)
+        self.assertEqual(rec["ofFloat"], 25.0)

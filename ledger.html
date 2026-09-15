@@ -111,7 +111,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
 .si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
 .si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
-.si-cells{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.si-cells{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}
 .si-cells .si-v{text-align:left;font-size:13.5px}
 .nw-head,.nw-row{display:grid;grid-template-columns:66px minmax(0,1fr) auto minmax(64px,auto);gap:12px;padding:0 16px;white-space:nowrap}
 .nw-head{padding-bottom:6px;margin:0 -16px}
@@ -2546,12 +2546,13 @@ function shortsFigures(s) {
   const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
   return [
     { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
-    { label: "Of shares out", value: s.ofSharesOut == null ? "—" : n2(s.ofSharesOut, 2) + "%",
-      note: s.sharesOut ? "of " + qty(s.sharesOut) + " in issue" : "" },
+    { label: "Of float", value: s.ofFloat == null ? "—" : n2(s.ofFloat, 2) + "%",
+      note: s.float ? "of " + qty(s.float) + " shares floating" : "" },
     { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
       note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
     { label: "Short volume", value: s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", bar: s.volumePct,
-      note: (s.shortVolume != null && s.totalVolume != null ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) : "") +
+      note: (s.shortVolume != null && s.totalVolume != null
+              ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) + " shares traded" : "") +
             (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
   ];
 }
@@ -2568,19 +2569,17 @@ function shortsCardHtml(s) {
 }
 // the position against the rest of the issue, in the donut every other card on the page uses
 function shortsRingHtml(s) {
-  const pct = s.ofSharesOut;
-  const empty = '<div class="muted empty" style="flex:1;font-size:12px">No share count is published for this listing.</div>';
-  let body = empty;
-  if (pct != null && s.sharesOut && s.shares != null) {
-    const share = Math.max(0, Math.min(1, s.shares / s.sharesOut));
-    const items = [{ label: "Sold short", share: share, color: "var(--pie-1)" },
-                   { label: "Not short", share: 1 - share, color: "rgba(var(--ink-rgb),.16)" }];
+  const pct = s.ofFloat;
+  let body = '<div class="muted empty" style="flex:1;font-size:12px">No float is published for this listing.</div>';
+  if (pct != null && s.float && s.shares != null) {
+    const share = Math.max(0, Math.min(1, s.shares / s.float));
+    const items = [{ label: "Short interest", share: share, color: "var(--pie-1)" },
+                   { label: "Float", share: 1 - share, color: "rgba(var(--ink-rgb),.16)" }];
     const d = donutPieces("sipie", "Short", items, null, "l", 132, n2(pct, 2) + "%");
     body = '<div id="sipiePlot" data-hover="sipie" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
   }
   return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
-    shortsHeader(s, "Short of the issue") + body +
-    (s.sharesOut ? '<div class="lbl" style="text-align:center;padding-top:6px">' + qty(s.sharesOut) + " shares in issue</div>" : "") + "</div>";
+    shortsHeader(s, "Short vs float") + body + "</div>";
 }
 // the run of reports, drawn the way the equity curve is: an axis of its own, the same grid
 // lines and the same area under the line. Bars from zero are the other house idiom, but a
@@ -2597,7 +2596,7 @@ function shortsHistoryHtml(s) {
   const want = Math.min(6, pts.length);
   const marks = [];
   for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round(i * (pts.length - 1) / Math.max(1, want - 1))].date));
-  return '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Short position over time</h5>' +
+  return '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Short interest over time</h5>' +
     '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + " · every report since " + esc(shortDay(pts[0].date)) + "</span></div>" +
     '<div style="display:flex;gap:10px"><div style="position:relative;width:72px;height:' + H + 'px;flex:none;font-size:10px;color:var(--ink55)" class="tab">' +
     ticks.map((t) => '<span style="position:absolute;left:0;top:' + (t[1] / H * 100).toFixed(1) + '%;transform:translateY(-50%)">' + qty(Math.round(t[0])) + "</span>").join("") + "</div>" +
@@ -2614,7 +2613,7 @@ function shortsSectionHtml(t) {
   const rec = _shorts[shortsKey(t)];
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
-  return '<div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
+  return '<div style="display:grid;grid-template-columns:minmax(0,1.75fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
     shortsCardHtml(s) + shortsRingHtml(s) + "</div>" + shortsHistoryHtml(s);
 }
 // the same listing, compact, for the News card once it is scoped to a symbol — the card is
