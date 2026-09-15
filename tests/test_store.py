@@ -146,6 +146,24 @@ class StoreTest(unittest.TestCase):
         with mock.patch.object(bagholder, "_http_json", return_value={"message": "Not Found"}):
             self.assertFalse(bagholder.check_for_update(now)["updateAvailable"], "no release published yet: nothing to flag")
 
+    def test_a_listing_no_directory_carries_is_found_through_tmx(self):
+        """The public directories carry the TSX and Nasdaq registries alone: a CSE or Cboe Canada
+        listing is in none of them, so TMX is asked what it knows the ticker as."""
+        import market
+        empty = '{"data": [], "results": []}'
+        with mock.patch.object(market, "_get_text", return_value=empty), \
+             mock.patch.object(market, "tmx_listing", return_value={"symbol": "QIMC", "name": "Quebec Innovative Materials Corp", "exchange": "CSE", "currency": "CAD"}) as look:
+            bagholder._search_cache.pop("QIMC", None)
+            out = bagholder.symbol_search("QIMC")
+        self.assertEqual([(m["symbol"], m["exchange"], m["currency"]) for m in out["matches"]], [("QIMC", "CSE", "CAD")])
+        self.assertEqual(look.call_count, 1)
+        # a directory that answers is enough on its own: TMX is not asked
+        with mock.patch.object(market, "_get_text", return_value=empty), mock.patch.object(market, "tmx_listing") as never, \
+             mock.patch.object(bagholder, "parse_nasdaq_search", return_value=[{"symbol": "KO", "name": "Coca-Cola", "exchange": "NYSE", "currency": "USD"}]):
+            bagholder._search_cache.pop("KO", None)
+            out = bagholder.symbol_search("KO")
+        self.assertEqual(([m["symbol"] for m in out["matches"]], never.call_count), (["KO"], 0))
+
     def test_history_endpoint_validates_and_serves_bars(self):
         self.assertFalse(bagholder.history_payload("symbol=RDDY")["ok"])
         bars = [{"date": "2026-09-04", "open": 4.8, "high": 4.8, "low": 4.68, "close": 4.75, "volume": 1}]

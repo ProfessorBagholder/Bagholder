@@ -3266,6 +3266,13 @@ function newsDiscLookup(text) {
 const WATCH_COLS = [{ key: "symbol", label: "Symbol" }, { key: "exchange", label: "Exch", align: "right" }, { key: "last", label: "Last", align: "right" }, { key: "chg", label: "Chg", align: "right" }];
 let _watchNewTimer = 0;
 // what the add row offers: with nothing typed, the holdings not yet followed; typed, the directory's matches, the followed ones left out
+// the typed ticker names a listing the watchlist already holds: the box offers nothing because it is
+// followed, not because nothing was found
+function watchAlready(q) {
+  const key = String(q || "").trim().toUpperCase();
+  if (!key) return false;
+  return (((state.model || {}).markets || {}).watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === key);
+}
 function watchSuggestions(q) {
   const m = state.model || {}, watched = watchedKeys();
   const key = (sym, ex) => bareSymbol(sym) + "@" + String(ex || "").toUpperCase();
@@ -3316,7 +3323,7 @@ function watchAddRowHtml() {
   const sug = (w, i) => '<div class="wl-row wl-sug' + (q && i === 0 ? " hi" : "") + '" role="button" tabindex="-1" data-act="watchPick" data-arg=\'' + attr({ symbol: w.symbol, exchange: w.exchange, name: w.name, currency: w.currency }) + "'>" + cells(w) + "<div></div></div>";
   return '<div class="wl-field">' + tkIconSvg(ICONS.search) + '<input id="watchQuery" value="' + esc(state.watchQuery) + '" placeholder="Search symbol..." aria-label="Search symbol"><span class="esc">ESC</span></div>' +
     '<div class="lbl" style="padding:0 0 6px">' + (q ? "Matches" : "From Holdings") + "</div>" +
-    (rows.length ? '<div class="wl-list">' + rows.map(sug).join("") + "</div>" : '<div class="muted" style="font-size:12px;padding:2px 0 6px">' + (q ? "No listing by that name." : "Every holding is followed.") + "</div>") +
+    (rows.length ? '<div class="wl-list">' + rows.map(sug).join("") + "</div>" : '<div class="muted" style="font-size:12px;padding:2px 0 6px">' + (q ? (watchAlready(q) ? "Already on the watchlist." : "No listing by that name.") : "Every holding is followed.") + "</div>") +
     '<div class="wl-rule"></div>';
 }
 function watchlistCardHtml(rows) {
