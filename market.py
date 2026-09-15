@@ -760,6 +760,12 @@ def quote_source(rec):
         return None
     if str(rec.get("exchange") or "").strip().upper() in CBOE_CANADA_EXCHANGES:
         return ("cboe_ca", sym)
+    # Every listing is quoted from a feed that is live for its own market. TMX quotes its own
+    # exchanges as they trade and stamps a US quote fifteen minutes behind, which is what its
+    # licence allows; a US listing is Yahoo's, whose quote is stamped to the second.
+    if tmx_form(rec.get("exchange"), rec.get("currency")) == ":US":
+        forms = yahoo_forms(rec)
+        return ("yahoo_quote", forms[0]) if forms else None
     q = tmx_quote_symbol(rec.get("symbol"), rec.get("exchange"), rec.get("currency"))
     return ("tmx", q) if q else None
 

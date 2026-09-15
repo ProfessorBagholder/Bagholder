@@ -3546,7 +3546,7 @@ class PeekQuoteTest(unittest.TestCase):
             again = market.peek_quote({"symbol": "RKLB", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"})
         self.assertEqual(q, {"price": 47.9, "priceChange": -1.29, "percentChange": -2.62})
         self.assertEqual(again, q)
-        self.assertEqual(calls, [("tmx", "RKLB:US")], "one read, remembered for the second glance")
+        self.assertEqual(calls, [("yahoo_quote", "RKLB")], "one read, remembered for the second glance")
         self.assertEqual(store.quote_fetched_at(), {}, "nothing stored")
         with mock.patch.object(market, "fetch_for", side_effect=RuntimeError("down")):
             self.assertIsNone(market.peek_quote({"symbol": "ZZZ", "exchange": "NYSE", "currency": "USD", "kind": "Shares"}), "a source that fails gives nothing, never raises")
@@ -3653,7 +3653,7 @@ class WatchlistTest(unittest.TestCase):
     def test_quote_refresh_keys_a_watched_listing_by_venue(self):
         needing = market.quote_symbols_needing_refresh([{"symbol": "AAPL", "exchange": "NEO", "currency": "CAD", "kind": "Shares"},
                                                         {"symbol": "AAPL", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares", "quoteKey": "AAPL@NASDAQ"}])
-        self.assertEqual([(k, src) for k, src, _ in needing], [("AAPL", "cboe_ca"), ("AAPL@NASDAQ", "tmx")], "the held CDR and the watched US listing keep separate quotes")
+        self.assertEqual([(k, src) for k, src, _ in needing], [("AAPL", "cboe_ca"), ("AAPL@NASDAQ", "yahoo_quote")], "the held CDR and the watched US listing keep separate quotes, each from a feed live for its market")
 
 
 class ConnectionPoolTest(unittest.TestCase):

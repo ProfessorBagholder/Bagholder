@@ -1131,7 +1131,8 @@ class QuoteTest(unittest.TestCase):
     def test_quote_sources_cover_every_held_kind(self):
         src = market.quote_source
         self.assertEqual(src({"symbol": "VEQT", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}), ("tmx", "VEQT"))
-        self.assertEqual(src({"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"}), ("tmx", "LUNR:US"))
+        self.assertEqual(src({"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"}), ("yahoo_quote", "LUNR"),
+                         "a US listing is quoted where its quote is live: TMX stamps one fifteen minutes behind")
         self.assertEqual(src({"symbol": "HBIX", "exchange": "Cboe Canada", "currency": "CAD", "kind": "Shares"}), ("cboe_ca", "HBIX"))
         self.assertEqual(src({"symbol": "BTC", "exchange": "Crypto", "currency": "CAD", "kind": "Crypto"}), ("coinbase", "BTC-CAD"))
         self.assertEqual(src({"symbol": "BTC", "exchange": "Crypto", "currency": "USD", "kind": "Crypto"}), ("coinbase", "BTC-USD"))
@@ -1221,9 +1222,10 @@ class QuoteTest(unittest.TestCase):
                 from datetime import datetime, timezone
                 syms = [{"symbol": "VEQT", "exchange": "TSX", "currency": "CAD"}, {"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD"}, {"symbol": "HBIX", "exchange": "Cboe Canada", "currency": "CAD"}]
                 cboe = {"price": 6.76, "prevClose": 6.76, "fetchedAt": "2026-09-06T14:00:00Z"}
-                with mock.patch.object(market, "fetch_tmx_quote", return_value={"price": 10.0, "priceChange": 0.1, "percentChange": 1.0, "prevClose": 9.9, "fetchedAt": "2026-09-06T14:00:00Z"}) as f, mock.patch.object(market, "fetch_cboe_ca_quote", return_value=cboe) as c:
+                with mock.patch.object(market, "fetch_yahoo_quote", return_value={"price": 10.0, "priceChange": 0.1, "percentChange": 1.0, "prevClose": 9.9, "fetchedAt": "2026-09-06T14:00:00Z"}), \
+                     mock.patch.object(market, "fetch_tmx_quote", return_value={"price": 10.0, "priceChange": 0.1, "percentChange": 1.0, "prevClose": 9.9, "fetchedAt": "2026-09-06T14:00:00Z"}) as f, mock.patch.object(market, "fetch_cboe_ca_quote", return_value=cboe) as c:
                     self.assertEqual(market.refresh_quotes(syms, now=datetime(2026, 9, 6, 14, 0, tzinfo=timezone.utc)), 3)
-                    self.assertEqual([x.args[0] for x in f.call_args_list], ["VEQT", "LUNR:US"])
+                    self.assertEqual([x.args[0] for x in f.call_args_list], ["VEQT"], "the Canadian listing through TMX; the US one is Yahoo's")
                     self.assertEqual([x.args[0] for x in c.call_args_list], ["HBIX"])
                     self.assertEqual(market.refresh_quotes(syms, now=datetime(2026, 9, 6, 14, 0, 30, tzinfo=timezone.utc)), 0)
                     self.assertEqual(market.refresh_quotes(syms, now=datetime(2026, 9, 6, 14, 2, tzinfo=timezone.utc)), 3)
@@ -1661,7 +1663,8 @@ class MarketParseTest(unittest.TestCase):
         self.assertEqual([(b["time"], b["open"], b["high"], b["low"], b["close"], b["volume"]) for b in bars], [(1787011200, 63000, 64000, 62000, 63500, 100), (1787097600, 64848.68, 65341.83, 63000.5, 63911.88, 6197.03)])
         src = market.history_source
         self.assertEqual(src({"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}), ("tmx", "RDDY"))
-        self.assertEqual(src({"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"}), ("tmx", "LUNR:US"))
+        self.assertEqual(src({"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"}), ("tmx", "LUNR:US"),
+                         "bars are a closed record, so a US listing's history stays TMX's; only the live quote moved")
         self.assertEqual(src({"symbol": "HBIX", "exchange": "Cboe Canada", "currency": "CAD", "kind": "Shares"}), ("tmx", "HBIX:AQL"), "history from TMX even where the quote comes from Cboe")
         self.assertEqual(src({"symbol": "ONE", "exchange": "Alpha Exchange", "currency": "CAD", "kind": "Shares"}), ("tmx", "ONE"), "an unknown venue starts from the currency's usual form")
         self.assertEqual(src({"symbol": "ASTS", "exchange": "", "currency": "USD", "kind": "Shares"}), ("tmx", "ASTS:US"))
