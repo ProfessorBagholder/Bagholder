@@ -486,6 +486,7 @@ const state = {
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
   discExpanded: null,   // the id of the disclosure row expanded to show its subject and summary
+  heatShow: null,     // the heatmap on its own cycling through scopes: {list, seconds}, from its address or the play button
   heat: (function () { try { return Object.assign({ universe: "holdings", size: "value" }, JSON.parse(localStorage.getItem("bh2.heatmap") || "{}")); } catch (e) { return { universe: "holdings", size: "value" }; } })(),
   ordersTab: "pending",
   orderEdit: null,
@@ -844,6 +845,8 @@ const ICONS = {
   bookmarkFill: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Z",
   x: "M205.66 194.34a8 8 0 0 1-11.32 11.32L128 139.31l-66.34 66.35a8 8 0 0 1-11.32-11.32L116.69 128 50.34 61.66a8 8 0 0 1 11.32-11.32L128 116.69l66.34-66.35a8 8 0 0 1 11.32 11.32L139.31 128Z",
   caretDown: "M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z",
+  play: "M232.4 114.49 88.32 26.35a16 16 0 0 0-16.2-.3A15.86 15.86 0 0 0 64 39.87v176.26A15.94 15.94 0 0 0 80 232a16 16 0 0 0 8.36-2.35l144.04-88.14a15.81 15.81 0 0 0 0-27.02ZM80 215.94V40l143.83 88Z",
+  pause: "M200 32h-36a16 16 0 0 0-16 16v160a16 16 0 0 0 16 16h36a16 16 0 0 0 16-16V48a16 16 0 0 0-16-16Zm0 176h-36V48h36ZM92 32H56a16 16 0 0 0-16 16v160a16 16 0 0 0 16 16h36a16 16 0 0 0 16-16V48a16 16 0 0 0-16-16Zm0 176H56V48h36Z",
   arrowsOut: "M216 48v40a8 8 0 0 1-16 0V67.31l-34.34 34.35a8 8 0 0 1-11.32-11.32L188.69 56H168a8 8 0 0 1 0-16h40a8 8 0 0 1 8 8ZM98.34 146.34 64 180.69V160a8 8 0 0 0-16 0v40a8 8 0 0 0 8 8h40a8 8 0 0 0 0-16H75.31l34.35-34.34a8 8 0 0 0-11.32-11.32ZM208 152a8 8 0 0 0-8 8v20.69l-34.34-34.35a8 8 0 0 0-11.32 11.32L188.69 192H168a8 8 0 0 0 0 16h40a8 8 0 0 0 8-8v-40a8 8 0 0 0-8-8ZM67.31 64H88a8 8 0 0 0 0-16H48a8 8 0 0 0-8 8v40a8 8 0 0 0 16 0V75.31l34.34 34.35a8 8 0 0 0 11.32-11.32Z",
   bell: "M221.8 175.94C216.25 166.38 208 139.33 208 104a80 80 0 1 0-160 0c0 35.34-8.26 62.38-13.81 71.94A16 16 0 0 0 48 200h40.81a40 40 0 0 0 78.38 0H208a16 16 0 0 0 13.8-24.06ZM128 216a24 24 0 0 1-22.62-16h45.24A24 24 0 0 1 128 216ZM48 184c7.7-13.24 16-43.92 16-80a64 64 0 1 1 128 0c0 36.05 8.28 66.73 16 80Z",
   receipt: "M72 104a8 8 0 0 1 8-8h96a8 8 0 0 1 0 16H80a8 8 0 0 1-8-8Zm8 40h96a8 8 0 0 0 0-16H80a8 8 0 0 0 0 16ZM232 56v152a8 8 0 0 1-11.58 7.15L192 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L128 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L64 200.94l-28.42 14.21A8 8 0 0 1 24 208V56a16 16 0 0 1 16-16h176a16 16 0 0 1 16 16Zm-16 0H40v139.06l20.42-10.22a8 8 0 0 1 7.16 0L96 199.06l28.42-14.22a8 8 0 0 1 7.16 0L160 199.06l28.42-14.22a8 8 0 0 1 7.16 0L216 195.06Z",
@@ -2973,7 +2976,8 @@ function heatHeaderHtml(full) {
     msegHtml("heatSize", "size", [["value", "Market value"], ["equal", "Equal"]], h.size) +
     '<span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)"><span>−3%</span>' +
     [-3, -2, -1, -0.2, 0.2, 1, 2, 3].map((c) => '<span style="width:16px;height:9px;border-radius:2px;background:' + heatColor(c) + '"></span>').join("") + "<span>+3%</span></span>" +
-    (full ? '<button class="heat-ghost" data-act="heatFullClose" aria-label="Back to Markets"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button>'
+    (full ? '<button class="heat-ghost" data-act="heatShowToggle" aria-label="' + (state.heatShow ? "Stop cycling" : "Cycle through the scopes") + '"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + (state.heatShow ? ICONS.pause : ICONS.play) + '"/></svg></button>' +
+      '<button class="heat-ghost" data-act="heatFullClose" aria-label="Back to Markets"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button>'
       : '<button class="heat-ghost" data-act="heatFull" aria-label="Heatmap on its own"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.arrowsOut + '"/></svg></button>') + "</div>";
 }
 function heatEmptyWord() { const h = state.heat; return h.universe === "watchlist" ? "Nothing watched." : HEAT_MARKETS[h.universe] ? "Not read yet." : "No open positions."; }
@@ -2988,11 +2992,36 @@ function heatmapFullHtml(mk) {
   return '<div id="heatFull">' + heatHeaderHtml(true) +
     (tiles.length ? '<div id="heatBox" style="position:relative;flex:1;min-height:0"></div>' : '<div class="muted empty" style="font-size:12px">' + heatEmptyWord() + "</div>") + "</div>";
 }
-function heatHash() { return "#heatmap/" + state.heat.universe + "/" + state.heat.size; }
-function applyHeatHash(heat) {
+function heatHash() {
+  const s = state.heatShow;
+  return "#heatmap/" + (s ? s.list.join(",") : state.heat.universe) + "/" + state.heat.size + (s ? "/" + s.seconds : "");
+}
+function applyHeatHash(heat, show) {
+  state.heatShow = show || null;
   if (!Object.keys(heat).length) return;
   Object.assign(state.heat, heat);
   try { localStorage.setItem("bh2.heatmap", JSON.stringify(state.heat)); } catch (e) {}
+}
+// the slideshow: every `seconds`, the next scope in the list that has something to show
+let _heatShowTimer = 0, _heatShowSecs = 0;
+function heatShowSync() {
+  const on = state.page === "heatmap" && state.heatShow ? state.heatShow.seconds : 0;
+  if (_heatShowTimer && (!on || on !== _heatShowSecs)) { clearInterval(_heatShowTimer); _heatShowTimer = 0; }
+  if (on && !_heatShowTimer) { _heatShowTimer = setInterval(heatShowStep, on * 1000); _heatShowSecs = on; }
+}
+function heatShowStep() {
+  const s = state.heatShow; if (!s || state.page !== "heatmap") return;
+  const mk = (state.model || {}).markets || {};
+  const i = Math.max(0, s.list.indexOf(state.heat.universe));
+  let asked = false;
+  for (let k = 1; k <= s.list.length; k++) {
+    const u = s.list[(i + k) % s.list.length];
+    state.heat.universe = u;
+    if (HEAT_MARKETS[u] && !((mk.universes || {})[u] || []).length && !asked) { asked = true; api("POST", "/api/markets/refresh", {}); }   // a market never read is asked for now
+    if (heatTiles(mk).length) break;   // a scope with nothing to show is passed over
+  }
+  try { localStorage.setItem("bh2.heatmap", JSON.stringify(state.heat)); } catch (e) {}
+  render();
 }
 function newsWhen(iso) {
   const t = Date.parse(iso); if (!isFinite(t)) return "—";
@@ -3615,6 +3644,7 @@ function render() {
   standing.forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("bh-noanim"); });
   if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
   placeTabIndicator();
+  heatShowSync();
   if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); } }
   mountTradeChart();
   mountHeatmap();
@@ -3648,19 +3678,22 @@ function hashState() {
   const parts = raw.split("/");
   if (parts[0] === "positions") parts[0] = "portfolio";   // the tab's old name, still in bookmarks
   if (parts[0] === "heatmap") {
-    // the heatmap on its own; the address may carry its scope and sizing, so a bookmark lands where it left
-    const heat = {};
-    if (HEAT_UNIVERSES.indexOf(parts[1]) >= 0) heat.universe = parts[1];
+    // the heatmap on its own; the address may carry its scope and sizing, so a bookmark lands where it left,
+    // and a list of scopes with a dwell in seconds cycles through them
+    const heat = {}, list = (parts[1] || "").split(",").filter((u) => HEAT_UNIVERSES.indexOf(u) >= 0);
+    if (list.length) heat.universe = list.indexOf(state.heat.universe) >= 0 ? state.heat.universe : list[0];
     if (HEAT_SIZES.indexOf(parts[2]) >= 0) heat.size = parts[2];
-    return { page: "heatmap", sel: null, heat };
+    const secs = parseInt(parts[3], 10);
+    const show = list.length > 1 && secs >= 5 && secs <= 3600 ? { list, seconds: secs } : null;
+    return { page: "heatmap", sel: null, heat, show };
   }
   const page = PAGES.indexOf(parts[0]) >= 0 ? parts[0] : "dashboard";
   return { page, sel: (page === "trades" || page === "portfolio") && parts.length > 1 ? parts.slice(1).join("/") : null };
 }
 function applyHash() {
   const h = hashState();
-  if (h.heat) applyHeatHash(h.heat);
-  if (h.page === state.page && (h.sel || null) === (state.sel || null)) return;
+  if (h.heat) applyHeatHash(h.heat, h.show);
+  if (h.page === state.page && (h.sel || null) === (state.sel || null)) { if (h.page === "heatmap") render(); return; }
   state.page = h.page;
   state.sel = h.sel && state.model && selById(h.sel) ? h.sel : (h.sel ? h.sel : null);
   state.picker = null;
@@ -3854,7 +3887,9 @@ function act(name, arg, ev) {
     case "tilesMore": state.tilesOpen = !state.tilesOpen; if (!state.tilesOpen) state.tileAdd = false; try { localStorage.setItem("bh2.tilesOpen", state.tilesOpen ? "1" : "0"); } catch (e) {} render(); break;
     case "heatFull": location.hash = heatHash(); break;
     case "heatFullClose": location.hash = "#markets"; break;
+    case "heatShowToggle": state.heatShow = state.heatShow ? null : { list: HEAT_UNIVERSES.slice(), seconds: 20 }; history.replaceState(null, "", heatHash()); render(); break;
     case "heatUniverse": case "heatSize": {
+      if (arg.universe && state.heatShow) state.heatShow = null;   // a scope picked by hand ends the cycling
       Object.assign(state.heat, arg); try { localStorage.setItem("bh2.heatmap", JSON.stringify(state.heat)); } catch (e) {}
       if (state.page === "heatmap") history.replaceState(null, "", heatHash());
       // a market universe never read: ask for it now rather than at the next half hour
@@ -4201,7 +4236,7 @@ function boot() {
   const h = hashState();
   state.page = h.page;
   state.sel = h.sel;
-  if (h.heat) applyHeatHash(h.heat);
+  if (h.heat) applyHeatHash(h.heat, h.show);
   bind();
   render();
   notifyLoad();
