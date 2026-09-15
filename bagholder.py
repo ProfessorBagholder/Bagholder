@@ -5807,20 +5807,36 @@ FILINGS_SWEEP_EVERY_SEC = 600      # how often the sweep looks for work
 FILINGS_SWEEP_AGE_HOURS = 6        # a ticker read within this long is left alone
 
 
-def known_filing_symbols():
-    """The tickers the book knows and a regulator could cover: every held instrument
-    and every watched listing, each with what the sources need to match it; a contract
-    or a coin has no filer and is left out."""
+def known_filing_symbols(scopes=("held", "watched", "all")):
+    """The tickers to watch for filings, each with what the sources need to match it:
+    "held" is every open position, "watched" every watched listing, "all" every
+    symbol the book has ever traded or held (an option trade counting for its
+    underlying) and every watched listing. A contract or a coin has no filer and is
+    left out."""
     out, seen = [], set()
     rows = []
-    try:
-        rows.extend(model.held_symbols())
-    except Exception as e:
-        sys.stderr.write("bagholder disclosures: holdings not read for the sweep: %s\n" % (str(e) or e.__class__.__name__))
-    try:
-        rows.extend(store.list_watchlist())
-    except Exception:
-        pass
+    base = None
+    if "held" in scopes or "all" in scopes:
+        try:
+            base = model.base_model()
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: the book not read for the sweep: %s\n" % (str(e) or e.__class__.__name__))
+    if base and ("held" in scopes or "all" in scopes):
+        rows.extend(model.held_symbols(base))
+    if base and "all" in scopes:
+        for t in base["trades"]:
+            rec = {"symbol": t.get("symbol"), "exchange": t.get("exchange"), "currency": t.get("currency"), "kind": t.get("kind")}
+            if rec["kind"] == "Options":
+                under = model.underlying_symbol(_s(rec["symbol"]))
+                if not under or under == "—":
+                    continue
+                rec = {"symbol": under, "exchange": rec["exchange"], "currency": rec["currency"], "kind": "Shares"}
+            rows.append(rec)
+    if "watched" in scopes or "all" in scopes:
+        try:
+            rows.extend(store.list_watchlist())
+        except Exception:
+            pass
     for r in rows:
         sym = _s(r.get("symbol")).strip().upper()
         if not sym or sym in seen or " " in sym or _s(r.get("kind")) in ("Options", "Crypto"):
@@ -5837,10 +5853,11 @@ def sweep_filings(now=None):
     FILINGS_SWEEP_AGE_HOURS is read again, at the sources' own pace, and a filing not
     stored before is told. A ticker read for the first time is a baseline, told
     nothing. Returns how many tickers had something new."""
-    if not notify.settings().get("disclosures"):
+    scopes = notify.disclosure_scopes()
+    if not scopes:
         return 0
     told = 0
-    for inst in known_filing_symbols():
+    for inst in known_filing_symbols(scopes):
         sym = inst["symbol"]
         if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_HOURS):
             continue

@@ -33,6 +33,9 @@ from pathlib import Path
 import store
 
 KINDS = ("fills", "problems", "connection", "updates", "disclosures")
+# the Disclosures kind is chosen by the tickers it covers, a set per switch
+DISCLOSURE_SCOPES = ("disclosuresHeld", "disclosuresWatched", "disclosuresAll")
+SETTING_KEYS = ("fills", "problems", "connection", "updates") + DISCLOSURE_SCOPES
 SETTINGS_KEY = "notify_settings"
 RECENT_MINUTES = 10      # a page that connects is told what happened this recently, never a backlog
 HEARTBEAT_SEC = 15.0     # a comment on the stream this often keeps the connection through proxies and sleeps
@@ -65,14 +68,27 @@ def settings():
         raw = {}
     if not isinstance(raw, dict):
         raw = {}
-    return {k: bool(raw.get(k)) for k in KINDS}
+    return {k: bool(raw.get(k)) for k in SETTING_KEYS}
+
+
+def disclosure_scopes():
+    """Which sets of tickers the Disclosures kind covers: {"held", "watched", "all"} or fewer."""
+    on = settings()
+    return {k[len("disclosures"):].lower() for k in DISCLOSURE_SCOPES if on.get(k)}
+
+
+def kind_on(kind):
+    """Whether a kind is told: Disclosures, whenever any of its sets is on."""
+    if kind == "disclosures":
+        return bool(disclosure_scopes())
+    return bool(settings().get(kind))
 
 
 def set_settings(patch):
     """Turn kinds on or off; unknown keys and non-booleans are ignored. Returns the settings."""
     cur = settings()
     for k, v in (patch or {}).items():
-        if k in KINDS and isinstance(v, bool):
+        if k in SETTING_KEYS and isinstance(v, bool):
             cur[k] = v
     store.set_meta(SETTINGS_KEY, json.dumps(cur))
     return cur
@@ -104,7 +120,7 @@ def native_channel():
 def emit(kind, key, title, body, extra=None):
     """One notification, if its kind is on and this key has not been told before.
     Returns the row, or None."""
-    if kind not in KINDS or not settings().get(kind):
+    if kind not in KINDS or not kind_on(kind):
         return None
     return _post(kind, key, title, body, extra)
 

@@ -20,7 +20,7 @@ import model  # noqa: E402
 import notify  # noqa: E402
 import store  # noqa: E402
 
-OFF = {"fills": False, "problems": False, "connection": False, "updates": False, "disclosures": False}
+OFF = {"fills": False, "problems": False, "connection": False, "updates": False, "disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False}
 
 ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"}
 
@@ -64,8 +64,12 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((row["kind"], row["title"], row["body"], row["seenAt"]), ("fills", "Order filled · QNC", "Bought 5 at 1.75", ""))
         self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "again"), "the same event is never told twice")
         self.assertIsNone(notify.emit("bogus", "x", "t", "b"), "an unknown kind is nothing")
+        self.assertIsNone(notify.emit("disclosures", "f1", "t", "b"), "no set of tickers chosen: disclosures are not told")
+        notify.set_settings({"disclosuresWatched": True})
+        self.assertEqual(notify.disclosure_scopes(), {"watched"})
+        self.assertIsNotNone(notify.emit("disclosures", "f1", "t", "b"), "any set on: the kind is told")
         self.assertGreater(notify.test_notification()["id"], row["id"], "the test goes out whatever the kinds say")
-        self.assertEqual(len(store.list_notifications()), 2)
+        self.assertEqual(len(store.list_notifications()), 3)
 
     def test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned(self):
         notify.set_settings({"fills": True})
@@ -273,10 +277,14 @@ class NotifyTest(unittest.TestCase):
         notify.configure(url="http://127.0.0.1:8800/")
         self.assertNotEqual(notify._mac_stamp(), stamp, "a new address means a new applet")
 
-    def test_a_new_filing_on_a_known_ticker_is_told_but_a_first_read_is_a_baseline(self):
-        notify.set_settings({"disclosures": True})
+    def test_a_new_filing_on_a_chosen_ticker_is_told_but_a_first_read_is_a_baseline(self):
+        notify.set_settings({"disclosuresHeld": True, "disclosuresWatched": True, "disclosuresAll": True})
         held = [{"symbol": "QNC", "exchange": "NYSE", "currency": "USD", "kind": "Shares"}, {"symbol": "QNC 20NOV26 3.00 CALL", "exchange": "NYSE", "currency": "USD", "kind": "Options"}, {"symbol": "BTC", "exchange": "", "currency": "CAD", "kind": "Crypto"}]
         watched = [{"symbol": "SHOP", "exchange": "TSX", "name": "Shopify Inc.", "currency": "CAD"}]
+        base = {"today": "2026-09-14", "positions": [], "trades": [
+            {"symbol": "ENB", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "entryDate": "2026-05-01", "exitDate": "2026-06-01"},
+            {"symbol": "OLD", "exchange": "TSX", "currency": "CAD", "kind": "Shares", "entryDate": "2024-05-01", "exitDate": "2024-06-01"},
+            {"symbol": "QNC 20NOV26 3.00 CALL", "exchange": "NYSE", "currency": "USD", "kind": "Options", "entryDate": "2026-08-01", "exitDate": "2026-09-01"}]}
         listings = {"QNC": [{"id": "sec:1", "source": "sec", "type": "8-K", "title": "Current report", "date": "2026-09-10"}],
                     "SHOP": [{"id": "sedar:1", "source": "sedar", "type": "Material change report", "title": "x", "date": "2026-09-10"}]}
         def fake_refresh(sym, name=None, exchange=None, currency=None):
@@ -286,9 +294,13 @@ class NotifyTest(unittest.TestCase):
                     store.replace_filings(sym, src, rows)
             store.mark_filings_fetched(sym)
             return len(listings[sym])
-        with mock.patch.object(model, "held_symbols", return_value=held), mock.patch.object(store, "list_watchlist", return_value=watched), \
+        listings["ENB"] = [{"id": "sedar:9", "source": "sedar", "type": "Annual report", "title": "a", "date": "2026-09-01"}]
+        with mock.patch.object(model, "base_model", return_value=base), mock.patch.object(model, "held_symbols", return_value=held), mock.patch.object(store, "list_watchlist", return_value=watched), \
              mock.patch.object(disclosures, "providers_for", return_value=[object()]), mock.patch.object(bagholder, "refresh_filings", side_effect=fake_refresh):
-            self.assertEqual([i["symbol"] for i in bagholder.known_filing_symbols()], ["QNC", "SHOP"], "a contract and a coin have no filer")
+            self.assertEqual([i["symbol"] for i in bagholder.known_filing_symbols()], ["QNC", "ENB", "OLD", "SHOP"], "a contract and a coin have no filer; every trade the book ever closed counts, an option trade for its underlying")
+            self.assertEqual([i["symbol"] for i in bagholder.known_filing_symbols(("watched",))], ["SHOP"], "each set is its own choice")
+            self.assertEqual([i["symbol"] for i in bagholder.known_filing_symbols(("held",))], ["QNC"])
+            listings["OLD"] = []
             self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
             self.assertEqual(store.list_notifications(), [])
             listings["QNC"].append({"id": "sec:2", "source": "sec", "type": "8-K", "title": "Another", "date": "2026-09-14"})
@@ -301,9 +313,9 @@ class NotifyTest(unittest.TestCase):
             ("disclosures", "New disclosure · QNC", "8-K · SEC EDGAR", {"symbol": "QNC"}),
             ("disclosures", "2 new disclosures · SHOP", "News release, Material change report · SEDAR+", {"symbol": "SHOP"}),
         ])
-        notify.set_settings({"disclosures": False})
+        notify.set_settings({"disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False})
         with mock.patch.object(bagholder, "known_filing_symbols", side_effect=AssertionError("swept while off")):
-            self.assertEqual(bagholder.sweep_filings(), 0, "off: the pipeline stays on demand")
+            self.assertEqual(bagholder.sweep_filings(), 0, "every set off: the pipeline stays on demand")
 
 
 if __name__ == "__main__":

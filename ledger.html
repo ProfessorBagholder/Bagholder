@@ -215,6 +215,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .menu button.primary{color:var(--accent-300);font-weight:500}
 .menu button[disabled]{opacity:.4;cursor:default}
 .menu .sep{height:1px;background:rgba(var(--ink-rgb),.1);margin:4px 2px}
+.menu .menu-h{font-size:10.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:rgba(var(--ink-rgb),.5);padding:5px 9px 2px}
 .menu button.open{background:rgba(var(--ink-rgb),var(--hover))}
 .menu .sub{top:0;right:calc(100% + 8px);z-index:6}
 .menu .sub::before{content:"";position:absolute;top:0;bottom:0;left:100%;width:8px}
@@ -870,7 +871,9 @@ function menuHtml() {
 }
 // Notifications: the server tells, the browser shows. The kinds are the server's settings; whether this
 // browser may show them is its own permission, asked on the first click (browsers ask only on a click).
-const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"], ["disclosures", "Disclosures"]];
+const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
+// the Disclosures kind is chosen by the tickers it covers: a set per switch, under its heading
+const NOTIFY_SCOPES = [["disclosuresHeld", "Holdings"], ["disclosuresWatched", "Watchlist"], ["disclosuresAll", "All tickers"]];
 // the server posts them itself where the computer it runs on has a desktop ("native"); only where it has none is
 // this browser asked to show them, under its own permission
 function notifyNative() { return !!(state.status.notify && state.status.notify.native); }
@@ -878,11 +881,13 @@ function notifyState() { return notifyNative() ? "native" : "Notification" in wi
 function notifyOn(kind) { const st = notifyState(); return (st === "native" || st === "granted") && !!(state.status.notify && state.status.notify[kind]); }
 function notifyWord() {
   const st = notifyState();
-  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.some((k) => notifyOn(k[0])) ? "On" : "Off";
+  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.concat(NOTIFY_SCOPES).some((k) => notifyOn(k[0])) ? "On" : "Off";
 }
 function notifyMenuHtml() {
   const st = notifyState(), dead = st === "unavailable" || st === "denied";
-  return '<div class="menu sub">' + NOTIFY_KINDS.map((k) => '<button data-act="notifyToggle" data-arg=\'' + attr({ kind: k[0] }) + "'" + (dead ? " disabled" : "") + ">" + esc(k[1]) + '<span class="sw' + (notifyOn(k[0]) ? " on" : "") + '" style="margin-left:auto"></span></button>').join("") +
+  const row = (k) => '<button data-act="notifyToggle" data-arg=\'' + attr({ kind: k[0] }) + "'" + (dead ? " disabled" : "") + ">" + esc(k[1]) + '<span class="sw' + (notifyOn(k[0]) ? " on" : "") + '" style="margin-left:auto"></span></button>';
+  return '<div class="menu sub">' + NOTIFY_KINDS.map(row).join("") +
+    '<div class="sep"></div><div class="menu-h">Disclosures</div>' + NOTIFY_SCOPES.map(row).join("") +
     '<div class="sep"></div><button data-act="notifyTest"' + (dead ? " disabled" : "") + ">" + icon("bell") + "Send a test notification</button></div>";
 }
 function notifyAsk() {
