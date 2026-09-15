@@ -116,6 +116,25 @@ def available():
     return bool(endpoint())
 
 
+COMING_UP = ("detecting", "starting")     # phases that finish in seconds, unlike a download
+
+
+def wait_ready(seconds):
+    """Wait, for at most `seconds`, for a model that is coming up right now, and say whether
+    one is up. Asking for the first time is what starts it, so without this the first caller
+    of a session always gets nothing. A download is never waited for: that takes minutes and
+    the caller has a page to answer."""
+    endpoint()                            # the ask that starts one, if none is up
+    deadline = time.time() + max(0.0, seconds)
+    while time.time() < deadline:
+        if available():
+            return True
+        if status() not in COMING_UP:
+            return False
+        time.sleep(0.5)
+    return available()
+
+
 def endpoint():
     """The base URL of a working local model, or "" if none is up yet. Never blocks
     on a download; if provisioning is needed, kick it in the background and return "".

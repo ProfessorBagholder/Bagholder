@@ -2623,21 +2623,23 @@ function enrichOne(sym, f) {
 // walks the issuer once, and each result is stored so a later visit is instant.
 function sweepDiscEnrich(sym, rows) {
   if (_discSweep[sym]) return;
-  const need = discEnrichNeed;
-  const pending = rows.filter(need);
-  if (!pending.length) return;
+  if (!rows.some(discEnrichNeed)) return;
   _discSweep[sym] = true;
-  const q = new Set(pending.map((f) => f.id));
-  _discQueue[sym] = q;
-  let i = 0, sawPreparing = false, sawFailure = false;
+  // A row that found no model to ask has not had its turn, so it is not counted as passed and
+  // the next step picks it up the moment one is up. This matters most for the first row: the
+  // first document read in a session is the read that starts the model, so the top of the list
+  // is the one that comes back without a sentence, and waiting for the other forty-odd
+  // documents to be read before returning to it left it looking empty for minutes.
+  const passed = new Set();
+  const upNext = () => rows.find((f) => discEnrichNeed(f) && !passed.has(f.id));
+  const queue = () => { _discQueue[sym] = new Set(rows.filter((f) => discEnrichNeed(f) && !passed.has(f.id)).map((f) => f.id)); };
+  queue();
+  let sawPreparing = false, sawFailure = false;
   const finish = () => {
     _discSweep[sym] = false; _discQueue[sym] = null;
     // a summary still being prepared is asked for again every fifteen seconds for as long as the card is shown; a
     // read that failed is tried again a few times, each wait longer than the last
     const again = (_discRekicks[sym] || 0);
-    // go round again while rows still have something to read for, whatever left them short:
-    // one half read, or a read that failed. Each row's own rule decides when it is finished,
-    // so this cannot circle — a row waiting on a model asks for nothing until one is up.
     const unfinished = rows.some(discEnrichNeed);
     if (_discStillOpen(sym) && (sawPreparing || (unfinished && again < 6))) {
       _discRekicks[sym] = again + 1;
@@ -2647,10 +2649,11 @@ function sweepDiscEnrich(sym, rows) {
   };
   const step = () => {
     if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
-    while (i < pending.length && !need(pending[i])) { q.delete(pending[i].id); i++; }
-    if (i >= pending.length) return finish();
-    const f = pending[i++]; q.delete(f.id);
+    const f = upNext();
+    if (!f) return finish();
+    queue();
     enrichOne(sym, f).then(() => {
+      if (_discEnrichTried[f.id] !== "waiting") passed.add(f.id);
       if (_discPreparing(f)) sawPreparing = true;
       else if (!f.subject && !f.summary) sawFailure = true;   // a transient read failure: retry on the next pass
       setTimeout(step, 150);

@@ -6242,6 +6242,11 @@ def filings_enrich(symbol, doc_id):
         return {"ok": False, "error": str(e)}
     if not data:
         return {"ok": False, "error": "the document could not be read"}
+    if not model:
+        # the document is in hand; the first read of a session is the one that starts the
+        # model, so wait the few seconds it needs rather than spending this read and coming
+        # back for the same document later. A model still downloading is not waited for.
+        model = enrich.wait_for_summary()
     info = enrich.enrich_document(row.get("source", ""), data, ct)
     new_subject = info.get("subject") or ""
     got_summary = info.get("summary") or ""

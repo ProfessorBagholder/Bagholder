@@ -263,3 +263,35 @@ class StatusSummaryTest(unittest.TestCase):
         with mock.patch.object(bagholder.enrich, "summary_status", return_value="off"), \
              mock.patch.object(bagholder.enrich, "summary_available", side_effect=AssertionError("a status poll started a model")):
             self.assertFalse(bagholder.status_payload()["summaryReady"])
+
+
+class WaitingForTheModelTest(unittest.TestCase):
+    """The first document read in a session is the read that starts the model. Spending it
+    and coming back later is what left the newest filing without a summary."""
+
+    setUp, tearDown, stored = EnrichTest.setUp, EnrichTest.tearDown, EnrichTest.stored
+
+    def test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted(self):
+        with mock.patch.object(bagholder.enrich, "summary_available", return_value=False), \
+             mock.patch.object(bagholder.enrich, "wait_for_summary", return_value=True) as waited, \
+             mock.patch.object(bagholder.enrich, "summary_status", return_value="ready"), \
+             mock.patch.object(bagholder.disclosures, "available", return_value=True), \
+             mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
+             mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")), \
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": "A title", "summary": "A sentence."}):
+            out = bagholder.filings_enrich("QNC", self.doc)
+        self.assertEqual(waited.call_count, 1)
+        self.assertEqual(out["summary"], "A sentence.")
+        self.assertEqual(self.stored(), ("A title", "A sentence.", bagholder.ENRICH_VERSION))
+
+    def test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again(self):
+        with mock.patch.object(bagholder.enrich, "summary_available", return_value=False), \
+             mock.patch.object(bagholder.enrich, "wait_for_summary", return_value=False), \
+             mock.patch.object(bagholder.enrich, "summary_status", return_value="off"), \
+             mock.patch.object(bagholder.disclosures, "available", return_value=True), \
+             mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
+             mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")), \
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": "A title", "summary": ""}):
+            out = bagholder.filings_enrich("QNC", self.doc)
+        self.assertEqual(out["subject"], "A title")
+        self.assertEqual(self.stored()[2], 0)      # not finalised: read again once a model is up

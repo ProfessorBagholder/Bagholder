@@ -134,6 +134,16 @@ def summary_available():
     return localmodel.available()
 
 
+SUMMARY_WAIT_SEC = 25      # how long a document read waits for a model that is starting
+
+
+def wait_for_summary(seconds=SUMMARY_WAIT_SEC):
+    """Give a model that is coming up the moment it needs, so the first document read in a
+    session — the read that starts the model — is not the one that comes back without a
+    sentence. Returns whether a summary can be made now."""
+    return localmodel.wait_ready(seconds)
+
+
 def summary_status():
     """Provisioning state for the UI and for retry decisions: while either the model
     or the PDF engine is still being fetched, report a not-ready state so a row is
