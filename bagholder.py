@@ -690,7 +690,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.31.1"
+APP_VERSION = "1.31.2"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5804,7 +5804,14 @@ def _filings_stale(symbol, now=None, hours=None):
 # --- the Disclosures notification: a sweep of the tickers the book knows, only while that kind is on ---
 
 FILINGS_SWEEP_EVERY_SEC = 300      # how often the sweep looks for work
-FILINGS_SWEEP_AGE_MIN = 10         # a ticker read within this long is left alone; a re-read is one paced request per source
+FILINGS_SWEEP_AGE_MIN = 30         # a ticker read within this long is left alone: a SEDAR+ re-read is a few paced actions, and thirty issuers must fit between passes
+
+
+def filing_mark(r):
+    """What makes a filing itself, whatever id a source hands out on a given day: its
+    source, date, kind, title and size. A filed document never changes, so this is
+    steady across reads even where an id scheme is not."""
+    return (_s(r.get("source")), _s(r.get("date")), _s(r.get("type")), _s(r.get("title")), _s(r.get("size")))
 
 
 def known_filing_symbols(scopes=("held", "watched", "all")):
@@ -5862,16 +5869,22 @@ def sweep_filings(now=None):
         if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
             continue
         first = not store.filings_fetched_at(sym)
-        before = {r.get("id") for r in store.filings(sym)}
+        before = {filing_mark(r) for r in store.filings(sym)}
         wrote = refresh_filings(sym, name=inst.get("name"), exchange=inst.get("exchange"), currency=inst.get("currency"))
         if first or wrote is None or wrote < 0:
             continue
-        new = [r for r in store.filings(sym) if r.get("id") not in before]
+        after = store.filings(sym)
+        new = [r for r in after if filing_mark(r) not in before]
         if not new:
+            continue
+        if before and not any(filing_mark(r) in before for r in after):
+            # nothing the list held a moment ago is in it now: a list re-keyed or re-read from
+            # scratch, not thirty filings in a morning; the read is a baseline again
             continue
         told += 1
         notice = filings_notice(sym, new)
-        notify.emit("disclosures", "filings:%s:%s" % (sym, _s(new[0].get("id"))), notice[0], notice[1], {"symbol": sym})
+        digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in new)).encode("utf-8")).hexdigest()[:12]
+        notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1], {"symbol": sym})
     return told
 
 
@@ -5934,11 +5947,18 @@ def refresh_filings(symbol, name=None, exchange=None, currency=None):
             by_source.setdefault(it.get("source") or "", []).append(it)
             if it.get("source") == sedar.SOURCE and it.get("profileNo"):
                 profile_no = it["profileNo"]
+        held = {r.get("source") for r in store.filings(sym)}
         for src, status in (result.get("sources") or {}).items():
             if status.get("available"):
                 any_reached = True
+            rows = by_source.get(src, [])
+            if not rows and src in held:
+                # a filed document never disappears: an empty answer from a source that had rows
+                # is a read that came back short, and the stored rows stand until a fuller one
+                sys.stderr.write("bagholder disclosures: %s: %s answered empty; the stored rows stand\n" % (sym, src))
+                continue
             if status.get("matched") or status.get("available"):
-                total += store.replace_filings(sym, src, by_source.get(src, []))
+                total += store.replace_filings(sym, src, rows)
         store.mark_filings_fetched(sym, profile_no)
         store.set_meta("filings_sources:" + sym, json.dumps(result.get("sources") or {}))
         return total if any_reached else -1
