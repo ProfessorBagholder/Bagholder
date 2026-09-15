@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import sys
 import threading
 import time
@@ -39,6 +40,8 @@ US_POSITION_URL = "https://api.finra.org/data/group/otcMarket/name/consolidatedS
 US_VOLUME_URL = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol%s.txt"
 CA_POSITION_URL = "https://www.ciro.ca/sites/default/files/epubs/CSPR/%s_CSPR_Report.xls"
 CA_VOLUME_URL = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_ShortSaleTradingSummaryReport.csv"
+CA_CBOE_URL = "https://www-api.cboe.com/ca/equities/listing-directory-data/"
+CBOE_FUNDS = ("etf", "cef")      # what that venue calls the listings whose units in issue are their float
 # what the Canadian files call each venue, against what the app calls it
 CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL": ("CBOE CANADA", "NEO")}
 FILE_HOURS = 6           # how often a whole-market file is looked for again
@@ -311,24 +314,59 @@ def _yahoo_session():
         return None, ""
 
 
+def _cboe_units(symbol, ssl_context=None, now=None):
+    """The units a fund listed on Cboe Canada has in issue, from that venue's own directory.
+    The directory publishes each listing's market capitalisation beside its last price, and a
+    capitalisation is the count times that price: dividing gives back the count the exchange
+    put in, whole for every listing it carries, which is the figure itself and not one rounded
+    into shape. It is asked only for the venue's funds: for a company the shares in issue are
+    not the float, and Yahoo publishes that. TMX carries Cboe listings but answers 0 for their
+    counts, and Yahoo publishes no count for a Canadian fund, so for these listings this is the
+    only place the figure exists."""
+    def build(ctx, when):
+        rows = {}
+        for r in (json.loads(market._get_text(CA_CBOE_URL, ctx, headers=HEADERS)) or {}).get("data") or []:
+            if _s(r.get("security")).strip().lower() not in CBOE_FUNDS:
+                continue
+            cap, last = _num(r.get("marketcap")), _num(r.get("last"))
+            if not cap or not last:
+                continue
+            count = cap / last
+            if abs(count - round(count)) < 1e-6:     # anything else is not the exchange's own count
+                rows[_s(r.get("symbol")).strip().upper()] = float(round(count))
+        return ("cboe", rows)
+    return _table("cboe_listings", build, ssl_context, now)["rows"].get(_s(symbol).strip().upper())
+
+
 def _fund_units(symbol, exchange, currency, ssl_context=None):
     """The units an exchange-traded fund has in issue, from the market's own source. A fund
     creates and redeems units on demand and holds none back, so the units in issue are the
-    units there are to trade: for a fund this is the float, not a stand-in for it."""
+    units there are to trade: for a fund this is the float, not a stand-in for it. TMX answers
+    for the venues it carries counts for, Cboe Canada's own directory for its listings."""
     sym = _s(symbol).strip().upper()
     if market_of(sym, exchange, currency) == "us":
         return None                              # the US count comes from Yahoo with the float below
+    count = None
     try:
         code = market.tmx_quote_symbol(sym, exchange, currency)
-        if not code:
-            return None
-        def ask(form):
-            answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
-                                                          "query": TMX_UNITS_QUERY}, ssl_context, market._TMX_HEADERS)
-            return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
-        return _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding")) or None
+        if code:
+            def ask(form):
+                answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
+                                                              "query": TMX_UNITS_QUERY}, ssl_context, market._TMX_HEADERS)
+                return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
+            count = _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding")) or None
     except Exception as e:
         sys.stderr.write("bagholder shorts: %s units failed: %s\n" % (sym, e))
+    if count:
+        return count
+    # the venue is asked for its own listings only: a symbol is one company's on one venue and
+    # another's on the next, and a count taken from the wrong venue would be the wrong fund's
+    if _s(exchange).strip().upper() not in CA_VENUES["AQL"]:
+        return None
+    try:
+        return _cboe_units(sym, ssl_context)
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s units from cboe failed: %s\n" % (sym, e))
         return None
 
 

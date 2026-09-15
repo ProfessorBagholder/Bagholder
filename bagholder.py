@@ -5920,7 +5920,7 @@ FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)
 
 
 SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
-SHORTS_VERSION = 3                 # bump when a reading can carry more than it could before, so
+SHORTS_VERSION = 4                 # bump when a reading can carry more than it could before, so
                                    # rows written by the older logic are read again once: a figure
                                    # the app has since learned to find should not wait for its row
                                    # to go stale, which is hours a reader spends looking at a dash

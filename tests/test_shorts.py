@@ -2,6 +2,7 @@
 one figure the app derives from them."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -494,6 +495,44 @@ class FundFloatTest(unittest.TestCase):
         answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": 111.0}, "sharesOutstanding": {"raw": 999.0}}}]}}
         self.use(self.session([("XIU", answer, 200)]))
         self.assertEqual(shorts.float_shares("XIU", "TSX", "CAD", "iShares S&P/TSX 60 Index ETF"), 111.0)
+
+
+class CboeUnitsTest(unittest.TestCase):
+    """A fund listed on Cboe Canada: TMX answers 0 for its count and Yahoo publishes none,
+    so the count comes from that venue's own directory, where a listing's market
+    capitalisation divided by its last price gives the count back whole."""
+
+    DIRECTORY = json.dumps({"data": [
+        {"symbol": "HBIX", "name": "HARVEST BITCOIN ENHANCED INCOME ETF", "security": "etf", "marketcap": 44091000.0, "last": 6.39},
+        {"symbol": "BCBN", "name": "A COMPANY", "security": "equity", "marketcap": 100876283.0, "last": 1.0},
+        {"symbol": "NOPR", "name": "NO PRICE ETF", "security": "etf", "marketcap": 500.0, "last": 0.0},
+        {"symbol": "ODDS", "name": "NOT A WHOLE COUNT ETF", "security": "etf", "marketcap": 100.0, "last": 3.0}]})
+
+    def setUp(self):
+        shorts._files.clear()
+
+    tearDown = setUp
+
+    def test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(self):
+        with mock.patch.object(shorts.market, "_get_text", return_value=self.DIRECTORY) as got, \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value=""):   # TMX carries no count for these
+            self.assertEqual(shorts._fund_units("HBIX", "CBOE CANADA", "CAD"), 6900000.0)
+            self.assertIsNone(shorts._fund_units("BCBN", "CBOE CANADA", "CAD"), "a company's shares in issue are not its float")
+            self.assertIsNone(shorts._fund_units("NOPR", "CBOE CANADA", "CAD"), "no price, no count")
+            self.assertIsNone(shorts._fund_units("ODDS", "CBOE CANADA", "CAD"), "a count that is not whole is not the exchange's own")
+        self.assertEqual(got.call_count, 1, "one directory for every listing looked up in it")
+
+    def test_a_listing_on_another_venue_never_takes_a_count_from_this_one(self):
+        with mock.patch.object(shorts.market, "_get_text", side_effect=AssertionError("asked anyway")), \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="HBIX:TSX"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 0}, "")):
+            self.assertIsNone(shorts._fund_units("HBIX", "TSX", "CAD"))
+
+    def test_the_venue_is_asked_only_where_tmx_has_no_count(self):
+        with mock.patch.object(shorts.market, "_get_text", side_effect=AssertionError("asked anyway")), \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="XYZ:AQL"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 4200}, "")):
+            self.assertEqual(shorts._fund_units("XYZ", "CBOE CANADA", "CAD"), 4200.0)
 
 
 class FloatCacheTest(unittest.TestCase):
