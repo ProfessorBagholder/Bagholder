@@ -86,7 +86,10 @@ textarea.input{resize:none;line-height:1.5}
 .mseg-opt.on{color:var(--ink);background:var(--chip-bg)}
 .mseg-div{width:1px;height:16px;background:rgba(var(--ink-rgb),.14);margin:0 4px;align-self:center}
 .heat-blk{position:absolute;border-radius:5px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.07)}
-.heat-hd{position:absolute;top:0;left:0;right:0;height:19px;display:flex;align-items:center;padding:0 7px;font:500 11px var(--font);letter-spacing:.04em;color:var(--ink60);white-space:nowrap;overflow:hidden}
+.heat-hd{position:absolute;top:0;left:0;right:0;height:19px;display:flex;align-items:center;gap:6px;padding:0 7px;font:500 11px var(--font);letter-spacing:.04em;color:var(--ink60);white-space:nowrap;overflow:hidden}
+.heat-hl{min-width:0;overflow:hidden;text-overflow:ellipsis}   /* on a narrow block the name gives way; the change never does */
+.heat-hd .num{flex:none}
+#heatTip{z-index:5}
 .heat-tile{position:absolute;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;overflow:hidden;color:#f2f2f6}
 .heat-tile.go{cursor:pointer}
 .heat-tile:hover{outline:1px solid rgba(233,233,237,.55);outline-offset:-1px;z-index:2}
@@ -2901,6 +2904,23 @@ function heatmapLayout(tiles, W, H) {
 // universe or the sizer moves a cell to its new slot instead of swapping the
 // text inside a stationary box. A node that is re-created has no previous
 // geometry to travel from and its transition parks at the start value.
+// a sector's name cut by its block, or a symbol cut by its tile, shows the whole on hover in the charts' tooltip;
+// what fits has no hover
+function heatTipShow(el) {
+  const box = document.getElementById("heatBox"), tip = document.getElementById("heatTip"); if (!box || !tip) return;
+  if (el.scrollWidth <= el.clientWidth) { tip.hidden = true; return; }
+  const tile = el.closest(".heat-tile");
+  const full = tile ? (tile.dataset.sym || el.textContent) : el.textContent, under = tile ? (tile.dataset.name || "") : "";
+  tip.querySelector(".tv").textContent = full;
+  const tl = tip.querySelector(".tl"); tl.textContent = under; tl.hidden = !under;
+  tip.hidden = false;
+  const b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
+  const cx = r.left + r.width / 2 - b.left, above = r.top - b.top - tip.offsetHeight - 6;
+  tip.style.left = Math.max(4, Math.min(b.width - 4, cx)) + "px";
+  tip.style.top = (above >= 0 ? above : r.bottom - b.top + 6) + "px";
+  tip.style.transform = "translateX(" + (cx < 70 ? "0%" : cx > b.width - 70 ? "-100%" : "-50%") + ")";
+}
+function heatTipHide() { const tip = document.getElementById("heatTip"); if (tip) tip.hidden = true; }
 function heatNode(cls) {
   const el = document.createElement("div");
   el.className = cls;
@@ -2932,7 +2952,7 @@ function mountHeatmap() {
     }
     heatPlace(el, g.x, g.y, g.w, g.h);
     const hd = el.firstElementChild;
-    hd.innerHTML = esc(g.label) + '<span class="num" style="margin-left:auto;font-weight:400;color:' +
+    hd.innerHTML = '<span class="heat-hl">' + esc(g.label) + '</span><span class="num" style="margin-left:auto;font-weight:400;color:' +
       (g.chg == null ? "var(--ink55)" : g.chg >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(g.chg) + "</span>";
   });
   lay.cells.forEach((c) => {
@@ -2956,9 +2976,12 @@ function mountHeatmap() {
     const sym = el.children[0], chg = el.children[1];
     sym.style.fontSize = (c.big ? 16 : c.mid ? 13 : 11) + "px";
     sym.textContent = c.other ? c.symbol : bareSymbol(c.symbol);
+    el.dataset.sym = sym.textContent; el.dataset.name = c.name || "";
     chg.hidden = !c.mid;
     if (c.mid) { chg.style.fontSize = (c.big ? 12 : 11) + "px"; chg.textContent = signedPct(c.percentChange); }
   });
+  if (!box.querySelector("#heatTip")) { const tip = heatNode("tip"); tip.id = "heatTip"; tip.hidden = true; tip.dataset.key = "tip"; tip.innerHTML = '<div class="tv"></div><div class="tl"></div>'; box.appendChild(tip); }
+  seen.add("tip");
   [...box.children].forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
 }
 function cssKey(key) {
@@ -4211,6 +4234,8 @@ function bind() {
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
     else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
+  document.addEventListener("mouseover", (e) => { const cut = e.target.closest && e.target.closest(".heat-hl, .heat-sym"); if (cut) heatTipShow(cut); });
+  document.addEventListener("mouseout", (e) => { if (e.target.closest && e.target.closest(".heat-hl, .heat-sym")) heatTipHide(); });
   // the Theme row opens its list on hover, as a submenu does; the click stays for touch
   document.addEventListener("mouseover", (e) => {
     const h = e.target.closest && e.target.closest('[data-hover="theme"],[data-hover="notify"]');
