@@ -3650,12 +3650,18 @@ const SHORTS_COLS = [{ key: "symbol", label: "Symbol" }, { key: "exchange", labe
 // here: asking again emptied the list for a moment, and a card that shrinks under a reader
 // scrolled past it takes the page with it
 const _shortsFeed = {};
+const SHORTS_FEED_KEEP_MS = 3 * 60 * 1000;   // the sweep fills rows in behind the page; a list
+                                             // fetched once and never again shows whatever it
+                                             // happened to get, dashes and all, until a reload
 function ensureShortsFeed() {
-  if (_shortsFeed.rows || _shortsFeed.loading) return;
+  if (_shortsFeed.loading || (_shortsFeed.at && Date.now() - _shortsFeed.at < SHORTS_FEED_KEEP_MS)) return;
   _shortsFeed.loading = true;
   api("GET", "/api/shorts/feed").then((d) => {
     _shortsFeed.loading = false;
-    _shortsFeed.rows = (d && d.ok) ? (d.rows || []) : [];
+    _shortsFeed.at = Date.now();
+    // what is already on screen stands until a better answer lands, so the list never empties
+    if (d && d.ok) _shortsFeed.rows = d.rows || [];
+    else if (!_shortsFeed.rows) _shortsFeed.rows = [];
     if (state.page === "markets") render();
   });
 }
