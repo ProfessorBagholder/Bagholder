@@ -345,3 +345,114 @@ class FloatTest(unittest.TestCase):
             rec = shorts.for_listing("GME", "NYSE", "USD")
         self.assertEqual(rec["float"], 400.0)
         self.assertEqual(rec["ofFloat"], 25.0)
+
+
+class StoredTest(unittest.TestCase):
+    """What was read is kept, so opening an instrument again — or after a restart — draws
+    its tiles with the page instead of after a round of reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        model.invalidate()
+        shorts._files.clear()
+        shorts._shares.clear()
+
+    def tearDown(self):
+        shorts._files.clear()
+        shorts._shares.clear()
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def record(self, **over):
+        rec = {"market": "ca", "asOf": "2026-08-31", "shares": 2667164.0, "previous": 2603087.0, "previousOf": "2026-08-15",
+               "change": 64077.0, "float": 212448707.0, "ofFloat": 1.2554, "averageVolume": 510698.0, "daysToCover": 5.2,
+               "volumeOf": "2026-08-16/2026-08-31", "volumeSpan": "period", "shortVolume": 1197633.0,
+               "totalVolume": 5617679.0, "volumePct": 21.319, "series": [{"date": "2026-08-15", "shares": 2603087.0}]}
+        rec.update(over)
+        return rec
+
+    def test_a_reading_comes_back_as_it_went_in(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["shares"], 2667164.0)
+        self.assertEqual(held["ofFloat"], 1.2554)
+        self.assertEqual(held["volumeSpan"], "period")
+        self.assertEqual(held["series"], [{"date": "2026-08-15", "shares": 2603087.0}])
+        self.assertTrue(held["fetchedAt"])
+
+    def test_a_later_reading_without_a_run_of_reports_keeps_the_one_stored(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("QNC", "TSX-V", self.record(series=None, shares=99.0))
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["shares"], 99.0)
+        self.assertEqual(len(held["series"]), 1)
+
+    def test_the_two_listings_of_one_company_are_kept_apart(self):
+        store.save_shorts("QNC", "TSX-V", self.record(shares=2667164.0))
+        store.save_shorts("QNC", "NYSE", self.record(market="us", shares=7058199.0))
+        self.assertEqual(store.shorts_for("QNC", "TSX-V")["shares"], 2667164.0)
+        self.assertEqual(store.shorts_for("QNC", "NYSE")["shares"], 7058199.0)
+        self.assertEqual(len(store.all_shorts()), 2)
+
+    def test_a_listing_never_read_is_not_in_the_store(self):
+        self.assertIsNone(store.shorts_for("NOSUCH", "TSX"))
+
+    def test_what_is_stored_is_answered_without_reading_again(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        with mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("read anyway")):
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertTrue(out["covered"])
+        self.assertEqual(out["shorts"]["shares"], 2667164.0)
+
+    def test_a_listing_not_stored_yet_is_read_and_kept(self):
+        with mock.patch.object(bagholder.shorts, "for_listing", return_value=self.record()) as read:
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertEqual(read.call_count, 1)
+        self.assertTrue(out["covered"])
+        self.assertEqual(store.shorts_for("QNC", "TSX-V")["shares"], 2667164.0)
+
+    def test_a_market_no_one_reports_is_never_read_or_kept(self):
+        with mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("asked anyway")):
+            self.assertEqual(bagholder.shorts_payload("BTC", "Crypto", "USD"), {"ok": True, "covered": False})
+        self.assertEqual(store.all_shorts(), [])
+
+    def test_a_stale_reading_is_still_answered_at_once(self):
+        store.save_shorts("QNC", "TSX-V", self.record(), now="2020-01-01T00:00:00Z")
+        with mock.patch.object(bagholder, "kick", return_value=True) as kicked, \
+             mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("read in the request")):
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertEqual(out["shorts"]["shares"], 2667164.0)
+        self.assertEqual(kicked.call_count, 1)      # refreshed behind the page, not in front of it
+
+
+class FeedTest(unittest.TestCase):
+    """The ranked list reads the store and never a regulator."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def test_only_listings_in_scope_are_listed(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("GONE", "TSX", self.record())
+        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
+             mock.patch.object(bagholder.model, "base_model", return_value={"positions": [], "watchlist": []}):
+            out = bagholder.shorts_feed("all")
+        self.assertEqual([r["symbol"] for r in out["rows"]], ["QNC"])
+
+    def test_a_row_carries_its_name_and_the_holding_it_opens(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        base = {"positions": [{"symbol": "QNC", "exchange": "TSX-V", "name": "Quantum eMotion Corp", "id": "rt:1"}], "watchlist": []}
+        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
+             mock.patch.object(bagholder.model, "base_model", return_value=base):
+            row = bagholder.shorts_feed("holdings")["rows"][0]
+        self.assertEqual(row["name"], "Quantum eMotion Corp")
+        self.assertEqual(row["positionId"], "rt:1")
+
+    def test_a_listing_read_but_carrying_no_position_is_left_out(self):
+        store.save_shorts("QNC", "TSX-V", self.record(shares=None))
+        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
+             mock.patch.object(bagholder.model, "base_model", return_value={"positions": [], "watchlist": []}):
+            self.assertEqual(bagholder.shorts_feed("all")["rows"], [])

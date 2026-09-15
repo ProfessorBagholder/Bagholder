@@ -691,7 +691,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.38.0"
+APP_VERSION = "1.39.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5919,10 +5919,33 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
+SHORTS_SWEEP_EVERY_SEC = 1800      # how often the sweep looks for listings to warm
+
+
+def _shorts_stale(rec, now=None):
+    try:
+        return (now or datetime.now(timezone.utc)) - datetime.fromisoformat(_s(rec.get("fetchedAt")).replace("Z", "+00:00")) > timedelta(hours=SHORTS_STALE_HOURS)
+    except ValueError:
+        return True
+
+
+def read_shorts(symbol, exchange, currency, trend=False, now=None):
+    """Read one listing's short selling from its regulator and keep it. Returns the record,
+    or {} for a market where no one publishes it."""
+    rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend)
+    if rec:
+        store.save_shorts(symbol, exchange, rec, now=now)
+    return rec
+
+
 def shorts_payload(symbol, exchange=None, currency=None, trend=False):
-    """One listing's short selling, read now. A market where no one publishes it answers
+    """One listing's short selling. What was read before is answered from the store at once,
+    so opening an instrument again — or after a restart — draws the tiles with the page
+    rather than after a round of reads; a stored reading past its hours is still answered
+    at once and refreshed behind the page. A market where no one publishes it answers
     `covered: false` rather than an empty set of figures, so the page draws nothing at all
-    for a coin or an index instead of a card of dashes."""
+    for a coin or an index instead of tiles of dashes."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
@@ -5930,10 +5953,83 @@ def shorts_payload(symbol, exchange=None, currency=None, trend=False):
     if not ex:
         _, ex, held = _instrument_meta(sym)
         ccy = ccy or held
-    rec = shorts.for_listing(sym, ex, ccy, _ssl_context(), trend=trend)
+    if not shorts.market_of(sym, ex, ccy):
+        return {"ok": True, "covered": False}
+    held = store.shorts_for(sym, ex)
+    if held and (not trend or held.get("series")):
+        if _shorts_stale(held):
+            kick("shorts:%s|%s" % (sym, ex), lambda: read_shorts(sym, ex, ccy, trend=True))
+        return {"ok": True, "covered": True, "shorts": held}
+    rec = read_shorts(sym, ex, ccy, trend=trend)
     if not rec:
         return {"ok": True, "covered": False}
     return {"ok": True, "covered": True, "shorts": rec}
+
+
+def shorts_feed(scope="holdings"):
+    """Every listing in scope with its short selling as it is stored, for the ranked list.
+    Nothing is read here: the sweep keeps the store warm, and a listing not read yet simply
+    is not in the list yet."""
+    want = {(_s(sym).upper(), _s(ex).upper()) for sym, ex, _ in shorts_listings(scope)}
+    rows = [r for r in store.all_shorts() if (r["symbol"], r["exchange"]) in want and r.get("shares") is not None]
+    base = model.base_model()
+    known = {}
+    for row in (base.get("watchlist") or []) + (base.get("positions") or []):
+        key = (market.tmx_symbol(row.get("symbol")).upper(), _s(row.get("exchange")).upper())
+        held = known.setdefault(key, {"name": "", "positionId": None})
+        held["name"] = held["name"] or _s(row.get("name"))
+        held["positionId"] = held["positionId"] or row.get("positionId") or row.get("id")
+    for r in rows:
+        r.update(known.get((r["symbol"], r["exchange"]), {"name": "", "positionId": None}))
+    return {"ok": True, "rows": rows}
+
+
+def shorts_listings(scope="all"):
+    """The listings whose short selling is worth keeping: the shares the book holds and the
+    ones it watches. A coin, an index or a contract is not one, and is left out here rather
+    than asked about and refused listing by listing."""
+    base = model.base_model()
+    seen, out = set(), []
+    groups = []
+    if scope in ("holdings", "all"):
+        groups.append(base.get("positions") or [])
+    if scope in ("watchlist", "all"):
+        groups.append(base.get("watchlist") or [])
+    for group in groups:
+        for row in group:
+            sym = market.tmx_symbol(row.get("symbol"))
+            ex, ccy = _s(row.get("exchange")), _s(row.get("currency"))
+            key = (sym.upper(), ex.upper())
+            if not sym or key in seen or not shorts.market_of(sym, ex, ccy):
+                continue
+            seen.add(key)
+            out.append((sym, ex, ccy))
+    return out
+
+
+def sweep_shorts(now=None):
+    """Keep every held and watched listing's short selling stored and current, so the page
+    never waits on a read it could have done already."""
+    done = 0
+    for sym, ex, ccy in shorts_listings("all"):
+        held = store.shorts_for(sym, ex)
+        if held and held.get("series") and not _shorts_stale(held, now):
+            continue
+        try:
+            if read_shorts(sym, ex, ccy, trend=True, now=now):
+                done += 1
+        except Exception as e:
+            sys.stderr.write("bagholder shorts: %s not read: %s\n" % (sym, str(e) or e.__class__.__name__))
+    return done
+
+
+def shorts_sweep_loop():
+    while True:
+        try:
+            sweep_shorts()
+        except Exception as e:
+            sys.stderr.write("bagholder shorts: sweep failed: %s\n" % (str(e) or e.__class__.__name__))
+        time.sleep(SHORTS_SWEEP_EVERY_SEC)
 
 
 def news_symbol_payload(symbol, exchange, currency):
@@ -7024,6 +7120,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
             return
+        if path == "/api/shorts/feed":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, shorts_feed(_query_param(query, "scope") or "holdings"))
+            return
         if path == "/api/shorts":
             if not self._gate():
                 self._send(403, {"ok": False})
@@ -7504,6 +7607,7 @@ def main():
     threading.Thread(target=archive_loop, name="bagholder-archive", daemon=True).start()
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
     threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
+    threading.Thread(target=shorts_sweep_loop, name="bagholder-shorts-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
     # A second instance run for verification (BAGHOLDER_NO_BROWSER=1) must not open
