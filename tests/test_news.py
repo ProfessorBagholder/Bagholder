@@ -58,6 +58,24 @@ class KindTest(unittest.TestCase):
         story = news.parse_nasdaq_news({"data": {"rows": [{"id": 8, "title": "Why SHOP", "publisher": "The Motley Fool", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/y", "related_symbols": ["shop|stocks"]}]}}, now, "SHOP")
         self.assertEqual(story[0]["kind"], "story")
 
+    def test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue(self):
+        item = {"newsid": "7", "headline": "QIMC Engages Echo Seismic", "source": "TMX Newsfile via QuoteMedia", "datetime": "2026-09-14T09:13:00-04:00"}
+        asked = []
+        def post_json(url, body, ctx, headers=None, **kw):
+            form = body["variables"]["symbol"]
+            asked.append(form)
+            return {"data": {"news": [item]}} if form in ("QIMC:CNX", "CH") else {"data": {"news": []}}
+        with mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(news, "_pace"):
+            src, rows = news.fetch_symbol("QIMC", "CSE", "CAD")
+            news.fetch_symbol("CH", "TSX-V", "CAD")
+            self.assertEqual((src, asked), ("tmx", ["QIMC:CNX", "CH"]), "each listing under the code its quote uses")
+            self.assertEqual((rows[0]["kind"], rows[0]["url"]), ("release", "https://money.tmx.com/en/quote/QIMC:CNX/news/7"))
+            # the record names the wrong venue: the lookup resolves the form that answers, as it does for a quote
+            asked.clear()
+            with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"):
+                _, found = news.fetch_symbol("QIMC", "TSX-V", "CAD")
+            self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC:CNX"], ["tmx:7"]))
+
     def test_a_us_listing_reads_its_releases_beside_its_news_each_once(self):
         now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
         feeds = {"articlebysymbol": '{"data": {"rows": [{"id": 1, "title": "Why SHOP", "publisher": "Zacks", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/a", "related_symbols": ["shop|stocks"]}, {"id": 2, "title": "Shopify Delivers Big", "publisher": "GlobeNewswire", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/articles/b", "related_symbols": ["shop|stocks"]}]}}',

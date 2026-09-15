@@ -56,7 +56,8 @@ def clean_text(t):
 
 
 def parse_tmx_news(data, symbol):
-    """TMX's items for a symbol into news rows: the headline, its exact time, the wire it came on, and TMX's page for it."""
+    """TMX's items for a symbol (in the venue's form, as `tmx_quote_symbol` gives it) into news
+    rows: the headline, its exact time, the wire it came on, and TMX's page for it."""
     rows = []
     for it in ((data or {}).get("data") or {}).get("news") or []:
         if not isinstance(it, dict) or not it.get("newsid"):
@@ -68,7 +69,7 @@ def parse_tmx_news(data, symbol):
             continue
         source = clean_text(it.get("source")).replace(" via QuoteMedia", "")
         rows.append({"id": "tmx:%s" % it["newsid"], "headline": clean_text(it.get("headline")), "source": source,
-                     "url": TMX_NEWS_URL % (market.tmx_symbol(symbol), it["newsid"]), "publishedAt": ts, "kind": kind_of(source)})
+                     "url": TMX_NEWS_URL % (symbol, it["newsid"]), "publishedAt": ts, "kind": kind_of(source)})
     return rows
 
 
@@ -138,11 +139,19 @@ def fetch_symbol(symbol, exchange, currency, ssl_context=None, now=None):
             text = market._get_text(NASDAQ_LATEST_URL % PER_MARKET, ssl_context, headers=NASDAQ_HEADERS)
             return src, parse_nasdaq_news(json.loads(text), now, "")
         if src == "tmx":
-            _pace("app-money.tmx.com")
-            data = market._post_json("https://app-money.tmx.com/graphql",
-                                     {"operationName": "getNewsForSymbol", "variables": {"symbol": sym, "page": 1, "limit": PER_SYMBOL, "locale": "en"}, "query": TMX_NEWS_QUERY},
-                                     ssl_context, TMX_HEADERS)
-            return src, parse_tmx_news(data, sym)
+            # TMX names a listing by its venue, and the news query answers nothing under the wrong
+            # name: the same code the quote asks under, through the same lookup, so a record with a
+            # wrong or missing venue resolves here as it does everywhere else and is remembered once
+            code = market.tmx_quote_symbol(symbol, exchange, currency)
+            if not code:
+                return src, []
+            def ask(form):
+                _pace("app-money.tmx.com")
+                data = market._post_json("https://app-money.tmx.com/graphql",
+                                         {"operationName": "getNewsForSymbol", "variables": {"symbol": form, "page": 1, "limit": PER_SYMBOL, "locale": "en"}, "query": TMX_NEWS_QUERY},
+                                         ssl_context, TMX_HEADERS)
+                return parse_tmx_news(data, form)
+            return src, market.tmx_lookup(code, ask, ssl_context)[0]
         _pace("api.nasdaq.com")
         text = market._get_text(NASDAQ_NEWS_URL % (sym, PER_SYMBOL), ssl_context, headers=NASDAQ_HEADERS)
         rows = parse_nasdaq_news(json.loads(text), now, sym)
