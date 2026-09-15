@@ -2551,21 +2551,24 @@ function shortsFigures(s) {
             (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
   ];
 }
-function shortsHeader(s, title) {
+// the tile's own date, and only that: each tile carries the date of the figures it draws,
+// which are not all on the same clock, and the regulator behind them is named once in the spec
+// rather than three times over one page
+function shortsHeader(title, right) {
   return '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>' + title + "</h5>" +
-    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>";
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(right || "") + "</span></div>";
 }
 // Both measures are a part of a whole, so both are the donut the Allocation, Sectors and
 // Regions cards draw: the centre carries the percentage, a slice under the pointer carries
 // the shares it stands for, and the line under the ring carries what the donut cannot.
-function shortsRingCard(key, title, s, pct, parts, footer, missing) {
+function shortsRingCard(key, title, when, pct, parts, footer, missing) {
   let body = '<div class="muted empty" style="flex:1;font-size:12px">' + missing + "</div>";
   if (pct != null && parts) {
-    const d = donutPieces(key, "Short", parts, null, "l", 132, n2(pct, 2) + "%");
+    const d = donutPieces(key, "Short", parts, null, "l", 210, n2(pct, 2) + "%");
     body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
   }
   return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
-    shortsHeader(s, title) + body +
+    shortsHeader(title, when) + body +
     (footer ? '<div class="tab" style="text-align:center;padding-top:10px;font-size:11.5px;color:var(--ink55)">' + footer + "</div>" : "") + "</div>";
 }
 // the part of a period's trading that was sold short
@@ -2576,8 +2579,7 @@ function shortsVolumeCardHtml(s) {
   const parts = share == null ? null : [{ label: "Short volume", share: share, count: s.shortVolume == null ? null : Math.round(s.shortVolume), color: "var(--pie-1)" },
                                         { label: "Shares traded", share: 1 - share, count: rest == null ? null : Math.round(rest), color: "rgba(var(--ink-rgb),.16)" }];
   const cover = s.daysToCover == null ? "" : n2(s.daysToCover, 1) + " days to cover" + (s.averageVolume ? " at " + qty(Math.round(s.averageVolume)) + " a day" : "");
-  const span = s.volumeOf ? shortSpan(s.volumeOf) : "";
-  return shortsRingCard("sivol", "Short volume", s, pct, parts, [span, cover].filter(Boolean).join(" · "),
+  return shortsRingCard("sivol", "Short volume", s.volumeOf ? shortSpan(s.volumeOf) : "", pct, parts, cover,
                         "No trading is reported for this listing.");
 }
 // the position against the shares actually available to trade
@@ -2588,8 +2590,8 @@ function shortsFloatCardHtml(s) {
                                         { label: "Float", share: 1 - share, count: Math.round(s.float - s.shares), color: "rgba(var(--ink-rgb),.16)" }];
   const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change) + (s.previousOf ? " since " + shortDay(s.previousOf) : "");
   const held = s.shares == null ? "" : qty(s.shares) + " shares short";
-  return shortsRingCard("sifloat", "Short vs float", s, share == null ? null : pct, parts, [held, change].filter(Boolean).join(" · "),
-                        "No float is published for this listing.");
+  return shortsRingCard("sifloat", "Short vs float", s.asOf ? "as of " + shortDay(s.asOf) : "", share == null ? null : pct, parts,
+                        [held, change].filter(Boolean).join(" · "), "No float is published for this listing.");
 }
 // the run of reports, drawn the way the equity curve is: an axis of its own, the same grid
 // lines and the same area under the line. Bars from zero are the other house idiom, but a
@@ -2607,7 +2609,7 @@ function shortsHistoryHtml(s) {
   const marks = [];
   for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round(i * (pts.length - 1) / Math.max(1, want - 1))].date));
   return '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Short interest over time</h5>' +
-    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + " · every report since " + esc(shortDay(pts[0].date)) + "</span></div>" +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">every report since ' + esc(shortDay(pts[0].date)) + "</span></div>" +
     '<div style="display:flex;gap:10px"><div style="position:relative;width:72px;height:' + H + 'px;flex:none;font-size:10px;color:var(--ink55)" class="tab">' +
     ticks.map((t) => '<span style="position:absolute;left:0;top:' + (t[1] / H * 100).toFixed(1) + '%;transform:translateY(-50%)">' + qty(Math.round(t[0])) + "</span>").join("") + "</div>" +
     '<div style="position:relative;flex:1;min-width:0">' +
@@ -2635,8 +2637,8 @@ function shortsStripHtml(only) {
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
   const cell = (f) => '<div><div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
-  return '<div class="si-strip"><div class="si-sh">Short interest<span>' + esc(s.source || "") +
-    (s.asOf ? " · " + esc(shortDay(s.asOf)) : "") + '</span></div><div class="si-cells">' +
+  return '<div class="si-strip"><div class="si-sh">Short interest<span>' + (s.asOf ? "as of " + esc(shortDay(s.asOf)) : "") +
+    '</span></div><div class="si-cells">' +
     shortsFigures(s).map(cell).join("") + "</div></div>";
 }
 
@@ -3033,7 +3035,7 @@ function donutHover(e, key) {
   plot.querySelectorAll("#" + key + "Legend [data-slice]").forEach((s) => { const on = i < 0 || +s.dataset.slice === i; [...s.children].forEach((c) => { c.style.opacity = on ? "1" : ".45"; }); });
   const centre = document.getElementById(key + "Centre"); const d = _donuts[key]; if (!centre || !d) return;
   const x = i >= 0 ? d.items[i] : null;
-  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (x.count == null ? pctPlain(x.share) : qty(x.count)) + "</div>" + (x.count == null ? "" : '<div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
+  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (x.count == null ? pctPlain(x.share) : '<span style="font-size:15px;letter-spacing:-.01em">' + qty(x.count) + "</span>") + "</div>" + (x.count == null ? "" : '<div class="muted" style="font-size:11px;margin-top:3px">' + pctPlain(x.share) + "</div>")
       : '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
     : '<div class="lbl">' + esc(d.centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (d.total == null ? esc(d.centreText || "") : money0(d.total)) + "</div>";
 }
