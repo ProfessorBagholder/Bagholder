@@ -2563,7 +2563,7 @@ function refreshDisclosures(sym) {
   if (open && discSymbol(open) === sym) ensureDisclosures(open);
   render();
 }
-const _discEnrichLoading = {}, _discEnrichTried = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
+const _discEnrichLoading = {}, _discEnrichTried = {}, _discEnrichPasses = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
 function discFiling(sym, id) { const rec = _disc[sym]; return (rec && rec.payload ? rec.payload.filings : []).find((f) => f.id === id) || null; }
 function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f && q.has(f.id)); }
 function _discStillOpen(sym) {
@@ -2572,6 +2572,18 @@ function _discStillOpen(sym) {
   return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
+// One rule for every card that reads documents, because they share this record of what has
+// been read. A row is finished when it has both a title and a summary. They come from one
+// read but not always in the same pass — a model that is still coming up gives the title
+// from the file and no sentence, and can miss one or the other on a document it reads fine
+// next time — so a row that counted as done on whichever half arrived first kept that half
+// and never got the other. Anything short of both is asked for again; a second pass is the
+// bound, since what two reads cannot produce the document does not have.
+function discEnrichNeed(f) { return !_discEnrichTried[f.id] && (!f.subject || !f.summary); }
+function discEnrichSettle(f) {
+  const passes = (_discEnrichPasses[f.id] = (_discEnrichPasses[f.id] || 0) + 1);
+  if ((f.subject && f.summary) || (!_discPreparing(f) && passes >= 2)) _discEnrichTried[f.id] = true;
+}
 function enrichOne(sym, f) {
   // read one document for its subject (from the file) and, if the local model is up, a summary
   if (!f) return Promise.resolve();
@@ -2579,9 +2591,7 @@ function enrichOne(sym, f) {
   return api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
     delete _discEnrichLoading[f.id];
     if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
-    // mark done only when the row actually has something and nothing is still provisioning;
-    // a failed or empty read is left un-tried so the sweep retries it rather than sticking
-    if ((f.subject || f.summary) && !_discPreparing(f)) _discEnrichTried[f.id] = true;
+    discEnrichSettle(f);
     if (_discStillOpen(sym)) render();
   });
 }
@@ -2590,22 +2600,25 @@ function enrichOne(sym, f) {
 // walks the issuer once, and each result is stored so a later visit is instant.
 function sweepDiscEnrich(sym, rows) {
   if (_discSweep[sym]) return;
-  const need = (f) => !_discEnrichTried[f.id] && (!f.subject || !f.summary);
+  const need = discEnrichNeed;
   const pending = rows.filter(need);
   if (!pending.length) return;
   _discSweep[sym] = true;
   const q = new Set(pending.map((f) => f.id));
   _discQueue[sym] = q;
-  let i = 0, sawPreparing = false, sawFailure = false;
+  let i = 0, sawPreparing = false, sawFailure = false, sawHalf = false;
   const finish = () => {
     _discSweep[sym] = false; _discQueue[sym] = null;
     // a summary still being prepared is asked for again every fifteen seconds for as long as the card is shown; a
     // read that failed is tried again a few times, each wait longer than the last
     const again = (_discRekicks[sym] || 0);
-    if (_discStillOpen(sym) && (sawPreparing || (sawFailure && again < 6))) {
+    // a row that came back with one half is asked once more straight away; the pass count on
+    // the row itself stops it there, so this cannot circle
+    if (_discStillOpen(sym) && (sawPreparing || sawHalf || (sawFailure && again < 6))) {
       _discRekicks[sym] = again + 1;
-      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); }, sawPreparing ? 15000 : 4000 * (again + 1));
-    } else if (!sawPreparing && !sawFailure) _discRekicks[sym] = 0;
+      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); },
+                 sawPreparing ? 15000 : sawFailure ? 4000 * (again + 1) : 1500);
+    } else if (!sawPreparing && !sawFailure && !sawHalf) _discRekicks[sym] = 0;
   };
   const step = () => {
     if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
@@ -2615,6 +2628,7 @@ function sweepDiscEnrich(sym, rows) {
     enrichOne(sym, f).then(() => {
       if (_discPreparing(f)) sawPreparing = true;
       else if (!f.subject && !f.summary) sawFailure = true;   // a transient read failure: retry on the next pass
+      else if (!f.subject || !f.summary) sawHalf = true;      // one half of the read: ask once more for the other
       setTimeout(step, 150);
     });
   };
@@ -3301,7 +3315,7 @@ let _feedSweep = "";
 function sweepFeedEnrich(scope, rows) {
   if (_feedSweep) return;
   const showing = () => state.page === "markets" && state.newsKind === "disc" && !state.newsSymbol && state.newsScope === scope;
-  const need = (f) => !_discEnrichTried[f.id] && !f.subject;
+  const need = discEnrichNeed;
   const pending = rows.filter(need).slice(0, 60);
   if (!pending.length) return;
   _feedSweep = scope;
@@ -3314,8 +3328,8 @@ function sweepFeedEnrich(scope, rows) {
     _discEnrichLoading[f.id] = true;
     api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(f.symbol) + "&id=" + encodeURIComponent(f.id)).then((d) => {
       delete _discEnrichLoading[f.id];
-      if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; }
-      if (f.subject) _discEnrichTried[f.id] = true;
+      if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
+      discEnrichSettle(f);
       if (showing()) render();
       setTimeout(step, 150);
     });

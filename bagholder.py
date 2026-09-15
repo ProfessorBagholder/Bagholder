@@ -6216,10 +6216,11 @@ def filings_enrich(symbol, doc_id):
     model = enrich.summary_available()
     fresh = (row.get("enrichVersion") or 0) >= ENRICH_VERSION
     attempted = bool(row.get("enrichedAt")) and fresh
-    # Already read by the current logic, and nothing further to get (we have the
-    # summary, or no model to make one): return the cache without re-reading. A row
-    # read by older logic (no title, weaker summary) is re-read once.
-    if attempted and (summary or not model):
+    # Already read by the current logic and there is nothing further to get: the row has
+    # both halves, or no model is up to make the missing one. A row holding only one of
+    # them while a model is up is read again — the title and the sentence come from the
+    # same read but not always in the same pass — as is a row read by older logic.
+    if attempted and ((subject and summary) or not model):
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if not disclosures.available():
@@ -6245,11 +6246,16 @@ def filings_enrich(symbol, doc_id):
     new_subject = info.get("subject") or ""
     got_summary = info.get("summary") or ""
     if model:
-        # a complete read under the current logic: it replaces both (an empty result
-        # clears a stale junk title or non-summary), and finalizes the row at this
-        # version so it is not re-read again.
-        store.set_filing_enrichment(sym, doc_id, subject=new_subject, summary=got_summary, version=ENRICH_VERSION)
-        subject, summary = new_subject, got_summary
+        if fresh:
+            # reading again a row this logic already wrote, to fill the half it lacks: what
+            # comes back fills what is missing and never empties what is there, since an
+            # empty result now means this read found nothing, not that the line was wrong
+            subject, summary = (new_subject or subject), (got_summary or summary)
+        else:
+            # the first read under the current logic replaces both, so an empty result
+            # clears a stale junk title or a non-summary left by an older version
+            subject, summary = new_subject, got_summary
+        store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary, version=ENRICH_VERSION)
     else:
         # the model is not up yet: keep the document's own title if it has one (a PDF's
         # metadata), do not finalize the version, so the row is re-read once it is up.
