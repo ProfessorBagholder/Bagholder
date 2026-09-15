@@ -462,6 +462,24 @@ class FeedTest(unittest.TestCase):
         self.assertEqual(row["name"], "Quantum eMotion Corp")
         self.assertEqual(row["positionId"], "rt:1")
 
+    def test_the_list_is_told_while_a_sweep_still_has_listings_to_read(self):
+        book = [{"symbol": "HBIX", "exchange": "CBOE CANADA", "kind": "Shares", "name": "H", "id": "rt:1", "currency": "CAD"},
+                {"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Q", "id": "rt:2", "currency": "CAD"}]
+        seen = []
+        def read(sym, ex, ccy, **kw):
+            seen.append(bagholder.shorts_feed()["reading"])       # what an open page is told mid-pass
+            store.save_shorts(sym, ex, self.record(), version=bagholder.SHORTS_VERSION)
+            return self.record()
+        with self.book(positions=book), mock.patch.object(bagholder, "read_shorts", side_effect=read):
+            self.assertFalse(bagholder.shorts_feed()["reading"], "nothing is being read before a pass")
+            self.assertEqual(bagholder.sweep_shorts(), 2)
+            self.assertEqual(seen, [True, True], "every listing of the pass, the last one included")
+            self.assertFalse(bagholder.shorts_feed()["reading"], "and nothing once it ends")
+        with self.book(positions=book), mock.patch.object(bagholder, "read_shorts", side_effect=OSError("down")), mock.patch.object(bagholder.sys, "stderr"):
+            store.save_shorts("QNC", "TSX-V", self.record(), version=0)
+            bagholder.sweep_shorts()
+            self.assertFalse(bagholder.shorts_feed()["reading"], "a pass that fails still ends")
+
     def test_a_listing_read_but_carrying_no_position_is_left_out(self):
         store.save_shorts("QNC", "TSX-V", self.record(shares=None))
         with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Q", "id": "rt:1"}]):

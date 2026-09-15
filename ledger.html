@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-15.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-15.2"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -3653,8 +3653,11 @@ const _shortsFeed = {};
 const SHORTS_FEED_KEEP_MS = 3 * 60 * 1000;   // the sweep fills rows in behind the page; a list
                                              // fetched once and never again shows whatever it
                                              // happened to get, dashes and all, until a reload
+const SHORTS_FEED_READING_MS = 4000;         // while the server is still reading listings, each
+                                             // figure reaches the page within seconds of landing
 function ensureShortsFeed() {
-  if (_shortsFeed.loading || (_shortsFeed.at && Date.now() - _shortsFeed.at < SHORTS_FEED_KEEP_MS)) return;
+  const keep = _shortsFeed.reading ? SHORTS_FEED_READING_MS : SHORTS_FEED_KEEP_MS;
+  if (_shortsFeed.loading || (_shortsFeed.at && Date.now() - _shortsFeed.at < keep)) return;
   _shortsFeed.loading = true;
   api("GET", "/api/shorts/feed").then((d) => {
     _shortsFeed.loading = false;
@@ -3662,6 +3665,9 @@ function ensureShortsFeed() {
     // what is already on screen stands until a better answer lands, so the list never empties
     if (d && d.ok) _shortsFeed.rows = d.rows || [];
     else if (!_shortsFeed.rows) _shortsFeed.rows = [];
+    _shortsFeed.reading = !!(d && d.ok && d.reading);
+    // asked again on a timer, not on the next draw: a page nobody touches draws nothing
+    if (_shortsFeed.reading) setTimeout(() => { if (state.page === "markets") ensureShortsFeed(); }, SHORTS_FEED_READING_MS);
     if (state.page === "markets") render();
   });
 }

@@ -39,8 +39,13 @@ class NotifyTest(unittest.TestCase):
         store.ensure()
         with bagholder._lock:
             bagholder._state.update({"connected": False, "error": "", "syncing": False, "capturing": False, "email": "", "syncFails": 0, "syncFirstFail": ""})
+        # a new filing is read for its title before it is told; here nothing is read, so no test
+        # reaches a regulator or a model and what is told does not depend on either being up
+        self.reads = mock.patch.object(bagholder, "filings_enrich", return_value={})
+        self.reads.start()
 
     def tearDown(self):
+        self.reads.stop()
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
         os.environ.pop("BAGHOLDER_NOTIFY", None)

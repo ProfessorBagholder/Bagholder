@@ -722,7 +722,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-15.1"
+PROTOCOL = "2026-09-15.2"
 ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -6011,7 +6011,10 @@ def shorts_feed():
         r["positionId"] = source.get("positionId") or source.get("id")
         r["held"], r["watched"] = key in held, key in watched
         rows.append(r)
-    return {"ok": True, "rows": rows}
+    # while a pass still has listings to read, the page asks again within seconds: a figure
+    # filled in behind an open page otherwise waited out the page's minutes between asks,
+    # and a restart that reads every listing again showed the old dashes for all of them
+    return {"ok": True, "rows": rows, "reading": _shorts_pass["left"] > 0}
 
 
 def shorts_listings(scope="all"):
@@ -6037,19 +6040,30 @@ def shorts_listings(scope="all"):
     return out
 
 
+_shorts_pass = {"left": 0}          # listings the running sweep has still to read
+
+
 def sweep_shorts(now=None):
     """Keep every held and watched listing's short selling stored and current, so the page
-    never waits on a read it could have done already."""
-    done = 0
+    never waits on a read it could have done already. How many are still to be read is kept
+    while the pass runs, so the ranked list knows to ask again soon."""
+    due = []
     for sym, ex, ccy, name in shorts_listings("all"):
         held = store.shorts_for(sym, ex)
-        if held and held.get("series") and not _shorts_stale(held, now):
-            continue
-        try:
-            if read_shorts(sym, ex, ccy, trend=True, now=now, name=name):
-                done += 1
-        except Exception as e:
-            sys.stderr.write("bagholder shorts: %s not read: %s\n" % (sym, str(e) or e.__class__.__name__))
+        if not (held and held.get("series") and not _shorts_stale(held, now)):
+            due.append((sym, ex, ccy, name))
+    done = 0
+    _shorts_pass["left"] = len(due)
+    try:
+        for sym, ex, ccy, name in due:
+            try:
+                if read_shorts(sym, ex, ccy, trend=True, now=now, name=name):
+                    done += 1
+            except Exception as e:
+                sys.stderr.write("bagholder shorts: %s not read: %s\n" % (sym, str(e) or e.__class__.__name__))
+            _shorts_pass["left"] -= 1
+    finally:
+        _shorts_pass["left"] = 0
     return done
 
 
