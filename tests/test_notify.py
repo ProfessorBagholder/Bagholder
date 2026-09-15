@@ -325,8 +325,8 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(store.list_notifications(), [])
             listings["QNC"].append({"id": "sec:2", "source": "sec", "type": "8-K", "title": "Another", "date": "2026-09-14"})
             listings["SHOP"].extend([{"id": "sedar:2", "source": "sedar", "type": "News release", "title": "y", "date": "2026-09-14"}, {"id": "sedar:3", "source": "sedar", "type": "Material change report", "title": "z", "date": "2026-09-14"}])
-            self.assertEqual(bagholder.sweep_filings(), 0, "read six hours ago at most: left alone")
-            later = datetime.now(timezone.utc) + timedelta(hours=7)
+            self.assertEqual(bagholder.sweep_filings(), 0, "read minutes ago: left alone")
+            later = datetime.now(timezone.utc) + timedelta(minutes=11)
             self.assertEqual(bagholder.sweep_filings(now=later), 2)
             self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
         self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
@@ -336,6 +336,27 @@ class NotifyTest(unittest.TestCase):
         notify.set_settings({"disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False})
         with mock.patch.object(bagholder, "known_filing_symbols", side_effect=AssertionError("swept while off")):
             self.assertEqual(bagholder.sweep_filings(), 0, "every set off: the pipeline stays on demand")
+
+
+    def test_a_re_read_takes_the_stored_profile_so_sedar_is_asked_once(self):
+        calls = []
+        def fake_fetch(sym, **kw):
+            calls.append((sym, kw.get("profile_no")))
+            return {"items": [], "sources": {"SEDAR+": {"available": True, "matched": False, "filer": False, "count": 0, "error": ""}}}
+        with mock.patch.object(disclosures, "fetch", side_effect=fake_fetch), mock.patch.object(store, "list_securities", return_value=[]):
+            bagholder.refresh_filings("QNC")
+            store.mark_filings_fetched("QNC", "000012345")
+            bagholder.refresh_filings("QNC")
+        self.assertEqual(calls, [("QNC", None), ("QNC", "000012345")], "the first read resolves the issuer; every later one brings its profile")
+        # the pipeline hands the profile to SEDAR+ only
+        seen = {}
+        with mock.patch.object(disclosures.sedar, "available", return_value=True), mock.patch.object(disclosures.sedar, "covers", return_value=True), \
+             mock.patch.object(disclosures.sedar, "fetch", side_effect=lambda sym, **kw: seen.setdefault("sedar", kw) and []), \
+             mock.patch.object(disclosures.edgar, "available", return_value=True), mock.patch.object(disclosures.edgar, "covers", return_value=True), \
+             mock.patch.object(disclosures.edgar, "fetch", side_effect=lambda sym, **kw: seen.setdefault("edgar", kw) and []):
+            disclosures.fetch("QNC", name="Quantum eMotion", exchange="TSX-V", currency="CAD", profile_no="000012345")
+        self.assertEqual(seen["sedar"].get("profile_no"), "000012345")
+        self.assertNotIn("profile_no", seen["edgar"])
 
 
 if __name__ == "__main__":

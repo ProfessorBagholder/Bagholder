@@ -94,11 +94,13 @@ def providers_for(symbol, exchange="", currency=""):
     return out
 
 
-def fetch(symbol, name="", exchange="", currency="", limit=200):
+def fetch(symbol, name="", exchange="", currency="", limit=200, profile_no=""):
     """Every covering source's filings for one instrument, merged newest first.
 
     Returns {"items": [...], "sources": {SOURCE: {available, matched, count, error}}}.
-    A source that fails is recorded and skipped; the others still return."""
+    A source that fails is recorded and skipped; the others still return. A SEDAR+
+    profile number already known goes with the request, so a re-read is one paced
+    request there rather than a lookup and a request."""
     items, sources = [], {}
     for p in PROVIDERS:
         covered = False
@@ -110,7 +112,8 @@ def fetch(symbol, name="", exchange="", currency="", limit=200):
             sources[p.SOURCE] = {"available": _safe_available(p), "matched": False, "filer": False, "count": 0, "error": ""}
             continue
         try:
-            got = p.fetch(symbol, name=name, exchange=exchange, currency=currency) or []
+            hint = {"profile_no": profile_no} if (p is sedar and profile_no) else {}
+            got = p.fetch(symbol, name=name, exchange=exchange, currency=currency, **hint) or []
             items.extend(got)
             filer = bool(got)
             if not filer and hasattr(p, "has_filer"):

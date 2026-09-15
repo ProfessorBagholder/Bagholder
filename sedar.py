@@ -658,11 +658,13 @@ def _to_item(raw, profile_no):
     }
 
 
-def fetch(symbol, name="", exchange="", currency="", limit=SEARCH_LIMIT):
+def fetch(symbol, name="", exchange="", currency="", limit=SEARCH_LIMIT, profile_no=""):
     """One Canadian issuer's SEDAR+ filings as normalized disclosure items. Resolves
-    the issuer from its name (or the bare symbol); returns [] when none matches."""
+    the issuer from its name (or the bare symbol), unless its profile number is
+    already known, in which case the filings are asked for directly, one paced
+    request; returns [] when no issuer matches."""
     try:
-        result = list_filings(query=(name or symbol), limit=limit)
+        result = list_filings(query=(name or symbol), profile_no=profile_no or None, limit=limit)
     except ProfileNotFound:
         return []
     profile_no = (result.get("profile") or {}).get("profileNo") or ""

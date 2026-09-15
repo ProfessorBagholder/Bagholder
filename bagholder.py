@@ -5803,8 +5803,8 @@ def _filings_stale(symbol, now=None, hours=None):
 
 # --- the Disclosures notification: a sweep of the tickers the book knows, only while that kind is on ---
 
-FILINGS_SWEEP_EVERY_SEC = 600      # how often the sweep looks for work
-FILINGS_SWEEP_AGE_HOURS = 6        # a ticker read within this long is left alone
+FILINGS_SWEEP_EVERY_SEC = 300      # how often the sweep looks for work
+FILINGS_SWEEP_AGE_MIN = 10         # a ticker read within this long is left alone; a re-read is one paced request per source
 
 
 def known_filing_symbols(scopes=("held", "watched", "all")):
@@ -5849,8 +5849,8 @@ def known_filing_symbols(scopes=("held", "watched", "all")):
 
 
 def sweep_filings(now=None):
-    """While the Disclosures kind is on: each known ticker whose list is older than
-    FILINGS_SWEEP_AGE_HOURS is read again, at the sources' own pace, and a filing not
+    """While a Disclosures set is on: each chosen ticker whose list is older than
+    FILINGS_SWEEP_AGE_MIN is read again, at the sources' own pace, and a filing not
     stored before is told. A ticker read for the first time is a baseline, told
     nothing. Returns how many tickers had something new."""
     scopes = notify.disclosure_scopes()
@@ -5859,7 +5859,7 @@ def sweep_filings(now=None):
     told = 0
     for inst in known_filing_symbols(scopes):
         sym = inst["symbol"]
-        if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_HOURS):
+        if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
             continue
         first = not store.filings_fetched_at(sym)
         before = {r.get("id") for r in store.filings(sym)}
@@ -5920,7 +5920,9 @@ def refresh_filings(symbol, name=None, exchange=None, currency=None):
             iname = name
         exchange_, currency_ = (exchange if exchange is not None else ex), (currency if currency is not None else cur)
         try:
-            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_)
+            # the issuer's profile, once resolved, goes with every later read: one paced request, no lookup
+            known = store.sedar_profile(sym) or ""
+            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_, **({"profile_no": known} if known else {}))
         except Exception as e:
             sys.stderr.write("bagholder disclosures: %s failed: %s\n" % (sym, e))
             return -1
