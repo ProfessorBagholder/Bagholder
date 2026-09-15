@@ -338,6 +338,19 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.sweep_filings(), 0, "every set off: the pipeline stays on demand")
 
 
+    def test_the_feed_merges_the_stored_disclosures_of_a_set_newest_first(self):
+        store.replace_filings("QNC", "sec", [{"id": "sec:1", "source": "sec", "type": "8-K", "title": "a", "date": "2026-09-10"}])
+        store.replace_filings("SHOP", "sedar", [{"id": "sedar:1", "source": "sedar", "type": "News release", "title": "b", "date": "2026-09-14"}, {"id": "sedar:2", "source": "sedar", "type": "MD&A", "title": "c", "date": "2026-08-01"}])
+        held = [{"symbol": "QNC", "exchange": "NYSE", "currency": "USD", "kind": "Shares"}]
+        watched = [{"symbol": "SHOP", "exchange": "TSX", "name": "Shopify Inc.", "currency": "CAD"}]
+        with mock.patch.object(model, "base_model", return_value={"today": "2026-09-15", "positions": [], "trades": []}), mock.patch.object(model, "held_symbols", return_value=held), \
+             mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]):
+            out = bagholder.filings_feed("all")
+            self.assertEqual([(r["symbol"], r["exchange"], r["id"]) for r in out["filings"]], [("SHOP", "TSX", "sedar:1"), ("QNC", "NYSE", "sec:1"), ("SHOP", "TSX", "sedar:2")], "every ticker the book knows, newest first, each row naming its listing")
+            self.assertEqual([r["id"] for r in bagholder.filings_feed("holdings")["filings"]], ["sec:1"])
+            self.assertEqual([r["id"] for r in bagholder.filings_feed("watchlist")["filings"]], ["sedar:1", "sedar:2"])
+            self.assertEqual(bagholder.filings_feed("bogus")["scope"], "bogus")
+
     def test_a_re_read_takes_the_stored_profile_so_sedar_is_asked_once(self):
         calls = []
         def fake_fetch(sym, **kw):

@@ -5888,6 +5888,25 @@ def sweep_filings(now=None):
     return told
 
 
+FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
+
+
+def filings_feed(scope, limit=200):
+    """The stored disclosures of every ticker in a set, merged newest first, each row
+    naming its listing: the News card's Disclosures view. Stored rows only; nothing
+    is fetched for the feed."""
+    key = _s(scope).strip().lower() or "all"
+    rows = []
+    for inst in known_filing_symbols(FEED_SCOPES.get(key, ("all",))):
+        sym = inst["symbol"]
+        for r in _fresh_filings(sym):
+            r["symbol"] = sym
+            r["exchange"] = _s(inst.get("exchange"))
+            rows.append(r)
+    rows.sort(key=lambda r: _s(r.get("date")), reverse=True)
+    return {"ok": True, "scope": key, "filings": rows[:max(1, int(limit))]}
+
+
 def filings_notice(sym, new):
     """`New disclosure · QNC` / `Material change report · SEDAR+`; several, `3 new disclosures · QNC` with the documents' kinds."""
     kinds = []
@@ -6855,6 +6874,13 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/filings/feed":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, filings_feed(_query_param(query, "scope")))
             return
         if path == "/api/filings/doc":
             if not self._gate():
