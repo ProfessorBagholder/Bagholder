@@ -47,6 +47,7 @@ import enrich
 import notify
 import market
 import news
+import shorts
 import sedar
 import universes
 import model
@@ -690,7 +691,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.37.6"
+APP_VERSION = "1.38.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -721,7 +722,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.8"
+PROTOCOL = "2026-09-15.1"
 ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5918,6 +5919,23 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+def shorts_payload(symbol, exchange=None, currency=None):
+    """One listing's short selling, read now. A market where no one publishes it answers
+    `covered: false` rather than an empty set of figures, so the page draws nothing at all
+    for a coin or an index instead of a card of dashes."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    if not ex:
+        _, ex, held = _instrument_meta(sym)
+        ccy = ccy or held
+    rec = shorts.for_listing(sym, ex, ccy, _ssl_context())
+    if not rec:
+        return {"ok": True, "covered": False}
+    return {"ok": True, "covered": True, "shorts": rec}
+
+
 def news_symbol_payload(symbol, exchange, currency):
     """One listing's wire read now, for the News card's search: a ticker neither held nor
     watched has no rows until asked for. The rows are stored under the listing (tagged as
@@ -6991,6 +7009,13 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/shorts":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, shorts_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency")))
             return
         if path == "/api/news/symbol":
             if not self._gate():

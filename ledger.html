@@ -524,7 +524,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.8"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-15.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2475,6 +2475,60 @@ function drawTradeChart(host, t, h, tf, c, LW, provisional) {
 function mountTradeChartWith(t, tf) { setChartTf(tf); mountTradeChart(); }
 function execSortValue(e, key) { if (key === "when") return e.when; if (key === "side") return e.side; if (key === "qty") return e.qty; if (key === "currency") return e.currency; if (key === "price") return e.price; return e.amount; }
 // ---------------------------------------------------------------------------
+// Short interest: what a regulator publishes about short selling in an instrument —
+// FINRA for a US listing, CIRO for a Canadian one — read per symbol from /api/shorts
+// and kept here. Two measures that are never mixed: the position, the shares still
+// sold short as dealers reported them twice a month, and the short volume, the part
+// of a period's trading sold short, which the US publishes every trading day. A market
+// where no one reports it (a coin, an index, a contract) answers that it is not
+// covered and draws no card at all, rather than a card of dashes.
+// ---------------------------------------------------------------------------
+const _shorts = {}, _shortsPending = {};
+const SHORTS_KEEP_MS = 30 * 60 * 1000;   // the daily file lands once a day, but a page left open for days should not still show the day it opened on
+
+function ensureShorts(t) {
+  const sym = discSymbol(t);
+  const held = _shorts[sym];
+  if (!sym || _shortsPending[sym] || (held && Date.now() - held.at < SHORTS_KEEP_MS)) return;
+  _shortsPending[sym] = true;
+  const q = "symbol=" + encodeURIComponent(sym) + (t.exchange ? "&exchange=" + encodeURIComponent(t.exchange) : "") +
+    (t.currency ? "&currency=" + encodeURIComponent(t.currency) : "");
+  api("GET", "/api/shorts?" + q).then((d) => {
+    delete _shortsPending[sym];
+    _shorts[sym] = Object.assign({ at: Date.now() }, (d && d.ok) ? d : { ok: false });
+    const open = state.sel && selById(state.sel);
+    if (open && discSymbol(open) === sym) render();
+  });
+}
+function shortDay(iso) {
+  const p = String(iso || "").split("-");
+  return p.length === 3 ? MON[Number(p[1]) - 1] + " " + Number(p[2]) : "";
+}
+function shortSpan(key) {
+  const ends = String(key || "").split("/");
+  if (ends.length !== 2) return shortDay(key);
+  const a = ends[0].split("-"), b = ends[1].split("-");
+  if (a.length !== 3 || b.length !== 3) return "";
+  return a[1] === b[1] ? MON[Number(a[1]) - 1] + " " + Number(a[2]) + "–" + Number(b[2]) : shortDay(ends[0]) + " – " + shortDay(ends[1]);
+}
+function shortsCardHtml(t) {
+  const rec = _shorts[discSymbol(t)];
+  if (!rec || !rec.ok || !rec.covered) return "";
+  const s = rec.shorts || {};
+  const fact = (label, value, sub) => '<div><div class="lbl">' + label + '</div><div class="tab" style="font-size:13px">' + value + '</div>' +
+    '<div class="tab" style="font-size:11px;margin-top:3px;color:var(--ink55)">' + (sub || "&nbsp;") + "</div></div>";
+  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
+  return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
+    '<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:10px"><h5>Short interest</h5>' +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + "</span></div>" +
+    '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">' +
+    fact("Short position", qty(s.shares), [change, shortDay(s.asOf)].filter(Boolean).join(" · ")) +
+    fact("Days to cover", s.daysToCover == null ? "—" : n2(s.daysToCover, 1), "") +
+    fact("Short volume", s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", shortSpan(s.volumeOf)) +
+    "</div></div>";
+}
+
+// ---------------------------------------------------------------------------
 // Disclosures: an instrument's regulatory filings from every source (SEDAR+,
 // SEC, …), on the trade/holding detail. Fetched per symbol from /api/filings
 // and cached here; the merged list is filtered by category, narrowed by source,
@@ -2693,7 +2747,7 @@ function tradeDetailHtml(t, m) {
     '<input id="tagInput" data-id="' + esc(t.id) + '" value="' + esc(state.tagDraft) + '" placeholder="' + ((t.tags || []).length ? "Add another…" : "Add a tag…") + '" aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off"></div>' +
     '<div id="tagMenu"></div>' +
 
-    "</div></div></div>" + disclosuresCardHtml(t) + "</div>";
+    "</div></div></div>" + shortsCardHtml(t) + disclosuresCardHtml(t) + "</div>";
 }
 function tagMenuHtml() {
   const t = state.sel ? selById(state.sel) : null;
@@ -3907,7 +3961,7 @@ function render() {
   if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
   placeTabIndicator();
   heatShowSync();
-  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); } }
+  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); ensureShorts(open); } }
   mountTradeChart();
   mountHeatmap();
   mountReels();
