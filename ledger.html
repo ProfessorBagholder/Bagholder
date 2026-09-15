@@ -3384,14 +3384,14 @@ function newsCardHtml(items) {
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(n.headline) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(n.source) + "</div></div>" +
     (bare ? "" : '<div style="text-align:right">' + (n.tags.length ? sym(first(n)) : "") + "</div>" +
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
-  return '<div class="card elev-sm" style="padding:14px 16px 12px"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
+  return '<div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
     msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
     msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (only ? shortsStripHtml(only) : "") +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
-      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
 // A news release the issuer filed. SEDAR+ and SEC EDGAR carry the company's own releases, including ones no
@@ -3468,7 +3468,7 @@ function newsDiscBodyHtml(scope, only, q) {
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
     '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
-  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
     : '<div class="muted" style="font-size:12px">' + empty + "</div>";
 }
 // the feed's titles fill in top first, one document at a time, while the feed is what the card shows
@@ -3622,17 +3622,17 @@ function watchlistCardHtml(rows) {
     '<div class="tab" style="text-align:right;font-size:13px">' + (w.last == null ? "—" : px(w.last)) + "</div>" +
     '<div class="tab" style="text-align:right;font-size:13px;color:' + (w.percentChange == null ? "var(--ink55)" : w.percentChange >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(w.percentChange) + "</div>" +
     '<button class="wl-trash" aria-label="Remove ' + esc(symText(w.symbol)) + ' from the watchlist" data-act="watchRemove" data-arg=\'' + attr({ symbol: w.symbol, exchange: w.exchange }) + "'>" + tkIconSvg(ICONS.trash) + "</button></div>";
-  return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
+  return '<div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0">' +
     '<div style="display:flex;align-items:center;min-height:28px;margin-bottom:8px"><h5>Watchlist</h5><button class="wl-add' + (state.watchAdding ? " on" : "") + '" style="margin-left:auto" aria-label="' + (state.watchAdding ? "Close" : "Add to the watchlist") + '" data-act="watchAdd">' + tkIconSvg(ICONS.plus) + "</button></div>" +
     (state.watchAdding ? watchAddRowHtml() : "") +
     (rows.length ? '<div class="wl-head">' + gridTh("watchlist", WATCH_COLS) + "<div></div></div>" +
-      '<div class="scroll wl-list" style="max-height:396px">' + rows.map(row).join("") + "</div>"
+      '<div class="scroll wl-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">Nothing watched.</div>') + "</div>";
 }
 function marketsHtml(m) {
   const mk = m.markets || { holdings: [], watchlist: [] };
   return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + marketTilesHtml() + heatmapCardHtml(mk) +
-    '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:start">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div>" +
+    '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div>" +
     shortsListCardHtml() + "</div>";
 }
 // ---------------------------------------------------------------------------
