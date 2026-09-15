@@ -690,7 +690,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.36.0"
+APP_VERSION = "1.37.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -4132,7 +4132,18 @@ def symbol_search(text):
         t.join(timeout=market.TIMEOUT_SEC + 2)
     if not answers:
         return {"ok": False, "error": "Search failed: " + "; ".join(errors.values()), "matches": []}
-    rows = rank_search(text, instruments.search(text) + [r for name, _, _ in jobs for r in answers.get(name, [])])
+    found = [r for name, _, _ in jobs for r in answers.get(name, [])]
+    if not found and len(text) <= 6 and " " not in text:
+        # the directories carry the TSX and Nasdaq registries alone, so a CSE or Cboe Canada listing is
+        # in none of them: TMX is asked what it knows the ticker as, and answers with the venue its own
+        # quote names. The same lookup the quotes, the charts and the news go through.
+        try:
+            hit = market.tmx_listing(text, _ssl_context())
+        except Exception as e:
+            hit, errors["tmx"] = None, str(e) or e.__class__.__name__
+        if hit:
+            found = [hit]
+    rows = rank_search(text, instruments.search(text) + found)
     if venues:
         rows = [r for r in rows if _s(r.get("exchange")).upper() in venues] or rows
     if not errors:

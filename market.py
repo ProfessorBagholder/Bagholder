@@ -582,6 +582,36 @@ def tmx_lookup(key, fn, ssl_context=None):
     return r, first
 
 
+# the venue a TMX quote names, in the app's own words
+TMX_EXCHANGE_NAMES = (("VENTURE", "TSX-V"), ("TORONTO", "TSX"), ("CANADIAN SECURITIES", "CSE"), ("CBOE", "Cboe Canada"),
+                      ("NEO", "Cboe Canada"), ("NASDAQ", "NASDAQ"), ("NYSE", "NYSE"), ("NEW YORK", "NYSE"))
+
+
+def tmx_venue(name):
+    up = str(name or "").upper()
+    for mark, venue in TMX_EXCHANGE_NAMES:
+        if mark in up:
+            return venue
+    return ""
+
+
+def tmx_listing(symbol, ssl_context=None):
+    """The listing TMX knows a bare ticker as: its name, the venue it verified by the quote, and its
+    currency; None when TMX does not carry it. The public directories cover the TSX and Nasdaq
+    registries alone, so this is how a CSE or Cboe Canada listing is found by name."""
+    bare = tmx_bare(tmx_symbol(symbol))
+    if not bare or " " in bare:
+        return None
+    form = tmx_resolve(bare, ssl_context)
+    if not form:
+        return None
+    q = parse_tmx_quote(_post_json(TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"}, "query": TMX_QUOTE_QUERY}, ssl_context, _TMX_HEADERS))
+    venue = tmx_venue((q or {}).get("exchange"))
+    if not q or not venue:
+        return None
+    return {"symbol": bare, "name": q.get("name") or bare, "exchange": venue, "currency": q.get("currency") or ("USD" if venue in ("NYSE", "NASDAQ") else "CAD")}
+
+
 def is_canadian_listing(exchange, currency):
     ex = str(exchange or "").strip().upper()
     if ex:
