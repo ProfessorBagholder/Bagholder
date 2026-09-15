@@ -102,19 +102,12 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth.on{color:var(--ink)}
 /* short interest: a label, the figure, and what stands behind it, so the row reads across
    the card's width instead of three numbers stranded in it */
-.si-body{display:grid;grid-template-columns:minmax(0,660px) minmax(280px,1fr);gap:36px;align-items:start}
-.si-trend{min-width:0}
-.si-th{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
-.si-th > span:last-child{font-size:11px;color:var(--ink55);white-space:nowrap}
-.si-spark{display:block;width:100%;height:92px;margin:7px 0 4px}
-.si-ends{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--ink55);white-space:nowrap}
-.si-grid{display:grid;grid-template-columns:130px 104px minmax(0,1fr);column-gap:18px;row-gap:8px;align-items:baseline}
-.si-l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink55);white-space:nowrap}
-.si-v{font-size:14.5px;font-weight:500;text-align:right;white-space:nowrap}
+.si-grid{display:grid;grid-template-columns:auto minmax(88px,auto) minmax(0,1fr);column-gap:16px;row-gap:13px;align-items:baseline}
+.si-v{font-size:14px;font-weight:500;text-align:right;white-space:nowrap}
 .si-n{display:flex;align-items:center;gap:10px;min-width:0;font-size:11.5px;color:var(--ink55)}
 .si-n > span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.si-bar{flex:0 0 110px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
-.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--chip-fg);opacity:.82}
+.si-bar{flex:0 0 84px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
+.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
 .si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
 .si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
@@ -2549,52 +2542,80 @@ function shortSpan(key) {
 function shortsFigures(s) {
   // label, figure, and what stands behind the figure — the row grammar the card and the
   // News tile's strip both read from, so one listing reads the same in both places
-  const room = (v) => v == null ? "—" : n2(v, 1) + "%";
   const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
   const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
   return [
     { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
-    { label: "Of shares out", value: s.ofSharesOut == null ? "—" : n2(s.ofSharesOut, 2) + "%", bar: s.ofSharesOut,
+    { label: "Of shares out", value: s.ofSharesOut == null ? "—" : n2(s.ofSharesOut, 2) + "%",
       note: s.sharesOut ? "of " + qty(s.sharesOut) + " in issue" : "" },
     { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
       note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
-    { label: "Short volume", value: room(s.volumePct), bar: s.volumePct,
+    { label: "Short volume", value: s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", bar: s.volumePct,
       note: (s.shortVolume != null && s.totalVolume != null ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) : "") +
             (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
   ];
 }
-// drawn in a square of its own and stretched to whatever width the card leaves, so the line
-// fills the space rather than sitting in a fixed box beside it; the stroke keeps its weight
-function shortsSpark(pts) {
-  const lo = Math.min.apply(null, pts.map((p) => p.shares)), hi = Math.max.apply(null, pts.map((p) => p.shares));
-  const span = (hi - lo) || 1;
-  const x = (i) => (i / (pts.length - 1)) * 100;
-  const y = (v) => 96 - ((v - lo) / span) * 92;
-  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(2) + " " + y(p.shares).toFixed(2)).join(" ");
-  return '<svg class="si-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
-    '<path d="' + line + " L100 100 L0 100 Z" + '" fill="var(--chip-fg)" opacity=".08"/>' +
-    '<path d="' + line + '" fill="none" stroke="var(--chip-fg)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
+function shortsHeader(s, title) {
+  return '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>' + title + "</h5>" +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>";
 }
-function shortsTrendHtml(s) {
+function shortsCardHtml(s) {
+  const line = (f) => '<div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div>" +
+    '<div class="si-n tab">' + (f.bar == null ? "" : '<span class="si-bar"><span style="width:' + Math.max(0, Math.min(100, f.bar)).toFixed(1) + '%"></span></span>') +
+    "<span>" + esc(f.note || "") + "</span></div>";
+  return '<div class="card elev-sm" style="padding:16px 18px 12px">' + shortsHeader(s, "Short interest") +
+    '<div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div></div>";
+}
+// the position against the rest of the issue, in the donut every other card on the page uses
+function shortsRingHtml(s) {
+  const pct = s.ofSharesOut;
+  const empty = '<div class="muted empty" style="flex:1;font-size:12px">No share count is published for this listing.</div>';
+  let body = empty;
+  if (pct != null && s.sharesOut && s.shares != null) {
+    const share = Math.max(0, Math.min(1, s.shares / s.sharesOut));
+    const items = [{ label: "Sold short", share: share, color: "var(--pie-1)" },
+                   { label: "Not short", share: 1 - share, color: "rgba(var(--ink-rgb),.16)" }];
+    const d = donutPieces("sipie", "Short", items, null, "l", 132, n2(pct, 2) + "%");
+    body = '<div id="sipiePlot" data-hover="sipie" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
+  }
+  return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
+    shortsHeader(s, "Short of the issue") + body +
+    (s.sharesOut ? '<div class="lbl" style="text-align:center;padding-top:6px">' + qty(s.sharesOut) + " shares in issue</div>" : "") + "</div>";
+}
+// the run of reports, drawn the way the equity curve is: an axis of its own, the same grid
+// lines and the same area under the line. Bars from zero are the other house idiom, but a
+// position moves by a few percent between reports and every bar would stand the same height.
+function shortsHistoryHtml(s) {
   const pts = (s.series || []).filter((p) => p && p.shares != null);
   if (pts.length < 3) return "";
-  const ends = (a, b) => '<div class="si-ends tab"><span>' + a + "</span><span>" + b + "</span></div>";
-  return '<div class="si-trend"><div class="si-th"><span class="si-l">Reported positions</span>' +
-    '<span>' + esc(shortDay(pts[0].date)) + " – " + esc(shortDay(pts[pts.length - 1].date)) + "</span></div>" +
-    shortsSpark(pts) + ends(qty(pts[0].shares), qty(pts[pts.length - 1].shares)) + "</div>";
+  const lo = Math.min.apply(null, pts.map((p) => p.shares)), hi = Math.max.apply(null, pts.map((p) => p.shares));
+  const span = (hi - lo) || 1, W = 880, H = 180, TOP = 8, BOT = H - 12;
+  const x = (i) => (i / (pts.length - 1)) * W;
+  const y = (v) => TOP + (1 - (v - lo) / span) * (BOT - TOP);
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.shares).toFixed(1)).join(" ");
+  const ticks = [[hi, TOP], [lo + span * 2 / 3, TOP + (BOT - TOP) / 3], [lo + span / 3, TOP + (BOT - TOP) * 2 / 3], [lo, BOT]];
+  const want = Math.min(6, pts.length);
+  const marks = [];
+  for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round(i * (pts.length - 1) / Math.max(1, want - 1))].date));
+  return '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Short position over time</h5>' +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + " · every report since " + esc(shortDay(pts[0].date)) + "</span></div>" +
+    '<div style="display:flex;gap:10px"><div style="position:relative;width:72px;height:' + H + 'px;flex:none;font-size:10px;color:var(--ink55)" class="tab">' +
+    ticks.map((t) => '<span style="position:absolute;left:0;top:' + (t[1] / H * 100).toFixed(1) + '%;transform:translateY(-50%)">' + qty(Math.round(t[0])) + "</span>").join("") + "</div>" +
+    '<div style="position:relative;flex:1;min-width:0">' +
+    '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:' + H + 'px;display:block">' +
+    '<defs><linearGradient id="bhSi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)"/><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>' +
+    ticks.map((t) => '<line x1="0" y1="' + t[1].toFixed(1) + '" x2="' + W + '" y2="' + t[1].toFixed(1) + '" style="stroke:var(--' + (t[1] === BOT ? "hair" : "grid") + ')"/>').join("") +
+    '<path d="' + line + " L" + W + " " + BOT + " L0 " + BOT + ' Z" fill="url(#bhSi)"/>' +
+    '<path d="' + line + '" fill="none" style="stroke:var(--accent)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg></div></div>' +
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:6px 0 0 82px">' +
+    marks.map((a) => "<span>" + esc(a) + "</span>").join("") + "</div></div>";
 }
-function shortsCardHtml(t) {
+function shortsSectionHtml(t) {
   const rec = _shorts[shortsKey(t)];
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
-  const line = (f) => '<div class="si-l">' + f.label + '</div>' +
-    '<div class="si-v tab">' + f.value + '</div>' +
-    '<div class="si-n tab">' + (f.bar == null ? "" : '<span class="si-bar"><span style="width:' + Math.max(0, Math.min(100, f.bar)).toFixed(1) + '%"></span></span>') +
-    '<span>' + esc(f.note || "") + "</span></div>";
-  return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
-    '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>Short interest</h5>' +
-    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>" +
-    '<div class="si-body"><div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div>" + shortsTrendHtml(s) + "</div></div>";
+  return '<div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
+    shortsCardHtml(s) + shortsRingHtml(s) + "</div>" + shortsHistoryHtml(s);
 }
 // the same listing, compact, for the News card once it is scoped to a symbol — the card is
 // half the width of the instrument page's, so the figures stack under their labels
@@ -2604,7 +2625,7 @@ function shortsStripHtml(only) {
   const rec = _shorts[shortsKey(only)];
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
-  const cell = (f) => '<div><div class="si-l">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
+  const cell = (f) => '<div><div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
   return '<div class="si-strip"><div class="si-sh">Short interest<span>' + esc(s.source || "") +
     (s.asOf ? " · " + esc(shortDay(s.asOf)) : "") + '</span></div><div class="si-cells">' +
     shortsFigures(s).map(cell).join("") + "</div></div>";
@@ -2869,7 +2890,7 @@ function tradeDetailHtml(t, m) {
     '<input id="tagInput" data-id="' + esc(t.id) + '" value="' + esc(state.tagDraft) + '" placeholder="' + ((t.tags || []).length ? "Add another…" : "Add a tag…") + '" aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off"></div>' +
     '<div id="tagMenu"></div>' +
 
-    "</div></div></div>" + shortsCardHtml(t) + disclosuresCardHtml(t) + "</div>";
+    "</div></div></div>" + shortsSectionHtml(t) + disclosuresCardHtml(t) + "</div>";
 }
 function tagMenuHtml() {
   const t = state.sel ? selById(state.sel) : null;
