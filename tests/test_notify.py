@@ -326,7 +326,7 @@ class NotifyTest(unittest.TestCase):
             listings["QNC"].append({"id": "sec:2", "source": "sec", "type": "8-K", "title": "Another", "date": "2026-09-14"})
             listings["SHOP"].extend([{"id": "sedar:2", "source": "sedar", "type": "News release", "title": "y", "date": "2026-09-14"}, {"id": "sedar:3", "source": "sedar", "type": "Material change report", "title": "z", "date": "2026-09-14"}])
             self.assertEqual(bagholder.sweep_filings(), 0, "read minutes ago: left alone")
-            later = datetime.now(timezone.utc) + timedelta(minutes=11)
+            later = datetime.now(timezone.utc) + timedelta(minutes=31)
             self.assertEqual(bagholder.sweep_filings(now=later), 2)
             self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
         self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
@@ -357,6 +357,36 @@ class NotifyTest(unittest.TestCase):
             disclosures.fetch("QNC", name="Quantum eMotion", exchange="TSX-V", currency="CAD", profile_no="000012345")
         self.assertEqual(seen["sedar"].get("profile_no"), "000012345")
         self.assertNotIn("profile_no", seen["edgar"])
+
+
+    def test_a_re_keyed_list_and_an_empty_answer_tell_nothing_and_a_new_filing_is_known_by_what_it_is(self):
+        notify.set_settings({"disclosuresWatched": True})
+        watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
+        docs = [{"id": "sedar:drm:a1", "source": "SEDAR+", "type": "News release", "title": "Closing 2nd Drawdown", "date": "2026-09-08T08:27", "size": "112 KB"},
+                {"id": "sedar:drm:b2", "source": "SEDAR+", "type": "Interim MD&A", "title": "MDA June 2026", "date": "2026-08-27T16:49", "size": "1.2 MB"}]
+        answer = {"rows": list(docs)}
+        def fake_fetch(sym, **kw):
+            return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": bool(answer["rows"]), "filer": True, "count": len(answer["rows"]), "error": ""}}}
+        later = lambda m: datetime.now(timezone.utc) + timedelta(minutes=m)
+        with mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]), \
+             mock.patch.object(disclosures, "fetch", side_effect=fake_fetch), mock.patch.object(store, "list_securities", return_value=[]), mock.patch.object(sys, "stderr"):
+            self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
+            self.assertEqual(len(store.filings("CH")), 2)
+            # the same two filings under new ids: nothing new
+            answer["rows"] = [dict(d, id=d["id"] + "-again") for d in docs]
+            self.assertEqual(bagholder.sweep_filings(now=later(31)), 0, "a filing is known by what it is, not by its id")
+            # the source answers empty: the stored rows stand, and nothing is told
+            answer["rows"] = []
+            self.assertEqual(bagholder.sweep_filings(now=later(62)), 0)
+            self.assertEqual(len(store.filings("CH")), 2, "a filed document never disappears")
+            # a list none of whose rows were there a moment ago: a baseline again, not thirty filings in a morning
+            answer["rows"] = [dict(d, id=d["id"] + "-x", title=d["title"] + " (fr)") for d in docs]
+            self.assertEqual(bagholder.sweep_filings(now=later(93)), 0)
+            # one filing more, the rest as before: that one is told, once
+            answer["rows"] = [dict(d, title=d["title"] + " (fr)") for d in docs] + [{"id": "sedar:drm:c3", "source": "SEDAR+", "type": "Material change report", "title": "Financing", "date": "2026-09-15T09:00", "size": "80 KB"}]
+            self.assertEqual(bagholder.sweep_filings(now=later(124)), 1)
+            self.assertEqual(bagholder.sweep_filings(now=later(155)), 0, "told once")
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [("New disclosure · CH", "Material change report · SEDAR+")])
 
 
 if __name__ == "__main__":
