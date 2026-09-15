@@ -5790,7 +5790,7 @@ def _instrument_meta(symbol):
     return (sym, "", "")
 
 
-def _filings_stale(symbol, now=None):
+def _filings_stale(symbol, now=None, hours=None):
     when = store.filings_fetched_at(symbol)
     if not when:
         return True
@@ -5798,7 +5798,93 @@ def _filings_stale(symbol, now=None):
         age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(when.replace("Z", "+00:00"))
     except ValueError:
         return True
-    return age > timedelta(hours=FILINGS_STALE_HOURS)
+    return age > timedelta(hours=FILINGS_STALE_HOURS if hours is None else hours)
+
+
+# --- the Disclosures notification: a sweep of the tickers the book knows, only while that kind is on ---
+
+FILINGS_SWEEP_EVERY_SEC = 600      # how often the sweep looks for work
+FILINGS_SWEEP_AGE_HOURS = 6        # a ticker read within this long is left alone
+
+
+def known_filing_symbols():
+    """The tickers the book knows and a regulator could cover: every held instrument
+    and every watched listing, each with what the sources need to match it; a contract
+    or a coin has no filer and is left out."""
+    out, seen = [], set()
+    rows = []
+    try:
+        rows.extend(model.held_symbols())
+    except Exception as e:
+        sys.stderr.write("bagholder disclosures: holdings not read for the sweep: %s\n" % (str(e) or e.__class__.__name__))
+    try:
+        rows.extend(store.list_watchlist())
+    except Exception:
+        pass
+    for r in rows:
+        sym = _s(r.get("symbol")).strip().upper()
+        if not sym or sym in seen or " " in sym or _s(r.get("kind")) in ("Options", "Crypto"):
+            continue
+        if not disclosures.providers_for(sym, _s(r.get("exchange")), _s(r.get("currency"))):
+            continue
+        seen.add(sym)
+        out.append({"symbol": sym, "name": _s(r.get("name")) or None, "exchange": _s(r.get("exchange")), "currency": _s(r.get("currency"))})
+    return out
+
+
+def sweep_filings(now=None):
+    """While the Disclosures kind is on: each known ticker whose list is older than
+    FILINGS_SWEEP_AGE_HOURS is read again, at the sources' own pace, and a filing not
+    stored before is told. A ticker read for the first time is a baseline, told
+    nothing. Returns how many tickers had something new."""
+    if not notify.settings().get("disclosures"):
+        return 0
+    told = 0
+    for inst in known_filing_symbols():
+        sym = inst["symbol"]
+        if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_HOURS):
+            continue
+        first = not store.filings_fetched_at(sym)
+        before = {r.get("id") for r in store.filings(sym)}
+        wrote = refresh_filings(sym, name=inst.get("name"), exchange=inst.get("exchange"), currency=inst.get("currency"))
+        if first or wrote is None or wrote < 0:
+            continue
+        new = [r for r in store.filings(sym) if r.get("id") not in before]
+        if not new:
+            continue
+        told += 1
+        notice = filings_notice(sym, new)
+        notify.emit("disclosures", "filings:%s:%s" % (sym, _s(new[0].get("id"))), notice[0], notice[1], {"symbol": sym})
+    return told
+
+
+def filings_notice(sym, new):
+    """`New disclosure · QNC` / `Material change report · SEDAR+`; several, `3 new disclosures · QNC` with the documents' kinds."""
+    kinds = []
+    for r in new:
+        t = _s(r.get("type")).strip()
+        if t and t not in kinds:
+            kinds.append(t)
+    sources = []
+    for r in new:
+        src = _s(r.get("source")).strip()
+        if src and src not in sources:
+            sources.append(src)
+    names = {"sedar": "SEDAR+", "sec": "SEC EDGAR"}
+    tail = ", ".join(names.get(x, x) for x in sources)
+    head = ", ".join(kinds[:3]) + (" and more" if len(kinds) > 3 else "")
+    body = (head + (" · " if head and tail else "") + tail) or "A new filing."
+    title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
+    return (title, body)
+
+
+def filings_sweep_loop():
+    while True:
+        time.sleep(FILINGS_SWEEP_EVERY_SEC)
+        try:
+            sweep_filings()
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: sweep failed: %s\n" % (str(e) or e.__class__.__name__))
 
 
 def refresh_filings(symbol, name=None, exchange=None, currency=None):
@@ -6055,7 +6141,7 @@ def status_payload():
             "openOrders": open_orders_count(),
             "updating": str(_state.get("updating") or ""),
             "updateError": str(_state.get("updateError") or ""),
-            "notify": notify.settings(),
+            "notify": notify.status(),
         }
 
 
@@ -6769,7 +6855,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate():
                 self._send(403, {"ok": False})
                 return
-            self._send(200, {"ok": True, "settings": notify.settings(), "kinds": list(notify.KINDS), "rows": store.list_notifications(limit=50)})
+            self._send(200, {"ok": True, "settings": notify.status(), "kinds": list(notify.KINDS), "rows": store.list_notifications(limit=50)})
             return
         if path == "/api/notifications/stream":
             if not self._gate():
@@ -6977,7 +7063,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/notifications/settings":
             body = self._read_json()
-            self._send(200, {"ok": True, "settings": notify.set_settings(body if isinstance(body, dict) else {})})
+            notify.set_settings(body if isinstance(body, dict) else {})
+            self._send(200, {"ok": True, "settings": notify.status()})
             return
         if path == "/api/notifications/test":
             self._read_json()
@@ -7142,6 +7229,7 @@ def bind_server():
     for port in port_choices():
         try:
             httpd = ThreadingHTTPServer((BIND_HOST, port), Handler)
+            notify.configure(url="http://127.0.0.1:%d/" % port, icon=Path(__file__).resolve().parent / "favicon.png")
             return httpd, port
         except OSError as e:
             last = e
@@ -7177,6 +7265,7 @@ def main():
     threading.Thread(target=market_loop, name="bagholder-market-loop", daemon=True).start()
     threading.Thread(target=archive_loop, name="bagholder-archive", daemon=True).start()
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
+    threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
     # A second instance run for verification (BAGHOLDER_NO_BROWSER=1) must not open

@@ -751,6 +751,7 @@ function pollStatus() {
     applyStatus(st);
     const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null)]);
     if (before !== after) renderHeaderOnly();
+    notifyListen();
     const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating;
     _pollTimer = setTimeout(pollStatus, fast ? 2500 : 30000);
   });
@@ -869,9 +870,12 @@ function menuHtml() {
 }
 // Notifications: the server tells, the browser shows. The kinds are the server's settings; whether this
 // browser may show them is its own permission, asked on the first click (browsers ask only on a click).
-const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
-function notifyState() { return "Notification" in window ? Notification.permission : "unavailable"; }   // granted | denied | default | unavailable
-function notifyOn(kind) { return notifyState() === "granted" && !!(state.status.notify && state.status.notify[kind]); }
+const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"], ["disclosures", "Disclosures"]];
+// the server posts them itself where the computer it runs on has a desktop ("native"); only where it has none is
+// this browser asked to show them, under its own permission
+function notifyNative() { return !!(state.status.notify && state.status.notify.native); }
+function notifyState() { return notifyNative() ? "native" : "Notification" in window ? Notification.permission : "unavailable"; }   // native | granted | denied | default | unavailable
+function notifyOn(kind) { const st = notifyState(); return (st === "native" || st === "granted") && !!(state.status.notify && state.status.notify[kind]); }
 function notifyWord() {
   const st = notifyState();
   return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.some((k) => notifyOn(k[0])) ? "On" : "Off";
@@ -898,6 +902,7 @@ function notifySave(patch) {
 function notifyToggle(kind) {
   const st = notifyState();
   if (st === "unavailable" || st === "denied") return;
+  if (st === "native") { notifySave({ [kind]: !notifyOn(kind) }); return; }
   if (st === "default") { notifyAsk().then((ok) => { if (ok) { notifyListen(); notifySave({ [kind]: true }); } else renderHeaderOnly(); }); return; }
   notifySave({ [kind]: !notifyOn(kind) });
 }
@@ -910,7 +915,7 @@ function notifyTest() {
 let _notifyStream = null;
 function notifyListen() {
   // the stream from the server, opened once this browser may show notifications; the browser reconnects it itself
-  if (_notifyStream || notifyState() !== "granted" || !window.EventSource) return;
+  if (_notifyStream || notifyState() !== "granted" || !window.EventSource) return;   // native: the server shows them, the page never does
   let seen = 0; try { seen = +localStorage.getItem("bh2.notifySeen") || 0; } catch (e) {}
   _notifyStream = new EventSource("/api/notifications/stream" + (seen ? "?after=" + seen : ""));
   _notifyStream.onmessage = (e) => { let r = null; try { r = JSON.parse(e.data); } catch (err) {} if (r && r.id) notifyShow(r); };
@@ -923,6 +928,7 @@ function notifyShow(r) {
   n.onclick = () => {
     window.focus();
     if (r.kind === "fills" || r.kind === "problems") { state.ordersOpen = true; state.ordersTab = r.kind === "fills" ? "filled" : "cancelled"; state.menuOpen = false; render(); loadOrders(); }
+    else if (r.kind === "disclosures" && r.extra && r.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === r.extra.symbol); if (p) openHolding(p.id); }
     n.close();
   };
 }
@@ -4087,7 +4093,6 @@ function boot() {
   state.sel = h.sel;
   bind();
   render();
-  notifyListen();
   loadModel();
   pollStatus();
 }

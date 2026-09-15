@@ -2,19 +2,25 @@
 import http.client
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bagholder  # noqa: E402
+import disclosures  # noqa: E402
+import model  # noqa: E402
 import notify  # noqa: E402
 import store  # noqa: E402
+
+OFF = {"fills": False, "problems": False, "connection": False, "updates": False, "disclosures": False}
 
 ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"}
 
@@ -24,6 +30,7 @@ class NotifyTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
         os.environ["BAGHOLDER_HOME"] = self.home
+        os.environ["BAGHOLDER_NOTIFY"] = "browser"   # this process must never post on the machine running the suite
         store.set_home(self.home)
         bagholder.set_home(self.home)
         store.ensure()
@@ -33,13 +40,22 @@ class NotifyTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
+        os.environ.pop("BAGHOLDER_NOTIFY", None)
 
     def test_every_kind_is_off_until_turned_on_and_the_settings_round_trip(self):
-        self.assertEqual(notify.settings(), {"fills": False, "problems": False, "connection": False, "updates": False})
+        self.assertEqual(notify.settings(), OFF)
         out = notify.set_settings({"fills": True, "bogus": True, "updates": "yes"})
-        self.assertEqual(out, {"fills": True, "problems": False, "connection": False, "updates": False}, "unknown keys and non-booleans are ignored")
+        self.assertEqual(out, dict(OFF, fills=True), "unknown keys and non-booleans are ignored")
         self.assertEqual(notify.settings(), out)
-        self.assertEqual(bagholder.status_payload()["notify"], out, "the status payload carries the kinds")
+        self.assertEqual(bagholder.status_payload()["notify"], dict(out, native=""), "the status payload carries the kinds and the channel; told to stand aside, the page is the channel")
+        with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": ""}), mock.patch.object(sys, "platform", "darwin"), mock.patch.object(notify.shutil, "which", lambda n: "/usr/bin/" + n):
+            self.assertEqual(notify.native_channel(), "mac")
+        with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": ""}), mock.patch.object(sys, "platform", "win32"), mock.patch.object(notify.shutil, "which", lambda n: "C:/ps.exe" if n == "powershell" else None):
+            self.assertEqual(notify.native_channel(), "windows")
+        with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": "", "DISPLAY": ":0"}), mock.patch.object(sys, "platform", "linux"), mock.patch.object(notify.shutil, "which", lambda n: "/usr/bin/" + n if n == "notify-send" else None):
+            self.assertEqual(notify.native_channel(), "linux")
+        with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": "", "DISPLAY": "", "WAYLAND_DISPLAY": ""}), mock.patch.object(sys, "platform", "linux"), mock.patch.object(notify.shutil, "which", lambda n: None):
+            self.assertEqual(notify.native_channel(), "", "no desktop: the page is the channel")
 
     def test_a_kind_that_is_off_is_not_told_and_a_key_is_told_once(self):
         self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75"))
@@ -199,6 +215,95 @@ class NotifyTest(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+    def test_posted_by_the_server_a_row_is_stored_seen_and_handed_to_the_system(self):
+        notify.set_settings({"fills": True})
+        calls = []
+        with mock.patch.object(notify, "native_channel", return_value="mac"), mock.patch.object(notify, "deliver", side_effect=lambda ch, t, b: calls.append((ch, t, b)) or True):
+            row = notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75")
+            deadline = time.time() + 3
+            while time.time() < deadline and not calls:
+                time.sleep(0.02)
+        self.assertNotEqual(row["seenAt"], "", "the server shows it: no page shows it too")
+        self.assertEqual(calls, [("mac", "Order filled · QNC", "Bought 5 at 1.75")])
+        self.assertEqual(store.list_notifications(unseen=True), [], "nothing left for a page")
+
+    def test_each_system_is_asked_in_its_own_words(self):
+        runs = []
+        def fake_run(cmd, **kw):
+            runs.append((cmd, kw.get("env") or {}))
+            return mock.Mock(returncode=0, stderr=b"")
+        notify.configure(url="http://127.0.0.1:8799/", icon=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "favicon.png"))
+        with mock.patch.object(notify.subprocess, "run", side_effect=fake_run), mock.patch.object(notify, "mac_app", return_value="/x/Bagholder.app"):
+            self.assertTrue(notify.deliver("mac", "Stopped out · QNC", "Sold 5 at 1.64"))
+        self.assertEqual(runs[-1][0], ["open", "-n", "-W", "--env", "BAGHOLDER_TITLE=Stopped out · QNC", "--env", "BAGHOLDER_BODY=Sold 5 at 1.64", "/x/Bagholder.app"], "the applet reads its words from the environment; a click on the banner runs it without any and it opens the app")
+        self.assertIn('open location "http://127.0.0.1:8799/"', notify._mac_script())
+        with mock.patch.object(notify.subprocess, "run", side_effect=fake_run), mock.patch.object(notify, "mac_app", return_value=None):
+            self.assertTrue(notify.deliver("mac", "T", "B"))
+        self.assertEqual((runs[-1][0][0], runs[-1][1]["BAGHOLDER_TITLE"], runs[-1][1]["BAGHOLDER_BODY"]), ("osascript", "T", "B"), "without the applet, the system's plain notification")
+        with mock.patch.object(notify.subprocess, "run", side_effect=fake_run), mock.patch.object(notify, "_windows_register"), mock.patch.object(notify.shutil, "which", lambda n: "powershell.exe" if n == "powershell" else None):
+            self.assertTrue(notify.deliver("windows", "T", "B"))
+        cmd, env = runs[-1]
+        self.assertEqual((cmd[0], cmd[1:7], env["BAGHOLDER_TITLE"]), ("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden"], "T"))
+        self.assertIn("CreateToastNotifier('Bagholder')", cmd[-1])
+        self.assertIn('launch="http://127.0.0.1:8799/"', cmd[-1], "a click on the toast opens the app")
+        with mock.patch.object(notify.subprocess, "run", side_effect=fake_run):
+            self.assertTrue(notify.deliver("linux", "T", "B"))
+        self.assertEqual(runs[-1][0][:2] + runs[-1][0][-2:], ["notify-send", "--app-name=Bagholder", "T", "B"])
+        self.assertTrue(runs[-1][0][2].startswith("--icon="))
+        self.assertFalse(notify.deliver("", "T", "B"))
+
+    @unittest.skipUnless(sys.platform == "darwin" and os.path.exists("/usr/bin/osacompile"), "the applet is built with macOS's own tools")
+    def test_the_mac_applet_is_built_once_under_bagholders_name_and_icon(self):
+        notify.configure(url="http://127.0.0.1:8799/", icon=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "favicon.png"))
+        app = notify.mac_app()
+        self.assertIsNotNone(app)
+        self.assertEqual(str(app), os.path.join(self.home, "Bagholder.app"))
+        plist = subprocess.run(["plutil", "-p", str(app / "Contents" / "Info.plist")], capture_output=True, text=True).stdout
+        self.assertIn('"CFBundleName" => "Bagholder"', plist)
+        self.assertIn('"CFBundleIdentifier" => "com.bagholder.notifier"', plist)
+        self.assertNotIn("CFBundleIconName", plist, "the stock asset catalogue gives way to the app's own icon file")
+        self.assertTrue((app / "Contents" / "Resources" / "applet.icns").stat().st_size > 10000, "the icon built from the favicon")
+        self.assertFalse((app / "Contents" / "Resources" / "Assets.car").exists())
+        self.assertIn('open location "http://127.0.0.1:8799/"', (app / "Contents" / "Resources" / "Scripts").exists() and notify._mac_script())
+        stamp = (app / "Contents" / "Resources" / "bagholder.stamp").read_text()
+        with mock.patch.object(notify, "_mac_build", side_effect=AssertionError("built again")):
+            self.assertEqual(notify.mac_app(), app, "already built: not built again")
+        notify.configure(url="http://127.0.0.1:8800/")
+        self.assertNotEqual(notify._mac_stamp(), stamp, "a new address means a new applet")
+
+    def test_a_new_filing_on_a_known_ticker_is_told_but_a_first_read_is_a_baseline(self):
+        notify.set_settings({"disclosures": True})
+        held = [{"symbol": "QNC", "exchange": "NYSE", "currency": "USD", "kind": "Shares"}, {"symbol": "QNC 20NOV26 3.00 CALL", "exchange": "NYSE", "currency": "USD", "kind": "Options"}, {"symbol": "BTC", "exchange": "", "currency": "CAD", "kind": "Crypto"}]
+        watched = [{"symbol": "SHOP", "exchange": "TSX", "name": "Shopify Inc.", "currency": "CAD"}]
+        listings = {"QNC": [{"id": "sec:1", "source": "sec", "type": "8-K", "title": "Current report", "date": "2026-09-10"}],
+                    "SHOP": [{"id": "sedar:1", "source": "sedar", "type": "Material change report", "title": "x", "date": "2026-09-10"}]}
+        def fake_refresh(sym, name=None, exchange=None, currency=None):
+            for src in ("sec", "sedar"):
+                rows = [r for r in listings[sym] if r["source"] == src]
+                if rows:
+                    store.replace_filings(sym, src, rows)
+            store.mark_filings_fetched(sym)
+            return len(listings[sym])
+        with mock.patch.object(model, "held_symbols", return_value=held), mock.patch.object(store, "list_watchlist", return_value=watched), \
+             mock.patch.object(disclosures, "providers_for", return_value=[object()]), mock.patch.object(bagholder, "refresh_filings", side_effect=fake_refresh):
+            self.assertEqual([i["symbol"] for i in bagholder.known_filing_symbols()], ["QNC", "SHOP"], "a contract and a coin have no filer")
+            self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
+            self.assertEqual(store.list_notifications(), [])
+            listings["QNC"].append({"id": "sec:2", "source": "sec", "type": "8-K", "title": "Another", "date": "2026-09-14"})
+            listings["SHOP"].extend([{"id": "sedar:2", "source": "sedar", "type": "News release", "title": "y", "date": "2026-09-14"}, {"id": "sedar:3", "source": "sedar", "type": "Material change report", "title": "z", "date": "2026-09-14"}])
+            self.assertEqual(bagholder.sweep_filings(), 0, "read six hours ago at most: left alone")
+            later = datetime.now(timezone.utc) + timedelta(hours=7)
+            self.assertEqual(bagholder.sweep_filings(now=later), 2)
+            self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
+        self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
+            ("disclosures", "New disclosure · QNC", "8-K · SEC EDGAR", {"symbol": "QNC"}),
+            ("disclosures", "2 new disclosures · SHOP", "News release, Material change report · SEDAR+", {"symbol": "SHOP"}),
+        ])
+        notify.set_settings({"disclosures": False})
+        with mock.patch.object(bagholder, "known_filing_symbols", side_effect=AssertionError("swept while off")):
+            self.assertEqual(bagholder.sweep_filings(), 0, "off: the pipeline stays on demand")
 
 
 if __name__ == "__main__":

@@ -3264,18 +3264,19 @@ def _notification(r):
     return {"id": r["id"], "at": r["at"], "kind": r["kind"], "key": r["key"], "title": r["title"], "body": r["body"] or "", "extra": extra, "seenAt": r["seen_at"] or ""}
 
 
-def add_notification(kind, key, title, body, extra=None):
+def add_notification(kind, key, title, body, extra=None, seen=False):
     """One notification row, keyed so the same event is never stored twice; the oldest
-    beyond the last NOTIFICATIONS_KEPT go. Returns the row as the page reads it, or
-    None when the key is already there."""
+    beyond the last NOTIFICATIONS_KEPT go. A row the server shows itself is stored
+    seen, so no page shows it too. Returns the row as the page reads it, or None
+    when the key is already there."""
     now = _now_iso()
     with _lock:
         conn = _connect()
         try:
             _ready(conn)
             cur = conn.execute(
-                "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra) VALUES (?, ?, ?, ?, ?, ?)",
-                (now, _s(kind), _s(key), _s(title), _s(body), json.dumps(extra or {})),
+                "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, _s(kind), _s(key), _s(title), _s(body), json.dumps(extra or {}), now if seen else None),
             )
             if not cur.rowcount:
                 conn.commit()
