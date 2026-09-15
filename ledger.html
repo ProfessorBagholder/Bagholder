@@ -307,6 +307,7 @@ html.panel-open{overflow:hidden}
 .tk-rowbtn.sell:hover{background:rgba(var(--neg-rgb),.16);color:var(--neg)}
 /* orders panel */
 .od-badge{position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font:600 11px/18px var(--font);text-align:center;box-shadow:0 0 0 2px var(--bg)}
+.od-badge.quiet{background:rgba(var(--ink-rgb),.18);color:var(--ink)}   /* a count, not an alert: resting orders are nothing to acknowledge */
 .od-segs{display:flex;padding:3px;border-radius:10px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.10)}
 .od-seg{flex:1;padding:9px 8px;border-radius:8px;border:0;background:transparent;color:var(--ink60);font:500 13.5px var(--font);cursor:pointer}
 .od-seg.on{background:rgba(var(--accent-rgb),.16);color:var(--ink)}
@@ -817,7 +818,7 @@ function headerHtml() {
     '<div style="margin-left:auto;display:flex;align-items:center;gap:12px">' +
     '<span style="font-size:12px;color:var(--ink55)">' + (state.notice ? '<span class="' + (state.noticeKind === "err" ? "status-err" : "") + '">' + esc(state.notice) + "</span>" : syncLine()) + "</span>" +
     '<button class="btn btn-icon btn-secondary" aria-label="Orders" data-act="ordersOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.receipt + '"/></svg>' +
-    (state.status.openOrders ? '<span class="od-badge">' + state.status.openOrders + "</span>" : "") + "</button>" +
+    (state.status.openOrders ? '<span class="od-badge quiet">' + state.status.openOrders + "</span>" : "") + "</button>" +
     '<button class="btn btn-icon btn-secondary" aria-label="Notifications" data-act="notesOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.bell + '"/></svg>' +
     (notesUnread() ? '<span class="od-badge">' + notesUnread() + "</span>" : "") + "</button>" +
     '<div style="position:relative" data-pop="filter">' +
