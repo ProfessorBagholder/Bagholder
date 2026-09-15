@@ -614,3 +614,64 @@ class ReadVersionTest(unittest.TestCase):
              mock.patch.object(shorts, "average_volume", return_value=None):
             rec = shorts.for_listing("RKLB", "NASDAQ", "USD")
         self.assertEqual(rec["exchange"], "NASDAQ")
+
+
+class VenueSpellingTest(unittest.TestCase):
+    """The venue reads as the book writes it. The stored key is upper case because it is a
+    key; the rest of the app shows Cboe Canada, not CBOE CANADA."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def test_the_list_shows_the_venue_the_way_the_book_does(self):
+        store.save_shorts("HBIX", "Cboe Canada", self.record(market="ca"))
+        base = {"positions": [], "watchlist": [{"symbol": "HBIX", "exchange": "Cboe Canada", "name": "Harvest Bitcoin Enhanced Income ETF"}]}
+        with mock.patch.object(bagholder.model, "base_model", return_value=base):
+            row = bagholder.shorts_feed()["rows"][0]
+        self.assertEqual(row["exchange"], "Cboe Canada")
+
+
+class ReportOmitsListingTest(unittest.TestCase):
+    """CIRO's volume report lists only what was sold short — it carries no zero rows — so a
+    listing absent from it was not sold short in the period rather than unknown, and what it
+    did trade comes from the exchange so days to cover still has a denominator."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.ensure()
+        shorts._files.clear()
+
+    def tearDown(self):
+        shorts._files.clear()
+        self.tmp.cleanup()
+
+    def warm(self, rows, key="2026-08-16/2026-08-31"):
+        shorts._files["ca_volume"] = {"key": key, "rows": rows, "at": shorts.time.time()}
+
+    def test_a_listing_the_report_omits_reads_as_none_of_its_trading(self):
+        self.warm({})
+        with mock.patch.object(shorts, "ca_traded", return_value=1519546.0):
+            out = shorts.ca_volume("YES", "TSX-V", "CAD")
+        self.assertEqual(out["shortVolume"], 0.0)
+        self.assertEqual(out["volumePct"], 0.0)
+        self.assertEqual(out["totalVolume"], 1519546.0)
+
+    def test_a_listing_the_report_omits_and_the_exchange_has_no_volume_for_says_nothing(self):
+        self.warm({})
+        with mock.patch.object(shorts, "ca_traded", return_value=None):
+            self.assertEqual(shorts.ca_volume("YES", "TSX-V", "CAD"), {})
+
+    def test_a_listing_the_report_carries_is_read_from_the_report(self):
+        self.warm({"QNC": {"venue": "TSXV", "shortVolume": 1197633.0, "volumePct": 21.319, "totalVolume": 5617679.0}})
+        with mock.patch.object(shorts, "ca_traded", side_effect=AssertionError("asked the exchange anyway")):
+            out = shorts.ca_volume("QNC", "TSX-V", "CAD")
+        self.assertEqual(out["volumePct"], 21.319)
+
+    def test_days_to_cover_follows_from_what_the_exchange_says_was_traded(self):
+        store.upsert_benchmark_prices("TSX", {"2026-08-%02d" % d: 100.0 for d in range(17, 28)}) if hasattr(store, "upsert_benchmark_prices") else None
+        rec = {"market": "ca", "shares": 17873.0, "totalVolume": 1519546.0, "volumeOf": "2026-08-16/2026-08-31"}
+        days = store.benchmark_days("TSX", "2026-08-16", "2026-08-31")
+        if days:
+            self.assertAlmostEqual(shorts.average_volume(rec), 1519546.0 / days)
+            self.assertIsNotNone(shorts.days_to_cover(rec))

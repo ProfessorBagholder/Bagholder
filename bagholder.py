@@ -5920,7 +5920,7 @@ FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)
 
 
 SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
-SHORTS_VERSION = 2                 # bump when a reading can carry more than it could before, so
+SHORTS_VERSION = 3                 # bump when a reading can carry more than it could before, so
                                    # rows written by the older logic are read again once: a figure
                                    # the app has since learned to find should not wait for its row
                                    # to go stale, which is hours a reader spends looking at a dash
@@ -6005,6 +6005,9 @@ def shorts_feed():
         if source is None or r.get("shares") is None:
             continue
         r["name"] = _s(source.get("name"))
+        # the venue as the book writes it: the stored key is upper case because it is a key,
+        # and the rest of the app shows "Cboe Canada", not "CBOE CANADA"
+        r["exchange"] = _s(source.get("exchange")) or r["exchange"]
         r["positionId"] = source.get("positionId") or source.get("id")
         r["held"], r["watched"] = key in held, key in watched
         rows.append(r)

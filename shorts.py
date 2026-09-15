@@ -203,6 +203,31 @@ def _ca_position_file(ssl_context, now):
     return None
 
 
+def ca_traded(symbol, exchange, currency, span, ssl_context=None):
+    """A Canadian listing's own volume over the report's period, from TMX's daily series under
+    the venue's own form. CIRO's volume report lists only the securities that were sold short,
+    so a listing with none is absent from it and has no total there to measure days to cover
+    against — but it traded, and the exchange says how much."""
+    start, end = (_s(span).split("/", 1) + [""])[:2]
+    if not end:
+        return None
+    try:
+        code = market.tmx_quote_symbol(symbol, exchange, currency)
+        if not code:
+            return None
+        def ask(form):
+            data = market._post_json(market.TMX_URL, {"operationName": "getTimeSeriesData",
+                                                      "variables": {"symbol": form, "freq": "day", "interval": 1, "start": start, "end": end},
+                                                      "query": market.TMX_HISTORY_QUERY}, ssl_context, market._TMX_HEADERS)
+            return market.parse_tmx_history(data)
+        bars = market.tmx_lookup(code, ask, ssl_context)[0] or []
+        traded = [b.get("volume") for b in bars if b.get("volume")]
+        return sum(traded) if traded else None
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s traded volume failed: %s\n" % (symbol, e))
+        return None
+
+
 def parse_ca_volume(text):
     """CIRO's short sale summary: the short part of a period's trading, per listing."""
     rows = {}
@@ -431,11 +456,23 @@ def ca_position(symbol, exchange="", ssl_context=None, now=None):
             "previousOf": earlier[0] if earlier else ""}
 
 
-def ca_volume(symbol, exchange="", ssl_context=None, now=None):
+def ca_volume(symbol, exchange="", currency="", ssl_context=None, now=None):
+    """The short part of a Canadian listing's trading over the report's period. A listing the
+    report does not carry was not sold short in it — the report has no zero rows — so its short
+    volume is none of its trading rather than unknown, and what it did trade comes from the
+    exchange so days to cover still has a denominator."""
     held = _table("ca_volume", _ca_volume_file, ssl_context, now or datetime.now(timezone.utc))
-    row = held["rows"].get(_s(symbol).strip().upper())
-    if not row or not _venue_fits(row.get("venue"), exchange):
+    if not held["key"]:
         return {}
+    row = held["rows"].get(_s(symbol).strip().upper())
+    if row and not _venue_fits(row.get("venue"), exchange):
+        return {}
+    if not row:
+        traded = ca_traded(symbol, exchange, currency, held["key"], ssl_context)
+        if not traded:
+            return {}
+        return {"volumeOf": held["key"], "volumeSpan": "period", "shortVolume": 0.0,
+                "totalVolume": traded, "volumePct": 0.0}
     return {"volumeOf": held["key"], "volumeSpan": "period", "shortVolume": row["shortVolume"],
             "totalVolume": row.get("totalVolume"), "volumePct": row.get("volumePct")}
 
@@ -480,7 +517,7 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
         rec.update(us_volume(sym, ssl_context, now))
     else:
         rec = dict(ca_position(sym, exchange, ssl_context, now))
-        rec.update(ca_volume(sym, exchange, ssl_context, now))
+        rec.update(ca_volume(sym, exchange, currency, ssl_context, now))
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     # the record names its own listing, as a stored one does: a ticker read on the spot for the
