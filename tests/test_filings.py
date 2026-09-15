@@ -235,3 +235,31 @@ class EnrichTest(unittest.TestCase):
         self.assertEqual(reads, 1)                       # the document's own title is still worth having
         self.assertEqual(out["subject"], "A title")
         self.assertEqual(self.stored()[2], 0)            # not finalised: it is read again once a model is up
+
+
+class StatusSummaryTest(unittest.TestCase):
+    """The page holds a row that had no model to ask, and the status it already polls is
+    what tells it one is up. Reading that must never start a model by itself."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_the_status_says_whether_a_summary_could_be_made_now(self):
+        with mock.patch.object(bagholder.enrich, "summary_status", return_value="ready"):
+            self.assertTrue(bagholder.status_payload()["summaryReady"])
+        for phase in ("off", "detecting", "downloading", "starting", "failed"):
+            with mock.patch.object(bagholder.enrich, "summary_status", return_value=phase):
+                self.assertFalse(bagholder.status_payload()["summaryReady"], phase)
+
+    def test_asking_the_status_never_starts_a_model(self):
+        with mock.patch.object(bagholder.enrich, "summary_status", return_value="off"), \
+             mock.patch.object(bagholder.enrich, "summary_available", side_effect=AssertionError("a status poll started a model")):
+            self.assertFalse(bagholder.status_payload()["summaryReady"])

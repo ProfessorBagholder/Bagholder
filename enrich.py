@@ -143,6 +143,36 @@ def summary_status():
     return localmodel.status()
 
 
+# Full stops that end an abbreviation rather than a sentence. A filing's summary nearly always
+# opens by naming the issuer, and a company's name ends in one of these far more often than a
+# sentence does.
+_ABBREV = {"corp", "inc", "ltd", "co", "llc", "llp", "plc", "lp", "sa", "nv", "ag", "cie", "pte",
+           "jr", "sr", "mr", "mrs", "ms", "dr", "prof", "st", "no", "nos", "vs", "etc", "approx", "al"}
+_STOP = re.compile(r"[.!?]+(?=\s|$)")
+_INITIAL = re.compile(r"(?:[a-z]\.)*[a-z]")
+_LAST_WORD = re.compile(r"[\s(\[\"']")
+
+
+def first_sentence(out):
+    """The first sentence of the model's answer, which is not the same as the text up to its
+    first full stop. `Quantum eMotion Corp. announces ...` is one sentence; cutting it at
+    `Corp.` left the bare name `Quantum eMotion Corp.`, which the check below then read as no
+    summary at all. So every filing whose summary opened with the issuer's name — every news
+    release — showed nothing, and the ones that survived the check showed a sentence chopped
+    mid-way. A stop ends a sentence only when the word before it is not an abbreviation or an
+    initial and what follows begins a new one."""
+    out = (out or "").strip()
+    for m in _STOP.finditer(out):
+        word = _LAST_WORD.split(out[:m.start()])[-1].lower().strip("\"'([")
+        if m.group(0) == "." and (word in _ABBREV or _INITIAL.fullmatch(word)):
+            continue
+        rest = out[m.end():].lstrip()
+        if rest and not (rest[0].isupper() or rest[0].isdigit() or rest[0] in '"\u201c('):
+            continue
+        return out[:m.end()].strip()
+    return out
+
+
 def summarize(text):
     """One-sentence summary of a filing's text from the app's local model, or "" (no
     text, or the model is not up yet — asking kicks it off in the background). Never
@@ -150,9 +180,7 @@ def summarize(text):
     text = (text or "").strip()
     if not text:
         return ""
-    out = _strip_preamble(localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90))
-    m = re.match(r"(.+?[.!?])(\s|$)", out)             # keep it to one sentence
-    out = (m.group(1) if m else out).strip()
+    out = first_sentence(_strip_preamble(localmodel.chat(_PROMPT % text[:MAX_TEXT], max_tokens=90)))
     # reject a non-summary: a bare name with no statement (e.g. "Quantum eMotion Corp.").
     # A real sentence carries a lowercase word (a verb/function word); a name is all caps-cased.
     if len(out.split()) < 4 or not re.search(r"\b[a-z]{3,}\b", out):

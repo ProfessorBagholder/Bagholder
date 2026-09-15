@@ -755,6 +755,7 @@ function applyStatus(st) {
   const prevCount = state.status.activityCount;
   const prevVersion = state.status.dataVersion;
   state.status = Object.assign({}, state.status, st);
+  discSummaryReady(st.summaryReady);
   const changed = (st.lastSync && st.lastSync !== prev && prev !== undefined) || (st.activityCount !== prevCount && prevCount) ||
     (st.dataVersion && prevVersion && st.dataVersion !== prevVersion);
   if (changed && !state.status.syncing) {
@@ -2573,16 +2574,38 @@ function _discStillOpen(sym) {
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
 // One rule for every card that reads documents, because they share this record of what has
-// been read. A row is finished when it has both a title and a summary. They come from one
-// read but not always in the same pass — a model that is still coming up gives the title
-// from the file and no sentence, and can miss one or the other on a document it reads fine
-// next time — so a row that counted as done on whichever half arrived first kept that half
-// and never got the other. Anything short of both is asked for again; a second pass is the
-// bound, since what two reads cannot produce the document does not have.
-function discEnrichNeed(f) { return !_discEnrichTried[f.id] && (!f.subject || !f.summary); }
-function discEnrichSettle(f) {
-  const passes = (_discEnrichPasses[f.id] = (_discEnrichPasses[f.id] || 0) + 1);
-  if ((f.subject && f.summary) || (!_discPreparing(f) && passes >= 2)) _discEnrichTried[f.id] = true;
+// been read. A row is finished when it has both a title and a summary; anything less is read
+// again. What bounds the reading is not how many times the document was asked for but how
+// many times the asking could have answered: the sentence comes from a local model, so a read
+// made while no model is up says nothing about whether this document has one — it only failed
+// to ask. Counting requests instead of real chances is what left rows blank for good, because
+// the first read of a session is the one that starts the model, and two quick passes could
+// both land before it answered. The model's own phase names are deliberately not consulted
+// here: there are six of them and they change. The only two questions are whether the read
+// answered and whether a model was up for it. A row that had no model to ask waits instead of
+// finishing, and the status the page already polls wakes it, costing no further reads.
+let _discSummaryUp = false;
+function discEnrichNeed(f) {
+  if (f.subject && f.summary) return false;
+  const settled = _discEnrichTried[f.id];
+  return settled === "waiting" ? _discSummaryUp : !settled;
+}
+function discEnrichSettle(f, d) {
+  const answered = !!(d && d.ok);
+  if (answered) _discSummaryUp = !!d.summaryAvailable;
+  if (f.subject && f.summary) { _discEnrichTried[f.id] = true; return; }   // both halves: nothing left to read for
+  if (!answered) return;                                                   // the read itself failed: nothing learned
+  if (!d.summaryAvailable) { _discEnrichTried[f.id] = "waiting"; return; } // no model was up: this read never asked
+  const chances = (_discEnrichPasses[f.id] = (_discEnrichPasses[f.id] || 0) + 1);
+  if (chances >= 2) _discEnrichTried[f.id] = true;   // two reads that could have answered: the document has no more
+}
+// a model coming up after a row waited on it is what makes that row readable again
+function discSummaryReady(ready) {
+  if (!ready || _discSummaryUp) return;
+  _discSummaryUp = true;
+  const open = state.sel && selById(state.sel);
+  if (open) { const r = _disc[discSymbol(open)]; if (r && r.payload) sweepDiscEnrich(discSymbol(open), r.payload.filings || []); }
+  render();   // whichever card is showing starts its own reading again from its render
 }
 function enrichOne(sym, f) {
   // read one document for its subject (from the file) and, if the local model is up, a summary
@@ -2591,7 +2614,7 @@ function enrichOne(sym, f) {
   return api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
     delete _discEnrichLoading[f.id];
     if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
-    discEnrichSettle(f);
+    discEnrichSettle(f, d);
     if (_discStillOpen(sym)) render();
   });
 }
@@ -2606,19 +2629,21 @@ function sweepDiscEnrich(sym, rows) {
   _discSweep[sym] = true;
   const q = new Set(pending.map((f) => f.id));
   _discQueue[sym] = q;
-  let i = 0, sawPreparing = false, sawFailure = false, sawHalf = false;
+  let i = 0, sawPreparing = false, sawFailure = false;
   const finish = () => {
     _discSweep[sym] = false; _discQueue[sym] = null;
     // a summary still being prepared is asked for again every fifteen seconds for as long as the card is shown; a
     // read that failed is tried again a few times, each wait longer than the last
     const again = (_discRekicks[sym] || 0);
-    // a row that came back with one half is asked once more straight away; the pass count on
-    // the row itself stops it there, so this cannot circle
-    if (_discStillOpen(sym) && (sawPreparing || sawHalf || (sawFailure && again < 6))) {
+    // go round again while rows still have something to read for, whatever left them short:
+    // one half read, or a read that failed. Each row's own rule decides when it is finished,
+    // so this cannot circle — a row waiting on a model asks for nothing until one is up.
+    const unfinished = rows.some(discEnrichNeed);
+    if (_discStillOpen(sym) && (sawPreparing || (unfinished && again < 6))) {
       _discRekicks[sym] = again + 1;
       setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); },
                  sawPreparing ? 15000 : sawFailure ? 4000 * (again + 1) : 1500);
-    } else if (!sawPreparing && !sawFailure && !sawHalf) _discRekicks[sym] = 0;
+    } else if (!sawPreparing && !unfinished) _discRekicks[sym] = 0;
   };
   const step = () => {
     if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
@@ -2628,7 +2653,6 @@ function sweepDiscEnrich(sym, rows) {
     enrichOne(sym, f).then(() => {
       if (_discPreparing(f)) sawPreparing = true;
       else if (!f.subject && !f.summary) sawFailure = true;   // a transient read failure: retry on the next pass
-      else if (!f.subject || !f.summary) sawHalf = true;      // one half of the read: ask once more for the other
       setTimeout(step, 150);
     });
   };
@@ -3329,7 +3353,7 @@ function sweepFeedEnrich(scope, rows) {
     api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(f.symbol) + "&id=" + encodeURIComponent(f.id)).then((d) => {
       delete _discEnrichLoading[f.id];
       if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
-      discEnrichSettle(f);
+      discEnrichSettle(f, d);
       if (showing()) render();
       setTimeout(step, 150);
     });
@@ -4157,6 +4181,7 @@ function syncNow() {
     const tick = () => api("GET", "/api/status").then((st) => {
       const wasSyncing = state.status.syncing;
       state.status = Object.assign({}, state.status, st);
+  discSummaryReady(st.summaryReady);
       renderHeaderOnly();
       if (st && !st.syncing) { if (wasSyncing || st.lastSync) loadModel(); return; }
       setTimeout(tick, 1500);

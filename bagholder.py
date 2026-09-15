@@ -723,7 +723,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
 PROTOCOL = "2026-09-15.1"
-ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
+ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -6327,6 +6327,9 @@ def status_payload():
             "syncStep": _state.get("syncStep") or "",
             "error": _state["error"] or "",
             "dataVersion": store.data_version() + "|" + model.today_local(),
+            # whether a summary could be made right now, read without starting anything: a row
+            # that had no model to ask waits for this rather than counting the read against itself
+            "summaryReady": enrich.summary_status() == "ready",
             "protocol": PROTOCOL,
             "startedAt": STARTED_AT,
             "version": APP_VERSION,
