@@ -295,3 +295,40 @@ class WaitingForTheModelTest(unittest.TestCase):
             out = bagholder.filings_enrich("QNC", self.doc)
         self.assertEqual(out["subject"], "A title")
         self.assertEqual(self.stored()[2], 0)      # not finalised: read again once a model is up
+
+
+class RefreshKeepsWhatWasReadTest(unittest.TestCase):
+    """The list of filings is refreshed far more often than a filed document changes, so a
+    refresh must not throw away what was read from the documents."""
+
+    setUp, tearDown = EnrichTest.setUp, EnrichTest.tearDown
+
+    def test_a_row_the_source_still_lists_keeps_its_subject_and_summary(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.set_filing_enrichment("QNC", "sedar:1", subject="A title", summary="A sentence.", version=9)
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2), item("SEDAR+", i=3)])
+        row = store.filing("QNC", "sedar:1")
+        self.assertEqual((row["subject"], row["summary"], row["enrichVersion"]), ("A title", "A sentence.", 9))
+
+    def test_what_the_source_says_about_a_row_is_still_refreshed(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        store.set_filing_enrichment("QNC", "sedar:1", subject="A title", summary="A sentence.", version=9)
+        moved = item("SEDAR+", i=1)
+        moved["url"] = "https://www.sedarplus.ca/x?drmKey=fresh"     # SEDAR+ mints a new link each visit
+        store.replace_filings("QNC", "SEDAR+", [moved])
+        row = store.filing("QNC", "sedar:1")
+        self.assertEqual(row["url"], "https://www.sedarplus.ca/x?drmKey=fresh")
+        self.assertEqual(row["summary"], "A sentence.")
+
+    def test_a_row_the_source_no_longer_lists_goes(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=2)])
+        self.assertIsNone(store.filing("QNC", "sedar:1"))
+        self.assertIsNotNone(store.filing("QNC", "sedar:2"))
+
+    def test_another_sources_rows_are_untouched(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        store.replace_filings("QNC", "SEC", [item("SEC", i=1)])
+        store.set_filing_enrichment("QNC", "sec:1", subject="From EDGAR", summary="A sentence.", version=9)
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        self.assertEqual(store.filing("QNC", "sec:1")["subject"], "From EDGAR")

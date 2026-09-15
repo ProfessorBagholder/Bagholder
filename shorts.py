@@ -41,6 +41,7 @@ CA_VOLUME_URL = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_Short
 CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL": ("CBOE CANADA", "NEO")}
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
+SERIES = 8               # reports behind the run shown with the position
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
 
 _files = {}
@@ -215,6 +216,37 @@ def _ca_volume_file(ssl_context, now):
     return None
 
 
+def _ca_positions_on(day, ssl_context=None):
+    """One dated Canadian report, kept for the session so a run of them is read once."""
+    name = "ca_position:" + day
+    with _lock:
+        held = _files.get(name)
+    if held:
+        return held["rows"]
+    try:
+        raw = market._fetch(CA_POSITION_URL % day.replace("-", ""), ssl_context or market.default_ssl_context(), HEADERS, market.TIMEOUT_SEC)
+        rows = parse_ca_positions(xls.table(raw))
+    except Exception:
+        rows = {}
+    with _lock:
+        _files[name] = {"key": day, "rows": rows, "at": time.time()}
+    return rows
+
+
+def ca_series(symbol, exchange="", asof="", ssl_context=None, now=None, back=SERIES):
+    """The listing's position across the last reports, oldest first. Canada publishes one
+    file per reporting date rather than a run of them, so each is read on its own and kept."""
+    sym, out = _s(symbol).strip().upper(), []
+    for d in position_dates((now or datetime.now(timezone.utc)).date(), back=back):
+        day = d.isoformat()
+        if asof and day > asof:
+            continue
+        row = _ca_positions_on(day, ssl_context).get(sym)
+        if row and _venue_fits(row.get("venue"), exchange):
+            out.append({"date": day, "shares": row["shares"]})
+    return sorted(out, key=lambda x: x["date"])
+
+
 def _venue_fits(code, exchange):
     """Whether a row's venue is the listing's. A symbol appears once in each Canadian
     file, so this confirms the row rather than choosing between rows."""
@@ -244,7 +276,12 @@ def us_position(symbol, ssl_context=None, now=None):
     return {"asOf": _s(r.get("settlementDate"))[:10], "shares": _num(r.get("currentShortPositionQuantity")),
             "previous": _num(r.get("previousShortPositionQuantity")), "change": _num(r.get("changePreviousNumber")),
             "previousOf": _s(rows[1].get("settlementDate"))[:10] if len(rows) > 1 else "",
-            "averageVolume": _num(r.get("averageDailyVolumeQuantity"))}
+            "averageVolume": _num(r.get("averageDailyVolumeQuantity")),
+            # every settlement FINRA answered with, oldest first: the run of reports costs
+            # nothing extra here, since they arrive in the same answer as the newest one
+            "series": [{"date": _s(x.get("settlementDate"))[:10], "shares": _num(x.get("currentShortPositionQuantity"))}
+                       for x in sorted(rows, key=lambda y: _s(y.get("settlementDate")))
+                       if _num(x.get("currentShortPositionQuantity")) is not None]}
 
 
 def us_volume(symbol, ssl_context=None, now=None):
@@ -308,7 +345,7 @@ def days_to_cover(rec, now=None):
     return round(shares / average, 1) if shares and average else None
 
 
-def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None):
+def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, trend=False):
     """Everything published about one listing's short selling, {} where nothing is."""
     sym = _s(symbol).strip().upper()
     now = now or datetime.now(timezone.utc)
@@ -321,6 +358,8 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None):
     else:
         rec = dict(ca_position(sym, exchange, ssl_context, now))
         rec.update(ca_volume(sym, exchange, ssl_context, now))
+    if where == "ca" and trend:
+        rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
     rec["averageVolume"] = average_volume(rec, now)
     rec["daysToCover"] = days_to_cover(rec, now)

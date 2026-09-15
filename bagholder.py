@@ -5919,7 +5919,7 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
-def shorts_payload(symbol, exchange=None, currency=None):
+def shorts_payload(symbol, exchange=None, currency=None, trend=False):
     """One listing's short selling, read now. A market where no one publishes it answers
     `covered: false` rather than an empty set of figures, so the page draws nothing at all
     for a coin or an index instead of a card of dashes."""
@@ -5930,7 +5930,7 @@ def shorts_payload(symbol, exchange=None, currency=None):
     if not ex:
         _, ex, held = _instrument_meta(sym)
         ccy = ccy or held
-    rec = shorts.for_listing(sym, ex, ccy, _ssl_context())
+    rec = shorts.for_listing(sym, ex, ccy, _ssl_context(), trend=trend)
     if not rec:
         return {"ok": True, "covered": False}
     return {"ok": True, "covered": True, "shorts": rec}
@@ -7029,7 +7029,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False})
                 return
             query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            self._send(200, shorts_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency")))
+            self._send(200, shorts_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency"),
+                                           trend=(_query_param(query, "trend") or "") in ("1", "true", "yes")))
             return
         if path == "/api/news/symbol":
             if not self._gate():

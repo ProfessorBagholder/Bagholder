@@ -102,6 +102,10 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth.on{color:var(--ink)}
 /* short interest: a label, the figure, and what stands behind it, so the row reads across
    the card's width instead of three numbers stranded in it */
+.si-body{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:26px;align-items:start}
+.si-trend{flex:0 0 auto;min-width:214px}
+.si-spark{display:block;margin:6px 0 3px;overflow:visible}
+.si-ends{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--ink55);white-space:nowrap}
 .si-grid{display:grid;grid-template-columns:auto minmax(96px,auto) minmax(0,1fr);column-gap:18px;row-gap:7px;align-items:baseline}
 .si-l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink55);white-space:nowrap}
 .si-v{font-size:14.5px;font-weight:500;text-align:right;white-space:nowrap}
@@ -2498,7 +2502,7 @@ function execSortValue(e, key) { if (key === "when") return e.when; if (key === 
 // where no one reports it (a coin, an index, a contract) answers that it is not
 // covered and draws no card at all, rather than a card of dashes.
 // ---------------------------------------------------------------------------
-const _shorts = {}, _shortsPending = {};
+const _shorts = {}, _shortsPending = {}, _shortsTrend = {};
 // keyed by listing, not by ticker: a company listed on both markets has a short position on
 // each, and they are different numbers measured against different trading
 function shortsKey(t) { return discSymbol(t) + "|" + String(t.exchange || "").toUpperCase(); }
@@ -2514,6 +2518,16 @@ function ensureShorts(t) {
   api("GET", "/api/shorts?" + q).then((d) => {
     delete _shortsPending[key];
     _shorts[key] = Object.assign({ at: Date.now() }, (d && d.ok) ? d : { ok: false });
+    // the run of past reports comes free with a US listing's answer; a Canadian one is a file
+    // per reporting date, so it is asked for once the figures are already on screen
+    if (d && d.ok && d.covered && !((d.shorts || {}).series || []).length && !_shortsTrend[key]) {
+      _shortsTrend[key] = true;
+      api("GET", "/api/shorts?" + q + "&trend=1").then((more) => {
+        const held = _shorts[key];
+        if (more && more.ok && more.covered && held && held.shorts) held.shorts.series = (more.shorts || {}).series || [];
+        render();
+      });
+    }
     const open = state.sel && selById(state.sel);
     if (open && shortsKey(open) === key) render();
     else if (state.page === "markets" && state.newsSymbol && shortsKey(state.newsSymbol) === key) render();
@@ -2537,13 +2551,32 @@ function shortsFigures(s) {
   const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
   const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
   return [
-    { label: "Shares short", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
+    { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
     { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
       note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
     { label: "Short volume", value: room(s.volumePct), bar: s.volumePct,
       note: (s.shortVolume != null && s.totalVolume != null ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) : "") +
             (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
   ];
+}
+function shortsSpark(pts, w, h) {
+  const lo = Math.min.apply(null, pts.map((p) => p.shares)), hi = Math.max.apply(null, pts.map((p) => p.shares));
+  const span = (hi - lo) || 1;
+  const x = (i) => (i / (pts.length - 1)) * (w - 3) + 1.5;
+  const y = (v) => (h - 4) - ((v - lo) / span) * (h - 9);
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.shares).toFixed(1)).join(" ");
+  const last = pts[pts.length - 1];
+  return '<svg class="si-spark" viewBox="0 0 ' + w + " " + h + '" width="' + w + '" height="' + h + '" aria-hidden="true">' +
+    '<path d="' + line + " L" + x(pts.length - 1).toFixed(1) + " " + h + " L" + x(0).toFixed(1) + " " + h + ' Z" fill="var(--chip-hi)" opacity=".14"/>' +
+    '<path d="' + line + '" fill="none" stroke="var(--chip-hi)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<circle cx="' + x(pts.length - 1).toFixed(1) + '" cy="' + y(last.shares).toFixed(1) + '" r="2.6" fill="var(--chip-hi)"/></svg>';
+}
+function shortsTrendHtml(s) {
+  const pts = (s.series || []).filter((p) => p && p.shares != null);
+  if (pts.length < 3) return "";
+  return '<div class="si-trend"><div class="si-l">Reported positions</div>' + shortsSpark(pts, 214, 46) +
+    '<div class="si-ends tab"><span>' + esc(shortDay(pts[0].date)) + "</span><span>" + esc(shortDay(pts[pts.length - 1].date)) + "</span></div>" +
+    '<div class="si-ends tab"><span>' + qty(pts[0].shares) + "</span><span>" + qty(pts[pts.length - 1].shares) + "</span></div></div>";
 }
 function shortsCardHtml(t) {
   const rec = _shorts[shortsKey(t)];
@@ -2556,7 +2589,7 @@ function shortsCardHtml(t) {
   return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
     '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>Short interest</h5>' +
     '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>" +
-    '<div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div></div>";
+    '<div class="si-body"><div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div>" + shortsTrendHtml(s) + "</div></div>";
 }
 // the same listing, compact, for the News card once it is scoped to a symbol — the card is
 // half the width of the instrument page's, so the figures stack under their labels

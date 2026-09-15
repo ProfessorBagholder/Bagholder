@@ -120,8 +120,10 @@ class ListingTest(unittest.TestCase):
                     {"settlementDate": "2026-08-31", "currentShortPositionQuantity": 56990026, "previousShortPositionQuantity": 54036583, "changePreviousNumber": 2953443, "averageDailyVolumeQuantity": 5864237},
                     "not a row"]
         with mock.patch.object(shorts.market, "_post_json", return_value=answered):
-            self.assertEqual(shorts.us_position("GME"), {"asOf": "2026-08-31", "shares": 56990026.0, "previous": 54036583.0,
-                                                         "change": 2953443.0, "previousOf": "2026-08-14", "averageVolume": 5864237.0})
+            out = shorts.us_position("GME")
+        self.assertEqual({k: out[k] for k in ("asOf", "shares", "previous", "change", "previousOf", "averageVolume")},
+                         {"asOf": "2026-08-31", "shares": 56990026.0, "previous": 54036583.0,
+                          "change": 2953443.0, "previousOf": "2026-08-14", "averageVolume": 5864237.0})
 
     def test_a_symbol_finra_does_not_carry_answers_nothing_rather_than_guessing(self):
         with mock.patch.object(shorts.market, "_post_json", return_value=[]):
@@ -208,3 +210,63 @@ class PayloadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeriesTest(unittest.TestCase):
+    """The run of past reports drawn beside the position. FINRA answers with every
+    settlement at once; Canada publishes a file per reporting date."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        shorts._files.clear()
+
+    def tearDown(self):
+        shorts._files.clear()
+        self.tmp.cleanup()
+
+    def test_every_settlement_finra_answered_with_is_kept_oldest_first(self):
+        answered = [{"settlementDate": "2026-08-31", "currentShortPositionQuantity": 3},
+                    {"settlementDate": "2026-07-31", "currentShortPositionQuantity": 1},
+                    {"settlementDate": "2026-08-14", "currentShortPositionQuantity": 2},
+                    {"settlementDate": "2026-06-30", "currentShortPositionQuantity": None}]
+        with mock.patch.object(shorts.market, "_post_json", return_value=answered):
+            series = shorts.us_position("GME")["series"]
+        self.assertEqual([p["date"] for p in series], ["2026-07-31", "2026-08-14", "2026-08-31"])
+        self.assertEqual([p["shares"] for p in series], [1.0, 2.0, 3.0])
+
+    def test_the_canadian_run_reads_one_file_per_reporting_date(self):
+        grids = {"20260831": [["", "QNC", "TSXV", 300.0, 0.0]],
+                 "20260815": [["", "QNC", "TSXV", 200.0, 0.0]],
+                 "20260731": [["", "QNC", "TSXV", 100.0, 0.0]]}
+        def table(raw):
+            return grids[raw.decode()]
+        def fetch(url, *a, **k):
+            day = url.rsplit("/", 1)[-1].split("_")[0]
+            if day not in grids:
+                raise OSError("no report")
+            return day.encode()
+        with mock.patch.object(shorts.market, "_fetch", side_effect=fetch), \
+             mock.patch.object(shorts.xls, "table", side_effect=table):
+            series = shorts.ca_series("QNC", "TSX-V", "2026-08-31", now=datetime(2026, 9, 15, tzinfo=timezone.utc))
+        self.assertEqual([(p["date"], p["shares"]) for p in series],
+                         [("2026-07-31", 100.0), ("2026-08-15", 200.0), ("2026-08-31", 300.0)])
+
+    def test_a_report_after_the_one_on_show_is_not_drawn(self):
+        with mock.patch.object(shorts.market, "_fetch", side_effect=OSError("none")):
+            self.assertEqual(shorts.ca_series("QNC", "TSX-V", "2026-07-31", now=datetime(2026, 9, 15, tzinfo=timezone.utc)), [])
+
+    def test_a_listing_on_another_venue_is_not_drawn_into_this_ones_run(self):
+        with mock.patch.object(shorts.market, "_fetch", return_value=b"x"), \
+             mock.patch.object(shorts.xls, "table", return_value=[["", "QNC", "CSE", 300.0, 0.0]]):
+            self.assertEqual(shorts.ca_series("QNC", "TSX-V", "2026-08-31", now=datetime(2026, 9, 15, tzinfo=timezone.utc)), [])
+
+    def test_the_canadian_run_is_only_read_when_it_is_asked_for(self):
+        with mock.patch.object(shorts.market, "_fetch", return_value=b"x"), \
+             mock.patch.object(shorts.xls, "table", return_value=CA_GRID), \
+             mock.patch.object(shorts.market, "_get_text", return_value=CA_CSV):
+            quiet = shorts.for_listing("QNC", "TSX-V", "CAD", now=datetime(2026, 9, 15, tzinfo=timezone.utc))
+        self.assertNotIn("series", quiet)
