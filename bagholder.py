@@ -5869,8 +5869,10 @@ def known_filing_symbols(scopes=("held", "watched", "all")):
 def sweep_filings(now=None):
     """While a Disclosures set is on: each chosen ticker whose list is older than
     FILINGS_SWEEP_AGE_MIN is read again, at the sources' own pace, and a filing not
-    stored before is told. A ticker read for the first time is a baseline, told
-    nothing. Returns how many tickers had something new."""
+    stored before is told. Every source is a stream of its own (`notify.fresh_since`): what it held
+    when it was first read is history and is told to nobody, whether that is the ticker's first read,
+    a regulator that has just started covering it, or a list re-keyed under it. Returns how many
+    tickers had something new."""
     scopes, rel_scopes = notify.disclosure_scopes(), notify.release_scopes()
     if not scopes and not rel_scopes:
         return 0
@@ -5880,18 +5882,21 @@ def sweep_filings(now=None):
         sym = inst["symbol"]
         if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
             continue
-        first = not store.filings_fetched_at(sym)
         before = {filing_mark(r) for r in store.filings(sym)}
         wrote = refresh_filings(sym, name=inst.get("name"), exchange=inst.get("exchange"), currency=inst.get("currency"))
-        if first or wrote is None or wrote < 0:
+        if wrote is None or wrote < 0:
             continue
-        after = store.filings(sym)
-        new = [r for r in after if filing_mark(r) not in before]
+        # each source is its own stream: what it held when it was first read is its history, whether
+        # that is the ticker's first read, a regulator that has just started covering it, or a list
+        # re-keyed under it. Only what it files after that is news.
+        by_source = {}
+        for r in store.filings(sym):
+            by_source.setdefault(_s(r.get("source")), []).append(r)
+        new = []
+        for src, rows in by_source.items():
+            new.extend(notify.fresh_since("filings:%s:%s" % (sym, src), rows,
+                                          at=lambda r: _s(r.get("date")), seen=lambda r: filing_mark(r) in before))
         if not new:
-            continue
-        if before and not any(filing_mark(r) in before for r in after):
-            # nothing the list held a moment ago is in it now: a list re-keyed or re-read from
-            # scratch, not thirty filings in a morning; the read is a baseline again
             continue
         # a filed news release is a release, not another filing: it is the Releases kind's to tell, and
         # only where no wire carried it, since the wire told it first and the record is the same release
@@ -6003,17 +6008,20 @@ def _release_key(sym, rows):
     return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(_s(r.get("id")) for r in rows)).encode("utf-8")).hexdigest()[:12])
 
 
-def note_wire_releases(symbol, exchange, rows):
-    """The items a listing's wire has just brought: the press releases among them are told, once."""
+def note_wire_releases(symbol, exchange, rows, new_ids):
+    """What a listing's wire answered with: the press releases newer than any this wire has shown for
+    the listing are told. A wire is a stream like any other, so its back catalogue is never told."""
     scopes = notify.release_scopes()
-    if not scopes:
+    sym = (market.tmx_symbol(symbol) or _s(symbol)).strip().upper()
+    if not scopes or not in_release_scope(sym, scopes):
         return
     rel = [r for r in rows if _s(r.get("kind")) == "release"]
-    sym = (market.tmx_symbol(symbol) or _s(symbol)).strip().upper()
-    if not rel or not in_release_scope(sym, scopes):
+    fresh = notify.fresh_since("news:" + store.news_key(symbol, exchange), rel,
+                               at=lambda r: _s(r.get("publishedAt")), seen=lambda r: _s(r.get("id")) not in new_ids)
+    if not fresh:
         return
-    title, body = release_notice(sym, rel)
-    notify.emit("releases", _release_key(sym, rel), title, body, {"symbol": sym})
+    title, body = release_notice(sym, fresh)
+    notify.emit("releases", _release_key(sym, fresh), title, body, {"symbol": sym})
 
 
 def filings_notice(sym, new):

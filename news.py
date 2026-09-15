@@ -194,26 +194,21 @@ def stale(listings, now=None, minutes=FRESH_MINUTES):
 
 def refresh(listings, ssl_context=None, now=None, on_new=None):
     """Read the wire for every stale listing; each answer replaces that listing's rows. Returns how
-    many answered. `on_new(symbol, exchange, rows)` is handed the items a listing did not have before,
-    for a listing that had been read before: a first read is what the listing already carries, not news."""
+    many answered. `on_new(symbol, exchange, rows, new_ids)` is handed everything the wire answered
+    with and the ids the listing did not have before; what is worth telling about is the notifier's
+    to decide."""
     done = 0
-    fetched = store.news_fetched_at() if on_new else {}
     for symbol, exchange, currency in stale(listings, now=now):
         src, rows = fetch_symbol(symbol, exchange, currency, ssl_context, now)
         if rows is None:
             continue
-        first, before = True, set()
-        if on_new:
-            first = not fetched.get(store.news_key(symbol, exchange))
-            before = set() if first else store.news_ids(symbol, exchange)
+        before = store.news_ids(symbol, exchange) if on_new else set()
         store.replace_news(symbol, exchange, src, rows, now=now)
-        if on_new and not first:
-            fresh = [r for r in rows if r.get("id") not in before]
-            if fresh:
-                try:
-                    on_new(symbol, exchange, fresh)
-                except Exception as e:
-                    sys.stderr.write("bagholder news: %s new items not told: %s\n" % (symbol, str(e) or e.__class__.__name__))
+        if on_new:
+            try:
+                on_new(symbol, exchange, rows, {_s(r.get("id")) for r in rows if _s(r.get("id")) not in before})
+            except Exception as e:
+                sys.stderr.write("bagholder news: %s items not told: %s\n" % (symbol, str(e) or e.__class__.__name__))
         done += 1
     if done:
         store.trim_news(KEEP)
