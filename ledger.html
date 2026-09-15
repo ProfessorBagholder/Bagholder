@@ -224,6 +224,11 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s var(--ease-travel)}
 .sw.on{background:var(--accent)}
 .sw.on::after{transform:translateX(12px)}
+.nt-card{cursor:pointer}
+.nt-card:hover{background:rgba(var(--ink-rgb),var(--hover))}
+.nt-card .od-title{font-size:14px;white-space:normal}
+.nt-card .od-line{white-space:normal}
+.nt-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .tabbtn{background:transparent;border:0;cursor:pointer;font:500 13px Inter,system-ui,sans-serif;padding:11px 0;flex:none;white-space:nowrap;color:var(--ink60)}
 .tabbtn:hover{color:var(--accent-300)}
 .tabbtn.on{color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)}
@@ -494,6 +499,9 @@ const state = {
   confirmOpen: "",
   themeOpen: false,
   notifyOpen: false,
+  notes: [],           // the notification history, newest first, from /api/notifications and the stream
+  notesLoaded: false,
+  notesOpen: false,
   modal: null,
   importReport: null,
   watch: null,
@@ -748,9 +756,9 @@ function pollStatus() {
   api("GET", "/api/status").then((st) => {
     // while the server restarts (an update) answers are not status payloads: keep asking
     if (!st || !st.protocol) { _pollTimer = setTimeout(pollStatus, 1000); return; }
-    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null)]);
+    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
     applyStatus(st);
-    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null)]);
+    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
     if (before !== after) renderHeaderOnly();
     notifyListen();
     const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating;
@@ -810,6 +818,8 @@ function headerHtml() {
     '<span style="font-size:12px;color:var(--ink55)">' + (state.notice ? '<span class="' + (state.noticeKind === "err" ? "status-err" : "") + '">' + esc(state.notice) + "</span>" : syncLine()) + "</span>" +
     '<button class="btn btn-icon btn-secondary" aria-label="Orders" data-act="ordersOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.receipt + '"/></svg>' +
     (state.status.openOrders ? '<span class="od-badge">' + state.status.openOrders + "</span>" : "") + "</button>" +
+    '<button class="btn btn-icon btn-secondary" aria-label="Notifications" data-act="notesOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.bell + '"/></svg>' +
+    (notesUnread() ? '<span class="od-badge">' + notesUnread() + "</span>" : "") + "</button>" +
     '<div style="position:relative" data-pop="filter">' +
     '<button class="btn btn-icon btn-secondary" aria-label="Filters" data-act="openFields"><svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d="M230.6 49.5A15.8 15.8 0 0 0 216 40H40a16 16 0 0 0-12.6 25.9l68.6 81.1v55a16 16 0 0 0 25.6 13.3l32-21.3a16 16 0 0 0 7.4-13.3v-33.7l68.6-81.1a15.8 15.8 0 0 0 1-15.4Z"/></svg></button>' +
     (filtersActive() ? '<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>' : "") +
@@ -869,6 +879,52 @@ function menuHtml() {
     '<div class="sep"></div>' + item("signout", "Disconnect", "disconnect", s.connected || s.email ? { style: "color:var(--neg)" } : { disabled: true }) +
     "</div>";
 }
+// The notification history: every row the server made, newest first, behind the bell in the header; unread
+// ones counted on its badge and marked in the list, read when the panel closes.
+function notesUnread() { return state.notesLoaded ? state.notes.filter((n) => !n.readAt).length : ((state.status.notify && state.status.notify.unread) || 0); }
+function notesPanelHtml() {
+  const card = (n) => '<div class="od-card nt-card" data-act="noteOpen" data-arg=\'' + attr({ id: n.id }) + "'>" +
+    '<div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">' + (n.readAt ? "" : '<span class="nt-dot"></span>') + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(n.title) + "</span></span></div>" +
+    (n.body ? '<div class="od-row2"><span class="od-line">' + esc(n.body) + "</span></div>" : "") +
+    '<div class="od-foot"><span class="od-when">' + esc(orderWhenWord(n.at)) + "</span></div></div>";
+  return '<div id="ntWrap"><div class="tk-scrim" data-act="notesClose"></div><div class="tk" role="dialog" aria-label="Notifications">' +
+    '<div class="tk-hd"><span class="tk-title">Notifications</span><button class="tk-x" aria-label="Close" data-act="notesClose"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button></div>' +
+    '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
+    '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
+}
+function renderNotes() {
+  const old = document.getElementById("ntWrap");
+  if (!state.notesOpen) { if (old) old.remove(); return; }
+  replacePanel("ntWrap", notesPanelHtml());
+}
+function openNotes() { state.notesOpen = true; state.menuOpen = false; state.picker = null; render(); }
+function closeNotes() {
+  // closing is having looked: every row reads read, the badge clears
+  state.notesOpen = false;
+  if (state.notes.some((n) => !n.readAt)) { const now = new Date().toISOString(); state.notes.forEach((n) => { if (!n.readAt) n.readAt = now; }); api("POST", "/api/notifications/read", {}); }
+  render();
+}
+function notesClear() { state.notes = []; api("POST", "/api/notifications/clear", {}); render(); }
+function noteOpen(id) {
+  const n = state.notes.find((x) => x.id === id); if (!n) return;
+  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); }
+  else if (n.kind === "disclosures" && n.extra && n.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === n.extra.symbol); if (p) { closeNotes(); openHolding(p.id); } }
+}
+function notifyLoad() {
+  api("GET", "/api/notifications").then((r) => {
+    if (!r || !r.ok) return;
+    state.notes = r.rows || []; state.notesLoaded = true;
+    if (r.settings) state.status.notify = r.settings;
+    renderHeaderOnly(); renderNotes(); notifyListen();
+  });
+}
+function notifyArrive(r) {
+  if (!r || !r.id || state.notes.some((n) => n.id === r.id)) return;
+  state.notes.unshift(r); if (state.notes.length > 200) state.notes.length = 200;
+  if (state.notesOpen) { r.readAt = new Date().toISOString(); api("POST", "/api/notifications/read", { ids: [r.id] }); }
+  if (!notifyNative() && !r.seenAt && notifyState() === "granted") notifyShow(r);
+  renderHeaderOnly(); renderNotes();
+}
 // Notifications: the server tells, the browser shows. The kinds are the server's settings; whether this
 // browser may show them is its own permission, asked on the first click (browsers ask only on a click).
 const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
@@ -919,14 +975,15 @@ function notifyTest() {
 }
 let _notifyStream = null;
 function notifyListen() {
-  // the stream from the server, opened once this browser may show notifications; the browser reconnects it itself
-  if (_notifyStream || notifyState() !== "granted" || !window.EventSource) return;   // native: the server shows them, the page never does
-  let seen = 0; try { seen = +localStorage.getItem("bh2.notifySeen") || 0; } catch (e) {}
-  _notifyStream = new EventSource("/api/notifications/stream" + (seen ? "?after=" + seen : ""));
-  _notifyStream.onmessage = (e) => { let r = null; try { r = JSON.parse(e.data); } catch (err) {} if (r && r.id) notifyShow(r); };
+  // the stream from the server, opened once the history is loaded, carries every row from then on; the browser reconnects it itself
+  if (_notifyStream || !state.notesLoaded || !window.EventSource) return;
+  const after = state.notes.reduce((m, n) => Math.max(m, n.id || 0), 0);
+  _notifyStream = new EventSource("/api/notifications/stream?after=" + after);
+  _notifyStream.onmessage = (e) => { let r = null; try { r = JSON.parse(e.data); } catch (err) {} if (r && r.id) notifyArrive(r); };
 }
 function notifyShow(r) {
-  try { localStorage.setItem("bh2.notifySeen", String(r.id)); } catch (e) {}
+  // where the page is the channel: the banner, through the browser, once
+  r.seenAt = new Date().toISOString();
   api("POST", "/api/notifications/seen", { ids: [r.id] });
   let n;
   try { n = new Notification(r.title, { body: r.body || "", icon: "favicon.png", tag: "bh-" + r.id }); } catch (e) { return; }
@@ -3505,12 +3562,12 @@ function render() {
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
-  const standing = ["tkWrap", "odWrap", "confirmDlg"].filter((id) => document.getElementById(id));
+  const standing = ["tkWrap", "odWrap", "ntWrap", "confirmDlg"].filter((id) => document.getElementById(id));
   const leavingSkeleton = document.getElementById("pageSkel");
-  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
+  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
   if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
-  document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen));   // the wheel over a panel must not move the page behind it
+  document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);
   // the filter popover's search box keeps focus across a redraw (a toggled value reloads the model)
   if (focusId === "valueQuery" || focusId === "searchInput" || focusId === "newsQuery" || focusId === "tileQuery" || focusId === "watchQuery") { const vq = document.getElementById(focusId); if (vq) { vq.focus(); vq.setSelectionRange(vq.value.length, vq.value.length); } }
@@ -3825,6 +3882,10 @@ function act(name, arg, ev) {
     case "cancelBracketNow": cancelBracketNow(arg.id); break;
     case "ordersOpen": openOrders(); break;
     case "ordersClose": closeOrders(); break;
+    case "notesOpen": openNotes(); break;
+    case "notesClose": closeNotes(); break;
+    case "notesClear": notesClear(); break;
+    case "noteOpen": noteOpen(arg.id); break;
     case "ordersTab": delete _keptScroll.orders; state.ordersTab = arg.tab; state.orderEdit = null; state.bracketEdit = null; renderOrders(); break;
     case "orderEdit": state.orderEdit = { id: arg.id, error: "" }; state.bracketEdit = null; renderOrders(); { const q = document.getElementById("od-qty"); if (q) q.focus(); } break;
     case "orderEditCancel": state.orderEdit = null; renderOrders(); break;
@@ -3927,6 +3988,9 @@ function bind() {
       e.preventDefault();
       if (state.ordersOpen) closeOrders(); else openOrders();
       return;
+    }
+    if (state.notesOpen && !state.confirmOpen && !state.picker && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
+      if (e.key === "Escape") { e.preventDefault(); closeNotes(); return; }
     }
     if (state.ordersOpen && !state.confirmOpen && !state.picker && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
       // the orders panel has the keyboard (⌘K and an open filter popover pass through): Esc closes an
@@ -4098,6 +4162,7 @@ function boot() {
   state.sel = h.sel;
   bind();
   render();
+  notifyLoad();
   loadModel();
   pollStatus();
 }

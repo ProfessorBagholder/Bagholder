@@ -6872,7 +6872,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate():
                 self._send(403, {"ok": False})
                 return
-            self._send(200, {"ok": True, "settings": notify.status(), "kinds": list(notify.KINDS), "rows": store.list_notifications(limit=50)})
+            self._send(200, {"ok": True, "settings": notify.status(), "kinds": list(notify.KINDS), "rows": store.list_notifications(limit=50, newest=True), "unread": store.unread_notifications()})
             return
         if path == "/api/notifications/stream":
             if not self._gate():
@@ -7087,6 +7087,15 @@ class Handler(BaseHTTPRequestHandler):
             self._read_json()
             row = notify.test_notification()
             self._send(200, {"ok": bool(row), "id": row["id"] if row else 0})
+            return
+        if path == "/api/notifications/read":
+            body = self._read_json()
+            ids = (body or {}).get("ids") if isinstance(body, dict) else None
+            self._send(200, {"ok": True, "read": store.mark_notifications_read(ids if isinstance(ids, list) else None)})
+            return
+        if path == "/api/notifications/clear":
+            self._read_json()
+            self._send(200, {"ok": True, "cleared": store.clear_notifications()})
             return
         if path == "/api/notifications/seen":
             body = self._read_json()

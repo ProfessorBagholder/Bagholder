@@ -11,10 +11,10 @@ as the system's own notification, under Bagholder's name and icon: on a Mac thro
 a small app bundle it builds for itself in the home folder (an applet compiled with
 the system's own `osacompile`, so the banner is Bagholder's, not a browser's or Script
 Editor's), on Windows through a toast registered under Bagholder's name, on Linux
-through the desktop's notification service. Where it has none (the container), every
-open page listens on a stream and shows the row through the browser's Notification
-API instead. Which kinds are told is a setting on the server, so every browser that
-opens the app agrees.
+through the desktop's notification service. Where it has none (the container), the
+page shows the row through the browser's Notification API instead. Every open page
+keeps the history either way, fed by a stream of every row as it is made. Which kinds
+are told is a setting on the server, so every browser that opens the app agrees.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import store
@@ -37,7 +37,6 @@ KINDS = ("fills", "problems", "connection", "updates", "disclosures")
 DISCLOSURE_SCOPES = ("disclosuresHeld", "disclosuresWatched", "disclosuresAll")
 SETTING_KEYS = ("fills", "problems", "connection", "updates") + DISCLOSURE_SCOPES
 SETTINGS_KEY = "notify_settings"
-RECENT_MINUTES = 10      # a page that connects is told what happened this recently, never a backlog
 HEARTBEAT_SEC = 15.0     # a comment on the stream this often keeps the connection through proxies and sleeps
 MODE_ENV = "BAGHOLDER_NOTIFY"   # "browser": never post from this process (a scratch copy beside the real one), the page shows them
 APP_NAME = "Bagholder"
@@ -99,6 +98,7 @@ def status():
     ("mac", "windows", "linux") or is empty where the page must show them."""
     out = settings()
     out["native"] = native_channel()
+    out["unread"] = store.unread_notifications()
     return out
 
 
@@ -139,9 +139,9 @@ def _post(kind, key, title, body, extra=None):
         return None
     if channel:
         _enqueue(row, channel)
-    else:
-        with _cond:
-            _cond.notify_all()
+    # every page learns of the row for its history, whichever channel shows the banner
+    with _cond:
+        _cond.notify_all()
     return row
 
 
@@ -351,17 +351,17 @@ def _linux_deliver(title, body):
 # --- the page's channel, where the server has none ---
 
 def stream(after=None, alive=lambda: True, heartbeat=None):
-    """text/event-stream chunks: the rows of the last few minutes not yet seen (and
-    after the given id when the page brings one), then each new row as it is made,
-    with a comment between them every `heartbeat` seconds so the connection is kept.
-    Ends when `alive()` says no, or when the reader goes."""
+    """text/event-stream chunks: every row made after the id the page brings (or
+    after the stream opens, when it brings none), each once as it is made, with a
+    comment between them every `heartbeat` seconds so the connection is kept. The
+    page keeps the history from these; the banner is the channel's business. Ends
+    when `alive()` says no, or when the reader goes."""
     heartbeat = HEARTBEAT_SEC if heartbeat is None else heartbeat
-    since = (datetime.now(timezone.utc) - timedelta(minutes=RECENT_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    last = int(after or 0)
+    last = int(after) if after is not None else store.latest_notification_id()
     yield ": bagholder\n\n"
     while alive():
         with _cond:
-            rows = store.list_notifications(after_id=last, since=since, unseen=True)
+            rows = store.list_notifications(after_id=last)
             if not rows:
                 _cond.wait(heartbeat)
         if not rows:

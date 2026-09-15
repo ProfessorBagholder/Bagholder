@@ -47,7 +47,7 @@ class NotifyTest(unittest.TestCase):
         out = notify.set_settings({"fills": True, "bogus": True, "updates": "yes"})
         self.assertEqual(out, dict(OFF, fills=True), "unknown keys and non-booleans are ignored")
         self.assertEqual(notify.settings(), out)
-        self.assertEqual(bagholder.status_payload()["notify"], dict(out, native=""), "the status payload carries the kinds and the channel; told to stand aside, the page is the channel")
+        self.assertEqual(bagholder.status_payload()["notify"], dict(out, native="", unread=0), "the status payload carries the kinds, the channel and the unread count; told to stand aside, the page is the channel")
         with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": ""}), mock.patch.object(sys, "platform", "darwin"), mock.patch.object(notify.shutil, "which", lambda n: "/usr/bin/" + n):
             self.assertEqual(notify.native_channel(), "mac")
         with mock.patch.dict(os.environ, {"BAGHOLDER_NOTIFY": ""}), mock.patch.object(sys, "platform", "win32"), mock.patch.object(notify.shutil, "which", lambda n: "C:/ps.exe" if n == "powershell" else None):
@@ -61,7 +61,7 @@ class NotifyTest(unittest.TestCase):
         self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75"))
         notify.set_settings({"fills": True})
         row = notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75")
-        self.assertEqual((row["kind"], row["title"], row["body"], row["seenAt"]), ("fills", "Order filled · QNC", "Bought 5 at 1.75", ""))
+        self.assertEqual((row["kind"], row["title"], row["body"], row["seenAt"], row["readAt"]), ("fills", "Order filled · QNC", "Bought 5 at 1.75", "", ""))
         self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "again"), "the same event is never told twice")
         self.assertIsNone(notify.emit("bogus", "x", "t", "b"), "an unknown kind is nothing")
         self.assertIsNone(notify.emit("disclosures", "f1", "t", "b"), "no set of tickers chosen: disclosures are not told")
@@ -80,15 +80,25 @@ class NotifyTest(unittest.TestCase):
         with mock.patch.object(store, "NOTIFICATIONS_KEPT", 2):
             notify.emit("fills", "k9", "t", "b")
         self.assertEqual(len(store.list_notifications()), 2, "the newest are kept")
+        self.assertEqual([r["key"] for r in store.list_notifications(newest=True)], ["k9", "k2"], "the history reads newest first")
+        # the history: unread until looked at, read when the panel closes, cleared on Clear
+        self.assertEqual(store.unread_notifications(), 2)
+        self.assertEqual(store.mark_notifications_read([ids[2], "x"]), 1)
+        self.assertEqual(store.unread_notifications(), 1)
+        self.assertEqual(store.mark_notifications_read(), 1, "no ids: every unread one")
+        self.assertEqual((store.unread_notifications(), store.mark_notifications_read()), (0, 0))
+        self.assertTrue(all(r["readAt"] for r in store.list_notifications()))
+        self.assertEqual(store.clear_notifications(), 2)
+        self.assertEqual((store.list_notifications(), store.latest_notification_id()), ([], 0))
 
-    def test_the_stream_sends_recent_unseen_rows_then_new_ones_with_pings_between(self):
+    def test_the_stream_sends_every_row_after_the_id_the_page_brings_with_pings_between(self):
         notify.set_settings({"fills": True})
         old = notify.emit("fills", "old", "Old", "b")
         store.mark_notifications_seen([old["id"]])
         first = notify.emit("fills", "first", "First", "b")
         ticks = iter([True, True, True, False])
         with mock.patch.object(notify, "HEARTBEAT_SEC", 0.05):
-            gen = notify.stream(alive=lambda: next(ticks))
+            gen = notify.stream(after=old["id"], alive=lambda: next(ticks))
             hello, row1, ping = next(gen), next(gen), next(gen)
             second = notify.emit("fills", "second", "Second", "b")
             row2 = next(gen)
@@ -97,10 +107,12 @@ class NotifyTest(unittest.TestCase):
         self.assertTrue(row1.startswith("id: %d\ndata: " % first["id"]) and '"title": "First"' in row1, row1)
         self.assertEqual(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection")
         self.assertTrue(row2.startswith("id: %d\ndata: " % second["id"]), row2)
-        with mock.patch.object(notify, "HEARTBEAT_SEC", 0.05):
-            gen = notify.stream(after=first["id"])
-            next(gen)
-            self.assertTrue(next(gen).startswith("id: %d\n" % second["id"]), "a page that brings the last id it showed is not told that one again")
+        with mock.patch.object(notify, "HEARTBEAT_SEC", 0.05), mock.patch.object(notify, "native_channel", return_value="mac"), mock.patch.object(notify, "deliver", return_value=True):
+            gen = notify.stream()
+            self.assertEqual((next(gen), next(gen)), (": bagholder\n\n", ": ping\n\n"), "no id: only what is made after the stream opens")
+            third = notify.emit("fills", "third", "Third", "b")
+            chunk = next(gen)
+        self.assertTrue(chunk.startswith("id: %d\n" % third["id"]) and '"seenAt": "20' in chunk, "a row the server posts itself still reaches the history, already seen")
 
     def test_a_fill_read_back_is_told_by_its_role(self):
         self.assertEqual(bagholder.order_notice(ORDER, {"status": "filled", "filledQty": 5.0, "avgFill": 1.75}), ("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"))
@@ -213,7 +225,15 @@ class NotifyTest(unittest.TestCase):
                 self.assertEqual(json.loads(c.getresponse().read())["seen"], 1)
                 c.request("GET", "/api/notifications")
                 out = json.loads(c.getresponse().read())
-                self.assertEqual((out["settings"]["fills"], out["rows"][0]["seenAt"] != ""), (True, True))
+                self.assertEqual((out["settings"]["fills"], out["rows"][0]["seenAt"] != "", out["unread"]), (True, True, 1))
+                c.request("POST", "/api/notifications/read", body="{}", headers=write)
+                self.assertEqual(json.loads(c.getresponse().read())["read"], 1)
+                c.request("GET", "/api/notifications")
+                self.assertEqual(json.loads(c.getresponse().read())["unread"], 0)
+                c.request("POST", "/api/notifications/clear", body="{}", headers=write)
+                self.assertEqual(json.loads(c.getresponse().read())["cleared"], 1)
+                c.request("GET", "/api/notifications")
+                self.assertEqual(json.loads(c.getresponse().read())["rows"], [])
                 c.request("POST", "/api/notifications/settings", body="{}", headers={"Content-Type": "application/json"})
                 self.assertEqual(c.getresponse().status, 403, "a write without the page's own header is refused")
         finally:
