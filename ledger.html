@@ -3067,8 +3067,20 @@ function newsWhen(iso) {
   return MON[d.getMonth()] + " " + d.getDate() + (d.getFullYear() !== now.getFullYear() ? " " + d.getFullYear() : "");
 }
 const NEWS_COLS = [{ key: "when", label: "When" }, { key: "news", label: "News" }, { key: "symbol", label: "Symbol", align: "right" }, { key: "change", label: "Change", align: "right" }];
+// a listing the book neither holds nor watches has no quote in the model, so the card's chip reads one
+// the way the watchlist's matches do, and the Change column fills in when it lands
+function chipChange(only) {
+  if (!only) return null;
+  const k = sugKey(only);
+  const held = ((state.model || {}).positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol);
+  const watched = (((state.model || {}).markets || {}).watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol);
+  if (held || watched) return null;
+  if (!_sugQuotes[k] && !_sugPending[k]) sugQuoteSchedule([only]);
+  return _sugQuotes[k] ? _sugQuotes[k].percentChange : null;
+}
 function newsCardHtml(items) {
   const scope = state.newsScope, only = state.newsSymbol, q = state.newsQuery.trim().toUpperCase();
+  const chipPct = chipChange(only);
   let s = state.sort.news;
   const isOnly = (t) => only && bareSymbol(t.symbol) === only.symbol && String(t.exchange || "").toUpperCase() === only.exchange;
   // the box: a ticker first (a listing's symbol starting with the text); only when no listing matches, a word of the
@@ -3093,7 +3105,8 @@ function newsCardHtml(items) {
   if (bare && s.key !== "when" && s.key !== "news") s = { key: "when", dir: "desc" };
   rows = sortRows(rows, s.key, s.dir, (n, k) => k === "when" ? n.publishedAt : k === "news" ? n.headline.toLowerCase() : k === "symbol" ? (first(n).symbol ? bareSymbol(first(n).symbol).toLowerCase() : null) : first(n).percentChange);
   const sym = (t) => '<button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || "").toUpperCase() }) + "'>" + esc(bareSymbol(t.symbol)) + "</button>";
-  const chg = (t) => '<span class="tab" style="font-size:13px;color:' + (t.percentChange == null ? "var(--ink55)" : t.percentChange >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(t.percentChange) + "</span>";
+  const chg = (t) => { const v = t.percentChange == null && only && bareSymbol(t.symbol).toUpperCase() === only.symbol ? chipPct : t.percentChange;
+    return '<span class="tab" style="font-size:13px;color:' + (v == null ? "var(--ink55)" : v >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(v) + "</span>"; };
   // one line per row: the headline cut with an ellipsis; a story read for several listings shows the first of them
   const row = (n) => '<div class="nw-row' + (bare ? " nw-bare" : "") + '" data-act="' + (n.filed ? "discOpen" : "newsOpen") + '" data-arg=\'' + attr(n.filed || { url: n.url }) + "'>" +
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(newsWhen(n.publishedAt)) + "</div>" +
@@ -3308,7 +3321,7 @@ function sugQuoteSchedule(rows) {
     _sugPending[k] = true;
     api("GET", "/api/symbols/quote?symbol=" + encodeURIComponent(w.symbol) + "&exchange=" + encodeURIComponent(w.exchange || "") + "&currency=" + encodeURIComponent(w.currency || "")).then((r) => {
       delete _sugPending[k];
-      if (r && r.ok && r.price != null) { _sugQuotes[k] = { last: r.price, percentChange: r.percentChange }; if (state.watchAdding) render(); }
+      if (r && r.ok && r.price != null) { _sugQuotes[k] = { last: r.price, percentChange: r.percentChange }; if (state.watchAdding || state.newsSymbol) render(); }
     });
   });
 }
