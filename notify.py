@@ -126,6 +126,47 @@ def native_channel():
     return ""
 
 
+WATERMARK = "notify_seen:"
+
+
+def fresh_since(stream, items, at, ident=None, seen=None):
+    """What a stream has that it has not shown before, and nothing it held when it was first met.
+
+    Every feed the app tells about is a stream of dated things — a source's filings for a ticker, a
+    listing's wire items. Each carries a mark in the store: the newest moment it has shown, and the
+    items it showed at that moment. A stream met for the first time shows nothing at all, whatever
+    it holds, and its mark is set from it; after that it shows what is newer than the mark, and what
+    shares the mark's moment without having been shown (two documents filed in the same minute).
+
+    Because the mark is kept and is a time rather than a list of ids, a restart, a database rebuilt
+    from scratch, a source that begins covering a ticker it never covered, an id scheme that changes
+    under a list, and a back catalogue delivered in one read are all the same thing to it: history,
+    told to nobody. `at(item)` is the item's time as a sortable string, `ident(item)` its id, and
+    `seen(item)` may say an item is known to the caller by other means.
+    """
+    key = WATERMARK + str(stream)
+    raw = store.get_meta(key)
+    mark, _, shown_raw = raw.partition("|")
+    shown = {x for x in shown_raw.split(",") if x}
+    ident = ident or (lambda i: str((i or {}).get("id", "") if isinstance(i, dict) else i))
+    stamped = [(str(at(i) or ""), str(ident(i)), i) for i in items]
+    newest = max([when for when, _, _ in stamped] or [""])
+
+    def remember(top):
+        at_top = {ide for when, ide, _ in stamped if when == top}
+        store.set_meta(key, top + "|" + ",".join(sorted(at_top | (shown if top == mark else set()))))
+
+    if not raw:
+        if newest:
+            remember(newest)
+        return []
+    out = [i for when, ide, i in stamped
+           if (when > mark or (when == mark and ide not in shown)) and not (seen and seen(i))]
+    if out or newest > mark:
+        remember(max(newest, mark))
+    return out
+
+
 def emit(kind, key, title, body, extra=None):
     """One notification, if its kind is on and this key has not been told before.
     Returns the row, or None."""

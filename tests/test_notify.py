@@ -427,14 +427,18 @@ class NotifyTest(unittest.TestCase):
     def test_a_release_outside_the_chosen_sets_is_not_told(self):
         notify.set_settings({"releasesWatched": True})
         base = {"today": "2026-09-15", "positions": [{"symbol": "QNC", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        old = {"id": "tmx:8", "headline": "older", "kind": "release", "publishedAt": "2026-09-14T13:00:00Z"}
+        new = {"id": "tmx:9", "headline": "h", "kind": "release", "publishedAt": "2026-09-15T13:00:00Z"}
         with mock.patch.object(model, "base_model", return_value=base), mock.patch.object(store, "list_watchlist", return_value=[]):
             self.assertFalse(bagholder.in_release_scope("QNC"), "held, while only the watchlist is chosen")
-            bagholder.note_wire_releases("QNC", "TSX-V", [{"id": "tmx:9", "headline": "h", "kind": "release", "publishedAt": "2026-09-15T13:00:00Z"}])
+            bagholder.note_wire_releases("QNC", "TSX-V", [old], {"tmx:8"})
         self.assertEqual(store.list_notifications(), [])
         notify.set_settings({"releasesHeld": True})
         with mock.patch.object(model, "base_model", return_value=base):
             self.assertTrue(bagholder.in_release_scope("QNC"))
-            bagholder.note_wire_releases("QNC", "TSX-V", [{"id": "tmx:9", "headline": "h", "kind": "release", "publishedAt": "2026-09-15T13:00:00Z"}])
+            bagholder.note_wire_releases("QNC", "TSX-V", [old], {"tmx:8"})          # the wire met for the first time: its history
+            self.assertEqual(store.list_notifications(), [])
+            bagholder.note_wire_releases("QNC", "TSX-V", [old, new], {"tmx:9"})     # what it carries after that
         self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · QNC"])
 
     def test_a_filed_release_is_told_only_where_no_wire_carried_one(self):
@@ -457,6 +461,53 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.sweep_filings(now=later(62)), 0)
         self.assertEqual([(r["kind"], r["title"]) for r in told], [("releases", "Press release · BIGG")],
                          "a ticker no wire carries is told from the record, under Releases and not Disclosures")
+
+
+    def test_a_stream_met_for_the_first_time_shows_nothing_and_never_shows_its_past(self):
+        """The one rule every feed is told through: what a stream held when it was met is history."""
+        at = lambda i: i["at"]
+        held = [{"id": "a", "at": "2026-05-01"}, {"id": "b", "at": "2026-06-01"}]
+        self.assertEqual(notify.fresh_since("s1", held, at), [], "met for the first time: nothing, whatever it holds")
+        self.assertEqual(store.get_meta("notify_seen:s1"), "2026-06-01|b", "and the mark is set from it, with what stood at that moment")
+        self.assertEqual(notify.fresh_since("s1", held, at), [], "the same again: still nothing")
+        later = held + [{"id": "c", "at": "2026-07-01"}]
+        self.assertEqual([i["id"] for i in notify.fresh_since("s1", later, at)], ["c"], "what comes after the mark")
+        self.assertEqual(notify.fresh_since("s1", later, at), [], "and never again, without the caller having to remember")
+        # a sibling filed at the same moment as the newest is not lost; a backfill dated before the mark is not told
+        both = later + [{"id": "d", "at": "2026-07-01"}, {"id": "old", "at": "2026-02-01"}]
+        self.assertEqual([i["id"] for i in notify.fresh_since("s1", both, at)], ["d"])
+        self.assertEqual(notify.fresh_since("s1", both, at), [])
+        # every stream carries its own mark, and it is kept in the store, so a restart does not replay one
+        self.assertEqual(notify.fresh_since("s2", held, at), [])
+        self.assertEqual(sorted(k for k in ("notify_seen:s1", "notify_seen:s2") if store.get_meta(k)), ["notify_seen:s1", "notify_seen:s2"])
+
+    def test_a_source_read_for_the_first_time_brings_history_not_news(self):
+        """QNC had SEC rows alone; SEDAR+ matched the issuer for the first time and brought thirty
+        documents going back months. A source's own history is not news, whatever the ticker's is."""
+        notify.set_settings({"disclosuresWatched": True})
+        watched = [{"symbol": "QNC", "exchange": "TSX-V", "name": "Quantum eMotion", "currency": "CAD"}]
+        sec = [{"id": "sec:1", "source": "SEC", "type": "6-K", "title": "a", "date": "2026-08-14"}]
+        sedar = [{"id": "sedar:%d" % i, "source": "SEDAR+", "type": "Other Correspondence", "title": "t%d" % i, "date": "2026-0%d-14T10:00" % (5 + i)} for i in range(3)]
+        holds = {"SEC": list(sec), "SEDAR+": []}
+        def fake_refresh(sym, name=None, exchange=None, currency=None):
+            for src, rows in holds.items():
+                store.replace_filings(sym, src, rows)
+            store.mark_filings_fetched(sym)
+            return sum(len(r) for r in holds.values())
+        later = lambda m: datetime.now(timezone.utc) + timedelta(minutes=m)
+        with mock.patch.object(model, "base_model", return_value={"today": "2026-09-15", "positions": [], "trades": []}), \
+             mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]), \
+             mock.patch.object(bagholder, "refresh_filings", side_effect=fake_refresh):
+            self.assertEqual(bagholder.sweep_filings(), 0, "the ticker's first read is the baseline")
+            holds["SEDAR+"] = list(sedar)          # a second regulator matches for the first time
+            self.assertEqual(bagholder.sweep_filings(now=later(31)), 0, "its back catalogue is history, not news")
+            self.assertEqual(store.list_notifications(), [])
+            holds["SEDAR+"] = sedar + [{"id": "sedar:9", "source": "SEDAR+", "type": "Material change report", "title": "new", "date": "2026-09-15T09:00"}]
+            self.assertEqual(bagholder.sweep_filings(now=later(62)), 1, "what it files after that is news")
+            holds["SEC"] = sec + [{"id": "sec:0", "source": "SEC", "type": "6-K", "title": "old", "date": "2026-02-01"}]
+            self.assertEqual(bagholder.sweep_filings(now=later(93)), 0, "a filing older than what that source already had is not news")
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()],
+                         [("New disclosure · QNC", "Material change report · SEDAR+")])
 
 
 if __name__ == "__main__":
