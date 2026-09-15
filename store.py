@@ -1707,6 +1707,21 @@ def benchmark_prices(symbol=BENCHMARK_SYMBOL):
             conn.close()
 
 
+def benchmark_days(symbol, start, end):
+    """How many days that index actually traded between two dates, inclusive — the market's
+    own calendar, so a statutory holiday is not counted as a day of trading."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM benchmark_prices WHERE symbol = ? AND date >= ? AND date <= ?",
+                (symbol, _s(start)[:10], _s(end)[:10]),
+            ).fetchone()["n"]
+        finally:
+            conn.close()
+
+
 def benchmark_last_date(symbol=BENCHMARK_SYMBOL):
     with _lock:
         conn = _connect()
@@ -3121,8 +3136,11 @@ def set_filing_enrichment(symbol, doc_id, subject=None, summary=None, version=No
 
 
 def replace_filings(symbol, source, items, now=None):
-    """One source's disclosures for a symbol, in place of what that source had.
-    Other sources' rows are untouched. Returns how many were written."""
+    """One source's disclosures for a symbol, in place of what that source had. Other
+    sources' rows are untouched, and so is what has been read from the documents: a row the
+    source still lists keeps its subject and summary. The list is refreshed far more often
+    than a filed document changes, and throwing the reading away with it meant every
+    document was read again from nothing on each refresh."""
     sym = filing_key(symbol)
     src = _s(source)
     when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -3138,10 +3156,14 @@ def replace_filings(symbol, source, items, now=None):
         conn = _connect()
         try:
             _ready(conn)
+            read = {r["id"]: (r["subject"], r["summary"], r["enriched_at"], r["enrich_version"])
+                    for r in conn.execute("SELECT id, subject, summary, enriched_at, enrich_version FROM filings WHERE symbol = ? AND source = ?", (sym, src))}
             conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", (sym, src))
             conn.executemany(
-                "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", clean)
+                "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, "
+                "subject, summary, enriched_at, enrich_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [row + read.get(row[1], ("", "", None, None)) for row in clean])
             conn.commit()
             return len(clean)
         finally:

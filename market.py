@@ -134,14 +134,16 @@ def _today():
 # source health: every request's outcome, per source, so the page can say why
 # a chart is empty and the menu can show what each source last answered
 # --------------------------------------------------------------------------
-SOURCE_LABELS = {"tmx": "TMX Money", "yahoo": "Yahoo Finance", "coinbase": "Coinbase", "cboe": "Cboe", "boc": "Bank of Canada", "fred": "FRED", "stooq": "Stooq"}
+SOURCE_LABELS = {"tmx": "TMX Money", "yahoo": "Yahoo Finance", "coinbase": "Coinbase", "cboe": "Cboe", "boc": "Bank of Canada", "fred": "FRED", "stooq": "Stooq",
+                 "finra": "FINRA", "ciro": "CIRO"}
 _health = {}
 _health_lock = threading.Lock()
 
 
 def source_of_url(url):
     host = urlparse(str(url or "")).netloc.lower()
-    for key, needle in (("tmx", "tmx.com"), ("yahoo", "yahoo.com"), ("coinbase", "coinbase.com"), ("cboe", "cboe.com"), ("boc", "bankofcanada.ca"), ("fred", "stlouisfed.org"), ("stooq", "stooq.com")):
+    for key, needle in (("tmx", "tmx.com"), ("yahoo", "yahoo.com"), ("coinbase", "coinbase.com"), ("cboe", "cboe.com"), ("boc", "bankofcanada.ca"), ("fred", "stlouisfed.org"),
+                        ("stooq", "stooq.com"), ("finra", "finra.org"), ("ciro", "ciro.ca")):
         if needle in host:
             return key
     return host or "other"

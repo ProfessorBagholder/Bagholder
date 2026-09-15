@@ -47,6 +47,7 @@ import enrich
 import notify
 import market
 import news
+import shorts
 import sedar
 import universes
 import model
@@ -690,7 +691,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.37.6"
+APP_VERSION = "1.38.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -721,8 +722,8 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.8"
-ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
+PROTOCOL = "2026-09-15.1"
+ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -5918,6 +5919,23 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+def shorts_payload(symbol, exchange=None, currency=None, trend=False):
+    """One listing's short selling, read now. A market where no one publishes it answers
+    `covered: false` rather than an empty set of figures, so the page draws nothing at all
+    for a coin or an index instead of a card of dashes."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    if not ex:
+        _, ex, held = _instrument_meta(sym)
+        ccy = ccy or held
+    rec = shorts.for_listing(sym, ex, ccy, _ssl_context(), trend=trend)
+    if not rec:
+        return {"ok": True, "covered": False}
+    return {"ok": True, "covered": True, "shorts": rec}
+
+
 def news_symbol_payload(symbol, exchange, currency):
     """One listing's wire read now, for the News card's search: a ticker neither held nor
     watched has no rows until asked for. The rows are stored under the listing (tagged as
@@ -6198,10 +6216,11 @@ def filings_enrich(symbol, doc_id):
     model = enrich.summary_available()
     fresh = (row.get("enrichVersion") or 0) >= ENRICH_VERSION
     attempted = bool(row.get("enrichedAt")) and fresh
-    # Already read by the current logic, and nothing further to get (we have the
-    # summary, or no model to make one): return the cache without re-reading. A row
-    # read by older logic (no title, weaker summary) is re-read once.
-    if attempted and (summary or not model):
+    # Already read by the current logic and there is nothing further to get: the row has
+    # both halves, or no model is up to make the missing one. A row holding only one of
+    # them while a model is up is read again — the title and the sentence come from the
+    # same read but not always in the same pass — as is a row read by older logic.
+    if attempted and ((subject and summary) or not model):
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if not disclosures.available():
@@ -6223,15 +6242,25 @@ def filings_enrich(symbol, doc_id):
         return {"ok": False, "error": str(e)}
     if not data:
         return {"ok": False, "error": "the document could not be read"}
+    if not model:
+        # the document is in hand; the first read of a session is the one that starts the
+        # model, so wait the few seconds it needs rather than spending this read and coming
+        # back for the same document later. A model still downloading is not waited for.
+        model = enrich.wait_for_summary()
     info = enrich.enrich_document(row.get("source", ""), data, ct)
     new_subject = info.get("subject") or ""
     got_summary = info.get("summary") or ""
     if model:
-        # a complete read under the current logic: it replaces both (an empty result
-        # clears a stale junk title or non-summary), and finalizes the row at this
-        # version so it is not re-read again.
-        store.set_filing_enrichment(sym, doc_id, subject=new_subject, summary=got_summary, version=ENRICH_VERSION)
-        subject, summary = new_subject, got_summary
+        if fresh:
+            # reading again a row this logic already wrote, to fill the half it lacks: what
+            # comes back fills what is missing and never empties what is there, since an
+            # empty result now means this read found nothing, not that the line was wrong
+            subject, summary = (new_subject or subject), (got_summary or summary)
+        else:
+            # the first read under the current logic replaces both, so an empty result
+            # clears a stale junk title or a non-summary left by an older version
+            subject, summary = new_subject, got_summary
+        store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary, version=ENRICH_VERSION)
     else:
         # the model is not up yet: keep the document's own title if it has one (a PDF's
         # metadata), do not finalize the version, so the row is re-read once it is up.
@@ -6303,6 +6332,9 @@ def status_payload():
             "syncStep": _state.get("syncStep") or "",
             "error": _state["error"] or "",
             "dataVersion": store.data_version() + "|" + model.today_local(),
+            # whether a summary could be made right now, read without starting anything: a row
+            # that had no model to ask waits for this rather than counting the read against itself
+            "summaryReady": enrich.summary_status() == "ready",
             "protocol": PROTOCOL,
             "startedAt": STARTED_AT,
             "version": APP_VERSION,
@@ -6991,6 +7023,14 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/shorts":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, shorts_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency"),
+                                           trend=(_query_param(query, "trend") or "") in ("1", "true", "yes")))
             return
         if path == "/api/news/symbol":
             if not self._gate():

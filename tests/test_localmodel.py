@@ -7,6 +7,7 @@ import hashlib
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import localmodel
@@ -109,3 +110,36 @@ class ChatTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitReadyTest(unittest.TestCase):
+    """Asking for a model is what starts one, so the first caller of a session would always
+    get nothing. It waits for a model that is coming up — never for a download."""
+
+    def wait(self, seconds, available, status):
+        with mock.patch.object(localmodel, "endpoint", return_value=""), \
+             mock.patch.object(localmodel, "available", side_effect=available), \
+             mock.patch.object(localmodel, "status", side_effect=status), \
+             mock.patch.object(localmodel.time, "sleep", lambda s: None):
+            return localmodel.wait_ready(seconds)
+
+    def test_it_waits_for_a_model_that_is_starting(self):
+        tries = iter([False, False, True, True])
+        self.assertTrue(self.wait(30, lambda: next(tries), lambda: "starting"))
+
+    def test_it_waits_while_one_is_being_detected(self):
+        tries = iter([False, True, True])
+        self.assertTrue(self.wait(30, lambda: next(tries), lambda: "detecting"))
+
+    def test_it_does_not_wait_for_a_download(self):
+        self.assertFalse(self.wait(30, lambda: False, lambda: "downloading"))
+
+    def test_it_does_not_wait_when_there_is_nothing_coming(self):
+        for phase in ("off", "failed"):
+            self.assertFalse(self.wait(30, lambda: False, lambda p=phase: p), phase)
+
+    def test_a_model_already_up_is_not_waited_for_at_all(self):
+        self.assertTrue(self.wait(30, lambda: True, lambda: "ready"))
+
+    def test_no_time_to_wait_means_no_wait(self):
+        self.assertFalse(self.wait(0, lambda: False, lambda: "starting"))

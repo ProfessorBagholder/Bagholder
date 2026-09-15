@@ -4,6 +4,7 @@ subprocess success is required; the pieces are exercised in isolation."""
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import enrich
 import pdftext
@@ -119,3 +120,45 @@ class SummaryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SentenceTest(unittest.TestCase):
+    """Where a summary ends. A filing's summary opens by naming the issuer, and a company's
+    name ends in a full stop far more often than a sentence does."""
+
+    def test_a_company_suffix_does_not_end_the_sentence(self):
+        for opening in ("Quantum eMotion Corp.", "Aegis Critical Energy Defence Corp.", "Shopify Inc.",
+                        "High Tide Ltd.", "Brookfield Co.", "Barrick PLC"):
+            line = opening + " announces a commercial order for seven units in the United States."
+            self.assertEqual(enrich.first_sentence(line), line, opening)
+
+    def test_an_initial_or_an_abbreviation_does_not_end_it_either(self):
+        for line in ("U.S. regulators approved the base shelf prospectus.",
+                     "Dr. Chen was appointed chief scientist of the company.",
+                     "No. 4 of the schedule lists the securities offered.",
+                     "J. Smith resigned from the board of directors."):
+            self.assertEqual(enrich.first_sentence(line), line, line)
+
+    def test_a_real_second_sentence_is_dropped(self):
+        self.assertEqual(enrich.first_sentence("The company files Q1 statements. It also names a director."),
+                         "The company files Q1 statements.")
+        self.assertEqual(enrich.first_sentence("Is the prospectus final? The company says yes."),
+                         "Is the prospectus final?")
+
+    def test_a_stop_followed_by_more_of_the_same_sentence_is_not_an_ending(self):
+        line = "The filing lists exhibits 1.2 and 3. and describes the securities offered."
+        self.assertEqual(enrich.first_sentence(line), line)
+
+    def test_an_answer_with_no_stop_at_all_survives_whole(self):
+        self.assertEqual(enrich.first_sentence("Quantum eMotion Corp files its interim statements"),
+                         "Quantum eMotion Corp files its interim statements")
+        self.assertEqual(enrich.first_sentence(""), "")
+
+    def test_the_summary_keeps_the_whole_sentence_rather_than_the_name_alone(self):
+        said = "Quantum eMotion Corp. announces its participation as a sponsor of the AI for Good Global Summit."
+        with mock.patch.object(enrich.localmodel, "chat", return_value=said):
+            self.assertEqual(enrich.summarize("the filing's text"), said)
+
+    def test_a_bare_name_is_still_no_summary(self):
+        with mock.patch.object(enrich.localmodel, "chat", return_value="Quantum eMotion Corp."):
+            self.assertEqual(enrich.summarize("the filing's text"), "")

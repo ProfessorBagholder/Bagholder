@@ -100,6 +100,14 @@ html[data-theme="light"] .heat-tile{color:#1b1d27}
 html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth{font:500 10.5px/18px var(--font);letter-spacing:.09em;text-transform:uppercase;color:var(--ink60);user-select:none;cursor:pointer;white-space:nowrap}
 .gth.on{color:var(--ink)}
+/* short interest: a label, the figure, and what stands behind it, so the row reads across
+   the card's width instead of three numbers stranded in it */
+.si-v{font-size:14px;font-weight:500;text-align:right;white-space:nowrap}
+.si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
+.si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
+.si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
+.si-cells{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}
+.si-cells .si-v{text-align:left;font-size:13.5px}
 .nw-head,.nw-row{display:grid;grid-template-columns:66px minmax(0,1fr) auto minmax(64px,auto);gap:12px;padding:0 16px;white-space:nowrap}
 .nw-head{padding-bottom:6px;margin:0 -16px}
 .nw-bare{grid-template-columns:66px minmax(0,1fr)}
@@ -524,7 +532,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.8"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-15.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -755,6 +763,7 @@ function applyStatus(st) {
   const prevCount = state.status.activityCount;
   const prevVersion = state.status.dataVersion;
   state.status = Object.assign({}, state.status, st);
+  discSummaryReady(st.summaryReady);
   const changed = (st.lastSync && st.lastSync !== prev && prev !== undefined) || (st.activityCount !== prevCount && prevCount) ||
     (st.dataVersion && prevVersion && st.dataVersion !== prevVersion);
   if (changed && !state.status.syncing) {
@@ -2475,6 +2484,168 @@ function drawTradeChart(host, t, h, tf, c, LW, provisional) {
 function mountTradeChartWith(t, tf) { setChartTf(tf); mountTradeChart(); }
 function execSortValue(e, key) { if (key === "when") return e.when; if (key === "side") return e.side; if (key === "qty") return e.qty; if (key === "currency") return e.currency; if (key === "price") return e.price; return e.amount; }
 // ---------------------------------------------------------------------------
+// Short interest: what a regulator publishes about short selling in an instrument —
+// FINRA for a US listing, CIRO for a Canadian one — read per symbol from /api/shorts
+// and kept here. Two measures that are never mixed: the position, the shares still
+// sold short as dealers reported them twice a month, and the short volume, the part
+// of a period's trading sold short, which the US publishes every trading day. A market
+// where no one reports it (a coin, an index, a contract) answers that it is not
+// covered and draws no card at all, rather than a card of dashes.
+// ---------------------------------------------------------------------------
+const _shorts = {}, _shortsPending = {}, _shortsTrend = {};
+// keyed by listing, not by ticker: a company listed on both markets has a short position on
+// each, and they are different numbers measured against different trading
+function shortsKey(t) { return discSymbol(t) + "|" + String(t.exchange || "").toUpperCase(); }
+const SHORTS_KEEP_MS = 30 * 60 * 1000;   // the daily file lands once a day, but a page left open for days should not still show the day it opened on
+
+function ensureShorts(t) {
+  const sym = discSymbol(t), key = shortsKey(t);
+  const held = _shorts[key];
+  if (!sym || _shortsPending[key] || (held && Date.now() - held.at < SHORTS_KEEP_MS)) return;
+  _shortsPending[key] = true;
+  const q = "symbol=" + encodeURIComponent(sym) + (t.exchange ? "&exchange=" + encodeURIComponent(t.exchange) : "") +
+    (t.currency ? "&currency=" + encodeURIComponent(t.currency) : "");
+  api("GET", "/api/shorts?" + q).then((d) => {
+    delete _shortsPending[key];
+    _shorts[key] = Object.assign({ at: Date.now() }, (d && d.ok) ? d : { ok: false });
+    // the run of past reports comes free with a US listing's answer; a Canadian one is a file
+    // per reporting date, so it is asked for once the figures are already on screen
+    if (d && d.ok && d.covered && !((d.shorts || {}).series || []).length && !_shortsTrend[key]) {
+      _shortsTrend[key] = true;
+      api("GET", "/api/shorts?" + q + "&trend=1").then((more) => {
+        const held = _shorts[key];
+        if (more && more.ok && more.covered && held && held.shorts) held.shorts.series = (more.shorts || {}).series || [];
+        render();
+      });
+    }
+    const open = state.sel && selById(state.sel);
+    if (open && shortsKey(open) === key) render();
+    else if (state.page === "markets" && state.newsSymbol && shortsKey(state.newsSymbol) === key) render();
+  });
+}
+function shortDay(iso) {
+  const p = String(iso || "").split("-");
+  return p.length === 3 ? MON[Number(p[1]) - 1] + " " + Number(p[2]) : "";
+}
+function shortSpan(key) {
+  const ends = String(key || "").split("/");
+  if (ends.length !== 2) return shortDay(key);
+  const a = ends[0].split("-"), b = ends[1].split("-");
+  if (a.length !== 3 || b.length !== 3) return "";
+  return a[1] === b[1] ? MON[Number(a[1]) - 1] + " " + Number(a[2]) + "–" + Number(b[2]) : shortDay(ends[0]) + " – " + shortDay(ends[1]);
+}
+function shortsFigures(s) {
+  // label, figure, and what stands behind the figure — the row grammar the card and the
+  // News tile's strip both read from, so one listing reads the same in both places
+  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
+  const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
+  return [
+    { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
+    { label: "Of float", value: s.ofFloat == null ? "—" : n2(s.ofFloat, 2) + "%",
+      note: s.float ? "of " + qty(s.float) + " shares floating" : "" },
+    { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
+      note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
+    { label: "Short volume", value: s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", bar: s.volumePct,
+      note: (s.shortVolume != null && s.totalVolume != null
+              ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) + " shares traded" : "") +
+            (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
+  ];
+}
+// the tile's own date, and only that: each tile carries the date of the figures it draws,
+// which are not all on the same clock, and the regulator behind them is named once in the spec
+// rather than three times over one page
+function shortsHeader(title, right) {
+  return '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>' + title + "</h5>" +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(right || "") + "</span></div>";
+}
+// Both measures are a part of a whole, so both are the donut the Allocation, Sectors and
+// Regions cards draw: the centre carries the percentage, a slice under the pointer carries
+// the shares it stands for, and the line under the ring carries what the donut cannot.
+function shortsRingCard(key, title, when, pct, parts, footer, missing) {
+  let body = '<div class="muted empty" style="flex:1;font-size:12px">' + missing + "</div>";
+  if (pct != null && parts) {
+    const d = donutPieces(key, "Short", parts, null, "row", 210, n2(pct, 2) + "%");
+    // the legend reads across above the ring, and the ring sits in the middle of the tile
+    // under it: a ring and a legend centred as a pair leaves the ring off to one side
+    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;flex-direction:column;align-items:center;gap:14px;flex:1;min-height:0;justify-content:center">' +
+      d.legend + d.ring + "</div>";
+  }
+  return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
+    shortsHeader(title, when) + body +
+    (footer ? '<div class="tab" style="text-align:center;padding-top:10px;font-size:11.5px;color:var(--ink55)">' + footer + "</div>" : "") + "</div>";
+}
+// the part of a period's trading that was sold short
+function shortsVolumeCardHtml(s) {
+  const pct = s.volumePct;
+  const share = pct == null ? null : Math.max(0, Math.min(1, pct / 100));
+  const rest = (s.totalVolume != null && s.shortVolume != null) ? Math.max(0, s.totalVolume - s.shortVolume) : null;
+  const parts = share == null ? null : [{ label: "Short volume", share: share, count: s.shortVolume == null ? null : Math.round(s.shortVolume), color: "var(--pie-1)" },
+                                        { label: "Shares traded", share: 1 - share, count: rest == null ? null : Math.round(rest), color: "rgba(var(--ink-rgb),.16)" }];
+  const cover = s.daysToCover == null ? "" : n2(s.daysToCover, 1) + " days to cover" + (s.averageVolume ? " at " + qty(Math.round(s.averageVolume)) + " a day" : "");
+  return shortsRingCard("sivol", "Short volume", s.volumeOf ? shortSpan(s.volumeOf) : "", pct, parts, cover,
+                        "No trading is reported for this listing.");
+}
+// the position against the shares actually available to trade
+function shortsFloatCardHtml(s) {
+  const pct = s.ofFloat;
+  const share = (pct == null || !s.float || s.shares == null) ? null : Math.max(0, Math.min(1, s.shares / s.float));
+  const parts = share == null ? null : [{ label: "Short interest", share: share, count: Math.round(s.shares), color: "var(--pie-1)" },
+                                        { label: "Float", share: 1 - share, count: Math.round(s.float - s.shares), color: "rgba(var(--ink-rgb),.16)" }];
+  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change) + (s.previousOf ? " since " + shortDay(s.previousOf) : "");
+  const held = s.shares == null ? "" : qty(s.shares) + " shares short";
+  return shortsRingCard("sifloat", "Short vs float", s.asOf ? "as of " + shortDay(s.asOf) : "", share == null ? null : pct, parts,
+                        [held, change].filter(Boolean).join(" · "), "No float is published for this listing.");
+}
+// the run of reports, drawn the way the equity curve is: an axis of its own, the same grid
+// lines and the same area under the line. Bars from zero are the other house idiom, but a
+// position moves by a few percent between reports and every bar would stand the same height.
+function shortsHistoryHtml(s) {
+  const pts = (s.series || []).filter((p) => p && p.shares != null);
+  if (pts.length < 3) return "";
+  const lo = Math.min.apply(null, pts.map((p) => p.shares)), hi = Math.max.apply(null, pts.map((p) => p.shares));
+  const span = (hi - lo) || 1, W = 880, H = 180, TOP = 8, BOT = H - 12;
+  const x = (i) => (i / (pts.length - 1)) * W;
+  const y = (v) => TOP + (1 - (v - lo) / span) * (BOT - TOP);
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.shares).toFixed(1)).join(" ");
+  const ticks = [[hi, TOP], [lo + span * 2 / 3, TOP + (BOT - TOP) / 3], [lo + span / 3, TOP + (BOT - TOP) * 2 / 3], [lo, BOT]];
+  const want = Math.min(6, pts.length);
+  const marks = [];
+  for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round(i * (pts.length - 1) / Math.max(1, want - 1))].date));
+  return '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Short interest over time</h5>' +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">every report since ' + esc(shortDay(pts[0].date)) + "</span></div>" +
+    '<div style="display:flex;gap:10px"><div style="position:relative;width:72px;height:' + H + 'px;flex:none;font-size:10px;color:var(--ink55)" class="tab">' +
+    ticks.map((t) => '<span style="position:absolute;left:0;top:' + (t[1] / H * 100).toFixed(1) + '%;transform:translateY(-50%)">' + qty(Math.round(t[0])) + "</span>").join("") + "</div>" +
+    '<div style="position:relative;flex:1;min-width:0">' +
+    '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:' + H + 'px;display:block">' +
+    '<defs><linearGradient id="bhSi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)"/><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>' +
+    ticks.map((t) => '<line x1="0" y1="' + t[1].toFixed(1) + '" x2="' + W + '" y2="' + t[1].toFixed(1) + '" style="stroke:var(--' + (t[1] === BOT ? "hair" : "grid") + ')"/>').join("") +
+    '<path d="' + line + " L" + W + " " + BOT + " L0 " + BOT + ' Z" fill="url(#bhSi)"/>' +
+    '<path d="' + line + '" fill="none" style="stroke:var(--accent)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg></div></div>' +
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:6px 0 0 82px">' +
+    marks.map((a) => "<span>" + esc(a) + "</span>").join("") + "</div></div>";
+}
+function shortsSectionHtml(t) {
+  const rec = _shorts[shortsKey(t)];
+  if (!rec || !rec.ok || !rec.covered) return "";
+  const s = rec.shorts || {};
+  return '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
+    shortsVolumeCardHtml(s) + shortsFloatCardHtml(s) + "</div>" + shortsHistoryHtml(s);
+}
+// the same listing, compact, for the News card once it is scoped to a symbol — the card is
+// half the width of the instrument page's, so the figures stack under their labels
+function shortsStripHtml(only) {
+  if (!only || !only.symbol) return "";
+  ensureShorts(only);                       // any ticker the chip names, held or not
+  const rec = _shorts[shortsKey(only)];
+  if (!rec || !rec.ok || !rec.covered) return "";
+  const s = rec.shorts || {};
+  const cell = (f) => '<div><div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
+  return '<div class="si-strip"><div class="si-sh">Short interest<span>' + (s.asOf ? "as of " + esc(shortDay(s.asOf)) : "") +
+    '</span></div><div class="si-cells">' +
+    shortsFigures(s).map(cell).join("") + "</div></div>";
+}
+
+// ---------------------------------------------------------------------------
 // Disclosures: an instrument's regulatory filings from every source (SEDAR+,
 // SEC, …), on the trade/holding detail. Fetched per symbol from /api/filings
 // and cached here; the merged list is filtered by category, narrowed by source,
@@ -2509,7 +2680,7 @@ function refreshDisclosures(sym) {
   if (open && discSymbol(open) === sym) ensureDisclosures(open);
   render();
 }
-const _discEnrichLoading = {}, _discEnrichTried = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
+const _discEnrichLoading = {}, _discEnrichTried = {}, _discEnrichPasses = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
 function discFiling(sym, id) { const rec = _disc[sym]; return (rec && rec.payload ? rec.payload.filings : []).find((f) => f.id === id) || null; }
 function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f && q.has(f.id)); }
 function _discStillOpen(sym) {
@@ -2518,6 +2689,40 @@ function _discStillOpen(sym) {
   return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
+// One rule for every card that reads documents, because they share this record of what has
+// been read. A row is finished when it has both a title and a summary; anything less is read
+// again. What bounds the reading is not how many times the document was asked for but how
+// many times the asking could have answered: the sentence comes from a local model, so a read
+// made while no model is up says nothing about whether this document has one — it only failed
+// to ask. Counting requests instead of real chances is what left rows blank for good, because
+// the first read of a session is the one that starts the model, and two quick passes could
+// both land before it answered. The model's own phase names are deliberately not consulted
+// here: there are six of them and they change. The only two questions are whether the read
+// answered and whether a model was up for it. A row that had no model to ask waits instead of
+// finishing, and the status the page already polls wakes it, costing no further reads.
+let _discSummaryUp = false;
+function discEnrichNeed(f) {
+  if (f.subject && f.summary) return false;
+  const settled = _discEnrichTried[f.id];
+  return settled === "waiting" ? _discSummaryUp : !settled;
+}
+function discEnrichSettle(f, d) {
+  const answered = !!(d && d.ok);
+  if (answered) _discSummaryUp = !!d.summaryAvailable;
+  if (f.subject && f.summary) { _discEnrichTried[f.id] = true; return; }   // both halves: nothing left to read for
+  if (!answered) return;                                                   // the read itself failed: nothing learned
+  if (!d.summaryAvailable) { _discEnrichTried[f.id] = "waiting"; return; } // no model was up: this read never asked
+  const chances = (_discEnrichPasses[f.id] = (_discEnrichPasses[f.id] || 0) + 1);
+  if (chances >= 2) _discEnrichTried[f.id] = true;   // two reads that could have answered: the document has no more
+}
+// a model coming up after a row waited on it is what makes that row readable again
+function discSummaryReady(ready) {
+  if (!ready || _discSummaryUp) return;
+  _discSummaryUp = true;
+  const open = state.sel && selById(state.sel);
+  if (open) { const r = _disc[discSymbol(open)]; if (r && r.payload) sweepDiscEnrich(discSymbol(open), r.payload.filings || []); }
+  render();   // whichever card is showing starts its own reading again from its render
+}
 function enrichOne(sym, f) {
   // read one document for its subject (from the file) and, if the local model is up, a summary
   if (!f) return Promise.resolve();
@@ -2525,9 +2730,7 @@ function enrichOne(sym, f) {
   return api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(sym) + "&id=" + encodeURIComponent(f.id)).then((d) => {
     delete _discEnrichLoading[f.id];
     if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
-    // mark done only when the row actually has something and nothing is still provisioning;
-    // a failed or empty read is left un-tried so the sweep retries it rather than sticking
-    if ((f.subject || f.summary) && !_discPreparing(f)) _discEnrichTried[f.id] = true;
+    discEnrichSettle(f, d);
     if (_discStillOpen(sym)) render();
   });
 }
@@ -2536,29 +2739,37 @@ function enrichOne(sym, f) {
 // walks the issuer once, and each result is stored so a later visit is instant.
 function sweepDiscEnrich(sym, rows) {
   if (_discSweep[sym]) return;
-  const need = (f) => !_discEnrichTried[f.id] && (!f.subject || !f.summary);
-  const pending = rows.filter(need);
-  if (!pending.length) return;
+  if (!rows.some(discEnrichNeed)) return;
   _discSweep[sym] = true;
-  const q = new Set(pending.map((f) => f.id));
-  _discQueue[sym] = q;
-  let i = 0, sawPreparing = false, sawFailure = false;
+  // A row that found no model to ask has not had its turn, so it is not counted as passed and
+  // the next step picks it up the moment one is up. This matters most for the first row: the
+  // first document read in a session is the read that starts the model, so the top of the list
+  // is the one that comes back without a sentence, and waiting for the other forty-odd
+  // documents to be read before returning to it left it looking empty for minutes.
+  const passed = new Set();
+  const upNext = () => rows.find((f) => discEnrichNeed(f) && !passed.has(f.id));
+  const queue = () => { _discQueue[sym] = new Set(rows.filter((f) => discEnrichNeed(f) && !passed.has(f.id)).map((f) => f.id)); };
+  queue();
+  let sawPreparing = false, sawFailure = false;
   const finish = () => {
     _discSweep[sym] = false; _discQueue[sym] = null;
     // a summary still being prepared is asked for again every fifteen seconds for as long as the card is shown; a
     // read that failed is tried again a few times, each wait longer than the last
     const again = (_discRekicks[sym] || 0);
-    if (_discStillOpen(sym) && (sawPreparing || (sawFailure && again < 6))) {
+    const unfinished = rows.some(discEnrichNeed);
+    if (_discStillOpen(sym) && (sawPreparing || (unfinished && again < 6))) {
       _discRekicks[sym] = again + 1;
-      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); }, sawPreparing ? 15000 : 4000 * (again + 1));
-    } else if (!sawPreparing && !sawFailure) _discRekicks[sym] = 0;
+      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); },
+                 sawPreparing ? 15000 : sawFailure ? 4000 * (again + 1) : 1500);
+    } else if (!sawPreparing && !unfinished) _discRekicks[sym] = 0;
   };
   const step = () => {
     if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
-    while (i < pending.length && !need(pending[i])) { q.delete(pending[i].id); i++; }
-    if (i >= pending.length) return finish();
-    const f = pending[i++]; q.delete(f.id);
+    const f = upNext();
+    if (!f) return finish();
+    queue();
     enrichOne(sym, f).then(() => {
+      if (_discEnrichTried[f.id] !== "waiting") passed.add(f.id);
       if (_discPreparing(f)) sawPreparing = true;
       else if (!f.subject && !f.summary) sawFailure = true;   // a transient read failure: retry on the next pass
       setTimeout(step, 150);
@@ -2693,7 +2904,7 @@ function tradeDetailHtml(t, m) {
     '<input id="tagInput" data-id="' + esc(t.id) + '" value="' + esc(state.tagDraft) + '" placeholder="' + ((t.tags || []).length ? "Add another…" : "Add a tag…") + '" aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off"></div>' +
     '<div id="tagMenu"></div>' +
 
-    "</div></div></div>" + disclosuresCardHtml(t) + "</div>";
+    "</div></div></div>" + shortsSectionHtml(t) + disclosuresCardHtml(t) + "</div>";
 }
 function tagMenuHtml() {
   const t = state.sel ? selById(state.sel) : null;
@@ -2759,7 +2970,8 @@ const _donuts = {};
 // a donut's two pieces: the ring with its centre, and the legend (swatch, name, share; mirrored when `side` is "r")
 // `size` sets the ring's width (a number in px, or a CSS width such as "100%" of its grid cell); without it the ring takes
 // what its card leaves beside the legend. With a null `total` the centre reads `centreText` under its label (a count, say),
-// and a hovered slice shows its name and share
+// and a hovered slice shows its name and share. `side` is which side of the ring the legend sits on, "l" or "r", or "row"
+// for a line of entries reading across — for a donut of two pieces that sits above or below the ring rather than beside it
 function donutPieces(key, centreLabel, items, total, side, size, centreText) {
   _donuts[key] = { items, total, centreLabel, centreText };
   const R = 44, W = 14, C = 60, SIZE = size || 264;
@@ -2778,8 +2990,12 @@ function donutPieces(key, centreLabel, items, total, side, size, centreText) {
   const swatch = (x) => '<span style="width:9px;height:9px;border-radius:2px;background:' + x.color + '"></span>';
   const name = (x) => '<span style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' + (side === "r" ? ";text-align:right" : "") + '">' + esc(x.label) + "</span>";
   const share = (x) => '<span class="tab" style="text-align:' + (side === "r" ? "left" : "right") + ';white-space:nowrap">' + pctPlain(x.share) + "</span>";
-  const legend = '<div id="' + key + 'Legend" class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;justify-self:' + (side === "r" ? "end" : "start") + ';display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">' +
-    items.map((x, i) => '<span data-slice="' + i + '" style="display:contents">' + (side === "r" ? share(x) + name(x) + swatch(x) : swatch(x) + name(x) + share(x)) + "</span>").join("") + "</div>";
+  const legend = side === "row"
+    ? '<div id="' + key + 'Legend" style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px 24px;font-size:12.5px">' +
+        items.map((x, i) => '<span data-slice="' + i + '" style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap">' + swatch(x) +
+          '<span style="font-weight:500">' + esc(x.label) + '</span><span class="tab" style="color:var(--ink55)">' + pctPlain(x.share) + "</span></span>").join("") + "</div>"
+    : '<div id="' + key + 'Legend" class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;justify-self:' + (side === "r" ? "end" : "start") + ';display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">' +
+        items.map((x, i) => '<span data-slice="' + i + '" style="display:contents">' + (side === "r" ? share(x) + name(x) + swatch(x) : swatch(x) + name(x) + share(x)) + "</span>").join("") + "</div>";
   return { ring, legend };
 }
 function donutCardHtml(key, title, centreLabel, items, total, empty) {
@@ -2827,10 +3043,11 @@ function donutHover(e, key) {
   plot.querySelectorAll("#" + key + "Legend [data-slice]").forEach((s) => { const on = i < 0 || +s.dataset.slice === i; [...s.children].forEach((c) => { c.style.opacity = on ? "1" : ".45"; }); });
   const centre = document.getElementById(key + "Centre"); const d = _donuts[key]; if (!centre || !d) return;
   const x = i >= 0 ? d.items[i] : null;
-  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + pctPlain(x.share) + "</div>"
+  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (x.count == null ? pctPlain(x.share) : '<span style="font-size:15px;letter-spacing:-.01em">' + qty(x.count) + "</span>") + "</div>" + (x.count == null ? "" : '<div class="muted" style="font-size:11px;margin-top:3px">' + pctPlain(x.share) + "</div>")
       : '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
     : '<div class="lbl">' + esc(d.centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (d.total == null ? esc(d.centreText || "") : money0(d.total)) + "</div>";
 }
+const DONUT_KEYS = { ppie: 1, xsec: 1, xreg: 1, sivol: 1, sifloat: 1 };
 function ppieHover(e) { donutHover(e, "ppie"); }
 function ppieLeave() { ppieHover({ target: document.body }); }
 // ---------------------------------------------------------------------------
@@ -3161,6 +3378,7 @@ function newsCardHtml(items) {
     msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    (only ? shortsStripHtml(only) : "") +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
@@ -3247,7 +3465,7 @@ let _feedSweep = "";
 function sweepFeedEnrich(scope, rows) {
   if (_feedSweep) return;
   const showing = () => state.page === "markets" && state.newsKind === "disc" && !state.newsSymbol && state.newsScope === scope;
-  const need = (f) => !_discEnrichTried[f.id] && !f.subject;
+  const need = discEnrichNeed;
   const pending = rows.filter(need).slice(0, 60);
   if (!pending.length) return;
   _feedSweep = scope;
@@ -3260,8 +3478,8 @@ function sweepFeedEnrich(scope, rows) {
     _discEnrichLoading[f.id] = true;
     api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(f.symbol) + "&id=" + encodeURIComponent(f.id)).then((d) => {
       delete _discEnrichLoading[f.id];
-      if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; }
-      if (f.subject) _discEnrichTried[f.id] = true;
+      if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; f.summaryStatus = d.summaryStatus || ""; }
+      discEnrichSettle(f, d);
       if (showing()) render();
       setTimeout(step, 150);
     });
@@ -3907,7 +4125,7 @@ function render() {
   if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
   placeTabIndicator();
   heatShowSync();
-  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); } }
+  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); ensureShorts(open); } }
   mountTradeChart();
   mountHeatmap();
   mountReels();
@@ -4089,6 +4307,7 @@ function syncNow() {
     const tick = () => api("GET", "/api/status").then((st) => {
       const wasSyncing = state.status.syncing;
       state.status = Object.assign({}, state.status, st);
+  discSummaryReady(st.summaryReady);
       renderHeaderOnly();
       if (st && !st.syncing) { if (wasSyncing || st.lastSync) loadModel(); return; }
       setTimeout(tick, 1500);
@@ -4464,13 +4683,13 @@ function bind() {
   document.addEventListener("mousemove", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
-    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover(e, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (DONUT_KEYS[h.dataset.hover]) donutHover(e, h.dataset.hover);
   });
   document.addEventListener("mouseout", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
-    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover({ target: document.body }, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (DONUT_KEYS[h.dataset.hover]) donutHover({ target: document.body }, h.dataset.hover);
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
     else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });

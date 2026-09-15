@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 import bagholder
 import disclosures
@@ -155,3 +156,179 @@ class FilingsPayloadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnrichTest(unittest.TestCase):
+    """When a document is read again. A title and a one-sentence summary come from the
+    same read but not always in the same pass, so a row holding one of them is not done."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        self.doc = "sedar:1"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def stored(self):
+        row = store.filing("QNC", self.doc)
+        return row.get("subject") or "", row.get("summary") or "", row.get("enrichVersion") or 0
+
+    def enrich(self, model=True, read=("A title", "A sentence."), available=True):
+        with mock.patch.object(bagholder.enrich, "summary_available", return_value=model), \
+             mock.patch.object(bagholder.enrich, "summary_status", return_value="ready" if model else "off"), \
+             mock.patch.object(bagholder.disclosures, "available", return_value=available), \
+             mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
+             mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")) as content, \
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": read[0], "summary": read[1]}):
+            out = bagholder.filings_enrich("QNC", self.doc)
+            return out, content.call_count
+
+    def test_a_row_with_both_halves_is_not_read_again(self):
+        self.enrich()
+        self.assertEqual(self.stored()[:2], ("A title", "A sentence."))
+        out, reads = self.enrich(read=("other", "other."))
+        self.assertEqual(reads, 0)                       # the document is not fetched a second time
+        self.assertEqual(out["subject"], "A title")
+
+    def test_a_row_holding_only_a_title_is_read_again_for_its_summary(self):
+        self.enrich(read=("A title", ""))
+        self.assertEqual(self.stored()[:2], ("A title", ""))
+        out, reads = self.enrich(read=("A title", "The sentence."))
+        self.assertEqual(reads, 1)
+        self.assertEqual(out["summary"], "The sentence.")
+
+    def test_a_row_holding_only_a_summary_is_read_again_for_its_title(self):
+        self.enrich(read=("", "A sentence."))
+        self.assertEqual(self.stored()[:2], ("", "A sentence."))
+        out, reads = self.enrich(read=("The title", "A sentence."))
+        self.assertEqual(reads, 1)
+        self.assertEqual(out["subject"], "The title")
+
+    def test_reading_again_fills_what_is_missing_and_empties_nothing(self):
+        self.enrich(read=("A title", ""))
+        out, reads = self.enrich(read=("", ""))          # this read found nothing at all
+        self.assertEqual(reads, 1)
+        self.assertEqual(out["subject"], "A title")      # what was already there survives
+        self.assertEqual(self.stored()[0], "A title")
+
+    def test_the_first_read_under_the_current_logic_still_clears_an_older_junk_title(self):
+        store.set_filing_enrichment("QNC", self.doc, subject="00012345.pdf", summary="", version=1)
+        out, reads = self.enrich(read=("", "A sentence."))
+        self.assertEqual(reads, 1)
+        self.assertEqual(out["subject"], "")             # the stale title goes rather than sticking
+        self.assertEqual(out["summary"], "A sentence.")
+
+    def test_with_no_model_up_a_row_already_read_is_not_fetched_again(self):
+        self.enrich(read=("A title", ""))
+        out, reads = self.enrich(model=False, read=("A title", "never asked"))
+        self.assertEqual(reads, 0)                       # no summary is coming: nothing to gain by reading
+        self.assertEqual(out["summary"], "")
+
+    def test_a_row_never_read_is_read_even_with_no_model(self):
+        out, reads = self.enrich(model=False, read=("A title", ""))
+        self.assertEqual(reads, 1)                       # the document's own title is still worth having
+        self.assertEqual(out["subject"], "A title")
+        self.assertEqual(self.stored()[2], 0)            # not finalised: it is read again once a model is up
+
+
+class StatusSummaryTest(unittest.TestCase):
+    """The page holds a row that had no model to ask, and the status it already polls is
+    what tells it one is up. Reading that must never start a model by itself."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_the_status_says_whether_a_summary_could_be_made_now(self):
+        with mock.patch.object(bagholder.enrich, "summary_status", return_value="ready"):
+            self.assertTrue(bagholder.status_payload()["summaryReady"])
+        for phase in ("off", "detecting", "downloading", "starting", "failed"):
+            with mock.patch.object(bagholder.enrich, "summary_status", return_value=phase):
+                self.assertFalse(bagholder.status_payload()["summaryReady"], phase)
+
+    def test_asking_the_status_never_starts_a_model(self):
+        with mock.patch.object(bagholder.enrich, "summary_status", return_value="off"), \
+             mock.patch.object(bagholder.enrich, "summary_available", side_effect=AssertionError("a status poll started a model")):
+            self.assertFalse(bagholder.status_payload()["summaryReady"])
+
+
+class WaitingForTheModelTest(unittest.TestCase):
+    """The first document read in a session is the read that starts the model. Spending it
+    and coming back later is what left the newest filing without a summary."""
+
+    setUp, tearDown, stored = EnrichTest.setUp, EnrichTest.tearDown, EnrichTest.stored
+
+    def test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted(self):
+        with mock.patch.object(bagholder.enrich, "summary_available", return_value=False), \
+             mock.patch.object(bagholder.enrich, "wait_for_summary", return_value=True) as waited, \
+             mock.patch.object(bagholder.enrich, "summary_status", return_value="ready"), \
+             mock.patch.object(bagholder.disclosures, "available", return_value=True), \
+             mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
+             mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")), \
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": "A title", "summary": "A sentence."}):
+            out = bagholder.filings_enrich("QNC", self.doc)
+        self.assertEqual(waited.call_count, 1)
+        self.assertEqual(out["summary"], "A sentence.")
+        self.assertEqual(self.stored(), ("A title", "A sentence.", bagholder.ENRICH_VERSION))
+
+    def test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again(self):
+        with mock.patch.object(bagholder.enrich, "summary_available", return_value=False), \
+             mock.patch.object(bagholder.enrich, "wait_for_summary", return_value=False), \
+             mock.patch.object(bagholder.enrich, "summary_status", return_value="off"), \
+             mock.patch.object(bagholder.disclosures, "available", return_value=True), \
+             mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
+             mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")), \
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": "A title", "summary": ""}):
+            out = bagholder.filings_enrich("QNC", self.doc)
+        self.assertEqual(out["subject"], "A title")
+        self.assertEqual(self.stored()[2], 0)      # not finalised: read again once a model is up
+
+
+class RefreshKeepsWhatWasReadTest(unittest.TestCase):
+    """The list of filings is refreshed far more often than a filed document changes, so a
+    refresh must not throw away what was read from the documents."""
+
+    setUp, tearDown = EnrichTest.setUp, EnrichTest.tearDown
+
+    def test_a_row_the_source_still_lists_keeps_its_subject_and_summary(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.set_filing_enrichment("QNC", "sedar:1", subject="A title", summary="A sentence.", version=9)
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2), item("SEDAR+", i=3)])
+        row = store.filing("QNC", "sedar:1")
+        self.assertEqual((row["subject"], row["summary"], row["enrichVersion"]), ("A title", "A sentence.", 9))
+
+    def test_what_the_source_says_about_a_row_is_still_refreshed(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        store.set_filing_enrichment("QNC", "sedar:1", subject="A title", summary="A sentence.", version=9)
+        moved = item("SEDAR+", i=1)
+        moved["url"] = "https://www.sedarplus.ca/x?drmKey=fresh"     # SEDAR+ mints a new link each visit
+        store.replace_filings("QNC", "SEDAR+", [moved])
+        row = store.filing("QNC", "sedar:1")
+        self.assertEqual(row["url"], "https://www.sedarplus.ca/x?drmKey=fresh")
+        self.assertEqual(row["summary"], "A sentence.")
+
+    def test_a_row_the_source_no_longer_lists_goes(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1), item("SEDAR+", i=2)])
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=2)])
+        self.assertIsNone(store.filing("QNC", "sedar:1"))
+        self.assertIsNotNone(store.filing("QNC", "sedar:2"))
+
+    def test_another_sources_rows_are_untouched(self):
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        store.replace_filings("QNC", "SEC", [item("SEC", i=1)])
+        store.set_filing_enrichment("QNC", "sec:1", subject="From EDGAR", summary="A sentence.", version=9)
+        store.replace_filings("QNC", "SEDAR+", [item("SEDAR+", i=1)])
+        self.assertEqual(store.filing("QNC", "sec:1")["subject"], "From EDGAR")
