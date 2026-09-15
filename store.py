@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -503,6 +503,7 @@ def _init_schema(conn):
             total_volume REAL,
             volume_pct REAL,
             series TEXT,
+            read_version INTEGER,
             fetched_at TEXT,
             PRIMARY KEY (symbol, exchange)
         );
@@ -513,6 +514,7 @@ def _init_schema(conn):
     _ensure_activity_security_id(conn)
     _migrate_spy_meta(conn)
     _ensure_quote_columns(conn)
+    _ensure_shorts_columns(conn)
     _ensure_order_columns(conn)
     _ensure_account_columns(conn)
     conn.executescript(
@@ -1603,6 +1605,15 @@ def save_trade_notes(notes):
     set_meta("trade_notes", json.dumps(clean))
     return clean
 
+
+
+def _ensure_shorts_columns(conn):
+    """A table already created by an earlier version keeps its columns: CREATE TABLE IF NOT
+    EXISTS adds none, so a column added later is added here."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(shorts)").fetchall()}
+    for col, typ in (("read_version", "INTEGER"),):
+        if col not in cols:
+            conn.execute("ALTER TABLE shorts ADD COLUMN %s %s" % (col, typ))
 
 
 def _ensure_quote_columns(conn):
@@ -3201,7 +3212,7 @@ _SHORT_COLUMNS = ("market", "as_of", "shares", "previous", "previous_of", "chang
 
 def _short_row(r):
     """A stored row as the page reads it, the run of reports parsed back from its column."""
-    out = {"symbol": r["symbol"], "exchange": r["exchange"], "fetchedAt": r["fetched_at"]}
+    out = {"symbol": r["symbol"], "exchange": r["exchange"], "fetchedAt": r["fetched_at"], "readVersion": r["read_version"] or 0}
     for name, column in zip(SHORT_FIELDS, _SHORT_COLUMNS):
         out[name] = r[column]
     try:
@@ -3211,7 +3222,7 @@ def _short_row(r):
     return out
 
 
-def save_shorts(symbol, exchange, rec, now=None):
+def save_shorts(symbol, exchange, rec, now=None, version=0):
     """One listing's short selling, kept so the page has it the moment it is opened again
     rather than after a read. A run of reports already stored is not dropped by a later
     read that did not ask for one."""
@@ -3226,9 +3237,9 @@ def save_shorts(symbol, exchange, rec, now=None):
                 held = conn.execute("SELECT series FROM shorts WHERE symbol = ? AND exchange = ?", (sym, ex)).fetchone()
                 series = json.loads(held["series"]) if held and held["series"] else []
             conn.execute(
-                "INSERT OR REPLACE INTO shorts (symbol, exchange, %s, series, fetched_at) VALUES (%s)"
-                % (", ".join(_SHORT_COLUMNS), ", ".join("?" * (len(_SHORT_COLUMNS) + 4))),
-                [sym, ex] + [rec.get(f) for f in SHORT_FIELDS] + [json.dumps(series), when])
+                "INSERT OR REPLACE INTO shorts (symbol, exchange, %s, series, read_version, fetched_at) VALUES (%s)"
+                % (", ".join(_SHORT_COLUMNS), ", ".join("?" * (len(_SHORT_COLUMNS) + 5))),
+                [sym, ex] + [rec.get(f) for f in SHORT_FIELDS] + [json.dumps(series), int(version), when])
             conn.commit()
         finally:
             conn.close()

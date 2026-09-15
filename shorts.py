@@ -483,7 +483,10 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
         rec.update(ca_volume(sym, exchange, ssl_context, now))
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
-    rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
+    # the record names its own listing, as a stored one does: a ticker read on the spot for the
+    # ranked list's box is not in the store yet, and without this its row had no exchange
+    rec.update({"symbol": sym, "exchange": _s(exchange).strip().upper(), "market": where,
+                "source": "FINRA" if where == "us" else "CIRO"})
     floated = float_shares(sym, exchange, currency, name, ssl_context)
     rec["float"] = floated
     rec["ofFloat"] = (rec["shares"] / floated * 100) if floated and rec.get("shares") else None

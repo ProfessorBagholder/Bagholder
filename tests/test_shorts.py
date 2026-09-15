@@ -579,3 +579,38 @@ class FloatFormTest(unittest.TestCase):
         self.use(s)
         self.assertEqual(shorts.float_shares("QNC", "TSX-V", "", "Quantum eMotion Corp"), 212448707.0)
         self.assertTrue(any("QNC.V" in u for u in s.asked))
+
+
+class ReadVersionTest(unittest.TestCase):
+    """A reading written by older logic is read again once, rather than waiting hours to go
+    stale while a figure the app has since learned to find reads as a dash."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def test_a_row_from_older_logic_is_read_again_however_fresh_it_is(self):
+        store.save_shorts("QNC", "TSX-V", self.record(float=None, ofFloat=None), version=bagholder.SHORTS_VERSION - 1)
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertTrue(bagholder._shorts_stale(held))     # written a moment ago, and still stale
+
+    def test_a_row_at_the_current_version_stands_until_its_hours_are_up(self):
+        store.save_shorts("QNC", "TSX-V", self.record(), version=bagholder.SHORTS_VERSION)
+        self.assertFalse(bagholder._shorts_stale(store.shorts_for("QNC", "TSX-V")))
+
+    def test_the_sweep_reads_a_row_from_older_logic(self):
+        store.save_shorts("QNC", "TSX-V", self.record(float=None), version=bagholder.SHORTS_VERSION - 1)
+        base = {"positions": [{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp"}], "watchlist": []}
+        with mock.patch.object(bagholder.model, "base_model", return_value=base), \
+             mock.patch.object(bagholder.shorts, "for_listing", return_value=self.record(float=212448707.0)) as read:
+            bagholder.sweep_shorts()
+        self.assertEqual(read.call_count, 1)
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["float"], 212448707.0)
+        self.assertEqual(held["readVersion"], bagholder.SHORTS_VERSION)
+
+    def test_a_record_read_on_the_spot_names_its_listing(self):
+        with mock.patch.object(shorts, "us_position", return_value={"shares": 1.0, "asOf": "2026-08-31"}), \
+             mock.patch.object(shorts, "us_volume", return_value={}), \
+             mock.patch.object(shorts, "float_shares", return_value=None), \
+             mock.patch.object(shorts, "average_volume", return_value=None):
+            rec = shorts.for_listing("RKLB", "NASDAQ", "USD")
+        self.assertEqual(rec["exchange"], "NASDAQ")

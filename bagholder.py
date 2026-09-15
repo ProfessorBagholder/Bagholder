@@ -5920,10 +5920,16 @@ FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)
 
 
 SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
+SHORTS_VERSION = 2                 # bump when a reading can carry more than it could before, so
+                                   # rows written by the older logic are read again once: a figure
+                                   # the app has since learned to find should not wait for its row
+                                   # to go stale, which is hours a reader spends looking at a dash
 SHORTS_SWEEP_EVERY_SEC = 1800      # how often the sweep looks for listings to warm
 
 
 def _shorts_stale(rec, now=None):
+    if (rec.get("readVersion") or 0) < SHORTS_VERSION:
+        return True                    # written by logic that could carry less than this one can
     try:
         return (now or datetime.now(timezone.utc)) - datetime.fromisoformat(_s(rec.get("fetchedAt")).replace("Z", "+00:00")) > timedelta(hours=SHORTS_STALE_HOURS)
     except ValueError:
@@ -5936,7 +5942,7 @@ def read_shorts(symbol, exchange, currency, trend=False, now=None, name=""):
     decides what its position is measured against."""
     rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend, name=name)
     if rec:
-        store.save_shorts(symbol, exchange, rec, now=now)
+        store.save_shorts(symbol, exchange, rec, now=now, version=SHORTS_VERSION)
     return rec
 
 
