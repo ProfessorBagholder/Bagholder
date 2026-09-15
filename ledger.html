@@ -219,6 +219,10 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .menu .sub{top:0;right:calc(100% + 8px);z-index:6}
 .menu .sub::before{content:"";position:absolute;top:0;bottom:0;left:100%;width:8px}
 .menu .swatch{width:16px;height:16px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1.5px rgba(var(--ink-rgb),.3)}
+.sw{width:28px;height:16px;border-radius:8px;background:rgba(var(--ink-rgb),.18);position:relative;flex:none;transition:background .15s ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s var(--ease-travel)}
+.sw.on{background:var(--accent)}
+.sw.on::after{transform:translateX(12px)}
 .tabbtn{background:transparent;border:0;cursor:pointer;font:500 13px Inter,system-ui,sans-serif;padding:11px 0;flex:none;white-space:nowrap;color:var(--ink60)}
 .tabbtn:hover{color:var(--accent-300)}
 .tabbtn.on{color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)}
@@ -488,6 +492,7 @@ const state = {
   notice: "",
   confirmOpen: "",
   themeOpen: false,
+  notifyOpen: false,
   modal: null,
   importReport: null,
   watch: null,
@@ -495,7 +500,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.7"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.8"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -742,9 +747,9 @@ function pollStatus() {
   api("GET", "/api/status").then((st) => {
     // while the server restarts (an update) answers are not status payloads: keep asking
     if (!st || !st.protocol) { _pollTimer = setTimeout(pollStatus, 1000); return; }
-    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders]);
+    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null)]);
     applyStatus(st);
-    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders]);
+    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null)]);
     if (before !== after) renderHeaderOnly();
     const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating;
     _pollTimer = setTimeout(pollStatus, fast ? 2500 : 30000);
@@ -821,6 +826,7 @@ const ICONS = {
   bookmarkFill: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Z",
   x: "M205.66 194.34a8 8 0 0 1-11.32 11.32L128 139.31l-66.34 66.35a8 8 0 0 1-11.32-11.32L116.69 128 50.34 61.66a8 8 0 0 1 11.32-11.32L128 116.69l66.34-66.35a8 8 0 0 1 11.32 11.32L139.31 128Z",
   caretDown: "M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z",
+  bell: "M221.8 175.94C216.25 166.38 208 139.33 208 104a80 80 0 1 0-160 0c0 35.34-8.26 62.38-13.81 71.94A16 16 0 0 0 48 200h40.81a40 40 0 0 0 78.38 0H208a16 16 0 0 0 13.8-24.06ZM128 216a24 24 0 0 1-22.62-16h45.24A24 24 0 0 1 128 216ZM48 184c7.7-13.24 16-43.92 16-80a64 64 0 1 1 128 0c0 36.05 8.28 66.73 16 80Z",
   receipt: "M72 104a8 8 0 0 1 8-8h96a8 8 0 0 1 0 16H80a8 8 0 0 1-8-8Zm8 40h96a8 8 0 0 0 0-16H80a8 8 0 0 0 0 16ZM232 56v152a8 8 0 0 1-11.58 7.15L192 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L128 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L64 200.94l-28.42 14.21A8 8 0 0 1 24 208V56a16 16 0 0 1 16-16h176a16 16 0 0 1 16 16Zm-16 0H40v139.06l20.42-10.22a8 8 0 0 1 7.16 0L96 199.06l28.42-14.22a8 8 0 0 1 7.16 0L160 199.06l28.42-14.22a8 8 0 0 1 7.16 0L216 195.06Z",
   palette: "M186.8 213.8A104.0 104.0 0 1 1 231.8 133.9A46.0 46.0 0 0 0 186.8 213.8ZM214.3 110.6A88.0 88.0 0 1 0 157.7 210.8A62.0 62.0 0 0 1 214.3 110.6ZM84 132m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM104 84m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM152 68m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM176 92m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0Z",
   caret: "M181.66 133.66l-80 80a8 8 0 0 1-11.32-11.32L164.69 128 90.34 53.66a8 8 0 0 1 11.32-11.32l80 80a8 8 0 0 1 0 11.32Z",
@@ -854,8 +860,71 @@ function menuHtml() {
     '<button data-act="themeMenu"' + (state.themeOpen ? ' class="open"' : "") + ">" + icon("palette") + 'Theme<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">' + esc((THEMES.find((t) => t[0] === state.theme) || THEMES[0])[1]) + "</span>" + icon("caret", ".5") + "</button>" +
     (state.themeOpen ? '<div class="menu sub">' + THEMES.map((t) => '<button data-act="theme" data-arg=\'' + attr({ theme: t[0] }) + "'" + (state.theme === t[0] ? ' class="primary"' : "") + '><span class="swatch" style="background:' + t[2] + '"></span>' + esc(t[1]) + (state.theme === t[0] ? '<span style="margin-left:auto;padding-left:24px">' + icon("check", "1") + "</span>" : "") + "</button>").join("") + "</div>" : "") +
     "</div>" +
+    '<div style="position:relative" data-hover="notify">' +
+    '<button data-act="notifyMenu"' + (state.notifyOpen ? ' class="open"' : "") + ">" + icon("bell") + 'Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">' + esc(notifyWord()) + "</span>" + icon("caret", ".5") + "</button>" +
+    (state.notifyOpen ? notifyMenuHtml() : "") +
+    "</div>" +
     '<div class="sep"></div>' + item("signout", "Disconnect", "disconnect", s.connected || s.email ? { style: "color:var(--neg)" } : { disabled: true }) +
     "</div>";
+}
+// Notifications: the server tells, the browser shows. The kinds are the server's settings; whether this
+// browser may show them is its own permission, asked on the first click (browsers ask only on a click).
+const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
+function notifyState() { return "Notification" in window ? Notification.permission : "unavailable"; }   // granted | denied | default | unavailable
+function notifyOn(kind) { return notifyState() === "granted" && !!(state.status.notify && state.status.notify[kind]); }
+function notifyWord() {
+  const st = notifyState();
+  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.some((k) => notifyOn(k[0])) ? "On" : "Off";
+}
+function notifyMenuHtml() {
+  const st = notifyState(), dead = st === "unavailable" || st === "denied";
+  return '<div class="menu sub">' + NOTIFY_KINDS.map((k) => '<button data-act="notifyToggle" data-arg=\'' + attr({ kind: k[0] }) + "'" + (dead ? " disabled" : "") + ">" + esc(k[1]) + '<span class="sw' + (notifyOn(k[0]) ? " on" : "") + '" style="margin-left:auto"></span></button>').join("") +
+    '<div class="sep"></div><button data-act="notifyTest"' + (dead ? " disabled" : "") + ">" + icon("bell") + "Send a test notification</button></div>";
+}
+function notifyAsk() {
+  // the permission prompt, whichever way this browser answers it (a promise, or the older callback)
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = (r) => { if (!done) { done = true; resolve(r === "granted"); } };
+    try { const p = Notification.requestPermission(settle); if (p && p.then) p.then(settle); } catch (e) { settle(""); }
+  });
+}
+function notifySave(patch) {
+  state.status.notify = Object.assign({}, state.status.notify || {}, patch);
+  renderHeaderOnly();
+  notifyListen();
+  api("POST", "/api/notifications/settings", patch).then((r) => { if (r && r.ok) { state.status.notify = r.settings; renderHeaderOnly(); } });
+}
+function notifyToggle(kind) {
+  const st = notifyState();
+  if (st === "unavailable" || st === "denied") return;
+  if (st === "default") { notifyAsk().then((ok) => { if (ok) { notifyListen(); notifySave({ [kind]: true }); } else renderHeaderOnly(); }); return; }
+  notifySave({ [kind]: !notifyOn(kind) });
+}
+function notifyTest() {
+  const st = notifyState();
+  if (st === "unavailable" || st === "denied") return;
+  const send = () => { notifyListen(); api("POST", "/api/notifications/test", {}); };
+  if (st === "default") notifyAsk().then((ok) => { renderHeaderOnly(); if (ok) send(); }); else send();
+}
+let _notifyStream = null;
+function notifyListen() {
+  // the stream from the server, opened once this browser may show notifications; the browser reconnects it itself
+  if (_notifyStream || notifyState() !== "granted" || !window.EventSource) return;
+  let seen = 0; try { seen = +localStorage.getItem("bh2.notifySeen") || 0; } catch (e) {}
+  _notifyStream = new EventSource("/api/notifications/stream" + (seen ? "?after=" + seen : ""));
+  _notifyStream.onmessage = (e) => { let r = null; try { r = JSON.parse(e.data); } catch (err) {} if (r && r.id) notifyShow(r); };
+}
+function notifyShow(r) {
+  try { localStorage.setItem("bh2.notifySeen", String(r.id)); } catch (e) {}
+  api("POST", "/api/notifications/seen", { ids: [r.id] });
+  let n;
+  try { n = new Notification(r.title, { body: r.body || "", icon: "favicon.png", tag: "bh-" + r.id }); } catch (e) { return; }
+  n.onclick = () => {
+    window.focus();
+    if (r.kind === "fills" || r.kind === "problems") { state.ordersOpen = true; state.ordersTab = r.kind === "fills" ? "filled" : "cancelled"; state.menuOpen = false; render(); loadOrders(); }
+    n.close();
+  };
 }
 function confirmDialogHtml() {
   if (/^bracket:/.test(state.confirmOpen)) {
@@ -3721,8 +3790,11 @@ function act(name, arg, ev) {
     case "preset": setFilters({ preset: f.preset === arg.preset ? "all" : arg.preset, years: [], from: "", to: "" }); break;
     case "rangeOp": f.ranges[arg.key].op = arg.op; if (f.ranges[arg.key].v != null) setFilters({}); else render(); break;
     case "rangeStep": f.ranges[arg.key].v = String(f.ranges[arg.key].v) === String(arg.v) ? null : arg.v; setFilters({}); break;
-    case "menu": state.menuOpen = !state.menuOpen; state.themeOpen = false; state.picker = null; render(); break;
-    case "themeMenu": state.themeOpen = !state.themeOpen; render(); break;
+    case "menu": state.menuOpen = !state.menuOpen; state.themeOpen = false; state.notifyOpen = false; state.picker = null; render(); break;
+    case "themeMenu": state.themeOpen = !state.themeOpen; state.notifyOpen = false; render(); break;
+    case "notifyMenu": state.notifyOpen = !state.notifyOpen; state.themeOpen = false; render(); break;
+    case "notifyToggle": notifyToggle(arg.kind); break;
+    case "notifyTest": notifyTest(); break;
     case "sync": syncNow(); break;
     case "connect": connect(); break;
     case "loginClick": { const p = loginFramePoint(ev); if (p) loginSend({ kind: "click", x: p.x, y: p.y }); break; }
@@ -3986,11 +4058,13 @@ function bind() {
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
     if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover({ target: document.body }, h.dataset.hover);
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
+    else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
   // the Theme row opens its list on hover, as a submenu does; the click stays for touch
   document.addEventListener("mouseover", (e) => {
-    const h = e.target.closest && e.target.closest('[data-hover="theme"]');
-    if (h && !state.themeOpen) { state.themeOpen = true; renderHeaderOnly(); }
+    const h = e.target.closest && e.target.closest('[data-hover="theme"],[data-hover="notify"]');
+    if (h && h.dataset.hover === "theme" && !state.themeOpen) { state.themeOpen = true; state.notifyOpen = false; renderHeaderOnly(); }
+    else if (h && h.dataset.hover === "notify" && !state.notifyOpen) { state.notifyOpen = true; state.themeOpen = false; renderHeaderOnly(); }
   });
   const _scrollTimers = new WeakMap();
   document.addEventListener("scroll", (e) => {
@@ -4013,6 +4087,7 @@ function boot() {
   state.sel = h.sel;
   bind();
   render();
+  notifyListen();
   loadModel();
   pollStatus();
 }

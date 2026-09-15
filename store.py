@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -491,6 +491,20 @@ def _init_schema(conn):
     _ensure_quote_columns(conn)
     _ensure_order_columns(conn)
     _ensure_account_columns(conn)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            body TEXT,
+            extra TEXT,
+            seen_at TEXT
+        );
+        """
+    )
     _ensure_filings_columns(conn)
     _migrate_history_sources(conn)
     conn.execute(
@@ -3229,5 +3243,93 @@ def balances_count():
         try:
             _ready(conn)
             return int(conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0])
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# notifications: one row per event the page tells the person about (notify.py)
+# ---------------------------------------------------------------------------
+
+NOTIFICATIONS_KEPT = 200
+
+
+def _notification(r):
+    if not r:
+        return None
+    try:
+        extra = json.loads(r["extra"] or "{}")
+    except ValueError:
+        extra = {}
+    return {"id": r["id"], "at": r["at"], "kind": r["kind"], "key": r["key"], "title": r["title"], "body": r["body"] or "", "extra": extra, "seenAt": r["seen_at"] or ""}
+
+
+def add_notification(kind, key, title, body, extra=None):
+    """One notification row, keyed so the same event is never stored twice; the oldest
+    beyond the last NOTIFICATIONS_KEPT go. Returns the row as the page reads it, or
+    None when the key is already there."""
+    now = _now_iso()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra) VALUES (?, ?, ?, ?, ?, ?)",
+                (now, _s(kind), _s(key), _s(title), _s(body), json.dumps(extra or {})),
+            )
+            if not cur.rowcount:
+                conn.commit()
+                return None
+            rid = cur.lastrowid
+            conn.execute(
+                "DELETE FROM notifications WHERE id <= (SELECT id FROM notifications ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                (NOTIFICATIONS_KEPT,),
+            )
+            conn.commit()
+            return _notification(conn.execute("SELECT * FROM notifications WHERE id = ?", (rid,)).fetchone())
+        finally:
+            conn.close()
+
+
+def list_notifications(after_id=0, since="", unseen=False, limit=50):
+    """Rows after an id, and from a time when one is given, oldest first."""
+    sql, args = "SELECT * FROM notifications WHERE id > ?", [int(after_id or 0)]
+    if since:
+        sql += " AND at >= ?"
+        args.append(_s(since))
+    if unseen:
+        sql += " AND seen_at IS NULL"
+    sql += " ORDER BY id ASC LIMIT ?"
+    args.append(int(limit))
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return [_notification(r) for r in conn.execute(sql, args).fetchall()]
+        finally:
+            conn.close()
+
+
+def mark_notifications_seen(ids):
+    """A page has shown these: no page shows them again. Returns how many were marked."""
+    clean = []
+    for i in ids or []:
+        try:
+            clean.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        return 0
+    now = _now_iso()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            cur = conn.execute(
+                "UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN (%s)" % ",".join("?" * len(clean)),
+                [now] + clean,
+            )
+            conn.commit()
+            return cur.rowcount
         finally:
             conn.close()

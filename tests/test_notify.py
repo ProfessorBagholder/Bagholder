@@ -1,0 +1,205 @@
+"""Notifications: what is told, once, and how it reaches the page."""
+import http.client
+import json
+import os
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from http.server import ThreadingHTTPServer
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import bagholder  # noqa: E402
+import notify  # noqa: E402
+import store  # noqa: E402
+
+ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"}
+
+
+class NotifyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+        os.environ["BAGHOLDER_HOME"] = self.home
+        store.set_home(self.home)
+        bagholder.set_home(self.home)
+        store.ensure()
+        with bagholder._lock:
+            bagholder._state.update({"connected": False, "error": "", "syncing": False, "capturing": False, "email": "", "syncFails": 0, "syncFirstFail": ""})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_every_kind_is_off_until_turned_on_and_the_settings_round_trip(self):
+        self.assertEqual(notify.settings(), {"fills": False, "problems": False, "connection": False, "updates": False})
+        out = notify.set_settings({"fills": True, "bogus": True, "updates": "yes"})
+        self.assertEqual(out, {"fills": True, "problems": False, "connection": False, "updates": False}, "unknown keys and non-booleans are ignored")
+        self.assertEqual(notify.settings(), out)
+        self.assertEqual(bagholder.status_payload()["notify"], out, "the status payload carries the kinds")
+
+    def test_a_kind_that_is_off_is_not_told_and_a_key_is_told_once(self):
+        self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75"))
+        notify.set_settings({"fills": True})
+        row = notify.emit("fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75")
+        self.assertEqual((row["kind"], row["title"], row["body"], row["seenAt"]), ("fills", "Order filled · QNC", "Bought 5 at 1.75", ""))
+        self.assertIsNone(notify.emit("fills", "order:1:filled", "Order filled · QNC", "again"), "the same event is never told twice")
+        self.assertIsNone(notify.emit("bogus", "x", "t", "b"), "an unknown kind is nothing")
+        self.assertGreater(notify.test_notification()["id"], row["id"], "the test goes out whatever the kinds say")
+        self.assertEqual(len(store.list_notifications()), 2)
+
+    def test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned(self):
+        notify.set_settings({"fills": True})
+        ids = [notify.emit("fills", "k%d" % i, "t", "b")["id"] for i in range(3)]
+        self.assertEqual(store.mark_notifications_seen([ids[0], "x", None]), 1)
+        self.assertEqual([r["id"] for r in store.list_notifications(unseen=True)], ids[1:])
+        self.assertEqual([r["id"] for r in store.list_notifications(after_id=ids[1])], ids[2:])
+        with mock.patch.object(store, "NOTIFICATIONS_KEPT", 2):
+            notify.emit("fills", "k9", "t", "b")
+        self.assertEqual(len(store.list_notifications()), 2, "the newest are kept")
+
+    def test_the_stream_sends_recent_unseen_rows_then_new_ones_with_pings_between(self):
+        notify.set_settings({"fills": True})
+        old = notify.emit("fills", "old", "Old", "b")
+        store.mark_notifications_seen([old["id"]])
+        first = notify.emit("fills", "first", "First", "b")
+        ticks = iter([True, True, True, False])
+        with mock.patch.object(notify, "HEARTBEAT_SEC", 0.05):
+            gen = notify.stream(alive=lambda: next(ticks))
+            hello, row1, ping = next(gen), next(gen), next(gen)
+            second = notify.emit("fills", "second", "Second", "b")
+            row2 = next(gen)
+            self.assertEqual(list(gen), [], "alive said no: the stream ends")
+        self.assertEqual(hello, ": bagholder\n\n")
+        self.assertTrue(row1.startswith("id: %d\ndata: " % first["id"]) and '"title": "First"' in row1, row1)
+        self.assertEqual(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection")
+        self.assertTrue(row2.startswith("id: %d\ndata: " % second["id"]), row2)
+        with mock.patch.object(notify, "HEARTBEAT_SEC", 0.05):
+            gen = notify.stream(after=first["id"])
+            next(gen)
+            self.assertTrue(next(gen).startswith("id: %d\n" % second["id"]), "a page that brings the last id it showed is not told that one again")
+
+    def test_a_fill_read_back_is_told_by_its_role(self):
+        self.assertEqual(bagholder.order_notice(ORDER, {"status": "filled", "filledQty": 5.0, "avgFill": 1.75}), ("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"))
+        stop = dict(ORDER, id="o2", side="SELL", type="STOP", stopPrice=1.66, role="stop")
+        self.assertEqual(bagholder.order_notice(stop, {"status": "filled", "filledQty": 5.0, "avgFill": 1.6374}), ("fills", "order:o2:filled", "Stopped out · QNC", "Sold 5 at 1.64 · 🚀 Trading"))
+        target = dict(ORDER, id="o3", side="SELL", limitPrice=1.93, role="target")
+        self.assertEqual(bagholder.order_notice(target, {"status": "filled", "filledQty": 5.0, "avgFill": 1.93})[2], "Target hit · QNC")
+        self.assertIsNone(bagholder.order_notice(dict(ORDER, status="filled"), {"status": "filled", "filledQty": 5.0, "avgFill": 1.75}), "read back filled again: nothing new")
+        self.assertEqual(bagholder.order_notice(dict(ORDER, quantity=100.0), {"status": "pending", "filledQty": 40.0, "avgFill": 64.5}), ("fills", "order:o1:partial:40", "Partly filled · QNC", "40 of 100 at 64.50 · 🚀 Trading"))
+        self.assertIsNone(bagholder.order_notice(dict(ORDER, quantity=100.0, filledQty=40.0), {"status": "pending", "filledQty": 40.0, "avgFill": 64.5}), "the same partial fill again: nothing new")
+
+    def test_problems_are_told_but_not_the_persons_own_cancel_nor_a_legs_expiry(self):
+        self.assertEqual(bagholder.order_notice(ORDER, {"status": "rejected", "error": "Limit price has too many decimal places. Max allowed: 2"}),
+                         ("problems", "order:o1:rejected", "Order rejected · QNC", "Buy 5 at 1.75 limit · Limit price has too many decimal places. Max allowed: 2"))
+        self.assertEqual(bagholder.order_notice(ORDER, {"status": "failed"})[2], "Order not sent · QNC")
+        self.assertEqual(bagholder.order_notice(ORDER, {"status": "expired"}), ("problems", "order:o1:expired", "Order expired · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"))
+        self.assertEqual(bagholder.order_notice(ORDER, {"status": "cancelled"}), ("problems", "order:o1:cancelled", "Order cancelled · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"))
+        self.assertIsNone(bagholder.order_notice(dict(ORDER, status="cancelling"), {"status": "cancelled"}), "a cancel asked for here passes through cancelling: not told")
+        stop = dict(ORDER, id="o2", side="SELL", type="STOP", stopPrice=1.66, role="stop")
+        self.assertIsNone(bagholder.order_notice(stop, {"status": "expired"}), "a leg's expiry is the engine's to place again")
+        self.assertIsNone(bagholder.order_notice(stop, {"status": "cancelled"}))
+        self.assertEqual(bagholder.order_notice(stop, {"status": "rejected", "error": "no shares"})[3], "Sell 5 stop 1.66 · no shares")
+        self.assertEqual(bagholder._order_words(dict(ORDER, type="MARKET")), "Buy 5 at market")
+        self.assertEqual(bagholder._order_words(dict(ORDER, type="STOP_LIMIT", stopPrice=1.6, limitPrice=1.55, side="SELL", quantity=2.5)), "Sell 2.5 stop 1.60 · limit 1.55")
+        self.assertEqual([bagholder._price_words(p) for p in (1.6374, 0.625, 0.54, 12, None)], ["1.64", "0.625", "0.54", "12.00", "—"])
+
+    def test_a_status_read_back_by_the_refresh_is_told_once(self):
+        notify.set_settings({"fills": True, "problems": True})
+        upd = {"wsStatus": "FILLED", "status": "filled", "filledQty": 5.0, "avgFill": 1.75}
+        with mock.patch.object(bagholder, "_ticket_session", return_value={"access_token": "t"}), \
+             mock.patch.object(bagholder, "fetch_extended_order", return_value=upd), \
+             mock.patch.object(bagholder, "_identity_from", return_value=None), \
+             mock.patch.object(bagholder, "book_order_fill"), \
+             mock.patch.object(store, "list_orders", return_value=[dict(ORDER)]), \
+             mock.patch.object(store, "update_order"), mock.patch.object(store, "get_order", return_value=dict(ORDER)):
+            bagholder.refresh_orders()
+            bagholder.refresh_orders()
+        self.assertEqual([(r["kind"], r["title"], r["body"]) for r in store.list_notifications()], [("fills", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading")])
+
+    def test_a_bracket_that_ends_for_a_reason_of_its_own_is_told_and_the_persons_doing_is_not(self):
+        notify.set_settings({"problems": True})
+        b = {"id": "b1", "orderId": "o1", "symbol": "QNC", "status": "armed", "slOrderId": "", "tpOrderId": "", "attempts": 0}
+        with mock.patch.object(bagholder, "_own_exit_rows", return_value=[]), mock.patch.object(store, "update_bracket"), \
+             mock.patch.object(store, "get_order", return_value={"account": "🚀 Trading"}), mock.patch.object(sys, "stderr"):
+            bagholder._end_bracket(b, "stop cancelled at Wealthsimple by hand")
+            bagholder._end_bracket(b, "stop cancelled at Wealthsimple by hand")
+            bagholder._end_bracket(dict(b, id="b2"), "cancelled by the user")
+            bagholder._end_bracket(dict(b, id="b3"), "both legs removed")
+            bagholder._end_bracket(dict(b, id="b4"), "sold from the ticket")
+            bagholder._end_bracket(dict(b, id="b5"), "stopped")
+            bagholder._fail(b, "stop not placed: Insufficient shares")
+            bagholder._fail(dict(b, attempts=1), "stop not placed: Insufficient shares")
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [
+            ("Bracket off · QNC", "Stop cancelled at Wealthsimple by hand · 🚀 Trading"),
+            ("Bracket · QNC", "Stop not placed: Insufficient shares · trying again in a minute · 🚀 Trading"),
+        ], "the fill is the order's to tell, the person's own doing is nothing, a refusal is told on the first attempt")
+
+    def test_the_session_expiring_is_told_on_the_transition_and_a_failing_sync_on_the_third_time(self):
+        notify.set_settings({"connection": True})
+        bagholder.note_session_expired()
+        self.assertEqual(store.list_notifications(), [], "not connected: nothing expired")
+        with bagholder._lock:
+            bagholder._state["connected"] = True
+        bagholder.note_session_expired()
+        bagholder.note_session_expired()
+        self.assertFalse(bagholder._state["connected"])
+        for _ in range(4):
+            bagholder.note_sync_failed("Wealthsimple did not answer")
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [
+            ("Sign in needed", "The Wealthsimple session expired. Connect again from the menu."),
+            ("Sync failing", "Wealthsimple did not answer"),
+        ])
+
+    def test_a_newer_release_is_told_once(self):
+        notify.set_settings({"updates": True})
+        with mock.patch.object(bagholder, "_http_json", return_value={"tag_name": "v99.0.0", "html_url": "https://x", "assets": []}):
+            bagholder.check_for_update()
+            bagholder.check_for_update()
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [("Bagholder v99.0.0 is available", "Update from the header.")])
+        with mock.patch.object(bagholder, "_http_json", return_value={"tag_name": "v0.0.1", "html_url": "https://x", "assets": []}):
+            bagholder.check_for_update()
+        self.assertEqual(len(store.list_notifications()), 1, "an older release never tells")
+
+    def test_the_endpoints_serve_the_settings_the_stream_the_test_and_the_seen_mark(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), bagholder.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        write = {"X-Bagholder": "1", "Content-Type": "application/json"}
+        try:
+            with mock.patch.object(notify, "HEARTBEAT_SEC", 0.2):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                c.request("POST", "/api/notifications/settings", body=json.dumps({"fills": True}), headers=write)
+                self.assertEqual(json.loads(c.getresponse().read())["settings"]["fills"], True)
+                s = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                s.request("GET", "/api/notifications/stream")
+                resp = s.getresponse()
+                self.assertEqual((resp.status, resp.getheader("Content-Type")), (200, "text/event-stream; charset=utf-8"))
+                self.assertEqual(resp.readline(), b": bagholder\n")
+                c.request("POST", "/api/notifications/test", body="{}", headers=write)
+                self.assertTrue(json.loads(c.getresponse().read())["ok"])
+                got = None
+                deadline = time.time() + 5
+                while time.time() < deadline and got is None:
+                    line = resp.readline()
+                    if line.startswith(b"data: "):
+                        got = json.loads(line[6:])
+                self.assertEqual((got["kind"], got["title"], got["body"]), ("test", "Bagholder", "Notifications reach you here."))
+                s.close()
+                c.request("POST", "/api/notifications/seen", body=json.dumps({"ids": [got["id"]]}), headers=write)
+                self.assertEqual(json.loads(c.getresponse().read())["seen"], 1)
+                c.request("GET", "/api/notifications")
+                out = json.loads(c.getresponse().read())
+                self.assertEqual((out["settings"]["fills"], out["rows"][0]["seenAt"] != ""), (True, True))
+                c.request("POST", "/api/notifications/settings", body="{}", headers={"Content-Type": "application/json"})
+                self.assertEqual(c.getresponse().status, 403, "a write without the page's own header is refused")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+if __name__ == "__main__":
+    unittest.main()
