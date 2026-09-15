@@ -543,12 +543,13 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-15.2"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-15.3"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
 const _tfByTrade = {};
 function autoTf(t) {
+  if (t.listing) return "1d";   // a listing's page opens on a year of days, whatever it was traded on
   const days = Math.max(1, Math.round((Date.parse(t.exitDate) - Date.parse(t.entryDate)) / 86400000) + 1);
   return days <= 2 ? "1h" : days <= 10 ? "4h" : days <= 180 ? "1d" : days <= 1100 ? "1w" : "1M";
 }
@@ -703,7 +704,64 @@ function holdingAsTrade(p) {
   if (!p) return null;
   return Object.assign({}, p, { holding: true, pnl: p.unreal, pnlPct: p.unrealPct, entryDate: p.opened, exitDate: "", entry: p.avg, exit: p.last, holdDays: p.held, status: "open", legs: [] });
 }
-function selById(id) { return tradeById(id) || holdingAsTrade(positionById(id)); }
+function selById(id) { return tradeById(id) || holdingAsTrade(positionById(id)) || listingAsTrade(id); }
+// A listing the book does not hold opens the page a holding opens, with the listing standing
+// in for the trade: no size, no cost and no P&L, since it has none, and the executions of the
+// trades closed on it marked on the chart — a listing never traded has none to mark.
+const _listings = {};
+const LISTING_DAYS = 365;
+function listingId(o) { return "listing:" + bareSymbol(String(o.symbol || "")).toUpperCase() + "@" + String(o.exchange || "").toUpperCase(); }
+function isListingId(id) { return String(id || "").slice(0, 8) === "listing:"; }
+function listingAsTrade(id) {
+  if (!isListingId(id)) return null;
+  const at = String(id).slice(8).split("@");
+  const l = _listings[id] || (_listings[id] = { symbol: at[0], exchange: at[1] || "", currency: "", name: "", kind: "" });
+  // the quote the page already keeps for a watched listing, which follows the model's own clock
+  const w = (((state.model || {}).markets || {}).watchlist || []).find((x) => listingId(x) === id);
+  const last = w && w.last != null ? w.last : l.price;
+  const chg = w && w.last != null ? w.percentChange : l.percentChange;
+  return Object.assign({}, l, { id, listing: true, legs: [], tags: [], status: "listing", holding: false,
+    pnl: null, pnlPct: null, entryDate: new Date(Date.now() - LISTING_DAYS * 86400000).toISOString().slice(0, 10), exitDate: "",
+    holdDays: null, last, percentChange: chg, kind: l.kind || (w && w.kind) || "Shares", name: l.name || (w && w.name) || "" });
+}
+const _listingPending = {};
+function loadListing(id) {
+  const l = _listings[id];
+  if (!l || _listingPending[id]) return;
+  _listingPending[id] = true;
+  const q = "symbol=" + encodeURIComponent(l.symbol) + "&exchange=" + encodeURIComponent(l.exchange || "") +
+    "&currency=" + encodeURIComponent(l.currency || "") + "&name=" + encodeURIComponent(l.name || "");
+  api("GET", "/api/listing?" + q).then((d) => {
+    delete _listingPending[id];
+    if (!(d && d.ok)) { l.fills = []; if (state.sel === id) render(); return; }
+    // held after all (a row opened before the model caught up): its page is the holding's
+    if (d.positionId) {
+      if (state.sel !== id) return;
+      state.sel = d.positionId; state.page = "portfolio";
+      history.replaceState(null, "", "#portfolio/" + encodeURIComponent(d.positionId));
+      render(); return;
+    }
+    ["exchange", "currency", "name", "kind", "securityId"].forEach((k) => { if (!l[k] && d[k]) l[k] = d[k]; });
+    l.fills = d.fills || [];
+    l.price = d.price; l.percentChange = d.percentChange;
+    if (state.sel === id) render();
+  });
+}
+// Every listing on Markets opens its page: the holding's where the book holds it, its own otherwise.
+function openListing(o) {
+  if (o.positionId) { openHolding(o.positionId); return; }
+  const id = listingId(o);
+  const l = _listings[id] || (_listings[id] = { symbol: bareSymbol(String(o.symbol || "")).toUpperCase(), exchange: String(o.exchange || "") });
+  ["currency", "name", "kind"].forEach((k) => { if (!l[k] && o[k]) l[k] = o[k]; });
+  _listScrollY = window.scrollY;
+  state.sel = id;
+  state.tagDraft = ""; state.discSource = null; state.discOpening = null; state.discExpanded = null;
+  state.page = "markets";
+  state.picker = null;
+  location.hash = "markets/" + encodeURIComponent(id);
+  render();
+  window.scrollTo(0, 0);
+}
 function filtersActive() {
   const f = state.filters;
   return Object.keys(f.lists).some((k) => f.lists[k].length) || Object.keys(f.ranges).some((k) => f.ranges[k].v != null && f.ranges[k].v !== "") ||
@@ -720,7 +778,7 @@ function loadModel() {
   if (!state.model) render();
   const q = encodeURIComponent(JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })));
   // legs and fills travel only for the open trade: the lists never read them
-  const detail = state.sel ? "&trade=" + encodeURIComponent(state.sel) : "";
+  const detail = state.sel && !isListingId(state.sel) ? "&trade=" + encodeURIComponent(state.sel) : "";
   return fetch("/api/model?filters=" + q + detail, { headers: { "X-Bagholder": "1" } })
     .then((r) => r.json())
     .then((m) => {
@@ -1238,9 +1296,10 @@ function chips() {
   });
   return out;
 }
+const DETAIL_PAGES = ["trades", "portfolio", "markets"];
 function tabsHtml() {
-  const t = (id, label) => '<button class="tabbtn' + (state.page === id && !((id === "trades" || id === "portfolio") && state.sel) ? " on" : "") + '" data-act="page" data-arg=\'' + attr({ page: id }) + "'>" + label + "</button>";
-  const sel = (state.page === "trades" || state.page === "portfolio") && state.sel ? selById(state.sel) : null;
+  const t = (id, label) => '<button class="tabbtn' + (state.page === id && !(DETAIL_PAGES.indexOf(id) >= 0 && state.sel) ? " on" : "") + '" data-act="page" data-arg=\'' + attr({ page: id }) + "'>" + label + "</button>";
+  const sel = DETAIL_PAGES.indexOf(state.page) >= 0 && state.sel ? selById(state.sel) : null;
   return '<div class="tabbar" style="display:flex;gap:22px;padding:0 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)"><div class="tabind" id="tabInd"></div>' +
     t("dashboard", "Dashboard") + t("trades", "Trades") + t("portfolio", "Portfolio") + t("markets", "Markets") + t("cashflow", "Cashflow") +
     (sel ? '<div style="display:flex;align-items:center;gap:6px;flex:none;min-width:0;white-space:nowrap;margin-left:6px"><span style="font-size:13px;color:rgba(var(--ink-rgb),.4)">›</span><span style="font:500 13px Inter,system-ui;padding:11px 0;max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)">' + esc(symText(sel.symbol)) + "</span></div>" : "") +
@@ -2883,7 +2942,28 @@ function disclosuresCardHtml(t) {
     '<div class="dc-head" style="grid-template-columns:' + tmpl + '">' + gridTh("disc", cols) + "<div></div></div>" +
     '<div class="scroll dc-list" style="max-height:330px">' + rows.map(row).join("") + "</div>");
 }
+// The ticket where the book can trade it: Buy and Sell as ⌘K's rows carry them, live on a
+// share, Sell only where a position is open, nothing on an option contract or a coin.
+function ticketButtonsHtml(t) {
+  if (String(t.kind || "Shares") !== "Shares") return "";
+  if (!t.listing) return tkRowButtons(t.symbol);
+  return '<span class="tk-rowbtns">' + tkIcon("BUY", true, t.symbol, "tkOpenExt", { symbol: t.symbol, exchange: t.exchange, currency: t.currency, name: t.name }) + tkIcon("SELL", false) + "</span>";
+}
+// A listing the book does not hold: the same page, without what belongs to a trade. It has no
+// size, cost or P&L, so its price stands where the P&L does, and no executions, notes, grade or
+// tags. Its chart, short interest and disclosures are the holding's own.
+function listingDetailHtml(t) {
+  return '<div style="display:flex;flex-direction:column;gap:14px">' +
+    '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:flex-start;gap:14px;margin:0 0 14px"><div style="min-width:0"><h4>' + esc(symText(t.symbol)) + '</h4>' +
+    '<div class="dim" style="font-size:11.5px;margin-top:2px">' + esc(t.name || t.symbol) + (t.exchange ? " · " + esc(t.exchange) + ": " + esc(listingTicker(t)) : "") + "</div></div>" +
+    '<div style="margin-left:auto;display:flex;align-items:center;gap:12px">' + ticketButtonsHtml(t) +
+    '<div style="text-align:right"><div class="tab" style="font-size:24px;font-weight:500;line-height:1.1">' + (t.last == null ? "—" : px(t.last)) + "</div>" +
+    '<div class="tab" style="font-size:12px;margin-top:2px;color:' + (t.percentChange == null ? "var(--ink55)" : color(t.percentChange)) + '">' + signedPct(t.percentChange) + "</div></div></div></div>" +
+    '<div id="chartTf" style="display:flex;gap:4px;justify-content:flex-end;margin:0 0 8px"></div><div id="tradeChart" style="position:relative;height:300px"></div></div>' +
+    shortsSectionHtml(t) + disclosuresCardHtml(t) + "</div>";
+}
 function tradeDetailHtml(t, m) {
+  if (t.listing) return listingDetailHtml(t);
   const fact = (l, v) => '<div><div class="lbl">' + l + '</div><div class="tab" style="font-size:13px">' + v + "</div></div>";
   const s = state.sort.execs;
   const execs = sortRows(t.fills || [], s.key, s.dir, execSortValue);
@@ -2892,7 +2972,8 @@ function tradeDetailHtml(t, m) {
   return '<div style="display:flex;flex-direction:column;gap:14px">' +
     '<div class="card elev-sm" style="padding:16px 18px 12px"><div style="display:flex;align-items:flex-start;gap:14px;margin:0 0 14px"><div style="min-width:0"><h4>' + esc(symText(t.symbol)) + '</h4><div class="dim" style="font-size:11.5px;margin-top:2px">' + esc(t.name || t.symbol) + (t.exchange ? " · " + esc(t.exchange) + ": " + esc(listingTicker(t)) : "") + "</div>" +
 "</div>" +
-    '<div style="margin-left:auto;text-align:right"><div class="tab" style="font-size:24px;font-weight:500;line-height:1.1;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</div><div class="tab" style="font-size:12px;color:' + color(t.pnl) + ';margin-top:2px">' + pct(t.pnlPct) + "</div></div></div>" +
+    '<div style="margin-left:auto;display:flex;align-items:center;gap:12px">' + ticketButtonsHtml(t) +
+    '<div style="text-align:right"><div class="tab" style="font-size:24px;font-weight:500;line-height:1.1;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</div><div class="tab" style="font-size:12px;color:' + color(t.pnl) + ';margin-top:2px">' + pct(t.pnlPct) + "</div></div></div></div>" +
     '<div id="chartTf" style="display:flex;gap:4px;justify-content:flex-end;margin:0 0 8px"></div><div id="tradeChart" style="position:relative;height:300px"></div></div>' +
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch;height:372px">' +
     '<div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0"><div class="rule-b" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 0 14px">' +
@@ -3255,8 +3336,10 @@ function mountHeatmap() {
       box.appendChild(el);
       if (had) el.classList.add("bh-new");   // the first draw is not an arrival
     }
-    el.className = "heat-tile" + (c.id ? " go" : "") + (fresh && had ? " bh-new" : "");
+    const opens = !!c.id || (!!c.symbol && !c.other);   // a folded `Other (N)` tile is several listings, and opens none
+    el.className = "heat-tile" + (opens ? " go" : "") + (fresh && had ? " bh-new" : "");
     if (c.id) { el.dataset.act = "heatOpen"; el.dataset.arg = JSON.stringify({ id: c.id }); }
+    else if (opens) { el.dataset.act = "listingOpen"; el.dataset.arg = JSON.stringify(heatListing(c)); }
     else { delete el.dataset.act; delete el.dataset.arg; }
     heatPlace(el, c.x + 1, c.y + 1, Math.max(0, c.w - 2), Math.max(0, c.h - 2));
     el.style.background = heatColor(c.percentChange);
@@ -3287,6 +3370,12 @@ function heatHeaderHtml(full) {
     (full ? '<button class="heat-ghost" data-act="heatShowToggle" aria-label="' + (state.heatShow ? "Stop cycling" : "Cycle through the scopes") + '"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + (state.heatShow ? ICONS.pause : ICONS.play) + '"/></svg></button>' +
       '<button class="heat-ghost" data-act="heatFullClose" aria-label="Back to Markets"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button>'
       : '<button class="heat-ghost" data-act="heatFull" aria-label="Heatmap on its own"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.arrowsOut + '"/></svg></button>') + "</div>";
+}
+// A market universe's tiles carry no venue of their own: the universe is the venue.
+function heatListing(c) {
+  const u = state.heat.universe;
+  const venue = c.exchange || (u === "ca" ? "TSX" : "");
+  return { symbol: bareSymbol(c.symbol), exchange: venue, currency: c.currency || (u === "ca" ? "CAD" : HEAT_MARKETS[u] ? "USD" : ""), name: c.name || "" };
 }
 function heatEmptyWord() { const h = state.heat; return h.universe === "watchlist" ? "Nothing watched." : HEAT_MARKETS[h.universe] ? "Not read yet." : "No open positions."; }
 function heatmapCardHtml(mk) {
@@ -3616,7 +3705,8 @@ function watchlistCardHtml(rows) {
   // a listing just added shows the price its match showed, until the server's own quote lands
   rows = rows.map((w) => { const c = w.last == null && typeof _sugQuotes !== "undefined" ? _sugQuotes[bareSymbol(w.symbol) + "@" + String(w.exchange || "").toUpperCase()] : null; return c ? Object.assign({}, w, c) : w; });
   rows = sortRows(rows.map((w, i) => Object.assign({ added: i }, w)), s.key, s.dir, (w, k) => k === "symbol" ? bareSymbol(w.symbol).toLowerCase() : k === "exchange" ? String(w.exchange || "").toLowerCase() : k === "last" ? w.last : k === "chg" ? w.percentChange : w.added);
-  const row = (w) => '<div class="wl-row' + (w.positionId ? " go" : "") + (state.watchNew && state.watchNew === bareSymbol(w.symbol) + "@" + String(w.exchange || "").toUpperCase() ? " wl-new" : "") + '"' + (w.positionId ? ' data-act="heatOpen" data-arg=\'' + attr({ id: w.positionId }) + "'" : "") + ">" +
+  const row = (w) => '<div class="wl-row go' + (state.watchNew && state.watchNew === bareSymbol(w.symbol) + "@" + String(w.exchange || "").toUpperCase() ? " wl-new" : "") + '" data-act="listingOpen" data-arg=\'' +
+    attr({ symbol: bareSymbol(w.symbol), exchange: w.exchange || "", currency: w.currency || "", name: w.name || "", kind: w.kind || "", positionId: w.positionId || "" }) + "'>" +
     '<div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">' + esc(bareSymbol(w.symbol)) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(w.name || "") + "</div></div>" +
     '<div style="font-size:12px;color:var(--ink55);text-align:right">' + esc(w.exchange || "") + "</div>" +
     '<div class="tab" style="text-align:right;font-size:13px">' + (w.last == null ? "—" : px(w.last)) + "</div>" +
@@ -3631,6 +3721,7 @@ function watchlistCardHtml(rows) {
 }
 function marketsHtml(m) {
   const mk = m.markets || { holdings: [], watchlist: [] };
+  if (state.sel && isListingId(state.sel)) return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + tradeDetailHtml(selById(state.sel), m) + "</div>";
   return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + marketTilesHtml() + heatmapCardHtml(mk) +
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div>" +
     shortsListCardHtml() + "</div>";
@@ -3705,8 +3796,8 @@ function shortsListCardHtml() {
   const rows = sortRows(pool, s.key, s.dir, (r, k) =>
     k === "symbol" ? String(r.symbol || "").toLowerCase() : k === "exchange" ? String(r.exchange || "").toLowerCase() :
     k === "asOf" ? String(r.asOf || "") : (r[k] == null ? -Infinity : r[k]));
-  const row = (r) => '<div class="si-row' + (r.positionId ? " go" : "") + '"' +
-    (r.positionId ? ' data-act="heatOpen" data-arg=\'' + attr({ id: r.positionId }) + "'" : "") + ">" +
+  const row = (r) => '<div class="si-row go" data-act="listingOpen" data-arg=\'' +
+    attr({ symbol: r.symbol, exchange: r.exchange || "", name: r.name || "", positionId: r.positionId || "" }) + "'>" +
     '<div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">' + esc(r.symbol) + '</div>' +
     '<div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(r.name || "") + "</div></div>" +
     '<div style="font-size:12px;color:var(--ink55);text-align:right">' + esc(r.exchange || "") + "</div>" +
@@ -4230,7 +4321,7 @@ function render() {
   if (leavingSkeleton && !document.getElementById("pageSkel")) crossFadeSkeleton(leavingSkeleton);
   placeTabIndicator();
   heatShowSync();
-  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) loadTradeDetail(open.id); ensureDisclosures(open); ensureShorts(open); } }
+  if (state.sel) { const open = selById(state.sel); if (open) { if (open.fills === undefined) { if (open.listing) loadListing(open.id); else loadTradeDetail(open.id); } ensureDisclosures(open); ensureShorts(open); } }
   mountTradeChart();
   mountHeatmap();
   mountReels();
@@ -4273,7 +4364,9 @@ function hashState() {
     return { page: "heatmap", sel: null, heat, show };
   }
   const page = PAGES.indexOf(parts[0]) >= 0 ? parts[0] : "dashboard";
-  return { page, sel: (page === "trades" || page === "portfolio") && parts.length > 1 ? parts.slice(1).join("/") : null };
+  const rest = parts.length > 1 ? parts.slice(1).join("/") : "";
+  const carries = page === "trades" || page === "portfolio" || (page === "markets" && isListingId(rest));
+  return { page, sel: carries && rest ? rest : null };
 }
 function applyHash() {
   const h = hashState();
@@ -4284,7 +4377,7 @@ function applyHash() {
   state.picker = null;
   state.menuOpen = false;
   state.tagDraft = "";
-  const backToList = (h.page === "trades" || h.page === "portfolio") && !h.sel;
+  const backToList = (h.page === "trades" || h.page === "portfolio" || h.page === "markets") && !h.sel;
   render();
   if (backToList) window.scrollTo(0, _listScrollY);
   if (state.derivedStale && !state.sel) { state.derivedStale = false; loadModel(); }
@@ -4484,6 +4577,7 @@ function act(name, arg, ev) {
     }
     case "noop": break;
     case "heatOpen": openHolding(arg.id); break;
+    case "listingOpen": openListing(arg); break;
     case "newsSym": state.newsSymbol = { symbol: arg.symbol, exchange: arg.exchange }; render(); break;
     case "newsSymClear": state.newsSymbol = null; render(); break;
     case "discCat": state.discCat = arg.cat; render(); break;

@@ -44,6 +44,8 @@ CA_CBOE_URL = "https://www-api.cboe.com/ca/equities/listing-directory-data/"
 CBOE_FUNDS = ("etf", "cef")      # what that venue calls the listings whose units in issue are their float
 # what the Canadian files call each venue, against what the app calls it
 CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL": ("CBOE CANADA", "NEO")}
+# and how the app writes each of them, for a listing the app knew no venue for
+CA_VENUE_NAMES = {"TSX": "TSX", "TSXV": "TSX-V", "CSE": "CSE", "AQL": "Cboe Canada"}
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 SERIES = 8               # reports behind the run shown with the position
@@ -491,7 +493,9 @@ def ca_position(symbol, exchange="", ssl_context=None, now=None):
     earlier = [d.isoformat() for d in position_dates(now.date() if now else datetime.now(timezone.utc).date()) if d.isoformat() < held["key"]]
     return {"asOf": held["key"], "shares": shares, "change": change,
             "previous": (shares - change) if change is not None else None,
-            "previousOf": earlier[0] if earlier else ""}
+            "previousOf": earlier[0] if earlier else "",
+            # the report names the venue and the issuer: what a listing the app knows nothing about is
+            "venue": _s(row.get("venue")).strip().upper(), "issuer": _s(row.get("name")).strip()}
 
 
 def ca_volume(symbol, exchange="", currency="", ssl_context=None, now=None):
@@ -559,10 +563,18 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     # the record names its own listing, as a stored one does: a ticker read on the spot for the
-    # ranked list's box is not in the store yet, and without this its row had no exchange
-    rec.update({"symbol": sym, "exchange": _s(exchange).strip().upper(), "market": where,
+    # ranked list's box is not in the store yet, and without this its row had no exchange. A
+    # listing the app knew no venue for takes the one the regulator's own report gives it,
+    # and the issuer's name with it, so a searched row reads like every other row.
+    venue, issuer = _s(rec.pop("venue", "")).strip().upper(), _s(rec.pop("issuer", "")).strip()
+    rec.update({"symbol": sym, "exchange": _s(exchange).strip().upper() or CA_VENUE_NAMES.get(venue, ""), "market": where,
                 "source": "FINRA" if where == "us" else "CIRO"})
-    floated = float_shares(sym, exchange, currency, name, ssl_context)
+    if issuer:
+        rec["name"] = issuer
+    # a listing the book does not carry is asked for under its ticker, and a ticker is not a name:
+    # the issuer the report names is what tells a fund from a company, and so what its short
+    # position is measured against — the units in issue rather than a float nobody publishes
+    floated = float_shares(sym, exchange, currency, _s(name).strip() or issuer, ssl_context)
     rec["float"] = floated
     rec["ofFloat"] = (rec["shares"] / floated * 100) if floated and rec.get("shares") else None
     rec["averageVolume"] = average_volume(rec, now)

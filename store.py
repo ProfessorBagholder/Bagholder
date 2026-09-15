@@ -502,6 +502,7 @@ def _init_schema(conn):
             short_volume REAL,
             total_volume REAL,
             volume_pct REAL,
+            name TEXT,
             series TEXT,
             read_version INTEGER,
             fetched_at TEXT,
@@ -1611,7 +1612,7 @@ def _ensure_shorts_columns(conn):
     """A table already created by an earlier version keeps its columns: CREATE TABLE IF NOT
     EXISTS adds none, so a column added later is added here."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(shorts)").fetchall()}
-    for col, typ in (("read_version", "INTEGER"),):
+    for col, typ in (("read_version", "INTEGER"), ("name", "TEXT")):
         if col not in cols:
             conn.execute("ALTER TABLE shorts ADD COLUMN %s %s" % (col, typ))
 
@@ -3205,9 +3206,9 @@ def replace_filings(symbol, source, items, now=None):
 
 
 SHORT_FIELDS = ("market", "asOf", "shares", "previous", "previousOf", "change", "float", "ofFloat",
-                "averageVolume", "daysToCover", "volumeOf", "volumeSpan", "shortVolume", "totalVolume", "volumePct")
+                "averageVolume", "daysToCover", "volumeOf", "volumeSpan", "shortVolume", "totalVolume", "volumePct", "name")
 _SHORT_COLUMNS = ("market", "as_of", "shares", "previous", "previous_of", "change", "float_shares", "of_float",
-                  "average_volume", "days_to_cover", "volume_of", "volume_span", "short_volume", "total_volume", "volume_pct")
+                  "average_volume", "days_to_cover", "volume_of", "volume_span", "short_volume", "total_volume", "volume_pct", "name")
 
 
 def _short_row(r):
