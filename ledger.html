@@ -2564,11 +2564,11 @@ function shortsHeader(title, right) {
 function shortsRingCard(key, title, when, pct, parts, footer, missing) {
   let body = '<div class="muted empty" style="flex:1;font-size:12px">' + missing + "</div>";
   if (pct != null && parts) {
-    const d = donutPieces(key, "Short", parts, null, "l", 210, n2(pct, 2) + "%");
-    // the legend under the ring rather than beside it, so the ring itself sits in the middle
-    // of the tile: a ring and a legend centred as a pair leaves the ring off to one side
-    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;flex-direction:column;align-items:center;gap:13px;flex:1;min-height:0;justify-content:center">' +
-      d.ring + d.legend + "</div>";
+    const d = donutPieces(key, "Short", parts, null, "row", 210, n2(pct, 2) + "%");
+    // the legend reads across above the ring, and the ring sits in the middle of the tile
+    // under it: a ring and a legend centred as a pair leaves the ring off to one side
+    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;flex-direction:column;align-items:center;gap:14px;flex:1;min-height:0;justify-content:center">' +
+      d.legend + d.ring + "</div>";
   }
   return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
     shortsHeader(title, when) + body +
@@ -2970,7 +2970,8 @@ const _donuts = {};
 // a donut's two pieces: the ring with its centre, and the legend (swatch, name, share; mirrored when `side` is "r")
 // `size` sets the ring's width (a number in px, or a CSS width such as "100%" of its grid cell); without it the ring takes
 // what its card leaves beside the legend. With a null `total` the centre reads `centreText` under its label (a count, say),
-// and a hovered slice shows its name and share
+// and a hovered slice shows its name and share. `side` is which side of the ring the legend sits on, "l" or "r", or "row"
+// for a line of entries reading across — for a donut of two pieces that sits above or below the ring rather than beside it
 function donutPieces(key, centreLabel, items, total, side, size, centreText) {
   _donuts[key] = { items, total, centreLabel, centreText };
   const R = 44, W = 14, C = 60, SIZE = size || 264;
@@ -2989,8 +2990,12 @@ function donutPieces(key, centreLabel, items, total, side, size, centreText) {
   const swatch = (x) => '<span style="width:9px;height:9px;border-radius:2px;background:' + x.color + '"></span>';
   const name = (x) => '<span style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' + (side === "r" ? ";text-align:right" : "") + '">' + esc(x.label) + "</span>";
   const share = (x) => '<span class="tab" style="text-align:' + (side === "r" ? "left" : "right") + ';white-space:nowrap">' + pctPlain(x.share) + "</span>";
-  const legend = '<div id="' + key + 'Legend" class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;justify-self:' + (side === "r" ? "end" : "start") + ';display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">' +
-    items.map((x, i) => '<span data-slice="' + i + '" style="display:contents">' + (side === "r" ? share(x) + name(x) + swatch(x) : swatch(x) + name(x) + share(x)) + "</span>").join("") + "</div>";
+  const legend = side === "row"
+    ? '<div id="' + key + 'Legend" style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px 24px;font-size:12.5px">' +
+        items.map((x, i) => '<span data-slice="' + i + '" style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap">' + swatch(x) +
+          '<span style="font-weight:500">' + esc(x.label) + '</span><span class="tab" style="color:var(--ink55)">' + pctPlain(x.share) + "</span></span>").join("") + "</div>"
+    : '<div id="' + key + 'Legend" class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;justify-self:' + (side === "r" ? "end" : "start") + ';display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">' +
+        items.map((x, i) => '<span data-slice="' + i + '" style="display:contents">' + (side === "r" ? share(x) + name(x) + swatch(x) : swatch(x) + name(x) + share(x)) + "</span>").join("") + "</div>";
   return { ring, legend };
 }
 function donutCardHtml(key, title, centreLabel, items, total, empty) {
