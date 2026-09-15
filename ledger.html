@@ -487,7 +487,7 @@ const state = {
   tileDrag: null,     // the tile under the pointer during a reorder
   tileOrder: null,    // the row's order while a reorder or a save is in flight
   newsScope: (function () { try { return localStorage.getItem("bh2.news") || "all"; } catch (e) { return "all"; } })(),
-  newsKind: (function () { try { return localStorage.getItem("bh2.newsKind") === "disc" ? "disc" : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, or the disclosures
+  newsKind: (function () { try { const k = localStorage.getItem("bh2.newsKind"); return k === "disc" || k === "releases" ? k : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, the releases, or the disclosures
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
@@ -3067,8 +3067,11 @@ function newsCardHtml(items) {
   const isOnly = (t) => only && bareSymbol(t.symbol) === only.symbol && String(t.exchange || "").toUpperCase() === only.exchange;
   // the box: a ticker first (a listing's symbol starting with the text); only when no listing matches, a word of the
   // headline or publisher starting with it, so `SH` is Shopify's news and not every headline with "shake" in it
-  // All is the market's own feed; Holdings and Watchlist are the stories read for those listings
-  let rows = (items || []).filter((n) => only ? n.tags.some(isOnly) : scope === "all" ? n.market : n.tags.some((t) => scope === "holdings" ? t.held : t.watched));
+  // All is the market's own feed; Holdings and Watchlist are the stories read for those listings. Releases are the
+  // companies' own, told by the wire they came on; the market feed carries none, so All there is every listing held or watched.
+  const releases = state.newsKind === "releases";
+  let rows = (items || []).filter((n) => (releases ? n.kind === "release" : n.kind !== "release") &&
+    (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
   if (q) {
     const tokens = q.split(/\s+/);
     const bySym = tokens.length === 1 && q.length <= 5 ? rows.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : [];
@@ -3077,7 +3080,7 @@ function newsCardHtml(items) {
   }
   const first = (n) => n.tags[0] || {};
   // the market's feed names no listing: no Symbol or Change column, and a sort on either reads newest first
-  const bare = scope === "all" && !only;
+  const bare = scope === "all" && !only && !releases;
   if (bare && s.key !== "when" && s.key !== "news") s = { key: "when", dir: "desc" };
   rows = sortRows(rows, s.key, s.dir, (n, k) => k === "when" ? n.publishedAt : k === "news" ? n.headline.toLowerCase() : k === "symbol" ? (first(n).symbol ? bareSymbol(first(n).symbol).toLowerCase() : null) : first(n).percentChange);
   const sym = (t) => '<button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || "").toUpperCase() }) + "'>" + esc(bareSymbol(t.symbol)) + "</button>";
@@ -3090,12 +3093,12 @@ function newsCardHtml(items) {
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
   return '<div class="card elev-sm" style="padding:14px 16px 12px"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
     msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
-    msegHtml("newsKind", "kind", [["stories", "Stories"], ["disc", "Disclosures"]], state.newsKind) +
+    msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
-      : '<div class="muted" style="font-size:12px">No news.</div>') + "</div>";
+      : '<div class="muted" style="font-size:12px">' + (releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
 // The card's other view: the disclosures of the listings in scope, merged newest first from what the store holds,
 // or of one listing, the chip's, read on demand as the instrument page reads them; the box finds any ticker.
@@ -4011,7 +4014,7 @@ function act(name, arg, ev) {
       clearTimeout(_discOpenTimer); _discOpenTimer = setTimeout(() => { state.discOpening = null; render(); }, 4000);
       break;
     }
-    case "newsKind": state.newsKind = arg.kind === "disc" ? "disc" : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
+    case "newsKind": state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;

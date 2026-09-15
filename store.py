@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -422,6 +422,7 @@ def _init_schema(conn):
             url TEXT,
             published_at TEXT,
             fetched_at TEXT,
+            kind TEXT,
             PRIMARY KEY (id, symbol, exchange)
         );
         CREATE INDEX IF NOT EXISTS news_published ON news (published_at);
@@ -507,6 +508,7 @@ def _init_schema(conn):
         """
     )
     _ensure_notifications_columns(conn)
+    _ensure_news_columns(conn)
     _ensure_filings_columns(conn)
     _migrate_history_sources(conn)
     conn.execute(
@@ -2947,8 +2949,10 @@ def news_key(symbol, exchange):
 
 
 def _news_from_row(r):
+    keys = r.keys() if hasattr(r, "keys") else []
     return {"id": r["id"], "symbol": r["symbol"], "exchange": r["exchange"] or "", "source": r["source"] or "", "headline": r["headline"] or "",
-            "wire": r["wire"] or "", "url": r["url"] or "", "publishedAt": r["published_at"] or "", "fetchedAt": r["fetched_at"] or ""}
+            "wire": r["wire"] or "", "url": r["url"] or "", "publishedAt": r["published_at"] or "", "fetchedAt": r["fetched_at"] or "",
+            "kind": (r["kind"] if "kind" in keys else "") or "story"}
 
 
 def replace_news(symbol, exchange, source, rows, now=None):
@@ -2960,8 +2964,8 @@ def replace_news(symbol, exchange, source, rows, now=None):
         try:
             _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (sym, ex))
-            conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             [(_s(r.get("id")), sym, ex, _s(source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when) for r in rows or [] if r.get("id")])
+            conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(_s(r.get("id")), sym, ex, _s(source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when, _s(r.get("kind")) or "story") for r in rows or [] if r.get("id")])
             conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("news_fetched:" + news_key(sym, ex), when))
             conn.commit()
         finally:
@@ -3254,6 +3258,18 @@ def balances_count():
 # ---------------------------------------------------------------------------
 
 NOTIFICATIONS_KEPT = 200
+
+
+def _ensure_news_columns(conn):
+    """A news table from before releases were told apart gains the kind, and every row it
+    holds is told by the name of the wire it came on: a wire's item is a release, a
+    publisher's a story."""
+    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='news'").fetchone():
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(news)").fetchall()}
+    if "kind" not in cols:
+        conn.execute("ALTER TABLE news ADD COLUMN kind TEXT")
+    conn.execute("UPDATE news SET kind = CASE WHEN LOWER(COALESCE(wire, '')) LIKE '%wire%' OR LOWER(COALESCE(wire, '')) LIKE '%newsfile%' OR LOWER(COALESCE(wire, '')) LIKE '%cision%' OR LOWER(COALESCE(wire, '')) LIKE '%cnw%' THEN 'release' ELSE 'story' END WHERE kind IS NULL OR kind = ''")
 
 
 def _ensure_notifications_columns(conn):

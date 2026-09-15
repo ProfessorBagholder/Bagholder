@@ -2497,10 +2497,12 @@ def news_rows(base, positions, watch):
                 row["market"] = True
             elif not any(lk(t["symbol"], t["exchange"]) == key for t in row["tags"]):
                 row["tags"].append(tag)
+            if n.get("kind") == "release":
+                row["kind"] = "release"   # the same text on a wire and in a publisher's column is the release
             by_id[n["id"]] = row
             continue
         row = {"id": n["id"], "headline": n.get("headline") or "", "source": n.get("wire") or "", "url": n.get("url") or "", "publishedAt": n.get("publishedAt") or "",
-               "market": is_market, "tags": [] if is_market else [tag]}
+               "market": is_market, "tags": [] if is_market else [tag], "kind": n.get("kind") or "story"}
         by_id[n["id"]] = row
         if text:
             by_text[text] = row
