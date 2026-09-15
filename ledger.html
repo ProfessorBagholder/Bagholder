@@ -2933,22 +2933,34 @@ function cutTipNode() {
   }
   return tip;
 }
-// what the reader cannot read: cut by an ellipsis, and wider than the room it has. The room is measured
-// against the text itself rather than scrollWidth, which browsers round to whole pixels and which
-// therefore reports no overflow for a line clipped by a fraction — the very line that reads worst.
+// what the reader cannot read: cut by an ellipsis, and wider than the room it has. Whole pixels cannot
+// answer that: scrollWidth and clientWidth are both rounded, and a column is rarely a whole number wide,
+// so a header with 42.66 px of room reports 43 either way and text of 43.05 px reads as fitting while the
+// browser draws the ellipsis — the very line that reads worst. Both sides are measured in fractions
+// instead: the room from the box itself less its padding and border, the text from a range over the
+// contents, which the browser lays out in full however little of it it paints.
 function textWider(el) {
   if (el.scrollWidth > el.clientWidth) return true;
+  const st = getComputedStyle(el);
+  const num = (v) => parseFloat(v) || 0;
+  const room = el.getBoundingClientRect().width - num(st.paddingLeft) - num(st.paddingRight) - num(st.borderLeftWidth) - num(st.borderRightWidth);
   try {
     const r = document.createRange();
     r.selectNodeContents(el);
-    return r.getBoundingClientRect().width > el.clientWidth + 0.5;
+    return r.getBoundingClientRect().width > room + 0.05;
   } catch (e) { return false; }
+}
+function cutsText(el) {
+  const st = getComputedStyle(el);
+  return st.textOverflow === "ellipsis" && st.overflowX !== "visible";
 }
 function cutElement(node) {
   for (let el = node; el && el !== document.body; el = el.parentElement) {
     if (!(el instanceof Element) || !el.textContent.trim()) continue;
-    const st = getComputedStyle(el);
-    if (st.textOverflow !== "ellipsis" || st.overflowX === "visible") continue;
+    if (!cutsText(el)) continue;
+    // The cut line is the innermost box that clips. A row holding one is not itself cut: its own box fits,
+    // and a range over its contents would measure the inner text at full width and answer for the wrong line.
+    if (Array.prototype.some.call(el.querySelectorAll("*"), cutsText)) return null;
     return textWider(el) ? el : null;
   }
   return null;
