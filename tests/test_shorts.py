@@ -270,3 +270,44 @@ class SeriesTest(unittest.TestCase):
              mock.patch.object(shorts.market, "_get_text", return_value=CA_CSV):
             quiet = shorts.for_listing("QNC", "TSX-V", "CAD", now=datetime(2026, 9, 15, tzinfo=timezone.utc))
         self.assertNotIn("series", quiet)
+
+
+class SharesOutstandingTest(unittest.TestCase):
+    """The denominator under `Of shares out`, from the authority of the listing's own market."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.ensure()
+        shorts._shares.clear()
+
+    def tearDown(self):
+        shorts._shares.clear()
+        self.tmp.cleanup()
+
+    def test_a_us_listing_takes_the_count_the_issuer_filed(self):
+        concept = {"units": {"shares": [{"end": "2026-06-01", "val": 500}, {"end": "2026-09-03", "val": 504500990}]}}
+        with mock.patch.object(shorts.edgar, "_ticker_map", return_value={"GME": (1326380, "GameStop")}), \
+             mock.patch.object(shorts.edgar, "_get_json", return_value=concept) as asked:
+            self.assertEqual(shorts.shares_outstanding("GME", "NYSE", "USD", "us"), 504500990.0)
+            self.assertEqual(shorts.shares_outstanding("GME", "NYSE", "USD", "us"), 504500990.0)
+        self.assertEqual(asked.call_count, 1)          # kept, not asked again for every view
+
+    def test_a_ticker_the_sec_does_not_list_reports_none(self):
+        with mock.patch.object(shorts.edgar, "_ticker_map", return_value={}):
+            self.assertIsNone(shorts.shares_outstanding("NOSUCH", "NYSE", "USD", "us"))
+
+    def test_a_canadian_listing_takes_the_exchanges_own_count(self):
+        with mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="QNC"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 219419670}, "QNC")):
+            self.assertEqual(shorts.shares_outstanding("QNC", "TSX-V", "CAD", "ca"), 219419670.0)
+
+    def test_a_fund_reports_no_count_rather_than_zero(self):
+        with mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="HBIX:AQL"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 0}, "HBIX:AQL")):
+            self.assertIsNone(shorts.shares_outstanding("HBIX", "Cboe Canada", "CAD", "ca"))
+
+    def test_a_source_that_will_not_answer_is_not_a_crash(self):
+        with mock.patch.object(shorts.market, "tmx_quote_symbol", side_effect=OSError("down")):
+            self.assertIsNone(shorts.shares_outstanding("QNC", "TSX-V", "CAD", "ca"))

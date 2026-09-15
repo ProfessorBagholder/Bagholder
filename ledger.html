@@ -102,17 +102,19 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth.on{color:var(--ink)}
 /* short interest: a label, the figure, and what stands behind it, so the row reads across
    the card's width instead of three numbers stranded in it */
-.si-body{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:26px;align-items:start}
-.si-trend{flex:0 0 auto;min-width:214px}
-.si-spark{display:block;margin:6px 0 3px;overflow:visible}
+.si-body{display:grid;grid-template-columns:minmax(0,660px) minmax(280px,1fr);gap:36px;align-items:start}
+.si-trend{min-width:0}
+.si-th{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.si-th > span:last-child{font-size:11px;color:var(--ink55);white-space:nowrap}
+.si-spark{display:block;width:100%;height:92px;margin:7px 0 4px}
 .si-ends{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--ink55);white-space:nowrap}
-.si-grid{display:grid;grid-template-columns:auto minmax(96px,auto) minmax(0,1fr);column-gap:18px;row-gap:7px;align-items:baseline}
+.si-grid{display:grid;grid-template-columns:130px 104px minmax(0,1fr);column-gap:18px;row-gap:8px;align-items:baseline}
 .si-l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink55);white-space:nowrap}
 .si-v{font-size:14.5px;font-weight:500;text-align:right;white-space:nowrap}
 .si-n{display:flex;align-items:center;gap:10px;min-width:0;font-size:11.5px;color:var(--ink55)}
 .si-n > span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.si-bar{flex:0 0 132px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
-.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--chip-hi)}
+.si-bar{flex:0 0 110px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
+.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--chip-fg);opacity:.82}
 .si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
 .si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
 .si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
@@ -2552,6 +2554,8 @@ function shortsFigures(s) {
   const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
   return [
     { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
+    { label: "Of shares out", value: s.ofSharesOut == null ? "—" : n2(s.ofSharesOut, 2) + "%", bar: s.ofSharesOut,
+      note: s.sharesOut ? "of " + qty(s.sharesOut) + " in issue" : "" },
     { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
       note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
     { label: "Short volume", value: room(s.volumePct), bar: s.volumePct,
@@ -2559,24 +2563,25 @@ function shortsFigures(s) {
             (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
   ];
 }
-function shortsSpark(pts, w, h) {
+// drawn in a square of its own and stretched to whatever width the card leaves, so the line
+// fills the space rather than sitting in a fixed box beside it; the stroke keeps its weight
+function shortsSpark(pts) {
   const lo = Math.min.apply(null, pts.map((p) => p.shares)), hi = Math.max.apply(null, pts.map((p) => p.shares));
   const span = (hi - lo) || 1;
-  const x = (i) => (i / (pts.length - 1)) * (w - 3) + 1.5;
-  const y = (v) => (h - 4) - ((v - lo) / span) * (h - 9);
-  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.shares).toFixed(1)).join(" ");
-  const last = pts[pts.length - 1];
-  return '<svg class="si-spark" viewBox="0 0 ' + w + " " + h + '" width="' + w + '" height="' + h + '" aria-hidden="true">' +
-    '<path d="' + line + " L" + x(pts.length - 1).toFixed(1) + " " + h + " L" + x(0).toFixed(1) + " " + h + ' Z" fill="var(--chip-hi)" opacity=".14"/>' +
-    '<path d="' + line + '" fill="none" stroke="var(--chip-hi)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
-    '<circle cx="' + x(pts.length - 1).toFixed(1) + '" cy="' + y(last.shares).toFixed(1) + '" r="2.6" fill="var(--chip-hi)"/></svg>';
+  const x = (i) => (i / (pts.length - 1)) * 100;
+  const y = (v) => 96 - ((v - lo) / span) * 92;
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(2) + " " + y(p.shares).toFixed(2)).join(" ");
+  return '<svg class="si-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
+    '<path d="' + line + " L100 100 L0 100 Z" + '" fill="var(--chip-fg)" opacity=".08"/>' +
+    '<path d="' + line + '" fill="none" stroke="var(--chip-fg)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
 }
 function shortsTrendHtml(s) {
   const pts = (s.series || []).filter((p) => p && p.shares != null);
   if (pts.length < 3) return "";
-  return '<div class="si-trend"><div class="si-l">Reported positions</div>' + shortsSpark(pts, 214, 46) +
-    '<div class="si-ends tab"><span>' + esc(shortDay(pts[0].date)) + "</span><span>" + esc(shortDay(pts[pts.length - 1].date)) + "</span></div>" +
-    '<div class="si-ends tab"><span>' + qty(pts[0].shares) + "</span><span>" + qty(pts[pts.length - 1].shares) + "</span></div></div>";
+  const ends = (a, b) => '<div class="si-ends tab"><span>' + a + "</span><span>" + b + "</span></div>";
+  return '<div class="si-trend"><div class="si-th"><span class="si-l">Reported positions</span>' +
+    '<span>' + esc(shortDay(pts[0].date)) + " – " + esc(shortDay(pts[pts.length - 1].date)) + "</span></div>" +
+    shortsSpark(pts) + ends(qty(pts[0].shares), qty(pts[pts.length - 1].shares)) + "</div>";
 }
 function shortsCardHtml(t) {
   const rec = _shorts[shortsKey(t)];

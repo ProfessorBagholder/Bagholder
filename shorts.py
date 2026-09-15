@@ -27,6 +27,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
+import edgar
 import instruments
 import market
 import model
@@ -42,9 +43,14 @@ CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL":
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 SERIES = 8               # reports behind the run shown with the position
+ISSUE_HOURS = 12         # how often a company's share count is looked up again
+US_SHARES_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK%010d/dei/EntityCommonStockSharesOutstanding.json"
+TMX_SHARES_QUERY = ("query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) "
+                    "{ symbol shareOutStanding } }")
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
 
 _files = {}
+_shares = {}
 _lock = threading.Lock()
 
 
@@ -247,6 +253,46 @@ def ca_series(symbol, exchange="", asof="", ssl_context=None, now=None, back=SER
     return sorted(out, key=lambda x: x["date"])
 
 
+def shares_outstanding(symbol, exchange, currency, where, ssl_context=None):
+    """The company's shares in issue, from the authority of the listing's own market: the
+    exchange itself for a Canadian listing, and for a US one the share count the issuer put
+    on the cover of its own last filing, which the SEC publishes.
+
+    Not the float. No source publishes a float for every venue the app carries — none does
+    for the CSE or Cboe Canada — and a percentage whose denominator changed from listing to
+    listing would not be the same figure twice, which is worse than a denominator that is
+    always the whole issue. Nothing is reported for an exchange-traded fund, whose units are
+    created and redeemed daily, and the row then reads as a dash rather than a wrong number."""
+    sym = _s(symbol).strip().upper()
+    key = "%s|%s" % (sym, where)
+    with _lock:
+        held = _shares.get(key)
+        if held and time.time() - held["at"] < ISSUE_HOURS * 3600:
+            return held["count"]
+    count = None
+    try:
+        if where == "us":
+            found = edgar._ticker_map().get(market.tmx_symbol(sym))
+            if found:
+                units = ((edgar._get_json(US_SHARES_URL % int(found[0])) or {}).get("units") or {}).get("shares") or []
+                newest = max(units, key=lambda u: _s(u.get("end")), default=None)
+                count = _num(newest.get("val")) if newest else None
+        else:
+            code = market.tmx_quote_symbol(sym, exchange, currency)
+            if code:
+                def ask(form):
+                    answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
+                                                                  "query": TMX_SHARES_QUERY}, ssl_context, market._TMX_HEADERS)
+                    return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
+                count = _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding"))
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s share count failed: %s\n" % (sym, e))
+    count = count or None                      # a fund reports none, and reads as none
+    with _lock:
+        _shares[key] = {"count": count, "at": time.time()}
+    return count
+
+
 def _venue_fits(code, exchange):
     """Whether a row's venue is the listing's. A symbol appears once in each Canadian
     file, so this confirms the row rather than choosing between rows."""
@@ -361,6 +407,9 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
+    issued = shares_outstanding(sym, exchange, currency, where, ssl_context)
+    rec["sharesOut"] = issued
+    rec["ofSharesOut"] = (rec["shares"] / issued * 100) if issued and rec.get("shares") else None
     rec["averageVolume"] = average_volume(rec, now)
     rec["daysToCover"] = days_to_cover(rec, now)
     return rec
