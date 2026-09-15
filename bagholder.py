@@ -5891,6 +5891,24 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+def news_symbol_payload(symbol, exchange, currency):
+    """One listing's wire read now, for the News card's search: a ticker neither held nor
+    watched has no rows until asked for. The rows are stored under the listing (tagged as
+    neither held nor watched, so they show only under its chip) and the model reloads."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    src, rows = news.fetch_symbol(sym, _s(exchange), _s(currency), _ssl_context())
+    if rows is None:
+        return {"ok": False, "error": "the wire did not answer"}
+    if not src:
+        return {"ok": True, "count": 0, "source": ""}
+    store.replace_news(sym, _s(exchange), src, rows)
+    store.trim_news(news.KEEP)
+    model.invalidate()
+    return {"ok": True, "count": len(rows), "source": src}
+
+
 def filings_feed(scope, limit=200):
     """The stored disclosures of every ticker in a set, merged newest first, each row
     naming its listing: the News card's Disclosures view. Stored rows only; nothing
@@ -6874,6 +6892,13 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/news/symbol":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, news_symbol_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency")))
             return
         if path == "/api/filings/feed":
             if not self._gate():
