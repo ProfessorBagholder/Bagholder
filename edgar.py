@@ -169,11 +169,13 @@ def _category(form):
     f = (form or "").upper()
     if f.startswith(("10-K", "10-Q", "20-F", "40-F", "6-K", "ARS", "N-CSR")):
         return D.FINANCIALS
-    if f.startswith("8-K"):
+    if f.startswith("8-K") or f == "25" or f.startswith("25-"):   # 8-K events; Form 25 is a delisting notice
         return D.EVENTS
     if "14A" in f or "14C" in f or f.startswith("DEF") or f.startswith("PRE"):
         return D.GOVERNANCE
-    if f.startswith(("S-", "F-", "424", "POS", "DRS", "EFFECT", "425", "25")):
+    # registration statements and prospectuses. F- matches only when a digit follows
+    # (F-1, F-3, F-10, F-80), not the administrative F-X / F-N, which are not offerings.
+    if f.startswith(("S-", "424", "POS", "DRS", "EFFECT", "425")) or re.match(r"F-\d", f):
         return D.OFFERINGS
     if f in {"3", "4", "5", "3/A", "4/A", "5/A", "144"} or "13D" in f or "13G" in f or f.startswith(("SC 13", "SCHEDULE 13", "13F")):
         return D.INSIDER

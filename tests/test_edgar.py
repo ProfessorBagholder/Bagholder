@@ -211,5 +211,23 @@ class OwnershipEnrichmentTest(unittest.TestCase):
         self.assertIsNone(edgar.enrichment({"type": "6-K", "source": "SEC", "url": "https://www.sec.gov/x/y.htm"}))
 
 
+
+
+class CategoryMappingTest(unittest.TestCase):
+    """SEC form codes map to the right category; the F- prefix does not over-match the
+    administrative F-X / F-N onto Offerings, and Form 25 (delisting) is a material event."""
+    def test_offering_forms_and_administrative_f_forms(self):
+        import disclosures as D
+        self.assertEqual(edgar._category("F-1"), D.OFFERINGS)
+        self.assertEqual(edgar._category("F-10"), D.OFFERINGS)
+        self.assertEqual(edgar._category("S-1"), D.OFFERINGS)
+        self.assertEqual(edgar._category("424B5"), D.OFFERINGS)
+        self.assertEqual(edgar._category("F-X"), D.OTHER)   # appointment of agent for service of process
+        self.assertEqual(edgar._category("F-N"), D.OTHER)
+        self.assertEqual(edgar._category("25"), D.EVENTS)   # notification of delisting
+        self.assertEqual(edgar._category("6-K"), D.FINANCIALS)
+        self.assertEqual(edgar._category("SCHEDULE 13G"), D.INSIDER)
+
+
 if __name__ == "__main__":
     unittest.main()
