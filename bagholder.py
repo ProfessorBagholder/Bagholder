@@ -5951,8 +5951,21 @@ def shorts_payload(symbol, exchange=None, currency=None, trend=False):
         return {"ok": False, "error": "symbol required"}
     ex, ccy = _s(exchange).strip(), _s(currency).strip()
     if not ex:
+        # a ticker typed into the ranked list's box carries no venue: settled from what the app
+        # already knows, in the order everything else settles it — the securities the sync
+        # brought, then TMX's own resolver, which names the venue it verified by the quote, a
+        # ticker it cannot place being a US one
         _, ex, held = _instrument_meta(sym)
         ccy = ccy or held
+        if not ex:
+            form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
+            if form and not form.endswith(":US"):
+                # the form the resolver verified names the venue where it carries one; a bare
+                # form is a TSX or TSX-V listing, and the report's own venue stands for it
+                ex = {"CNX": "CSE", "AQL": "Cboe Canada"}.get(form.rsplit(":", 1)[-1] if ":" in form else "", "")
+                ccy = ccy or "CAD"
+            else:
+                ex, ccy = "NASDAQ", "USD"
     if not shorts.market_of(sym, ex, ccy):
         return {"ok": True, "covered": False}
     held = store.shorts_for(sym, ex)
