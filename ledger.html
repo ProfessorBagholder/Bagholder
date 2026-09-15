@@ -947,6 +947,7 @@ function notifyArrive(r) {
 const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
 // the Disclosures kind is chosen by the tickers it covers: a set per switch, under its heading
 const NOTIFY_SCOPES = [["disclosuresHeld", "Holdings"], ["disclosuresWatched", "Watchlist"], ["disclosuresAll", "All tickers"]];
+const NOTIFY_RELEASE_SCOPES = [["releasesHeld", "Holdings"], ["releasesWatched", "Watchlist"], ["releasesAll", "All tickers"]];
 // the server posts them itself where the computer it runs on has a desktop ("native"); only where it has none is
 // this browser asked to show them, under its own permission
 function notifyNative() { return !!(state.status.notify && state.status.notify.native); }
@@ -954,12 +955,13 @@ function notifyState() { return notifyNative() ? "native" : "Notification" in wi
 function notifyOn(kind) { const st = notifyState(); return (st === "native" || st === "granted") && !!(state.status.notify && state.status.notify[kind]); }
 function notifyWord() {
   const st = notifyState();
-  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.concat(NOTIFY_SCOPES).some((k) => notifyOn(k[0])) ? "On" : "Off";
+  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.concat(NOTIFY_SCOPES, NOTIFY_RELEASE_SCOPES).some((k) => notifyOn(k[0])) ? "On" : "Off";
 }
 function notifyMenuHtml() {
   const st = notifyState(), dead = st === "unavailable" || st === "denied";
   const row = (k) => '<button data-act="notifyToggle" data-arg=\'' + attr({ kind: k[0] }) + "'" + (dead ? " disabled" : "") + ">" + esc(k[1]) + '<span class="sw' + (notifyOn(k[0]) ? " on" : "") + '" style="margin-left:auto"></span></button>';
   return '<div class="menu sub">' + NOTIFY_KINDS.map(row).join("") +
+    '<div class="sep"></div><div class="menu-h">Releases</div>' + NOTIFY_RELEASE_SCOPES.map(row).join("") +
     '<div class="sep"></div><div class="menu-h">Disclosures</div>' + NOTIFY_SCOPES.map(row).join("") +
     '<div class="sep"></div><button data-act="notifyTest"' + (dead ? " disabled" : "") + ">" + icon("bell") + "Send a test notification</button></div>";
 }
@@ -1007,7 +1009,7 @@ function notifyShow(r) {
   n.onclick = () => {
     window.focus();
     if (r.kind === "fills" || r.kind === "problems") { state.ordersOpen = true; state.ordersTab = r.kind === "fills" ? "filled" : "cancelled"; state.menuOpen = false; render(); loadOrders(); }
-    else if (r.kind === "disclosures" && r.extra && r.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === r.extra.symbol); if (p) openHolding(p.id); }
+    else if ((r.kind === "disclosures" || r.kind === "releases") && r.extra && r.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === r.extra.symbol); if (p) openHolding(p.id); }
     n.close();
   };
 }
@@ -3111,7 +3113,7 @@ function newsCardHtml(items) {
 // wire picked up, so the Releases view shows them beside the wires', in the same row grammar, a release
 // carried both ways shown once. The rows are the ones the Disclosures view already reads, and their titles
 // fill in the same way; until one is read the document's kind stands in for it.
-const FILED_RELEASE = /news release|press release|^8-K|^6-K/i;
+const FILED_RELEASE = /news release|press release/i;   // a current report (8-K, 6-K) is a filing, not a release
 function filedReleases(only, scope, wire) {
   let rows;
   if (only) {

@@ -192,14 +192,28 @@ def stale(listings, now=None, minutes=FRESH_MINUTES):
     return out
 
 
-def refresh(listings, ssl_context=None, now=None):
-    """Read the wire for every stale listing; each answer replaces that listing's rows. Returns how many answered."""
+def refresh(listings, ssl_context=None, now=None, on_new=None):
+    """Read the wire for every stale listing; each answer replaces that listing's rows. Returns how
+    many answered. `on_new(symbol, exchange, rows)` is handed the items a listing did not have before,
+    for a listing that had been read before: a first read is what the listing already carries, not news."""
     done = 0
+    fetched = store.news_fetched_at() if on_new else {}
     for symbol, exchange, currency in stale(listings, now=now):
         src, rows = fetch_symbol(symbol, exchange, currency, ssl_context, now)
         if rows is None:
             continue
+        first, before = True, set()
+        if on_new:
+            first = not fetched.get(store.news_key(symbol, exchange))
+            before = set() if first else store.news_ids(symbol, exchange)
         store.replace_news(symbol, exchange, src, rows, now=now)
+        if on_new and not first:
+            fresh = [r for r in rows if r.get("id") not in before]
+            if fresh:
+                try:
+                    on_new(symbol, exchange, fresh)
+                except Exception as e:
+                    sys.stderr.write("bagholder news: %s new items not told: %s\n" % (symbol, str(e) or e.__class__.__name__))
         done += 1
     if done:
         store.trim_news(KEEP)
