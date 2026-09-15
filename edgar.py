@@ -182,6 +182,12 @@ def _category(form):
     return D.OTHER
 
 
+def categorize(row):
+    """The category for a stored row, re-derived from its form type, so a change to
+    the mapping takes effect on read without re-fetching the filing."""
+    return _category((row or {}).get("type") or "")
+
+
 def _title(form, description):
     """The plain-English title beside the form code. EDGAR often repeats the form
     as the description ("FORM 4" for a 4); in that case use our own label so the

@@ -688,7 +688,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.30.1"
+APP_VERSION = "1.30.2"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5785,6 +5785,7 @@ def _fresh_filings(sym):
     for r in rows:
         if (r.get("enrichVersion") or 0) < ENRICH_VERSION:
             r["subject"], r["summary"] = "", ""
+        r["category"] = disclosures.categorize(r)   # re-derive so a mapping fix applies without a re-fetch
     return rows
 
 
