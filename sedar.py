@@ -619,6 +619,12 @@ def _sedar_category(file):
     return D.OTHER
 
 
+def categorize(row):
+    """The category for a stored row, re-derived from its document type, so a change
+    to the mapping takes effect on read without re-fetching."""
+    return _sedar_category((row or {}).get("type") or "")
+
+
 _LANG_TAIL = re.compile(r"[-–]\s*(English|French)\s*$", re.I)
 _LANG_PAREN = re.compile(r"\((English|French)\)\s*$", re.I)
 

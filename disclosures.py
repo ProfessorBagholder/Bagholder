@@ -156,6 +156,18 @@ def enrichment(row):
     return None
 
 
+def categorize(row):
+    """Re-derive a stored row's category from its type via its provider, so a change
+    to a provider's category mapping applies on read without re-fetching. Falls back
+    to the stored category."""
+    src=(row or {}).get("source") or ""
+    for p in PROVIDERS:
+        if p.SOURCE==src:
+            fn=getattr(p,"categorize",None)
+            return (fn(row) if fn else (row or {}).get("category")) or (row or {}).get("category")
+    return (row or {}).get("category")
+
+
 def content(row):
     """The document's readable *substance* for enrichment (title/summary): a provider
     may resolve past a cover form to the real content (see edgar.content). Falls back
