@@ -487,7 +487,8 @@ const state = {
   tileDrag: null,     // the tile under the pointer during a reorder
   tileOrder: null,    // the row's order while a reorder or a save is in flight
   newsScope: (function () { try { return localStorage.getItem("bh2.news") || "all"; } catch (e) { return "all"; } })(),
-  newsKind: (function () { try { return localStorage.getItem("bh2.newsKind") === "disc" ? "disc" : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, or the disclosures
+  newsReading: "",     // a listing whose wire is being read for the card's chip
+  newsKind: (function () { try { const k = localStorage.getItem("bh2.newsKind"); return k === "disc" || k === "releases" ? k : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, the releases, or the disclosures
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
@@ -2495,7 +2496,7 @@ function ensureDisclosures(t) {
     _disc[sym] = (d && d.ok) ? { payload: d } : { error: (d && d.error) || "Could not read disclosures." };
     const open = state.sel && selById(state.sel);
     if (open && discSymbol(open) === sym) render();
-    else if (state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym) render();
+    else if (state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym) render();   // the card's chip, on either view that reads filings
   });
 }
 function refreshDisclosures(sym) {
@@ -2511,7 +2512,7 @@ function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f 
 function _discStillOpen(sym) {
   // the instrument page showing this listing, or the News card turned to its disclosures under the chip
   const open = state.sel && selById(state.sel);
-  return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym);
+  return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
 function enrichOne(sym, f) {
@@ -2541,10 +2542,13 @@ function sweepDiscEnrich(sym, rows) {
   let i = 0, sawPreparing = false, sawFailure = false;
   const finish = () => {
     _discSweep[sym] = false; _discQueue[sym] = null;
-    if ((sawPreparing || sawFailure) && (_discRekicks[sym] || 0) < 6 && _discStillOpen(sym)) {
-      _discRekicks[sym] = (_discRekicks[sym] || 0) + 1;
-      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); }, sawPreparing ? 15000 : 4000);
-    }
+    // a summary still being prepared is asked for again every fifteen seconds for as long as the card is shown; a
+    // read that failed is tried again a few times, each wait longer than the last
+    const again = (_discRekicks[sym] || 0);
+    if (_discStillOpen(sym) && (sawPreparing || (sawFailure && again < 6))) {
+      _discRekicks[sym] = again + 1;
+      setTimeout(() => { const r = _disc[sym]; if (r && r.payload && _discStillOpen(sym)) sweepDiscEnrich(sym, r.payload.filings); }, sawPreparing ? 15000 : 4000 * (again + 1));
+    } else if (!sawPreparing && !sawFailure) _discRekicks[sym] = 0;
   };
   const step = () => {
     if (!_discStillOpen(sym)) { _discSweep[sym] = false; _discQueue[sym] = null; return; }
@@ -2636,7 +2640,7 @@ function disclosuresCardHtml(t) {
   const row = (f) => {
     const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
     const exp = state.discExpanded === f.id;
-    const titleCell = f.subject ? esc(f.subject) : (enriching ? skel("70%") : "");
+    const titleCell = f.subject ? esc(f.subject) : (enriching || !_discEnrichTried[f.id] ? skel("70%") : "");   // still to be read, or being read: the shimmer
     const sum = f.summary ? esc(f.summary)
       : (enriching || _discPreparing(f)) ? skel("90%") : "";
     return '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
@@ -3067,8 +3071,14 @@ function newsCardHtml(items) {
   const isOnly = (t) => only && bareSymbol(t.symbol) === only.symbol && String(t.exchange || "").toUpperCase() === only.exchange;
   // the box: a ticker first (a listing's symbol starting with the text); only when no listing matches, a word of the
   // headline or publisher starting with it, so `SH` is Shopify's news and not every headline with "shake" in it
-  // All is the market's own feed; Holdings and Watchlist are the stories read for those listings
-  let rows = (items || []).filter((n) => only ? n.tags.some(isOnly) : scope === "all" ? n.market : n.tags.some((t) => scope === "holdings" ? t.held : t.watched));
+  // All is the market's own feed; Holdings and Watchlist are the stories read for those listings. Releases are the
+  // companies' own, told by the wire they came on; the market feed carries none, so All there is every listing held or watched.
+  const releases = state.newsKind === "releases";
+  let rows = (items || []).filter((n) => (releases ? n.kind === "release" : n.kind !== "release") &&
+    (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
+  // the issuer's own releases as it filed them, beside the wires': a wire carries what it is sent, and a
+  // release it never carried is still on the regulator's record, so both are shown and the same release once
+  if (releases) rows = rows.concat(filedReleases(only, scope, rows));
   if (q) {
     const tokens = q.split(/\s+/);
     const bySym = tokens.length === 1 && q.length <= 5 ? rows.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : [];
@@ -3077,26 +3087,58 @@ function newsCardHtml(items) {
   }
   const first = (n) => n.tags[0] || {};
   // the market's feed names no listing: no Symbol or Change column, and a sort on either reads newest first
-  const bare = scope === "all" && !only;
+  const bare = scope === "all" && !only && !releases;
   if (bare && s.key !== "when" && s.key !== "news") s = { key: "when", dir: "desc" };
   rows = sortRows(rows, s.key, s.dir, (n, k) => k === "when" ? n.publishedAt : k === "news" ? n.headline.toLowerCase() : k === "symbol" ? (first(n).symbol ? bareSymbol(first(n).symbol).toLowerCase() : null) : first(n).percentChange);
   const sym = (t) => '<button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || "").toUpperCase() }) + "'>" + esc(bareSymbol(t.symbol)) + "</button>";
   const chg = (t) => '<span class="tab" style="font-size:13px;color:' + (t.percentChange == null ? "var(--ink55)" : t.percentChange >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(t.percentChange) + "</span>";
   // one line per row: the headline cut with an ellipsis; a story read for several listings shows the first of them
-  const row = (n) => '<div class="nw-row' + (bare ? " nw-bare" : "") + '" data-act="newsOpen" data-arg=\'' + attr({ url: n.url }) + "'>" +
+  const row = (n) => '<div class="nw-row' + (bare ? " nw-bare" : "") + '" data-act="' + (n.filed ? "discOpen" : "newsOpen") + '" data-arg=\'' + attr(n.filed || { url: n.url }) + "'>" +
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(newsWhen(n.publishedAt)) + "</div>" +
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(n.headline) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(n.source) + "</div></div>" +
     (bare ? "" : '<div style="text-align:right">' + (n.tags.length ? sym(first(n)) : "") + "</div>" +
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
   return '<div class="card elev-sm" style="padding:14px 16px 12px"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
     msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
-    msegHtml("newsKind", "kind", [["stories", "Stories"], ["disc", "Disclosures"]], state.newsKind) +
+    msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
-      : '<div class="muted" style="font-size:12px">No news.</div>') + "</div>";
+      : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
+// A news release the issuer filed. SEDAR+ and SEC EDGAR carry the company's own releases, including ones no
+// wire picked up, so the Releases view shows them beside the wires', in the same row grammar, a release
+// carried both ways shown once. The rows are the ones the Disclosures view already reads, and their titles
+// fill in the same way; until one is read the document's kind stands in for it.
+const FILED_RELEASE = /news release|press release|^8-K|^6-K/i;
+function filedReleases(only, scope, wire) {
+  let rows;
+  if (only) {
+    const rec = _disc[only.symbol];
+    if (!rec) { ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || "", name: only.name || "", currency: only.currency || "" }); return []; }
+    if (!rec.payload) return [];
+    rows = (rec.payload.filings || []).map((f) => Object.assign({}, f, { symbol: only.symbol, exchange: only.exchange || "" }));
+    sweepDiscEnrich(only.symbol, rec.payload.filings || []);
+  } else {
+    loadDiscFeed(scope);
+    rows = ((_discFeed[scope] || {}).rows) || [];
+    sweepFeedEnrich(scope, rows);
+  }
+  const said = new Set((wire || []).map((n) => news_text_key(n.headline)));
+  const tagOf = (sym, ex) => {
+    const w = (((state.model || {}).markets || {}).watchlist || []).find((x) => bareSymbol(x.symbol) === sym);
+    const p = ((state.model || {}).positions || []).find((x) => bareSymbol(x.symbol) === sym);
+    return { symbol: sym, exchange: ex || (p && p.exchange) || (w && w.exchange) || "", held: !!p, watched: !!w,
+             percentChange: p ? p.percentChange : (w ? w.percentChange : null), positionId: p ? p.id : null };
+  };
+  return rows.filter((f) => FILED_RELEASE.test(String(f.type || "")) && !said.has(news_text_key(f.subject || "")))
+    .map((f) => ({ id: "filed:" + f.id, headline: f.subject || f.type || "News release", source: f.source || "", url: f.url || "",
+                   publishedAt: String(f.date || ""), kind: "release", market: false, tags: [tagOf(f.symbol, f.exchange)],
+                   filed: { id: f.id, sym: f.symbol, source: f.source, url: f.url } }));
+}
+// the page's own copy of the model's headline key, so a release on a wire and on the record is one row
+function news_text_key(h) { return String(h || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 // The card's other view: the disclosures of the listings in scope, merged newest first from what the store holds,
 // or of one listing, the chip's, read on demand as the instrument page reads them; the box finds any ticker.
 const NDISC_COLS = [{ key: "when", label: "When" }, { key: "news", label: "Disclosure" }, { key: "symbol", label: "Symbol", align: "right" }];
@@ -3125,6 +3167,7 @@ function newsDiscBodyHtml(scope, only, q) {
     const f = _discFeed[scope];
     if (!f || !f.rows) return '<div class="muted" style="font-size:12px">Reading…</div>';
     rows = f.rows;
+    sweepFeedEnrich(scope, rows);
   }
   if (q) {
     const tokens = q.split(/\s+/);
@@ -3141,24 +3184,80 @@ function newsDiscBodyHtml(scope, only, q) {
   return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
     : '<div class="muted" style="font-size:12px">' + empty + "</div>";
 }
-// a ticker typed that the feed does not hold is looked up in the directory, and its disclosures read: the chip takes it
+// the feed's titles fill in top first, one document at a time, while the feed is what the card shows
+let _feedSweep = "";
+function sweepFeedEnrich(scope, rows) {
+  if (_feedSweep) return;
+  const showing = () => state.page === "markets" && state.newsKind === "disc" && !state.newsSymbol && state.newsScope === scope;
+  const need = (f) => !_discEnrichTried[f.id] && !f.subject;
+  const pending = rows.filter(need).slice(0, 60);
+  if (!pending.length) return;
+  _feedSweep = scope;
+  let i = 0;
+  const step = () => {
+    if (!showing()) { _feedSweep = ""; return; }
+    while (i < pending.length && !need(pending[i])) i++;
+    if (i >= pending.length) { _feedSweep = ""; return; }
+    const f = pending[i++];
+    _discEnrichLoading[f.id] = true;
+    api("GET", "/api/filings/enrich?symbol=" + encodeURIComponent(f.symbol) + "&id=" + encodeURIComponent(f.id)).then((d) => {
+      delete _discEnrichLoading[f.id];
+      if (d && d.ok) { if (d.subject) f.subject = d.subject; if (d.summary) f.summary = d.summary; }
+      if (f.subject) _discEnrichTried[f.id] = true;
+      if (showing()) render();
+      setTimeout(step, 150);
+    });
+  };
+  step();
+}
+// A ticker the app already knows: a watched listing, an open holding, or one the book has traded. The
+// directories carry the TSX and Nasdaq registries and not every venue (a CSE listing is in neither), so
+// the book's own listings answer first, as they do in ⌘K and the watchlist's add row.
+function listingByTicker(key) {
+  const m = state.model || {};
+  const hit = (rows) => (rows || []).find((r) => {
+    const sym = String(r.symbol || "");
+    return sym.indexOf(" ") < 0 && bareSymbol(sym).toUpperCase() === key && String(r.kind || "Shares") !== "Crypto";
+  });
+  const r = hit(((m.markets || {}).watchlist) || []) || hit(m.positions) || hit(m.trades);
+  return r ? { symbol: bareSymbol(String(r.symbol)).toUpperCase(), exchange: String(r.exchange || "").toUpperCase(), name: r.name || "", currency: r.currency || "" } : null;
+}
+// a ticker typed that the card does not hold takes the chip, and its disclosures, or its wire, are read on demand
 let _ndLookupTimer = 0;
 function newsDiscLookup(text) {
   clearTimeout(_ndLookupTimer);
   const key = text.trim().toUpperCase();
   if (!/^[A-Z0-9.\-]{1,6}$/.test(key)) return;
   _ndLookupTimer = setTimeout(() => {
-    if (state.newsKind !== "disc" || state.newsSymbol || state.newsQuery.trim().toUpperCase() !== key) return;
-    const f = _discFeed[state.newsScope], rows = (f && f.rows) || [];
-    if (rows.some((r) => String(r.symbol || "").startsWith(key))) return;   // the feed has it: the filter shows it
-    api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
-      if (!(r && r.ok) || state.newsKind !== "disc" || state.newsQuery.trim().toUpperCase() !== key) return;
-      const m = r.matches || [];
-      const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
-      if (!hit) return;
-      state.newsSymbol = { symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" };
+    const kind = state.newsKind;
+    if (state.newsSymbol || state.newsQuery.trim().toUpperCase() !== key) return;
+    // the card's own items for this ticker, whatever the scope shows: a chip is not needed to read them again
+    const itemsFor = (only) => kind === "disc"
+      ? ((_discFeed[state.newsScope] || {}).rows || []).some((r) => String(r.symbol || "").toUpperCase() === only.symbol)
+      : (((state.model || {}).markets || {}).news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol));
+    const take = (only) => {
+      if (state.newsKind !== kind || state.newsQuery.trim().toUpperCase() !== key) return;
+      // the chip, not the filter: a listing outside the scope on show (a holding while Watchlist is
+      // chosen, one sold since its items were read) is the listing asked for, and the scope must not hide it
+      state.newsSymbol = only;
       state.newsQuery = "";
+      if (kind !== "disc" && !itemsFor(only)) {
+        // no items for it: the wire is read now, and the model brings its rows
+        state.newsReading = only.symbol;
+        api("GET", "/api/news/symbol?symbol=" + encodeURIComponent(only.symbol) + "&exchange=" + encodeURIComponent(only.exchange) + "&currency=" + encodeURIComponent(only.currency))
+          .then((r) => { state.newsReading = ""; if (r && r.ok && r.exchange && state.newsSymbol === only) only.exchange = String(r.exchange).toUpperCase(); loadModel(); });
+      }
       render();
+    };
+    const known = listingByTicker(key);
+    if (known) { take(known); return; }
+    api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
+      const m = (r && r.ok && r.matches) || [];
+      const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
+      // no directory carries it (a CSE or Cboe Canada listing): the server places it from the security
+      // records and TMX's own resolver, and answers with the venue it read under
+      take(hit ? { symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" }
+               : { symbol: key, exchange: "", name: "", currency: "" });
     });
   }, 500);
 }
@@ -4011,7 +4110,7 @@ function act(name, arg, ev) {
       clearTimeout(_discOpenTimer); _discOpenTimer = setTimeout(() => { state.discOpening = null; render(); }, 4000);
       break;
     }
-    case "newsKind": state.newsKind = arg.kind === "disc" ? "disc" : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
+    case "newsKind": state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
@@ -4264,7 +4363,7 @@ function bind() {
   document.addEventListener("input", (e) => {
     const t = e.target;
     if (/^tk-/.test(t.id || "")) { tkInputEvent(t); return; }
-    if (t.id === "newsQuery") { state.newsQuery = t.value; if (state.newsKind === "disc") newsDiscLookup(t.value); render(); return; }
+    if (t.id === "newsQuery") { state.newsQuery = t.value; newsDiscLookup(t.value); render(); return; }
     if (t.id === "tileQuery") { state.tileQuery = t.value; render(); return; }
     if (t.id === "watchQuery") { state.watchQuery = t.value; extSchedule(t.value); render(); return; }
     if (t.id === "tagInput") { state.tagDraft = t.value; state.tagHi = 0; document.getElementById("tagMenu").innerHTML = tagMenuHtml(); return; }

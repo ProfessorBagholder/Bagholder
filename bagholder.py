@@ -690,7 +690,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.34.0"
+APP_VERSION = "1.35.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5891,6 +5891,37 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+def news_symbol_payload(symbol, exchange, currency):
+    """One listing's wire read now, for the News card's search: a ticker neither held nor
+    watched has no rows until asked for. The rows are stored under the listing (tagged as
+    neither held nor watched, so they show only under its chip) and the model reloads."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    if not ex:
+        # the venue from what the app already knows: the security records the sync brought, then
+        # TMX's own resolver, which names the venue it verified by the quote and so covers the
+        # venues no public directory carries (the CSE, Cboe Canada). Nothing is guessed: a ticker
+        # TMX cannot place is a US one, and Nasdaq keeps only the items that name it.
+        _, ex, ccy = (lambda n, e, c: (n, e, c or ccy))(*_instrument_meta(sym))
+        if not ex:
+            form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
+            if form and not form.endswith(":US"):
+                ccy = ccy or "CAD"          # TMX, under the form its resolver just remembered
+            else:
+                ex, ccy = "NASDAQ", "USD"
+    src, rows = news.fetch_symbol(sym, ex, ccy, _ssl_context())
+    if rows is None:
+        return {"ok": False, "error": "the wire did not answer"}
+    if not src:
+        return {"ok": True, "count": 0, "source": "", "exchange": ex}
+    store.replace_news(sym, ex, src, rows)
+    store.trim_news(news.KEEP)
+    model.invalidate()
+    return {"ok": True, "count": len(rows), "source": src, "exchange": ex}
+
+
 def filings_feed(scope, limit=200):
     """The stored disclosures of every ticker in a set, merged newest first, each row
     naming its listing: the News card's Disclosures view. Stored rows only; nothing
@@ -6874,6 +6905,13 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/news/symbol":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, news_symbol_payload(_query_param(query, "symbol"), _query_param(query, "exchange"), _query_param(query, "currency")))
             return
         if path == "/api/filings/feed":
             if not self._gate():

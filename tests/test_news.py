@@ -9,6 +9,7 @@ from unittest import mock
 
 import bagholder
 import model
+import market
 import news
 import store
 
@@ -20,7 +21,7 @@ class ParseTest(unittest.TestCase):
                                   {"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}}
         rows = news.parse_tmx_news(data, "SHOP")
         self.assertEqual(rows, [{"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire",
-                                 "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z"}])
+                                 "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release"}])
 
     def test_nasdaq_items_take_their_time_from_the_age_given(self):
         now = datetime(2026, 9, 11, 15, 30, tzinfo=timezone.utc)
@@ -41,6 +42,91 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(news.source_for("NVDA", "NASDAQ", "USD"), "nasdaq")
         self.assertEqual(news.source_for("AAPL", "", "USD"), "nasdaq")
         self.assertEqual(news.source_for("QBTC", "NEO", "CAD"), "tmx")
+
+
+class KindTest(unittest.TestCase):
+    def test_a_wires_item_is_a_release_and_a_publishers_a_story(self):
+        for wire in ("GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group"):
+            self.assertEqual(news.kind_of(wire), "release", wire)
+        for pub in ("The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", ""):
+            self.assertEqual(news.kind_of(pub), "story", pub)
+        tmx = news.parse_tmx_news({"data": {"news": [{"newsid": "1", "headline": "Closing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-14T08:00:00-04:00"}]}}, "CH")
+        self.assertEqual((tmx[0]["kind"], tmx[0]["source"]), ("release", "GlobeNewswire"))
+        now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+        press = news.parse_nasdaq_news({"data": {"rows": [{"id": 9, "title": "Shopify Delivers Big", "publisher": "", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/press-release/x", "related_symbols": ["shop|stocks"]}]}}, now, "SHOP", kind="release")
+        self.assertEqual((press[0]["kind"], press[0]["source"], press[0]["publishedAt"]), ("release", "Nasdaq", "2026-08-05T00:00:00Z"), "a release Nasdaq names no wire for reads as Nasdaq's")
+        story = news.parse_nasdaq_news({"data": {"rows": [{"id": 8, "title": "Why SHOP", "publisher": "The Motley Fool", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/y", "related_symbols": ["shop|stocks"]}]}}, now, "SHOP")
+        self.assertEqual(story[0]["kind"], "story")
+
+    def test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue(self):
+        item = {"newsid": "7", "headline": "QIMC Engages Echo Seismic", "source": "TMX Newsfile via QuoteMedia", "datetime": "2026-09-14T09:13:00-04:00"}
+        asked = []
+        def post_json(url, body, ctx, headers=None, **kw):
+            form = body["variables"]["symbol"]
+            asked.append(form)
+            return {"data": {"news": [item]}} if form in ("QIMC:CNX", "CH") else {"data": {"news": []}}
+        with mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(news, "_pace"):
+            src, rows = news.fetch_symbol("QIMC", "CSE", "CAD")
+            news.fetch_symbol("CH", "TSX-V", "CAD")
+            self.assertEqual((src, asked), ("tmx", ["QIMC:CNX", "CH"]), "each listing under the code its quote uses")
+            self.assertEqual((rows[0]["kind"], rows[0]["url"]), ("release", "https://money.tmx.com/en/quote/QIMC:CNX/news/7"))
+            # the record names the wrong venue: the lookup resolves the form that answers, as it does for a quote
+            asked.clear()
+            with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"):
+                _, found = news.fetch_symbol("QIMC", "TSX-V", "CAD")
+            self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC:CNX"], ["tmx:7"]))
+
+    def test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked(self):
+        """No directory carries every venue, so the venue comes from the app's own knowledge: the
+        security records the sync brought, then TMX's resolver, which names the venue it verified
+        by the quote. A ticker TMX cannot place is a US one."""
+        seen = {}
+        def get_text(url, ctx, headers=None, **kw):
+            seen.setdefault("nasdaq", []).append(url)
+            return '{"data": {"rows": []}}'
+        def post_json(url, body, ctx, headers=None, **kw):
+            seen["tmx"] = body["variables"]["symbol"]
+            return {"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}
+        with mock.patch.object(news, "_pace"), mock.patch.object(market, "_get_text", side_effect=get_text), \
+             mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(store, "list_securities", return_value=[]):
+            # a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
+            with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"), mock.patch.object(market, "tmx_remembered", side_effect=lambda k: "QIMC:CNX"):
+                out = bagholder.news_symbol_payload("QIMC", "", "")
+            self.assertEqual((out["source"], seen.get("tmx")), ("tmx", "QIMC:CNX"))
+            seen.clear()
+            # TMX cannot place it: Nasdaq, whose items name the symbols they belong to
+            with mock.patch.object(market, "tmx_resolve", return_value=""):
+                out = bagholder.news_symbol_payload("KO", "", "")
+        self.assertEqual((out["source"], out["exchange"], "tmx" in seen), ("nasdaq", "NASDAQ", False))
+
+    def test_a_ticker_with_no_venue_is_never_asked_of_tmx(self):
+        """TMX's news answers on the bare ticker whatever venue it is asked under, so a name with no
+        venue would come back as another company's. Only Nasdaq, whose items name their symbols."""
+        seen = {}
+        def post_json(url, body, ctx, headers=None, **kw):
+            seen["tmx"] = body["variables"]["symbol"]
+            return {"data": {"news": [{"newsid": "9", "headline": "IIROC Trading Halt - F", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}
+        def get_text(url, ctx, headers=None, **kw):
+            seen.setdefault("nasdaq", []).append(url)
+            return '{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}'
+        with mock.patch.object(news, "_pace"), mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(market, "_get_text", side_effect=get_text):
+            src, rows = news.fetch_symbol("F", "", "")
+        self.assertEqual((src, "tmx" in seen), ("nasdaq", False), "no venue: TMX is never asked")
+        self.assertEqual([(r["kind"], r["headline"]) for r in rows], [("release", "Ford declares dividend")])
+
+    def test_a_us_listing_reads_its_releases_beside_its_news_each_once(self):
+        now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+        feeds = {"articlebysymbol": '{"data": {"rows": [{"id": 1, "title": "Why SHOP", "publisher": "Zacks", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/a", "related_symbols": ["shop|stocks"]}, {"id": 2, "title": "Shopify Delivers Big", "publisher": "GlobeNewswire", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/articles/b", "related_symbols": ["shop|stocks"]}]}}',
+                 "press_release": '{"data": {"rows": [{"id": 2, "title": "Shopify Delivers Big", "publisher": "", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/press-release/b", "related_symbols": ["shop|stocks"]}, {"id": 3, "title": "Shopify to Announce", "publisher": "", "created": "Jul 8, 2026", "ago": "Jul 8, 2026", "url": "/press-release/c", "related_symbols": ["shop|stocks"]}]}}'}
+        asked = []
+        def get_text(url, ctx, headers=None, **kw):
+            asked.append(url)
+            return feeds["press_release" if "press_release" in url else "articlebysymbol"]
+        with mock.patch.object(market, "_get_text", side_effect=get_text), mock.patch.object(news, "_pace"):
+            src, rows = news.fetch_symbol("SHOP", "NASDAQ", "USD", now=now)
+        self.assertEqual(src, "nasdaq")
+        self.assertEqual([(r["id"], r["kind"], r["source"]) for r in rows], [("nasdaq:1", "story", "Zacks"), ("nasdaq:2", "release", "GlobeNewswire"), ("nasdaq:3", "release", "Nasdaq")], "the news feed's own wire item is a release; the press feed adds what the news feed lacks, each once")
+        self.assertEqual(len(asked), 2)
 
 
 class StoreTest(unittest.TestCase):
@@ -78,6 +164,22 @@ class StoreTest(unittest.TestCase):
         store.forget_news("SHOP", "TSX")
         self.assertEqual([r["id"] for r in store.snapshot()["news"]], ["nasdaq:9"])
         self.assertEqual(news.stale([("SHOP", "TSX", "CAD")], now=later), [("SHOP", "TSX", "CAD")], "forgotten means stale")
+
+    def test_rows_keep_their_kind_and_an_old_table_is_told_by_its_wires(self):
+        store.replace_news("SHOP", "NASDAQ", "nasdaq", [{"id": "nasdaq:1", "headline": "a", "source": "Zacks", "url": "u", "publishedAt": "2026-09-14T00:00:00Z", "kind": "story"},
+                                                       {"id": "nasdaq:2", "headline": "b", "source": "GlobeNewswire", "url": "u", "publishedAt": "2026-08-05T00:00:00Z", "kind": "release"}])
+        kinds = {r["id"]: r["kind"] for r in store.list_news()} if hasattr(store, "list_news") else None
+        with store._lock:
+            conn = store._connect()
+            try:
+                conn.execute("UPDATE news SET kind = NULL")
+                conn.commit()
+                store._ensure_news_columns(conn)
+                conn.commit()
+                told = {r["id"]: r["kind"] for r in conn.execute("SELECT id, kind FROM news").fetchall()}
+            finally:
+                conn.close()
+        self.assertEqual(told, {"nasdaq:1": "story", "nasdaq:2": "release"}, "a table from before releases were told apart is told by the wire names it holds")
 
     def test_trim_keeps_the_newest(self):
         store.replace_news("A", "TSX", "tmx", [{"id": "tmx:%d" % i, "headline": str(i), "source": "", "url": "", "publishedAt": "2026-09-%02dT00:00:00Z" % i} for i in range(1, 6)])

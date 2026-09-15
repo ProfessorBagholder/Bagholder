@@ -18,6 +18,8 @@ TMX_NEWS_QUERY = ("query getNewsForSymbol($symbol: String!, $page: Int!, $limit:
 TMX_NEWS_URL = "https://money.tmx.com/en/quote/%s/news/%s"
 NASDAQ_NEWS_URL = "https://api.nasdaq.com/api/news/topic/articlebysymbol?q=%s|STOCKS&offset=0&limit=%d"
 NASDAQ_LATEST_URL = "https://api.nasdaq.com/api/news/topic/latestnews?offset=0&limit=%d"
+NASDAQ_PRESS_URL = "https://api.nasdaq.com/api/news/topic/press_release?q=symbol:%s|assetclass:stocks&offset=0&limit=%d"   # a US listing's own releases, beside its news
+WIRE_MARKS = ("wire", "newsfile", "cision", "cnw")   # in a source's name: GlobeNewswire, Business Wire, PR Newswire, ACCESS Newswire, TheNewsWire, Canada Newswire, TMX Newsfile, Marketwired
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 NASDAQ_HEADERS = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
 TMX_HEADERS = {"User-Agent": UA, "locale": "en", "Origin": "https://money.tmx.com", "Referer": "https://money.tmx.com/"}
@@ -42,12 +44,20 @@ def _s(v):
     return "" if v is None else str(v)
 
 
+def kind_of(source):
+    """What an item is, told by where it came from: a wire carries the company's own
+    release, a publisher writes a story about it."""
+    s = _s(source).lower()
+    return "release" if any(m in s for m in WIRE_MARKS) else "story"
+
+
 def clean_text(t):
     return re.sub(r"\s+", " ", html.unescape(_s(t))).strip()
 
 
 def parse_tmx_news(data, symbol):
-    """TMX's items for a symbol into news rows: the headline, its exact time, the wire it came on, and TMX's page for it."""
+    """TMX's items for a symbol (in the venue's form, as `tmx_quote_symbol` gives it) into news
+    rows: the headline, its exact time, the wire it came on, and TMX's page for it."""
     rows = []
     for it in ((data or {}).get("data") or {}).get("news") or []:
         if not isinstance(it, dict) or not it.get("newsid"):
@@ -57,8 +67,9 @@ def parse_tmx_news(data, symbol):
             ts = datetime.fromisoformat(when).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
             continue
-        rows.append({"id": "tmx:%s" % it["newsid"], "headline": clean_text(it.get("headline")), "source": clean_text(it.get("source")).replace(" via QuoteMedia", ""),
-                     "url": TMX_NEWS_URL % (market.tmx_symbol(symbol), it["newsid"]), "publishedAt": ts})
+        source = clean_text(it.get("source")).replace(" via QuoteMedia", "")
+        rows.append({"id": "tmx:%s" % it["newsid"], "headline": clean_text(it.get("headline")), "source": source,
+                     "url": TMX_NEWS_URL % (symbol, it["newsid"]), "publishedAt": ts, "kind": kind_of(source)})
     return rows
 
 
@@ -79,9 +90,11 @@ def nasdaq_when(row, now):
         return ""
 
 
-def parse_nasdaq_news(data, now=None, symbol=""):
+def parse_nasdaq_news(data, now=None, symbol="", kind=None):
     """Nasdaq pads a symbol's feed with market-wide pieces; an item is kept only when the
-    symbol is among the ones Nasdaq itself lists for it (a feed asked without a symbol keeps all)."""
+    symbol is among the ones Nasdaq itself lists for it (a feed asked without a symbol keeps
+    all). An item's kind is the feed's when it has one (the press-release feed), else told
+    by its publisher; a release Nasdaq names no wire for reads as Nasdaq's."""
     now = now or datetime.now(timezone.utc)
     want = _s(symbol).strip().lower()
     rows = []
@@ -96,8 +109,9 @@ def parse_nasdaq_news(data, now=None, symbol=""):
         if not when:
             continue
         url = _s(it.get("url"))
-        rows.append({"id": "nasdaq:%s" % it["id"], "headline": clean_text(it.get("title")), "source": clean_text(it.get("publisher")),
-                     "url": url if url.startswith("http") else "https://www.nasdaq.com" + url, "publishedAt": when})
+        source = clean_text(it.get("publisher")) or ("Nasdaq" if kind == "release" else "")
+        rows.append({"id": "nasdaq:%s" % it["id"], "headline": clean_text(it.get("title")), "source": source,
+                     "url": url if url.startswith("http") else "https://www.nasdaq.com" + url, "publishedAt": when, "kind": kind or kind_of(source)})
     return rows
 
 
@@ -117,22 +131,45 @@ def fetch_symbol(symbol, exchange, currency, ssl_context=None, now=None):
     """The latest items for one listing from its wire, as rows; [] when the wire has none or fails."""
     src = source_for(symbol, exchange, currency)
     sym = market.tmx_symbol(symbol)
-    if not src or not sym:
+    if not sym:
         return src, []
+    if not src:
+        # A ticker asked for with no venue at all is an ambiguous name: TMX's news answers on the bare
+        # ticker whatever venue it is asked under, so `F` there is a Canadian company's halt notice and
+        # not Ford's releases. Only Nasdaq is asked, whose items name the symbols they belong to and are
+        # kept only when this one is among them, so nothing comes back rather than another company's news.
+        src = "nasdaq"
     try:
         if symbol == MARKET[0]:
             _pace("api.nasdaq.com")
             text = market._get_text(NASDAQ_LATEST_URL % PER_MARKET, ssl_context, headers=NASDAQ_HEADERS)
             return src, parse_nasdaq_news(json.loads(text), now, "")
         if src == "tmx":
-            _pace("app-money.tmx.com")
-            data = market._post_json("https://app-money.tmx.com/graphql",
-                                     {"operationName": "getNewsForSymbol", "variables": {"symbol": sym, "page": 1, "limit": PER_SYMBOL, "locale": "en"}, "query": TMX_NEWS_QUERY},
-                                     ssl_context, TMX_HEADERS)
-            return src, parse_tmx_news(data, sym)
+            # TMX names a listing by its venue, and the news query answers nothing under the wrong
+            # name: the same code the quote asks under, through the same lookup, so a record with a
+            # wrong or missing venue resolves here as it does everywhere else and is remembered once
+            code = market.tmx_quote_symbol(symbol, exchange, currency)
+            if not code:
+                return src, []
+            def ask(form):
+                _pace("app-money.tmx.com")
+                data = market._post_json("https://app-money.tmx.com/graphql",
+                                         {"operationName": "getNewsForSymbol", "variables": {"symbol": form, "page": 1, "limit": PER_SYMBOL, "locale": "en"}, "query": TMX_NEWS_QUERY},
+                                         ssl_context, TMX_HEADERS)
+                return parse_tmx_news(data, form)
+            return src, market.tmx_lookup(code, ask, ssl_context)[0]
         _pace("api.nasdaq.com")
         text = market._get_text(NASDAQ_NEWS_URL % (sym, PER_SYMBOL), ssl_context, headers=NASDAQ_HEADERS)
-        return src, parse_nasdaq_news(json.loads(text), now, sym)
+        rows = parse_nasdaq_news(json.loads(text), now, sym)
+        # the listing's own releases come on a feed of their own; each once, beside the stories
+        try:
+            _pace("api.nasdaq.com")
+            text = market._get_text(NASDAQ_PRESS_URL % (sym, PER_SYMBOL), ssl_context, headers=NASDAQ_HEADERS)
+            seen = {r["id"] for r in rows}
+            rows.extend(r for r in parse_nasdaq_news(json.loads(text), now, sym, kind="release") if r["id"] not in seen)
+        except Exception as e:
+            sys.stderr.write("bagholder news: %s releases from nasdaq failed: %s\n" % (sym, e))
+        return src, rows
     except Exception as e:
         sys.stderr.write("bagholder news: %s from %s failed: %s\n" % (sym, src, e))
         return src, None
