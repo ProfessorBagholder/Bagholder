@@ -5930,10 +5930,11 @@ def _shorts_stale(rec, now=None):
         return True
 
 
-def read_shorts(symbol, exchange, currency, trend=False, now=None):
+def read_shorts(symbol, exchange, currency, trend=False, now=None, name=""):
     """Read one listing's short selling from its regulator and keep it. Returns the record,
-    or {} for a market where no one publishes it."""
-    rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend)
+    or {} for a market where no one publishes it. The name tells a fund from a company, which
+    decides what its position is measured against."""
+    rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend, name=name)
     if rec:
         store.save_shorts(symbol, exchange, rec, now=now)
     return rec
@@ -5949,7 +5950,7 @@ def shorts_payload(symbol, exchange=None, currency=None, trend=False):
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
-    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    listed_as, ex, ccy = _instrument_meta(sym)[0], _s(exchange).strip(), _s(currency).strip()
     if not ex:
         # a ticker typed into the ranked list's box carries no venue: settled from what the app
         # already knows, in the order everything else settles it — the securities the sync
@@ -5971,29 +5972,36 @@ def shorts_payload(symbol, exchange=None, currency=None, trend=False):
     held = store.shorts_for(sym, ex)
     if held and (not trend or held.get("series")):
         if _shorts_stale(held):
-            kick("shorts:%s|%s" % (sym, ex), lambda: read_shorts(sym, ex, ccy, trend=True))
+            kick("shorts:%s|%s" % (sym, ex), lambda: read_shorts(sym, ex, ccy, trend=True, name=listed_as))
         return {"ok": True, "covered": True, "shorts": held}
-    rec = read_shorts(sym, ex, ccy, trend=trend)
+    rec = read_shorts(sym, ex, ccy, trend=trend, name=listed_as)
     if not rec:
         return {"ok": True, "covered": False}
     return {"ok": True, "covered": True, "shorts": rec}
 
 
-def shorts_feed(scope="holdings"):
-    """Every listing in scope with its short selling as it is stored, for the ranked list.
-    Nothing is read here: the sweep keeps the store warm, and a listing not read yet simply
-    is not in the list yet."""
-    want = {(_s(sym).upper(), _s(ex).upper()) for sym, ex, _ in shorts_listings(scope)}
-    rows = [r for r in store.all_shorts() if (r["symbol"], r["exchange"]) in want and r.get("shares") is not None]
+def shorts_feed():
+    """Every listing the book holds or watches with its short selling as it is stored, each
+    marked held or watched. One answer covers all three scopes, so turning between them asks
+    nothing and the list never empties for a moment while it waits — which is what moved the
+    page under the reader."""
     base = model.base_model()
-    known = {}
-    for row in (base.get("watchlist") or []) + (base.get("positions") or []):
-        key = (market.tmx_symbol(row.get("symbol")).upper(), _s(row.get("exchange")).upper())
-        held = known.setdefault(key, {"name": "", "positionId": None})
-        held["name"] = held["name"] or _s(row.get("name"))
-        held["positionId"] = held["positionId"] or row.get("positionId") or row.get("id")
-    for r in rows:
-        r.update(known.get((r["symbol"], r["exchange"]), {"name": "", "positionId": None}))
+    held, watched = {}, {}
+    for p in base.get("positions") or []:
+        if p.get("kind") == "Shares":
+            held[(market.tmx_symbol(p.get("symbol")).upper(), _s(p.get("exchange")).upper())] = p
+    for w in base.get("watchlist") or []:
+        watched[(market.tmx_symbol(w.get("symbol")).upper(), _s(w.get("exchange")).upper())] = w
+    rows = []
+    for r in store.all_shorts():
+        key = (r["symbol"], r["exchange"])
+        source = held.get(key) or watched.get(key)
+        if source is None or r.get("shares") is None:
+            continue
+        r["name"] = _s(source.get("name"))
+        r["positionId"] = source.get("positionId") or source.get("id")
+        r["held"], r["watched"] = key in held, key in watched
+        rows.append(r)
     return {"ok": True, "rows": rows}
 
 
@@ -6016,7 +6024,7 @@ def shorts_listings(scope="all"):
             if not sym or key in seen or not shorts.market_of(sym, ex, ccy):
                 continue
             seen.add(key)
-            out.append((sym, ex, ccy))
+            out.append((sym, ex, ccy, _s(row.get("name"))))
     return out
 
 
@@ -6024,12 +6032,12 @@ def sweep_shorts(now=None):
     """Keep every held and watched listing's short selling stored and current, so the page
     never waits on a read it could have done already."""
     done = 0
-    for sym, ex, ccy in shorts_listings("all"):
+    for sym, ex, ccy, name in shorts_listings("all"):
         held = store.shorts_for(sym, ex)
         if held and held.get("series") and not _shorts_stale(held, now):
             continue
         try:
-            if read_shorts(sym, ex, ccy, trend=True, now=now):
+            if read_shorts(sym, ex, ccy, trend=True, now=now, name=name):
                 done += 1
         except Exception as e:
             sys.stderr.write("bagholder shorts: %s not read: %s\n" % (sym, str(e) or e.__class__.__name__))
@@ -7137,8 +7145,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate():
                 self._send(403, {"ok": False})
                 return
-            query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            self._send(200, shorts_feed(_query_param(query, "scope") or "holdings"))
+            self._send(200, shorts_feed())
             return
         if path == "/api/shorts":
             if not self._gate():

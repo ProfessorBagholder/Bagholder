@@ -430,29 +430,152 @@ class StoredTest(unittest.TestCase):
 
 
 class FeedTest(unittest.TestCase):
-    """The ranked list reads the store and never a regulator."""
+    """The ranked list reads the store and never a regulator, and one answer covers every
+    scope so turning between them asks nothing."""
 
     setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
 
-    def test_only_listings_in_scope_are_listed(self):
+    def book(self, positions=(), watchlist=()):
+        return mock.patch.object(bagholder.model, "base_model", return_value={"positions": list(positions), "watchlist": list(watchlist)})
+
+    def test_only_listings_the_book_holds_or_watches_are_listed(self):
         store.save_shorts("QNC", "TSX-V", self.record())
         store.save_shorts("GONE", "TSX", self.record())
-        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
-             mock.patch.object(bagholder.model, "base_model", return_value={"positions": [], "watchlist": []}):
-            out = bagholder.shorts_feed("all")
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}]):
+            out = bagholder.shorts_feed()
         self.assertEqual([r["symbol"] for r in out["rows"]], ["QNC"])
+
+    def test_each_row_says_whether_it_is_held_or_watched(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("PNG", "TSX-V", self.record())
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}],
+                       watchlist=[{"symbol": "PNG", "exchange": "TSX-V", "name": "Kraken Robotics Inc."}]):
+            rows = {r["symbol"]: r for r in bagholder.shorts_feed()["rows"]}
+        self.assertEqual((rows["QNC"]["held"], rows["QNC"]["watched"]), (True, False))
+        self.assertEqual((rows["PNG"]["held"], rows["PNG"]["watched"]), (False, True))
 
     def test_a_row_carries_its_name_and_the_holding_it_opens(self):
         store.save_shorts("QNC", "TSX-V", self.record())
-        base = {"positions": [{"symbol": "QNC", "exchange": "TSX-V", "name": "Quantum eMotion Corp", "id": "rt:1"}], "watchlist": []}
-        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
-             mock.patch.object(bagholder.model, "base_model", return_value=base):
-            row = bagholder.shorts_feed("holdings")["rows"][0]
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}]):
+            row = bagholder.shorts_feed()["rows"][0]
         self.assertEqual(row["name"], "Quantum eMotion Corp")
         self.assertEqual(row["positionId"], "rt:1")
 
     def test_a_listing_read_but_carrying_no_position_is_left_out(self):
         store.save_shorts("QNC", "TSX-V", self.record(shares=None))
-        with mock.patch.object(bagholder, "shorts_listings", return_value=[("QNC", "TSX-V", "CAD")]), \
-             mock.patch.object(bagholder.model, "base_model", return_value={"positions": [], "watchlist": []}):
-            self.assertEqual(bagholder.shorts_feed("all")["rows"], [])
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Q", "id": "rt:1"}]):
+            self.assertEqual(bagholder.shorts_feed()["rows"], [])
+
+
+class FundFloatTest(unittest.TestCase):
+    """A fund is the one instrument whose units in issue are its float: it creates and
+    redeems them on demand and holds none back."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_company_with_no_float_published_is_never_given_its_share_count(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": {"raw": 500.0}}}]}}
+        self.use(self.session([("QNC", answer, 200)]))
+        with mock.patch.object(shorts, "_fund_units", side_effect=AssertionError("asked for units")):
+            self.assertIsNone(shorts.float_shares("QNC", "TSX-V", "CAD", "Quantum eMotion Corp"))
+
+    def test_a_fund_falls_back_to_the_units_the_exchange_publishes(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": None}}]}}
+        self.use(self.session([("RDDY", answer, 200)]))
+        with mock.patch.object(shorts, "_fund_units", return_value=20075000.0):
+            self.assertEqual(shorts.float_shares("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF"), 20075000.0)
+
+    def test_a_us_fund_takes_the_count_from_the_same_answer_as_the_float(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": {"raw": 4000.0}}}]}}
+        self.use(self.session([("SPY", answer, 200)]))
+        self.assertEqual(shorts.float_shares("SPY", "NYSE", "USD", "SPDR S&P 500 ETF Trust"), 4000.0)
+
+    def test_a_float_that_is_published_is_still_what_a_fund_is_measured_against(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": 111.0}, "sharesOutstanding": {"raw": 999.0}}}]}}
+        self.use(self.session([("XIU", answer, 200)]))
+        self.assertEqual(shorts.float_shares("XIU", "TSX", "CAD", "iShares S&P/TSX 60 Index ETF"), 111.0)
+
+
+class FloatCacheTest(unittest.TestCase):
+    """A float that answered is kept for the day; one that did not is asked for again soon,
+    since a source being slow is not the same as a figure not existing."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_figure_is_read_once_and_kept(self):
+        s = self.session([("GME", self.stats(463550645), 200)])
+        self.use(s)
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertEqual(len([u for u in s.asked if "GME" in u]), 1)
+
+    def test_a_lookup_that_answered_with_nothing_is_asked_again(self):
+        empty = self.session([("ASTS", self.stats(None), 200)])
+        self.use(empty)
+        self.assertIsNone(shorts.float_shares("ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."))
+        shorts._shares["ASTS|NASDAQ"]["at"] -= shorts.FLOAT_MISS_MIN * 60 + 1
+        good = self.session([("ASTS", self.stats(266440743), 200)])
+        self.use(good)
+        self.assertEqual(shorts.float_shares("ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."), 266440743.0)
+
+    def test_a_figure_is_not_asked_again_that_soon(self):
+        s = self.session([("GME", self.stats(463550645), 200)])
+        self.use(s)
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        shorts._shares["GME|NYSE"]["at"] -= shorts.FLOAT_MISS_MIN * 60 + 1
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertEqual(len([u for u in s.asked if "GME" in u]), 1)
+
+
+class YahooPaceTest(unittest.TestCase):
+    """The float lookups keep Yahoo's own pace, the one the rest of the app keeps."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_each_lookup_takes_its_turn_and_leaves_the_next_slot(self):
+        s = self.session([("GME", self.stats(1.0), 200)])
+        self.use(s)
+        shorts.market._yahoo_next_at = 0
+        with mock.patch.object(shorts.time, "sleep") as slept:
+            shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertGreater(shorts.market._yahoo_next_at, 0)          # the next caller waits its turn
+        self.assertEqual(slept.call_count, 0)                        # the slot was free, so no wait
+
+    def test_nothing_is_asked_while_a_backoff_stands(self):
+        s = self.session([("GME", self.stats(1.0), 200)])
+        self.use(s)
+        shorts.market._yahoo_backoff_until = shorts.time.monotonic() + 60
+        try:
+            self.assertIsNone(shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp."))
+            self.assertEqual([u for u in s.asked if "quoteSummary" in u], [])
+        finally:
+            shorts.market._yahoo_backoff_until = 0
+
+    def test_a_refusal_starts_the_backoff_the_whole_app_honours(self):
+        s = self.session([("GME", {}, 429)])
+        self.use(s)
+        shorts.market._yahoo_backoff_until = 0
+        try:
+            self.assertIsNone(shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp."))
+            self.assertGreater(shorts.market._yahoo_backoff_until, shorts.time.monotonic())
+        finally:
+            shorts.market._yahoo_backoff_until = 0
+
+
+class FloatFormTest(unittest.TestCase):
+    """Which symbol Yahoo is asked for. A row that carries no currency must not be asked for
+    under the wrong market's suffixes."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_us_listing_with_no_currency_on_its_row_is_still_asked_for_as_one(self):
+        s = self.session([("quoteSummary/ASTS?", self.stats(266440743), 200)])
+        self.use(s)
+        self.assertEqual(shorts.float_shares("ASTS", "NASDAQ", "", "AST SpaceMobile Inc."), 266440743.0)
+        self.assertFalse([u for u in s.asked if ".TO" in u or ".V" in u], "asked under a Canadian suffix")
+
+    def test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes(self):
+        s = self.session([("QNC.V", self.stats(212448707), 200)])
+        self.use(s)
+        self.assertEqual(shorts.float_shares("QNC", "TSX-V", "", "Quantum eMotion Corp"), 212448707.0)
+        self.assertTrue(any("QNC.V" in u for u in s.asked))

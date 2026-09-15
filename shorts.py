@@ -28,6 +28,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import edgar
+import exposure
 import instruments
 import market
 import model
@@ -43,10 +44,15 @@ CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL":
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 SERIES = 8               # reports behind the run shown with the position
-FLOAT_HOURS = 12         # how often a listing's float is looked up again
+FLOAT_HOURS = 12         # how often a float that answered is looked up again
+FLOAT_MISS_MIN = 20      # a lookup that answered with nothing is tried again far sooner: a float
+                         # that did not arrive is usually the source being slow, not the figure
+                         # being absent, and holding the miss as long as a hit hides it for hours
 YAHOO_QUOTE_URL = "https://finance.yahoo.com/quote/%s/"
 YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 YAHOO_STATS_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
+TMX_UNITS_QUERY = ("query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) "
+                   "{ symbol shareOutStanding } }")
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
 
 _files = {}
@@ -280,34 +286,84 @@ def _yahoo_session():
         return None, ""
 
 
-def float_shares(symbol, exchange, currency, ssl_context=None):
-    """The listing's free float: the shares actually available to trade, which is what a
-    short position is normally measured against. Yahoo is the one source that publishes a
-    float for both markets, under the same symbol forms the app's own quotes use, and it is
-    None where Yahoo carries none — for a fund, or for a venue it does not cover. Nothing is
-    substituted for it: shares in issue is a different figure and would not be the same
-    percentage twice."""
+def _fund_units(symbol, exchange, currency, ssl_context=None):
+    """The units an exchange-traded fund has in issue, from the market's own source. A fund
+    creates and redeems units on demand and holds none back, so the units in issue are the
+    units there are to trade: for a fund this is the float, not a stand-in for it."""
+    sym = _s(symbol).strip().upper()
+    if market_of(sym, exchange, currency) == "us":
+        return None                              # the US count comes from Yahoo with the float below
+    try:
+        code = market.tmx_quote_symbol(sym, exchange, currency)
+        if not code:
+            return None
+        def ask(form):
+            answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
+                                                          "query": TMX_UNITS_QUERY}, ssl_context, market._TMX_HEADERS)
+            return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
+        return _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding")) or None
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s units failed: %s\n" % (sym, e))
+        return None
+
+
+def _yahoo_paced(call):
+    """Yahoo at the pace the rest of the app already keeps with it: one request at a time,
+    spaced, and none at all while a backoff after a 429 stands. These lookups are a burst by
+    nature — one per listing whenever the sweep runs — and unpaced they were the burst Yahoo
+    turned away, which read as a listing having no float when it has one."""
+    with market._yahoo_lock:
+        if time.monotonic() < market._yahoo_backoff_until:
+            return None
+        wait = market._yahoo_next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        market._yahoo_next_at = time.monotonic() + market.YAHOO_MIN_INTERVAL_SEC
+        answered = call()
+        if getattr(answered, "status_code", 0) == 429:
+            market._yahoo_backoff_until = time.monotonic() + market.YAHOO_BACKOFF_SEC
+            return None
+        return answered
+
+
+def float_shares(symbol, exchange, currency, name="", ssl_context=None):
+    """What a short position is measured against: the shares actually available to trade.
+
+    For a company that is the free float, which Yahoo publishes for both markets under the
+    same symbol forms the app's own quotes use, and it is never swapped for the shares in
+    issue — those include what insiders hold and would not be the same percentage twice. A
+    fund is the one instrument where the two are the same thing: its units are created and
+    redeemed on demand and none are held back, so the units in issue are the units there are
+    to trade, and where no float is published for one its unit count stands in its place.
+    None where neither is published, and the tile then says so."""
     sym = _s(symbol).strip().upper()
     key = "%s|%s" % (sym, _s(exchange).strip().upper())
     with _lock:
         held = _shares.get(key)
-        if held and time.time() - held["at"] < FLOAT_HOURS * 3600:
+        if held and time.time() - held["at"] < (FLOAT_HOURS * 3600 if held["float"] else FLOAT_MISS_MIN * 60):
             return held["float"]
-    count = None
+    count, fund = None, exposure.is_fund(name, sym)
+    # the symbol forms follow the market the venue already settled on, not the currency the
+    # row happens to carry: a watchlist row keeps none, and the forms then default to Canada,
+    # so a Nasdaq listing was asked for as a Toronto one and answered with nothing
+    where = market_of(sym, exchange, currency)
+    ccy = _s(currency).strip() or ("USD" if where == "us" else "CAD")
     session, crumb = _yahoo_session()
     if session:
-        for form in (market.yahoo_forms({"symbol": sym, "exchange": exchange, "currency": currency}) or [market.tmx_symbol(sym)]):
+        for form in (market.yahoo_forms({"symbol": sym, "exchange": exchange, "currency": ccy}) or [market.tmx_symbol(sym)]):
             try:
-                answered = session.get(YAHOO_STATS_URL % (form, crumb), timeout=market.TIMEOUT_SEC)
-                if answered.status_code != 200:
+                answered = _yahoo_paced(lambda: session.get(YAHOO_STATS_URL % (form, crumb), timeout=market.TIMEOUT_SEC))
+                if answered is None or answered.status_code != 200:
                     continue
                 stats = (((answered.json().get("quoteSummary") or {}).get("result") or [{}])[0] or {}).get("defaultKeyStatistics") or {}
-                raw = stats.get("floatShares")
-                count = _num(raw.get("raw") if isinstance(raw, dict) else raw)
+                pick = lambda field: _num((stats.get(field) or {}).get("raw") if isinstance(stats.get(field), dict) else stats.get(field))
+                count = pick("floatShares") or (pick("sharesOutstanding") if fund else None)
                 if count:
                     break
             except Exception as e:
                 sys.stderr.write("bagholder shorts: %s float from yahoo failed: %s\n" % (form, e))
+    if not count and fund:
+        count = _fund_units(sym, exchange, ccy, ssl_context)
     count = count or None
     with _lock:
         _shares[key] = {"float": count, "at": time.time()}
@@ -412,7 +468,7 @@ def days_to_cover(rec, now=None):
     return round(shares / average, 1) if shares and average else None
 
 
-def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, trend=False):
+def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, trend=False, name=""):
     """Everything published about one listing's short selling, {} where nothing is."""
     sym = _s(symbol).strip().upper()
     now = now or datetime.now(timezone.utc)
@@ -428,7 +484,7 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
     rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
-    floated = float_shares(sym, exchange, currency, ssl_context)
+    floated = float_shares(sym, exchange, currency, name, ssl_context)
     rec["float"] = floated
     rec["ofFloat"] = (rec["shares"] / floated * 100) if floated and rec.get("shares") else None
     rec["averageVolume"] = average_volume(rec, now)

@@ -3646,12 +3646,16 @@ const SHORTS_COLS = [{ key: "symbol", label: "Symbol" }, { key: "exchange", labe
                      { key: "shares", label: "Short shares", align: "right" }, { key: "ofFloat", label: "Of float", align: "right" },
                      { key: "daysToCover", label: "Days to cover", align: "right" }, { key: "volumePct", label: "Short volume", align: "right" },
                      { key: "asOf", label: "As of", align: "right" }];
+// one answer covers every scope, so turning between them draws at once from what is already
+// here: asking again emptied the list for a moment, and a card that shrinks under a reader
+// scrolled past it takes the page with it
 const _shortsFeed = {};
-function ensureShortsFeed(scope) {
-  if (_shortsFeed[scope]) return;
-  _shortsFeed[scope] = { loading: true };
-  api("GET", "/api/shorts/feed?scope=" + encodeURIComponent(scope)).then((d) => {
-    _shortsFeed[scope] = (d && d.ok) ? { rows: d.rows || [] } : { rows: [] };
+function ensureShortsFeed() {
+  if (_shortsFeed.rows || _shortsFeed.loading) return;
+  _shortsFeed.loading = true;
+  api("GET", "/api/shorts/feed").then((d) => {
+    _shortsFeed.loading = false;
+    _shortsFeed.rows = (d && d.ok) ? (d.rows || []) : [];
     if (state.page === "markets") render();
   });
 }
@@ -3665,8 +3669,7 @@ function shortsLookup(text) {
   if (!key || key.length > 12 || /[^A-Z0-9.\-]/.test(key) || _shortsFound[key]) return;
   _shortsLookupTimer = setTimeout(() => {
     if (state.shortsQuery.trim().toUpperCase() !== key) return;
-    const rows = (_shortsFeed[state.shortsScope] || {}).rows || [];
-    if (rows.some((r) => String(r.symbol).toUpperCase() === key)) return;   // already listed: nothing to look up
+    if ((_shortsFeed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return;   // already listed
     _shortsFound[key] = { loading: true };
     render();
     api("GET", "/api/shorts?symbol=" + encodeURIComponent(key)).then((d) => {
@@ -3677,11 +3680,11 @@ function shortsLookup(text) {
 }
 function shortsListCardHtml() {
   const scope = state.shortsScope;
-  ensureShortsFeed(scope);
-  const held = _shortsFeed[scope] || {};
+  ensureShortsFeed();
+  const held = _shortsFeed;
   const q = state.shortsQuery.trim().toUpperCase();
   const s = state.sort.shorts;
-  let pool = (held.rows || []).slice();
+  let pool = (held.rows || []).filter((r) => scope === "all" || (scope === "holdings" ? r.held : r.watched));
   if (q) {
     pool = pool.filter((r) => String(r.symbol).toUpperCase().indexOf(q) === 0 || String(r.name || "").toUpperCase().indexOf(q) >= 0);
     const found = _shortsFound[q];
