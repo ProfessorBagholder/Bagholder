@@ -6169,20 +6169,32 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
 
 
 def filings_notice(sym, new):
-    """`New disclosure · QNC` / `Material change report · SEDAR+`; several, `3 new disclosures · QNC` with the documents' kinds."""
-    kinds = []
-    for r in new:
-        t = _s(r.get("type")).strip()
-        if t and t not in kinds:
-            kinds.append(t)
+    """`New disclosure · QNC` and what was filed; several, `3 new disclosures · QNC` and the
+    first of them. What was filed is the document's own title, the one the Disclosures table
+    shows, because a filing's type is the form's code — `144`, `6-K` — which names the form
+    and not what happened. A document with no title yet is read here for one, at most the few
+    the notice names, and the read is kept on the row, so the table shows what the
+    notification said. A form whose document could not be read is named by its code."""
+    named = []
+    for r in new[:3]:
+        title = _s(r.get("subject")).strip()
+        if not title and _s(r.get("id")):
+            try:
+                title = _s((filings_enrich(sym, _s(r.get("id"))) or {}).get("subject")).strip()
+            except Exception as e:
+                sys.stderr.write("bagholder disclosures: %s not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
+        title = title or _s(r.get("type")).strip()
+        if title and title not in named:
+            named.append(title)
     sources = []
     for r in new:
         src = _s(r.get("source")).strip()
         if src and src not in sources:
             sources.append(src)
-    names = {"sedar": "SEDAR+", "sec": "SEC EDGAR"}
-    tail = ", ".join(names.get(x, x) for x in sources)
-    head = ", ".join(kinds[:3]) + (" and more" if len(kinds) > 3 else "")
+    # the regulator under its own name, whatever case the source's rows spell it in
+    names = {"sedar": "SEDAR+", "sedar+": "SEDAR+", "sec": "SEC EDGAR", "sec edgar": "SEC EDGAR"}
+    tail = ", ".join(names.get(x.lower(), x) for x in sources)
+    head = ", ".join(named) + (" and more" if len(new) > 3 else "")
     body = (head + (" · " if head and tail else "") + tail) or "A new filing."
     title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
     return (title, body)
