@@ -102,12 +102,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth.on{color:var(--ink)}
 /* short interest: a label, the figure, and what stands behind it, so the row reads across
    the card's width instead of three numbers stranded in it */
-.si-grid{display:grid;grid-template-columns:auto minmax(88px,auto) minmax(0,1fr);column-gap:16px;row-gap:13px;align-items:baseline}
 .si-v{font-size:14px;font-weight:500;text-align:right;white-space:nowrap}
-.si-n{display:flex;align-items:center;gap:10px;min-width:0;font-size:11.5px;color:var(--ink55)}
-.si-n > span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.si-bar{flex:0 0 84px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
-.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
 .si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
 .si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
@@ -2560,26 +2555,41 @@ function shortsHeader(s, title) {
   return '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>' + title + "</h5>" +
     '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>";
 }
-function shortsCardHtml(s) {
-  const line = (f) => '<div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div>" +
-    '<div class="si-n tab">' + (f.bar == null ? "" : '<span class="si-bar"><span style="width:' + Math.max(0, Math.min(100, f.bar)).toFixed(1) + '%"></span></span>') +
-    "<span>" + esc(f.note || "") + "</span></div>";
-  return '<div class="card elev-sm" style="padding:16px 18px 12px">' + shortsHeader(s, "Short interest") +
-    '<div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div></div>";
-}
-// the position against the rest of the issue, in the donut every other card on the page uses
-function shortsRingHtml(s) {
-  const pct = s.ofFloat;
-  let body = '<div class="muted empty" style="flex:1;font-size:12px">No float is published for this listing.</div>';
-  if (pct != null && s.float && s.shares != null) {
-    const share = Math.max(0, Math.min(1, s.shares / s.float));
-    const items = [{ label: "Short interest", share: share, color: "var(--pie-1)" },
-                   { label: "Float", share: 1 - share, color: "rgba(var(--ink-rgb),.16)" }];
-    const d = donutPieces("sipie", "Short", items, null, "l", 132, n2(pct, 2) + "%");
-    body = '<div id="sipiePlot" data-hover="sipie" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
+// Both measures are a part of a whole, so both are the donut the Allocation, Sectors and
+// Regions cards draw: the centre carries the percentage, a slice under the pointer carries
+// the shares it stands for, and the line under the ring carries what the donut cannot.
+function shortsRingCard(key, title, s, pct, parts, footer, missing) {
+  let body = '<div class="muted empty" style="flex:1;font-size:12px">' + missing + "</div>";
+  if (pct != null && parts) {
+    const d = donutPieces(key, "Short", parts, null, "l", 132, n2(pct, 2) + "%");
+    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
   }
   return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
-    shortsHeader(s, "Short vs float") + body + "</div>";
+    shortsHeader(s, title) + body +
+    (footer ? '<div class="tab" style="text-align:center;padding-top:10px;font-size:11.5px;color:var(--ink55)">' + footer + "</div>" : "") + "</div>";
+}
+// the part of a period's trading that was sold short
+function shortsVolumeCardHtml(s) {
+  const pct = s.volumePct;
+  const share = pct == null ? null : Math.max(0, Math.min(1, pct / 100));
+  const rest = (s.totalVolume != null && s.shortVolume != null) ? Math.max(0, s.totalVolume - s.shortVolume) : null;
+  const parts = share == null ? null : [{ label: "Short volume", share: share, count: s.shortVolume == null ? null : Math.round(s.shortVolume), color: "var(--pie-1)" },
+                                        { label: "Shares traded", share: 1 - share, count: rest == null ? null : Math.round(rest), color: "rgba(var(--ink-rgb),.16)" }];
+  const cover = s.daysToCover == null ? "" : n2(s.daysToCover, 1) + " days to cover" + (s.averageVolume ? " at " + qty(Math.round(s.averageVolume)) + " a day" : "");
+  const span = s.volumeOf ? shortSpan(s.volumeOf) : "";
+  return shortsRingCard("sivol", "Short volume", s, pct, parts, [span, cover].filter(Boolean).join(" · "),
+                        "No trading is reported for this listing.");
+}
+// the position against the shares actually available to trade
+function shortsFloatCardHtml(s) {
+  const pct = s.ofFloat;
+  const share = (pct == null || !s.float || s.shares == null) ? null : Math.max(0, Math.min(1, s.shares / s.float));
+  const parts = share == null ? null : [{ label: "Short interest", share: share, count: Math.round(s.shares), color: "var(--pie-1)" },
+                                        { label: "Float", share: 1 - share, count: Math.round(s.float - s.shares), color: "rgba(var(--ink-rgb),.16)" }];
+  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change) + (s.previousOf ? " since " + shortDay(s.previousOf) : "");
+  const held = s.shares == null ? "" : qty(s.shares) + " shares short";
+  return shortsRingCard("sifloat", "Short vs float", s, share == null ? null : pct, parts, [held, change].filter(Boolean).join(" · "),
+                        "No float is published for this listing.");
 }
 // the run of reports, drawn the way the equity curve is: an axis of its own, the same grid
 // lines and the same area under the line. Bars from zero are the other house idiom, but a
@@ -2613,8 +2623,8 @@ function shortsSectionHtml(t) {
   const rec = _shorts[shortsKey(t)];
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
-  return '<div style="display:grid;grid-template-columns:minmax(0,1.75fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
-    shortsCardHtml(s) + shortsRingHtml(s) + "</div>" + shortsHistoryHtml(s);
+  return '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
+    shortsVolumeCardHtml(s) + shortsFloatCardHtml(s) + "</div>" + shortsHistoryHtml(s);
 }
 // the same listing, compact, for the News card once it is scoped to a symbol — the card is
 // half the width of the instrument page's, so the figures stack under their labels
@@ -3023,10 +3033,11 @@ function donutHover(e, key) {
   plot.querySelectorAll("#" + key + "Legend [data-slice]").forEach((s) => { const on = i < 0 || +s.dataset.slice === i; [...s.children].forEach((c) => { c.style.opacity = on ? "1" : ".45"; }); });
   const centre = document.getElementById(key + "Centre"); const d = _donuts[key]; if (!centre || !d) return;
   const x = i >= 0 ? d.items[i] : null;
-  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + pctPlain(x.share) + "</div>"
+  centre.innerHTML = x ? (d.total == null ? '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (x.count == null ? pctPlain(x.share) : qty(x.count)) + "</div>" + (x.count == null ? "" : '<div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
       : '<div class="lbl">' + esc(x.label) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + money0(x.v) + '</div><div class="muted" style="font-size:11px;margin-top:2px">' + pctPlain(x.share) + "</div>")
     : '<div class="lbl">' + esc(d.centreLabel) + '</div><div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">' + (d.total == null ? esc(d.centreText || "") : money0(d.total)) + "</div>";
 }
+const DONUT_KEYS = { ppie: 1, xsec: 1, xreg: 1, sivol: 1, sifloat: 1 };
 function ppieHover(e) { donutHover(e, "ppie"); }
 function ppieLeave() { ppieHover({ target: document.body }); }
 // ---------------------------------------------------------------------------
@@ -4662,13 +4673,13 @@ function bind() {
   document.addEventListener("mousemove", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
-    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover(e, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (DONUT_KEYS[h.dataset.hover]) donutHover(e, h.dataset.hover);
   });
   document.addEventListener("mouseout", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
-    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover({ target: document.body }, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (DONUT_KEYS[h.dataset.hover]) donutHover({ target: document.body }, h.dataset.hover);
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
     else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
