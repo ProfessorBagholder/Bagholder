@@ -76,6 +76,29 @@ class KindTest(unittest.TestCase):
                 _, found = news.fetch_symbol("QIMC", "TSX-V", "CAD")
             self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC:CNX"], ["tmx:7"]))
 
+    def test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked(self):
+        """No directory carries every venue, so the venue comes from the app's own knowledge: the
+        security records the sync brought, then TMX's resolver, which names the venue it verified
+        by the quote. A ticker TMX cannot place is a US one."""
+        seen = {}
+        def get_text(url, ctx, headers=None, **kw):
+            seen.setdefault("nasdaq", []).append(url)
+            return '{"data": {"rows": []}}'
+        def post_json(url, body, ctx, headers=None, **kw):
+            seen["tmx"] = body["variables"]["symbol"]
+            return {"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}
+        with mock.patch.object(news, "_pace"), mock.patch.object(market, "_get_text", side_effect=get_text), \
+             mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(store, "list_securities", return_value=[]):
+            # a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
+            with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"), mock.patch.object(market, "tmx_remembered", side_effect=lambda k: "QIMC:CNX"):
+                out = bagholder.news_symbol_payload("QIMC", "", "")
+            self.assertEqual((out["source"], seen.get("tmx")), ("tmx", "QIMC:CNX"))
+            seen.clear()
+            # TMX cannot place it: Nasdaq, whose items name the symbols they belong to
+            with mock.patch.object(market, "tmx_resolve", return_value=""):
+                out = bagholder.news_symbol_payload("KO", "", "")
+        self.assertEqual((out["source"], out["exchange"], "tmx" in seen), ("nasdaq", "NASDAQ", False))
+
     def test_a_ticker_with_no_venue_is_never_asked_of_tmx(self):
         """TMX's news answers on the bare ticker whatever venue it is asked under, so a name with no
         venue would come back as another company's. Only Nasdaq, whose items name their symbols."""

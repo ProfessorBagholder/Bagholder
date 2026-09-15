@@ -5898,15 +5898,28 @@ def news_symbol_payload(symbol, exchange, currency):
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
-    src, rows = news.fetch_symbol(sym, _s(exchange), _s(currency), _ssl_context())
+    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    if not ex:
+        # the venue from what the app already knows: the security records the sync brought, then
+        # TMX's own resolver, which names the venue it verified by the quote and so covers the
+        # venues no public directory carries (the CSE, Cboe Canada). Nothing is guessed: a ticker
+        # TMX cannot place is a US one, and Nasdaq keeps only the items that name it.
+        _, ex, ccy = (lambda n, e, c: (n, e, c or ccy))(*_instrument_meta(sym))
+        if not ex:
+            form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
+            if form and not form.endswith(":US"):
+                ccy = ccy or "CAD"          # TMX, under the form its resolver just remembered
+            else:
+                ex, ccy = "NASDAQ", "USD"
+    src, rows = news.fetch_symbol(sym, ex, ccy, _ssl_context())
     if rows is None:
         return {"ok": False, "error": "the wire did not answer"}
     if not src:
-        return {"ok": True, "count": 0, "source": ""}
-    store.replace_news(sym, _s(exchange), src, rows)
+        return {"ok": True, "count": 0, "source": "", "exchange": ex}
+    store.replace_news(sym, ex, src, rows)
     store.trim_news(news.KEEP)
     model.invalidate()
-    return {"ok": True, "count": len(rows), "source": src}
+    return {"ok": True, "count": len(rows), "source": src, "exchange": ex}
 
 
 def filings_feed(scope, limit=200):

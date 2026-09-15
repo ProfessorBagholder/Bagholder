@@ -3196,29 +3196,33 @@ function newsDiscLookup(text) {
   _ndLookupTimer = setTimeout(() => {
     const kind = state.newsKind;
     if (state.newsSymbol || state.newsQuery.trim().toUpperCase() !== key) return;
-    const has = kind === "disc" ? ((_discFeed[state.newsScope] || {}).rows || []).some((r) => String(r.symbol || "").startsWith(key))
-      : (((state.model || {}).markets || {}).news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(key)));
-    if (has) return;   // the card has it: the filter shows it
+    // the card's own items for this ticker, whatever the scope shows: a chip is not needed to read them again
+    const itemsFor = (only) => kind === "disc"
+      ? ((_discFeed[state.newsScope] || {}).rows || []).some((r) => String(r.symbol || "").toUpperCase() === only.symbol)
+      : (((state.model || {}).markets || {}).news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol));
     const take = (only) => {
       if (state.newsKind !== kind || state.newsQuery.trim().toUpperCase() !== key) return;
+      // the chip, not the filter: a listing outside the scope on show (a holding while Watchlist is
+      // chosen, one sold since its items were read) is the listing asked for, and the scope must not hide it
       state.newsSymbol = only;
       state.newsQuery = "";
-      if (kind !== "disc") {
-        // the wire read now for a listing whose items the card has none of; the model brings its rows
+      if (kind !== "disc" && !itemsFor(only)) {
+        // no items for it: the wire is read now, and the model brings its rows
         state.newsReading = only.symbol;
         api("GET", "/api/news/symbol?symbol=" + encodeURIComponent(only.symbol) + "&exchange=" + encodeURIComponent(only.exchange) + "&currency=" + encodeURIComponent(only.currency))
-          .then(() => { state.newsReading = ""; loadModel(); });
+          .then((r) => { state.newsReading = ""; if (r && r.ok && r.exchange && state.newsSymbol === only) only.exchange = String(r.exchange).toUpperCase(); loadModel(); });
       }
       render();
     };
     const known = listingByTicker(key);
     if (known) { take(known); return; }
     api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
-      if (!(r && r.ok)) return;
-      const m = r.matches || [];
+      const m = (r && r.ok && r.matches) || [];
       const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
-      if (!hit) return;
-      take({ symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" });
+      // no directory carries it (a CSE or Cboe Canada listing): the server places it from the security
+      // records and TMX's own resolver, and answers with the venue it read under
+      take(hit ? { symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" }
+               : { symbol: key, exchange: "", name: "", currency: "" });
     });
   }, 500);
 }
