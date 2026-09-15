@@ -39,8 +39,13 @@ class NotifyTest(unittest.TestCase):
         store.ensure()
         with bagholder._lock:
             bagholder._state.update({"connected": False, "error": "", "syncing": False, "capturing": False, "email": "", "syncFails": 0, "syncFirstFail": ""})
+        # a new filing is read for its title before it is told; here nothing is read, so no test
+        # reaches a regulator or a model and what is told does not depend on either being up
+        self.reads = mock.patch.object(bagholder, "filings_enrich", return_value={})
+        self.reads.start()
 
     def tearDown(self):
+        self.reads.stop()
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
         os.environ.pop("BAGHOLDER_NOTIFY", None)
@@ -403,6 +408,29 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.sweep_filings(now=later(124)), 1)
             self.assertEqual(bagholder.sweep_filings(now=later(155)), 0, "told once")
         self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [("New disclosure · CH", "Material change report · SEDAR+")])
+
+
+    def test_a_disclosure_is_told_by_the_documents_own_title_and_the_form_code_stands_in(self):
+        rows = [{"id": "sec:1", "source": "SEC", "type": "144", "subject": "Proposed sale of 40,000 shares by an officer"}]
+        self.assertEqual(bagholder.filings_notice("NBIS", rows),
+                         ("New disclosure \u00b7 NBIS", "Proposed sale of 40,000 shares by an officer \u00b7 SEC EDGAR"))
+        # no title on the row yet: the document is read for one, and that is what is told
+        read = []
+        def fake(sym, doc_id):
+            read.append((sym, doc_id))
+            return {"ok": True, "subject": "Notice of intent to sell"}
+        with mock.patch.object(bagholder, "filings_enrich", side_effect=fake):
+            self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:2", "source": "SEC", "type": "144"}]),
+                             ("New disclosure \u00b7 NBIS", "Notice of intent to sell \u00b7 SEC EDGAR"))
+        self.assertEqual(read, [("NBIS", "sec:2")], "read once, for the notice it is naming")
+        # nothing could be read from it: the form's code stands in rather than nothing at all
+        with mock.patch.object(bagholder, "filings_enrich", return_value={"ok": False}):
+            self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:3", "source": "SEC", "type": "6-K"}]),
+                             ("New disclosure \u00b7 NBIS", "6-K \u00b7 SEC EDGAR"))
+        # several: counted in the title, named in the body, and only the ones it names are read
+        many = [{"id": "sec:%d" % i, "source": "SEC", "type": "4", "subject": "Insider report %d" % i} for i in range(4)]
+        self.assertEqual(bagholder.filings_notice("NBIS", many),
+                         ("4 new disclosures \u00b7 NBIS", "Insider report 0, Insider report 1, Insider report 2 and more \u00b7 SEC EDGAR"))
 
 
     def test_a_wires_release_is_told_and_a_first_read_of_a_listing_is_not(self):

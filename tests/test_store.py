@@ -3956,3 +3956,35 @@ class KeptConnectionTest(unittest.TestCase):
             with self.assertRaises(Exception) as caught:
                 market._fetch("https://example.invalid/missing", None, {}, 5)
         self.assertEqual(getattr(caught.exception, "code", None), 404, "a symbol a source does not carry is still a 404")
+
+
+class ShortsColumnTest(unittest.TestCase):
+    """A table an earlier version created keeps its columns: CREATE TABLE IF NOT EXISTS adds
+    none, so a column added later is added by hand and the rows already there survive it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def test_a_table_from_the_version_before_gains_the_column_and_keeps_its_rows(self):
+        path = os.path.join(self.tmp.name, "bagholder.db")
+        old = sqlite3.connect(path)
+        old.executescript(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+            "INSERT INTO meta VALUES ('schema_version', '12');"
+            "CREATE TABLE shorts (symbol TEXT NOT NULL, exchange TEXT NOT NULL DEFAULT '', market TEXT, as_of TEXT,"
+            " shares REAL, previous REAL, previous_of TEXT, change REAL, float_shares REAL, of_float REAL,"
+            " average_volume REAL, days_to_cover REAL, volume_of TEXT, volume_span TEXT, short_volume REAL,"
+            " total_volume REAL, volume_pct REAL, series TEXT, fetched_at TEXT, PRIMARY KEY (symbol, exchange));"
+            "INSERT INTO shorts (symbol, exchange, shares, fetched_at) VALUES ('QNC','TSX-V',2667164,'2026-09-15T20:00:00Z');")
+        old.commit()
+        old.close()
+        store.ensure()
+        row = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(row["shares"], 2667164.0)
+        self.assertEqual(row["readVersion"], 0)      # unmarked, so it is read again once

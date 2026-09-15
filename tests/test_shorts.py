@@ -2,6 +2,7 @@
 one figure the app derives from them."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -345,3 +346,389 @@ class FloatTest(unittest.TestCase):
             rec = shorts.for_listing("GME", "NYSE", "USD")
         self.assertEqual(rec["float"], 400.0)
         self.assertEqual(rec["ofFloat"], 25.0)
+
+
+class StoredTest(unittest.TestCase):
+    """What was read is kept, so opening an instrument again — or after a restart — draws
+    its tiles with the page instead of after a round of reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+        model.invalidate()
+        shorts._files.clear()
+        shorts._shares.clear()
+
+    def tearDown(self):
+        shorts._files.clear()
+        shorts._shares.clear()
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    def record(self, **over):
+        rec = {"market": "ca", "asOf": "2026-08-31", "shares": 2667164.0, "previous": 2603087.0, "previousOf": "2026-08-15",
+               "change": 64077.0, "float": 212448707.0, "ofFloat": 1.2554, "averageVolume": 510698.0, "daysToCover": 5.2,
+               "volumeOf": "2026-08-16/2026-08-31", "volumeSpan": "period", "shortVolume": 1197633.0,
+               "totalVolume": 5617679.0, "volumePct": 21.319, "series": [{"date": "2026-08-15", "shares": 2603087.0}]}
+        rec.update(over)
+        return rec
+
+    def test_a_reading_comes_back_as_it_went_in(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["shares"], 2667164.0)
+        self.assertEqual(held["ofFloat"], 1.2554)
+        self.assertEqual(held["volumeSpan"], "period")
+        self.assertEqual(held["series"], [{"date": "2026-08-15", "shares": 2603087.0}])
+        self.assertTrue(held["fetchedAt"])
+
+    def test_a_later_reading_without_a_run_of_reports_keeps_the_one_stored(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("QNC", "TSX-V", self.record(series=None, shares=99.0))
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["shares"], 99.0)
+        self.assertEqual(len(held["series"]), 1)
+
+    def test_the_two_listings_of_one_company_are_kept_apart(self):
+        store.save_shorts("QNC", "TSX-V", self.record(shares=2667164.0))
+        store.save_shorts("QNC", "NYSE", self.record(market="us", shares=7058199.0))
+        self.assertEqual(store.shorts_for("QNC", "TSX-V")["shares"], 2667164.0)
+        self.assertEqual(store.shorts_for("QNC", "NYSE")["shares"], 7058199.0)
+        self.assertEqual(len(store.all_shorts()), 2)
+
+    def test_a_listing_never_read_is_not_in_the_store(self):
+        self.assertIsNone(store.shorts_for("NOSUCH", "TSX"))
+
+    def test_what_is_stored_is_answered_without_reading_again(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        with mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("read anyway")):
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertTrue(out["covered"])
+        self.assertEqual(out["shorts"]["shares"], 2667164.0)
+
+    def test_a_listing_not_stored_yet_is_read_and_kept(self):
+        with mock.patch.object(bagholder.shorts, "for_listing", return_value=self.record()) as read:
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertEqual(read.call_count, 1)
+        self.assertTrue(out["covered"])
+        self.assertEqual(store.shorts_for("QNC", "TSX-V")["shares"], 2667164.0)
+
+    def test_a_market_no_one_reports_is_never_read_or_kept(self):
+        with mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("asked anyway")):
+            self.assertEqual(bagholder.shorts_payload("BTC", "Crypto", "USD"), {"ok": True, "covered": False})
+        self.assertEqual(store.all_shorts(), [])
+
+    def test_a_stale_reading_is_still_answered_at_once(self):
+        store.save_shorts("QNC", "TSX-V", self.record(), now="2020-01-01T00:00:00Z")
+        with mock.patch.object(bagholder, "kick", return_value=True) as kicked, \
+             mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("read in the request")):
+            out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
+        self.assertEqual(out["shorts"]["shares"], 2667164.0)
+        self.assertEqual(kicked.call_count, 1)      # refreshed behind the page, not in front of it
+
+
+class FeedTest(unittest.TestCase):
+    """The ranked list reads the store and never a regulator, and one answer covers every
+    scope so turning between them asks nothing."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def book(self, positions=(), watchlist=()):
+        return mock.patch.object(bagholder.model, "base_model", return_value={"positions": list(positions), "watchlist": list(watchlist)})
+
+    def test_only_listings_the_book_holds_or_watches_are_listed(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("GONE", "TSX", self.record())
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}]):
+            out = bagholder.shorts_feed()
+        self.assertEqual([r["symbol"] for r in out["rows"]], ["QNC"])
+
+    def test_each_row_says_whether_it_is_held_or_watched(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        store.save_shorts("PNG", "TSX-V", self.record())
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}],
+                       watchlist=[{"symbol": "PNG", "exchange": "TSX-V", "name": "Kraken Robotics Inc."}]):
+            rows = {r["symbol"]: r for r in bagholder.shorts_feed()["rows"]}
+        self.assertEqual((rows["QNC"]["held"], rows["QNC"]["watched"]), (True, False))
+        self.assertEqual((rows["PNG"]["held"], rows["PNG"]["watched"]), (False, True))
+
+    def test_a_row_carries_its_name_and_the_holding_it_opens(self):
+        store.save_shorts("QNC", "TSX-V", self.record())
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp", "id": "rt:1"}]):
+            row = bagholder.shorts_feed()["rows"][0]
+        self.assertEqual(row["name"], "Quantum eMotion Corp")
+        self.assertEqual(row["positionId"], "rt:1")
+
+    def test_the_list_is_told_while_a_sweep_still_has_listings_to_read(self):
+        book = [{"symbol": "HBIX", "exchange": "CBOE CANADA", "kind": "Shares", "name": "H", "id": "rt:1", "currency": "CAD"},
+                {"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Q", "id": "rt:2", "currency": "CAD"}]
+        seen = []
+        def read(sym, ex, ccy, **kw):
+            seen.append(bagholder.shorts_feed()["reading"])       # what an open page is told mid-pass
+            store.save_shorts(sym, ex, self.record(), version=bagholder.SHORTS_VERSION)
+            return self.record()
+        with self.book(positions=book), mock.patch.object(bagholder, "read_shorts", side_effect=read):
+            self.assertFalse(bagholder.shorts_feed()["reading"], "nothing is being read before a pass")
+            self.assertEqual(bagholder.sweep_shorts(), 2)
+            self.assertEqual(seen, [True, True], "every listing of the pass, the last one included")
+            self.assertFalse(bagholder.shorts_feed()["reading"], "and nothing once it ends")
+        with self.book(positions=book), mock.patch.object(bagholder, "read_shorts", side_effect=OSError("down")), mock.patch.object(bagholder.sys, "stderr"):
+            store.save_shorts("QNC", "TSX-V", self.record(), version=0)
+            bagholder.sweep_shorts()
+            self.assertFalse(bagholder.shorts_feed()["reading"], "a pass that fails still ends")
+
+    def test_a_listing_read_but_carrying_no_position_is_left_out(self):
+        store.save_shorts("QNC", "TSX-V", self.record(shares=None))
+        with self.book(positions=[{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Q", "id": "rt:1"}]):
+            self.assertEqual(bagholder.shorts_feed()["rows"], [])
+
+
+class FundFloatTest(unittest.TestCase):
+    """A fund is the one instrument whose units in issue are its float: it creates and
+    redeems them on demand and holds none back."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_company_with_no_float_published_is_never_given_its_share_count(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": {"raw": 500.0}}}]}}
+        self.use(self.session([("QNC", answer, 200)]))
+        with mock.patch.object(shorts, "_fund_units", side_effect=AssertionError("asked for units")):
+            self.assertIsNone(shorts.float_shares("QNC", "TSX-V", "CAD", "Quantum eMotion Corp"))
+
+    def test_a_fund_falls_back_to_the_units_the_exchange_publishes(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": None}}]}}
+        self.use(self.session([("RDDY", answer, 200)]))
+        with mock.patch.object(shorts, "_fund_units", return_value=20075000.0):
+            self.assertEqual(shorts.float_shares("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF"), 20075000.0)
+
+    def test_a_us_fund_takes_the_count_from_the_same_answer_as_the_float(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": None, "sharesOutstanding": {"raw": 4000.0}}}]}}
+        self.use(self.session([("SPY", answer, 200)]))
+        self.assertEqual(shorts.float_shares("SPY", "NYSE", "USD", "SPDR S&P 500 ETF Trust"), 4000.0)
+
+    def test_a_float_that_is_published_is_still_what_a_fund_is_measured_against(self):
+        answer = {"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": 111.0}, "sharesOutstanding": {"raw": 999.0}}}]}}
+        self.use(self.session([("XIU", answer, 200)]))
+        self.assertEqual(shorts.float_shares("XIU", "TSX", "CAD", "iShares S&P/TSX 60 Index ETF"), 111.0)
+
+
+class CboeUnitsTest(unittest.TestCase):
+    """A fund listed on Cboe Canada: TMX answers 0 for its count and Yahoo publishes none,
+    so the count comes from that venue's own directory, where a listing's market
+    capitalisation divided by its last price gives the count back whole."""
+
+    DIRECTORY = json.dumps({"data": [
+        {"symbol": "HBIX", "name": "HARVEST BITCOIN ENHANCED INCOME ETF", "security": "etf", "marketcap": 44091000.0, "last": 6.39},
+        {"symbol": "BCBN", "name": "A COMPANY", "security": "equity", "marketcap": 100876283.0, "last": 1.0},
+        {"symbol": "NOPR", "name": "NO PRICE ETF", "security": "etf", "marketcap": 500.0, "last": 0.0},
+        {"symbol": "ODDS", "name": "NOT A WHOLE COUNT ETF", "security": "etf", "marketcap": 100.0, "last": 3.0}]})
+
+    def setUp(self):
+        shorts._files.clear()
+
+    tearDown = setUp
+
+    def test_the_count_is_the_capitalisation_over_the_price_for_the_venues_own_funds(self):
+        with mock.patch.object(shorts.market, "_get_text", return_value=self.DIRECTORY) as got, \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value=""):   # TMX carries no count for these
+            self.assertEqual(shorts._fund_units("HBIX", "CBOE CANADA", "CAD"), 6900000.0)
+            self.assertIsNone(shorts._fund_units("BCBN", "CBOE CANADA", "CAD"), "a company's shares in issue are not its float")
+            self.assertIsNone(shorts._fund_units("NOPR", "CBOE CANADA", "CAD"), "no price, no count")
+            self.assertIsNone(shorts._fund_units("ODDS", "CBOE CANADA", "CAD"), "a count that is not whole is not the exchange's own")
+        self.assertEqual(got.call_count, 1, "one directory for every listing looked up in it")
+
+    def test_a_listing_on_another_venue_never_takes_a_count_from_this_one(self):
+        with mock.patch.object(shorts.market, "_get_text", side_effect=AssertionError("asked anyway")), \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="HBIX:TSX"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 0}, "")):
+            self.assertIsNone(shorts._fund_units("HBIX", "TSX", "CAD"))
+
+    def test_the_venue_is_asked_only_where_tmx_has_no_count(self):
+        with mock.patch.object(shorts.market, "_get_text", side_effect=AssertionError("asked anyway")), \
+             mock.patch.object(shorts.market, "tmx_quote_symbol", return_value="XYZ:AQL"), \
+             mock.patch.object(shorts.market, "tmx_lookup", return_value=({"shareOutStanding": 4200}, "")):
+            self.assertEqual(shorts._fund_units("XYZ", "CBOE CANADA", "CAD"), 4200.0)
+
+
+class FloatCacheTest(unittest.TestCase):
+    """A float that answered is kept for the day; one that did not is asked for again soon,
+    since a source being slow is not the same as a figure not existing."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_figure_is_read_once_and_kept(self):
+        s = self.session([("GME", self.stats(463550645), 200)])
+        self.use(s)
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertEqual(len([u for u in s.asked if "GME" in u]), 1)
+
+    def test_a_lookup_that_answered_with_nothing_is_asked_again(self):
+        empty = self.session([("ASTS", self.stats(None), 200)])
+        self.use(empty)
+        self.assertIsNone(shorts.float_shares("ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."))
+        shorts._shares["ASTS|NASDAQ"]["at"] -= shorts.FLOAT_MISS_MIN * 60 + 1
+        good = self.session([("ASTS", self.stats(266440743), 200)])
+        self.use(good)
+        self.assertEqual(shorts.float_shares("ASTS", "NASDAQ", "USD", "AST SpaceMobile Inc."), 266440743.0)
+
+    def test_a_figure_is_not_asked_again_that_soon(self):
+        s = self.session([("GME", self.stats(463550645), 200)])
+        self.use(s)
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        shorts._shares["GME|NYSE"]["at"] -= shorts.FLOAT_MISS_MIN * 60 + 1
+        shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertEqual(len([u for u in s.asked if "GME" in u]), 1)
+
+
+class YahooPaceTest(unittest.TestCase):
+    """The float lookups keep Yahoo's own pace, the one the rest of the app keeps."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_each_lookup_takes_its_turn_and_leaves_the_next_slot(self):
+        s = self.session([("GME", self.stats(1.0), 200)])
+        self.use(s)
+        shorts.market._yahoo_next_at = 0
+        with mock.patch.object(shorts.time, "sleep") as slept:
+            shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp.")
+        self.assertGreater(shorts.market._yahoo_next_at, 0)          # the next caller waits its turn
+        self.assertEqual(slept.call_count, 0)                        # the slot was free, so no wait
+
+    def test_nothing_is_asked_while_a_backoff_stands(self):
+        s = self.session([("GME", self.stats(1.0), 200)])
+        self.use(s)
+        shorts.market._yahoo_backoff_until = shorts.time.monotonic() + 60
+        try:
+            self.assertIsNone(shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp."))
+            self.assertEqual([u for u in s.asked if "quoteSummary" in u], [])
+        finally:
+            shorts.market._yahoo_backoff_until = 0
+
+    def test_a_refusal_starts_the_backoff_the_whole_app_honours(self):
+        s = self.session([("GME", {}, 429)])
+        self.use(s)
+        shorts.market._yahoo_backoff_until = 0
+        try:
+            self.assertIsNone(shorts.float_shares("GME", "NYSE", "USD", "GameStop Corp."))
+            self.assertGreater(shorts.market._yahoo_backoff_until, shorts.time.monotonic())
+        finally:
+            shorts.market._yahoo_backoff_until = 0
+
+
+class FloatFormTest(unittest.TestCase):
+    """Which symbol Yahoo is asked for. A row that carries no currency must not be asked for
+    under the wrong market's suffixes."""
+
+    setUp, tearDown, session, use, stats = (FloatTest.setUp, FloatTest.tearDown, FloatTest.session, FloatTest.use, FloatTest.stats)
+
+    def test_a_us_listing_with_no_currency_on_its_row_is_still_asked_for_as_one(self):
+        s = self.session([("quoteSummary/ASTS?", self.stats(266440743), 200)])
+        self.use(s)
+        self.assertEqual(shorts.float_shares("ASTS", "NASDAQ", "", "AST SpaceMobile Inc."), 266440743.0)
+        self.assertFalse([u for u in s.asked if ".TO" in u or ".V" in u], "asked under a Canadian suffix")
+
+    def test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes(self):
+        s = self.session([("QNC.V", self.stats(212448707), 200)])
+        self.use(s)
+        self.assertEqual(shorts.float_shares("QNC", "TSX-V", "", "Quantum eMotion Corp"), 212448707.0)
+        self.assertTrue(any("QNC.V" in u for u in s.asked))
+
+
+class ReadVersionTest(unittest.TestCase):
+    """A reading written by older logic is read again once, rather than waiting hours to go
+    stale while a figure the app has since learned to find reads as a dash."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def test_a_row_from_older_logic_is_read_again_however_fresh_it_is(self):
+        store.save_shorts("QNC", "TSX-V", self.record(float=None, ofFloat=None), version=bagholder.SHORTS_VERSION - 1)
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertTrue(bagholder._shorts_stale(held))     # written a moment ago, and still stale
+
+    def test_a_row_at_the_current_version_stands_until_its_hours_are_up(self):
+        store.save_shorts("QNC", "TSX-V", self.record(), version=bagholder.SHORTS_VERSION)
+        self.assertFalse(bagholder._shorts_stale(store.shorts_for("QNC", "TSX-V")))
+
+    def test_the_sweep_reads_a_row_from_older_logic(self):
+        store.save_shorts("QNC", "TSX-V", self.record(float=None), version=bagholder.SHORTS_VERSION - 1)
+        base = {"positions": [{"symbol": "QNC", "exchange": "TSX-V", "kind": "Shares", "name": "Quantum eMotion Corp"}], "watchlist": []}
+        with mock.patch.object(bagholder.model, "base_model", return_value=base), \
+             mock.patch.object(bagholder.shorts, "for_listing", return_value=self.record(float=212448707.0)) as read:
+            bagholder.sweep_shorts()
+        self.assertEqual(read.call_count, 1)
+        held = store.shorts_for("QNC", "TSX-V")
+        self.assertEqual(held["float"], 212448707.0)
+        self.assertEqual(held["readVersion"], bagholder.SHORTS_VERSION)
+
+    def test_a_record_read_on_the_spot_names_its_listing(self):
+        with mock.patch.object(shorts, "us_position", return_value={"shares": 1.0, "asOf": "2026-08-31"}), \
+             mock.patch.object(shorts, "us_volume", return_value={}), \
+             mock.patch.object(shorts, "float_shares", return_value=None), \
+             mock.patch.object(shorts, "average_volume", return_value=None):
+            rec = shorts.for_listing("RKLB", "NASDAQ", "USD")
+        self.assertEqual(rec["exchange"], "NASDAQ")
+
+
+class VenueSpellingTest(unittest.TestCase):
+    """The venue reads as the book writes it. The stored key is upper case because it is a
+    key; the rest of the app shows Cboe Canada, not CBOE CANADA."""
+
+    setUp, tearDown, record = StoredTest.setUp, StoredTest.tearDown, StoredTest.record
+
+    def test_the_list_shows_the_venue_the_way_the_book_does(self):
+        store.save_shorts("HBIX", "Cboe Canada", self.record(market="ca"))
+        base = {"positions": [], "watchlist": [{"symbol": "HBIX", "exchange": "Cboe Canada", "name": "Harvest Bitcoin Enhanced Income ETF"}]}
+        with mock.patch.object(bagholder.model, "base_model", return_value=base):
+            row = bagholder.shorts_feed()["rows"][0]
+        self.assertEqual(row["exchange"], "Cboe Canada")
+
+
+class ReportOmitsListingTest(unittest.TestCase):
+    """CIRO's volume report lists only what was sold short — it carries no zero rows — so a
+    listing absent from it was not sold short in the period rather than unknown, and what it
+    did trade comes from the exchange so days to cover still has a denominator."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        store.ensure()
+        shorts._files.clear()
+
+    def tearDown(self):
+        shorts._files.clear()
+        self.tmp.cleanup()
+
+    def warm(self, rows, key="2026-08-16/2026-08-31"):
+        shorts._files["ca_volume"] = {"key": key, "rows": rows, "at": shorts.time.time()}
+
+    def test_a_listing_the_report_omits_reads_as_none_of_its_trading(self):
+        self.warm({})
+        with mock.patch.object(shorts, "ca_traded", return_value=1519546.0):
+            out = shorts.ca_volume("YES", "TSX-V", "CAD")
+        self.assertEqual(out["shortVolume"], 0.0)
+        self.assertEqual(out["volumePct"], 0.0)
+        self.assertEqual(out["totalVolume"], 1519546.0)
+
+    def test_a_listing_the_report_omits_and_the_exchange_has_no_volume_for_says_nothing(self):
+        self.warm({})
+        with mock.patch.object(shorts, "ca_traded", return_value=None):
+            self.assertEqual(shorts.ca_volume("YES", "TSX-V", "CAD"), {})
+
+    def test_a_listing_the_report_carries_is_read_from_the_report(self):
+        self.warm({"QNC": {"venue": "TSXV", "shortVolume": 1197633.0, "volumePct": 21.319, "totalVolume": 5617679.0}})
+        with mock.patch.object(shorts, "ca_traded", side_effect=AssertionError("asked the exchange anyway")):
+            out = shorts.ca_volume("QNC", "TSX-V", "CAD")
+        self.assertEqual(out["volumePct"], 21.319)
+
+    def test_days_to_cover_follows_from_what_the_exchange_says_was_traded(self):
+        store.upsert_benchmark_prices("TSX", {"2026-08-%02d" % d: 100.0 for d in range(17, 28)}) if hasattr(store, "upsert_benchmark_prices") else None
+        rec = {"market": "ca", "shares": 17873.0, "totalVolume": 1519546.0, "volumeOf": "2026-08-16/2026-08-31"}
+        days = store.benchmark_days("TSX", "2026-08-16", "2026-08-31")
+        if days:
+            self.assertAlmostEqual(shorts.average_volume(rec), 1519546.0 / days)
+            self.assertIsNotNone(shorts.days_to_cover(rec))

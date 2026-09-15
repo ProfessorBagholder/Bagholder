@@ -148,6 +148,14 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .dc-sweep::after{content:"";position:absolute;top:0;left:0;height:100%;width:30%;background:var(--accent);animation:dcsweep 1.9s linear infinite}
 @keyframes dcsweep{0%{transform:translateX(-100%)}100%{transform:translateX(433%)}}
 @media (prefers-reduced-motion:reduce){.dc-skel,.dc-sweep::after{animation:none}}
+/* the ranked short interest list, on the watchlist's own table grammar */
+.si-head,.si-row{display:grid;grid-template-columns:minmax(0,1fr) 96px 118px 84px 104px 104px 78px;gap:12px;align-items:center;padding:0 16px;white-space:nowrap}
+.si-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.si-head{padding:0 26px 6px 16px;margin:0 -16px}   /* the list's own right padding again, so heads sit over their values */
+.si-list{margin:0 -16px;padding-right:10px}
+.si-row{padding:8px 16px}
+.si-row.go{cursor:pointer}
+.si-row:hover{background:rgba(var(--ink-rgb),var(--hover))}
 .wl-head,.wl-row{display:grid;grid-template-columns:minmax(0,1fr) 58px 70px 66px 22px;gap:10px;align-items:center;padding:0 16px;white-space:nowrap}
 .wl-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .wl-head{padding-bottom:6px;margin:0 -16px}
@@ -480,7 +488,10 @@ const state = {
     orders: { key: "placed", dir: "desc" },
     watchlist: { key: "added", dir: "desc" },   // newest first: a listing just added lands at the top
     news: { key: "when", dir: "desc" },
+    shorts: { key: "ofFloat", dir: "desc" },    // the most shorted first, which is what the list is for
   },
+  shortsScope: (function () { try { return localStorage.getItem("bh2.shorts") || "all"; } catch (e) { return "all"; } })(),   // which listings the ranked list covers
+  shortsQuery: "",      // a ticker typed into the ranked list's box, which need not be one of them
   orders: null,
   ordersError: "",
   ordersOpen: false,
@@ -532,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-15.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-15.2"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -3373,14 +3384,14 @@ function newsCardHtml(items) {
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(n.headline) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(n.source) + "</div></div>" +
     (bare ? "" : '<div style="text-align:right">' + (n.tags.length ? sym(first(n)) : "") + "</div>" +
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
-  return '<div class="card elev-sm" style="padding:14px 16px 12px"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
+  return '<div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
     msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
     msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (only ? shortsStripHtml(only) : "") +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
-      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
 // A news release the issuer filed. SEDAR+ and SEC EDGAR carry the company's own releases, including ones no
@@ -3457,7 +3468,7 @@ function newsDiscBodyHtml(scope, only, q) {
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
     '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
-  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
     : '<div class="muted" style="font-size:12px">' + empty + "</div>";
 }
 // the feed's titles fill in top first, one document at a time, while the feed is what the card shows
@@ -3611,17 +3622,111 @@ function watchlistCardHtml(rows) {
     '<div class="tab" style="text-align:right;font-size:13px">' + (w.last == null ? "—" : px(w.last)) + "</div>" +
     '<div class="tab" style="text-align:right;font-size:13px;color:' + (w.percentChange == null ? "var(--ink55)" : w.percentChange >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(w.percentChange) + "</div>" +
     '<button class="wl-trash" aria-label="Remove ' + esc(symText(w.symbol)) + ' from the watchlist" data-act="watchRemove" data-arg=\'' + attr({ symbol: w.symbol, exchange: w.exchange }) + "'>" + tkIconSvg(ICONS.trash) + "</button></div>";
-  return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
+  return '<div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0">' +
     '<div style="display:flex;align-items:center;min-height:28px;margin-bottom:8px"><h5>Watchlist</h5><button class="wl-add' + (state.watchAdding ? " on" : "") + '" style="margin-left:auto" aria-label="' + (state.watchAdding ? "Close" : "Add to the watchlist") + '" data-act="watchAdd">' + tkIconSvg(ICONS.plus) + "</button></div>" +
     (state.watchAdding ? watchAddRowHtml() : "") +
     (rows.length ? '<div class="wl-head">' + gridTh("watchlist", WATCH_COLS) + "<div></div></div>" +
-      '<div class="scroll wl-list" style="max-height:396px">' + rows.map(row).join("") + "</div>"
+      '<div class="scroll wl-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">Nothing watched.</div>') + "</div>";
 }
 function marketsHtml(m) {
   const mk = m.markets || { holdings: [], watchlist: [] };
   return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + marketTilesHtml() + heatmapCardHtml(mk) +
-    '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:start">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div></div>";
+    '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div>" +
+    shortsListCardHtml() + "</div>";
+}
+// ---------------------------------------------------------------------------
+// Markets: short interest across the listings the book holds and watches, ranked.
+// A listing's own tiles answer what its short interest is; this answers which
+// listings carry the most of it, which is not a question about one instrument.
+// Every row is read from what the sweep has already stored, so the list is drawn
+// with the page and never waits on a regulator.
+// ---------------------------------------------------------------------------
+const SHORTS_COLS = [{ key: "symbol", label: "Symbol" }, { key: "exchange", label: "Exchange", align: "right" },
+                     { key: "shares", label: "Short shares", align: "right" }, { key: "ofFloat", label: "Of float", align: "right" },
+                     { key: "daysToCover", label: "Days to cover", align: "right" }, { key: "volumePct", label: "Short volume", align: "right" },
+                     { key: "asOf", label: "As of", align: "right" }];
+// one answer covers every scope, so turning between them draws at once from what is already
+// here: asking again emptied the list for a moment, and a card that shrinks under a reader
+// scrolled past it takes the page with it
+const _shortsFeed = {};
+const SHORTS_FEED_KEEP_MS = 3 * 60 * 1000;   // the sweep fills rows in behind the page; a list
+                                             // fetched once and never again shows whatever it
+                                             // happened to get, dashes and all, until a reload
+const SHORTS_FEED_READING_MS = 4000;         // while the server is still reading listings, each
+                                             // figure reaches the page within seconds of landing
+function ensureShortsFeed() {
+  const keep = _shortsFeed.reading ? SHORTS_FEED_READING_MS : SHORTS_FEED_KEEP_MS;
+  if (_shortsFeed.loading || (_shortsFeed.at && Date.now() - _shortsFeed.at < keep)) return;
+  _shortsFeed.loading = true;
+  api("GET", "/api/shorts/feed").then((d) => {
+    _shortsFeed.loading = false;
+    _shortsFeed.at = Date.now();
+    // what is already on screen stands until a better answer lands, so the list never empties
+    if (d && d.ok) _shortsFeed.rows = d.rows || [];
+    else if (!_shortsFeed.rows) _shortsFeed.rows = [];
+    _shortsFeed.reading = !!(d && d.ok && d.reading);
+    // asked again on a timer, not on the next draw: a page nobody touches draws nothing
+    if (_shortsFeed.reading) setTimeout(() => { if (state.page === "markets") ensureShortsFeed(); }, SHORTS_FEED_READING_MS);
+    if (state.page === "markets") render();
+  });
+}
+// a ticker typed into the box that is not among the listings in scope is read on its own and
+// shown as a row of its own, the way the News card's search reaches any ticker
+const _shortsFound = {};
+let _shortsLookupTimer = 0;
+function shortsLookup(text) {
+  const key = String(text || "").trim().toUpperCase();
+  clearTimeout(_shortsLookupTimer);
+  if (!key || key.length > 12 || /[^A-Z0-9.\-]/.test(key) || _shortsFound[key]) return;
+  _shortsLookupTimer = setTimeout(() => {
+    if (state.shortsQuery.trim().toUpperCase() !== key) return;
+    if ((_shortsFeed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return;   // already listed
+    _shortsFound[key] = { loading: true };
+    render();
+    api("GET", "/api/shorts?symbol=" + encodeURIComponent(key)).then((d) => {
+      _shortsFound[key] = (d && d.ok && d.covered) ? { row: Object.assign({ name: "" }, d.shorts) } : { missing: true };
+      render();
+    });
+  }, 450);
+}
+function shortsListCardHtml() {
+  const scope = state.shortsScope;
+  ensureShortsFeed();
+  const held = _shortsFeed;
+  const q = state.shortsQuery.trim().toUpperCase();
+  const s = state.sort.shorts;
+  let pool = (held.rows || []).filter((r) => scope === "all" || (scope === "holdings" ? r.held : r.watched));
+  if (q) {
+    pool = pool.filter((r) => String(r.symbol).toUpperCase().indexOf(q) === 0 || String(r.name || "").toUpperCase().indexOf(q) >= 0);
+    const found = _shortsFound[q];
+    if (!pool.length && found && found.row) pool = [found.row];
+  }
+  const rows = sortRows(pool, s.key, s.dir, (r, k) =>
+    k === "symbol" ? String(r.symbol || "").toLowerCase() : k === "exchange" ? String(r.exchange || "").toLowerCase() :
+    k === "asOf" ? String(r.asOf || "") : (r[k] == null ? -Infinity : r[k]));
+  const row = (r) => '<div class="si-row' + (r.positionId ? " go" : "") + '"' +
+    (r.positionId ? ' data-act="heatOpen" data-arg=\'' + attr({ id: r.positionId }) + "'" : "") + ">" +
+    '<div><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">' + esc(r.symbol) + '</div>' +
+    '<div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(r.name || "") + "</div></div>" +
+    '<div style="font-size:12px;color:var(--ink55);text-align:right">' + esc(r.exchange || "") + "</div>" +
+    '<div class="tab" style="text-align:right;font-size:13px">' + qty(r.shares) + "</div>" +
+    '<div class="tab" style="text-align:right;font-size:13px">' + (r.ofFloat == null ? "—" : n2(r.ofFloat, 2) + "%") + "</div>" +
+    '<div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">' + (r.daysToCover == null ? "—" : n2(r.daysToCover, 1)) + "</div>" +
+    '<div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">' + (r.volumePct == null ? "—" : n2(r.volumePct, 1) + "%") + "</div>" +
+    '<div class="tab" style="text-align:right;font-size:11.5px;color:var(--ink55)">' + esc(shortDay(r.asOf)) + "</div></div>";
+  const found = q ? _shortsFound[q] : null;
+  const empty = held.loading ? "Reading…"
+    : q ? (found && found.loading ? "Reading " + esc(q) + "…" : found && found.missing ? "No short interest is reported for " + esc(q) + "." : "No listing by that name.")
+    : "Nothing reported yet.";
+  return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
+    '<div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>Short interest</h5>' +
+    msegHtml("shortsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
+    '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">' +
+    '<input id="shortsQuery" value="' + esc(state.shortsQuery) + '" placeholder="Search any symbol" aria-label="Search short interest" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    (rows.length ? '<div class="si-head">' + gridTh("shorts", SHORTS_COLS) + "</div>" +
+      '<div class="scroll si-list" style="max-height:340px">' + rows.map(row).join("") + "</div>"
+      : '<div class="muted" style="font-size:12px">' + empty + "</div>") + "</div>";
 }
 // ---------------------------------------------------------------------------
 // Markets: the tile row
@@ -4108,7 +4213,7 @@ function render() {
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);
   // the filter popover's search box keeps focus across a redraw (a toggled value reloads the model)
-  if (focusId === "valueQuery" || focusId === "searchInput" || focusId === "newsQuery" || focusId === "tileQuery" || focusId === "watchQuery") { const vq = document.getElementById(focusId); if (vq) { vq.focus(); vq.setSelectionRange(vq.value.length, vq.value.length); } }
+  if (focusId === "valueQuery" || focusId === "searchInput" || focusId === "newsQuery" || focusId === "shortsQuery" || focusId === "tileQuery" || focusId === "watchQuery") { const vq = document.getElementById(focusId); if (vq) { vq.focus(); vq.setSelectionRange(vq.value.length, vq.value.length); } }
   else if (rowHadFocus) { const row = document.querySelector("#popMatches .pop-row.hi, #popValues .pop-row.hi"); if (row) row.focus(); }
   root.querySelectorAll(".scroll, .scroll-xy").forEach((el, i) => { const b = boxes[i]; if (b && !el.dataset.keepScroll) { el.scrollTop = b.top; el.scrollLeft = b.left; } });
   root.querySelectorAll("[data-keep-scroll]").forEach((el) => { const k = _keptScroll[el.dataset.keepScroll]; if (k) { el.scrollTop = k.top; el.scrollLeft = k.left; } });
@@ -4395,6 +4500,7 @@ function act(name, arg, ev) {
       break;
     }
     case "newsKind": state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
+    case "shortsScope": state.shortsScope = arg.scope; try { localStorage.setItem("bh2.shorts", arg.scope); } catch (e) {} render(); break;
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
@@ -4647,6 +4753,7 @@ function bind() {
   document.addEventListener("input", (e) => {
     const t = e.target;
     if (/^tk-/.test(t.id || "")) { tkInputEvent(t); return; }
+    if (t.id === "shortsQuery") { state.shortsQuery = t.value; shortsLookup(t.value); render(); return; }
     if (t.id === "newsQuery") { state.newsQuery = t.value; newsDiscLookup(t.value); render(); return; }
     if (t.id === "tileQuery") { state.tileQuery = t.value; render(); return; }
     if (t.id === "watchQuery") { state.watchQuery = t.value; extSchedule(t.value); render(); return; }

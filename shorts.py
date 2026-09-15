@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import sys
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
 import edgar
+import exposure
 import instruments
 import market
 import model
@@ -38,15 +40,22 @@ US_POSITION_URL = "https://api.finra.org/data/group/otcMarket/name/consolidatedS
 US_VOLUME_URL = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol%s.txt"
 CA_POSITION_URL = "https://www.ciro.ca/sites/default/files/epubs/CSPR/%s_CSPR_Report.xls"
 CA_VOLUME_URL = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_ShortSaleTradingSummaryReport.csv"
+CA_CBOE_URL = "https://www-api.cboe.com/ca/equities/listing-directory-data/"
+CBOE_FUNDS = ("etf", "cef")      # what that venue calls the listings whose units in issue are their float
 # what the Canadian files call each venue, against what the app calls it
 CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL": ("CBOE CANADA", "NEO")}
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 SERIES = 8               # reports behind the run shown with the position
-FLOAT_HOURS = 12         # how often a listing's float is looked up again
+FLOAT_HOURS = 12         # how often a float that answered is looked up again
+FLOAT_MISS_MIN = 20      # a lookup that answered with nothing is tried again far sooner: a float
+                         # that did not arrive is usually the source being slow, not the figure
+                         # being absent, and holding the miss as long as a hit hides it for hours
 YAHOO_QUOTE_URL = "https://finance.yahoo.com/quote/%s/"
 YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 YAHOO_STATS_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
+TMX_UNITS_QUERY = ("query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) "
+                   "{ symbol shareOutStanding } }")
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
 
 _files = {}
@@ -197,6 +206,31 @@ def _ca_position_file(ssl_context, now):
     return None
 
 
+def ca_traded(symbol, exchange, currency, span, ssl_context=None):
+    """A Canadian listing's own volume over the report's period, from TMX's daily series under
+    the venue's own form. CIRO's volume report lists only the securities that were sold short,
+    so a listing with none is absent from it and has no total there to measure days to cover
+    against — but it traded, and the exchange says how much."""
+    start, end = (_s(span).split("/", 1) + [""])[:2]
+    if not end:
+        return None
+    try:
+        code = market.tmx_quote_symbol(symbol, exchange, currency)
+        if not code:
+            return None
+        def ask(form):
+            data = market._post_json(market.TMX_URL, {"operationName": "getTimeSeriesData",
+                                                      "variables": {"symbol": form, "freq": "day", "interval": 1, "start": start, "end": end},
+                                                      "query": market.TMX_HISTORY_QUERY}, ssl_context, market._TMX_HEADERS)
+            return market.parse_tmx_history(data)
+        bars = market.tmx_lookup(code, ask, ssl_context)[0] or []
+        traded = [b.get("volume") for b in bars if b.get("volume")]
+        return sum(traded) if traded else None
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s traded volume failed: %s\n" % (symbol, e))
+        return None
+
+
 def parse_ca_volume(text):
     """CIRO's short sale summary: the short part of a period's trading, per listing."""
     rows = {}
@@ -280,34 +314,119 @@ def _yahoo_session():
         return None, ""
 
 
-def float_shares(symbol, exchange, currency, ssl_context=None):
-    """The listing's free float: the shares actually available to trade, which is what a
-    short position is normally measured against. Yahoo is the one source that publishes a
-    float for both markets, under the same symbol forms the app's own quotes use, and it is
-    None where Yahoo carries none — for a fund, or for a venue it does not cover. Nothing is
-    substituted for it: shares in issue is a different figure and would not be the same
-    percentage twice."""
+def _cboe_units(symbol, ssl_context=None, now=None):
+    """The units a fund listed on Cboe Canada has in issue, from that venue's own directory.
+    The directory publishes each listing's market capitalisation beside its last price, and a
+    capitalisation is the count times that price: dividing gives back the count the exchange
+    put in, whole for every listing it carries, which is the figure itself and not one rounded
+    into shape. It is asked only for the venue's funds: for a company the shares in issue are
+    not the float, and Yahoo publishes that. TMX carries Cboe listings but answers 0 for their
+    counts, and Yahoo publishes no count for a Canadian fund, so for these listings this is the
+    only place the figure exists."""
+    def build(ctx, when):
+        rows = {}
+        for r in (json.loads(market._get_text(CA_CBOE_URL, ctx, headers=HEADERS)) or {}).get("data") or []:
+            if _s(r.get("security")).strip().lower() not in CBOE_FUNDS:
+                continue
+            cap, last = _num(r.get("marketcap")), _num(r.get("last"))
+            if not cap or not last:
+                continue
+            count = cap / last
+            if abs(count - round(count)) < 1e-6:     # anything else is not the exchange's own count
+                rows[_s(r.get("symbol")).strip().upper()] = float(round(count))
+        return ("cboe", rows)
+    return _table("cboe_listings", build, ssl_context, now)["rows"].get(_s(symbol).strip().upper())
+
+
+def _fund_units(symbol, exchange, currency, ssl_context=None):
+    """The units an exchange-traded fund has in issue, from the market's own source. A fund
+    creates and redeems units on demand and holds none back, so the units in issue are the
+    units there are to trade: for a fund this is the float, not a stand-in for it. TMX answers
+    for the venues it carries counts for, Cboe Canada's own directory for its listings."""
+    sym = _s(symbol).strip().upper()
+    if market_of(sym, exchange, currency) == "us":
+        return None                              # the US count comes from Yahoo with the float below
+    count = None
+    try:
+        code = market.tmx_quote_symbol(sym, exchange, currency)
+        if code:
+            def ask(form):
+                answered = market._post_json(market.TMX_URL, {"operationName": "getQuoteBySymbol", "variables": {"symbol": form, "locale": "en"},
+                                                              "query": TMX_UNITS_QUERY}, ssl_context, market._TMX_HEADERS)
+                return ((answered or {}).get("data") or {}).get("getQuoteBySymbol") or {}
+            count = _num((market.tmx_lookup(code, ask, ssl_context)[0] or {}).get("shareOutStanding")) or None
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s units failed: %s\n" % (sym, e))
+    if count:
+        return count
+    # the venue is asked for its own listings only: a symbol is one company's on one venue and
+    # another's on the next, and a count taken from the wrong venue would be the wrong fund's
+    if _s(exchange).strip().upper() not in CA_VENUES["AQL"]:
+        return None
+    try:
+        return _cboe_units(sym, ssl_context)
+    except Exception as e:
+        sys.stderr.write("bagholder shorts: %s units from cboe failed: %s\n" % (sym, e))
+        return None
+
+
+def _yahoo_paced(call):
+    """Yahoo at the pace the rest of the app already keeps with it: one request at a time,
+    spaced, and none at all while a backoff after a 429 stands. These lookups are a burst by
+    nature — one per listing whenever the sweep runs — and unpaced they were the burst Yahoo
+    turned away, which read as a listing having no float when it has one."""
+    with market._yahoo_lock:
+        if time.monotonic() < market._yahoo_backoff_until:
+            return None
+        wait = market._yahoo_next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        market._yahoo_next_at = time.monotonic() + market.YAHOO_MIN_INTERVAL_SEC
+        answered = call()
+        if getattr(answered, "status_code", 0) == 429:
+            market._yahoo_backoff_until = time.monotonic() + market.YAHOO_BACKOFF_SEC
+            return None
+        return answered
+
+
+def float_shares(symbol, exchange, currency, name="", ssl_context=None):
+    """What a short position is measured against: the shares actually available to trade.
+
+    For a company that is the free float, which Yahoo publishes for both markets under the
+    same symbol forms the app's own quotes use, and it is never swapped for the shares in
+    issue — those include what insiders hold and would not be the same percentage twice. A
+    fund is the one instrument where the two are the same thing: its units are created and
+    redeemed on demand and none are held back, so the units in issue are the units there are
+    to trade, and where no float is published for one its unit count stands in its place.
+    None where neither is published, and the tile then says so."""
     sym = _s(symbol).strip().upper()
     key = "%s|%s" % (sym, _s(exchange).strip().upper())
     with _lock:
         held = _shares.get(key)
-        if held and time.time() - held["at"] < FLOAT_HOURS * 3600:
+        if held and time.time() - held["at"] < (FLOAT_HOURS * 3600 if held["float"] else FLOAT_MISS_MIN * 60):
             return held["float"]
-    count = None
+    count, fund = None, exposure.is_fund(name, sym)
+    # the symbol forms follow the market the venue already settled on, not the currency the
+    # row happens to carry: a watchlist row keeps none, and the forms then default to Canada,
+    # so a Nasdaq listing was asked for as a Toronto one and answered with nothing
+    where = market_of(sym, exchange, currency)
+    ccy = _s(currency).strip() or ("USD" if where == "us" else "CAD")
     session, crumb = _yahoo_session()
     if session:
-        for form in (market.yahoo_forms({"symbol": sym, "exchange": exchange, "currency": currency}) or [market.tmx_symbol(sym)]):
+        for form in (market.yahoo_forms({"symbol": sym, "exchange": exchange, "currency": ccy}) or [market.tmx_symbol(sym)]):
             try:
-                answered = session.get(YAHOO_STATS_URL % (form, crumb), timeout=market.TIMEOUT_SEC)
-                if answered.status_code != 200:
+                answered = _yahoo_paced(lambda: session.get(YAHOO_STATS_URL % (form, crumb), timeout=market.TIMEOUT_SEC))
+                if answered is None or answered.status_code != 200:
                     continue
                 stats = (((answered.json().get("quoteSummary") or {}).get("result") or [{}])[0] or {}).get("defaultKeyStatistics") or {}
-                raw = stats.get("floatShares")
-                count = _num(raw.get("raw") if isinstance(raw, dict) else raw)
+                pick = lambda field: _num((stats.get(field) or {}).get("raw") if isinstance(stats.get(field), dict) else stats.get(field))
+                count = pick("floatShares") or (pick("sharesOutstanding") if fund else None)
                 if count:
                     break
             except Exception as e:
                 sys.stderr.write("bagholder shorts: %s float from yahoo failed: %s\n" % (form, e))
+    if not count and fund:
+        count = _fund_units(sym, exchange, ccy, ssl_context)
     count = count or None
     with _lock:
         _shares[key] = {"float": count, "at": time.time()}
@@ -375,11 +494,23 @@ def ca_position(symbol, exchange="", ssl_context=None, now=None):
             "previousOf": earlier[0] if earlier else ""}
 
 
-def ca_volume(symbol, exchange="", ssl_context=None, now=None):
+def ca_volume(symbol, exchange="", currency="", ssl_context=None, now=None):
+    """The short part of a Canadian listing's trading over the report's period. A listing the
+    report does not carry was not sold short in it — the report has no zero rows — so its short
+    volume is none of its trading rather than unknown, and what it did trade comes from the
+    exchange so days to cover still has a denominator."""
     held = _table("ca_volume", _ca_volume_file, ssl_context, now or datetime.now(timezone.utc))
-    row = held["rows"].get(_s(symbol).strip().upper())
-    if not row or not _venue_fits(row.get("venue"), exchange):
+    if not held["key"]:
         return {}
+    row = held["rows"].get(_s(symbol).strip().upper())
+    if row and not _venue_fits(row.get("venue"), exchange):
+        return {}
+    if not row:
+        traded = ca_traded(symbol, exchange, currency, held["key"], ssl_context)
+        if not traded:
+            return {}
+        return {"volumeOf": held["key"], "volumeSpan": "period", "shortVolume": 0.0,
+                "totalVolume": traded, "volumePct": 0.0}
     return {"volumeOf": held["key"], "volumeSpan": "period", "shortVolume": row["shortVolume"],
             "totalVolume": row.get("totalVolume"), "volumePct": row.get("volumePct")}
 
@@ -412,7 +543,7 @@ def days_to_cover(rec, now=None):
     return round(shares / average, 1) if shares and average else None
 
 
-def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, trend=False):
+def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, trend=False, name=""):
     """Everything published about one listing's short selling, {} where nothing is."""
     sym = _s(symbol).strip().upper()
     now = now or datetime.now(timezone.utc)
@@ -424,11 +555,14 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None, tr
         rec.update(us_volume(sym, ssl_context, now))
     else:
         rec = dict(ca_position(sym, exchange, ssl_context, now))
-        rec.update(ca_volume(sym, exchange, ssl_context, now))
+        rec.update(ca_volume(sym, exchange, currency, ssl_context, now))
     if where == "ca" and trend:
         rec["series"] = ca_series(sym, exchange, rec.get("asOf") or "", ssl_context, now)
-    rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
-    floated = float_shares(sym, exchange, currency, ssl_context)
+    # the record names its own listing, as a stored one does: a ticker read on the spot for the
+    # ranked list's box is not in the store yet, and without this its row had no exchange
+    rec.update({"symbol": sym, "exchange": _s(exchange).strip().upper(), "market": where,
+                "source": "FINRA" if where == "us" else "CIRO"})
+    floated = float_shares(sym, exchange, currency, name, ssl_context)
     rec["float"] = floated
     rec["ofFloat"] = (rec["shares"] / floated * 100) if floated and rec.get("shares") else None
     rec["averageVolume"] = average_volume(rec, now)

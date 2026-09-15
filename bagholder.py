@@ -691,7 +691,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.38.0"
+APP_VERSION = "1.39.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -722,7 +722,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-15.1"
+PROTOCOL = "2026-09-15.2"
 ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5919,21 +5919,161 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
+SHORTS_VERSION = 4                 # bump when a reading can carry more than it could before, so
+                                   # rows written by the older logic are read again once: a figure
+                                   # the app has since learned to find should not wait for its row
+                                   # to go stale, which is hours a reader spends looking at a dash
+SHORTS_SWEEP_EVERY_SEC = 1800      # how often the sweep looks for listings to warm
+
+
+def _shorts_stale(rec, now=None):
+    if (rec.get("readVersion") or 0) < SHORTS_VERSION:
+        return True                    # written by logic that could carry less than this one can
+    try:
+        return (now or datetime.now(timezone.utc)) - datetime.fromisoformat(_s(rec.get("fetchedAt")).replace("Z", "+00:00")) > timedelta(hours=SHORTS_STALE_HOURS)
+    except ValueError:
+        return True
+
+
+def read_shorts(symbol, exchange, currency, trend=False, now=None, name=""):
+    """Read one listing's short selling from its regulator and keep it. Returns the record,
+    or {} for a market where no one publishes it. The name tells a fund from a company, which
+    decides what its position is measured against."""
+    rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend, name=name)
+    if rec:
+        store.save_shorts(symbol, exchange, rec, now=now, version=SHORTS_VERSION)
+    return rec
+
+
 def shorts_payload(symbol, exchange=None, currency=None, trend=False):
-    """One listing's short selling, read now. A market where no one publishes it answers
+    """One listing's short selling. What was read before is answered from the store at once,
+    so opening an instrument again — or after a restart — draws the tiles with the page
+    rather than after a round of reads; a stored reading past its hours is still answered
+    at once and refreshed behind the page. A market where no one publishes it answers
     `covered: false` rather than an empty set of figures, so the page draws nothing at all
-    for a coin or an index instead of a card of dashes."""
+    for a coin or an index instead of tiles of dashes."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
-    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    listed_as, ex, ccy = _instrument_meta(sym)[0], _s(exchange).strip(), _s(currency).strip()
     if not ex:
+        # a ticker typed into the ranked list's box carries no venue: settled from what the app
+        # already knows, in the order everything else settles it — the securities the sync
+        # brought, then TMX's own resolver, which names the venue it verified by the quote, a
+        # ticker it cannot place being a US one
         _, ex, held = _instrument_meta(sym)
         ccy = ccy or held
-    rec = shorts.for_listing(sym, ex, ccy, _ssl_context(), trend=trend)
+        if not ex:
+            form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
+            if form and not form.endswith(":US"):
+                # the form the resolver verified names the venue where it carries one; a bare
+                # form is a TSX or TSX-V listing, and the report's own venue stands for it
+                ex = {"CNX": "CSE", "AQL": "Cboe Canada"}.get(form.rsplit(":", 1)[-1] if ":" in form else "", "")
+                ccy = ccy or "CAD"
+            else:
+                ex, ccy = "NASDAQ", "USD"
+    if not shorts.market_of(sym, ex, ccy):
+        return {"ok": True, "covered": False}
+    held = store.shorts_for(sym, ex)
+    if held and (not trend or held.get("series")):
+        if _shorts_stale(held):
+            kick("shorts:%s|%s" % (sym, ex), lambda: read_shorts(sym, ex, ccy, trend=True, name=listed_as))
+        return {"ok": True, "covered": True, "shorts": held}
+    rec = read_shorts(sym, ex, ccy, trend=trend, name=listed_as)
     if not rec:
         return {"ok": True, "covered": False}
     return {"ok": True, "covered": True, "shorts": rec}
+
+
+def shorts_feed():
+    """Every listing the book holds or watches with its short selling as it is stored, each
+    marked held or watched. One answer covers all three scopes, so turning between them asks
+    nothing and the list never empties for a moment while it waits — which is what moved the
+    page under the reader."""
+    base = model.base_model()
+    held, watched = {}, {}
+    for p in base.get("positions") or []:
+        if p.get("kind") == "Shares":
+            held[(market.tmx_symbol(p.get("symbol")).upper(), _s(p.get("exchange")).upper())] = p
+    for w in base.get("watchlist") or []:
+        watched[(market.tmx_symbol(w.get("symbol")).upper(), _s(w.get("exchange")).upper())] = w
+    rows = []
+    for r in store.all_shorts():
+        key = (r["symbol"], r["exchange"])
+        source = held.get(key) or watched.get(key)
+        if source is None or r.get("shares") is None:
+            continue
+        r["name"] = _s(source.get("name"))
+        # the venue as the book writes it: the stored key is upper case because it is a key,
+        # and the rest of the app shows "Cboe Canada", not "CBOE CANADA"
+        r["exchange"] = _s(source.get("exchange")) or r["exchange"]
+        r["positionId"] = source.get("positionId") or source.get("id")
+        r["held"], r["watched"] = key in held, key in watched
+        rows.append(r)
+    # while a pass still has listings to read, the page asks again within seconds: a figure
+    # filled in behind an open page otherwise waited out the page's minutes between asks,
+    # and a restart that reads every listing again showed the old dashes for all of them
+    return {"ok": True, "rows": rows, "reading": _shorts_pass["left"] > 0}
+
+
+def shorts_listings(scope="all"):
+    """The listings whose short selling is worth keeping: the shares the book holds and the
+    ones it watches. A coin, an index or a contract is not one, and is left out here rather
+    than asked about and refused listing by listing."""
+    base = model.base_model()
+    seen, out = set(), []
+    groups = []
+    if scope in ("holdings", "all"):
+        groups.append(base.get("positions") or [])
+    if scope in ("watchlist", "all"):
+        groups.append(base.get("watchlist") or [])
+    for group in groups:
+        for row in group:
+            sym = market.tmx_symbol(row.get("symbol"))
+            ex, ccy = _s(row.get("exchange")), _s(row.get("currency"))
+            key = (sym.upper(), ex.upper())
+            if not sym or key in seen or not shorts.market_of(sym, ex, ccy):
+                continue
+            seen.add(key)
+            out.append((sym, ex, ccy, _s(row.get("name"))))
+    return out
+
+
+_shorts_pass = {"left": 0}          # listings the running sweep has still to read
+
+
+def sweep_shorts(now=None):
+    """Keep every held and watched listing's short selling stored and current, so the page
+    never waits on a read it could have done already. How many are still to be read is kept
+    while the pass runs, so the ranked list knows to ask again soon."""
+    due = []
+    for sym, ex, ccy, name in shorts_listings("all"):
+        held = store.shorts_for(sym, ex)
+        if not (held and held.get("series") and not _shorts_stale(held, now)):
+            due.append((sym, ex, ccy, name))
+    done = 0
+    _shorts_pass["left"] = len(due)
+    try:
+        for sym, ex, ccy, name in due:
+            try:
+                if read_shorts(sym, ex, ccy, trend=True, now=now, name=name):
+                    done += 1
+            except Exception as e:
+                sys.stderr.write("bagholder shorts: %s not read: %s\n" % (sym, str(e) or e.__class__.__name__))
+            _shorts_pass["left"] -= 1
+    finally:
+        _shorts_pass["left"] = 0
+    return done
+
+
+def shorts_sweep_loop():
+    while True:
+        try:
+            sweep_shorts()
+        except Exception as e:
+            sys.stderr.write("bagholder shorts: sweep failed: %s\n" % (str(e) or e.__class__.__name__))
+        time.sleep(SHORTS_SWEEP_EVERY_SEC)
 
 
 def news_symbol_payload(symbol, exchange, currency):
@@ -6043,20 +6183,32 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
 
 
 def filings_notice(sym, new):
-    """`New disclosure · QNC` / `Material change report · SEDAR+`; several, `3 new disclosures · QNC` with the documents' kinds."""
-    kinds = []
-    for r in new:
-        t = _s(r.get("type")).strip()
-        if t and t not in kinds:
-            kinds.append(t)
+    """`New disclosure · QNC` and what was filed; several, `3 new disclosures · QNC` and the
+    first of them. What was filed is the document's own title, the one the Disclosures table
+    shows, because a filing's type is the form's code — `144`, `6-K` — which names the form
+    and not what happened. A document with no title yet is read here for one, at most the few
+    the notice names, and the read is kept on the row, so the table shows what the
+    notification said. A form whose document could not be read is named by its code."""
+    named = []
+    for r in new[:3]:
+        title = _s(r.get("subject")).strip()
+        if not title and _s(r.get("id")):
+            try:
+                title = _s((filings_enrich(sym, _s(r.get("id"))) or {}).get("subject")).strip()
+            except Exception as e:
+                sys.stderr.write("bagholder disclosures: %s not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
+        title = title or _s(r.get("type")).strip()
+        if title and title not in named:
+            named.append(title)
     sources = []
     for r in new:
         src = _s(r.get("source")).strip()
         if src and src not in sources:
             sources.append(src)
-    names = {"sedar": "SEDAR+", "sec": "SEC EDGAR"}
-    tail = ", ".join(names.get(x, x) for x in sources)
-    head = ", ".join(kinds[:3]) + (" and more" if len(kinds) > 3 else "")
+    # the regulator under its own name, whatever case the source's rows spell it in
+    names = {"sedar": "SEDAR+", "sedar+": "SEDAR+", "sec": "SEC EDGAR", "sec edgar": "SEC EDGAR"}
+    tail = ", ".join(names.get(x.lower(), x) for x in sources)
+    head = ", ".join(named) + (" and more" if len(new) > 3 else "")
     body = (head + (" · " if head and tail else "") + tail) or "A new filing."
     title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
     return (title, body)
@@ -7024,6 +7176,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
             return
+        if path == "/api/shorts/feed":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            self._send(200, shorts_feed())
+            return
         if path == "/api/shorts":
             if not self._gate():
                 self._send(403, {"ok": False})
@@ -7504,6 +7662,7 @@ def main():
     threading.Thread(target=archive_loop, name="bagholder-archive", daemon=True).start()
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
     threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
+    threading.Thread(target=shorts_sweep_loop, name="bagholder-shorts-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
     # A second instance run for verification (BAGHOLDER_NO_BROWSER=1) must not open
