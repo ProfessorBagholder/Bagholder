@@ -1707,6 +1707,21 @@ def benchmark_prices(symbol=BENCHMARK_SYMBOL):
             conn.close()
 
 
+def benchmark_days(symbol, start, end):
+    """How many days that index actually traded between two dates, inclusive — the market's
+    own calendar, so a statutory holiday is not counted as a day of trading."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM benchmark_prices WHERE symbol = ? AND date >= ? AND date <= ?",
+                (symbol, _s(start)[:10], _s(end)[:10]),
+            ).fetchone()["n"]
+        finally:
+            conn.close()
+
+
 def benchmark_last_date(symbol=BENCHMARK_SYMBOL):
     with _lock:
         conn = _connect()

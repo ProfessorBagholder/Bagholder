@@ -100,6 +100,20 @@ html[data-theme="light"] .heat-tile{color:#1b1d27}
 html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth{font:500 10.5px/18px var(--font);letter-spacing:.09em;text-transform:uppercase;color:var(--ink60);user-select:none;cursor:pointer;white-space:nowrap}
 .gth.on{color:var(--ink)}
+/* short interest: a label, the figure, and what stands behind it, so the row reads across
+   the card's width instead of three numbers stranded in it */
+.si-grid{display:grid;grid-template-columns:auto minmax(96px,auto) minmax(0,1fr);column-gap:18px;row-gap:7px;align-items:baseline}
+.si-l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink55);white-space:nowrap}
+.si-v{font-size:14.5px;font-weight:500;text-align:right;white-space:nowrap}
+.si-n{display:flex;align-items:center;gap:10px;min-width:0;font-size:11.5px;color:var(--ink55)}
+.si-n > span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-bar{flex:0 0 132px;height:5px;border-radius:3px;background:rgba(var(--ink-rgb),.1);overflow:hidden}
+.si-bar > span{display:block;height:100%;border-radius:3px;background:var(--chip-hi)}
+.si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
+.si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
+.si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
+.si-cells{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.si-cells .si-v{text-align:left;font-size:13.5px}
 .nw-head,.nw-row{display:grid;grid-template-columns:66px minmax(0,1fr) auto minmax(64px,auto);gap:12px;padding:0 16px;white-space:nowrap}
 .nw-head{padding-bottom:6px;margin:0 -16px}
 .nw-bare{grid-template-columns:66px minmax(0,1fr)}
@@ -2485,20 +2499,24 @@ function execSortValue(e, key) { if (key === "when") return e.when; if (key === 
 // covered and draws no card at all, rather than a card of dashes.
 // ---------------------------------------------------------------------------
 const _shorts = {}, _shortsPending = {};
+// keyed by listing, not by ticker: a company listed on both markets has a short position on
+// each, and they are different numbers measured against different trading
+function shortsKey(t) { return discSymbol(t) + "|" + String(t.exchange || "").toUpperCase(); }
 const SHORTS_KEEP_MS = 30 * 60 * 1000;   // the daily file lands once a day, but a page left open for days should not still show the day it opened on
 
 function ensureShorts(t) {
-  const sym = discSymbol(t);
-  const held = _shorts[sym];
-  if (!sym || _shortsPending[sym] || (held && Date.now() - held.at < SHORTS_KEEP_MS)) return;
-  _shortsPending[sym] = true;
+  const sym = discSymbol(t), key = shortsKey(t);
+  const held = _shorts[key];
+  if (!sym || _shortsPending[key] || (held && Date.now() - held.at < SHORTS_KEEP_MS)) return;
+  _shortsPending[key] = true;
   const q = "symbol=" + encodeURIComponent(sym) + (t.exchange ? "&exchange=" + encodeURIComponent(t.exchange) : "") +
     (t.currency ? "&currency=" + encodeURIComponent(t.currency) : "");
   api("GET", "/api/shorts?" + q).then((d) => {
-    delete _shortsPending[sym];
-    _shorts[sym] = Object.assign({ at: Date.now() }, (d && d.ok) ? d : { ok: false });
+    delete _shortsPending[key];
+    _shorts[key] = Object.assign({ at: Date.now() }, (d && d.ok) ? d : { ok: false });
     const open = state.sel && selById(state.sel);
-    if (open && discSymbol(open) === sym) render();
+    if (open && shortsKey(open) === key) render();
+    else if (state.page === "markets" && state.newsSymbol && shortsKey(state.newsSymbol) === key) render();
   });
 }
 function shortDay(iso) {
@@ -2512,21 +2530,46 @@ function shortSpan(key) {
   if (a.length !== 3 || b.length !== 3) return "";
   return a[1] === b[1] ? MON[Number(a[1]) - 1] + " " + Number(a[2]) + "–" + Number(b[2]) : shortDay(ends[0]) + " – " + shortDay(ends[1]);
 }
+function shortsFigures(s) {
+  // label, figure, and what stands behind the figure — the row grammar the card and the
+  // News tile's strip both read from, so one listing reads the same in both places
+  const room = (v) => v == null ? "—" : n2(v, 1) + "%";
+  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
+  const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
+  return [
+    { label: "Shares short", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
+    { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
+      note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
+    { label: "Short volume", value: room(s.volumePct), bar: s.volumePct,
+      note: (s.shortVolume != null && s.totalVolume != null ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) : "") +
+            (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
+  ];
+}
 function shortsCardHtml(t) {
-  const rec = _shorts[discSymbol(t)];
+  const rec = _shorts[shortsKey(t)];
   if (!rec || !rec.ok || !rec.covered) return "";
   const s = rec.shorts || {};
-  const fact = (label, value, sub) => '<div><div class="lbl">' + label + '</div><div class="tab" style="font-size:13px">' + value + '</div>' +
-    '<div class="tab" style="font-size:11px;margin-top:3px;color:var(--ink55)">' + (sub || "&nbsp;") + "</div></div>";
-  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
+  const line = (f) => '<div class="si-l">' + f.label + '</div>' +
+    '<div class="si-v tab">' + f.value + '</div>' +
+    '<div class="si-n tab">' + (f.bar == null ? "" : '<span class="si-bar"><span style="width:' + Math.max(0, Math.min(100, f.bar)).toFixed(1) + '%"></span></span>') +
+    '<span>' + esc(f.note || "") + "</span></div>";
   return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
-    '<div style="display:flex;align-items:center;gap:12px;min-height:24px;margin-bottom:10px"><h5>Short interest</h5>' +
-    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + "</span></div>" +
-    '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">' +
-    fact("Short position", qty(s.shares), [change, shortDay(s.asOf)].filter(Boolean).join(" · ")) +
-    fact("Days to cover", s.daysToCover == null ? "—" : n2(s.daysToCover, 1), "") +
-    fact("Short volume", s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", shortSpan(s.volumeOf)) +
-    "</div></div>";
+    '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>Short interest</h5>' +
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(s.source || "") + (s.asOf ? " · as of " + esc(shortDay(s.asOf)) : "") + "</span></div>" +
+    '<div class="si-grid">' + shortsFigures(s).map(line).join("") + "</div></div>";
+}
+// the same listing, compact, for the News card once it is scoped to a symbol — the card is
+// half the width of the instrument page's, so the figures stack under their labels
+function shortsStripHtml(only) {
+  if (!only || !only.symbol) return "";
+  ensureShorts(only);                       // any ticker the chip names, held or not
+  const rec = _shorts[shortsKey(only)];
+  if (!rec || !rec.ok || !rec.covered) return "";
+  const s = rec.shorts || {};
+  const cell = (f) => '<div><div class="si-l">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
+  return '<div class="si-strip"><div class="si-sh">Short interest<span>' + esc(s.source || "") +
+    (s.asOf ? " · " + esc(shortDay(s.asOf)) : "") + '</span></div><div class="si-cells">' +
+    shortsFigures(s).map(cell).join("") + "</div></div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -3256,6 +3299,7 @@ function newsCardHtml(items) {
     msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    (only ? shortsStripHtml(only) : "") +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";

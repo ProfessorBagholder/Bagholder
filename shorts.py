@@ -39,7 +39,6 @@ CA_POSITION_URL = "https://www.ciro.ca/sites/default/files/epubs/CSPR/%s_CSPR_Re
 CA_VOLUME_URL = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_ShortSaleTradingSummaryReport.csv"
 # what the Canadian files call each venue, against what the app calls it
 CA_VENUES = {"TSX": ("TSX",), "TSXV": ("TSX-V", "TSXV"), "CSE": ("CSE",), "AQL": ("CBOE CANADA", "NEO")}
-COVER_SESSIONS = 20      # sessions of the app's own volume behind days to cover
 FILE_HOURS = 6           # how often a whole-market file is looked for again
 TRIES = 6                # how many report dates back to try before giving up
 HEADERS = {"User-Agent": market.UA, "Accept": "*/*"}
@@ -226,7 +225,7 @@ def _venue_fits(code, exchange):
 # --- one listing -------------------------------------------------------------------
 
 def us_position(symbol, ssl_context=None, now=None):
-    """The newest settlement FINRA has for a US listing."""
+    """The newest settlement FINRA has for a US listing, and the date of the one before it."""
     now = now or datetime.now(timezone.utc)
     body = {"limit": 20,
             "compareFilters": [{"fieldName": "symbolCode", "fieldValue": _s(symbol).strip().upper(), "compareType": "EQUAL"}],
@@ -240,9 +239,12 @@ def us_position(symbol, ssl_context=None, now=None):
     rows = [r for r in answered or [] if isinstance(r, dict) and r.get("settlementDate")]
     if not rows:
         return {}
-    r = max(rows, key=lambda x: _s(x.get("settlementDate")))
+    rows.sort(key=lambda x: _s(x.get("settlementDate")), reverse=True)
+    r = rows[0]
     return {"asOf": _s(r.get("settlementDate"))[:10], "shares": _num(r.get("currentShortPositionQuantity")),
-            "previous": _num(r.get("previousShortPositionQuantity")), "change": _num(r.get("changePreviousNumber"))}
+            "previous": _num(r.get("previousShortPositionQuantity")), "change": _num(r.get("changePreviousNumber")),
+            "previousOf": _s(rows[1].get("settlementDate"))[:10] if len(rows) > 1 else "",
+            "averageVolume": _num(r.get("averageDailyVolumeQuantity"))}
 
 
 def us_volume(symbol, ssl_context=None, now=None):
@@ -262,8 +264,11 @@ def ca_position(symbol, exchange="", ssl_context=None, now=None):
     if not row or not _venue_fits(row.get("venue"), exchange):
         return {}
     shares, change = row["shares"], row.get("change")
+    # the report before this one is the previous reporting date, which is what the change is against
+    earlier = [d.isoformat() for d in position_dates(now.date() if now else datetime.now(timezone.utc).date()) if d.isoformat() < held["key"]]
     return {"asOf": held["key"], "shares": shares, "change": change,
-            "previous": (shares - change) if change is not None else None}
+            "previous": (shares - change) if change is not None else None,
+            "previousOf": earlier[0] if earlier else ""}
 
 
 def ca_volume(symbol, exchange="", ssl_context=None, now=None):
@@ -275,30 +280,32 @@ def ca_volume(symbol, exchange="", ssl_context=None, now=None):
             "totalVolume": row.get("totalVolume"), "volumePct": row.get("volumePct")}
 
 
-def days_to_cover(symbol, shares, exchange="", currency="", ssl_context=None, now=None):
+def average_volume(rec, now=None):
+    """The average daily volume in the listing's own market, over the period its short report
+    covers. It cannot come from the app's own bars: those are stored under the bare ticker, so
+    a company listed on both markets has one set of them and days to cover for its US listing
+    would be measured against Canadian trading. Each regulator reports the volume for its own
+    market instead — FINRA publishes the average itself; Canada's report gives the period's
+    total, divided here by the days the Canadian market actually traded, counted from the index
+    series the app already keeps so a holiday is not counted as a day of trading."""
+    if rec.get("market") == "us":
+        return rec.get("averageVolume")
+    total, span = rec.get("totalVolume"), _s(rec.get("volumeOf"))
+    if not total or "/" not in span:
+        return None
+    start, end = span.split("/", 1)
+    days = store.benchmark_days("TSX", start, end)
+    return (total / days) if days else None
+
+
+def days_to_cover(rec, now=None):
     """The position against the app's own average daily volume over the last sessions it
     has bars for. One calculation on both markets, rather than each regulator's own
     arithmetic where it happens to publish some. A listing with no bars stored yet gets
     them through the app's own history, the same daily bars its chart is about to ask
     for; None only when even that answers nothing."""
-    if not shares:
-        return None
-    sym = _s(symbol).strip().upper()
-    now = now or datetime.now(timezone.utc)
-    start, end = (now - timedelta(days=180)).strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d")
-    volumes = [b["volume"] for b in store.price_history(sym, start, end) if b.get("volume")]
-    if not volumes:
-        try:
-            inst = market.chart_instrument({"symbol": sym, "exchange": exchange, "currency": currency or "CAD", "kind": "Shares"})
-            volumes = [b.get("volume") for b in market.ensure_bars(inst, "1d", start, end, ssl_context) or [] if b.get("volume")]
-        except Exception as e:
-            sys.stderr.write("bagholder shorts: %s volume for days to cover failed: %s\n" % (sym, e))
-            return None
-    volumes = volumes[-COVER_SESSIONS:]
-    if not volumes:
-        return None
-    average = sum(volumes) / len(volumes)
-    return round(shares / average, 1) if average > 0 else None
+    shares, average = rec.get("shares"), average_volume(rec, now)
+    return round(shares / average, 1) if shares and average else None
 
 
 def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None):
@@ -314,6 +321,7 @@ def for_listing(symbol, exchange="", currency="", ssl_context=None, now=None):
     else:
         rec = dict(ca_position(sym, exchange, ssl_context, now))
         rec.update(ca_volume(sym, exchange, ssl_context, now))
-    rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO",
-                "daysToCover": days_to_cover(sym, rec.get("shares"), exchange, currency, ssl_context, now)})
+    rec.update({"symbol": sym, "market": where, "source": "FINRA" if where == "us" else "CIRO"})
+    rec["averageVolume"] = average_volume(rec, now)
+    rec["daysToCover"] = days_to_cover(rec, now)
     return rec

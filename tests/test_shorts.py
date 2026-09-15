@@ -117,10 +117,11 @@ class ListingTest(unittest.TestCase):
 
     def test_the_newest_settlement_finra_has_is_the_one_shown(self):
         answered = [{"settlementDate": "2026-08-14", "currentShortPositionQuantity": 54036583, "previousShortPositionQuantity": 53736062, "changePreviousNumber": 300521},
-                    {"settlementDate": "2026-08-31", "currentShortPositionQuantity": 56990026, "previousShortPositionQuantity": 54036583, "changePreviousNumber": 2953443},
+                    {"settlementDate": "2026-08-31", "currentShortPositionQuantity": 56990026, "previousShortPositionQuantity": 54036583, "changePreviousNumber": 2953443, "averageDailyVolumeQuantity": 5864237},
                     "not a row"]
         with mock.patch.object(shorts.market, "_post_json", return_value=answered):
-            self.assertEqual(shorts.us_position("GME"), {"asOf": "2026-08-31", "shares": 56990026.0, "previous": 54036583.0, "change": 2953443.0})
+            self.assertEqual(shorts.us_position("GME"), {"asOf": "2026-08-31", "shares": 56990026.0, "previous": 54036583.0,
+                                                         "change": 2953443.0, "previousOf": "2026-08-14", "averageVolume": 5864237.0})
 
     def test_a_symbol_finra_does_not_carry_answers_nothing_rather_than_guessing(self):
         with mock.patch.object(shorts.market, "_post_json", return_value=[]):
@@ -155,6 +156,7 @@ class ListingTest(unittest.TestCase):
         self.assertEqual(rec["asOf"], "2026-09-15")
         self.assertEqual(rec["volumeOf"], "2026-09-01/2026-09-15")
         self.assertEqual(rec["volumeSpan"], "period")
+        self.assertEqual(rec["previousOf"], "2026-08-31")      # what the change is measured against
 
     def test_a_listing_filed_under_another_venue_is_not_read_as_this_one(self):
         with mock.patch.object(shorts.market, "_fetch", return_value=b"x"), \
@@ -168,27 +170,25 @@ class ListingTest(unittest.TestCase):
         with mock.patch.object(shorts.market, "_get_text", side_effect=AssertionError("asked anyway")):
             self.assertEqual(shorts.for_listing("BTC", "Crypto", "USD"), {})
 
-    def test_days_to_cover_divides_the_position_by_the_apps_own_average_volume(self):
-        bars = [{"date": "2026-09-%02d" % d, "close": 10.0, "volume": 1000000.0} for d in range(1, 15)]
-        store.upsert_price_history("GME", bars, "test")
-        self.assertEqual(shorts.days_to_cover("GME", 5000000.0, now=datetime(2026, 9, 15, tzinfo=timezone.utc)), 5.0)
+    def test_days_to_cover_uses_the_volume_of_the_listings_own_market(self):
+        us = {"market": "us", "shares": 56990026.0, "averageVolume": 5864237.0}
+        self.assertEqual(shorts.average_volume(us), 5864237.0)      # FINRA publishes it
+        self.assertEqual(shorts.days_to_cover(us), 9.7)
 
-    def test_only_the_most_recent_sessions_count_toward_the_average(self):
-        bars = [{"date": "2026-08-%02d" % d, "close": 10.0, "volume": 1.0} for d in range(1, 29)]
-        bars += [{"date": "2026-09-%02d" % d, "close": 10.0, "volume": 1000000.0} for d in range(1, 15)]
-        store.upsert_price_history("OLD", bars, "test")
-        self.assertIsNotNone(shorts.COVER_SESSIONS)
-        self.assertGreater(shorts.days_to_cover("OLD", 1000000.0, now=datetime(2026, 9, 15, tzinfo=timezone.utc)), 0.9)
+    def test_the_canadian_average_counts_only_the_days_the_market_traded(self):
+        for day in ("2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"):
+            store.upsert_benchmark_prices("TSX", {day: 100.0}) if hasattr(store, "upsert_benchmark_prices") else None
+        ca = {"market": "ca", "shares": 2667164.0, "totalVolume": 5000000.0, "volumeOf": "2026-08-16/2026-08-31"}
+        days = store.benchmark_days("TSX", "2026-08-16", "2026-08-31")
+        if days:
+            self.assertAlmostEqual(shorts.average_volume(ca), 5000000.0 / days)
+        else:
+            self.assertIsNone(shorts.average_volume(ca))            # no calendar stored: nothing is guessed
 
-    def test_no_position_and_no_volume_leave_days_to_cover_unsaid(self):
-        self.assertIsNone(shorts.days_to_cover("GME", None))
-        with mock.patch.object(shorts.market, "ensure_bars", return_value=[]):
-            self.assertIsNone(shorts.days_to_cover("NEVERSEEN", 1000.0, "NASDAQ", "USD"))
-
-    def test_a_listing_with_no_bars_stored_gets_them_the_way_its_chart_would(self):
-        with mock.patch.object(shorts.market, "ensure_bars", return_value=[{"volume": 2000.0}, {"volume": 2000.0}]) as bars:
-            self.assertEqual(shorts.days_to_cover("NEW", 4000.0, "NASDAQ", "USD"), 2.0)
-        self.assertEqual(bars.call_count, 1)
+    def test_no_position_or_no_volume_leaves_days_to_cover_unsaid(self):
+        self.assertIsNone(shorts.days_to_cover({"market": "us", "shares": None, "averageVolume": 10.0}))
+        self.assertIsNone(shorts.days_to_cover({"market": "us", "shares": 10.0, "averageVolume": None}))
+        self.assertIsNone(shorts.average_volume({"market": "ca", "totalVolume": None, "volumeOf": "2026-08-16/2026-08-31"}))
 
 
 class PayloadTest(unittest.TestCase):
