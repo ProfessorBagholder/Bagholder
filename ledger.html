@@ -46,6 +46,11 @@ html[data-theme="light"]{color-scheme:light;
 html,body{margin:0;background:var(--mat);color:var(--ink);color-scheme:dark}
 body{font:400 13px/1.45 var(--font);-webkit-font-smoothing:antialiased;min-height:100vh;padding:24px}
 #app{background:var(--bg);border-radius:20px;box-shadow:0 0 0 1px var(--hair);overflow:hidden;min-height:calc(100vh - 48px)}
+html.display-heat body{padding:0}
+html.display-heat #app{border-radius:0;box-shadow:none;min-height:100vh}
+#heatFull{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;padding:14px 16px 16px;gap:12px}
+.heat-ghost{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink55);cursor:pointer;flex:none}
+.heat-ghost:hover{color:var(--ink);background:rgba(var(--ink-rgb),var(--hover))}
 button{font-family:inherit}
 a{color:var(--accent)}
 h4,h5{font-weight:500;margin:0;letter-spacing:0}
@@ -839,6 +844,7 @@ const ICONS = {
   bookmarkFill: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Z",
   x: "M205.66 194.34a8 8 0 0 1-11.32 11.32L128 139.31l-66.34 66.35a8 8 0 0 1-11.32-11.32L116.69 128 50.34 61.66a8 8 0 0 1 11.32-11.32L128 116.69l66.34-66.35a8 8 0 0 1 11.32 11.32L139.31 128Z",
   caretDown: "M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z",
+  arrowsOut: "M216 48v40a8 8 0 0 1-16 0V67.31l-34.34 34.35a8 8 0 0 1-11.32-11.32L188.69 56H168a8 8 0 0 1 0-16h40a8 8 0 0 1 8 8ZM98.34 146.34 64 180.69V160a8 8 0 0 0-16 0v40a8 8 0 0 0 8 8h40a8 8 0 0 0 0-16H75.31l34.35-34.34a8 8 0 0 0-11.32-11.32ZM208 152a8 8 0 0 0-8 8v20.69l-34.34-34.35a8 8 0 0 0-11.32 11.32L188.69 192H168a8 8 0 0 0 0 16h40a8 8 0 0 0 8-8v-40a8 8 0 0 0-8-8ZM67.31 64H88a8 8 0 0 0 0-16H48a8 8 0 0 0-8 8v40a8 8 0 0 0 16 0V75.31l34.34 34.35a8 8 0 0 0 11.32-11.32Z",
   bell: "M221.8 175.94C216.25 166.38 208 139.33 208 104a80 80 0 1 0-160 0c0 35.34-8.26 62.38-13.81 71.94A16 16 0 0 0 48 200h40.81a40 40 0 0 0 78.38 0H208a16 16 0 0 0 13.8-24.06ZM128 216a24 24 0 0 1-22.62-16h45.24A24 24 0 0 1 128 216ZM48 184c7.7-13.24 16-43.92 16-80a64 64 0 1 1 128 0c0 36.05 8.28 66.73 16 80Z",
   receipt: "M72 104a8 8 0 0 1 8-8h96a8 8 0 0 1 0 16H80a8 8 0 0 1-8-8Zm8 40h96a8 8 0 0 0 0-16H80a8 8 0 0 0 0 16ZM232 56v152a8 8 0 0 1-11.58 7.15L192 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L128 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L64 200.94l-28.42 14.21A8 8 0 0 1 24 208V56a16 16 0 0 1 16-16h176a16 16 0 0 1 16 16Zm-16 0H40v139.06l20.42-10.22a8 8 0 0 1 7.16 0L96 199.06l28.42-14.22a8 8 0 0 1 7.16 0L160 199.06l28.42-14.22a8 8 0 0 1 7.16 0L216 195.06Z",
   palette: "M186.8 213.8A104.0 104.0 0 1 1 231.8 133.9A46.0 46.0 0 0 0 186.8 213.8ZM214.3 110.6A88.0 88.0 0 1 0 157.7 210.8A62.0 62.0 0 0 1 214.3 110.6ZM84 132m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM104 84m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM152 68m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM176 92m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0Z",
@@ -2958,16 +2964,35 @@ function cssKey(key) {
 function msegHtml(act, key, opts, cur) {
   return '<span class="mseg">' + opts.map((o) => o === "|" ? '<span class="mseg-div"></span>' : '<button class="mseg-opt' + (o[0] === cur ? " on" : "") + '" data-act="' + act + '" data-arg=\'' + attr({ [key]: o[0] }) + "'>" + o[1] + "</button>").join("") + "</span>";
 }
-function heatmapCardHtml(mk) {
-  const h = state.heat, tiles = heatTiles(mk);
-  const empty = h.universe === "watchlist" ? "Nothing watched." : HEAT_MARKETS[h.universe] ? "Not read yet." : "No open positions.";
-  return '<div class="card elev-sm" style="padding:14px 16px 16px">' +
-    '<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px"><h5>Heatmap</h5>' +
+const HEAT_UNIVERSES = ["holdings", "watchlist", "both", "ca", "us", "intl"], HEAT_SIZES = ["value", "equal"];
+function heatHeaderHtml(full) {
+  // the card's header row: the title, the two controls, the legend, and at the right the way into the view on its own or back
+  const h = state.heat;
+  return '<div style="display:flex;align-items:center;gap:14px' + (full ? "" : ";margin-bottom:12px") + '"><h5>Heatmap</h5>' +
     msegHtml("heatUniverse", "universe", [["holdings", "Holdings"], ["watchlist", "Watchlist"], ["both", "Both"], "|", ["ca", "Canada"], ["us", "US"], ["intl", "International"]], h.universe) +
     msegHtml("heatSize", "size", [["value", "Market value"], ["equal", "Equal"]], h.size) +
     '<span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)"><span>−3%</span>' +
-    [-3, -2, -1, -0.2, 0.2, 1, 2, 3].map((c) => '<span style="width:16px;height:9px;border-radius:2px;background:' + heatColor(c) + '"></span>').join("") + "<span>+3%</span></span></div>" +
-    (tiles.length ? '<div id="heatBox" style="position:relative;width:100%;height:430px"></div>' : '<div class="muted empty" style="font-size:12px">' + empty + "</div>") + "</div>";
+    [-3, -2, -1, -0.2, 0.2, 1, 2, 3].map((c) => '<span style="width:16px;height:9px;border-radius:2px;background:' + heatColor(c) + '"></span>').join("") + "<span>+3%</span></span>" +
+    (full ? '<button class="heat-ghost" data-act="heatFullClose" aria-label="Back to Markets"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button>'
+      : '<button class="heat-ghost" data-act="heatFull" aria-label="Heatmap on its own"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.arrowsOut + '"/></svg></button>') + "</div>";
+}
+function heatEmptyWord() { const h = state.heat; return h.universe === "watchlist" ? "Nothing watched." : HEAT_MARKETS[h.universe] ? "Not read yet." : "No open positions."; }
+function heatmapCardHtml(mk) {
+  const tiles = heatTiles(mk);
+  return '<div class="card elev-sm" style="padding:14px 16px 16px">' + heatHeaderHtml(false) +
+    (tiles.length ? '<div id="heatBox" style="position:relative;width:100%;height:430px"></div>' : '<div class="muted empty" style="font-size:12px">' + heatEmptyWord() + "</div>") + "</div>";
+}
+// the heatmap on its own, at #heatmap/<universe>/<size>: the frame gone, the header row on top, the treemap filling the window
+function heatmapFullHtml(mk) {
+  const tiles = heatTiles(mk);
+  return '<div id="heatFull">' + heatHeaderHtml(true) +
+    (tiles.length ? '<div id="heatBox" style="position:relative;flex:1;min-height:0"></div>' : '<div class="muted empty" style="font-size:12px">' + heatEmptyWord() + "</div>") + "</div>";
+}
+function heatHash() { return "#heatmap/" + state.heat.universe + "/" + state.heat.size; }
+function applyHeatHash(heat) {
+  if (!Object.keys(heat).length) return;
+  Object.assign(state.heat, heat);
+  try { localStorage.setItem("bh2.heatmap", JSON.stringify(state.heat)); } catch (e) {}
 }
 function newsWhen(iso) {
   const t = Date.parse(iso); if (!isFinite(t)) return "—";
@@ -3423,6 +3448,7 @@ function pageHtml() {
   if (state.page === "portfolio") return portfolioHtml(m);
   if (state.page === "cashflow") return cashflowHtml(m);
   if (state.page === "markets") return marketsHtml(m);
+  if (state.page === "heatmap") return heatmapFullHtml(m.markets || {});
   return dashboardHtml(m);
 }
 // The skeleton is not swapped for the page; it is lifted over it and faded out
@@ -3558,14 +3584,16 @@ function render() {
   const keepPills = keepChart ? document.getElementById("chartTf") : null;
   // the heatmap's cells travel to their new slots, which they can only do if the
   // nodes holding them outlive the redraw
-  const keepHeat = state.page === "markets" ? document.getElementById("heatBox") : null;
+  const keepHeat = state.page === "markets" || state.page === "heatmap" ? document.getElementById("heatBox") : null;
   const keepTab = document.getElementById("tabInd");
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
   const standing = ["tkWrap", "odWrap", "ntWrap", "confirmDlg"].filter((id) => document.getElementById(id));
   const leavingSkeleton = document.getElementById("pageSkel");
-  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
+  const alone = state.page === "heatmap";   // the heatmap on its own: no header, no tabs, no frame
+  document.documentElement.classList.toggle("display-heat", alone);
+  root.innerHTML = (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
   if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
@@ -3619,11 +3647,19 @@ function hashState() {
   const raw = decodeURIComponent(location.hash.replace(/^#/, ""));
   const parts = raw.split("/");
   if (parts[0] === "positions") parts[0] = "portfolio";   // the tab's old name, still in bookmarks
+  if (parts[0] === "heatmap") {
+    // the heatmap on its own; the address may carry its scope and sizing, so a bookmark lands where it left
+    const heat = {};
+    if (HEAT_UNIVERSES.indexOf(parts[1]) >= 0) heat.universe = parts[1];
+    if (HEAT_SIZES.indexOf(parts[2]) >= 0) heat.size = parts[2];
+    return { page: "heatmap", sel: null, heat };
+  }
   const page = PAGES.indexOf(parts[0]) >= 0 ? parts[0] : "dashboard";
   return { page, sel: (page === "trades" || page === "portfolio") && parts.length > 1 ? parts.slice(1).join("/") : null };
 }
 function applyHash() {
   const h = hashState();
+  if (h.heat) applyHeatHash(h.heat);
   if (h.page === state.page && (h.sel || null) === (state.sel || null)) return;
   state.page = h.page;
   state.sel = h.sel && state.model && selById(h.sel) ? h.sel : (h.sel ? h.sel : null);
@@ -3816,8 +3852,11 @@ function act(name, arg, ev) {
       postTiles(next); break;
     }
     case "tilesMore": state.tilesOpen = !state.tilesOpen; if (!state.tilesOpen) state.tileAdd = false; try { localStorage.setItem("bh2.tilesOpen", state.tilesOpen ? "1" : "0"); } catch (e) {} render(); break;
+    case "heatFull": location.hash = heatHash(); break;
+    case "heatFullClose": location.hash = "#markets"; break;
     case "heatUniverse": case "heatSize": {
       Object.assign(state.heat, arg); try { localStorage.setItem("bh2.heatmap", JSON.stringify(state.heat)); } catch (e) {}
+      if (state.page === "heatmap") history.replaceState(null, "", heatHash());
       // a market universe never read: ask for it now rather than at the next half hour
       if (HEAT_MARKETS[state.heat.universe] && !((((state.model || {}).markets || {}).universes || {})[state.heat.universe] || []).length) api("POST", "/api/markets/refresh", {});
       render(); break;
@@ -4020,6 +4059,7 @@ function bind() {
       if (j >= 0 && j < pages.length) { e.preventDefault(); go(pages[j]); }
       return;
     }
+    if (e.key === "Escape" && state.page === "heatmap" && !state.confirmOpen && !state.modal) { location.hash = "#markets"; return; }
     if (e.key === "Escape") { if (state.watchAdding) { state.watchAdding = false; state.watchQuery = ""; render(); return; } if (state.tileAdd) { state.tileAdd = false; render(); return; } if (state.confirmOpen) { state.confirmOpen = ""; render(); return; } if (state.modal) { state.modal = null; render(); return; } if (state.picker || state.menuOpen) { state.picker = null; state.menuOpen = false; render(); } else if (state.sel && state.page === "trades" && document.activeElement && document.activeElement.tagName !== "TEXTAREA" && document.activeElement.id !== "tagInput") { history.back(); }
       // nothing open, nothing being typed: Escape clears the filters
       else if (filtersActive() && !(document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA"))) { act("clearAll"); }
@@ -4161,6 +4201,7 @@ function boot() {
   const h = hashState();
   state.page = h.page;
   state.sel = h.sel;
+  if (h.heat) applyHeatHash(h.heat);
   bind();
   render();
   notifyLoad();
