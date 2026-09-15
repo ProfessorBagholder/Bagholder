@@ -2565,7 +2565,10 @@ function shortsRingCard(key, title, when, pct, parts, footer, missing) {
   let body = '<div class="muted empty" style="flex:1;font-size:12px">' + missing + "</div>";
   if (pct != null && parts) {
     const d = donutPieces(key, "Short", parts, null, "l", 210, n2(pct, 2) + "%");
-    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">' + d.ring + d.legend + "</div>";
+    // the legend under the ring rather than beside it, so the ring itself sits in the middle
+    // of the tile: a ring and a legend centred as a pair leaves the ring off to one side
+    body = '<div id="' + key + 'Plot" data-hover="' + key + '" style="display:flex;flex-direction:column;align-items:center;gap:13px;flex:1;min-height:0;justify-content:center">' +
+      d.ring + d.legend + "</div>";
   }
   return '<div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">' +
     shortsHeader(title, when) + body +
