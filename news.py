@@ -131,8 +131,14 @@ def fetch_symbol(symbol, exchange, currency, ssl_context=None, now=None):
     """The latest items for one listing from its wire, as rows; [] when the wire has none or fails."""
     src = source_for(symbol, exchange, currency)
     sym = market.tmx_symbol(symbol)
-    if not src or not sym:
+    if not sym:
         return src, []
+    if not src:
+        # A ticker asked for with no venue at all is an ambiguous name: TMX's news answers on the bare
+        # ticker whatever venue it is asked under, so `F` there is a Canadian company's halt notice and
+        # not Ford's releases. Only Nasdaq is asked, whose items name the symbols they belong to and are
+        # kept only when this one is among them, so nothing comes back rather than another company's news.
+        src = "nasdaq"
     try:
         if symbol == MARKET[0]:
             _pace("api.nasdaq.com")

@@ -76,6 +76,21 @@ class KindTest(unittest.TestCase):
                 _, found = news.fetch_symbol("QIMC", "TSX-V", "CAD")
             self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC:CNX"], ["tmx:7"]))
 
+    def test_a_ticker_with_no_venue_is_never_asked_of_tmx(self):
+        """TMX's news answers on the bare ticker whatever venue it is asked under, so a name with no
+        venue would come back as another company's. Only Nasdaq, whose items name their symbols."""
+        seen = {}
+        def post_json(url, body, ctx, headers=None, **kw):
+            seen["tmx"] = body["variables"]["symbol"]
+            return {"data": {"news": [{"newsid": "9", "headline": "IIROC Trading Halt - F", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}
+        def get_text(url, ctx, headers=None, **kw):
+            seen.setdefault("nasdaq", []).append(url)
+            return '{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}'
+        with mock.patch.object(news, "_pace"), mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(market, "_get_text", side_effect=get_text):
+            src, rows = news.fetch_symbol("F", "", "")
+        self.assertEqual((src, "tmx" in seen), ("nasdaq", False), "no venue: TMX is never asked")
+        self.assertEqual([(r["kind"], r["headline"]) for r in rows], [("release", "Ford declares dividend")])
+
     def test_a_us_listing_reads_its_releases_beside_its_news_each_once(self):
         now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
         feeds = {"articlebysymbol": '{"data": {"rows": [{"id": 1, "title": "Why SHOP", "publisher": "Zacks", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/a", "related_symbols": ["shop|stocks"]}, {"id": 2, "title": "Shopify Delivers Big", "publisher": "GlobeNewswire", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/articles/b", "related_symbols": ["shop|stocks"]}]}}',

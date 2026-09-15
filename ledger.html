@@ -3175,8 +3175,19 @@ function sweepFeedEnrich(scope, rows) {
   };
   step();
 }
-// a ticker typed that the card does not hold is looked up in the directory: the chip takes it, and its disclosures,
-// or its wire, are read on demand
+// A ticker the app already knows: a watched listing, an open holding, or one the book has traded. The
+// directories carry the TSX and Nasdaq registries and not every venue (a CSE listing is in neither), so
+// the book's own listings answer first, as they do in ⌘K and the watchlist's add row.
+function listingByTicker(key) {
+  const m = state.model || {};
+  const hit = (rows) => (rows || []).find((r) => {
+    const sym = String(r.symbol || "");
+    return sym.indexOf(" ") < 0 && bareSymbol(sym).toUpperCase() === key && String(r.kind || "Shares") !== "Crypto";
+  });
+  const r = hit(((m.markets || {}).watchlist) || []) || hit(m.positions) || hit(m.trades);
+  return r ? { symbol: bareSymbol(String(r.symbol)).toUpperCase(), exchange: String(r.exchange || "").toUpperCase(), name: r.name || "", currency: r.currency || "" } : null;
+}
+// a ticker typed that the card does not hold takes the chip, and its disclosures, or its wire, are read on demand
 let _ndLookupTimer = 0;
 function newsDiscLookup(text) {
   clearTimeout(_ndLookupTimer);
@@ -3188,20 +3199,26 @@ function newsDiscLookup(text) {
     const has = kind === "disc" ? ((_discFeed[state.newsScope] || {}).rows || []).some((r) => String(r.symbol || "").startsWith(key))
       : (((state.model || {}).markets || {}).news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(key)));
     if (has) return;   // the card has it: the filter shows it
-    api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
-      if (!(r && r.ok) || state.newsKind !== kind || state.newsQuery.trim().toUpperCase() !== key) return;
-      const m = r.matches || [];
-      const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
-      if (!hit) return;
-      const only = { symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" };
+    const take = (only) => {
+      if (state.newsKind !== kind || state.newsQuery.trim().toUpperCase() !== key) return;
       state.newsSymbol = only;
       state.newsQuery = "";
       if (kind !== "disc") {
-        // the wire read now for a listing the loop does not read; the model brings its rows
+        // the wire read now for a listing whose items the card has none of; the model brings its rows
         state.newsReading = only.symbol;
-        api("GET", "/api/news/symbol?symbol=" + encodeURIComponent(only.symbol) + "&exchange=" + encodeURIComponent(only.exchange) + "&currency=" + encodeURIComponent(only.currency)).then(() => { state.newsReading = ""; loadModel(); });
+        api("GET", "/api/news/symbol?symbol=" + encodeURIComponent(only.symbol) + "&exchange=" + encodeURIComponent(only.exchange) + "&currency=" + encodeURIComponent(only.currency))
+          .then(() => { state.newsReading = ""; loadModel(); });
       }
       render();
+    };
+    const known = listingByTicker(key);
+    if (known) { take(known); return; }
+    api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
+      if (!(r && r.ok)) return;
+      const m = r.matches || [];
+      const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
+      if (!hit) return;
+      take({ symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" });
     });
   }, 500);
 }
