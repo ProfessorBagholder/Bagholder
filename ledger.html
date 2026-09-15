@@ -102,6 +102,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .nw-head,.nw-row{display:grid;grid-template-columns:66px minmax(0,1fr) auto minmax(64px,auto);gap:12px;padding:0 16px;white-space:nowrap}
 .nw-head{padding-bottom:6px;margin:0 -16px}
 .nw-bare{grid-template-columns:66px minmax(0,1fr)}
+.nw-disc{grid-template-columns:82px minmax(0,1fr) auto}   /* a filing's date carries its year */
 .nw-list{margin:0 -16px}
 .nw-row{padding:7px 16px;align-items:center;cursor:pointer;box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.06)}
 .nw-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -464,6 +465,7 @@ const state = {
     bySymbol: { key: "pnl", dir: "desc" },
     execs: { key: "when", dir: "desc" },
     disc: { key: "date", dir: "desc" },
+    ndisc: { key: "when", dir: "desc" },
     yoc: { key: "ttm", dir: "desc" },
     cash: { key: "date", dir: "desc" },
     orders: { key: "placed", dir: "desc" },
@@ -485,6 +487,7 @@ const state = {
   tileDrag: null,     // the tile under the pointer during a reorder
   tileOrder: null,    // the row's order while a reorder or a save is in flight
   newsScope: (function () { try { return localStorage.getItem("bh2.news") || "all"; } catch (e) { return "all"; } })(),
+  newsKind: (function () { try { return localStorage.getItem("bh2.newsKind") === "disc" ? "disc" : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, or the disclosures
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
@@ -2492,6 +2495,7 @@ function ensureDisclosures(t) {
     _disc[sym] = (d && d.ok) ? { payload: d } : { error: (d && d.error) || "Could not read disclosures." };
     const open = state.sel && selById(state.sel);
     if (open && discSymbol(open) === sym) render();
+    else if (state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym) render();
   });
 }
 function refreshDisclosures(sym) {
@@ -2504,7 +2508,11 @@ function refreshDisclosures(sym) {
 const _discEnrichLoading = {}, _discEnrichTried = {}, _discSweep = {}, _discQueue = {}, _discRekicks = {};
 function discFiling(sym, id) { const rec = _disc[sym]; return (rec && rec.payload ? rec.payload.filings : []).find((f) => f.id === id) || null; }
 function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f && q.has(f.id)); }
-function _discStillOpen(sym) { const open = state.sel && selById(state.sel); return !!(open && discSymbol(open) === sym); }
+function _discStillOpen(sym) {
+  // the instrument page showing this listing, or the News card turned to its disclosures under the chip
+  const open = state.sel && selById(state.sel);
+  return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym);
+}
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
 function enrichOne(sym, f) {
   // read one document for its subject (from the file) and, if the local model is up, a summary
@@ -3082,10 +3090,77 @@ function newsCardHtml(items) {
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
   return '<div class="card elev-sm" style="padding:14px 16px 12px"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
     msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
+    msegHtml("newsKind", "kind", [["stories", "Stories"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
-    '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="Search symbol or headline" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
-    (rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+    '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
+      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">No news.</div>') + "</div>";
+}
+// The card's other view: the disclosures of the listings in scope, merged newest first from what the store holds,
+// or of one listing, the chip's, read on demand as the instrument page reads them; the box finds any ticker.
+const NDISC_COLS = [{ key: "when", label: "When" }, { key: "news", label: "Disclosure" }, { key: "symbol", label: "Symbol", align: "right" }];
+let _discFeed = {};   // scope -> {rows, at, loading}
+function loadDiscFeed(scope) {
+  const f = _discFeed[scope];
+  if (f && (f.loading || Date.now() - f.at < 60000)) return;
+  _discFeed[scope] = { rows: f ? f.rows : null, at: f ? f.at : 0, loading: true };
+  api("GET", "/api/filings/feed?scope=" + encodeURIComponent(scope)).then((r) => {
+    _discFeed[scope] = { rows: r && r.ok ? r.filings || [] : (f ? f.rows : []), at: Date.now(), loading: false };
+    if (state.page === "markets" && state.newsKind === "disc" && !state.newsSymbol) render();
+  });
+}
+function newsDiscBodyHtml(scope, only, q) {
+  let rows, empty = "Nothing filed.";
+  if (only) {
+    const sym = only.symbol, rec = _disc[sym];
+    if (!rec || rec.loading) { ensureDisclosures({ symbol: sym, exchange: only.exchange || "", name: only.name || "", currency: only.currency || "" }); return '<div class="muted" style="font-size:12px">Reading…</div>'; }
+    if (rec.error) return '<div class="status-err" style="font-size:12px">' + esc(rec.error) + "</div>";
+    const p = rec.payload;
+    rows = (p.filings || []).map((f) => Object.assign({}, f, { symbol: sym, exchange: only.exchange || "" }));
+    if (!rows.length) empty = Object.values(p.sources || {}).some((x) => x && x.filer) ? "Nothing filed." : "No regulatory filer for this listing.";
+    sweepDiscEnrich(sym, p.filings || []);   // titles and summaries fill in as on the instrument page, top first
+  } else {
+    loadDiscFeed(scope);
+    const f = _discFeed[scope];
+    if (!f || !f.rows) return '<div class="muted" style="font-size:12px">Reading…</div>';
+    rows = f.rows;
+  }
+  if (q) {
+    const tokens = q.split(/\s+/);
+    const bySym = tokens.length === 1 && q.length <= 6 ? rows.filter((f) => String(f.symbol || "").startsWith(q)) : [];
+    const text = (f) => (String(f.subject || "") + " " + String(f.type || "") + " " + String(f.source || "")).toUpperCase();
+    rows = bySym.length ? bySym : rows.filter((f) => { const h = text(f); return tokens.every((t) => h.indexOf(t) >= 0); });
+  }
+  const s = state.sort.ndisc;
+  rows = sortRows(rows, s.key, s.dir, (f, k) => k === "when" ? f.date : k === "news" ? String(f.subject || f.type || "").toLowerCase() : String(f.symbol || "").toLowerCase());
+  const row = (f) => '<div class="nw-row nw-disc" data-act="discOpen" data-arg=\'' + attr({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) + "'>" +
+    '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
+    '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
+    '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
+  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
+    : '<div class="muted" style="font-size:12px">' + empty + "</div>";
+}
+// a ticker typed that the feed does not hold is looked up in the directory, and its disclosures read: the chip takes it
+let _ndLookupTimer = 0;
+function newsDiscLookup(text) {
+  clearTimeout(_ndLookupTimer);
+  const key = text.trim().toUpperCase();
+  if (!/^[A-Z0-9.\-]{1,6}$/.test(key)) return;
+  _ndLookupTimer = setTimeout(() => {
+    if (state.newsKind !== "disc" || state.newsSymbol || state.newsQuery.trim().toUpperCase() !== key) return;
+    const f = _discFeed[state.newsScope], rows = (f && f.rows) || [];
+    if (rows.some((r) => String(r.symbol || "").startsWith(key))) return;   // the feed has it: the filter shows it
+    api("GET", "/api/symbols/search?q=" + encodeURIComponent(key)).then((r) => {
+      if (!(r && r.ok) || state.newsKind !== "disc" || state.newsQuery.trim().toUpperCase() !== key) return;
+      const m = r.matches || [];
+      const hit = m.find((x) => bareSymbol(String(x.symbol || "")).toUpperCase() === key) || m[0];
+      if (!hit) return;
+      state.newsSymbol = { symbol: bareSymbol(String(hit.symbol || "")).toUpperCase(), exchange: String(hit.exchange || "").toUpperCase(), name: hit.name || "", currency: hit.currency || "" };
+      state.newsQuery = "";
+      render();
+    });
+  }, 500);
 }
 const WATCH_COLS = [{ key: "symbol", label: "Symbol" }, { key: "exchange", label: "Exch", align: "right" }, { key: "last", label: "Last", align: "right" }, { key: "chg", label: "Chg", align: "right" }];
 let _watchNewTimer = 0;
@@ -3936,6 +4011,7 @@ function act(name, arg, ev) {
       clearTimeout(_discOpenTimer); _discOpenTimer = setTimeout(() => { state.discOpening = null; render(); }, 4000);
       break;
     }
+    case "newsKind": state.newsKind = arg.kind === "disc" ? "disc" : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
@@ -4188,7 +4264,7 @@ function bind() {
   document.addEventListener("input", (e) => {
     const t = e.target;
     if (/^tk-/.test(t.id || "")) { tkInputEvent(t); return; }
-    if (t.id === "newsQuery") { state.newsQuery = t.value; render(); return; }
+    if (t.id === "newsQuery") { state.newsQuery = t.value; if (state.newsKind === "disc") newsDiscLookup(t.value); render(); return; }
     if (t.id === "tileQuery") { state.tileQuery = t.value; render(); return; }
     if (t.id === "watchQuery") { state.watchQuery = t.value; extSchedule(t.value); render(); return; }
     if (t.id === "tagInput") { state.tagDraft = t.value; state.tagHi = 0; document.getElementById("tagMenu").innerHTML = tagMenuHtml(); return; }
