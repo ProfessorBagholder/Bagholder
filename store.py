@@ -14,7 +14,7 @@ from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 FX_PAIR = "USDCAD"
 BENCHMARK_SYMBOL = "SP500"
 JOURNAL_META = "journal_v2"
@@ -491,6 +491,22 @@ def _init_schema(conn):
     _ensure_quote_columns(conn)
     _ensure_order_columns(conn)
     _ensure_account_columns(conn)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            body TEXT,
+            extra TEXT,
+            seen_at TEXT,
+            read_at TEXT
+        );
+        """
+    )
+    _ensure_notifications_columns(conn)
     _ensure_filings_columns(conn)
     _migrate_history_sources(conn)
     conn.execute(
@@ -3229,5 +3245,164 @@ def balances_count():
         try:
             _ready(conn)
             return int(conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0])
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# notifications: one row per event the page tells the person about (notify.py)
+# ---------------------------------------------------------------------------
+
+NOTIFICATIONS_KEPT = 200
+
+
+def _ensure_notifications_columns(conn):
+    """A notifications table from the branch's first cut gains the read mark."""
+    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='notifications'").fetchone():
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    if "read_at" not in cols:
+        conn.execute("ALTER TABLE notifications ADD COLUMN read_at TEXT")
+
+
+def _notification(r):
+    if not r:
+        return None
+    try:
+        extra = json.loads(r["extra"] or "{}")
+    except ValueError:
+        extra = {}
+    return {"id": r["id"], "at": r["at"], "kind": r["kind"], "key": r["key"], "title": r["title"], "body": r["body"] or "", "extra": extra,
+            "seenAt": r["seen_at"] or "", "readAt": r["read_at"] or ""}
+
+
+def add_notification(kind, key, title, body, extra=None, seen=False):
+    """One notification row, keyed so the same event is never stored twice; the oldest
+    beyond the last NOTIFICATIONS_KEPT go. A row the server shows itself is stored
+    seen, so no page shows it too. Returns the row as the page reads it, or None
+    when the key is already there."""
+    now = _now_iso()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, _s(kind), _s(key), _s(title), _s(body), json.dumps(extra or {}), now if seen else None),
+            )
+            if not cur.rowcount:
+                conn.commit()
+                return None
+            rid = cur.lastrowid
+            conn.execute(
+                "DELETE FROM notifications WHERE id <= (SELECT id FROM notifications ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                (NOTIFICATIONS_KEPT,),
+            )
+            conn.commit()
+            return _notification(conn.execute("SELECT * FROM notifications WHERE id = ?", (rid,)).fetchone())
+        finally:
+            conn.close()
+
+
+def list_notifications(after_id=0, since="", unseen=False, limit=50, newest=False):
+    """Rows after an id, and from a time when one is given, oldest first (newest first for the history)."""
+    sql, args = "SELECT * FROM notifications WHERE id > ?", [int(after_id or 0)]
+    if since:
+        sql += " AND at >= ?"
+        args.append(_s(since))
+    if unseen:
+        sql += " AND seen_at IS NULL"
+    sql += " ORDER BY id %s LIMIT ?" % ("DESC" if newest else "ASC")
+    args.append(int(limit))
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return [_notification(r) for r in conn.execute(sql, args).fetchall()]
+        finally:
+            conn.close()
+
+
+def mark_notifications_seen(ids):
+    """A page has shown these: no page shows them again. Returns how many were marked."""
+    clean = []
+    for i in ids or []:
+        try:
+            clean.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        return 0
+    now = _now_iso()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            cur = conn.execute(
+                "UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN (%s)" % ",".join("?" * len(clean)),
+                [now] + clean,
+            )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+
+def latest_notification_id():
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            row = conn.execute("SELECT MAX(id) AS m FROM notifications").fetchone()
+            return int(row["m"] or 0) if row else 0
+        finally:
+            conn.close()
+
+
+def unread_notifications():
+    """How many the person has not looked at in the history."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return int(conn.execute("SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL").fetchone()["n"])
+        finally:
+            conn.close()
+
+
+def mark_notifications_read(ids=None):
+    """The person has looked at these (every unread one, when no ids are given). Returns how many were marked."""
+    now = _now_iso()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            if ids is None:
+                cur = conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", (now,))
+            else:
+                clean = []
+                for i in ids or []:
+                    try:
+                        clean.append(int(i))
+                    except (TypeError, ValueError):
+                        continue
+                if not clean:
+                    return 0
+                cur = conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN (%s)" % ",".join("?" * len(clean)), [now] + clean)
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+
+def clear_notifications():
+    """The history emptied; the keys go with it, so an event already told is not told again only while its row stands."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            cur = conn.execute("DELETE FROM notifications")
+            conn.commit()
+            return cur.rowcount
         finally:
             conn.close()

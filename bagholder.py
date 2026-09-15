@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,7 @@ import exposure
 import instruments
 import disclosures
 import enrich
+import notify
 import market
 import news
 import sedar
@@ -688,7 +690,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.30.2"
+APP_VERSION = "1.31.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -719,7 +721,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-14.7"
+PROTOCOL = "2026-09-14.8"
 ENRICH_VERSION = 8   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -2877,6 +2879,7 @@ def run_sync(allow_refresh=True, force_activity=True):
             nav_err_line = "NAV history failed for " + "; ".join(nav_errors)
         with _lock:
             _state["connected"] = True
+            _state["syncFails"] = 0
             _state["email"] = email
             _state["lastSync"] = synced
             _state["capturing"] = False
@@ -2888,20 +2891,45 @@ def run_sync(allow_refresh=True, force_activity=True):
             with _lock:
                 _state["syncing"] = False
             return run_sync(allow_refresh=False, force_activity=force_activity)
-        with _lock:
-            _state["connected"] = False
-            _state["error"] = "Session expired. Connect again."
+        note_session_expired()
         return False
     except Exception as e:
         line = "Sync failed: " + _public_sync_error(e)
         sys.stderr.write(line + "\n")
         with _lock:
             _state["error"] = line
+        note_sync_failed(_public_sync_error(e))
         return False
     finally:
         with _lock:
             _state["syncing"] = False
             _state["syncStep"] = ""
+
+
+SYNC_FAILS_TOLD = 3   # a sync that has failed this many times in a row is told, once, until one succeeds
+
+
+def note_session_expired():
+    """The session is gone: connected reads false, and the person is told once per expiry."""
+    with _lock:
+        was = _state["connected"]
+        _state["connected"] = False
+        _state["error"] = "Session expired. Connect again."
+    if was:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        notify.emit("connection", "session:" + stamp, "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.")
+
+
+def note_sync_failed(reason):
+    """One more failure in a row; the third is told, and a success starts the count over."""
+    with _lock:
+        fails = int(_state.get("syncFails") or 0) + 1
+        _state["syncFails"] = fails
+        if fails == 1:
+            _state["syncFirstFail"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        first = _state.get("syncFirstFail") or ""
+    if fails == SYNC_FAILS_TOLD:
+        notify.emit("connection", "sync:" + first, "Sync failing", reason or "Sync failed.")
 
 
 def boot_session():
@@ -4464,6 +4492,71 @@ WS_PENDING = ("NEW", "PENDING_SUBMISSION", "PENDING_REVIEW", "PENDING_FUND_TRANS
 WS_CANCELLING = ("CANCEL_PENDING",)
 WS_STATUS_MAP = {"FILLED": "filled", "POSTED": "filled", "CANCELLED": "cancelled", "DELETED": "cancelled", "EXPIRED": "expired", "REJECTED": "rejected"}
 LIVE_STATUSES = ("sent", "pending", "cancelling")   # rows still worth asking Wealthsimple about
+
+
+def _qty_words(q):
+    q = _num(q, 0.0) or 0.0
+    return ("%d" % q) if float(q).is_integer() else ("%g" % q)
+
+
+def _price_words(p):
+    """`1.64`; under a dollar a third decimal only when it says something: `0.625`, but `0.54`."""
+    p = _num(p, None)
+    if p is None:
+        return "—"
+    if abs(p) < 1 and round(p, 3) != round(p, 2):
+        return "%.3f" % p
+    return "%.2f" % p
+
+
+def _order_words(o):
+    """The order as the panel's second line says it: `Buy 5 at 1.75 limit`, `Sell 5 stop 1.66`, `Buy 5 at market`."""
+    side = "Buy" if _s(o.get("side")) == "BUY" else "Sell"
+    t = _s(o.get("type"))
+    if t == "MARKET":
+        how = "at market"
+    elif t == "STOP":
+        how = "stop " + _price_words(o.get("stopPrice"))
+    elif t == "STOP_LIMIT":
+        how = "stop " + _price_words(o.get("stopPrice")) + " · limit " + _price_words(o.get("limitPrice"))
+    else:
+        how = "at " + _price_words(o.get("limitPrice")) + " limit"
+    return side + " " + _qty_words(o.get("quantity")) + " " + how
+
+
+def order_notice(before, upd):
+    """What a status read back deserves a notification for: (kind, key, title, body),
+    or None. A fill, partial or whole, is told; a rejection, an expiry, and a cancel
+    not asked for here (a cancel from this app passes through `cancelling` first) are
+    told; a bracket's own leg is told for its fill and its refusal only, its expiries
+    and cancels being the engine's to handle."""
+    was, now = _s(before.get("status")), _s(upd.get("status"))
+    sym = _s(before.get("symbol")) or "?"
+    role = _s(before.get("role")) or "entry"
+    acct = _s(before.get("account"))
+    tail = (" · " + acct) if acct else ""
+    oid = _s(before.get("id"))
+    qty = _num(upd.get("filledQty"), None) or _num(before.get("filledQty"), None) or _num(before.get("quantity"), 0.0)
+    px = _num(upd.get("avgFill"), None) or _num(before.get("avgFill"), None)
+    at = (" at " + _price_words(px)) if px else ""
+    if now == "filled" and was != "filled":
+        did = "Sold " if _s(before.get("side")) == "SELL" else "Bought "
+        title = {"stop": "Stopped out · ", "target": "Target hit · "}.get(role, "Order filled · ") + sym
+        return ("fills", "order:%s:filled" % oid, title, did + _qty_words(qty) + at + tail)
+    if now in ("rejected", "failed") and was not in ("rejected", "failed"):
+        reason = _s(upd.get("error")) or _s(before.get("error"))
+        title = ("Order rejected · " if now == "rejected" else "Order not sent · ") + sym
+        return ("problems", "order:%s:%s" % (oid, now), title, _order_words(before) + ((" · " + reason) if reason else tail))
+    if role in ("stop", "target"):
+        return None
+    if now == "expired" and was != "expired":
+        return ("problems", "order:%s:expired" % oid, "Order expired · " + sym, _order_words(before) + tail)
+    if now == "cancelled" and was not in ("cancelled", "cancelling"):
+        return ("problems", "order:%s:cancelled" % oid, "Order cancelled · " + sym, _order_words(before) + tail)
+    filled = _num(upd.get("filledQty"), 0.0) or 0.0
+    if now in LIVE_STATUSES and filled > (_num(before.get("filledQty"), 0.0) or 0.0) and filled < (_num(before.get("quantity"), 0.0) or 0.0):
+        return ("fills", "order:%s:partial:%s" % (oid, _qty_words(filled)), "Partly filled · " + sym, _qty_words(filled) + " of " + _qty_words(before.get("quantity")) + at + tail)
+    return None
 ORDERS_REFRESH_SEC = 30
 
 
@@ -4697,8 +4790,11 @@ def refresh_orders(only_id=""):
                 name = store.symbol_for_security(o.get("securityId"))
                 if name and name != o.get("symbol"):
                     patch["symbol"] = name
+            notice = order_notice(o, upd)
             store.update_order(o["id"], patch)
             read += 1
+            if notice:
+                notify.emit(*notice)
             if upd.get("status") == "filled":
                 # the order Bagholder was watching filled: book the fill locally now so the
                 # position updates without waiting for the next Wealthsimple sync
@@ -4944,6 +5040,12 @@ def _fail(b, msg):
     attempts = int(b.get("attempts") or 0) + 1
     store.update_bracket(b["id"], {"error": msg, "attempts": attempts})
     sys.stderr.write("bagholder bracket: %s for %s: %s (attempt %d; next in %d s)\n" % (b["id"], b["symbol"], msg, attempts, BRACKET_RETRY_SEC[min(attempts, len(BRACKET_RETRY_SEC)) - 1]))
+    if attempts == 1:
+        # the first refusal is told; the retries are the engine's own business
+        entry = store.get_order(_s(b.get("orderId"))) or {}
+        acct = _s(entry.get("account"))
+        notify.emit("problems", "bracket:%s:fail:%s" % (b["id"], hashlib.md5(msg.encode("utf-8")).hexdigest()[:8]), "Bracket · " + _s(b.get("symbol")),
+                    msg[:1].upper() + msg[1:] + " · trying again in a minute" + ((" · " + acct) if acct else ""))
 
 
 def _arm_step(b, entry):
@@ -5037,7 +5139,15 @@ def _end_bracket(b, outcome, note=""):
     status = "closing" if pending else "done"
     store.update_bracket(b["id"], {"status": status, "outcome": outcome, "error": note, "slOrderId": "", "tpOrderId": ""})
     sys.stderr.write("bagholder bracket: %s for %s: %s%s\n" % (b["id"], b["symbol"], outcome, "; its resting exit is being cancelled" if pending else ""))
+    if outcome not in BRACKET_ENDED_QUIETLY:
+        # not the fill (told by the order) and not the person's own doing: the bracket is off and they should know
+        entry = store.get_order(_s(b.get("orderId"))) or {}
+        acct = _s(entry.get("account"))
+        notify.emit("problems", "bracket:%s:off" % b["id"], "Bracket off · " + _s(b.get("symbol")), outcome[:1].upper() + outcome[1:] + ((" · " + acct) if acct else ""))
     return status
+
+
+BRACKET_ENDED_QUIETLY = ("stopped", "target", "cancelled by the user", "both legs removed", "sold from the ticket")
 
 
 def _closing_step(b):
@@ -5680,7 +5790,7 @@ def _instrument_meta(symbol):
     return (sym, "", "")
 
 
-def _filings_stale(symbol, now=None):
+def _filings_stale(symbol, now=None, hours=None):
     when = store.filings_fetched_at(symbol)
     if not when:
         return True
@@ -5688,7 +5798,110 @@ def _filings_stale(symbol, now=None):
         age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(when.replace("Z", "+00:00"))
     except ValueError:
         return True
-    return age > timedelta(hours=FILINGS_STALE_HOURS)
+    return age > timedelta(hours=FILINGS_STALE_HOURS if hours is None else hours)
+
+
+# --- the Disclosures notification: a sweep of the tickers the book knows, only while that kind is on ---
+
+FILINGS_SWEEP_EVERY_SEC = 300      # how often the sweep looks for work
+FILINGS_SWEEP_AGE_MIN = 10         # a ticker read within this long is left alone; a re-read is one paced request per source
+
+
+def known_filing_symbols(scopes=("held", "watched", "all")):
+    """The tickers to watch for filings, each with what the sources need to match it:
+    "held" is every open position, "watched" every watched listing, "all" every
+    symbol the book has ever traded or held (an option trade counting for its
+    underlying) and every watched listing. A contract or a coin has no filer and is
+    left out."""
+    out, seen = [], set()
+    rows = []
+    base = None
+    if "held" in scopes or "all" in scopes:
+        try:
+            base = model.base_model()
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: the book not read for the sweep: %s\n" % (str(e) or e.__class__.__name__))
+    if base and ("held" in scopes or "all" in scopes):
+        rows.extend(model.held_symbols(base))
+    if base and "all" in scopes:
+        for t in base["trades"]:
+            rec = {"symbol": t.get("symbol"), "exchange": t.get("exchange"), "currency": t.get("currency"), "kind": t.get("kind")}
+            if rec["kind"] == "Options":
+                under = model.underlying_symbol(_s(rec["symbol"]))
+                if not under or under == "—":
+                    continue
+                rec = {"symbol": under, "exchange": rec["exchange"], "currency": rec["currency"], "kind": "Shares"}
+            rows.append(rec)
+    if "watched" in scopes or "all" in scopes:
+        try:
+            rows.extend(store.list_watchlist())
+        except Exception:
+            pass
+    for r in rows:
+        sym = _s(r.get("symbol")).strip().upper()
+        if not sym or sym in seen or " " in sym or _s(r.get("kind")) in ("Options", "Crypto"):
+            continue
+        if not disclosures.providers_for(sym, _s(r.get("exchange")), _s(r.get("currency"))):
+            continue
+        seen.add(sym)
+        out.append({"symbol": sym, "name": _s(r.get("name")) or None, "exchange": _s(r.get("exchange")), "currency": _s(r.get("currency"))})
+    return out
+
+
+def sweep_filings(now=None):
+    """While a Disclosures set is on: each chosen ticker whose list is older than
+    FILINGS_SWEEP_AGE_MIN is read again, at the sources' own pace, and a filing not
+    stored before is told. A ticker read for the first time is a baseline, told
+    nothing. Returns how many tickers had something new."""
+    scopes = notify.disclosure_scopes()
+    if not scopes:
+        return 0
+    told = 0
+    for inst in known_filing_symbols(scopes):
+        sym = inst["symbol"]
+        if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
+            continue
+        first = not store.filings_fetched_at(sym)
+        before = {r.get("id") for r in store.filings(sym)}
+        wrote = refresh_filings(sym, name=inst.get("name"), exchange=inst.get("exchange"), currency=inst.get("currency"))
+        if first or wrote is None or wrote < 0:
+            continue
+        new = [r for r in store.filings(sym) if r.get("id") not in before]
+        if not new:
+            continue
+        told += 1
+        notice = filings_notice(sym, new)
+        notify.emit("disclosures", "filings:%s:%s" % (sym, _s(new[0].get("id"))), notice[0], notice[1], {"symbol": sym})
+    return told
+
+
+def filings_notice(sym, new):
+    """`New disclosure · QNC` / `Material change report · SEDAR+`; several, `3 new disclosures · QNC` with the documents' kinds."""
+    kinds = []
+    for r in new:
+        t = _s(r.get("type")).strip()
+        if t and t not in kinds:
+            kinds.append(t)
+    sources = []
+    for r in new:
+        src = _s(r.get("source")).strip()
+        if src and src not in sources:
+            sources.append(src)
+    names = {"sedar": "SEDAR+", "sec": "SEC EDGAR"}
+    tail = ", ".join(names.get(x, x) for x in sources)
+    head = ", ".join(kinds[:3]) + (" and more" if len(kinds) > 3 else "")
+    body = (head + (" · " if head and tail else "") + tail) or "A new filing."
+    title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
+    return (title, body)
+
+
+def filings_sweep_loop():
+    while True:
+        time.sleep(FILINGS_SWEEP_EVERY_SEC)
+        try:
+            sweep_filings()
+        except Exception as e:
+            sys.stderr.write("bagholder disclosures: sweep failed: %s\n" % (str(e) or e.__class__.__name__))
 
 
 def refresh_filings(symbol, name=None, exchange=None, currency=None):
@@ -5707,7 +5920,9 @@ def refresh_filings(symbol, name=None, exchange=None, currency=None):
             iname = name
         exchange_, currency_ = (exchange if exchange is not None else ex), (currency if currency is not None else cur)
         try:
-            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_)
+            # the issuer's profile, once resolved, goes with every later read: one paced request, no lookup
+            known = store.sedar_profile(sym) or ""
+            result = disclosures.fetch(sym, name=iname, exchange=exchange_, currency=currency_, **({"profile_no": known} if known else {}))
         except Exception as e:
             sys.stderr.write("bagholder disclosures: %s failed: %s\n" % (sym, e))
             return -1
@@ -5945,6 +6160,7 @@ def status_payload():
             "openOrders": open_orders_count(),
             "updating": str(_state.get("updating") or ""),
             "updateError": str(_state.get("updateError") or ""),
+            "notify": notify.status(),
         }
 
 
@@ -6115,6 +6331,8 @@ def check_for_update(now=None):
             raise ValueError("no release")
         record.update({"ok": True, "latest": str(rel.get("tag_name")), "url": str(rel.get("html_url") or record["url"]), "updateAvailable": latest > parse_version(APP_VERSION)})
         record["assets"] = release_assets(rel)
+        if record["updateAvailable"]:
+            notify.emit("updates", "update:" + record["latest"], "Bagholder " + record["latest"] + " is available", "Pull the new image." if UPDATES_OFF else "Update from the header.")
     except Exception:
         pass
     try:
@@ -6506,6 +6724,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _stream_notifications(self):
+        """Server-sent events for the page's notifications: every row as it is made, a
+        comment every few seconds in between, until the page goes. The page brings the
+        last id it showed, or the browser does on a reconnect."""
+        q = parse_qs(self.path.partition("?")[2])
+        after = (q.get("after") or [""])[0].strip() or (self.headers.get("Last-Event-ID") or "").strip()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            for chunk in notify.stream(int(after) if after.isdigit() else None):
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def _read_json(self):
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -6633,6 +6869,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False})
                 return
             self._send(200, orders_payload(kick=True))
+            return
+        if path == "/api/notifications":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            self._send(200, {"ok": True, "settings": notify.status(), "kinds": list(notify.KINDS), "rows": store.list_notifications(limit=50, newest=True), "unread": store.unread_notifications()})
+            return
+        if path == "/api/notifications/stream":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            self._stream_notifications()
             return
         if path == "/api/status":
             if not self._gate():
@@ -6832,6 +7080,29 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             self._send(200, cancel_bracket((body or {}).get("id") if isinstance(body, dict) else ""))
             return
+        if path == "/api/notifications/settings":
+            body = self._read_json()
+            notify.set_settings(body if isinstance(body, dict) else {})
+            self._send(200, {"ok": True, "settings": notify.status()})
+            return
+        if path == "/api/notifications/test":
+            self._read_json()
+            row = notify.test_notification()
+            self._send(200, {"ok": bool(row), "id": row["id"] if row else 0})
+            return
+        if path == "/api/notifications/read":
+            body = self._read_json()
+            ids = (body or {}).get("ids") if isinstance(body, dict) else None
+            self._send(200, {"ok": True, "read": store.mark_notifications_read(ids if isinstance(ids, list) else None)})
+            return
+        if path == "/api/notifications/clear":
+            self._read_json()
+            self._send(200, {"ok": True, "cleared": store.clear_notifications()})
+            return
+        if path == "/api/notifications/seen":
+            body = self._read_json()
+            self._send(200, {"ok": True, "seen": store.mark_notifications_seen((body or {}).get("ids") if isinstance(body, dict) else [])})
+            return
         if path == "/api/orders/refresh":
             self._read_json()
             r = refresh_orders()
@@ -6986,6 +7257,7 @@ def bind_server():
     for port in port_choices():
         try:
             httpd = ThreadingHTTPServer((BIND_HOST, port), Handler)
+            notify.configure(url="http://127.0.0.1:%d/" % port, icon=Path(__file__).resolve().parent / "favicon.png")
             return httpd, port
         except OSError as e:
             last = e
@@ -7021,6 +7293,7 @@ def main():
     threading.Thread(target=market_loop, name="bagholder-market-loop", daemon=True).start()
     threading.Thread(target=archive_loop, name="bagholder-archive", daemon=True).start()
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
+    threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
     # A second instance run for verification (BAGHOLDER_NO_BROWSER=1) must not open

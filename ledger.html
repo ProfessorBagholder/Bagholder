@@ -215,10 +215,20 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .menu button.primary{color:var(--accent-300);font-weight:500}
 .menu button[disabled]{opacity:.4;cursor:default}
 .menu .sep{height:1px;background:rgba(var(--ink-rgb),.1);margin:4px 2px}
+.menu .menu-h{font-size:10.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:rgba(var(--ink-rgb),.5);padding:5px 9px 2px}
 .menu button.open{background:rgba(var(--ink-rgb),var(--hover))}
 .menu .sub{top:0;right:calc(100% + 8px);z-index:6}
 .menu .sub::before{content:"";position:absolute;top:0;bottom:0;left:100%;width:8px}
 .menu .swatch{width:16px;height:16px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1.5px rgba(var(--ink-rgb),.3)}
+.sw{width:28px;height:16px;border-radius:8px;background:rgba(var(--ink-rgb),.18);position:relative;flex:none;transition:background .15s ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s var(--ease-travel)}
+.sw.on{background:var(--accent)}
+.sw.on::after{transform:translateX(12px)}
+.nt-card{cursor:pointer}
+.nt-card:hover{background:rgba(var(--ink-rgb),var(--hover))}
+.nt-card .od-title{font-size:14px;white-space:normal}
+.nt-card .od-line{white-space:normal}
+.nt-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .tabbtn{background:transparent;border:0;cursor:pointer;font:500 13px Inter,system-ui,sans-serif;padding:11px 0;flex:none;white-space:nowrap;color:var(--ink60)}
 .tabbtn:hover{color:var(--accent-300)}
 .tabbtn.on{color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)}
@@ -488,6 +498,10 @@ const state = {
   notice: "",
   confirmOpen: "",
   themeOpen: false,
+  notifyOpen: false,
+  notes: [],           // the notification history, newest first, from /api/notifications and the stream
+  notesLoaded: false,
+  notesOpen: false,
   modal: null,
   importReport: null,
   watch: null,
@@ -495,7 +509,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-14.7"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-14.8"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -742,10 +756,11 @@ function pollStatus() {
   api("GET", "/api/status").then((st) => {
     // while the server restarts (an update) answers are not status payloads: keep asking
     if (!st || !st.protocol) { _pollTimer = setTimeout(pollStatus, 1000); return; }
-    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders]);
+    const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
     applyStatus(st);
-    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders]);
+    const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
     if (before !== after) renderHeaderOnly();
+    notifyListen();
     const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating;
     _pollTimer = setTimeout(pollStatus, fast ? 2500 : 30000);
   });
@@ -803,6 +818,8 @@ function headerHtml() {
     '<span style="font-size:12px;color:var(--ink55)">' + (state.notice ? '<span class="' + (state.noticeKind === "err" ? "status-err" : "") + '">' + esc(state.notice) + "</span>" : syncLine()) + "</span>" +
     '<button class="btn btn-icon btn-secondary" aria-label="Orders" data-act="ordersOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.receipt + '"/></svg>' +
     (state.status.openOrders ? '<span class="od-badge">' + state.status.openOrders + "</span>" : "") + "</button>" +
+    '<button class="btn btn-icon btn-secondary" aria-label="Notifications" data-act="notesOpen" style="position:relative"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.bell + '"/></svg>' +
+    (notesUnread() ? '<span class="od-badge">' + notesUnread() + "</span>" : "") + "</button>" +
     '<div style="position:relative" data-pop="filter">' +
     '<button class="btn btn-icon btn-secondary" aria-label="Filters" data-act="openFields"><svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d="M230.6 49.5A15.8 15.8 0 0 0 216 40H40a16 16 0 0 0-12.6 25.9l68.6 81.1v55a16 16 0 0 0 25.6 13.3l32-21.3a16 16 0 0 0 7.4-13.3v-33.7l68.6-81.1a15.8 15.8 0 0 0 1-15.4Z"/></svg></button>' +
     (filtersActive() ? '<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>' : "") +
@@ -821,6 +838,7 @@ const ICONS = {
   bookmarkFill: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Z",
   x: "M205.66 194.34a8 8 0 0 1-11.32 11.32L128 139.31l-66.34 66.35a8 8 0 0 1-11.32-11.32L116.69 128 50.34 61.66a8 8 0 0 1 11.32-11.32L128 116.69l66.34-66.35a8 8 0 0 1 11.32 11.32L139.31 128Z",
   caretDown: "M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z",
+  bell: "M221.8 175.94C216.25 166.38 208 139.33 208 104a80 80 0 1 0-160 0c0 35.34-8.26 62.38-13.81 71.94A16 16 0 0 0 48 200h40.81a40 40 0 0 0 78.38 0H208a16 16 0 0 0 13.8-24.06ZM128 216a24 24 0 0 1-22.62-16h45.24A24 24 0 0 1 128 216ZM48 184c7.7-13.24 16-43.92 16-80a64 64 0 1 1 128 0c0 36.05 8.28 66.73 16 80Z",
   receipt: "M72 104a8 8 0 0 1 8-8h96a8 8 0 0 1 0 16H80a8 8 0 0 1-8-8Zm8 40h96a8 8 0 0 0 0-16H80a8 8 0 0 0 0 16ZM232 56v152a8 8 0 0 1-11.58 7.15L192 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L128 200.94l-28.42 14.21a8 8 0 0 1-7.16 0L64 200.94l-28.42 14.21A8 8 0 0 1 24 208V56a16 16 0 0 1 16-16h176a16 16 0 0 1 16 16Zm-16 0H40v139.06l20.42-10.22a8 8 0 0 1 7.16 0L96 199.06l28.42-14.22a8 8 0 0 1 7.16 0L160 199.06l28.42-14.22a8 8 0 0 1 7.16 0L216 195.06Z",
   palette: "M186.8 213.8A104.0 104.0 0 1 1 231.8 133.9A46.0 46.0 0 0 0 186.8 213.8ZM214.3 110.6A88.0 88.0 0 1 0 157.7 210.8A62.0 62.0 0 0 1 214.3 110.6ZM84 132m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM104 84m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM152 68m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0ZM176 92m-16 0a16 16 0 1 0 32 0a16 16 0 1 0 -32 0Z",
   caret: "M181.66 133.66l-80 80a8 8 0 0 1-11.32-11.32L164.69 128 90.34 53.66a8 8 0 0 1 11.32-11.32l80 80a8 8 0 0 1 0 11.32Z",
@@ -854,8 +872,127 @@ function menuHtml() {
     '<button data-act="themeMenu"' + (state.themeOpen ? ' class="open"' : "") + ">" + icon("palette") + 'Theme<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">' + esc((THEMES.find((t) => t[0] === state.theme) || THEMES[0])[1]) + "</span>" + icon("caret", ".5") + "</button>" +
     (state.themeOpen ? '<div class="menu sub">' + THEMES.map((t) => '<button data-act="theme" data-arg=\'' + attr({ theme: t[0] }) + "'" + (state.theme === t[0] ? ' class="primary"' : "") + '><span class="swatch" style="background:' + t[2] + '"></span>' + esc(t[1]) + (state.theme === t[0] ? '<span style="margin-left:auto;padding-left:24px">' + icon("check", "1") + "</span>" : "") + "</button>").join("") + "</div>" : "") +
     "</div>" +
+    '<div style="position:relative" data-hover="notify">' +
+    '<button data-act="notifyMenu"' + (state.notifyOpen ? ' class="open"' : "") + ">" + icon("bell") + 'Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">' + esc(notifyWord()) + "</span>" + icon("caret", ".5") + "</button>" +
+    (state.notifyOpen ? notifyMenuHtml() : "") +
+    "</div>" +
     '<div class="sep"></div>' + item("signout", "Disconnect", "disconnect", s.connected || s.email ? { style: "color:var(--neg)" } : { disabled: true }) +
     "</div>";
+}
+// The notification history: every row the server made, newest first, behind the bell in the header; unread
+// ones counted on its badge and marked in the list, read when the panel closes.
+function notesUnread() { return state.notesLoaded ? state.notes.filter((n) => !n.readAt).length : ((state.status.notify && state.status.notify.unread) || 0); }
+function notesPanelHtml() {
+  const card = (n) => '<div class="od-card nt-card" data-act="noteOpen" data-arg=\'' + attr({ id: n.id }) + "'>" +
+    '<div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">' + (n.readAt ? "" : '<span class="nt-dot"></span>') + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(n.title) + "</span></span></div>" +
+    (n.body ? '<div class="od-row2"><span class="od-line">' + esc(n.body) + "</span></div>" : "") +
+    '<div class="od-foot"><span class="od-when">' + esc(orderWhenWord(n.at)) + "</span></div></div>";
+  return '<div id="ntWrap"><div class="tk-scrim" data-act="notesClose"></div><div class="tk" role="dialog" aria-label="Notifications">' +
+    '<div class="tk-hd"><span class="tk-title">Notifications</span><button class="tk-x" aria-label="Close" data-act="notesClose"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button></div>' +
+    '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
+    '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
+}
+function renderNotes() {
+  const old = document.getElementById("ntWrap");
+  if (!state.notesOpen) { if (old) old.remove(); return; }
+  replacePanel("ntWrap", notesPanelHtml());
+}
+function openNotes() { state.notesOpen = true; state.menuOpen = false; state.picker = null; render(); }
+function closeNotes() {
+  // closing is having looked: every row reads read, the badge clears
+  state.notesOpen = false;
+  if (state.notes.some((n) => !n.readAt)) { const now = new Date().toISOString(); state.notes.forEach((n) => { if (!n.readAt) n.readAt = now; }); api("POST", "/api/notifications/read", {}); }
+  render();
+}
+function notesClear() { state.notes = []; api("POST", "/api/notifications/clear", {}); render(); }
+function noteOpen(id) {
+  const n = state.notes.find((x) => x.id === id); if (!n) return;
+  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); }
+  else if (n.kind === "disclosures" && n.extra && n.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === n.extra.symbol); if (p) { closeNotes(); openHolding(p.id); } }
+}
+function notifyLoad() {
+  api("GET", "/api/notifications").then((r) => {
+    if (!r || !r.ok) return;
+    state.notes = r.rows || []; state.notesLoaded = true;
+    if (r.settings) state.status.notify = r.settings;
+    renderHeaderOnly(); renderNotes(); notifyListen();
+  });
+}
+function notifyArrive(r) {
+  if (!r || !r.id || state.notes.some((n) => n.id === r.id)) return;
+  state.notes.unshift(r); if (state.notes.length > 200) state.notes.length = 200;
+  if (state.notesOpen) { r.readAt = new Date().toISOString(); api("POST", "/api/notifications/read", { ids: [r.id] }); }
+  if (!notifyNative() && !r.seenAt && notifyState() === "granted") notifyShow(r);
+  renderHeaderOnly(); renderNotes();
+}
+// Notifications: the server tells, the browser shows. The kinds are the server's settings; whether this
+// browser may show them is its own permission, asked on the first click (browsers ask only on a click).
+const NOTIFY_KINDS = [["fills", "Fills"], ["problems", "Order problems"], ["connection", "Connection"], ["updates", "Updates"]];
+// the Disclosures kind is chosen by the tickers it covers: a set per switch, under its heading
+const NOTIFY_SCOPES = [["disclosuresHeld", "Holdings"], ["disclosuresWatched", "Watchlist"], ["disclosuresAll", "All tickers"]];
+// the server posts them itself where the computer it runs on has a desktop ("native"); only where it has none is
+// this browser asked to show them, under its own permission
+function notifyNative() { return !!(state.status.notify && state.status.notify.native); }
+function notifyState() { return notifyNative() ? "native" : "Notification" in window ? Notification.permission : "unavailable"; }   // native | granted | denied | default | unavailable
+function notifyOn(kind) { const st = notifyState(); return (st === "native" || st === "granted") && !!(state.status.notify && state.status.notify[kind]); }
+function notifyWord() {
+  const st = notifyState();
+  return st === "unavailable" ? "Unavailable" : st === "denied" ? "Blocked" : NOTIFY_KINDS.concat(NOTIFY_SCOPES).some((k) => notifyOn(k[0])) ? "On" : "Off";
+}
+function notifyMenuHtml() {
+  const st = notifyState(), dead = st === "unavailable" || st === "denied";
+  const row = (k) => '<button data-act="notifyToggle" data-arg=\'' + attr({ kind: k[0] }) + "'" + (dead ? " disabled" : "") + ">" + esc(k[1]) + '<span class="sw' + (notifyOn(k[0]) ? " on" : "") + '" style="margin-left:auto"></span></button>';
+  return '<div class="menu sub">' + NOTIFY_KINDS.map(row).join("") +
+    '<div class="sep"></div><div class="menu-h">Disclosures</div>' + NOTIFY_SCOPES.map(row).join("") +
+    '<div class="sep"></div><button data-act="notifyTest"' + (dead ? " disabled" : "") + ">" + icon("bell") + "Send a test notification</button></div>";
+}
+function notifyAsk() {
+  // the permission prompt, whichever way this browser answers it (a promise, or the older callback)
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = (r) => { if (!done) { done = true; resolve(r === "granted"); } };
+    try { const p = Notification.requestPermission(settle); if (p && p.then) p.then(settle); } catch (e) { settle(""); }
+  });
+}
+function notifySave(patch) {
+  state.status.notify = Object.assign({}, state.status.notify || {}, patch);
+  renderHeaderOnly();
+  notifyListen();
+  api("POST", "/api/notifications/settings", patch).then((r) => { if (r && r.ok) { state.status.notify = r.settings; renderHeaderOnly(); } });
+}
+function notifyToggle(kind) {
+  const st = notifyState();
+  if (st === "unavailable" || st === "denied") return;
+  if (st === "native") { notifySave({ [kind]: !notifyOn(kind) }); return; }
+  if (st === "default") { notifyAsk().then((ok) => { if (ok) { notifyListen(); notifySave({ [kind]: true }); } else renderHeaderOnly(); }); return; }
+  notifySave({ [kind]: !notifyOn(kind) });
+}
+function notifyTest() {
+  const st = notifyState();
+  if (st === "unavailable" || st === "denied") return;
+  const send = () => { notifyListen(); api("POST", "/api/notifications/test", {}); };
+  if (st === "default") notifyAsk().then((ok) => { renderHeaderOnly(); if (ok) send(); }); else send();
+}
+let _notifyStream = null;
+function notifyListen() {
+  // the stream from the server, opened once the history is loaded, carries every row from then on; the browser reconnects it itself
+  if (_notifyStream || !state.notesLoaded || !window.EventSource) return;
+  const after = state.notes.reduce((m, n) => Math.max(m, n.id || 0), 0);
+  _notifyStream = new EventSource("/api/notifications/stream?after=" + after);
+  _notifyStream.onmessage = (e) => { let r = null; try { r = JSON.parse(e.data); } catch (err) {} if (r && r.id) notifyArrive(r); };
+}
+function notifyShow(r) {
+  // where the page is the channel: the banner, through the browser, once
+  r.seenAt = new Date().toISOString();
+  api("POST", "/api/notifications/seen", { ids: [r.id] });
+  let n;
+  try { n = new Notification(r.title, { body: r.body || "", icon: "favicon.png", tag: "bh-" + r.id }); } catch (e) { return; }
+  n.onclick = () => {
+    window.focus();
+    if (r.kind === "fills" || r.kind === "problems") { state.ordersOpen = true; state.ordersTab = r.kind === "fills" ? "filled" : "cancelled"; state.menuOpen = false; render(); loadOrders(); }
+    else if (r.kind === "disclosures" && r.extra && r.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === r.extra.symbol); if (p) openHolding(p.id); }
+    n.close();
+  };
 }
 function confirmDialogHtml() {
   if (/^bracket:/.test(state.confirmOpen)) {
@@ -3425,12 +3562,12 @@ function render() {
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
-  const standing = ["tkWrap", "odWrap", "confirmDlg"].filter((id) => document.getElementById(id));
+  const standing = ["tkWrap", "odWrap", "ntWrap", "confirmDlg"].filter((id) => document.getElementById(id));
   const leavingSkeleton = document.getElementById("pageSkel");
-  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
+  root.innerHTML = headerHtml() + tabsHtml() + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
   if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
-  document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen));   // the wheel over a panel must not move the page behind it
+  document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);
   // the filter popover's search box keeps focus across a redraw (a toggled value reloads the model)
   if (focusId === "valueQuery" || focusId === "searchInput" || focusId === "newsQuery" || focusId === "tileQuery" || focusId === "watchQuery") { const vq = document.getElementById(focusId); if (vq) { vq.focus(); vq.setSelectionRange(vq.value.length, vq.value.length); } }
@@ -3721,8 +3858,11 @@ function act(name, arg, ev) {
     case "preset": setFilters({ preset: f.preset === arg.preset ? "all" : arg.preset, years: [], from: "", to: "" }); break;
     case "rangeOp": f.ranges[arg.key].op = arg.op; if (f.ranges[arg.key].v != null) setFilters({}); else render(); break;
     case "rangeStep": f.ranges[arg.key].v = String(f.ranges[arg.key].v) === String(arg.v) ? null : arg.v; setFilters({}); break;
-    case "menu": state.menuOpen = !state.menuOpen; state.themeOpen = false; state.picker = null; render(); break;
-    case "themeMenu": state.themeOpen = !state.themeOpen; render(); break;
+    case "menu": state.menuOpen = !state.menuOpen; state.themeOpen = false; state.notifyOpen = false; state.picker = null; render(); break;
+    case "themeMenu": state.themeOpen = !state.themeOpen; state.notifyOpen = false; render(); break;
+    case "notifyMenu": state.notifyOpen = !state.notifyOpen; state.themeOpen = false; render(); break;
+    case "notifyToggle": notifyToggle(arg.kind); break;
+    case "notifyTest": notifyTest(); break;
     case "sync": syncNow(); break;
     case "connect": connect(); break;
     case "loginClick": { const p = loginFramePoint(ev); if (p) loginSend({ kind: "click", x: p.x, y: p.y }); break; }
@@ -3742,6 +3882,10 @@ function act(name, arg, ev) {
     case "cancelBracketNow": cancelBracketNow(arg.id); break;
     case "ordersOpen": openOrders(); break;
     case "ordersClose": closeOrders(); break;
+    case "notesOpen": openNotes(); break;
+    case "notesClose": closeNotes(); break;
+    case "notesClear": notesClear(); break;
+    case "noteOpen": noteOpen(arg.id); break;
     case "ordersTab": delete _keptScroll.orders; state.ordersTab = arg.tab; state.orderEdit = null; state.bracketEdit = null; renderOrders(); break;
     case "orderEdit": state.orderEdit = { id: arg.id, error: "" }; state.bracketEdit = null; renderOrders(); { const q = document.getElementById("od-qty"); if (q) q.focus(); } break;
     case "orderEditCancel": state.orderEdit = null; renderOrders(); break;
@@ -3844,6 +3988,9 @@ function bind() {
       e.preventDefault();
       if (state.ordersOpen) closeOrders(); else openOrders();
       return;
+    }
+    if (state.notesOpen && !state.confirmOpen && !state.picker && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
+      if (e.key === "Escape") { e.preventDefault(); closeNotes(); return; }
     }
     if (state.ordersOpen && !state.confirmOpen && !state.picker && !((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
       // the orders panel has the keyboard (⌘K and an open filter popover pass through): Esc closes an
@@ -3986,11 +4133,13 @@ function bind() {
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
     if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (h.dataset.hover === "ppie" || h.dataset.hover === "xsec" || h.dataset.hover === "xreg") donutHover({ target: document.body }, h.dataset.hover);
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
+    else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
   // the Theme row opens its list on hover, as a submenu does; the click stays for touch
   document.addEventListener("mouseover", (e) => {
-    const h = e.target.closest && e.target.closest('[data-hover="theme"]');
-    if (h && !state.themeOpen) { state.themeOpen = true; renderHeaderOnly(); }
+    const h = e.target.closest && e.target.closest('[data-hover="theme"],[data-hover="notify"]');
+    if (h && h.dataset.hover === "theme" && !state.themeOpen) { state.themeOpen = true; state.notifyOpen = false; renderHeaderOnly(); }
+    else if (h && h.dataset.hover === "notify" && !state.notifyOpen) { state.notifyOpen = true; state.themeOpen = false; renderHeaderOnly(); }
   });
   const _scrollTimers = new WeakMap();
   document.addEventListener("scroll", (e) => {
@@ -4013,6 +4162,7 @@ function boot() {
   state.sel = h.sel;
   bind();
   render();
+  notifyLoad();
   loadModel();
   pollStatus();
 }
