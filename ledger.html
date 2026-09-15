@@ -89,7 +89,8 @@ textarea.input{resize:none;line-height:1.5}
 .heat-hd{position:absolute;top:0;left:0;right:0;height:19px;display:flex;align-items:center;gap:6px;padding:0 7px;font:500 11px var(--font);letter-spacing:.04em;color:var(--ink60);white-space:nowrap;overflow:hidden}
 .heat-hl{min-width:0;overflow:hidden;text-overflow:ellipsis}   /* on a narrow block the name gives way; the change never does */
 .heat-hd .num{flex:none}
-#heatTip{z-index:5}
+#cutTip{position:fixed;z-index:30;max-width:min(460px,90vw);white-space:normal;pointer-events:none}
+#cutTip .tv{font-size:12.5px;font-weight:500;line-height:1.35}
 .heat-tile{position:absolute;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;overflow:hidden;color:#f2f2f6}
 .heat-tile.go{cursor:pointer}
 .heat-tile:hover{outline:1px solid rgba(233,233,237,.55);outline-offset:-1px;z-index:2}
@@ -2918,23 +2919,45 @@ function heatmapLayout(tiles, W, H) {
 // universe or the sizer moves a cell to its new slot instead of swapping the
 // text inside a stationary box. A node that is re-created has no previous
 // geometry to travel from and its transition parks at the start value.
-// a sector's name cut by its block, or a symbol cut by its tile, shows the whole on hover in the charts' tooltip;
-// what fits has no hover
-function heatTipShow(el) {
-  const box = document.getElementById("heatBox"), tip = document.getElementById("heatTip"); if (!box || !tip) return;
-  if (el.scrollWidth <= el.clientWidth) { tip.hidden = true; return; }
-  const tile = el.closest(".heat-tile");
-  const full = tile ? (tile.dataset.sym || el.textContent) : el.textContent, under = tile ? (tile.dataset.name || "") : "";
-  tip.querySelector(".tv").textContent = full;
+// Text the page had to cut reads in full on hover, wherever it was cut: one tooltip, in the charts' own
+// style, for the heatmap's blocks and tiles, the watchlist's names, a headline, an order's listing, a
+// suggestion's name. Nothing is marked up for it — an element qualifies by being cut, which is exactly
+// when the reader cannot read it — and text that fits, or that a click un-clips, has no hover.
+function cutTipNode() {
+  let tip = document.getElementById("cutTip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.id = "cutTip"; tip.className = "tip"; tip.hidden = true;
+    tip.innerHTML = '<div class="tv"></div><div class="tl"></div>';
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+// what the reader cannot read: cut by an ellipsis, and actually overflowing
+function cutElement(node) {
+  for (let el = node; el && el !== document.body; el = el.parentElement) {
+    if (!(el instanceof Element) || !el.textContent.trim()) continue;
+    const st = getComputedStyle(el);
+    if (st.textOverflow !== "ellipsis" || st.overflowX === "visible") continue;
+    return el.scrollWidth > el.clientWidth + 1 ? el : null;
+  }
+  return null;
+}
+function cutTipShow(el) {
+  const tip = cutTipNode();
+  tip.querySelector(".tv").textContent = el.textContent.trim();
+  // a tile says what it is under its symbol, the one line a reader cannot get at any other way
+  const sub = (el.closest("[data-tip-sub]") || {}).dataset;
+  const under = sub ? sub.tipSub || "" : "";
   const tl = tip.querySelector(".tl"); tl.textContent = under; tl.hidden = !under;
   tip.hidden = false;
-  const b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
-  const cx = r.left + r.width / 2 - b.left, above = r.top - b.top - tip.offsetHeight - 6;
-  tip.style.left = Math.max(4, Math.min(b.width - 4, cx)) + "px";
-  tip.style.top = (above >= 0 ? above : r.bottom - b.top + 6) + "px";
-  tip.style.transform = "translateX(" + (cx < 70 ? "0%" : cx > b.width - 70 ? "-100%" : "-50%") + ")";
+  const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+  const left = Math.max(6, Math.min(window.innerWidth - w - 6, r.left + r.width / 2 - w / 2));
+  const above = r.top - h - 6;
+  tip.style.left = left + "px";
+  tip.style.top = (above >= 6 ? above : Math.min(window.innerHeight - h - 6, r.bottom + 6)) + "px";
 }
-function heatTipHide() { const tip = document.getElementById("heatTip"); if (tip) tip.hidden = true; }
+function cutTipHide() { const tip = document.getElementById("cutTip"); if (tip) tip.hidden = true; }
 function heatNode(cls) {
   const el = document.createElement("div");
   el.className = cls;
@@ -2990,12 +3013,10 @@ function mountHeatmap() {
     const sym = el.children[0], chg = el.children[1];
     sym.style.fontSize = (c.big ? 16 : c.mid ? 13 : 11) + "px";
     sym.textContent = c.other ? c.symbol : bareSymbol(c.symbol);
-    el.dataset.sym = sym.textContent; el.dataset.name = c.name || "";
+    el.dataset.sym = sym.textContent; el.dataset.tipSub = c.name || "";
     chg.hidden = !c.mid;
     if (c.mid) { chg.style.fontSize = (c.big ? 12 : 11) + "px"; chg.textContent = signedPct(c.percentChange); }
   });
-  if (!box.querySelector("#heatTip")) { const tip = heatNode("tip"); tip.id = "heatTip"; tip.hidden = true; tip.dataset.key = "tip"; tip.innerHTML = '<div class="tv"></div><div class="tl"></div>'; box.appendChild(tip); }
-  seen.add("tip");
   [...box.children].forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
 }
 function cssKey(key) {
@@ -4431,8 +4452,9 @@ function bind() {
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
     else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
-  document.addEventListener("mouseover", (e) => { const cut = e.target.closest && e.target.closest(".heat-hl, .heat-sym"); if (cut) heatTipShow(cut); });
-  document.addEventListener("mouseout", (e) => { if (e.target.closest && e.target.closest(".heat-hl, .heat-sym")) heatTipHide(); });
+  document.addEventListener("mouseover", (e) => { const cut = cutElement(e.target); if (cut) cutTipShow(cut); else cutTipHide(); });
+  document.addEventListener("mouseout", (e) => { if (!e.relatedTarget || !cutElement(e.relatedTarget)) cutTipHide(); });
+  window.addEventListener("scroll", cutTipHide, true);
   // the Theme row opens its list on hover, as a submenu does; the click stays for touch
   document.addEventListener("mouseover", (e) => {
     const h = e.target.closest && e.target.closest('[data-hover="theme"],[data-hover="notify"]');
