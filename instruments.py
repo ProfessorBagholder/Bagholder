@@ -4,7 +4,7 @@ it under. Nothing here is traded from the app; the directory exists so ⌘K find
 `NDX` or `VIX` and the watchlist can quote them."""
 from __future__ import annotations
 
-KIND_LABEL = {"Index": "Indices", "Commodity": "Commodities", "Rate": "Rates", "Currency": "Currencies"}
+KIND_LABEL = {"Index": "Indices", "Future": "Futures", "Commodity": "Commodities", "Rate": "Rates", "Currency": "Currencies"}
 
 # symbol, name, kind, venue shown, currency, Yahoo code, aliases (matched whole, case-insensitively)
 INSTRUMENTS = [
@@ -21,6 +21,11 @@ INSTRUMENTS = [
     ("HSI", "Hang Seng", "Index", "Index", "HKD", "^HSI", ("HANG SENG",)),
     ("STOXX50E", "Euro Stoxx 50", "Index", "Index", "EUR", "^STOXX50E", ("STOXX", "EURO STOXX")),
     ("DXY", "US Dollar Index", "Index", "Index", "USD", "DX-Y.NYB", ("DOLLAR INDEX",)),
+    # the equity index futures trade nearly around the clock: the read on the market after hours
+    ("ES", "S&P 500 E-mini futures", "Future", "CME", "USD", "ES=F", ("ES=F", "S&P FUTURES", "S&P 500 FUTURES", "SPX FUTURES", "ES FUTURES", "FUTURES")),
+    ("NQ", "Nasdaq 100 E-mini futures", "Future", "CME", "USD", "NQ=F", ("NQ=F", "NASDAQ FUTURES", "NASDAQ 100 FUTURES", "NQ FUTURES")),
+    ("YM", "Dow E-mini futures", "Future", "CBOT", "USD", "YM=F", ("YM=F", "DOW FUTURES", "YM FUTURES")),
+    ("RTY", "Russell 2000 E-mini futures", "Future", "CME", "USD", "RTY=F", ("RTY=F", "RUSSELL FUTURES", "RTY FUTURES")),
     ("CL", "Crude Oil (WTI)", "Commodity", "NYMEX", "USD", "CL=F", ("WTI", "CRUDE", "OIL", "CRUDE OIL")),
     ("BZ", "Brent Crude Oil", "Commodity", "ICE", "USD", "BZ=F", ("BRENT",)),
     ("NG", "Natural Gas", "Commodity", "NYMEX", "USD", "NG=F", ("NATGAS", "NATURAL GAS", "GAS")),
