@@ -690,7 +690,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.35.0"
+APP_VERSION = "1.36.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5753,7 +5753,7 @@ def news_listings():
 def refresh_news():
     """The wires for every listing whose news is older than fifteen minutes. Never raises."""
     try:
-        n = news.refresh(news_listings(), _ssl_context())
+        n = news.refresh(news_listings(), _ssl_context(), on_new=note_wire_releases)
         if n:
             model.invalidate()
         return n
@@ -5860,11 +5860,12 @@ def sweep_filings(now=None):
     FILINGS_SWEEP_AGE_MIN is read again, at the sources' own pace, and a filing not
     stored before is told. A ticker read for the first time is a baseline, told
     nothing. Returns how many tickers had something new."""
-    scopes = notify.disclosure_scopes()
-    if not scopes:
+    scopes, rel_scopes = notify.disclosure_scopes(), notify.release_scopes()
+    if not scopes and not rel_scopes:
         return 0
     told = 0
-    for inst in known_filing_symbols(scopes):
+    disc_syms = {i["symbol"] for i in known_filing_symbols(scopes)} if scopes else set()
+    for inst in known_filing_symbols(scopes | rel_scopes):
         sym = inst["symbol"]
         if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
             continue
@@ -5881,10 +5882,20 @@ def sweep_filings(now=None):
             # nothing the list held a moment ago is in it now: a list re-keyed or re-read from
             # scratch, not thirty filings in a morning; the read is a baseline again
             continue
-        told += 1
-        notice = filings_notice(sym, new)
-        digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in new)).encode("utf-8")).hexdigest()[:12]
-        notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1], {"symbol": sym})
+        # a filed news release is a release, not another filing: it is the Releases kind's to tell, and
+        # only where no wire carried it, since the wire told it first and the record is the same release
+        rel = [r for r in new if is_news_release(r)]
+        rest = [r for r in new if not is_news_release(r)]
+        said = False
+        if rel and in_release_scope(sym, rel_scopes) and not store.has_wire_release(sym):
+            t, b = release_notice(sym, rel)
+            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, {"symbol": sym})) or said
+        if rest and sym in disc_syms:
+            notice = filings_notice(sym, rest)
+            digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in rest)).encode("utf-8")).hexdigest()[:12]
+            said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1], {"symbol": sym})) or said
+        if said:
+            told += 1
     return told
 
 
@@ -5936,6 +5947,62 @@ def filings_feed(scope, limit=200):
             rows.append(r)
     rows.sort(key=lambda r: _s(r.get("date")), reverse=True)
     return {"ok": True, "scope": key, "filings": rows[:max(1, int(limit))]}
+
+
+NEWS_RELEASE_DOC = re.compile(r"news release|press release", re.I)   # a current report (8-K, 6-K) is a filing, not a release
+
+
+def is_news_release(filing):
+    """A filed document that is the company's own press release (§4, Disclosures)."""
+    return bool(NEWS_RELEASE_DOC.search(_s((filing or {}).get("type"))))
+
+
+def in_release_scope(sym, scopes=None):
+    """Whether a ticker is in a set the Releases kind covers. Unlike a filing, a release needs no
+    regulator: a fund's wire release counts, so the sets are read from the book itself."""
+    scopes = notify.release_scopes() if scopes is None else scopes
+    if not scopes:
+        return False
+    if "all" in scopes:
+        return True
+    sym = _s(sym).strip().upper()
+    same = lambda s: (market.tmx_symbol(s) or _s(s)).strip().upper() == sym
+    try:
+        if "held" in scopes and any(same(p["symbol"]) for p in model.base_model()["positions"]):
+            return True
+    except Exception:
+        pass
+    if "watched" in scopes:
+        try:
+            return any(same(w["symbol"]) for w in store.list_watchlist())
+        except Exception:
+            return False
+    return False
+
+
+def release_notice(sym, rows):
+    """`Press release · QNC` and the headline; several, `3 press releases · QNC` and the newest."""
+    newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)
+    head = _s(newest[0].get("headline") or newest[0].get("subject") or newest[0].get("type")) or "A new release."
+    title = ("Press release · " if len(rows) == 1 else "%d press releases · " % len(rows)) + sym
+    return (title, head)
+
+
+def _release_key(sym, rows):
+    return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(_s(r.get("id")) for r in rows)).encode("utf-8")).hexdigest()[:12])
+
+
+def note_wire_releases(symbol, exchange, rows):
+    """The items a listing's wire has just brought: the press releases among them are told, once."""
+    scopes = notify.release_scopes()
+    if not scopes:
+        return
+    rel = [r for r in rows if _s(r.get("kind")) == "release"]
+    sym = (market.tmx_symbol(symbol) or _s(symbol)).strip().upper()
+    if not rel or not in_release_scope(sym, scopes):
+        return
+    title, body = release_notice(sym, rel)
+    notify.emit("releases", _release_key(sym, rel), title, body, {"symbol": sym})
 
 
 def filings_notice(sym, new):

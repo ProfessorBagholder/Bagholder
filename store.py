@@ -2972,6 +2972,34 @@ def replace_news(symbol, exchange, source, rows, now=None):
             conn.close()
 
 
+def news_ids(symbol, exchange):
+    """The ids a listing's stored items carry, to tell a wire's new items from the ones it had."""
+    sym, ex = _s(symbol).strip().upper(), _s(exchange).strip().upper()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return {r["id"] for r in conn.execute("SELECT id FROM news WHERE symbol = ? AND exchange = ?", (sym, ex)).fetchall()}
+        finally:
+            conn.close()
+
+
+def has_wire_release(symbol):
+    """Whether a wire has carried a release for this ticker, under any venue and any form the book
+    writes it (`QNC`, `QNC.TO`): where one has, the record's copy of the same release is not told again."""
+    sym = _s(symbol).strip().upper()
+    if not sym:
+        return False
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            row = conn.execute("SELECT 1 FROM news WHERE kind = 'release' AND (symbol = ? OR symbol LIKE ?) LIMIT 1", (sym, sym + ".%")).fetchone()
+            return bool(row)
+        finally:
+            conn.close()
+
+
 def news_fetched_at():
     """{symbol@venue: when its wire was last read}."""
     with _lock:

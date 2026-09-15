@@ -17,10 +17,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bagholder  # noqa: E402
 import disclosures  # noqa: E402
 import model  # noqa: E402
+import news  # noqa: E402
 import notify  # noqa: E402
 import store  # noqa: E402
 
-OFF = {"fills": False, "problems": False, "connection": False, "updates": False, "disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False}
+OFF = {"fills": False, "problems": False, "connection": False, "updates": False,
+       "releasesHeld": False, "releasesWatched": False, "releasesAll": False,
+       "disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False}
 
 ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"}
 
@@ -331,8 +334,8 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
         self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
             ("disclosures", "New disclosure · QNC", "8-K · SEC EDGAR", {"symbol": "QNC"}),
-            ("disclosures", "2 new disclosures · SHOP", "News release, Material change report · SEDAR+", {"symbol": "SHOP"}),
-        ])
+            ("disclosures", "New disclosure · SHOP", "Material change report · SEDAR+", {"symbol": "SHOP"}),
+        ], "a filed news release is the Releases kind's to tell, and that kind is off here")
         notify.set_settings({"disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False})
         with mock.patch.object(bagholder, "known_filing_symbols", side_effect=AssertionError("swept while off")):
             self.assertEqual(bagholder.sweep_filings(), 0, "every set off: the pipeline stays on demand")
@@ -400,6 +403,60 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.sweep_filings(now=later(124)), 1)
             self.assertEqual(bagholder.sweep_filings(now=later(155)), 0, "told once")
         self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()], [("New disclosure · CH", "Material change report · SEDAR+")])
+
+
+    def test_a_wires_release_is_told_and_a_first_read_of_a_listing_is_not(self):
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "QNC", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        wire = {"rows": [{"id": "tmx:1", "headline": "Quantum eMotion Reports Record Quarter", "source": "TMX Newsfile", "url": "u", "publishedAt": "2026-09-15T12:00:00Z", "kind": "release"},
+                         {"id": "tmx:2", "headline": "Why QNC is up", "source": "The Motley Fool", "url": "u", "publishedAt": "2026-09-15T12:00:00Z", "kind": "story"}]}
+        listings = [("QNC", "TSX-V", "CAD")]
+        with mock.patch.object(model, "base_model", return_value=base), mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(bagholder, "news_listings", return_value=listings), mock.patch.object(bagholder, "_ssl_context", return_value=None):
+            bagholder.refresh_news()                      # the listing's first read: what it already carries, not news
+            self.assertEqual(store.list_notifications(), [])
+            wire["rows"].append({"id": "tmx:3", "headline": "Quantum eMotion Wins Certification", "source": "GlobeNewswire", "url": "u", "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"})
+            with mock.patch.object(news, "stale", return_value=listings):
+                bagholder.refresh_news()
+                rows = store.list_notifications()
+                bagholder.refresh_news()               # the same release again: told once
+        self.assertEqual([(r["kind"], r["title"], r["body"]) for r in rows],
+                         [("releases", "Press release · QNC", "Quantum eMotion Wins Certification")], "the wire's release, not the story beside it")
+        self.assertEqual(len(store.list_notifications()), 1)
+
+    def test_a_release_outside_the_chosen_sets_is_not_told(self):
+        notify.set_settings({"releasesWatched": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "QNC", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        with mock.patch.object(model, "base_model", return_value=base), mock.patch.object(store, "list_watchlist", return_value=[]):
+            self.assertFalse(bagholder.in_release_scope("QNC"), "held, while only the watchlist is chosen")
+            bagholder.note_wire_releases("QNC", "TSX-V", [{"id": "tmx:9", "headline": "h", "kind": "release", "publishedAt": "2026-09-15T13:00:00Z"}])
+        self.assertEqual(store.list_notifications(), [])
+        notify.set_settings({"releasesHeld": True})
+        with mock.patch.object(model, "base_model", return_value=base):
+            self.assertTrue(bagholder.in_release_scope("QNC"))
+            bagholder.note_wire_releases("QNC", "TSX-V", [{"id": "tmx:9", "headline": "h", "kind": "release", "publishedAt": "2026-09-15T13:00:00Z"}])
+        self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · QNC"])
+
+    def test_a_filed_release_is_told_only_where_no_wire_carried_one(self):
+        notify.set_settings({"releasesWatched": True, "disclosuresWatched": True})
+        watched = [{"symbol": "BIGG", "exchange": "CSE", "name": "BIGG", "currency": "CAD"}]
+        docs = {"BIGG": [{"id": "sedar:1", "source": "sedar", "type": "News release", "title": "x", "date": "2026-09-10"}]}
+        def fake_refresh(sym, name=None, exchange=None, currency=None):
+            store.replace_filings(sym, "sedar", docs[sym]); store.mark_filings_fetched(sym); return len(docs[sym])
+        later = lambda m: datetime.now(timezone.utc) + timedelta(minutes=m)
+        with mock.patch.object(model, "base_model", return_value={"today": "2026-09-15", "positions": [], "trades": []}), \
+             mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]), \
+             mock.patch.object(bagholder, "refresh_filings", side_effect=fake_refresh):
+            self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
+            docs["BIGG"].append({"id": "sedar:2", "source": "sedar", "type": "News release", "title": "y", "date": "2026-09-15"})
+            self.assertEqual(bagholder.sweep_filings(now=later(31)), 1)
+            told = store.list_notifications()
+            # the same release once a wire has carried one for this ticker: the wire told it, the record does not again
+            docs["BIGG"].append({"id": "sedar:3", "source": "sedar", "type": "News release", "title": "z", "date": "2026-09-15"})
+            store.replace_news("BIGG", "CSE", "tmx", [{"id": "tmx:1", "headline": "z", "source": "TMX Newsfile", "url": "u", "publishedAt": "2026-09-15T00:00:00Z", "kind": "release"}])
+            self.assertEqual(bagholder.sweep_filings(now=later(62)), 0)
+        self.assertEqual([(r["kind"], r["title"]) for r in told], [("releases", "Press release · BIGG")],
+                         "a ticker no wire carries is told from the record, under Releases and not Disclosures")
 
 
 if __name__ == "__main__":

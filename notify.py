@@ -32,10 +32,11 @@ from pathlib import Path
 
 import store
 
-KINDS = ("fills", "problems", "connection", "updates", "disclosures")
-# the Disclosures kind is chosen by the tickers it covers, a set per switch
+KINDS = ("fills", "problems", "connection", "updates", "releases", "disclosures")
+# the Releases and Disclosures kinds are each chosen by the tickers they cover, a set per switch
+RELEASE_SCOPES = ("releasesHeld", "releasesWatched", "releasesAll")
 DISCLOSURE_SCOPES = ("disclosuresHeld", "disclosuresWatched", "disclosuresAll")
-SETTING_KEYS = ("fills", "problems", "connection", "updates") + DISCLOSURE_SCOPES
+SETTING_KEYS = ("fills", "problems", "connection", "updates") + RELEASE_SCOPES + DISCLOSURE_SCOPES
 SETTINGS_KEY = "notify_settings"
 HEARTBEAT_SEC = 15.0     # a comment on the stream this often keeps the connection through proxies and sleeps
 MODE_ENV = "BAGHOLDER_NOTIFY"   # "browser": never post from this process (a scratch copy beside the real one), the page shows them
@@ -76,10 +77,18 @@ def disclosure_scopes():
     return {k[len("disclosures"):].lower() for k in DISCLOSURE_SCOPES if on.get(k)}
 
 
+def release_scopes():
+    """Which sets of tickers the Releases kind covers: {"held", "watched", "all"} or fewer."""
+    on = settings()
+    return {k[len("releases"):].lower() for k in RELEASE_SCOPES if on.get(k)}
+
+
 def kind_on(kind):
-    """Whether a kind is told: Disclosures, whenever any of its sets is on."""
+    """Whether a kind is told: Releases and Disclosures, whenever any of their sets is on."""
     if kind == "disclosures":
         return bool(disclosure_scopes())
+    if kind == "releases":
+        return bool(release_scopes())
     return bool(settings().get(kind))
 
 
