@@ -2496,7 +2496,7 @@ function ensureDisclosures(t) {
     _disc[sym] = (d && d.ok) ? { payload: d } : { error: (d && d.error) || "Could not read disclosures." };
     const open = state.sel && selById(state.sel);
     if (open && discSymbol(open) === sym) render();
-    else if (state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym) render();
+    else if (state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym) render();   // the card's chip, on either view that reads filings
   });
 }
 function refreshDisclosures(sym) {
@@ -2512,7 +2512,7 @@ function _discSweepActive(sym, f) { const q = _discQueue[sym]; return !!(q && f 
 function _discStillOpen(sym) {
   // the instrument page showing this listing, or the News card turned to its disclosures under the chip
   const open = state.sel && selById(state.sel);
-  return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsKind === "disc" && state.newsSymbol && state.newsSymbol.symbol === sym);
+  return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
 function enrichOne(sym, f) {
@@ -3076,6 +3076,9 @@ function newsCardHtml(items) {
   const releases = state.newsKind === "releases";
   let rows = (items || []).filter((n) => (releases ? n.kind === "release" : n.kind !== "release") &&
     (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
+  // the issuer's own releases as it filed them, beside the wires': a wire carries what it is sent, and a
+  // release it never carried is still on the regulator's record, so both are shown and the same release once
+  if (releases) rows = rows.concat(filedReleases(only, scope, rows));
   if (q) {
     const tokens = q.split(/\s+/);
     const bySym = tokens.length === 1 && q.length <= 5 ? rows.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : [];
@@ -3090,7 +3093,7 @@ function newsCardHtml(items) {
   const sym = (t) => '<button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: bareSymbol(t.symbol), exchange: String(t.exchange || "").toUpperCase() }) + "'>" + esc(bareSymbol(t.symbol)) + "</button>";
   const chg = (t) => '<span class="tab" style="font-size:13px;color:' + (t.percentChange == null ? "var(--ink55)" : t.percentChange >= 0 ? "var(--pos)" : "var(--neg)") + '">' + signedPct(t.percentChange) + "</span>";
   // one line per row: the headline cut with an ellipsis; a story read for several listings shows the first of them
-  const row = (n) => '<div class="nw-row' + (bare ? " nw-bare" : "") + '" data-act="newsOpen" data-arg=\'' + attr({ url: n.url }) + "'>" +
+  const row = (n) => '<div class="nw-row' + (bare ? " nw-bare" : "") + '" data-act="' + (n.filed ? "discOpen" : "newsOpen") + '" data-arg=\'' + attr(n.filed || { url: n.url }) + "'>" +
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(newsWhen(n.publishedAt)) + "</div>" +
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(n.headline) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc(n.source) + "</div></div>" +
     (bare ? "" : '<div style="text-align:right">' + (n.tags.length ? sym(first(n)) : "") + "</div>" +
@@ -3104,6 +3107,38 @@ function newsCardHtml(items) {
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
+// A news release the issuer filed. SEDAR+ and SEC EDGAR carry the company's own releases, including ones no
+// wire picked up, so the Releases view shows them beside the wires', in the same row grammar, a release
+// carried both ways shown once. The rows are the ones the Disclosures view already reads, and their titles
+// fill in the same way; until one is read the document's kind stands in for it.
+const FILED_RELEASE = /news release|press release|^8-K|^6-K/i;
+function filedReleases(only, scope, wire) {
+  let rows;
+  if (only) {
+    const rec = _disc[only.symbol];
+    if (!rec) { ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || "", name: only.name || "", currency: only.currency || "" }); return []; }
+    if (!rec.payload) return [];
+    rows = (rec.payload.filings || []).map((f) => Object.assign({}, f, { symbol: only.symbol, exchange: only.exchange || "" }));
+    sweepDiscEnrich(only.symbol, rec.payload.filings || []);
+  } else {
+    loadDiscFeed(scope);
+    rows = ((_discFeed[scope] || {}).rows) || [];
+    sweepFeedEnrich(scope, rows);
+  }
+  const said = new Set((wire || []).map((n) => news_text_key(n.headline)));
+  const tagOf = (sym, ex) => {
+    const w = (((state.model || {}).markets || {}).watchlist || []).find((x) => bareSymbol(x.symbol) === sym);
+    const p = ((state.model || {}).positions || []).find((x) => bareSymbol(x.symbol) === sym);
+    return { symbol: sym, exchange: ex || (p && p.exchange) || (w && w.exchange) || "", held: !!p, watched: !!w,
+             percentChange: p ? p.percentChange : (w ? w.percentChange : null), positionId: p ? p.id : null };
+  };
+  return rows.filter((f) => FILED_RELEASE.test(String(f.type || "")) && !said.has(news_text_key(f.subject || "")))
+    .map((f) => ({ id: "filed:" + f.id, headline: f.subject || f.type || "News release", source: f.source || "", url: f.url || "",
+                   publishedAt: String(f.date || ""), kind: "release", market: false, tags: [tagOf(f.symbol, f.exchange)],
+                   filed: { id: f.id, sym: f.symbol, source: f.source, url: f.url } }));
+}
+// the page's own copy of the model's headline key, so a release on a wire and on the record is one row
+function news_text_key(h) { return String(h || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 // The card's other view: the disclosures of the listings in scope, merged newest first from what the store holds,
 // or of one listing, the chip's, read on demand as the instrument page reads them; the box finds any ticker.
 const NDISC_COLS = [{ key: "when", label: "When" }, { key: "news", label: "Disclosure" }, { key: "symbol", label: "Symbol", align: "right" }];
