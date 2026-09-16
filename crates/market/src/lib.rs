@@ -6,6 +6,7 @@ pub mod http;
 pub mod parse;
 pub mod refresh;
 pub mod clockzone;
+pub mod fear;
 pub mod history;
 pub mod quotes;
 pub mod tmx;

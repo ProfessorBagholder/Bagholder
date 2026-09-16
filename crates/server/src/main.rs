@@ -425,15 +425,32 @@ fn handle(app: &App, req: Request) {
         }
         "/api/fear" => {
             let which = query_param(&query, "index").unwrap_or_else(|| "stocks".into()).to_lowercase();
+            if !bagholder_market::fear::INDEXES.contains(&which.as_str()) {
+                send_json(req, 200, &json!({"ok": false, "error": "no such index"}));
+                return;
+            }
+            let stamp = now_iso();
+            let now_unix = unix_now();
             with_conn(app, req, move |conn| {
-                // reading a fresh one needs fear.py, which is not ported; what
-                // has already been read is answered from the store
-                match bagholder_store::feeds::gauge(conn, &which)? {
-                    Some(g) if !g.get("score").map(|s| s.is_null()).unwrap_or(true) => {
-                        Ok(json!({"ok": true, "gauge": g}))
-                    }
-                    _ => Ok(json!({"ok": false, "error": "the index did not answer"})),
+                // What was read before is answered from the store at once, so
+                // the meter is drawn with the page rather than after a round
+                // trip to its publisher; a reading past its minutes is read
+                // again first.
+                let held = bagholder_store::feeds::gauge(conn, &which)?;
+                let has_score = held.as_ref().map(|g| !g.get("score").map(|s| s.is_null()).unwrap_or(true)).unwrap_or(false);
+                if has_score && !fear_stale(held.as_ref().unwrap(), now_unix) {
+                    return Ok(json!({"ok": true, "gauge": held}));
                 }
+                let rec = bagholder_market::fear::read(&which);
+                if rec.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                    // the publisher did not answer: whatever is stored still stands
+                    return Ok(match held {
+                        Some(g) if has_score => json!({"ok": true, "gauge": g}),
+                        _ => json!({"ok": false, "error": "the index did not answer"}),
+                    });
+                }
+                bagholder_store::feeds::save_gauge(conn, &which, &rec, &stamp, FEAR_VERSION)?;
+                Ok(json!({"ok": true, "gauge": bagholder_store::feeds::gauge(conn, &which)?}))
             })
         }
         "/api/history" => {
@@ -699,6 +716,21 @@ fn main() {
     for req in server.incoming_requests() {
         let app = app.clone();
         std::thread::spawn(move || handle(&app, req));
+    }
+}
+
+/// `bagholder.FEAR_VERSION` and `FEAR_STALE_MIN`: CNN moves its index through
+/// the session, the crypto one once a day.
+const FEAR_VERSION: i64 = 1;
+const FEAR_STALE_MIN: f64 = 15.0;
+
+fn fear_stale(rec: &Value, now_unix: f64) -> bool {
+    if rec.get("readVersion").and_then(|v| v.as_i64()).unwrap_or(0) < FEAR_VERSION {
+        return true;
+    }
+    match bagholder_market::quotes::instant_secs_public(&field_s(rec, "fetchedAt")) {
+        Some(then) => (now_unix - then) > FEAR_STALE_MIN * 60.0,
+        None => true,
     }
 }
 
