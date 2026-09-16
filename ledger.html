@@ -3964,6 +3964,14 @@ function fearCardHtml() {
 const TILES_MAX = 12, TILES_ROW = 6;
 function tileOrder() { return state.tileOrder || (((state.model || {}).markets || {}).tiles || []); }
 function tileChangeHtml(t) {
+  // a contract quoted as 100 minus a rate reads as that rate, so its tile carries the published
+  // price on this line and the day's move in the rate, which runs against the price's
+  if (t.rate != null) {
+    const m = t.rateChange;
+    const c = m == null ? "" : m < 0 ? "neg" : "pos";
+    return '<div class="s" style="color:var(--ink55)">' + (t.last == null ? "—" : n2(t.last, t.decimals)) +
+      (m == null ? "" : ' <span style="color:var(--' + c + ')">(' + (m < 0 ? "−" : "+") + n2(Math.abs(m), t.decimals) + ")</span>") + "</div>";
+  }
   if (t.change == null || t.percentChange == null) return '<div class="s">—</div>';
   const c = t.change < 0 ? "neg" : "pos";
   return '<div class="s ' + c + '" style="color:var(--' + c + ')">' + (t.change < 0 ? "−" : "+") + n2(Math.abs(t.change), t.decimals) + " (" + signedPct(t.percentChange) + ")</div>";
@@ -3971,7 +3979,7 @@ function tileChangeHtml(t) {
 function tileHtml(t) {
   const arg = attr({ symbol: t.symbol, exchange: t.exchange });
   return '<div class="mt-cell" data-sym="' + esc(t.symbol) + '"><div class="card elev-sm kpi mt-tile' + (state.tileDrag === t.symbol ? " mt-drag" : "") + '" data-sym="' + esc(t.symbol) + '" data-ex="' + esc(t.exchange) + '">' +
-    '<div class="lbl">' + esc(t.label) + '</div><div class="v">' + (t.last == null ? "—" : n2(t.last, t.decimals)) + "</div>" + tileChangeHtml(t) +
+    '<div class="lbl">' + esc(t.label) + '</div><div class="v">' + (t.rate != null ? n2(t.rate, 2) + "%" : t.last == null ? "—" : n2(t.last, t.decimals)) + "</div>" + tileChangeHtml(t) +
     '<button class="mt-x" data-act="tileRemove" data-arg=\'' + arg + '\' aria-label="Remove ' + esc(t.label) + '">' + tkIconSvg(ICONS.x) + "</button></div></div>";
 }
 function tilePickerHtml(tiles) {

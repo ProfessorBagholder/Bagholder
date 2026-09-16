@@ -2332,9 +2332,18 @@ def tile_rows(base):
     out = []
     for inst in tile_list(base):
         q = quotes.get(watch_quote_key(inst["symbol"], inst["exchange"])) or {}
-        out.append({"symbol": inst["symbol"], "exchange": inst["exchange"], "label": instruments.label(inst["symbol"]), "name": inst["name"], "kind": inst["kind"],
-                    "last": _num(q.get("price"), None), "change": _num(q.get("priceChange"), None), "percentChange": _num(q.get("percentChange"), None),
-                    "decimals": tile_decimals(inst)})
+        price, move = _num(q.get("price"), None), _num(q.get("priceChange"), None)
+        row = {"symbol": inst["symbol"], "exchange": inst["exchange"], "label": instruments.label(inst["symbol"]), "name": inst["name"], "kind": inst["kind"],
+               "last": price, "change": move, "percentChange": _num(q.get("percentChange"), None),
+               "decimals": tile_decimals(inst)}
+        # a contract quoted as 100 minus the rate carries that rate beside its published price: the
+        # price is what the exchange gives, the rate is the contract's own definition of it, and a
+        # day that moves the price down has moved the rate it prices up
+        rate = instruments.implied_rate(inst["symbol"], price)
+        if rate is not None:
+            row["rate"] = rate
+            row["rateChange"] = None if move is None else round(-move, 4)
+        out.append(row)
     return out
 
 

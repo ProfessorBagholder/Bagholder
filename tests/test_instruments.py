@@ -143,3 +143,30 @@ class CoinChangeTest(unittest.TestCase):
         with mock.patch.object(market, "coinbase_market", return_value=""), mock.patch.object(market, "_get_text", return_value='{"data": {"amount": "2.0", "currency": "CAD"}}'):
             rec = market.fetch_coinbase_spot("XYZ-CAD", None, now)
             self.assertEqual(rec, {"price": 2.0, "currency": "CAD"}, "no market, no change: the price alone")
+
+
+class RateContractTest(unittest.TestCase):
+    """The two contracts the market prices policy with are quoted as 100 minus the rate they
+    settle against, so the rate is the price subtracted from 100 — the contract's own
+    definition — and the tile carries both."""
+
+    def test_the_directory_finds_them_by_the_words_people_type(self):
+        self.assertEqual([r["symbol"] for r in instruments.search("fed")], ["ZQ"])
+        self.assertEqual([r["symbol"] for r in instruments.search("sofr")], ["SR3"])
+        self.assertEqual([r["symbol"] for r in instruments.search("fed funds")], ["ZQ"])
+        self.assertEqual(instruments.label("ZQ"), "FED FUNDS")
+
+    def test_the_rate_is_the_price_taken_from_a_hundred_and_nothing_else_carries_one(self):
+        self.assertEqual(instruments.implied_rate("ZQ", 96.13), 3.87)
+        self.assertEqual(instruments.implied_rate("SR3", 95.765), 4.235)
+        self.assertIsNone(instruments.implied_rate("ES", 7674.0), "an index future prices no rate")
+        self.assertIsNone(instruments.implied_rate("ZQ", None), "and an unquoted contract prices none either")
+
+    def test_a_tile_carries_the_rate_beside_the_published_price_and_the_day_runs_the_other_way(self):
+        base = {"tiles": [{"symbol": "ZQ", "exchange": "CBOT"}, {"symbol": "ES", "exchange": "CME"}],
+                "quotes": {model.watch_quote_key("ZQ", "CBOT"): {"price": 96.13, "priceChange": -0.157, "percentChange": -0.163},
+                           model.watch_quote_key("ES", "CME"): {"price": 7674.0, "priceChange": 18.0, "percentChange": 0.24}}}
+        rows = {r["symbol"]: r for r in model.tile_rows(base)}
+        self.assertEqual((rows["ZQ"]["last"], rows["ZQ"]["rate"], rows["ZQ"]["rateChange"]), (96.13, 3.87, 0.157),
+                         "the price as published, the rate it prices, and a day that cut the price raised the rate")
+        self.assertNotIn("rate", rows["ES"], "nothing else carries one")
