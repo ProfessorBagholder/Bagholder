@@ -52,6 +52,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tz-rs",
 ]
 
 [[package]]

@@ -70,6 +70,98 @@ fn yahoo_get(url: &str) -> Option<String> {
     }
 }
 
+/// `market._yahoo_get`, for the chart path: the body, or the HTTP code when
+/// there was one, so a 404 can be remembered as a symbol Yahoo does not carry.
+pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
+    {
+        let mut gate = YAHOO.lock().unwrap();
+        let now = Instant::now();
+        if let Some(until) = gate.backoff_until {
+            if now < until {
+                crate::http::note_source("yahoo", false, None);
+                return Err(None);
+            }
+        }
+        if let Some(next) = gate.next_at {
+            if next > now {
+                let wait = next - now;
+                drop(gate);
+                std::thread::sleep(wait);
+                gate = YAHOO.lock().unwrap();
+            }
+        }
+        gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
+    }
+    match get_text(url, &YAHOO_HEADERS) {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            let code = e.code();
+            if code == Some(429) {
+                YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
+            }
+            Err(code)
+        }
+    }
+}
+
+/// `market.instant_secs`, for callers outside this module.
+pub fn instant_secs_public(s: &str) -> Option<f64> {
+    instant_secs(s)
+}
+
+/// `market.parse_yahoo_chart`: bars in the exchange's own local day and
+/// minute, oldest first; a row with no close is dropped.
+///
+/// Yahoo's `gmtoffset` is the offset today, not the bar's, so where the
+/// exchange names its zone each bar is given its own standard or daylight
+/// offset instead.
+pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
+    let d: Value = match serde_json::from_str(if text.is_empty() { "{}" } else { text }) { Ok(v) => v, Err(_) => return vec![] };
+    let results = match d.get("chart").and_then(|c| c.get("result")).and_then(|r| r.as_array()) {
+        Some(r) if !r.is_empty() => r,
+        _ => return vec![],
+    };
+    let r = &results[0];
+    let ts = r.get("timestamp").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let q = r
+        .get("indicators")
+        .and_then(|i| i.get("quote"))
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let meta = r.get("meta").cloned().unwrap_or_else(|| json!({}));
+    let zone = field_s(&meta, "exchangeTimezoneName");
+    let fixed = num(get(&meta, "gmtoffset"), 0.0) as i64;
+
+    let col = |k: &str, i: usize| -> Option<f64> {
+        q.get(k).and_then(|v| v.as_array()).and_then(|a| a.get(i)).and_then(|x| x.as_f64())
+    };
+
+    let mut out: Vec<Value> = Vec::new();
+    for (i, t) in ts.iter().enumerate() {
+        let t = match t.as_i64() { Some(t) => t, None => continue };
+        let close = match col("close", i) { Some(c) if c > 0.0 => c, _ => continue };
+        let (day, minute, off) = match crate::clockzone::local_at(&zone, t) {
+            Some((d, mi, o)) => (d, mi, o),
+            None => {
+                let local = t + fixed;
+                let days = local.div_euclid(86400);
+                let rem = local.rem_euclid(86400);
+                let (y, m, dd) = bagholder_model::dates::from_days(days);
+                (bagholder_model::dates::fmt(y, m, dd), (rem / 60) as i64, fixed)
+            }
+        };
+        out.push(json!({
+            "time": t, "day": day, "minute": minute, "offset": off,
+            "open": col("open", i), "high": col("high", i), "low": col("low", i),
+            "close": close, "volume": col("volume", i),
+        }));
+    }
+    out.sort_by_key(|b| b.get("time").and_then(|v| v.as_i64()).unwrap_or(0));
+    out
+}
+
 /// `market.parse_yahoo_quote`: the chart's meta read as a quote.
 pub fn parse_yahoo_quote(text: &str) -> Option<Value> {
     let d: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;

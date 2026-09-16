@@ -5,6 +5,8 @@ pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
+pub mod clockzone;
+pub mod history;
 pub mod quotes;
 pub mod tmx;
 
