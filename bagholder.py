@@ -691,7 +691,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.39.0"
+APP_VERSION = "1.40.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -722,7 +722,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-15.2"
+PROTOCOL = "2026-09-15.3"
 ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5920,7 +5920,7 @@ FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)
 
 
 SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
-SHORTS_VERSION = 4                 # bump when a reading can carry more than it could before, so
+SHORTS_VERSION = 5                 # bump when a reading can carry more than it could before, so
                                    # rows written by the older logic are read again once: a figure
                                    # the app has since learned to find should not wait for its row
                                    # to go stale, which is hours a reader spends looking at a dash
@@ -5942,7 +5942,9 @@ def read_shorts(symbol, exchange, currency, trend=False, now=None, name=""):
     decides what its position is measured against."""
     rec = shorts.for_listing(symbol, exchange, currency, _ssl_context(), now=now, trend=trend, name=name)
     if rec:
-        store.save_shorts(symbol, exchange, rec, now=now, version=SHORTS_VERSION)
+        # under the venue the reading names, which for a listing the book knew no venue for is the
+        # one the regulator's report gave it; the book's own listings name the venue they are asked under
+        store.save_shorts(symbol, _s(rec.get("exchange")) or exchange, rec, now=now, version=SHORTS_VERSION)
     return rec
 
 
@@ -5956,7 +5958,10 @@ def shorts_payload(symbol, exchange=None, currency=None, trend=False):
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
+    # the meta falls back to the ticker itself, which is not a name: a listing the book does not
+    # carry is left nameless here so the regulator's own report can name it
     listed_as, ex, ccy = _instrument_meta(sym)[0], _s(exchange).strip(), _s(currency).strip()
+    listed_as = "" if listed_as == sym else listed_as
     if not ex:
         # a ticker typed into the ranked list's box carries no venue: settled from what the app
         # already knows, in the order everything else settles it — the securities the sync
@@ -6004,7 +6009,7 @@ def shorts_feed():
         source = held.get(key) or watched.get(key)
         if source is None or r.get("shares") is None:
             continue
-        r["name"] = _s(source.get("name"))
+        r["name"] = _s(source.get("name")) or _s(r.get("name"))   # the book's name for it, else the one the reading carries
         # the venue as the book writes it: the stored key is upper case because it is a key,
         # and the rest of the app shows "Cboe Canada", not "CBOE CANADA"
         r["exchange"] = _s(source.get("exchange")) or r["exchange"]
@@ -6015,6 +6020,47 @@ def shorts_feed():
     # filled in behind an open page otherwise waited out the page's minutes between asks,
     # and a restart that reads every listing again showed the old dashes for all of them
     return {"ok": True, "rows": rows, "reading": _shorts_pass["left"] > 0}
+
+
+def listing_payload(symbol, exchange="", currency="", name=""):
+    """What the page for one listing needs, whether or not the book holds it. A listing the
+    book holds answers with that holding's id, since its page is the holding's. Any other
+    answers with what the book knows of it — its name, venue and currency from the trades,
+    the watchlist or the security records — and every execution of the trades closed on it,
+    so a listing traded before still shows where it was bought and sold; one never traded
+    has none. Its price is the glance the watchlist's add row takes, nothing stored."""
+    sym = market.tmx_symbol(_s(symbol)).strip().upper()
+    if not sym:
+        return {"ok": False, "error": "symbol required"}
+    ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    base = model.base_model()
+    def same(r):
+        if r.get("kind") == "Options" or market.tmx_symbol(_s(r.get("symbol"))).strip().upper() != sym:
+            return False
+        # a ticker is one company on one venue and another's on the next: the venue decides where both name one
+        there = _s(r.get("exchange")).strip().upper()
+        return not ex or not there or there == ex.upper()
+    held = next((p for p in base.get("positions") or [] if same(p)), None)
+    if held:
+        return {"ok": True, "symbol": sym, "positionId": held.get("id")}
+    trades = [t for t in base.get("trades") or [] if same(t)]
+    watched = next((w for w in base.get("watchlist") or [] if same(w)), None)
+    known = trades[0] if trades else (watched or {})
+    meta = _instrument_meta(sym)
+    ex = ex or _s(known.get("exchange")) or meta[1]
+    ccy = ccy or _s(known.get("currency")) or meta[2]
+    kind = _s(known.get("kind")) or "Shares"
+    fills = sorted((f for t in trades for f in (t.get("fills") or [])), key=lambda f: _s(f.get("when")))
+    out = {"ok": True, "symbol": sym, "exchange": ex, "currency": ccy, "kind": kind,
+           "name": _s(name).strip() or _s(known.get("name")) or (meta[0] if meta[0] != sym else ""),
+           "securityId": _s(known.get("securityId")), "fills": fills, "price": None, "percentChange": None}
+    if kind == "Shares":
+        try:
+            q = market.peek_quote({"symbol": sym, "exchange": ex, "currency": ccy, "kind": kind}, _ssl_context()) or {}
+            out["price"], out["percentChange"] = q.get("price"), q.get("percentChange")
+        except Exception as e:
+            sys.stderr.write("bagholder listing: %s not quoted: %s\n" % (sym, str(e) or e.__class__.__name__))
+    return out
 
 
 def shorts_listings(scope="all"):
@@ -7175,6 +7221,15 @@ class Handler(BaseHTTPRequestHandler):
             refresh = (_query_param(query, "refresh") or "") in ("1", "true", "yes")
             self._send(200, filings_payload(symbol, refresh=refresh, name=_query_param(query, "name"),
                                             exchange=_query_param(query, "exchange"), currency=_query_param(query, "currency")))
+            return
+        if path == "/api/listing":
+            # one listing's own page, held or not
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, listing_payload(_query_param(query, "symbol"), _query_param(query, "exchange"),
+                                            _query_param(query, "currency"), _query_param(query, "name")))
             return
         if path == "/api/shorts/feed":
             if not self._gate():

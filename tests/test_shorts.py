@@ -515,6 +515,37 @@ class FundFloatTest(unittest.TestCase):
         self.assertEqual(shorts.float_shares("XIU", "TSX", "CAD", "iShares S&P/TSX 60 Index ETF"), 111.0)
 
 
+class SearchedListingTest(unittest.TestCase):
+    """A ticker the book does not carry is asked for under its ticker alone: the regulator's
+    own report names its venue and its issuer, and the name is what tells a fund from a
+    company, so the reading is a whole row rather than a ticker with blanks beside it."""
+
+    POSITION = {"TSX": {"venue": "TSX", "shares": 7573829.0, "change": 41206.0, "name": "SHOPIFY INC. CL 'A' SV"}}
+
+    def setUp(self):
+        shorts._files.clear()
+        shorts._shares.clear()
+
+    tearDown = setUp
+
+    def read(self, exchange="", name=""):
+        with mock.patch.object(shorts, "_table", return_value={"key": "2026-08-31", "rows": {"SHOP": self.POSITION["TSX"]}}), \
+             mock.patch.object(shorts, "ca_volume", return_value={}), \
+             mock.patch.object(shorts, "float_shares", side_effect=lambda sym, ex, ccy, nm="", ctx=None: self.seen.append(nm) or 1000000.0):
+            self.seen = []
+            return shorts.for_listing("SHOP", exchange, "CAD", name=name)
+
+    def test_the_report_names_the_venue_and_the_issuer_where_the_book_knows_neither(self):
+        rec = self.read()
+        self.assertEqual((rec["exchange"], rec["name"]), ("TSX", "SHOPIFY INC. CL 'A' SV"))
+        self.assertEqual(self.seen, ["SHOPIFY INC. CL 'A' SV"], "the issuer is what tells a fund from a company")
+
+    def test_the_book_own_name_for_a_listing_it_carries_is_the_one_the_float_is_read_under(self):
+        rec = self.read(exchange="TSX", name="Shopify Inc.")
+        self.assertEqual(rec["exchange"], "TSX")
+        self.assertEqual(self.seen, ["Shopify Inc."], "the book's name for a listing it carries, not the report's")
+
+
 class CboeUnitsTest(unittest.TestCase):
     """A fund listed on Cboe Canada: TMX answers 0 for its count and Yahoo publishes none,
     so the count comes from that venue's own directory, where a listing's market
