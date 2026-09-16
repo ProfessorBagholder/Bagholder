@@ -182,11 +182,8 @@ pub fn get_order(conn: &Connection, order_id: &str) -> Result<Option<Value>> {
 ///
 /// The booked quantity only ever grows; a smaller value never lowers it.
 ///
-/// The answer is whether *this* statement changed a row. Python returns
-/// `conn.total_changes > 0`, which counts every change the pooled connection
-/// has ever made, so it reads true even for an order id that does not exist.
-/// Nothing reads the result there, but `stamp_canonical_id` has the same
-/// shape and its result is acted on -- see the note on that function.
+/// The answer is whether this statement changed a row, not the pooled
+/// connection's running tally.
 pub fn mark_order_fill_booked(conn: &Connection, order_id: &str, qty: f64, now: &str) -> Result<bool> {
     let n = conn.execute(
         "UPDATE orders SET fill_booked_qty = ?, updated_at = ? WHERE id = ? AND (fill_booked_qty IS NULL OR fill_booked_qty < ?)",

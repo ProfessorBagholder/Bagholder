@@ -208,7 +208,8 @@ fn main() {
                     e.get("id").and_then(|v| v.as_str()).unwrap_or(""),
                     e.get("subject").and_then(|v| v.as_str()),
                     e.get("summary").and_then(|v| v.as_str()),
-                    e.get("version").and_then(|v| v.as_i64()), &now).unwrap();
+                    e.get("version").and_then(|v| v.as_i64()),
+                    e.get("final").and_then(|v| v.as_bool()), &now).unwrap();
             }
             for s in a("shorts") {
                 fd::save_shorts(&conn, s.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),

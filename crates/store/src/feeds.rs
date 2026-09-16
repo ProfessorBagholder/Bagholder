@@ -261,6 +261,11 @@ fn filing_from_row(r: &Row) -> Result<Value> {
         "enrichedAt": maybe(r, "enriched_at"),
         // Python's reader coerces a missing value to "", including this one
         "enrichVersion": match r.get::<_, Option<i64>>("enrich_version")? { Some(v) => json!(v), None => json!("") },
+        // read for good: a regulator's form, read from its own boxes
+        "enrichFinal": match r.as_ref().column_index("enrich_final") {
+            Ok(_) => r.get::<_, Option<i64>>("enrich_final")?.map(|v| v != 0).unwrap_or(false),
+            Err(_) => false,
+        },
         "fetchedAt": maybe(r, "fetched_at"),
     }))
 }
@@ -302,10 +307,17 @@ pub fn set_filing_enrichment(
     subject: Option<&str>,
     summary: Option<&str>,
     version: Option<i64>,
+    final_: Option<bool>,
     now: &str,
 ) -> Result<()> {
     let mut sets: Vec<&str> = vec!["enriched_at = ?"];
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+    // `final` marks a document read for good, which is not read again for a
+    // half it will never have
+    if let Some(f) = final_ {
+        sets.push("enrich_final = ?");
+        args.push(Box::new(if f { 1i64 } else { 0 }));
+    }
     if let Some(s) = subject {
         sets.push("subject = ?");
         args.push(Box::new(s.to_string()));
@@ -336,17 +348,17 @@ pub fn set_filing_enrichment(
 /// nothing on each refresh.
 pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[Value], now: &str) -> Result<usize> {
     let sym = filing_key(symbol);
-    struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64> }
+    struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
     let mut kept: Vec<(String, Kept)> = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT id, subject, summary, enriched_at, enrich_version FROM filings WHERE symbol = ? AND source = ?",
+            "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
         )?;
         let mut rows = stmt.query(rusqlite::params![sym, source])?;
         while let Some(r) = rows.next()? {
             kept.push((
                 r.get::<_, String>(0)?,
-                Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)? },
+                Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)? },
             ));
         }
     }
@@ -362,7 +374,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[V
         let read = kept.iter().find(|(k, _)| *k == rid).map(|(_, v)| v);
         conn.execute(
             "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
-             subject, summary, enriched_at, enrich_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 sym, rid, src, field_s(r, "category"), field_s(r, "profileNo"), field_s(r, "issuer"),
                 field_s(r, "type"), field_s(r, "title"), field_s(r, "date"), field_s(r, "dateText"),
@@ -371,6 +383,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[V
                 read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
                 read.and_then(|k| k.enriched_at.clone()),
                 read.and_then(|k| k.version),
+                read.and_then(|k| k.final_),
             ],
         )?;
         n += 1;

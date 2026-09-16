@@ -22,3 +22,6 @@ flate2 = "1"
 tz-rs = "0.7"
 # the filing sources' page patterns; Python's `re` for the same ones
 regex = "1"
+# the text of an issuer PDF where no system pdftotext is present; pdfminer.six
+# does this job in the Python app
+pdf-extract = "0.9"

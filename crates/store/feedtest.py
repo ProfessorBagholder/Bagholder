@@ -67,8 +67,9 @@ FILINGS = [
     ]},
 ]
 ENRICH = [
-    {"symbol": "QNC", "id": "f1", "subject": "The year", "summary": "A summary.", "version": 3},
+    {"symbol": "QNC", "id": "f1", "subject": "The year", "summary": "A summary.", "version": 3, "final": True},
     {"symbol": "QNC", "id": "f2", "summary": "Only a summary."},
+    {"symbol": "QNC", "id": "f2", "final": False},
 ]
 # the same source again: f1 keeps its reading, f2 is gone, f3 is new
 FILINGS_AGAIN = [
@@ -156,7 +157,7 @@ def python_side(home):
     for f in FILINGS:
         store.replace_filings(f["symbol"], f["source"], f["items"], NOW)
     for e in ENRICH:
-        store.set_filing_enrichment(e["symbol"], e["id"], e.get("subject"), e.get("summary"), e.get("version"))
+        store.set_filing_enrichment(e["symbol"], e["id"], e.get("subject"), e.get("summary"), e.get("version"), e.get("final"))
     for f in FILINGS_AGAIN:
         store.replace_filings(f["symbol"], f["source"], f["items"], NOW)
     for s in SHORTS:
