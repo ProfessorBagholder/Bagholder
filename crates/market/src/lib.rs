@@ -7,6 +7,8 @@ pub mod parse;
 pub mod refresh;
 pub mod clockzone;
 pub mod fear;
+pub mod entities;
+pub mod news;
 pub mod history;
 pub mod quotes;
 pub mod tmx;

@@ -413,14 +413,60 @@ fn handle(app: &App, req: Request) {
             Ok(json!({"ok": true, "rows": bagholder_store::feeds::all_shorts(conn)?}))
         }),
         "/api/news/symbol" => {
-            let sym = query_param(&query, "symbol").unwrap_or_default();
-            let ex = query_param(&query, "exchange").unwrap_or_default();
+            // One listing's wire read now, for the News card's search: a ticker
+            // neither held nor watched has no rows until asked for. The rows are
+            // stored under the listing and the model reloads.
+            let sym = query_param(&query, "symbol").unwrap_or_default().trim().to_uppercase();
+            if sym.is_empty() {
+                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
+                return;
+            }
+            let ex0 = query_param(&query, "exchange").unwrap_or_default().trim().to_string();
+            let ccy0 = query_param(&query, "currency").unwrap_or_default().trim().to_string();
             with_conn(app, req, move |conn| {
-                Ok(json!({
-                    "ok": true,
-                    "ids": bagholder_store::feeds::news_ids(conn, &sym, &ex)?,
-                    "fetchedAt": bagholder_store::feeds::news_fetched_at(conn)?,
-                }))
+                let today = bagholder_market::now_stamp()[..10].to_string();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let (mut ex, mut ccy) = (ex0.clone(), ccy0.clone());
+                if ex.is_empty() {
+                    // the venue from what the app already knows: the security
+                    // records the sync brought, then TMX's own resolver, which
+                    // names the venue it verified by the quote and so covers the
+                    // venues no public directory carries (the CSE, Cboe Canada).
+                    // Nothing is guessed: a ticker TMX cannot place is a US one,
+                    // and Nasdaq keeps only the items that name it.
+                    let meta = instrument_meta(conn, &sym)?;
+                    ex = meta.1;
+                    if !meta.2.is_empty() {
+                        ccy = meta.2;
+                    }
+                    if ex.is_empty() {
+                        let form = bagholder_market::tmx::tmx_resolve(
+                            conn, &bagholder_model::venues::tmx_symbol(&sym), &today);
+                        if !form.is_empty() && !form.ends_with(":US") {
+                            // TMX, under the form its resolver just remembered
+                            if ccy.is_empty() {
+                                ccy = "CAD".into();
+                            }
+                        } else {
+                            ex = "NASDAQ".into();
+                            ccy = "USD".into();
+                        }
+                    }
+                }
+                let (src, rows) = bagholder_market::news::fetch_symbol(conn, &sym, &ex, &ccy, &today, now);
+                let rows = match rows {
+                    Some(r) => r,
+                    None => return Ok(json!({"ok": false, "error": "the wire did not answer"})),
+                };
+                if src.is_empty() {
+                    return Ok(json!({"ok": true, "count": 0, "source": "", "exchange": ex}));
+                }
+                bagholder_store::feeds::replace_news(conn, &sym, &ex, &src, &rows, &bagholder_market::now_stamp())?;
+                bagholder_store::feeds::trim_news(conn, bagholder_market::news::KEEP)?;
+                Ok(json!({"ok": true, "count": rows.len(), "source": src, "exchange": ex}))
             })
         }
         "/api/fear" => {
@@ -554,6 +600,23 @@ fn data_summary(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<Val
 }
 
 /// Opens the store, runs one reader, and answers with what it returned.
+/// `bagholder._instrument_meta`: (issuer name, exchange, currency) Bagholder
+/// holds for a symbol, to steer the sources. Falls back to the bare symbol.
+fn instrument_meta(conn: &rusqlite::Connection, symbol: &str) -> rusqlite::Result<(String, String, String)> {
+    let sym = symbol.trim().to_uppercase();
+    for sec in bagholder_store::admin::list_securities(conn)? {
+        if field_s(&sec, "symbol").trim().to_uppercase() == sym {
+            let name = field_s(&sec, "name").trim().to_string();
+            return Ok((
+                if name.is_empty() { sym.clone() } else { name },
+                field_s(&sec, "primaryExchange").trim().to_string(),
+                field_s(&sec, "currency").trim().to_string(),
+            ));
+        }
+    }
+    Ok((sym, String::new(), String::new()))
+}
+
 fn with_conn<F>(app: &App, req: Request, f: F)
 where
     F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value>,

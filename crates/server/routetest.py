@@ -128,11 +128,16 @@ def main():
                                                {"symbol": "NOPE", "exchange": "X"}]})
         call("/api/notifications/settings", body={"fills": True, "problems": False, "nonsense": True})
         call("/api/notifications/read", body={"ids": []})
+        # the News card's search reads a wire and stores what it answers, so it
+        # runs with the writes; a ticker neither held nor watched, so nothing is
+        # stored for it beforehand
+        news_code, news_got = call("/api/news/symbol?symbol=BNS")
 
         shutil.copy(os.path.join(rshome, "bagholder.db"), os.path.join(pyhome, "bagholder.db"))
         import store
         import notify as notify_py
         store.set_home(pyhome)
+        import bagholder as bagholder_py
 
         checks = [
             ("/api/orders", lambda: {
@@ -149,10 +154,26 @@ def main():
                 "ok": True, "symbol": store.filing_key("QNC"), "filings": store.filings("QNC"),
                 "fetchedAt": store.filings_fetched_at("QNC"), "profileNo": store.sedar_profile("QNC")}),
             ("/api/shorts/feed", lambda: {"ok": True, "rows": store.all_shorts()}),
-            ("/api/news/symbol?symbol=QNC&exchange=TSX", lambda: {
-                "ok": True, "ids": sorted(store.news_ids("QNC", "TSX")), "fetchedAt": store.news_fetched_at()}),
             ("/api/data", lambda: dict(store.data_summary(), ok=True, sessionPresent=False)),
         ]
+        # the two answers are compared on what does not move between two calls
+        # a second apart: the venue it settled on, the wire it went to, and that
+        # the rows landed under the listing
+        # read back what the Rust route stored before Python's own call
+        # replaces those rows in the copy
+        stored = store.news_ids("BNS", news_got.get("exchange") or "") if news_code == 200 else []
+        py_news = bagholder_py.news_symbol_payload("BNS", "", "")
+        if news_code != 200:
+            bad.append(f"/api/news/symbol: HTTP {news_code}")
+        else:
+            for k in ("ok", "source", "exchange"):
+                if news_got.get(k) != py_news.get(k):
+                    bad.append(f"/api/news/symbol {k}: python {py_news.get(k)!r} rust {news_got.get(k)!r}")
+            if news_got.get("ok") and not news_got.get("count"):
+                bad.append("/api/news/symbol: the wire answered with nothing")
+            if news_got.get("count") and len(stored) != news_got["count"]:
+                bad.append(f"/api/news/symbol: {news_got['count']} answered, {len(stored)} stored")
+
         for path, want_fn in checks:
             code, got = call(path)
             if code != 200:
