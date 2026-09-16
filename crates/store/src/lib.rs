@@ -8,3 +8,4 @@ pub mod merge;
 pub mod snapshot;
 pub mod market;
 pub mod orders;
+pub mod feeds;

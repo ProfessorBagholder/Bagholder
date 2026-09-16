@@ -171,6 +171,86 @@ fn main() {
                 "symbolFor": o::symbol_for_security(&conn, doc.get("symbolFor").and_then(|v| v.as_str()).unwrap_or("")).unwrap(),
             })).unwrap());
         }
+        // every feed table written then read back
+        "feeds" => {
+            let doc = stdin_json();
+            let now = doc.get("now").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let a = |k: &str| -> Vec<Value> { doc.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default() };
+            use bagholder_store::feeds as fd;
+
+            for pair in a("exposures") {
+                let k = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                fd::replace_exposure(&conn, k, pair.get(1).unwrap_or(&Value::Null), &now).unwrap();
+            }
+            let added: Vec<Value> = a("watch").iter().map(|w| {
+                let g = |k: &str| bagholder_model::value::field_s(w, k);
+                fd::add_watch(&conn, &g("symbol"), &g("exchange"), &g("name"), &g("currency"), &g("securityId"), &now)
+                    .unwrap().unwrap_or(Value::Null)
+            }).collect();
+            let removed: Vec<Value> = a("unwatch").iter().map(|w| {
+                json!(fd::remove_watch(&conn, w.get(0).and_then(|v| v.as_str()).unwrap_or(""),
+                                       w.get(1).and_then(|v| v.as_str()).unwrap_or("")).unwrap())
+            }).collect();
+            for n in a("news") {
+                let rows = n.get("rows").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                fd::replace_news(&conn, n.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+                                 n.get("exchange").and_then(|v| v.as_str()).unwrap_or(""),
+                                 n.get("source").and_then(|v| v.as_str()).unwrap_or(""), &rows, &now).unwrap();
+            }
+            for f in a("filings") {
+                let items = f.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                fd::replace_filings(&conn, f.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+                                    f.get("source").and_then(|v| v.as_str()).unwrap_or(""), &items, &now).unwrap();
+            }
+            for e in a("enrich") {
+                fd::set_filing_enrichment(&conn,
+                    e.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+                    e.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    e.get("subject").and_then(|v| v.as_str()),
+                    e.get("summary").and_then(|v| v.as_str()),
+                    e.get("version").and_then(|v| v.as_i64()), &now).unwrap();
+            }
+            for s in a("shorts") {
+                fd::save_shorts(&conn, s.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+                                s.get("exchange").and_then(|v| v.as_str()).unwrap_or(""),
+                                s.get("rec").unwrap_or(&Value::Null), &now,
+                                s.get("version").and_then(|v| v.as_i64()).unwrap_or(0)).unwrap();
+            }
+            for g in a("gauges") {
+                fd::save_gauge(&conn, g.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                               g.get("rec").unwrap_or(&Value::Null), &now,
+                               g.get("version").and_then(|v| v.as_i64()).unwrap_or(0)).unwrap();
+            }
+            let notes: Vec<Value> = a("notifications").iter().map(|n| {
+                let g = |k: &str| bagholder_model::value::field_s(n, k);
+                fd::add_notification(&conn, &g("kind"), &g("key"), &g("title"), &g("body"),
+                                     n.get("extra"), n.get("seen").and_then(|v| v.as_bool()).unwrap_or(false), &now)
+                    .unwrap().unwrap_or(Value::Null)
+            }).collect();
+            let seen_ids: Vec<i64> = a("seen").iter().filter_map(|v| v.as_i64()).collect();
+            let marked = fd::mark_notifications_seen(&conn, &seen_ids, &now).unwrap();
+            for u in a("universes") {
+                let rows = u.get("rows").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                fd::replace_universe(&conn, u.get("key").and_then(|v| v.as_str()).unwrap_or(""), &rows, &now).unwrap();
+            }
+            let q = |k: &str| doc.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            println!("{}", serde_json::to_string(&json!({
+                "added": added,
+                "removed": removed,
+                "watchlist": fd::list_watchlist(&conn).unwrap(),
+                "newsIds": fd::news_ids(&conn, &q("newsSymbol"), &q("newsExchange")).unwrap(),
+                "hasRelease": fd::has_wire_release(&conn, &q("newsSymbol")).unwrap(),
+                "newsFetched": fd::news_fetched_at(&conn).unwrap(),
+                "filings": fd::filings_for(&conn, &q("filingSymbol")).unwrap(),
+                "filingsAll": fd::filings_all(&conn).unwrap(),
+                "shorts": fd::shorts_for(&conn, &q("shortSymbol"), &q("shortExchange")).unwrap(),
+                "gauge": fd::gauge(&conn, &q("gaugeName")).unwrap(),
+                "notifications": notes,
+                "list": fd::list_notifications(&conn, 0, "", false, 50, false).unwrap(),
+                "unseen": fd::list_notifications(&conn, 0, "", true, 50, false).unwrap(),
+                "marked": marked,
+            })).unwrap());
+        }
         "snapshot" => {
             bagholder_store::relabel::ensure(&conn).unwrap();
             println!("{}", serde_json::to_string(&bagholder_store::snapshot::snapshot(&conn, true).unwrap()).unwrap());
