@@ -5,6 +5,7 @@ pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
+pub mod tmx;
 
 /// The stamp the sources' health and the attempt marker are written with.
 pub fn now_stamp() -> String {
