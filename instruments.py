@@ -36,6 +36,9 @@ INSTRUMENTS = [
     ("ZC", "Corn", "Commodity", "CBOT", "USD", "ZC=F", ("CORN",)),
     ("ZW", "Wheat", "Commodity", "CBOT", "USD", "ZW=F", ("WHEAT",)),
     ("TNX", "US 10-Year Treasury Yield", "Rate", "Index", "USD", "^TNX", ("10Y", "10-YEAR", "10 YEAR", "TREASURY", "YIELD")),
+    # the two contracts the market prices policy with, quoted as 100 minus the rate they settle against
+    ("ZQ", "30-Day Federal Funds futures", "Rate", "CBOT", "USD", "ZQ=F", ("FED", "FED FUNDS", "FED FUNDS FUTURES", "FEDERAL FUNDS", "FOMC", "POLICY RATE", "ZQ=F")),
+    ("SR3", "Three-Month SOFR futures", "Rate", "CME", "USD", "SR3=F", ("SOFR", "SOFR FUTURES", "THREE-MONTH SOFR", "SR3=F")),
     ("USDCAD", "US Dollar / Canadian Dollar", "Currency", "FX", "CAD", "CAD=X", ("USD/CAD", "CAD", "LOONIE")),
     ("EURUSD", "Euro / US Dollar", "Currency", "FX", "USD", "EURUSD=X", ("EUR/USD", "EURO")),
     ("GBPUSD", "British Pound / US Dollar", "Currency", "FX", "USD", "GBPUSD=X", ("GBP/USD", "POUND")),
@@ -45,8 +48,24 @@ INSTRUMENTS = [
 
 
 # what a market tile calls the instrument: the symbol unless people know it by a name
-LABELS = {"CL": "WTI", "BZ": "BRENT", "NG": "NATGAS", "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "PL": "PLATINUM", "ZC": "CORN", "ZW": "WHEAT",
+LABELS = {"ZQ": "FED FUNDS", "SR3": "SOFR", "CL": "WTI", "BZ": "BRENT", "NG": "NATGAS", "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "PL": "PLATINUM", "ZC": "CORN", "ZW": "WHEAT",
           "TNX": "10Y", "USDCAD": "USD/CAD", "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY", "BTCUSD": "BITCOIN"}
+
+
+# A contract quoted as 100 minus the rate it settles against: the exchange publishes the price,
+# and the rate is the price subtracted from 100 — the contract's own definition, not a reading of
+# it. Nothing else in the directory carries a rate under its price.
+RATE_FROM_PRICE = {"ZQ": "Implied rate", "SR3": "Implied rate"}
+
+
+def implied_rate(symbol, price):
+    """The rate a contract quoted as `100 minus the rate` is pricing, None for everything else."""
+    if str(symbol or "").strip().upper() not in RATE_FROM_PRICE or price is None:
+        return None
+    try:
+        return round(100.0 - float(price), 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def label(symbol):
