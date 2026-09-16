@@ -27,3 +27,6 @@ __pycache__/
 
 # the compose data folder: the database and the login
 data/
+
+# Rust build output
+target/
