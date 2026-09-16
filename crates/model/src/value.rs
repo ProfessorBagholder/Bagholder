@@ -99,3 +99,9 @@ pub fn fold_spaces_upper(v: &str) -> String {
 }
 
 pub fn fmt8(v: f64) -> String { format!("{:.8}", v) }
+
+/// A float written the way Python writes one, for the derived rows whose
+/// descriptions are built by string formatting: `200.0`, not `200`.
+pub fn num_repr(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e16 { format!("{:.1}", v) } else { v.to_string() }
+}

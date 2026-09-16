@@ -11,3 +11,7 @@ pub mod normalize;
 pub mod dates;
 pub mod fifo;
 pub mod fold;
+pub mod fx;
+pub mod synth;
+pub mod securities;
+pub mod book;

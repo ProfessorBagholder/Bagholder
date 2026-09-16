@@ -73,6 +73,9 @@ pub struct Slice {
     pub sell_activity_id: String,
     pub security_id: String,
     pub flags: Vec<String>,
+    /// Filled in by `apply_fx`; absent until then, as the Python dict is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fees_cad: Option<f64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -98,6 +101,12 @@ struct Fill {
     qty: f64,
     roll_direction: Option<String>,
     rt_before: Option<String>,
+    /// Where this row came from in the caller's list, when it came from one.
+    /// The inference rewrites a multileg row's quantity, price and sub-type,
+    /// and the Python fill holds the very dict the activity list holds, so the
+    /// rewrite has to land back there too: `actsById` feeds the fill rows the
+    /// page prints under a trade.
+    src: Option<usize>,
 }
 
 pub struct Matched {
@@ -251,6 +260,7 @@ fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, sym
         sell_activity_id: field_s(a, "id"),
         security_id,
         flags,
+        fees_cad: None,
     };
     t.id = stable_trade_id(&t);
     t
@@ -646,27 +656,43 @@ fn lot_from(a: &Value, qty: f64, price: f64, direction: &str, commission: f64, k
 
 /// `model.match_fifo`.
 pub fn match_fifo(activities: &[Value]) -> Matched {
-    let normalized_all: Vec<Value> = activities
+    let mut owned = activities.to_vec();
+    match_fifo_in_place(&mut owned)
+}
+
+/// `model.match_fifo`, writing the inference back into `activities`.
+///
+/// A row that already carries `flags` is one the caller normalized, and the
+/// Python fill holds that same dict, so what the inference decides about it --
+/// the contract count behind a quantity-zero multileg, the price that implies,
+/// which way it closes -- is visible to the caller afterwards. A row this
+/// function normalizes itself is a fresh copy in Python too, and is left alone.
+pub fn match_fifo_in_place(activities: &mut Vec<Value>) -> Matched {
+    let prepared: Vec<(Option<usize>, Value)> = activities
         .iter()
-        .map(|a| if a.get("flags").is_some() { a.clone() } else { normalize_activity(a) })
+        .enumerate()
+        .map(|(i, a)| if a.get("flags").is_some() { (Some(i), a.clone()) } else { (None, normalize_activity(a)) })
+        .filter(|(_, a)| !has_flag(a, "pending-distribution"))
         .collect();
-    let normalized: Vec<Value> = normalized_all
-        .into_iter()
-        .filter(|a| !has_flag(a, "pending-distribution"))
-        .collect();
-    let folded = crate::normalize::fold_stkdis(&normalized);
+    let normalized: Vec<Value> = prepared.iter().map(|(_, a)| a.clone()).collect();
+    let folded = crate::normalize::fold_stkdis_indexed(&prepared);
 
     let mut fills: Vec<Fill> = Vec::new();
-    for a in &folded {
+    for (src, a) in &folded {
         let cat = field_s(a, "category");
         if (cat != "trade" && cat != "option_event") || field_s(a, "symbol").is_empty() { continue; }
         let side = trade_side(a);
         if side.is_empty() { continue; }
-        fills.push(Fill { a: a.clone(), side, qty: field_num(a, "quantity").abs(), roll_direction: None, rt_before: None });
+        fills.push(Fill { a: a.clone(), side, qty: field_num(a, "quantity").abs(), roll_direction: None, rt_before: None, src: *src });
     }
     fills.sort_by(|x, y| fill_sort_key(x).cmp(&fill_sort_key(y)));
     infer_zero_qty_option_fills(&mut fills);
+    // What the inference decided stands even for a fill it left at zero.
+    for f in &fills {
+        if let Some(i) = f.src { activities[i] = f.a.clone(); }
+    }
     let usable: Vec<Fill> = fills.into_iter().filter(|f| f.qty > 0.0).collect();
+    let mut rewritten: Vec<(usize, Value)> = Vec::new();
 
     let mut books = Books::default();
     let mut rt_open: HashMap<String, Option<String>> = HashMap::new();
@@ -735,6 +761,7 @@ pub fn match_fifo(activities: &[Value]) -> Matched {
                 let lot = lot_from(&fill.a, remaining, per, opening, 0.0, "Options", rt, flags_of(&fill.a));
                 books.at(&a_key).push(lot);
             }
+            if let Some(i) = fill.src { rewritten.push((i, fill.a.clone())); }
             continue;
         }
 
@@ -810,6 +837,8 @@ pub fn match_fifo(activities: &[Value]) -> Matched {
             }
         }
     }
+
+    for (i, a) in rewritten { activities[i] = a; }
 
     let all_keys: Vec<String> = books.keys.clone();
     for key in &all_keys {

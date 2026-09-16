@@ -225,6 +225,45 @@ pub fn is_multileg(a: &Value) -> bool {
 
 /// `model.fold_stkdis`: net the +N/-N name-change rows posted on one day, and
 /// open whatever is left over at $0.
+/// The same folding, keeping each surviving row's index in the caller's list.
+/// The netted replacement row has no origin, since it is not one of them.
+pub fn fold_stkdis_indexed(activities: &[(Option<usize>, Value)]) -> Vec<(Option<usize>, Value)> {
+    struct G { pos: f64, neg: f64, sample: Value }
+    let mut rest: Vec<(Option<usize>, Value)> = Vec::new();
+    let mut groups: Vec<(String, G)> = Vec::new();
+
+    for (src, a) in activities {
+        if compact(&field_s(a, "activityType")) != "STKDIS" {
+            rest.push((*src, a.clone()));
+            continue;
+        }
+        let k = format!("{}\u{0}{}\u{0}{}", field_s(a, "symbol"), field_s(a, "transactionDate"), field_s(a, "currency"));
+        let idx = match groups.iter().position(|(gk, _)| *gk == k) {
+            Some(i) => i,
+            None => { groups.push((k, G { pos: 0.0, neg: 0.0, sample: a.clone() })); groups.len() - 1 }
+        };
+        let q = field_num(a, "quantity");
+        if field_s(a, "activitySubType") == "SELL" || q < 0.0 {
+            groups[idx].1.neg += q.abs();
+        } else {
+            groups[idx].1.pos += q.abs();
+        }
+    }
+    for (_, g) in groups {
+        let net = g.pos - g.neg;
+        if net > EPS {
+            let mut m = match g.sample { Value::Object(o) => o, _ => Map::new() };
+            setf(&mut m, "quantity", net);
+            set(&mut m, "activitySubType", "BUY".into());
+            setf(&mut m, "unitPrice", 0.0);
+            setf(&mut m, "netCashAmount", 0.0);
+            set(&mut m, "category", "trade".into());
+            rest.push((None, Value::Object(m)));
+        }
+    }
+    rest
+}
+
 pub fn fold_stkdis(activities: &[Value]) -> Vec<Value> {
     struct G { pos: f64, neg: f64, sample: Value }
     let mut rest: Vec<Value> = Vec::new();
