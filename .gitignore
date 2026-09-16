@@ -11,6 +11,10 @@ user_agent
 chrome/
 ext/
 
+# Xcode regenerates these per machine: the workspace stub, and window state under a user's own name
+ios/**/project.xcworkspace/
+**/xcuserdata/
+
 # OS / editor cruft
 .DS_Store
 ._*
