@@ -484,6 +484,16 @@ def _init_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS filings_date ON filings (symbol, date DESC);
 
+        CREATE TABLE IF NOT EXISTS gauges (
+            name TEXT PRIMARY KEY,
+            source TEXT,
+            score REAL,
+            rating TEXT,
+            as_of TEXT,
+            payload TEXT,
+            read_version INTEGER,
+            fetched_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS shorts (
             symbol TEXT NOT NULL,
             exchange TEXT NOT NULL DEFAULT '',
@@ -3242,6 +3252,47 @@ def save_shorts(symbol, exchange, rec, now=None, version=0):
                 % (", ".join(_SHORT_COLUMNS), ", ".join("?" * (len(_SHORT_COLUMNS) + 5))),
                 [sym, ex] + [rec.get(f) for f in SHORT_FIELDS] + [json.dumps(series), int(version), when])
             conn.commit()
+        finally:
+            conn.close()
+
+
+def save_gauge(name, rec, now=None, version=0):
+    """One published index's reading, kept so the meter is drawn with the page rather than
+    after a read. What the publisher gives beyond the score — the readings it compares
+    against, its indicators, its year of days — travels in the payload."""
+    key = _s(name).strip().lower()
+    when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or _now_iso()
+    rest = {k: v for k, v in (rec or {}).items() if k not in ("index", "source", "score", "rating", "asOf")}
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.execute("INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (key, _s(rec.get("source")), rec.get("score"), _s(rec.get("rating")), _s(rec.get("asOf")),
+                          json.dumps(rest), int(version), when))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def gauge(name):
+    """What is stored for one index, or None."""
+    key = _s(name).strip().lower()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            row = conn.execute("SELECT * FROM gauges WHERE name = ?", (key,)).fetchone()
+            if not row:
+                return None
+            try:
+                rest = json.loads(row["payload"]) if row["payload"] else {}
+            except ValueError:
+                rest = {}
+            out = {"index": row["name"], "source": row["source"], "score": row["score"], "rating": row["rating"],
+                   "asOf": row["as_of"], "fetchedAt": row["fetched_at"], "readVersion": row["read_version"] or 0}
+            out.update(rest if isinstance(rest, dict) else {})
+            return out
         finally:
             conn.close()
 

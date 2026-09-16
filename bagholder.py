@@ -41,6 +41,7 @@ deps.activate()   # make ~/.bagholder/pylibs importable before the optional-depe
 
 import csvimport
 import exposure
+import fear
 import instruments
 import disclosures
 import enrich
@@ -691,7 +692,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.40.1"
+APP_VERSION = "1.41.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -722,7 +723,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-15.3"
+PROTOCOL = "2026-09-16.1"
 ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5919,6 +5920,68 @@ def sweep_filings(now=None):
 FEED_SCOPES = {"holdings": ("held",), "watchlist": ("watched",), "all": ("all",)}
 
 
+FEAR_STALE_MIN = 15                # CNN moves its index through the session; the crypto one once a day
+FEAR_VERSION = 1                   # bump when a reading can carry more than it could before
+FEAR_SWEEP_EVERY_SEC = 900
+
+
+def read_fear(index):
+    """One published index read from its publisher and kept."""
+    rec = fear.read(index, _ssl_context())
+    if rec:
+        store.save_gauge(index, rec, version=FEAR_VERSION)
+    return rec
+
+
+def _fear_stale(rec, now=None):
+    if (rec.get("readVersion") or 0) < FEAR_VERSION:
+        return True
+    try:
+        return (now or datetime.now(timezone.utc)) - datetime.fromisoformat(_s(rec.get("fetchedAt")).replace("Z", "+00:00")) > timedelta(minutes=FEAR_STALE_MIN)
+    except ValueError:
+        return True
+
+
+def fear_payload(index):
+    """One index's meter. What was read before is answered from the store at once, so the
+    meter is drawn with the page rather than after a round trip to its publisher, and a
+    reading past its minutes is refreshed behind the page."""
+    which = _s(index).strip().lower()
+    if which not in fear.INDEXES:
+        return {"ok": False, "error": "no such index"}
+    held = store.gauge(which)
+    if held and held.get("score") is not None:
+        if _fear_stale(held):
+            kick("fear:%s" % which, lambda: read_fear(which))
+        return {"ok": True, "gauge": held}
+    rec = read_fear(which)
+    return {"ok": True, "gauge": rec} if rec else {"ok": False, "error": "the index did not answer"}
+
+
+def sweep_fear(now=None):
+    """Keep both meters current, so neither waits on its publisher when the tab is opened."""
+    done = 0
+    for which in fear.INDEXES:
+        held = store.gauge(which)
+        if held and held.get("score") is not None and not _fear_stale(held, now):
+            continue
+        try:
+            if read_fear(which):
+                done += 1
+        except Exception as e:
+            sys.stderr.write("bagholder fear: %s not read: %s\n" % (which, str(e) or e.__class__.__name__))
+    return done
+
+
+def fear_sweep_loop():
+    while True:
+        try:
+            sweep_fear()
+        except Exception as e:
+            sys.stderr.write("bagholder fear: sweep failed: %s\n" % (str(e) or e.__class__.__name__))
+        time.sleep(FEAR_SWEEP_EVERY_SEC)
+
+
 SHORTS_STALE_HOURS = 6             # after this, a stored reading is refreshed behind the page
 SHORTS_VERSION = 5                 # bump when a reading can carry more than it could before, so
                                    # rows written by the older logic are read again once: a figure
@@ -7231,6 +7294,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, listing_payload(_query_param(query, "symbol"), _query_param(query, "exchange"),
                                             _query_param(query, "currency"), _query_param(query, "name")))
             return
+        if path == "/api/fear":
+            if not self._gate():
+                self._send(403, {"ok": False})
+                return
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self._send(200, fear_payload(_query_param(query, "index") or "stocks"))
+            return
         if path == "/api/shorts/feed":
             if not self._gate():
                 self._send(403, {"ok": False})
@@ -7718,6 +7788,7 @@ def main():
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
     threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
     threading.Thread(target=shorts_sweep_loop, name="bagholder-shorts-sweep", daemon=True).start()
+    threading.Thread(target=fear_sweep_loop, name="bagholder-fear-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
     print("Bagholder  %s" % url, flush=True)
     # A second instance run for verification (BAGHOLDER_NO_BROWSER=1) must not open
