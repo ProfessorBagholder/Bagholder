@@ -35,6 +35,10 @@ pub struct Base {
     pub balances: Vec<Value>,
     pub margin: Vec<Value>,
     pub exposures: Map<String, Value>,
+    pub watchlist: Vec<Value>,
+    pub news: Vec<Value>,
+    pub universes: Map<String, Value>,
+    pub tiles: Option<Value>,
     pub cash_currencies: HashMap<String, String>,
     pub activity_count: usize,
     pub last_prices: Map<String, Value>,
@@ -152,6 +156,17 @@ pub fn build_base(snapshot: &Value, market: &Value, journal: &Journal, today: Op
         balances: arr(snapshot.get("balances")).into_iter().filter(|b| b.is_object()).collect(),
         margin: arr(snapshot.get("margin")).into_iter().filter(|m| m.is_object()).collect(),
         exposures: obj(snapshot.get("exposures")),
+        watchlist: arr(snapshot.get("watchlist")).into_iter().filter(|w| w.is_object()).collect(),
+        news: arr(snapshot.get("news")).into_iter().filter(|n| n.is_object()).collect(),
+        universes: {
+            let mut m = Map::new();
+            for (k, v) in obj(snapshot.get("universes")) {
+                m.insert(k, Value::Array(arr(Some(&v)).into_iter().filter(|r| r.is_object()).collect()));
+            }
+            m
+        },
+        // absent is not the same as an empty row: it means never saved
+        tiles: snapshot.get("tiles").filter(|v| !v.is_null()).cloned(),
         cash_currencies,
         activity_count,
         last_prices,

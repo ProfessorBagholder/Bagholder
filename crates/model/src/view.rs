@@ -696,6 +696,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
         "positions": positions,
         "positionsSummary": {"count": positions.len(), "book": book, "mv": mv, "unreal": unreal},
         "portfolio": portfolio,
+        "markets": crate::markets::markets_view(base, &positions),
         "cashflow": cashflow,
         "unmatched": base.book.fifo.unmatched,
         "accounts": base.accounts,

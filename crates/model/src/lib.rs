@@ -24,4 +24,7 @@ pub mod filters;
 pub mod stats;
 pub mod exposure;
 pub mod base;
+pub mod venues;
+pub mod instruments;
+pub mod markets;
 pub mod view;

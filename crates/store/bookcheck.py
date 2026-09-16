@@ -22,6 +22,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 STORETOOL = os.path.join(ROOT, "target", "debug", "storetool")
 CASETOOL = os.path.join(ROOT, "target", "debug", "casetool")
+VIEWTOOL = os.path.join(ROOT, "target", "debug", "viewtool")
 
 LIVE = os.environ.get("BAGHOLDER_DB") or os.path.expanduser("~/.bagholder/bagholder.db")
 
@@ -99,11 +100,22 @@ def main():
                                          capture_output=True, text=True, check=True).stdout)
     diff("view", want_view, got_view, bad)
 
+    # the whole payload, not only the projection a case records
+    base = model.build_base(snap, market, journal, today=today)
+    want_full = model.build_view(base, None)
+    got_full = json.loads(subprocess.run([VIEWTOOL], input=json.dumps(case),
+                                         capture_output=True, text=True, check=True).stdout)
+    for key in want_full:
+        if key == "generated":
+            continue
+        diff("full." + key, want_full[key], got_full.get(key), bad)
+
     for line in bad[:25]:
         print("  " + line)
+    mk = want_full["markets"]
     print(f"{len(snap['activities'])} activities, {len(market['quotes'])} quotes, "
           f"{len(want_view['trades'])} trades, {len(want_view['positions'])} positions, "
-          f"{len(bad)} differences")
+          f"{len(mk['news'])} news rows, {len(mk['tiles'])} tiles, {len(bad)} differences")
     shutil.rmtree(work, ignore_errors=True)
     return 1 if bad else 0
 
