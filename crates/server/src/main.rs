@@ -8,6 +8,7 @@
 //! was bound elsewhere on purpose, the Host header has to name 127.0.0.1 and
 //! the port, and a write has to come from the page itself.
 
+mod notify;
 mod versions;
 
 use std::io::Cursor;
@@ -18,6 +19,7 @@ use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response, Server};
 
 use bagholder_model::base::Base;
+use bagholder_model::value::field_s;
 
 /// `bagholder.APP_VERSION`.
 const APP_VERSION: &str = "1.42.0";
@@ -276,9 +278,16 @@ fn handle(app: &App, req: Request) {
     let query = query_of(&url).to_string();
     let method = req.method().as_str().to_string();
 
+    if method == "POST" {
+        if !gate(app, &req, true) {
+            forbidden(req);
+            return;
+        }
+        handle_post(app, req, &path);
+        return;
+    }
     if method != "GET" {
-        // the write routes are still Python's
-        send_json(req, 404, &json!({"ok": false, "error": "not ported"}));
+        send_json(req, 404, &json!({"ok": false, "error": "not found"}));
         return;
     }
     if !gate(app, &req, false) {
@@ -346,6 +355,87 @@ fn handle(app: &App, req: Request) {
                 None => send_json(req, 404, &json!({"ok": false, "error": "no such trade"})),
             }
         }
+        "/api/orders" => with_conn(app, req, |conn| {
+            let securities = bagholder_store::admin::list_securities(conn)?;
+            let mut orders = bagholder_store::orders::list_orders(conn, 200)?;
+            for o in orders.iter_mut() {
+                let sid = field_s(o, "securityId");
+                let exch = securities
+                    .iter()
+                    .find(|s| field_s(s, "id") == sid)
+                    .map(|s| field_s(s, "primaryExchange"))
+                    .unwrap_or_default();
+                if let Value::Object(m) = o {
+                    m.insert("exchange".into(), json!(exch));
+                }
+            }
+            Ok(json!({
+                "ok": true,
+                "orders": orders,
+                "brackets": bagholder_store::orders::list_brackets(conn, &[])?,
+                // orders are not placed from here yet; see the README
+                "live": false,
+                "refreshedAt": "",
+            }))
+        }),
+        "/api/notifications" => with_conn(app, req, |conn| {
+            Ok(json!({
+                "ok": true,
+                "settings": notify::status(conn)?,
+                "kinds": notify::KINDS,
+                "rows": bagholder_store::feeds::list_notifications(conn, 0, "", false, 50, true)?,
+                "unread": bagholder_store::feeds::unread_notifications(conn)?,
+            }))
+        }),
+        "/api/filings" => {
+            let sym = query_param(&query, "symbol").unwrap_or_default();
+            with_conn(app, req, move |conn| {
+                Ok(json!({
+                    "ok": true,
+                    "symbol": bagholder_store::feeds::filing_key(&sym),
+                    "filings": bagholder_store::feeds::filings_for(conn, &sym)?,
+                    "fetchedAt": bagholder_store::feeds::filings_fetched_for(conn, &sym)?,
+                    "profileNo": bagholder_store::feeds::sedar_profile(conn, &sym)?,
+                }))
+            })
+        }
+        "/api/shorts" => {
+            let sym = query_param(&query, "symbol").unwrap_or_default();
+            let ex = query_param(&query, "exchange").unwrap_or_default();
+            with_conn(app, req, move |conn| {
+                match bagholder_store::feeds::shorts_for(conn, &sym, &ex)? {
+                    Some(row) => Ok(json!({"ok": true, "shorts": row})),
+                    None => Ok(json!({"ok": false, "error": "nothing stored for that listing"})),
+                }
+            })
+        }
+        "/api/shorts/feed" => with_conn(app, req, |conn| {
+            Ok(json!({"ok": true, "rows": bagholder_store::feeds::all_shorts(conn)?}))
+        }),
+        "/api/news/symbol" => {
+            let sym = query_param(&query, "symbol").unwrap_or_default();
+            let ex = query_param(&query, "exchange").unwrap_or_default();
+            with_conn(app, req, move |conn| {
+                Ok(json!({
+                    "ok": true,
+                    "ids": bagholder_store::feeds::news_ids(conn, &sym, &ex)?,
+                    "fetchedAt": bagholder_store::feeds::news_fetched_at(conn)?,
+                }))
+            })
+        }
+        "/api/fear" => {
+            let which = query_param(&query, "index").unwrap_or_else(|| "stocks".into()).to_lowercase();
+            with_conn(app, req, move |conn| {
+                // reading a fresh one needs fear.py, which is not ported; what
+                // has already been read is answered from the store
+                match bagholder_store::feeds::gauge(conn, &which)? {
+                    Some(g) if !g.get("score").map(|s| s.is_null()).unwrap_or(true) => {
+                        Ok(json!({"ok": true, "gauge": g}))
+                    }
+                    _ => Ok(json!({"ok": false, "error": "the index did not answer"})),
+                }
+            })
+        }
         "/api/data" => {
             let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
             match data_summary(&conn, &app.db_path().display().to_string()) {
@@ -393,6 +483,134 @@ fn data_summary(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<Val
         "filings": count("SELECT COUNT(*) FROM filings")?,
         "syncedAt": bagholder_store::tables::get_meta(conn, "synced_at", "")?,
     }))
+}
+
+/// Opens the store, runs one reader, and answers with what it returned.
+fn with_conn<F>(app: &App, req: Request, f: F)
+where
+    F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value>,
+{
+    let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+    match f(&conn) {
+        Ok(v) => send_json(req, 200, &v),
+        Err(e) => fail(req, e),
+    }
+}
+
+/// The write routes that only touch the store. Anything that would reach
+/// Wealthsimple is not here: the session, the sync and the order routes are
+/// still Python's, and they answer 404 rather than pretending.
+fn handle_post(app: &App, mut req: Request, path: &str) {
+    let mut body = Vec::new();
+    let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
+    let doc: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let now = now_iso();
+
+    match path {
+        "/api/journal" => {
+            let id = field_s(&doc, "id").trim().to_string();
+            if id.is_empty() {
+                send_json(req, 400, &json!({"ok": false, "error": "id required"}));
+                return;
+            }
+            let entry = json!({
+                "thesis": doc.get("thesis").cloned().unwrap_or(Value::Null),
+                "tags": doc.get("tags").cloned().unwrap_or(Value::Null),
+                "grade": doc.get("grade").cloned().unwrap_or(Value::Null),
+            });
+            with_conn(app, req, move |conn| {
+                let entries = bagholder_store::admin::save_journal_entry(conn, &id, Some(&entry))?;
+                Ok(json!({"ok": true, "journal": entries}))
+            });
+        }
+        "/api/groups" => with_conn(app, req, move |conn| {
+            let groups = bagholder_store::tables::save_trade_groups(conn, doc.get("groups"))?;
+            Ok(json!({"ok": true, "groups": groups}))
+        }),
+        "/api/notes" => with_conn(app, req, move |conn| {
+            let notes = bagholder_store::tables::save_trade_notes(conn, doc.get("notes"))?;
+            Ok(json!({"ok": true, "notes": notes}))
+        }),
+        "/api/watchlist/add" => {
+            // the bare ticker: Wealthsimple's `.TO` on a dual listing is not
+            // the app's convention
+            let sym = bagholder_model::venues::tmx_symbol(&field_s(&doc, "symbol"));
+            if sym.is_empty() {
+                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
+                return;
+            }
+            let ex = field_s(&doc, "exchange");
+            let inst = bagholder_model::instruments::find(&sym, &ex);
+            let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| field_s(&doc, "name"));
+            let ccy = inst.map(|i| i.currency.to_string()).filter(|c| !c.is_empty()).unwrap_or_else(|| field_s(&doc, "currency"));
+            let sid = field_s(&doc, "securityId");
+            with_conn(app, req, move |conn| {
+                bagholder_store::feeds::add_watch(conn, &sym, &ex, &name, &ccy, &sid, &now)?;
+                Ok(json!({"ok": true, "watchlist": bagholder_store::feeds::list_watchlist(conn)?}))
+            });
+        }
+        "/api/watchlist/remove" => {
+            let raw = field_s(&doc, "symbol");
+            let sym = bagholder_model::venues::tmx_symbol(&raw);
+            if sym.is_empty() {
+                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
+                return;
+            }
+            let ex = field_s(&doc, "exchange");
+            with_conn(app, req, move |conn| {
+                bagholder_store::feeds::remove_watch(conn, &sym, &ex)?;
+                // a row kept under Wealthsimple's own form of the ticker
+                bagholder_store::feeds::remove_watch(conn, raw.trim(), &ex)?;
+                bagholder_store::feeds::forget_news(conn, &sym, &ex)?;
+                Ok(json!({"ok": true, "watchlist": bagholder_store::feeds::list_watchlist(conn)?}))
+            });
+        }
+        "/api/tiles/set" => {
+            // only instruments the directory knows, twelve at most
+            let mut rows: Vec<Value> = Vec::new();
+            let mut seen: Vec<&str> = Vec::new();
+            if let Some(list) = doc.get("tiles").and_then(|v| v.as_array()) {
+                for r in list {
+                    if let Some(i) = bagholder_model::instruments::find(&field_s(r, "symbol"), &field_s(r, "exchange")) {
+                        if !seen.contains(&i.symbol) {
+                            seen.push(i.symbol);
+                            rows.push(json!({"symbol": i.symbol, "exchange": i.exchange}));
+                        }
+                    }
+                }
+            }
+            if rows.len() > 12 {
+                send_json(req, 200, &json!({"ok": false, "error": "at most 12 tiles"}));
+                return;
+            }
+            with_conn(app, req, move |conn| {
+                let tiles = bagholder_store::admin::save_tiles(conn, &rows)?;
+                Ok(json!({"ok": true, "tiles": tiles}))
+            });
+        }
+        "/api/notifications/read" => {
+            let ids: Option<Vec<i64>> = doc.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect());
+            with_conn(app, req, move |conn| {
+                let n = bagholder_store::feeds::mark_notifications_read(conn, ids.as_deref(), &now)?;
+                Ok(json!({"ok": true, "read": n}))
+            });
+        }
+        "/api/notifications/seen" => {
+            let ids: Vec<i64> = doc.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect()).unwrap_or_default();
+            with_conn(app, req, move |conn| {
+                let n = bagholder_store::feeds::mark_notifications_seen(conn, &ids, &now)?;
+                Ok(json!({"ok": true, "seen": n}))
+            });
+        }
+        "/api/notifications/clear" => with_conn(app, req, |conn| {
+            Ok(json!({"ok": true, "cleared": bagholder_store::feeds::clear_notifications(conn)?}))
+        }),
+        "/api/notifications/settings" => with_conn(app, req, move |conn| {
+            let saved = notify::save_settings(conn, &doc)?;
+            Ok(json!({"ok": true, "settings": saved}))
+        }),
+        _ => send_json(req, 404, &json!({"ok": false, "error": "not ported"})),
+    }
 }
 
 fn fail(req: Request, e: rusqlite::Error) {
