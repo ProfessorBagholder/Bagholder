@@ -3,3 +3,4 @@
 pub mod schema;
 pub mod relabel;
 pub mod activities;
+pub mod tables;
