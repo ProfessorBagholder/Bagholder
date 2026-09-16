@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 bagholder-model = { path = "../model" }
 bagholder-store = { path = "../store" }
+bagholder-market = { path = "../market" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

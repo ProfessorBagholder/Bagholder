@@ -436,6 +436,57 @@ fn handle(app: &App, req: Request) {
                 }
             })
         }
+        "/api/history" => {
+            let q = |k: &str| query_param(&query, k).unwrap_or_default();
+            let ccy = { let c = q("currency"); if c.is_empty() { "CAD".to_string() } else { c } };
+            let kind = { let k = q("kind"); if k.is_empty() { "Shares".to_string() } else { k } };
+            let rec = json!({"symbol": q("symbol"), "exchange": q("exchange"), "currency": ccy, "kind": kind});
+            let start: String = q("from").chars().take(10).collect();
+            let end: String = q("to").chars().take(10).collect();
+            let tf = { let t = q("tf"); if t.is_empty() { "1d".to_string() } else { t } };
+            if field_s(&rec, "symbol").is_empty()
+                || start.len() != 10
+                || end.len() != 10
+                || !bagholder_market::history::TIMEFRAMES.contains(&tf.as_str())
+            {
+                send_json(req, 200, &json!({"ok": false, "error": "symbol, from, to and a known tf are required"}));
+                return;
+            }
+            let inst = bagholder_market::history::chart_instrument(&rec);
+            let src = bagholder_market::history::history_source(&inst);
+            let available = bagholder_market::history::offered_timeframes(&inst);
+            let today = bagholder_model::clock::today_local();
+            let now_unix = unix_now();
+            let stamp = now_iso();
+            with_conn(app, req, move |conn| {
+                let bars = if src.is_none() || !available.contains(&tf.as_str()) {
+                    vec![]
+                } else {
+                    bagholder_market::history::ensure_bars(conn, &inst, &tf, &start, &end, &today, now_unix, &stamp)
+                        .unwrap_or_default()
+                };
+                // the minute-data chain is not ported, so an intraday request
+                // is answered with the reason rather than an empty chart
+                let reason = if !bars.is_empty() {
+                    ""
+                } else if bagholder_market::history::INTRADAY.contains(&tf.as_str()) {
+                    "intraday bars are not served from here yet"
+                } else {
+                    "no source had bars for that span"
+                };
+                Ok(json!({
+                    "ok": true,
+                    "symbol": field_s(&rec, "symbol"),
+                    "chartSymbol": field_s(&inst, "symbol"),
+                    "source": src.as_ref().map(|(s, _)| s.clone()).unwrap_or_default(),
+                    "tf": tf,
+                    "available": available,
+                    "bars": bars,
+                    "pending": false,
+                    "reason": reason,
+                }))
+            });
+        }
         "/api/data" => {
             let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
             match data_summary(&conn, &app.db_path().display().to_string()) {
@@ -649,6 +700,13 @@ fn main() {
         let app = app.clone();
         std::thread::spawn(move || handle(&app, req));
     }
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn now_iso() -> String {

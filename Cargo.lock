@@ -69,6 +69,7 @@ dependencies = [
 name = "bagholder-server"
 version = "1.10.0"
 dependencies = [
+ "bagholder-market",
  "bagholder-model",
  "bagholder-store",
  "rusqlite",

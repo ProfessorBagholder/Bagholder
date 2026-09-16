@@ -479,3 +479,57 @@ pub fn aggregate_daily(bars: &[Value], tf: &str) -> Vec<Value> {
     }
     out
 }
+
+/// `market.TIMEFRAMES`.
+pub const TIMEFRAMES: [&str; 5] = ["1h", "4h", "1d", "1w", "1M"];
+/// `market.INTRADAY_SECONDS`: the two timeframes that need minute data.
+pub const INTRADAY: [&str; 2] = ["1h", "4h"];
+
+/// `market.chart_instrument`: what the chart draws for an instrument -- itself,
+/// or for an option contract its underlying, since no source keeps contract
+/// history.
+pub fn chart_instrument(rec: &Value) -> Value {
+    if field_s(rec, "kind") == "Options" {
+        let under = bagholder_model::symbols::underlying_symbol(&field_s(rec, "symbol"));
+        if !under.is_empty() && under != "—" {
+            let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "USD".to_string() } else { c } };
+            return json!({"symbol": under, "exchange": field_s(rec, "exchange"), "currency": ccy, "kind": "Shares"});
+        }
+    }
+    rec.clone()
+}
+
+/// `market.history_source`: the preferred source for an instrument's bars.
+pub fn history_source(rec: &Value) -> Option<(String, String)> {
+    history_candidates(rec).into_iter().next()
+}
+
+/// `market.available_timeframes`, less the intraday ones.
+///
+/// The minute-data chain is not ported yet, so `1h` and `4h` are not offered
+/// and the chart falls back to daily bars rather than waiting on a source this
+/// server cannot ask.
+pub fn offered_timeframes(rec: &Value) -> Vec<&'static str> {
+    if history_candidates(rec).is_empty() {
+        return vec![];
+    }
+    vec!["1d", "1w", "1M"]
+}
+
+/// `market.ensure_bars`, for the timeframes built from daily bars.
+pub fn ensure_bars(
+    conn: &rusqlite::Connection,
+    rec: &Value,
+    tf: &str,
+    start: &str,
+    end: &str,
+    today: &str,
+    now_unix: f64,
+    now_stamp: &str,
+) -> rusqlite::Result<Vec<Value>> {
+    if INTRADAY.contains(&tf) {
+        return Ok(vec![]);
+    }
+    let daily = ensure_history(conn, rec, start, end, today, now_unix, now_stamp)?;
+    Ok(if tf == "1d" { daily } else { aggregate_daily(&daily, tf) })
+}
