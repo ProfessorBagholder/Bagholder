@@ -1,0 +1,23 @@
+query FetchSoOrdersExtendedOrder($branchId: String!, $externalId: String!) {
+  soOrdersExtendedOrder(branchId: $branchId, externalId: $externalId) {
+    averageFilledPrice
+    filledQuantity
+    firstFilledAtUtc
+    lastFilledAtUtc
+    limitPrice
+    orderType
+    rejectionCause
+    rejectionCode
+    securityCurrency
+    status
+    stopPrice
+    submittedAtUtc
+    submittedQuantity
+    timeInForce
+    accountId
+    canonicalAccountId
+    cancellationCutoff
+    expiredAtUtc
+    securityId
+  }
+}

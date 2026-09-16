@@ -87,6 +87,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-ws"
+version = "1.10.0"
+dependencies = [
+ "bagholder-market",
+ "bagholder-model",
+ "bagholder-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

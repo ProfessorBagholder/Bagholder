@@ -1,0 +1,6 @@
+mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
+  soOrdersCreateOrder(input: $input) {
+    errors { code message }
+    order { orderId createdAt }
+  }
+}

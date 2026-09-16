@@ -1,0 +1,41 @@
+query FetchAccountHistoricalFinancials(
+  $id: ID!
+  $currency: Currency!
+  $startDate: Date
+  $resolution: DateResolution!
+  $endDate: Date
+  $first: Int
+  $cursor: String
+) {
+  account(id: $id) {
+    id
+    financials {
+      historicalDaily(
+        currency: $currency
+        startDate: $startDate
+        resolution: $resolution
+        endDate: $endDate
+        first: $first
+        after: $cursor
+      ) {
+        edges {
+          node {
+            date
+            netLiquidationValueV2 { amount currency __typename }
+            netDepositsV2 { amount currency __typename }
+            __typename
+          }
+          __typename
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

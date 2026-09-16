@@ -1,0 +1,9 @@
+query FetchSecurity($securityId: ID!) {
+  security(id: $securityId) {
+    id
+    currency
+    stock { name primaryExchange primaryMic symbol }
+    optionDetails { underlyingSecurity { id currency } }
+    __typename
+  }
+}
