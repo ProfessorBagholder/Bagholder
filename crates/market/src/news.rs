@@ -36,7 +36,8 @@ pub const FRESH_MINUTES: f64 = 15.0;
 /// Items kept in the database, newest first.
 pub const KEEP: i64 = 400;
 
-fn nasdaq_headers() -> [(&'static str, &'static str); 4] {
+/// `news.NASDAQ_HEADERS`.
+pub fn nasdaq_headers() -> [(&'static str, &'static str); 4] {
     [
         ("User-Agent", UA),
         ("Accept", "application/json, text/plain, */*"),
@@ -45,7 +46,8 @@ fn nasdaq_headers() -> [(&'static str, &'static str); 4] {
     ]
 }
 
-fn tmx_headers() -> [(&'static str, &'static str); 4] {
+/// `news.TMX_HEADERS`: TMX Money's own page, not the quote client's.
+pub fn tmx_headers() -> [(&'static str, &'static str); 4] {
     [
         ("User-Agent", UA),
         ("locale", "en"),
@@ -55,7 +57,7 @@ fn tmx_headers() -> [(&'static str, &'static str); 4] {
 }
 
 /// `news._pace`: one call to a host every six-tenths of a second.
-fn pace(host: &str) {
+pub fn pace(host: &str) {
     static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     let last = LAST.get_or_init(|| Mutex::new(HashMap::new()));
     let wait = {

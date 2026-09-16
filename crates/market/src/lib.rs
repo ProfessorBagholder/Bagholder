@@ -12,6 +12,7 @@ pub mod news;
 pub mod history;
 pub mod quotes;
 pub mod tmx;
+pub mod universes;
 
 /// `store.quote_fetched_at`, re-exported so the quote loop can ask when each
 /// symbol was last priced.
