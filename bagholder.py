@@ -43,6 +43,7 @@ import csvimport
 import exposure
 import fear
 import instruments
+import localmodel
 import disclosures
 import enrich
 import notify
@@ -692,7 +693,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.43.0"
+APP_VERSION = "1.43.1"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -5817,6 +5818,40 @@ def _filings_stale(symbol, now=None, hours=None):
 # --- the Disclosures notification: a sweep of the tickers the book knows, only while that kind is on ---
 
 FILINGS_SWEEP_EVERY_SEC = 300      # how often the sweep looks for work
+FILINGS_HOLD_MAX_MIN = 120         # how long a disclosure waits to be told by name before it is told by its form's code
+FILINGS_HOLD_KEY = "filings:held-since"
+
+
+def _can_name_documents():
+    """Whether a new filing can be told by the document's own title now. The title is read
+    from the document by the local model, so a model that is coming up in seconds is waited
+    for; one still downloading means the title is minutes or hours away, and the caller holds
+    the notice rather than sending the form's code; a model that is off or has failed means no
+    title is ever coming, and the form's code is the best there will be."""
+    if enrich.summary_available():
+        return True
+    status = enrich.summary_status()
+    if status in localmodel.COMING_UP:
+        return enrich.wait_for_summary()
+    return status != "downloading"
+
+
+def _naming_held(now, holding):
+    """Whether to keep holding what cannot be named yet. A hold is bounded: after
+    FILINGS_HOLD_MAX_MIN the filing is told by its form's code rather than never told."""
+    now = now or datetime.now(timezone.utc)
+    if not holding:
+        store.set_meta(FILINGS_HOLD_KEY, "")
+        return False
+    since = _s(store.get_meta(FILINGS_HOLD_KEY))
+    if not since:
+        store.set_meta(FILINGS_HOLD_KEY, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        return True
+    try:
+        waited = now - datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return waited <= timedelta(minutes=FILINGS_HOLD_MAX_MIN)
 FILINGS_SWEEP_AGE_MIN = 30         # a ticker read within this long is left alone: a SEDAR+ re-read is a few paced actions, and thirty issuers must fit between passes
 
 
@@ -5880,9 +5915,19 @@ def sweep_filings(now=None):
         return 0
     told = 0
     disc_syms = {i["symbol"] for i in known_filing_symbols(scopes)} if scopes else set()
+    # A disclosure is told by the document's own title, so the document must be readable before
+    # the notice goes out. While the model that reads it is still coming, the pass refreshes the
+    # lists and tells nothing: the stream is not consumed, so nothing is lost and the filing is
+    # told on a later pass by its title rather than by `144`. The hold is bounded.
+    hold = bool(disc_syms) and _naming_held(now, not _can_name_documents())
     for inst in known_filing_symbols(scopes | rel_scopes):
         sym = inst["symbol"]
         if not _filings_stale(sym, now, hours=FILINGS_SWEEP_AGE_MIN / 60.0):
+            continue
+        if hold and sym in disc_syms:
+            # the ticker is left alone entirely, list and all: a filing stored now would be part of
+            # what the app already held by the time it could be told, which is history and told to
+            # nobody. The next pass reads it and tells it by the document's own title.
             continue
         before = {filing_mark(r) for r in store.filings(sym)}
         wrote = refresh_filings(sym, name=inst.get("name"), exchange=inst.get("exchange"), currency=inst.get("currency"))
@@ -6477,11 +6522,12 @@ def filings_enrich(symbol, doc_id):
     model = enrich.summary_available()
     fresh = (row.get("enrichVersion") or 0) >= ENRICH_VERSION
     attempted = bool(row.get("enrichedAt")) and fresh
-    # Already read by the current logic and there is nothing further to get: the row has
-    # both halves, or no model is up to make the missing one. A row holding only one of
-    # them while a model is up is read again — the title and the sentence come from the
-    # same read but not always in the same pass — as is a row read by older logic.
-    if attempted and ((subject and summary) or not model):
+    # Already read by the current logic and there is nothing further to get: the row was read
+    # for good (a form, read from its own boxes, which no model adds to), or it has both halves,
+    # or no model is up to make the missing one. A row holding only one of them while a model is
+    # up is read again — the title and the sentence come from the same read but not always in the
+    # same pass — as is a row read by older logic.
+    if attempted and (row.get("enrichFinal") or (subject and summary) or not model):
         return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if not disclosures.available():
@@ -6511,6 +6557,12 @@ def filings_enrich(symbol, doc_id):
     info = enrich.enrich_document(row.get("source", ""), data, ct)
     new_subject = info.get("subject") or ""
     got_summary = info.get("summary") or ""
+    if info.get("final"):
+        # read for good, model or no model: a regulator's form is read from its own boxes, and
+        # the row says so, since a form has no missing half to come back for
+        store.set_filing_enrichment(sym, doc_id, subject=new_subject, summary=got_summary, version=ENRICH_VERSION, final=True)
+        return {"ok": True, "id": doc_id, "subject": new_subject, "summary": got_summary,
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if model:
         if fresh:
             # reading again a row this logic already wrote, to fill the half it lacks: what

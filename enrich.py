@@ -294,11 +294,14 @@ def enrich_document(source, data, content_type=""):
     # summarizes the instructions: one this app reads exactly is read value by value and never
     # sees a model, and one it does not read is not summarized at all, since the row's type
     # already says what the document is and a guess about it is worse than nothing (forms.py).
+    # `final` says the document has been read for good and no model will add to it, so the row
+    # is stamped and never read again: a form is read here or not at all, and without this a form
+    # read while no model happened to be up was fetched and read again on every later ask
     exact = forms.read(text)
     if exact:
-        return {"subject": exact.get("subject", "") or subject, "summary": exact.get("summary", "")}
+        return {"subject": exact.get("subject", "") or subject, "summary": exact.get("summary", ""), "final": True}
     if forms.is_form(text):
-        return {"subject": subject, "summary": ""}
+        return {"subject": subject, "summary": "", "final": True}
     summary = summarize(text)
     if not subject:
         subject = title_from_model(text)

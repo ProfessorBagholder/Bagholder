@@ -43,8 +43,12 @@ class NotifyTest(unittest.TestCase):
         # reaches a regulator or a model and what is told does not depend on either being up
         self.reads = mock.patch.object(bagholder, "filings_enrich", return_value={})
         self.reads.start()
+        # and no test asks whether a model is up, which would start one downloading here
+        self.naming = mock.patch.object(bagholder, "_can_name_documents", return_value=True)
+        self.naming.start()
 
     def tearDown(self):
+        self.naming.stop()
         self.reads.stop()
         self.tmp.cleanup()
         os.environ.pop("BAGHOLDER_HOME", None)
@@ -432,6 +436,50 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(bagholder.filings_notice("NBIS", many),
                          ("4 new disclosures \u00b7 NBIS", "Insider report 0, Insider report 1, Insider report 2 and more \u00b7 SEC EDGAR"))
 
+
+    def test_a_disclosure_waits_to_be_told_by_name_rather_than_by_its_forms_code(self):
+        notify.set_settings({"disclosuresWatched": True})
+        watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
+        old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        answer = {"rows": [old]}
+        def fake_fetch(sym, **kw):
+            return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
+        later = lambda m: datetime.now(timezone.utc) + timedelta(minutes=m)
+        with mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]), \
+             mock.patch.object(disclosures, "fetch", side_effect=fake_fetch), mock.patch.object(store, "list_securities", return_value=[]), mock.patch.object(sys, "stderr"):
+            self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
+            answer["rows"] = list(rows)
+            # the model that reads a document is still coming up: the list is stored, nothing is told
+            with mock.patch.object(bagholder, "_can_name_documents", return_value=False):
+                self.assertEqual(bagholder.sweep_filings(now=later(31)), 0)
+            self.assertEqual(store.list_notifications(), [], "nothing told by a form's code")
+            self.assertEqual([r["id"] for r in store.filings("CH")], ["sedar:a0"], "the ticker is left alone: a filing stored now would read as history")
+            # once a document can be read, the filing is told — the stream was never consumed
+            with mock.patch.object(bagholder, "filings_enrich", return_value={"subject": "Notice of proposed sale"}):
+                self.assertEqual(bagholder.sweep_filings(now=later(62)), 1)
+        self.assertEqual([(r["title"], r["body"]) for r in store.list_notifications()],
+                         [("New disclosure \u00b7 CH", "Notice of proposed sale \u00b7 SEDAR+")])
+
+    def test_a_hold_is_bounded_so_a_filing_is_told_late_rather_than_never(self):
+        notify.set_settings({"disclosuresWatched": True})
+        watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
+        old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        answer = {"rows": [old]}
+        def fake_fetch(sym, **kw):
+            return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
+        later = lambda m: datetime.now(timezone.utc) + timedelta(minutes=m)
+        with mock.patch.object(store, "list_watchlist", return_value=watched), mock.patch.object(disclosures, "providers_for", return_value=[object()]), \
+             mock.patch.object(disclosures, "fetch", side_effect=fake_fetch), mock.patch.object(store, "list_securities", return_value=[]), \
+             mock.patch.object(sys, "stderr"):
+            self.assertEqual(bagholder.sweep_filings(), 0, "the first read is the baseline")
+            answer["rows"] = list(rows)
+            with mock.patch.object(bagholder, "_can_name_documents", return_value=False):
+                self.assertEqual(bagholder.sweep_filings(now=later(31)), 0, "held while the document cannot be read")
+                # after the hold's bound it is told by what the row already says, rather than never told
+                self.assertEqual(bagholder.sweep_filings(now=later(31 + bagholder.FILINGS_HOLD_MAX_MIN + 1)), 1)
+        self.assertEqual([r["body"] for r in store.list_notifications()], ["144 \u00b7 SEDAR+"])
 
     def test_a_wires_release_is_told_and_a_first_read_of_a_listing_is_not(self):
         notify.set_settings({"releasesHeld": True})

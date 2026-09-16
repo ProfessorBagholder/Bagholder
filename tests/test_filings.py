@@ -179,13 +179,13 @@ class EnrichTest(unittest.TestCase):
         row = store.filing("QNC", self.doc)
         return row.get("subject") or "", row.get("summary") or "", row.get("enrichVersion") or 0
 
-    def enrich(self, model=True, read=("A title", "A sentence."), available=True):
+    def enrich(self, model=True, read=("A title", "A sentence."), available=True, final=False):
         with mock.patch.object(bagholder.enrich, "summary_available", return_value=model), \
              mock.patch.object(bagholder.enrich, "summary_status", return_value="ready" if model else "off"), \
              mock.patch.object(bagholder.disclosures, "available", return_value=available), \
              mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
              mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")) as content, \
-             mock.patch.object(bagholder.enrich, "enrich_document", return_value={"subject": read[0], "summary": read[1]}):
+             mock.patch.object(bagholder.enrich, "enrich_document", return_value=dict({"subject": read[0], "summary": read[1]}, **({"final": True} if final else {}))):
             out = bagholder.filings_enrich("QNC", self.doc)
             return out, content.call_count
 
@@ -195,6 +195,23 @@ class EnrichTest(unittest.TestCase):
         out, reads = self.enrich(read=("other", "other."))
         self.assertEqual(reads, 0)                       # the document is not fetched a second time
         self.assertEqual(out["subject"], "A title")
+
+    def test_a_document_read_for_good_is_never_fetched_again_even_with_nothing_to_show(self):
+        # a regulator's form is read from its own boxes and no model adds to it, so a form that
+        # yields nothing is done. Without this it had neither half, counted as unfinished, and was
+        # fetched from the regulator again on every ask — the page asks whenever the card is shown.
+        out, reads = self.enrich(read=("", ""), final=True)
+        self.assertEqual((out["subject"], out["summary"]), ("", ""))
+        self.assertEqual(self.stored()[2], bagholder.ENRICH_VERSION, "stamped, so the row is done")
+        for _ in range(3):
+            out, reads = self.enrich(read=("", ""), final=True)
+            self.assertEqual(reads, 0, "the document is not fetched again")
+
+    def test_a_document_read_for_good_while_no_model_was_up_is_still_done(self):
+        out, reads = self.enrich(model=False, read=("Exempt distribution of $1,500,000", "$1,500,000 distributed."), final=True)
+        self.assertEqual(self.stored()[:2], ("Exempt distribution of $1,500,000", "$1,500,000 distributed."))
+        _, reads = self.enrich(model=True, read=("other", "other."), final=True)
+        self.assertEqual(reads, 0, "a form needs no model, so a model arriving later changes nothing")
 
     def test_a_row_holding_only_a_title_is_read_again_for_its_summary(self):
         self.enrich(read=("A title", ""))
