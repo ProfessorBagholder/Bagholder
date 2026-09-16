@@ -56,6 +56,8 @@ fn slim_slice(s: &Slice) -> Value {
 }
 
 /// `model._fill_row`: one broker fill as the page prints it.
+pub fn fill_row_public(a: &Value) -> Value { fill_row(a) }
+
 fn fill_row(a: &Value) -> Value {
     let occurred = { let o = field_s(a, "occurredAt"); if o.is_empty() { field_s(a, "transactionDate") } else { o } };
     let (day, clock) = when_parts(&occurred);

@@ -45,7 +45,22 @@ def main():
         model.apply_fx(book["fifo"]["closed"], fx)
         trades = model.build_trades(book["fifo"]["closed"], book["fifo"]["open"], snap.get("tradeGroups"),
                                     book["actsById"], book["securities"], journal)
+        quotes = doc["market"].get("quotes") or {}
+        positions = model.build_positions(book["fifo"]["open"], model.last_fill_prices(book["activities"]),
+                                          snap.get("balances"), snap.get("accounts"), book["securities"],
+                                          journal, today, quotes, book["actsById"])
+        bench = doc["market"].get("benchmark") or {}
+        equity = model.equity_series(snap.get("navHistory"))
+        years = model.yearly_returns(equity, bench, today)
         want = {
+            "cashflowRows": model.build_cashflow(book["activities"], book["securities"], fx),
+            "equity": equity,
+            "equityByAccount": {model.norm_account_name(k): model.equity_series(v)
+                                for k, v in (snap.get("navByAccount") or {}).items()},
+            "years": years,
+            "annualized": model.annualized(years),
+            "drawdown": model.drawdown(equity),
+            "positions": positions,
             "trades": trades,
             "lastPrices": model.last_fill_prices(book["activities"]),
             "activities": book["activities"],
@@ -57,13 +72,13 @@ def main():
             "knownExchanges": book["securities"].known_exchanges(),
         }
         got = json.loads(subprocess.run(
-            [BIN, "book"], input=json.dumps({"snapshot": snap, "today": today, "fx": fx, "journal": journal}),
+            [BIN, "book"], input=json.dumps({"snapshot": snap, "today": today, "fx": fx, "journal": journal, "quotes": quotes, "benchmark": bench}),
             capture_output=True, text=True, check=True).stdout)
 
-        for k in ("rawCount", "cashCurrencies", "knownExchanges", "lastPrices"):
+        for k in ("rawCount", "cashCurrencies", "knownExchanges", "lastPrices", "annualized", "drawdown", "equityByAccount"):
             if norm(want[k]) != norm(got[k]):
                 bad.append(f"{name}: {k} py={want[k]!r} rs={got[k]!r}")
-        for section in ("activities", "closed", "open", "unmatched", "trades"):
+        for section in ("activities", "closed", "open", "unmatched", "trades", "positions", "cashflowRows", "equity", "years"):
             w, g = norm(want[section]), norm(got[section])
             counts[section] = counts.get(section, 0) + len(w)
             if len(w) != len(g):

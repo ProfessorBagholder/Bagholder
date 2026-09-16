@@ -41,7 +41,23 @@ fn main() {
             let journal = input.get("journal").and_then(|v| v.as_object()).cloned().unwrap_or_default();
             let trades = bagholder_model::trades::build_trades(&b.fifo.closed, &saved, &b.acts_by_id, &b.securities, &journal);
             let last_prices = bagholder_model::trades::last_fill_prices(&b.activities);
+            let arr = |k: &str| snapshot.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let quotes = input.get("quotes").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            let positions = bagholder_model::positions::build_positions(
+                &b.fifo.open, &last_prices, &arr("balances"), &arr("accounts"),
+                &b.securities, &journal, &today, &quotes, &b.acts_by_id);
+            let cashflow = bagholder_model::cashflow::build_cashflow(&b.activities, &b.securities, &fx);
+            let equity = bagholder_model::nav::equity_series(&arr("navHistory"));
+            let bench = bagholder_model::nav::bench_map(input.get("benchmark"));
+            let years = bagholder_model::nav::yearly_returns(&equity, &bench, &today);
             json!({
+                "cashflowRows": cashflow,
+                "equity": bagholder_model::nav::series_json(&equity),
+                "equityByAccount": bagholder_model::nav::by_account(snapshot.get("navByAccount")),
+                "years": years,
+                "annualized": bagholder_model::nav::annualized(&years),
+                "drawdown": bagholder_model::nav::drawdown(&equity),
+                "positions": positions,
                 "trades": trades,
                 "lastPrices": last_prices,
                 "activities": b.activities,
