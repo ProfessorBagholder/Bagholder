@@ -234,7 +234,25 @@ fn main() {
                 fd::replace_universe(&conn, u.get("key").and_then(|v| v.as_str()).unwrap_or(""), &rows, &now).unwrap();
             }
             let q = |k: &str| doc.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            for f in a("filingStamps") {
+                fd::mark_filings_fetched(&conn, f.get(0).and_then(|v| v.as_str()).unwrap_or(""),
+                                         f.get(1).and_then(|v| v.as_str()).unwrap_or(""), &now).unwrap();
+            }
+            let read_ids: Option<Vec<i64>> = doc.get("read").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect());
+            let read_marked = fd::mark_notifications_read(&conn, read_ids.as_deref(), &now).unwrap();
             println!("{}", serde_json::to_string(&json!({
+                "dividendSymbols": fd::dividend_symbols(&conn).unwrap(),
+                "allShorts": fd::all_shorts(&conn).unwrap(),
+                "filingsFetched": fd::filings_fetched_at(&conn).unwrap(),
+                "filingsFetchedFor": fd::filings_fetched_for(&conn, &q("filingSymbol")).unwrap(),
+                "sedarProfile": fd::sedar_profile(&conn, &q("filingSymbol")).unwrap(),
+                "soldSince": fd::sold_since(&conn, &q("soldAccount"), &q("soldSecurity"), &q("soldSince"), &q("soldSymbol")).unwrap(),
+                "positionQuantity": fd::position_quantity(&conn, &q("soldAccount"), &q("soldSecurity")).unwrap(),
+                "balancesCount": fd::balances_count(&conn).unwrap(),
+                "latestNotificationId": fd::latest_notification_id(&conn).unwrap(),
+                "unreadNotifications": fd::unread_notifications(&conn).unwrap(),
+                "readMarked": read_marked,
                 "added": added,
                 "removed": removed,
                 "watchlist": fd::list_watchlist(&conn).unwrap(),

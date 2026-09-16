@@ -653,3 +653,168 @@ pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str)
     }
     Ok(())
 }
+
+// --------------------------------------------------------------------------
+// the remaining readers
+// --------------------------------------------------------------------------
+
+/// `store.dividend_symbols`: the symbols that have paid, with the listing
+/// exchange when the securities table knows it.
+pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT a.symbol AS symbol, a.currency AS currency, s.primary_exchange AS exchange \
+         FROM activities a LEFT JOIN securities s ON s.id = a.security_id \
+         WHERE a.category = 'dividend' AND IFNULL(a.symbol, '') != ''",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(r) = rows.next()? {
+        let sym = up(&text(r, "symbol")?);
+        if sym.is_empty() || seen.contains(&sym) {
+            continue;
+        }
+        seen.push(sym.clone());
+        out.push(json!({
+            "symbol": sym,
+            "currency": text(r, "currency")?,
+            "exchange": text(r, "exchange")?.trim().to_string(),
+        }));
+    }
+    Ok(out)
+}
+
+/// `store.all_shorts`: every listing's stored short selling, for the ranked
+/// list.
+pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare("SELECT * FROM shorts")?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(short_row(r)?);
+    }
+    Ok(out)
+}
+
+/// `store.mark_filings_fetched`: when a symbol's disclosures were last
+/// refreshed, and its SEDAR+ profile number when one was found.
+pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, now: &str) -> Result<()> {
+    let sym = filing_key(symbol);
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        rusqlite::params![format!("filings_fetched:{}", sym), now],
+    )?;
+    if !profile_no.is_empty() {
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn filings_fetched_for(conn: &Connection, symbol: &str) -> Result<String> {
+    Ok(crate::tables::get_meta(conn, &format!("filings_fetched:{}", filing_key(symbol)), "")?)
+}
+
+pub fn filings_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'filings_fetched:%'")?;
+    let mut rows = stmt.query([])?;
+    let mut out = Map::new();
+    while let Some(r) = rows.next()? {
+        let key: String = r.get(0)?;
+        out.insert(
+            key["filings_fetched:".len()..].to_string(),
+            json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()),
+        );
+    }
+    Ok(out)
+}
+
+/// `store.sedar_profile`.
+pub fn sedar_profile(conn: &Connection, symbol: &str) -> Result<String> {
+    crate::tables::get_meta(conn, &format!("sedar_profile:{}", filing_key(symbol)), "")
+}
+
+pub fn forget_filings(conn: &Connection, symbol: &str) -> Result<()> {
+    let sym = filing_key(symbol);
+    conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
+    conn.execute(
+        "DELETE FROM meta WHERE key IN (?, ?)",
+        rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
+    )?;
+    Ok(())
+}
+
+/// `store.sold_since`: the shares sold in an account since a moment, from the
+/// activity feed -- by security id when there is one, else by symbol.
+pub fn sold_since(conn: &Connection, account_id: &str, security_id: &str, since_iso: &str, symbol: &str) -> Result<f64> {
+    let q: Option<f64> = if !security_id.is_empty() {
+        conn.query_row(
+            "SELECT SUM(quantity) FROM activities WHERE account_id = ? AND security_id = ? AND activity_type = 'Trade' AND activity_sub_type = 'SELL' AND occurred_at > ?",
+            rusqlite::params![account_id, security_id, since_iso],
+            |r| r.get(0),
+        )?
+    } else {
+        conn.query_row(
+            "SELECT SUM(quantity) FROM activities WHERE account_id = ? AND symbol = ? AND activity_type = 'Trade' AND activity_sub_type = 'SELL' AND occurred_at > ?",
+            rusqlite::params![account_id, symbol, since_iso],
+            |r| r.get(0),
+        )?
+    };
+    Ok(q.unwrap_or(0.0))
+}
+
+/// `store.position_quantity`: Wealthsimple's own balance for one security in
+/// one account, as last read. Nothing when it is not known.
+pub fn position_quantity(conn: &Connection, account_id: &str, security_id: &str) -> Result<Option<f64>> {
+    conn.query_row(
+        "SELECT SUM(quantity) FROM balances WHERE account_id = ? AND security_id = ?",
+        rusqlite::params![account_id, security_id],
+        |r| r.get(0),
+    )
+}
+
+pub fn balances_count(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM balances", [], |r| r.get(0))
+}
+
+pub fn latest_notification_id(conn: &Connection) -> Result<i64> {
+    let m: Option<i64> = conn.query_row("SELECT MAX(id) FROM notifications", [], |r| r.get(0))?;
+    Ok(m.unwrap_or(0))
+}
+
+/// `store.unread_notifications`: how many the person has not looked at.
+pub fn unread_notifications(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL", [], |r| r.get(0))
+}
+
+/// `store.mark_notifications_read`: every unread one when no ids are given.
+pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str) -> Result<usize> {
+    match ids {
+        None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
+        Some(ids) if ids.is_empty() => Ok(0),
+        Some(ids) => {
+            let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN ({})", marks);
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+            for i in ids {
+                args.push(Box::new(*i));
+            }
+            let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+            conn.execute(&sql, refs.as_slice())
+        }
+    }
+}
+
+/// `store.clear_notifications`: the history emptied, and the keys with it --
+/// an event already told is only untold while its row stands.
+pub fn clear_notifications(conn: &Connection) -> Result<usize> {
+    conn.execute("DELETE FROM notifications", [])
+}
+
+/// `store.exposure_record`: one record by its key, or nothing.
+pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<Value>> {
+    let all = crate::admin::exposures_map(conn)?;
+    Ok(all.get(key).cloned())
+}

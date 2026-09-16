@@ -128,6 +128,9 @@ def norm(v):
     return v
 
 
+FILING_STAMPS = [["QNC", "00012345"], ["ZZZ", ""]]
+READ_IDS = [1, 99]
+
 UNIVERSES = [
     {"key": "gainers", "rows": [
         {"symbol": "AAA", "name": "Triple A", "value": 12.5, "percentChange": 3.2,
@@ -165,7 +168,21 @@ def python_side(home):
     marked = store.mark_notifications_seen([1, 2, 99])
     for u in UNIVERSES:
         store.replace_universe(u["key"], u["rows"], NOW)
+    for sym, prof in FILING_STAMPS:
+        store.mark_filings_fetched(sym, prof, NOW)
+    read_marked = store.mark_notifications_read(READ_IDS)
     out = {
+        "dividendSymbols": store.dividend_symbols(),
+        "allShorts": store.all_shorts(),
+        "filingsFetched": store.filings_fetched_at(),
+        "filingsFetchedFor": store.filings_fetched_at("QNC"),
+        "sedarProfile": store.sedar_profile("QNC"),
+        "soldSince": store.sold_since("acct-1", "sec-1", "2026-01-01T00:00:00Z", "AAA"),
+        "positionQuantity": store.position_quantity("acct-1", "sec-1"),
+        "balancesCount": store.balances_count(),
+        "latestNotificationId": store.latest_notification_id(),
+        "unreadNotifications": store.unread_notifications(),
+        "readMarked": read_marked,
         "added": [a for a in added],
         "removed": removed,
         "watchlist": store.list_watchlist(),
@@ -204,7 +221,10 @@ def main():
                "shorts": SHORTS, "gauges": GAUGES, "notifications": NOTIFICATIONS,
                "seen": [1, 2, 99], "universes": UNIVERSES,
                "newsSymbol": "QNC", "newsExchange": "TSX", "filingSymbol": "QNC",
-               "shortSymbol": "QNC", "shortExchange": "TSX", "gaugeName": "Fear & Greed"}
+               "shortSymbol": "QNC", "shortExchange": "TSX", "gaugeName": "Fear & Greed",
+               "filingStamps": FILING_STAMPS, "read": READ_IDS,
+               "soldAccount": "acct-1", "soldSecurity": "sec-1", "soldSince": "2026-01-01T00:00:00Z",
+               "soldSymbol": "AAA"}
     # the filings are applied in one pass on the Rust side, so the enrichment has
     # to run between them the same way; the tool takes them in the order given
     payload["filings"] = FILINGS
@@ -215,7 +235,8 @@ def main():
         return 1
     # the second filing pass, after the enrichment, as Python did it
     payload2 = dict(payload, filings=FILINGS_AGAIN, enrich=[], watch=[], unwatch=[], news=[],
-                    shorts=[], gauges=[], notifications=[], seen=[], universes=[], exposures=[])
+                    shorts=[], gauges=[], notifications=[], seen=[], universes=[], exposures=[],
+                    filingStamps=[], read=[])
     r2 = subprocess.run([BIN, "feeds", os.path.join(rshome, "bagholder.db")],
                         input=json.dumps(payload2), capture_output=True, text=True)
     if r2.returncode != 0:
@@ -224,7 +245,7 @@ def main():
     got = json.loads(r2.stdout)
     first = json.loads(r.stdout)
     # what only the first pass produced
-    for k in ("added", "removed", "notifications", "marked"):
+    for k in ("added", "removed", "notifications", "marked", "readMarked"):
         got[k] = first[k]
 
     bad = []
