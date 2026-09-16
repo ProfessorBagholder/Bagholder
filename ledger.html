@@ -1388,8 +1388,11 @@ function extSchedule(q) {
 function extRowHtml(r, cls) {
   const sym = r.sym || r.symbol;
   if (r.kind) return symbolRowHtml(sym, r.name, r.exchange, '<span class="tk-rowbtns">' + tkIcon("BUY", false) + tkIcon("SELL", false) + "</span>", cls, "noop", {});
-  const icon = '<span class="tk-rowbtns"><span class="tk-rowbtn buy" aria-hidden="true">' + tkIconSvg(ICONS.plus) + "</span>" + tkIcon("SELL", false) + "</span>";
-  return symbolRowHtml(sym, r.name, r.exchange, icon, cls, "tkOpenExt", { symbol: sym, exchange: r.exchange, currency: r.currency, name: r.name });
+  // the row opens the listing's page, as a listing opens everywhere else; Buy on it opens the
+  // ticket, which is what the icon is for and the only thing that should reach an order
+  const listing = { symbol: sym, exchange: r.exchange, currency: r.currency, name: r.name };
+  const icon = '<span class="tk-rowbtns">' + tkIcon("BUY", true, sym, "tkOpenExt", listing) + tkIcon("SELL", false) + "</span>";
+  return symbolRowHtml(sym, r.name, r.exchange, icon, cls, "listingOpen", listing);
 }
 // The symbol rows for a text, the book's and the ones found outside it, in one order
 // of relevance: exact tickers on any exchange, then tickers starting with the text, then
@@ -4804,7 +4807,7 @@ function bind() {
       return;
     }
     if (e.target && e.target.id === "searchInput") {
-      const rows = [...document.querySelectorAll("#popMatches [data-act=toggleList], #popMatches [data-act=tkOpenExt]")];
+      const rows = [...document.querySelectorAll("#popMatches [data-act=toggleList], #popMatches [data-act=listingOpen]")];
       if (popoverBoxKeys(e, rows)) return;
       if ((e.key === "ArrowDown" || e.key === "ArrowUp") && rows.length) {
         e.preventDefault();
@@ -4820,7 +4823,7 @@ function bind() {
           // a value: toggled in its field, the box cleared for the next one
           let arg = {}; try { arg = JSON.parse(row.dataset.arg); } catch (err) {}
           clearTimeout(_rangeTimer);
-          act(row.dataset.act === "tkOpenExt" ? row.dataset.act : "toggleList", arg);
+          act(row.dataset.act === "listingOpen" ? row.dataset.act : "toggleList", arg);
         } else {
           // no value matches: the text is the free-text search, applied now
           clearTimeout(_rangeTimer); state.filters.search = e.target.value.trim(); state.fieldQuery = null; state.sel = null; loadModel();
