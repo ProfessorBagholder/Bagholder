@@ -328,6 +328,9 @@ html.panel-open{overflow:hidden}
 .tk-go:hover{background:rgba(var(--accent-rgb),.12)}
 .tk-go[disabled]{opacity:.5;cursor:default}
 .tk-rowbtns{display:inline-flex;gap:2px;flex:none}
+.tk-rowbtn.funnel{color:rgba(var(--ink-rgb),.38)}
+.tk-rowbtn.funnel:hover{background:rgba(var(--accent-rgb),.16);color:var(--accent-300)}
+.tk-rowbtn.funnel.on{color:var(--accent)}
 .tk-rowbtn{width:22px;height:22px;border-radius:5px;border:0;background:transparent;color:rgba(var(--ink-rgb),.5);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
 .tk-rowbtn.off{color:rgba(var(--ink-rgb),.18);cursor:default;pointer-events:none}
 .tk-rowbtn.buy:hover{background:rgba(var(--pos-rgb),.16);color:var(--pos)}
@@ -931,6 +934,7 @@ const ICONS = {
   bookmark: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Zm0 177.57-51.77-32.35a8 8 0 0 0-8.48 0L72 209.57V48h112Z",
   search: "M229.66 218.34l-50.07-50.06a88.11 88.11 0 1 0-11.31 11.31l50.06 50.07a8 8 0 0 0 11.32-11.32ZM40 112a72 72 0 1 1 72 72 72.08 72.08 0 0 1-72-72Z",
   bookmarkFill: "M184 32H72a16 16 0 0 0-16 16v176a8 8 0 0 0 12.24 6.78L128 193.43l59.77 37.35A8 8 0 0 0 200 224V48a16 16 0 0 0-16-16Z",
+  funnel: "M230.6 49.5A15.8 15.8 0 0 0 216 40H40a16 16 0 0 0-12.6 25.9l68.6 81.1v55a16 16 0 0 0 25.6 13.3l32-21.3a16 16 0 0 0 7.4-13.3v-33.7l68.6-81.1a15.8 15.8 0 0 0 1-15.4Z",
   x: "M205.66 194.34a8 8 0 0 1-11.32 11.32L128 139.31l-66.34 66.35a8 8 0 0 1-11.32-11.32L116.69 128 50.34 61.66a8 8 0 0 1 11.32-11.32L128 116.69l66.34-66.35a8 8 0 0 1 11.32 11.32L139.31 128Z",
   caretDown: "M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z",
   play: "M232.4 114.49 88.32 26.35a16 16 0 0 0-16.2-.3A15.86 15.86 0 0 0 64 39.87v176.26A15.94 15.94 0 0 0 80 232a16 16 0 0 0 8.36-2.35l144.04-88.14a15.81 15.81 0 0 0 0-27.02ZM80 215.94V40l143.83 88Z",
@@ -1332,12 +1336,15 @@ function popValuesHtml(active) {
 function symbolRowHtml(sym, name, exchange, icons, cls, act, arg) {
   return '<div class="pop-row' + cls + '" role="button" tabindex="-1" data-act="' + act + '" data-arg=\'' + attr(arg) + "'><span style=\"flex:none\">" + esc(sym) + "</span>" +
     (name ? '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink55)">' + esc(name) + "</span>" : "") +
-    '<span style="margin-left:auto;font-size:11px;color:var(--ink55);white-space:nowrap">' + esc(exchange || "") + '</span><span style="flex:none;width:46px;display:inline-flex;justify-content:flex-end">' + icons + "</span></div>";
+    '<span style="margin-left:auto;font-size:11px;color:var(--ink55);white-space:nowrap">' + esc(exchange || "") + '</span><span style="flex:none;width:70px;display:inline-flex;justify-content:flex-end">' + icons + "</span></div>";
 }
 function popRowHtml(key, value, cls, label) {
   if (key === "symbol") {
     const l = (((state.model && state.model.options) || {}).listings || {})[value] || {};
-    return symbolRowHtml(OPTION_RE.test(value) ? value : bareSymbol(value), l.name || "", l.exchange || "", tkRowButtons(value), cls, "toggleList", { key, value });
+    const contract = OPTION_RE.test(value);   // a contract has no page of its own: the row is its filter
+    return symbolRowHtml(contract ? value : bareSymbol(value), l.name || "", l.exchange || "", symbolRowButtons(value, value), cls,
+                         contract ? "toggleList" : "listingOpen",
+                         contract ? { key, value } : { symbol: bareSymbol(value), exchange: l.exchange || "", name: l.name || "" });
   }
   return '<button class="pop-row' + cls + '" tabindex="-1" data-act="toggleList" data-arg=\'' + attr({ key, value }) + "'>" + esc(value) +
     (label ? '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(label) + "</span>" : "") + "</button>";
@@ -1393,7 +1400,7 @@ function extRowHtml(r, cls) {
   // the row opens the listing's page, as a listing opens everywhere else; Buy on it opens the
   // ticket, which is what the icon is for and the only thing that should reach an order
   const listing = { symbol: sym, exchange: r.exchange, currency: r.currency, name: r.name };
-  const icon = '<span class="tk-rowbtns">' + tkIcon("BUY", true, sym, "tkOpenExt", listing) + tkIcon("SELL", false) + "</span>";
+  const icon = '<span class="tk-rowbtns">' + filterIcon(sym, false, false) + tkIcon("BUY", true, sym, "tkOpenExt", listing) + tkIcon("SELL", false) + "</span>";
   return symbolRowHtml(sym, r.name, r.exchange, icon, cls, "listingOpen", listing);
 }
 // The symbol rows for a text, the book's and the ones found outside it, in one order
@@ -1441,7 +1448,9 @@ function popFieldsBodyHtml() {
     const hi = Math.min(state.valueHi || 0, syms.length + others.length - 1);
     return '<div id="popMatches" class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">' +
       syms.map((r, i) => r.book
-        ? symbolRowHtml(OPTION_RE.test(r.sym) ? r.sym : bareSymbol(r.sym), r.name, r.exchange, tkRowButtons(r.sym), (f.lists.symbol.indexOf(r.sym) >= 0 ? " on" : "") + (i === hi ? " hi" : ""), "toggleList", { key: "symbol", value: r.sym })
+        ? symbolRowHtml(OPTION_RE.test(r.sym) ? r.sym : bareSymbol(r.sym), r.name, r.exchange, symbolRowButtons(r.sym, r.sym), (f.lists.symbol.indexOf(r.sym) >= 0 ? " on" : "") + (i === hi ? " hi" : ""),
+                        OPTION_RE.test(r.sym) ? "toggleList" : "listingOpen",
+                        OPTION_RE.test(r.sym) ? { key: "symbol", value: r.sym } : { symbol: bareSymbol(r.sym), exchange: r.exchange || "", name: r.name || "" })
         : extRowHtml(r, i === hi ? " hi" : "")).join("") +
       others.map((m, i) => popRowHtml(m.key, m.value, (f.lists[m.key].indexOf(m.value) >= 0 ? " on" : "") + (syms.length + i === hi ? " hi" : ""), m.label)).join("") + "</div>";
   }
@@ -1507,10 +1516,25 @@ function tkIcon(side, on, symbol, act, arg) {
   return on ? '<button class="tk-rowbtn ' + side.toLowerCase() + '" aria-label="' + label + " " + esc(symText(symbol)) + '" data-act="' + act + '" data-arg=\'' + attr(arg) + "'>" + tkIconSvg(path) + "</button>"
     : '<span class="tk-rowbtn off" aria-hidden="true">' + tkIconSvg(path) + "</span>";
 }
-function tkRowButtons(symbol) {
+function tkRowIcons(symbol) {
   const info = tkLookup(symbol);
   const share = info.kind === "Shares";
-  return '<span class="tk-rowbtns">' + tkIcon("BUY", share, symbol, "tkOpen", { symbol, side: "BUY" }) + tkIcon("SELL", share && !!info.position, symbol, "tkOpen", { symbol, side: "SELL" }) + "</span>";
+  return tkIcon("BUY", share, symbol, "tkOpen", { symbol, side: "BUY" }) + tkIcon("SELL", share && !!info.position, symbol, "tkOpen", { symbol, side: "SELL" });
+}
+function tkRowButtons(symbol) { return '<span class="tk-rowbtns">' + tkRowIcons(symbol) + "</span>"; }
+// Every symbol row goes to its ticker on a click, as a symbol does everywhere else on the page.
+// Narrowing the book by it is its own button, lit while that filter stands, so the two readings
+// of a click — look at this, or filter by this — are two things to press rather than one.
+function filterIcon(value, on, live) {
+  // a listing the book has never traded has nothing to filter, so its funnel is dimmed like an
+  // unavailable Sell: every symbol row keeps the same three slots in the same places
+  if (live === false) return '<span class="tk-rowbtn off" aria-hidden="true">' + tkIconSvg(ICONS.funnel) + "</span>";
+  return '<button class="tk-rowbtn funnel' + (on ? " on" : "") + '" data-act="toggleList" data-arg=\'' + attr({ key: "symbol", value }) +
+    '\' aria-label="' + (on ? "Stop filtering by " : "Filter by ") + esc(symText(value)) + '" aria-pressed="' + (on ? "true" : "false") + '">' + tkIconSvg(ICONS.funnel) + "</button>";
+}
+function symbolRowButtons(value, symbol) {
+  const filtered = (state.filters.lists.symbol || []).indexOf(value) >= 0;
+  return '<span class="tk-rowbtns">' + filterIcon(value, filtered) + tkRowIcons(symbol) + "</span>";
 }
 // The accounts a ticket can route to: the server's list once the quote has answered, the
 // book's own list before that, joined so an account chosen from either is never lost.
@@ -3298,6 +3322,10 @@ function textWider(el) {
 }
 function cutsText(el) {
   const st = getComputedStyle(el);
+  // an inline box cannot clip whatever its overflow says, so a `<b>` inside a cell that
+  // declares the ellipsis is not the cut line: the block around it is, and treating the
+  // inline one as the clipper measured a box that is never cut and answered "not cut"
+  if (st.display === "inline") return false;
   return st.textOverflow === "ellipsis" && st.overflowX !== "visible";
 }
 function cutElement(node) {
@@ -4965,10 +4993,13 @@ function bind() {
         e.preventDefault();
         const row = rows[Math.min(state.valueHi || 0, rows.length - 1)];
         if (row) {
-          // a value: toggled in its field, the box cleared for the next one
+          // Enter does what a click does — a symbol row goes to its ticker — and Shift+Enter
+          // narrows the book by it, which is what that row's funnel does under the pointer
           let arg = {}; try { arg = JSON.parse(row.dataset.arg); } catch (err) {}
           clearTimeout(_rangeTimer);
-          act(row.dataset.act === "listingOpen" ? row.dataset.act : "toggleList", arg);
+          const filterInstead = e.shiftKey && row.dataset.act === "listingOpen";
+          if (filterInstead) { const f = row.querySelector(".tk-rowbtn.funnel"); if (f) f.click(); }
+          else act(row.dataset.act === "listingOpen" ? row.dataset.act : "toggleList", arg);
         } else {
           // no value matches: the text is the free-text search, applied now
           clearTimeout(_rangeTimer); state.filters.search = e.target.value.trim(); state.fieldQuery = null; state.sel = null; loadModel();
@@ -4978,8 +5009,9 @@ function bind() {
     if (e.key === "Enter" && e.target && /^tf-/.test(e.target.id || "") && e.target.tagName !== "SELECT") { e.preventDefault(); saveTrade(); return; }
     if (e.key === "Enter" && e.target && e.target.id === "folderPath") { e.preventDefault(); watchFolder(false); return; }
     if (e.target && e.target.id === "valueQuery") {
-      // the value list is driven from the search box: arrows move the highlight, Enter toggles it
-      const rows = [...document.querySelectorAll("#popValues [data-act=toggleList]")];
+      // the value list is driven from the search box: arrows move the highlight, Enter does what a
+      // click on the row does, and Shift+Enter narrows the book by a symbol row rather than opening it
+      const rows = [...document.querySelectorAll("#popValues [data-act=toggleList], #popValues [data-act=listingOpen]")];
       if (popoverBoxKeys(e, rows)) return;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         if (!rows.length) return;
@@ -4989,7 +5021,15 @@ function bind() {
         rows[state.valueHi].scrollIntoView({ block: "nearest" });
         return;
       }
-      if (e.key === "Enter") { const row = rows[Math.min(state.valueHi || 0, rows.length - 1)]; if (row) { e.preventDefault(); let arg = {}; try { arg = JSON.parse(row.dataset.arg); } catch (err) {} act("toggleList", arg); } }
+      if (e.key === "Enter") {
+        const row = rows[Math.min(state.valueHi || 0, rows.length - 1)];
+        if (row) {
+          e.preventDefault();
+          let arg = {}; try { arg = JSON.parse(row.dataset.arg); } catch (err) {}
+          if (e.shiftKey && row.dataset.act === "listingOpen") { const f = row.querySelector(".tk-rowbtn.funnel"); if (f) f.click(); }
+          else act(row.dataset.act === "listingOpen" ? "listingOpen" : "toggleList", arg);
+        }
+      }
     }
   });
   document.addEventListener("input", (e) => {

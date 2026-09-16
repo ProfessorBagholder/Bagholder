@@ -47,6 +47,31 @@ class SubjectTest(unittest.TestCase):
         data = b"%PDF-1.7\n1 0 obj<< /Title <" + raw + b"> >>\nendobj"
         self.assertEqual(enrich.extract_pdf_subject(data), "Financing Update")
 
+    def test_a_title_of_bytes_that_merely_decoded_is_no_title(self):
+        # what CHARBONE's report of exempt distribution actually stored: a PDF whose strings are
+        # not text, decoded into characters. `Btu` is in there, so asking for three letters in a
+        # row passed it, and the table and a notification both read it out.
+        binary = b"\\022\x8a\xf0,0\x91\x9f\xbfO\xf9\xff\xaf\xe2U\xc0<w\xb0\\027\xb3c\xab\\)Q\xb1\xba \x9cO\xb4.\xb4\xf9 xBtu\x83\xe5\\f!"
+        self.assertEqual(enrich.extract_pdf_subject(pdf_with_title(binary)), "")
+        self.assertFalse(enrich.readable(binary.decode("latin-1")))
+
+    def test_what_reads_as_a_title_and_what_does_not(self):
+        for good in ("CHARBONE - Closing 2nd Drawdown", "D\u00e9claration de placement avec dispense 45-106F1",
+                     "Q3 2026 Interim Financial Statements", "Form 45-106F1 Report of Exempt Distribution"):
+            self.assertTrue(enrich.readable(good), good)
+        for bad in ("2026-09-04", "\u00b1\u00ba\u00b4\u00ab\u00b9\u00b2", "", "   ", "\x0c\x12 Report", "45-106"):
+            self.assertFalse(enrich.readable(bad), repr(bad))
+
+    def test_an_unreadable_title_falls_back_to_the_model(self):
+        def chat(prompt, **kw):
+            return "Report of exempt distribution in Canada" if "Title:" in prompt else "It reports a distribution."
+        data = pdf_with_title(b"\x8a\xf0,0\x91\x9f\xbfO\xf9\xff\xaf\xe2U\xc0<w\xb0")
+        with mock.patch.object(enrich.localmodel, "available", return_value=True), \
+             mock.patch.object(enrich.localmodel, "chat", side_effect=chat), \
+             mock.patch.object(enrich, "document_text", return_value="A report of exempt distribution."):
+            out = enrich.enrich_document("sedar", data, "application/pdf")
+        self.assertEqual(out["subject"], "Report of exempt distribution in Canada")
+
     def test_non_pdf_bytes_have_no_pdf_subject(self):
         self.assertEqual(enrich.extract_pdf_subject(b"<html>...</html>"), "")
 

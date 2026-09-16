@@ -692,7 +692,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.42.0"
+APP_VERSION = "1.43.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -724,7 +724,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
 PROTOCOL = "2026-09-16.1"
-ENRICH_VERSION = 9   # bump when title/summary logic improves, so read rows are re-read once
+ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
