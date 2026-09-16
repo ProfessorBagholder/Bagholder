@@ -61,6 +61,27 @@ def extract_pdf_subject(data):
     return _clean_subject(s)
 
 
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]")
+_TITLE_PUNCT = re.compile(r"[ \-\u2010\u2013\u2014'\u2019&(),.:;/%+#?!\"\u201c\u201d]")
+
+
+def readable(s):
+    """Whether a string reads as a title, or is bytes that merely decoded into characters.
+    A PDF whose strings are encrypted or compressed hands back a `/Title` of binary, and
+    latin-1 turns that into characters without making it text: `\\022 \u00f0,0 \u00bfO\u00f9\u00ff\u00af\u00e2U\u00c0<w\u00b0` reads as a title
+    to anything that only asks for three letters in a row, since `Btu` is in there somewhere.
+    A title is letters, digits and ordinary punctuation, and mostly letters."""
+    text = (s or "").strip()
+    if not text or _CTRL.search(text):
+        return False
+    body = [c for c in text if not c.isspace()]
+    if not body:
+        return False
+    sane = sum(1 for c in body if c.isalpha() or c.isdigit() or _TITLE_PUNCT.match(c))
+    letters = sum(1 for c in body if c.isalpha())
+    return sane >= len(body) * 0.9 and letters >= len(body) * 0.4
+
+
 def _clean_subject(s):
     s = re.sub(r"^\s*(Microsoft Word|Microsoft PowerPoint|Adobe \w+|Acrobat)\s*-\s*", "", s, flags=re.I)
     s = re.sub(r"\.(pdf|docx?|pptx?|rtf|txt)\s*$", "", s, flags=re.I)
@@ -74,7 +95,7 @@ def _clean_subject(s):
         return ""
     if s.lower() in ("news release", "press release", "document"):
         return ""
-    return s
+    return s if readable(s) else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -219,6 +240,8 @@ def _is_junk_title(s):
     (e.g. a PDF's '/Title' of 'PEO 75744 1'), which is no better than the form type."""
     low = (s or "").lower()
     if not low:
+        return True
+    if not readable(s):                  # bytes that decoded into characters are no title either
         return True
     return (".htm" in low or ".xml" in low or ".pdf" in low or "exhibit" in low
             or re.search(r"\bex-?\d", low) or re.search(r"\d{5,}", low))
