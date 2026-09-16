@@ -7,6 +7,8 @@
 //!     storetool local  <db>      -- the same, through insert_local
 //!     storetool keys             -- rows on stdin, their match keys out
 //!     storetool tables <db>      -- accounts/balances/margin/nav/fx/journal in and out
+//!     storetool snapshot <db>    -- everything the model is built from
+//!     storetool journal <db>     -- the v2 journal
 //!     storetool merge  <db>      -- {ws, local} rows merged in; the counts and the table out
 //!
 //! `insert` and `local` number any id they have to make `gen-0`, `gen-1`, ...
@@ -135,6 +137,13 @@ fn main() {
                 "merged": merged,
                 "rows": act::all_activities(&conn).unwrap(),
             })).unwrap());
+        }
+        "snapshot" => {
+            bagholder_store::relabel::ensure(&conn).unwrap();
+            println!("{}", serde_json::to_string(&bagholder_store::snapshot::snapshot(&conn, true).unwrap()).unwrap());
+        }
+        "journal" => {
+            println!("{}", serde_json::to_string(&bagholder_store::snapshot::journal(&conn).unwrap()).unwrap());
         }
         other => panic!("unknown mode {other}"),
     }
