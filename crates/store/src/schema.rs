@@ -11,7 +11,7 @@ use std::collections::HashSet;
 /// `store.SCHEMA_VERSION`.
 pub const SCHEMA_VERSION: i64 = 13;
 
-pub const BENCHMARK_SYMBOL: &str = "SPX";
+pub const BENCHMARK_SYMBOL: &str = "SP500";
 
 const SCHEMA_0: &str = include_str!("../sql/schema_0.sql");
 const SCHEMA_1: &str = include_str!("../sql/schema_1.sql");

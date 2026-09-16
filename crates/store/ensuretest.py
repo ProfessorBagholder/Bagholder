@@ -7,6 +7,7 @@ one-shot unit-price scaling cannot differ.
 
     cargo build -p bagholder-store && python3 crates/store/ensuretest.py
 """
+import json
 import os
 import random
 import shutil
@@ -51,8 +52,17 @@ def seed(path, n=400):
              rng.choice(["Trade", "LIMIT_ORDER", "other"]), rng.choice(SUBS), rng.choice(RAW_TYPES),
              rng.choice(SYMBOLS), rng.choice(["CAD", "USD"]), qty, px, 0.0, cash,
              rng.choice(["trade", "other", "option_event", "dividend"]), "wealthsimple"))
+    # the legacy benchmark map, so the one-shot copy into benchmark_prices runs
+    c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('spy_by_date', ?)",
+              (json.dumps({"2024-01-02": 4742.83, "2024-06-28": 5460.48, "2025-12-31": 6801.0}),))
+    c.execute("DELETE FROM benchmark_prices")
+    # bars from a source that gave closes only, so the history migration has work
+    c.execute("INSERT OR REPLACE INTO price_history(symbol, date, close, source) VALUES ('ETH','2025-01-02',3000,'coingecko')")
+    c.execute("INSERT OR REPLACE INTO price_history(symbol, date, close, source) VALUES ('AAA','2025-01-02',10,'tmx')")
+    c.execute("INSERT OR REPLACE INTO history_fetches(symbol, start, fetched_at) VALUES ('ETH','2024-01-01','2026-01-01')")
+    c.execute("INSERT OR REPLACE INTO history_fetches(symbol, start, fetched_at) VALUES ('AAA','2024-01-01','2026-01-01')")
     # the stamps that would let the migrations skip must not be present
-    c.execute("DELETE FROM meta WHERE key IN ('option_relabel_rows_v1', 'option_unit_price_scale_v1')")
+    c.execute("DELETE FROM meta WHERE key IN ('option_relabel_rows_v1', 'option_unit_price_scale_v1', 'history_sources_migrated')")
     c.commit()
     c.close()
 
