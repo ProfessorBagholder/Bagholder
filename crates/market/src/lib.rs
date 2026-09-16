@@ -5,7 +5,19 @@ pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
+pub mod quotes;
 pub mod tmx;
+
+/// `store.quote_fetched_at`, re-exported so the quote loop can ask when each
+/// symbol was last priced.
+pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<serde_json::Map<String, serde_json::Value>> {
+    bagholder_store::market::quote_fetched_at(conn)
+}
+
+/// `store`'s market writers, under the name this crate uses for them.
+pub mod market {
+    pub use bagholder_store::market::{distributions_fetched_at, quotes, upsert_quote};
+}
 
 /// The stamp the sources' health and the attempt marker are written with.
 pub fn now_stamp() -> String {
