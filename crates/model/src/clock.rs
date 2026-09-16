@@ -66,3 +66,8 @@ pub fn today_local() -> String {
         None => Utc::now().format("%Y-%m-%d").to_string(),
     }
 }
+
+/// The stamp `build_view` puts on its output: UTC, to the second.
+pub fn now_utc_stamp() -> String {
+    Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
