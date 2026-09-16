@@ -5,6 +5,8 @@ pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
+pub mod shorts;
+pub mod browser;
 pub mod clockzone;
 pub mod fear;
 pub mod entities;

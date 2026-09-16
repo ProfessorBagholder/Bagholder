@@ -480,19 +480,23 @@ pub fn fetch_symbol(
             Some(c) => c,
             None => return (src, Some(vec![])),
         };
-        let ask = |form: &str| -> Option<Value> {
+        let ask = |form: &str| -> Result<Option<Value>, ()> {
             pace("app-money.tmx.com");
             let payload = json!({
                 "operationName": "getNewsForSymbol",
                 "variables": {"symbol": form, "page": 1, "limit": PER_SYMBOL, "locale": "en"},
                 "query": TMX_NEWS_QUERY,
             });
-            let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).ok()?;
+            let data = post_json(crate::tmx::TMX_URL, &payload, &tmx_headers()).map_err(|_| ())?;
             let rows = parse_tmx_news(&data, form);
-            if rows.is_empty() { None } else { Some(Value::Array(rows)) }
+            Ok(if rows.is_empty() { None } else { Some(Value::Array(rows)) })
         };
-        let got = crate::tmx::tmx_lookup(conn, &code, today, ask).0;
-        return (src, Some(got.and_then(|v| v.as_array().cloned()).unwrap_or_default()));
+        // a wire that failed leaves what is stored standing, as Python's
+        // exception does
+        return match crate::tmx::tmx_lookup_try(conn, &code, today, ask) {
+            Ok((got, _)) => (src, Some(got.and_then(|v| v.as_array().cloned()).unwrap_or_default())),
+            Err(()) => (src, None),
+        };
     }
 
     pace("api.nasdaq.com");

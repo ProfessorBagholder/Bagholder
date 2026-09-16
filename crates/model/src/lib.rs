@@ -18,6 +18,7 @@ pub mod book;
 pub mod clock;
 pub mod trades;
 pub mod positions;
+pub mod pytext;
 pub mod cashflow;
 pub mod nav;
 pub mod filters;

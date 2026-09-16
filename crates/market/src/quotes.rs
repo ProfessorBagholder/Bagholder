@@ -45,7 +45,7 @@ fn yahoo_get(url: &str) -> Option<String> {
         let now = Instant::now();
         if let Some(until) = gate.backoff_until {
             if now < until {
-                crate::http::note_source("yahoo", false, None);
+                crate::http::note_source("yahoo", false, Some(&crate::http::FetchError::Transport("yahoo: backing off after 429".into())));
                 return None;
             }
         }
@@ -78,7 +78,7 @@ pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
         let now = Instant::now();
         if let Some(until) = gate.backoff_until {
             if now < until {
-                crate::http::note_source("yahoo", false, None);
+                crate::http::note_source("yahoo", false, Some(&crate::http::FetchError::Transport("yahoo: backing off after 429".into())));
                 return Err(None);
             }
         }
@@ -453,4 +453,32 @@ pub fn stale_symbols(
 /// A number read the way the quote parsers do.
 pub fn n(v: Option<&Value>) -> f64 {
     num(v, 0.0)
+}
+
+/// Yahoo's pace, for a caller that makes its own request: false while a
+/// backoff after a 429 stands; otherwise waits its turn and takes it.
+pub fn yahoo_turn() -> bool {
+    let mut gate = YAHOO.lock().unwrap();
+    let now = Instant::now();
+    if let Some(until) = gate.backoff_until {
+        if now < until {
+            return false;
+        }
+    }
+    if let Some(next) = gate.next_at {
+        if next > now {
+            let wait = next - now;
+            drop(gate);
+            std::thread::sleep(wait);
+            gate = YAHOO.lock().unwrap();
+        }
+    }
+    gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
+    true
+}
+
+/// Yahoo turned a request away with a 429: nothing is asked of it for the
+/// backoff.
+pub fn yahoo_back_off() {
+    YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
 }

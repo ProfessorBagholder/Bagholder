@@ -174,6 +174,25 @@ where
     (r, first)
 }
 
+/// `market.tmx_lookup` for a lookup that can fail: a failure is raised past
+/// the lookup in Python, so it stops there -- nothing is resolved and nothing
+/// is remembered on the strength of a request that did not get an answer.
+pub fn tmx_lookup_try<F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<Value>, String), E>
+where
+    F: Fn(&str) -> Result<Option<Value>, E>,
+{
+    let first = tmx_remembered(conn, key);
+    let r = f(&first)?;
+    if r.is_some() || key.is_empty() || key.starts_with('^') {
+        return Ok((r, first));
+    }
+    let alt = tmx_resolve(conn, key, today);
+    if !alt.is_empty() && alt != first {
+        return Ok((f(&alt)?, alt));
+    }
+    Ok((r, first))
+}
+
 /// `market.fetch_tmx_quote`.
 pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Option<Value> {
     tmx_lookup(conn, tmx_sym, today, |k| parse_tmx_quote(&ask(k))).0

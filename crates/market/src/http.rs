@@ -88,7 +88,8 @@ fn health() -> &'static Mutex<BTreeMap<String, Health>> {
 /// `market.note_source`.
 pub fn note_source(name: &str, ok: bool, error: Option<&FetchError>) {
     let at = crate::now_stamp();
-    let error = if ok { String::new() } else { error.map(describe_failure).unwrap_or_default() };
+    // a failure with nothing to say for itself reads as Python's does
+    let error = if ok { String::new() } else { error.map(describe_failure).unwrap_or_else(|| "could not be reached".into()) };
     health().lock().unwrap().insert(name.to_string(), Health { ok, at, error });
 }
 
@@ -131,7 +132,15 @@ pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result
         ("Content-Type", "application/json"),
         ("Accept", "*/*"),
     ];
-    hdrs.extend_from_slice(headers);
+    // `hdrs.update(headers)`: a caller's header replaces the default of the
+    // same name rather than being sent beside it. FINRA answers two Accept
+    // headers with CSV.
+    for (k, v) in headers {
+        match hdrs.iter_mut().find(|(name, _)| name.eq_ignore_ascii_case(k)) {
+            Some(slot) => *slot = (k, v),
+            None => hdrs.push((k, v)),
+        }
+    }
     match crate::client::request("POST", url, &hdrs, Some(body.as_bytes()), Duration::from_secs(TIMEOUT_SEC)) {
         Ok(resp) => {
             note_source(&source_of_url(url), true, None);
