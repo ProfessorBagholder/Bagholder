@@ -272,6 +272,7 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .tip .tv{font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
 .tip .tl{font-size:10px;color:var(--ink55);font-variant-numeric:tabular-nums}
 .xline{position:absolute;top:0;bottom:0;width:1px;background:rgba(var(--ink-rgb),.35);pointer-events:none}
+.line-dot{position:absolute;width:7px;height:7px;margin:-4px 0 0 -3px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--surface);pointer-events:none}
 .bar-col{position:relative;flex:1;height:100%;cursor:pointer}
 .bar-col:hover{background:rgba(var(--ink-rgb),.05)}
 .rule-b{background:linear-gradient(to right,transparent,rgba(var(--ink-rgb),.14) 20px,rgba(var(--ink-rgb),.14) calc(100% - 20px),transparent) no-repeat bottom/100% 1px}
@@ -2682,6 +2683,9 @@ function shortsHistoryHtml(s) {
   const y = (v) => TOP + (1 - (v - lo) / span) * (BOT - TOP);
   const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.shares).toFixed(1)).join(" ");
   const ticks = [[hi, TOP], [lo + span * 2 / 3, TOP + (BOT - TOP) / 3], [lo + span / 3, TOP + (BOT - TOP) * 2 / 3], [lo, BOT]];
+  // hovering a report reads the shares short at it, on the date it settled
+  _lines.sihist = { pts: pts.map((p) => y(p.shares)), height: H,
+                    read: (i) => ({ value: qty(Math.round(pts[i].shares)), label: shortDay(pts[i].date) }) };
   const want = Math.min(6, pts.length);
   const marks = [];
   for (let i = 0; i < want; i++) marks.push(shortDay(pts[Math.round(i * (pts.length - 1) / Math.max(1, want - 1))].date));
@@ -2689,7 +2693,7 @@ function shortsHistoryHtml(s) {
     '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">every report since ' + esc(shortDay(pts[0].date)) + "</span></div>" +
     '<div style="display:flex;gap:10px"><div style="position:relative;width:72px;height:' + H + 'px;flex:none;font-size:10px;color:var(--ink55)" class="tab">' +
     ticks.map((t) => '<span style="position:absolute;left:0;top:' + (t[1] / H * 100).toFixed(1) + '%;transform:translateY(-50%)">' + qty(Math.round(t[0])) + "</span>").join("") + "</div>" +
-    '<div style="position:relative;flex:1;min-width:0">' +
+    '<div id="sihistPlot" data-hover="sihist" style="position:relative;flex:1;min-width:0">' + lineLayer("sihist") +
     '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:' + H + 'px;display:block">' +
     '<defs><linearGradient id="bhSi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)"/><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>' +
     ticks.map((t) => '<line x1="0" y1="' + t[1].toFixed(1) + '" x2="' + W + '" y2="' + t[1].toFixed(1) + '" style="stroke:var(--' + (t[1] === BOT ? "hair" : "grid") + ')"/>').join("") +
@@ -3132,6 +3136,35 @@ function exposureCardsHtml(pf) {
     '<div id="xsecPlot" data-hover="xsec" style="display:contents">' + a.legend + a.ring + "</div>" +
     '<div id="xregPlot" data-hover="xreg" style="display:contents">' + b.ring + b.legend + "</div></div></div>";
 }
+// The charts the page draws itself, rather than through the chart library, share one hover:
+// the crosshair, a dot on the point and the two-line tip the equity curve has. A chart
+// registers its points and what each one reads as; nothing else about it is known here.
+const _lines = {};
+const LINE_KEYS = { fear: 1, sihist: 1 };
+function lineLayer(key) {
+  return '<div id="' + key + 'X" class="xline" hidden></div><div id="' + key + 'Dot" class="line-dot" hidden></div>' +
+    '<div id="' + key + 'Tip" class="tip" hidden><div class="tv"></div><div class="tl"></div></div>';
+}
+function lineHover(e, key) {
+  const d = _lines[key], plot = document.getElementById(key + "Plot");
+  if (!d || !plot || !d.pts.length) return;
+  const r = plot.getBoundingClientRect();
+  if (!r.width) return;                 // a chart with no width on screen has no point under the pointer
+  const n = d.pts.length;
+  const i = Math.max(0, Math.min(n - 1, Math.round((e.clientX - r.left) / r.width * (n - 1))));
+  const read = d.read(i);
+  const x = (i / Math.max(1, n - 1) * 100).toFixed(2) + "%";
+  const xl = document.getElementById(key + "X"), dot = document.getElementById(key + "Dot"), tip = document.getElementById(key + "Tip");
+  xl.style.left = x; xl.hidden = false;
+  dot.style.left = x; dot.style.top = (d.pts[i] / d.height * 100).toFixed(2) + "%";
+  dot.style.background = read.color || "var(--accent)"; dot.hidden = false;
+  tip.style.left = x; tip.style.transform = "translateX(" + (i < n * 0.1 ? "0%" : i > n * 0.9 ? "-100%" : "-50%") + ")";
+  const value = tip.querySelector(".tv");
+  value.textContent = read.value; value.style.color = read.color || "";
+  tip.querySelector(".tl").textContent = read.label;
+  tip.hidden = false;
+}
+function lineLeave(key) { [key + "X", key + "Dot", key + "Tip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); }
 function donutHover(e, key) {
   const el = e.target.closest("[data-slice]"); const plot = document.getElementById(key + "Plot"); if (!plot) return;
   const i = el ? +el.dataset.slice : -1;
@@ -3844,6 +3877,9 @@ const FEAR_BANDS = [[0, 25, "Extreme fear", "var(--heat-n4)"], [25, 45, "Fear", 
                     [45, 56, "Neutral", "rgba(var(--ink-rgb),.22)"], [56, 76, "Greed", "var(--heat-p3)"], [76, 100, "Extreme greed", "var(--heat-p4)"]];
 function fearBand(score) { return score == null ? null : FEAR_BANDS.find((b) => score < b[1]) || FEAR_BANDS[FEAR_BANDS.length - 1]; }
 function fearColor(score) { const b = fearBand(score); return b ? b[3] : "rgba(var(--ink-rgb),.22)"; }
+// the neutral band is unpainted on the dial, which is right for an arc and unreadable for a
+// word or a figure: text takes the page's own ink there instead of the arc's grey
+function fearInk(score) { const b = fearBand(score); return !b || b[2] === "Neutral" ? "var(--ink75)" : b[3]; }
 // the dial: a half circle from 0 at the left to 100 at the right, one arc per band
 function fearArc(cx, cy, r, from, to) {
   const at = (v) => { const a = (180 - v * 1.8) * Math.PI / 180; return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; };
@@ -3864,7 +3900,7 @@ function fearDialHtml(score, rating) {
     '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block" aria-hidden="true">' + bands + needle + "</svg>" +
     '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:2px 4px 0"><span>Extreme fear</span><span>Extreme greed</span></div>' +
     '<div style="text-align:center;margin-top:10px">' +
-    '<div class="tab" style="font-size:34px;font-weight:500;line-height:1;color:' + fearColor(score) + '">' + (score == null ? "\u2014" : n2(score, 0)) + "</div>" +
+    '<div class="tab" style="font-size:34px;font-weight:500;line-height:1;color:' + fearInk(score) + '">' + (score == null ? "\u2014" : n2(score, 0)) + "</div>" +
     '<div style="font-size:12.5px;margin-top:5px;color:var(--ink75)">' + esc(rating || "") + "</div></div></div>";
 }
 function fearRowsHtml(title, rows) {
@@ -3875,7 +3911,7 @@ function fearRowsHtml(title, rows) {
     rows.map((r) => '<div style="display:flex;align-items:baseline;gap:10px;padding:5px 0">' +
       '<span style="font-size:12.5px;color:var(--ink75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.label || r.name) + "</span>" +
       '<span class="tab" style="margin-left:auto;font-size:12.5px">' + (r.score == null ? "\u2014" : n2(r.score, 0)) + "</span>" +
-      '<span style="font-size:11px;width:82px;text-align:right;color:' + fearColor(r.score) + '">' + esc(r.rating || "") + "</span></div>").join("") + "</div>";
+      '<span style="font-size:11px;width:82px;text-align:right;color:' + fearInk(r.score) + '">' + esc(r.rating || "") + "</span></div>").join("") + "</div>";
 }
 // a span of a year ends in the month it began, so a day outside this year carries its year
 function fearDay(iso) {
@@ -3890,13 +3926,18 @@ function fearHistoryHtml(series) {
   const y = (v) => TOP + (1 - v / 100) * (BOT - TOP);
   const x = (i) => (i / (pts.length - 1)) * W;
   const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.score).toFixed(1)).join(" ");
+  // hovering a day reads what the index stood at and what it was called that day, in that band's colour
+  _lines.fear = { pts: pts.map((p) => y(p.score)), height: H,
+                  read: (i) => ({ value: n2(pts[i].score, 0), color: fearInk(pts[i].score),
+                                  label: (fearBand(pts[i].score) || ["", "", ""])[2] + " \u00b7 " + fearDay(pts[i].date) }) };
   return '<div style="margin-top:12px">' +
+    '<div id="fearPlot" data-hover="fear" style="position:relative">' + lineLayer("fear") +
     '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:' + H + 'px;display:block">' +
     '<defs><linearGradient id="bhFg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)"/><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>' +
     [25, 50, 75].map((v) => '<line x1="0" y1="' + y(v).toFixed(1) + '" x2="' + W + '" y2="' + y(v).toFixed(1) + '" style="stroke:var(--grid)"/>').join("") +
     '<line x1="0" y1="' + BOT + '" x2="' + W + '" y2="' + BOT + '" style="stroke:var(--hair)"/>' +
     '<path d="' + line + " L" + W + " " + BOT + " L0 " + BOT + ' Z" fill="url(#bhFg)"/>' +
-    '<path d="' + line + '" fill="none" style="stroke:var(--accent)" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>' +
+    '<path d="' + line + '" fill="none" style="stroke:var(--accent)" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg></div>' +
     '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding-top:4px">' +
     "<span>" + esc(fearDay(pts[0].date)) + "</span><span>" + esc(fearDay(pts[pts.length - 1].date)) + "</span></div></div>";
 }
@@ -4983,13 +5024,13 @@ function bind() {
   document.addEventListener("mousemove", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
-    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (DONUT_KEYS[h.dataset.hover]) donutHover(e, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqHover(e); else if (h.dataset.hover === "mo") moHover(e); else if (h.dataset.hover === "cf") cfHover(e); else if (h.dataset.hover === "pie") pieHover(e); else if (LINE_KEYS[h.dataset.hover]) lineHover(e, h.dataset.hover); else if (DONUT_KEYS[h.dataset.hover]) donutHover(e, h.dataset.hover);
   });
   document.addEventListener("mouseout", (e) => {
     const h = e.target.closest("[data-hover]");
     if (!h) return;
     if (e.relatedTarget && h.contains(e.relatedTarget)) return;
-    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (DONUT_KEYS[h.dataset.hover]) donutHover({ target: document.body }, h.dataset.hover);
+    if (h.dataset.hover === "eq") eqLeave(); else if (h.dataset.hover === "mo") moLeave(); else if (h.dataset.hover === "cf") cfLeave(); else if (h.dataset.hover === "pie") pieLeave(); else if (LINE_KEYS[h.dataset.hover]) lineLeave(h.dataset.hover); else if (DONUT_KEYS[h.dataset.hover]) donutHover({ target: document.body }, h.dataset.hover);
     else if (h.dataset.hover === "theme" && state.themeOpen) { state.themeOpen = false; renderHeaderOnly(); }
     else if (h.dataset.hover === "notify" && state.notifyOpen) { state.notifyOpen = false; renderHeaderOnly(); }
   });
