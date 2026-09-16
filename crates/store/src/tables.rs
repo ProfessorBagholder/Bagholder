@@ -572,3 +572,26 @@ fn write_py_str(s: &str, out: &mut String) {
     }
     out.push('"');
 }
+
+/// `json.dumps(..., sort_keys=True)`: the same formatting, with every object's
+/// keys in order. A ticket's stored request uses it so the same order is the
+/// same text whichever way it was built.
+pub fn py_json_sorted(v: &Value) -> String {
+    py_json(&sorted(v))
+}
+
+fn sorted(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            let mut out = Map::new();
+            for k in keys {
+                out.insert(k.clone(), sorted(&m[k]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}

@@ -139,6 +139,38 @@ fn main() {
                 "rows": act::all_activities(&conn).unwrap(),
             })).unwrap());
         }
+        // {orders: [...], orderPatches: [[id, patch]], brackets: [...],
+        // bracketPatches: [[id, patch]], now} written then read back
+        "orders" => {
+            let doc = stdin_json();
+            let now = doc.get("now").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let a = |k: &str| -> Vec<Value> { doc.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default() };
+            use bagholder_store::orders as o;
+            for row in a("orders") { o::insert_order(&conn, &row, &now).unwrap(); }
+            for pair in a("orderPatches") {
+                let id = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                o::update_order(&conn, id, pair.get(1).unwrap_or(&Value::Null), &now).unwrap();
+            }
+            for b in a("brackets") { o::insert_bracket(&conn, &b, &now).unwrap(); }
+            for pair in a("bracketPatches") {
+                let id = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                o::update_bracket(&conn, id, pair.get(1).unwrap_or(&Value::Null), &now).unwrap();
+            }
+            let booked: Vec<Value> = a("booked").iter().map(|p| {
+                let id = p.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                let qty = p.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                json!(o::mark_order_fill_booked(&conn, id, qty, &now).unwrap())
+            }).collect();
+            let statuses: Vec<String> = a("statuses").iter().filter_map(|s| s.as_str().map(|x| x.to_string())).collect();
+            println!("{}", serde_json::to_string(&json!({
+                "orders": o::list_orders(&conn, 200).unwrap(),
+                "brackets": o::list_brackets(&conn, &[]).unwrap(),
+                "byStatus": o::list_brackets(&conn, &statuses).unwrap(),
+                "booked": booked,
+                "forOrder": o::bracket_for_order(&conn, doc.get("forOrder").and_then(|v| v.as_str()).unwrap_or("")).unwrap(),
+                "symbolFor": o::symbol_for_security(&conn, doc.get("symbolFor").and_then(|v| v.as_str()).unwrap_or("")).unwrap(),
+            })).unwrap());
+        }
         "snapshot" => {
             bagholder_store::relabel::ensure(&conn).unwrap();
             println!("{}", serde_json::to_string(&bagholder_store::snapshot::snapshot(&conn, true).unwrap()).unwrap());

@@ -7,3 +7,4 @@ pub mod tables;
 pub mod merge;
 pub mod snapshot;
 pub mod market;
+pub mod orders;

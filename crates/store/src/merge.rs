@@ -75,6 +75,17 @@ pub fn find_link_candidates(conn: &Connection, act: &Value) -> Result<Vec<Value>
 
 /// `store.stamp_canonical_id`: mark a local row as the broker's, but only when
 /// it has no broker id already.
+///
+/// The answer is whether this statement changed a row, which is not what
+/// Python answers: it returns `conn.total_changes > 0`, and that counts every
+/// change the pooled connection has made since it was opened, so it reads
+/// true even for a row that does not exist.
+///
+/// That one is not cosmetic. `apply_wealthsimple_mapped` takes a true here as
+/// "the imported row is now the broker's" and skips the insert. If another
+/// caller stamps the same row between the search and this update, Python
+/// counts a link that did not happen and the broker's row is never stored --
+/// the fill is lost. The accurate answer is kept here deliberately.
 pub fn stamp_canonical_id(conn: &Connection, activity_id: &str, canonical_id: &str) -> Result<bool> {
     let cid = canonical_id.trim();
     if cid.is_empty() || looks_like_homemade_id(cid) {
