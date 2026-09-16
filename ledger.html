@@ -507,6 +507,7 @@ const state = {
   tileDrag: null,     // the tile under the pointer during a reorder
   tileOrder: null,    // the row's order while a reorder or a save is in flight
   newsScope: (function () { try { return localStorage.getItem("bh2.news") || "all"; } catch (e) { return "all"; } })(),
+  fearIndex: (function () { try { return localStorage.getItem("bh2.fear") || "stocks"; } catch (e) { return "stocks"; } })(),
   newsReading: "",     // a listing whose wire is being read for the card's chip
   newsKind: (function () { try { const k = localStorage.getItem("bh2.newsKind"); return k === "disc" || k === "releases" ? k : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, the releases, or the disclosures
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
@@ -543,7 +544,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-15.3"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-16.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -3725,7 +3726,7 @@ function watchlistCardHtml(rows) {
 function marketsHtml(m) {
   const mk = m.markets || { holdings: [], watchlist: [] };
   if (state.sel && isListingId(state.sel)) return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + tradeDetailHtml(selById(state.sel), m) + "</div>";
-  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + marketTilesHtml() + heatmapCardHtml(mk) +
+  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + marketTilesHtml() + fearCardHtml() + heatmapCardHtml(mk) +
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">' + newsCardHtml(mk.news || []) + watchlistCardHtml(mk.watchlist || []) + "</div>" +
     shortsListCardHtml() + "</div>";
 }
@@ -3822,6 +3823,100 @@ function shortsListCardHtml() {
       '<div class="scroll si-list" style="max-height:340px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + empty + "</div>") + "</div>";
 }
+// ---------------------------------------------------------------------------
+// Markets: the fear and greed meter, as its publisher gives it
+// ---------------------------------------------------------------------------
+const FEAR_KEEP_MS = 5 * 60 * 1000;
+const _fear = {};
+function ensureFear(index) {
+  const ix = index || state.fearIndex;
+  const held = _fear[ix];
+  if (held && (held.loading || Date.now() - held.at < FEAR_KEEP_MS)) return;
+  _fear[ix] = Object.assign({}, held, { loading: true });
+  api("GET", "/api/fear?index=" + encodeURIComponent(ix)).then((d) => {
+    // what is on screen stands until a better answer lands, as everywhere else on this tab
+    _fear[ix] = { loading: false, at: Date.now(), rec: (d && d.ok && d.gauge) || (held && held.rec) || null };
+    if (state.page === "markets") render();
+  });
+}
+// the scale both publishers name their scores on, and the colour each band reads in
+const FEAR_BANDS = [[0, 25, "Extreme fear", "var(--heat-n4)"], [25, 45, "Fear", "var(--heat-n3)"],
+                    [45, 56, "Neutral", "rgba(var(--ink-rgb),.22)"], [56, 76, "Greed", "var(--heat-p3)"], [76, 100, "Extreme greed", "var(--heat-p4)"]];
+function fearBand(score) { return score == null ? null : FEAR_BANDS.find((b) => score < b[1]) || FEAR_BANDS[FEAR_BANDS.length - 1]; }
+function fearColor(score) { const b = fearBand(score); return b ? b[3] : "rgba(var(--ink-rgb),.22)"; }
+// the dial: a half circle from 0 at the left to 100 at the right, one arc per band
+function fearArc(cx, cy, r, from, to) {
+  const at = (v) => { const a = (180 - v * 1.8) * Math.PI / 180; return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; };
+  const [x1, y1] = at(from), [x2, y2] = at(to);
+  return "M" + x1.toFixed(1) + " " + y1.toFixed(1) + " A" + r + " " + r + " 0 0 1 " + x2.toFixed(1) + " " + y2.toFixed(1);
+}
+function fearDialHtml(score, rating) {
+  const W = 280, H = 150, cx = 140, cy = 140, r = 104;
+  const at = (v, rad) => { const a = (180 - Math.max(0, Math.min(100, v)) * 1.8) * Math.PI / 180; return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)]; };
+  const bands = FEAR_BANDS.map((b) => '<path d="' + fearArc(cx, cy, r, b[0] + (b[0] ? 0.8 : 0), b[1] - (b[1] < 100 ? 0.8 : 0)) + '" fill="none" stroke="' + b[3] + '" stroke-width="15"/>').join("");
+  // the needle stops short of the arc and starts clear of the hub, so it crosses nothing it points at
+  const needle = score == null ? "" : (function () {
+    const [tx, ty] = at(score, 16), [nx, ny] = at(score, 88);
+    return '<line x1="' + tx.toFixed(1) + '" y1="' + ty.toFixed(1) + '" x2="' + nx.toFixed(1) + '" y2="' + ny.toFixed(1) + '" stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round"/>' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="6" fill="var(--ink)"/><circle cx="' + cx + '" cy="' + cy + '" r="2.5" fill="var(--card)"/>';
+  })();
+  return '<div style="width:' + W + 'px;max-width:100%">' +
+    '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block" aria-hidden="true">' + bands + needle + "</svg>" +
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:2px 4px 0"><span>Extreme fear</span><span>Extreme greed</span></div>' +
+    '<div style="text-align:center;margin-top:10px">' +
+    '<div class="tab" style="font-size:34px;font-weight:500;line-height:1;color:' + fearColor(score) + '">' + (score == null ? "\u2014" : n2(score, 0)) + "</div>" +
+    '<div style="font-size:12.5px;margin-top:5px;color:var(--ink75)">' + esc(rating || "") + "</div></div></div>";
+}
+function fearRowsHtml(title, rows) {
+  if (!rows.length) return "";
+  // the rows keep their own width whatever room the card has: an index with no indicators under
+  // it (the crypto one publishes none) would otherwise stretch four readings across the card
+  return '<div style="min-width:0;max-width:460px"><div class="lbl" style="margin-bottom:8px">' + esc(title) + "</div>" +
+    rows.map((r) => '<div style="display:flex;align-items:baseline;gap:10px;padding:5px 0">' +
+      '<span style="font-size:12.5px;color:var(--ink75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.label || r.name) + "</span>" +
+      '<span class="tab" style="margin-left:auto;font-size:12.5px">' + (r.score == null ? "\u2014" : n2(r.score, 0)) + "</span>" +
+      '<span style="font-size:11px;width:82px;text-align:right;color:' + fearColor(r.score) + '">' + esc(r.rating || "") + "</span></div>").join("") + "</div>";
+}
+// a span of a year ends in the month it began, so a day outside this year carries its year
+function fearDay(iso) {
+  const day = String(iso || "");
+  const here = String((state.model || {}).today || "").slice(0, 4);
+  return day.slice(0, 4) === here ? shortDay(day) : shortDay(day) + " " + day.slice(0, 4);
+}
+function fearHistoryHtml(series) {
+  const pts = (series || []).filter((p) => p && p.score != null);
+  if (pts.length < 3) return "";
+  const W = 880, H = 96, TOP = 6, BOT = H - 6;
+  const y = (v) => TOP + (1 - v / 100) * (BOT - TOP);
+  const x = (i) => (i / (pts.length - 1)) * W;
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.score).toFixed(1)).join(" ");
+  return '<div style="margin-top:12px">' +
+    '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:' + H + 'px;display:block">' +
+    '<defs><linearGradient id="bhFg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)"/><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>' +
+    [25, 50, 75].map((v) => '<line x1="0" y1="' + y(v).toFixed(1) + '" x2="' + W + '" y2="' + y(v).toFixed(1) + '" style="stroke:var(--grid)"/>').join("") +
+    '<line x1="0" y1="' + BOT + '" x2="' + W + '" y2="' + BOT + '" style="stroke:var(--hair)"/>' +
+    '<path d="' + line + " L" + W + " " + BOT + " L0 " + BOT + ' Z" fill="url(#bhFg)"/>' +
+    '<path d="' + line + '" fill="none" style="stroke:var(--accent)" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>' +
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding-top:4px">' +
+    "<span>" + esc(fearDay(pts[0].date)) + "</span><span>" + esc(fearDay(pts[pts.length - 1].date)) + "</span></div></div>";
+}
+function fearCardHtml() {
+  ensureFear(state.fearIndex);
+  const held = _fear[state.fearIndex] || {};
+  const g = held.rec;
+  const when = g && g.asOf ? (String(g.asOf).slice(0, 10) === String((state.model || {}).today || "") ? relTime(g.asOf) : shortDay(String(g.asOf).slice(0, 10))) : "";
+  const head = '<div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>Fear &amp; Greed</h5>' +
+    msegHtml("fearIndex", "index", [["stocks", "Stocks"], ["crypto", "Crypto"]], state.fearIndex) +
+    (g ? '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(g.source || "") + (when ? " \u00b7 " + esc(when) : "") + "</span>" : "") + "</div>";
+  if (!g) return '<div class="card elev-sm" style="padding:14px 16px 12px">' + head +
+    '<div class="muted" style="font-size:12px">' + (held.loading ? "Reading\u2026" : "The index did not answer.") + "</div></div>";
+  const parts = fearRowsHtml("What it is made of", g.parts || []);
+  return '<div class="card elev-sm" style="padding:14px 16px 12px">' + head +
+    '<div style="display:grid;grid-template-columns:280px minmax(0,1fr)' + (parts ? " minmax(0,1.15fr)" : "") + ';gap:26px;align-items:start">' +
+    fearDialHtml(g.score, g.rating) + fearRowsHtml("Where it stood", g.previous || []) + parts + "</div>" +
+    fearHistoryHtml(g.series) + "</div>";
+}
+
 // ---------------------------------------------------------------------------
 // Markets: the tile row
 // ---------------------------------------------------------------------------
@@ -4598,6 +4693,7 @@ function act(name, arg, ev) {
     }
     case "newsKind": state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
     case "shortsScope": state.shortsScope = arg.scope; try { localStorage.setItem("bh2.shorts", arg.scope); } catch (e) {} render(); break;
+    case "fearIndex": state.fearIndex = arg.index; try { localStorage.setItem("bh2.fear", arg.index); } catch (e) {} ensureFear(arg.index); render(); break;
     case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
