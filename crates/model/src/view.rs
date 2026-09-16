@@ -703,3 +703,55 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
         "activityCount": base.activity_count,
     })
 }
+
+/// `model.DETAIL_KEYS`: what a row carries only when the page has opened it.
+pub const DETAIL_KEYS: [&str; 2] = ["legs", "fills"];
+
+/// `model.slim`: the view as the page receives it -- the legs and fills of one
+/// trade or holding only, because sending every leg of every trade on every
+/// poll is most of the payload.
+pub fn slim(view: &Value, detail: Option<&str>) -> Value {
+    let mut out = view.clone();
+    for key in ["trades", "positions"] {
+        let rows: Vec<Value> = view
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        let keep = detail.map(|d| field_s(r, "id") == d).unwrap_or(false);
+                        if keep {
+                            r.clone()
+                        } else {
+                            let mut m = r.as_object().cloned().unwrap_or_default();
+                            for k in DETAIL_KEYS {
+                                m.remove(k);
+                            }
+                            Value::Object(m)
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Value::Object(m) = &mut out {
+            m.insert(key.into(), Value::Array(rows));
+        }
+    }
+    out
+}
+
+/// `model.trade_detail`: the legs and fills of one trade or holding, by id.
+pub fn trade_detail(base: &Base, trade_id: &str) -> Option<Value> {
+    for rows in [&base.trades, &base.positions] {
+        for r in rows {
+            if field_s(r, "id") == trade_id {
+                return Some(json!({
+                    "id": trade_id,
+                    "legs": r.get("legs").cloned().unwrap_or_else(|| json!([])),
+                    "fills": r.get("fills").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
+        }
+    }
+    None
+}

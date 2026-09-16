@@ -314,15 +314,85 @@ fn handle(app: &App, req: Request) {
             let status = match app.status_payload(&conn) { Ok(s) => s, Err(e) => return fail(req, e) };
             let cache = app.cache.lock().unwrap();
             let base = cache.base.as_ref().expect("base built above");
-            let mut payload = bagholder_model::view::build_view(base, model_filters(&query).as_ref());
+            let full = bagholder_model::view::build_view(base, model_filters(&query).as_ref());
+            // the legs and fills of the one trade the page has open, and no
+            // other: sending every leg on every poll is most of the payload
+            let detail = query_param(&query, "trade");
+            let mut payload = bagholder_model::view::slim(&full, detail.as_deref());
             if let Value::Object(m) = &mut payload {
                 m.insert("status".into(), status);
             }
             drop(cache);
             send_json(req, 200, &payload);
         }
+        "/api/trade" => {
+            // the legs and fills of one trade or holding, fetched when its page opens
+            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            if let Err(e) = app.base_for(&conn) {
+                return fail(req, e);
+            }
+            let id = query_param(&query, "trade").or_else(|| query_param(&query, "id"));
+            let cache = app.cache.lock().unwrap();
+            let base = cache.base.as_ref().expect("base built above");
+            let found = id.as_deref().and_then(|i| bagholder_model::view::trade_detail(base, i));
+            drop(cache);
+            match found {
+                Some(mut d) => {
+                    if let Value::Object(m) = &mut d {
+                        m.insert("ok".into(), json!(true));
+                    }
+                    send_json(req, 200, &d)
+                }
+                None => send_json(req, 404, &json!({"ok": false, "error": "no such trade"})),
+            }
+        }
+        "/api/data" => {
+            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            match data_summary(&conn, &app.db_path().display().to_string()) {
+                Ok(mut s) => {
+                    if let Value::Object(m) = &mut s {
+                        m.insert("ok".into(), json!(true));
+                        // the Wealthsimple session is still Python's
+                        m.insert("sessionPresent".into(), json!(false));
+                    }
+                    send_json(req, 200, &s)
+                }
+                Err(e) => fail(req, e),
+            }
+        }
         _ => not_found(req),
     }
+}
+
+/// `store.data_summary`: the row counts the Data & storage dialog shows before
+/// a wipe.
+fn data_summary(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<Value> {
+    let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
+    let journal_raw = bagholder_store::tables::get_meta(conn, "journal_v2", "")?;
+    let journal_n = serde_json::from_str::<Value>(&journal_raw)
+        .ok()
+        .and_then(|v| v.as_object().map(|m| m.len()))
+        .unwrap_or(0);
+    let (first, last): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT MIN(transaction_date), MAX(transaction_date) FROM activities",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(json!({
+        "path": path,
+        "activities": count("SELECT COUNT(*) FROM activities")?,
+        "firstActivity": first.unwrap_or_default(),
+        "lastActivity": last.unwrap_or_default(),
+        "accounts": count("SELECT COUNT(*) FROM accounts")?,
+        "balances": count("SELECT COUNT(*) FROM balances")?,
+        "navDays": count("SELECT COUNT(*) FROM nav_history")?,
+        "securities": count("SELECT COUNT(*) FROM securities")?,
+        "journal": journal_n,
+        "fxDays": count("SELECT COUNT(*) FROM fx_rates")?,
+        "benchmarkDays": count("SELECT COUNT(*) FROM benchmark_prices")?,
+        "filings": count("SELECT COUNT(*) FROM filings")?,
+        "syncedAt": bagholder_store::tables::get_meta(conn, "synced_at", "")?,
+    }))
 }
 
 fn fail(req: Request, e: rusqlite::Error) {
