@@ -7,6 +7,7 @@
 //!     storetool local  <db>      -- the same, through insert_local
 //!     storetool keys             -- rows on stdin, their match keys out
 //!     storetool tables <db>      -- accounts/balances/margin/nav/fx/journal in and out
+//!     storetool merge  <db>      -- {ws, local} rows merged in; the counts and the table out
 //!
 //! `insert` and `local` number any id they have to make `gen-0`, `gen-1`, ...
 //! rather than drawing a UUID, so a comparison does not turn on randomness.
@@ -117,6 +118,22 @@ fn main() {
                 "benchDays": t::benchmark_days(&conn, t::BENCHMARK_SYMBOL, "2024-01-01", "2026-12-31").unwrap(),
                 "groups": t::trade_groups(&conn).unwrap(),
                 "notes": t::trade_notes(&conn).unwrap(),
+            })).unwrap());
+        }
+        // {ws: [...], local: [...]} applied in that order
+        "merge" => {
+            let doc = stdin_json();
+            let a = |k: &str| -> Vec<Value> { doc.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default() };
+            // the tool is a fresh process per step, so the caller says where
+            // the id sequence has got to
+            let n = Cell::new(doc.get("idStart").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+            let gen = || { let i = n.get(); n.set(i + 1); format!("gen-{}", i) };
+            let applied = bagholder_store::merge::apply_wealthsimple_mapped(&conn, &a("ws"), &gen).unwrap();
+            let merged = bagholder_store::merge::merge_local_rows(&conn, &a("local"), &gen).unwrap();
+            println!("{}", serde_json::to_string(&json!({
+                "applied": applied,
+                "merged": merged,
+                "rows": act::all_activities(&conn).unwrap(),
             })).unwrap());
         }
         other => panic!("unknown mode {other}"),

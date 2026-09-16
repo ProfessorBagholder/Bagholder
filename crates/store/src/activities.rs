@@ -288,6 +288,30 @@ fn insert_params(act: &Value, assigned_id: &str, canonical_id: Option<&str>) -> 
     ]
 }
 
+/// The insert parameters keyed by column name, which is what the revision
+/// check compares against the stored row.
+pub fn insert_columns(act: &Value, assigned_id: &str, canonical_id: Option<&str>) -> Map<String, Value> {
+    let params = insert_params(act, assigned_id, canonical_id);
+    let mut out = Map::new();
+    for (c, v) in COLUMNS.iter().zip(params) {
+        out.insert((*c).to_string(), v);
+    }
+    out
+}
+
+/// One JSON value as a bound parameter.
+pub fn to_sql(v: &Value) -> Box<dyn rusqlite::ToSql> {
+    match v {
+        Value::Null => Box::new(None::<String>),
+        Value::String(s) => Box::new(s.clone()),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() { Box::new(i) } else { Box::new(n.as_f64().unwrap_or(0.0)) }
+        }
+        Value::Bool(b) => Box::new(*b as i64),
+        other => Box::new(other.to_string()),
+    }
+}
+
 fn bind(params: &[Value]) -> Vec<Box<dyn rusqlite::ToSql>> {
     params
         .iter()
