@@ -3,6 +3,7 @@
 //!
 //!     difftool rows   -- activity rows in, the normalized rows and symbol readings out
 //!     difftool fifo   -- activity rows in, match_fifo's result out
+//!     difftool when   -- ISO instants in, the local date and time out
 //!     difftool book   -- {snapshot, today, fx} in, build_book plus apply_fx out
 use serde_json::{json, Value};
 use std::io::Read;
@@ -14,6 +15,13 @@ fn main() {
     let input: Value = serde_json::from_str(&buf).unwrap();
 
     let out = match mode.as_str() {
+        "when" => {
+            let rows: Vec<String> = serde_json::from_value(input).unwrap();
+            Value::Array(rows.iter().map(|r| {
+                let (d, t) = bagholder_model::clock::when_parts(r);
+                json!([d, t])
+            }).collect())
+        }
         "fifo" => {
             let rows: Vec<Value> = serde_json::from_value(input).unwrap();
             let m = bagholder_model::fifo::match_fifo(&rows);
@@ -29,7 +37,13 @@ fn main() {
                 .unwrap_or_default();
             let mut b = bagholder_model::book::build_book(&snapshot, &today);
             bagholder_model::fx::apply_fx(&mut b.fifo.closed, &fx);
+            let saved: Vec<Value> = snapshot.get("tradeGroups").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let journal = input.get("journal").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            let trades = bagholder_model::trades::build_trades(&b.fifo.closed, &saved, &b.acts_by_id, &b.securities, &journal);
+            let last_prices = bagholder_model::trades::last_fill_prices(&b.activities);
             json!({
+                "trades": trades,
+                "lastPrices": last_prices,
                 "activities": b.activities,
                 "closed": b.fifo.closed,
                 "open": b.fifo.open,

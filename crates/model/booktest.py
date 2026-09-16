@@ -40,9 +40,14 @@ def main():
         snap, today = doc["snapshot"], doc["today"]
         fx = doc["market"].get("fx") or {}
 
+        journal = doc.get("journal") or {}
         book = model.build_book(snap, today)
         model.apply_fx(book["fifo"]["closed"], fx)
+        trades = model.build_trades(book["fifo"]["closed"], book["fifo"]["open"], snap.get("tradeGroups"),
+                                    book["actsById"], book["securities"], journal)
         want = {
+            "trades": trades,
+            "lastPrices": model.last_fill_prices(book["activities"]),
             "activities": book["activities"],
             "closed": book["fifo"]["closed"],
             "open": book["fifo"]["open"],
@@ -52,13 +57,13 @@ def main():
             "knownExchanges": book["securities"].known_exchanges(),
         }
         got = json.loads(subprocess.run(
-            [BIN, "book"], input=json.dumps({"snapshot": snap, "today": today, "fx": fx}),
+            [BIN, "book"], input=json.dumps({"snapshot": snap, "today": today, "fx": fx, "journal": journal}),
             capture_output=True, text=True, check=True).stdout)
 
-        for k in ("rawCount", "cashCurrencies", "knownExchanges"):
+        for k in ("rawCount", "cashCurrencies", "knownExchanges", "lastPrices"):
             if norm(want[k]) != norm(got[k]):
                 bad.append(f"{name}: {k} py={want[k]!r} rs={got[k]!r}")
-        for section in ("activities", "closed", "open", "unmatched"):
+        for section in ("activities", "closed", "open", "unmatched", "trades"):
             w, g = norm(want[section]), norm(got[section])
             counts[section] = counts.get(section, 0) + len(w)
             if len(w) != len(g):

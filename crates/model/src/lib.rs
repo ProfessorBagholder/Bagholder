@@ -15,3 +15,5 @@ pub mod fx;
 pub mod synth;
 pub mod securities;
 pub mod book;
+pub mod clock;
+pub mod trades;
