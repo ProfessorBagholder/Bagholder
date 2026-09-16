@@ -89,6 +89,10 @@ def main():
                                             capture_output=True, text=True, check=True).stdout)
     diff("journal", journal, got_journal, bad)
 
+    got_market = json.loads(subprocess.run([STORETOOL, "market", rsdb],
+                                           capture_output=True, text=True, check=True).stdout)
+    diff("market", market, got_market, bad)
+
     case = {"snapshot": snap, "market": market, "today": today, "journal": journal, "filters": {}}
     want_view = make_cases.expect_from(snap, market, today, {}, journal)
     got_view = json.loads(subprocess.run([CASETOOL], input=json.dumps(case),
@@ -97,8 +101,9 @@ def main():
 
     for line in bad[:25]:
         print("  " + line)
-    print(f"{len(snap['activities'])} activities, {len(want_view['trades'])} trades, "
-          f"{len(want_view['positions'])} positions, {len(bad)} differences")
+    print(f"{len(snap['activities'])} activities, {len(market['quotes'])} quotes, "
+          f"{len(want_view['trades'])} trades, {len(want_view['positions'])} positions, "
+          f"{len(bad)} differences")
     shutil.rmtree(work, ignore_errors=True)
     return 1 if bad else 0
 

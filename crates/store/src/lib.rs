@@ -6,3 +6,4 @@ pub mod activities;
 pub mod tables;
 pub mod merge;
 pub mod snapshot;
+pub mod market;

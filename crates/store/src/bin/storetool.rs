@@ -8,6 +8,7 @@
 //!     storetool keys             -- rows on stdin, their match keys out
 //!     storetool tables <db>      -- accounts/balances/margin/nav/fx/journal in and out
 //!     storetool snapshot <db>    -- everything the model is built from
+//!     storetool market <db>      -- fx, benchmarks, distributions and quotes
 //!     storetool journal <db>     -- the v2 journal
 //!     storetool merge  <db>      -- {ws, local} rows merged in; the counts and the table out
 //!
@@ -141,6 +142,9 @@ fn main() {
         "snapshot" => {
             bagholder_store::relabel::ensure(&conn).unwrap();
             println!("{}", serde_json::to_string(&bagholder_store::snapshot::snapshot(&conn, true).unwrap()).unwrap());
+        }
+        "market" => {
+            println!("{}", serde_json::to_string(&bagholder_store::market::market_data(&conn).unwrap()).unwrap());
         }
         "journal" => {
             println!("{}", serde_json::to_string(&bagholder_store::snapshot::journal(&conn).unwrap()).unwrap());
