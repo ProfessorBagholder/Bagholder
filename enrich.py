@@ -21,6 +21,7 @@ from __future__ import annotations
 import html as _html
 import re
 
+import forms
 import localmodel
 import pdftext
 
@@ -216,7 +217,22 @@ def summarize(text):
     # A real sentence carries a lowercase word (a verb/function word); a name is all caps-cased.
     if len(out.split()) < 4 or not re.search(r"\b[a-z]{3,}\b", out):
         return ""
+    if hedged(out):
+        return ""
     return out[:240]
+
+
+# A summary says what a document says. A model that hedges is telling you it did not find
+# out — "the company announces the completion of a new report, likely a Form 45-106F1" — and a
+# guess on a filing is worse than no line at all, so a hedged answer is thrown away.
+_HEDGE = re.compile(r"\b(likely|probably|presumably|apparently|possibly|perhaps|seems?\s+to|appears?\s+to|"
+                    r"may\s+be|might\s+be|could\s+be|suggests?\s+that|unclear|not\s+specified|unspecified|"
+                    r"i\s+think|it\s+is\s+not\s+clear)\b", re.I)
+
+
+def hedged(out):
+    """Whether a model's line is a guess rather than a reading."""
+    return bool(_HEDGE.search(out or ""))
 
 
 _PREAMBLE = re.compile(r"^\s*(sure[,!.]?\s+)?(here(?:'?s| is| are)\b[^:]*:?\s*)", re.I)
@@ -258,8 +274,8 @@ def title_from_model(text):
     out = out.rstrip(".:").strip()
     out = " ".join(out.split()[:9])
     low = out.lower()
-    if len(out.split()) < 3 or "title" in low or low.startswith("here") or _is_junk_title(out):
-        return ""                        # a preamble echo, a form/file header, or a bare form code: fall back to the type
+    if len(out.split()) < 3 or "title" in low or low.startswith("here") or _is_junk_title(out) or hedged(out):
+        return ""                        # a preamble echo, a form/file header, a bare form code, or a guess: fall back to the type
     return out[:90]
 
 
@@ -274,6 +290,15 @@ def enrich_document(source, data, content_type=""):
     if _is_junk_title(subject):          # a PDF's own /Title can be a file name or doc id
         subject = ""
     text = document_text(data, content_type)
+    # A regulator's fill-in form is mostly its own instructions, and a model handed those
+    # summarizes the instructions: one this app reads exactly is read value by value and never
+    # sees a model, and one it does not read is not summarized at all, since the row's type
+    # already says what the document is and a guess about it is worse than nothing (forms.py).
+    exact = forms.read(text)
+    if exact:
+        return {"subject": exact.get("subject", "") or subject, "summary": exact.get("summary", "")}
+    if forms.is_form(text):
+        return {"subject": subject, "summary": ""}
     summary = summarize(text)
     if not subject:
         subject = title_from_model(text)
