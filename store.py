@@ -479,6 +479,7 @@ def _init_schema(conn):
             summary TEXT,
             enriched_at TEXT,
             enrich_version INTEGER,
+            enrich_final INTEGER,
             fetched_at TEXT,
             PRIMARY KEY (symbol, id)
         );
@@ -1208,13 +1209,17 @@ def stamp_canonical_id(activity_id, canonical_id):
         conn = _connect()
         try:
             _ready(conn)
-            conn.execute(
+            # this statement's own rows: `total_changes` counts every change the connection has
+            # ever made, and the connection is pooled, so it is all but always positive — a stamp
+            # that matched nothing reported success, and the sync then counted the activity linked
+            # and did not insert it
+            done = conn.execute(
                 "UPDATE activities SET canonical_id = ? WHERE id = ? "
                 "AND (canonical_id IS NULL OR canonical_id = '')",
                 (cid, activity_id),
-            )
+            ).rowcount
             conn.commit()
-            return conn.total_changes > 0
+            return done > 0
         finally:
             conn.close()
 
@@ -2784,13 +2789,13 @@ def mark_order_fill_booked(order_id, qty):
         conn = _connect()
         try:
             _ready(conn)
-            conn.execute(
+            done = conn.execute(                      # this statement's own rows, not the pooled connection's tally
                 "UPDATE orders SET fill_booked_qty = ?, updated_at = ? "
                 "WHERE id = ? AND (fill_booked_qty IS NULL OR fill_booked_qty < ?)",
                 (q, _now_iso(), _s(order_id), q),
-            )
+            ).rowcount
             conn.commit()
-            return conn.total_changes > 0
+            return done > 0
         finally:
             conn.close()
 
@@ -3110,7 +3115,7 @@ def _ensure_filings_columns(conn):
         return
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(filings)").fetchall()}
     for col, typ in (("source", "TEXT"), ("category", "TEXT"), ("type", "TEXT"), ("title", "TEXT"),
-                     ("date", "TEXT"), ("date_text", "TEXT"), ("subject", "TEXT"), ("summary", "TEXT"), ("enriched_at", "TEXT"), ("enrich_version", "INTEGER")):
+                     ("date", "TEXT"), ("date_text", "TEXT"), ("subject", "TEXT"), ("summary", "TEXT"), ("enriched_at", "TEXT"), ("enrich_version", "INTEGER"), ("enrich_final", "INTEGER")):
         if col not in cols:
             conn.execute("ALTER TABLE filings ADD COLUMN %s %s" % (col, typ))
     # the old columns `file`/`submitted`/`submitted_at` are left in place but unused;
@@ -3124,7 +3129,7 @@ def _filing_from_row(r):
             "profileNo": get("profile_no"), "issuer": get("issuer"),
             "type": get("type") or get("file"), "title": get("title"),
             "date": get("date") or get("submitted_at"), "dateText": get("date_text") or get("submitted"),
-            "size": get("size"), "url": get("url"), "subject": get("subject"), "summary": get("summary"), "enrichedAt": get("enriched_at"), "enrichVersion": get("enrich_version"),
+            "size": get("size"), "url": get("url"), "subject": get("subject"), "summary": get("summary"), "enrichedAt": get("enriched_at"), "enrichVersion": get("enrich_version"), "enrichFinal": bool(get("enrich_final")),
             "fetchedAt": get("fetched_at")}
 
 
@@ -3158,11 +3163,14 @@ def filing(symbol, doc_id):
             conn.close()
 
 
-def set_filing_enrichment(symbol, doc_id, subject=None, summary=None, version=None):
+def set_filing_enrichment(symbol, doc_id, subject=None, summary=None, version=None, final=None):
     """Persist a document's read subject and/or summary on its row, stamped with the
     enrichment logic's version so a later, better version re-reads it once. Missing
-    values are left as they were."""
+    values are left as they were. `final` marks a document read for good — a regulator's
+    form, read from its own boxes — which is not read again for a half it will never have."""
     sets, args = ["enriched_at = ?"], [_now_iso()]
+    if final is not None:
+        sets.append("enrich_final = ?"); args.append(1 if final else 0)
     if subject is not None:
         sets.append("subject = ?"); args.append(_s(subject))
     if summary is not None:
@@ -3201,14 +3209,14 @@ def replace_filings(symbol, source, items, now=None):
         conn = _connect()
         try:
             _ready(conn)
-            read = {r["id"]: (r["subject"], r["summary"], r["enriched_at"], r["enrich_version"])
-                    for r in conn.execute("SELECT id, subject, summary, enriched_at, enrich_version FROM filings WHERE symbol = ? AND source = ?", (sym, src))}
+            read = {r["id"]: (r["subject"], r["summary"], r["enriched_at"], r["enrich_version"], r["enrich_final"])
+                    for r in conn.execute("SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?", (sym, src))}
             conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", (sym, src))
             conn.executemany(
                 "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, "
-                "subject, summary, enriched_at, enrich_version) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [row + read.get(row[1], ("", "", None, None)) for row in clean])
+                "subject, summary, enriched_at, enrich_version, enrich_final) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [row + read.get(row[1], ("", "", None, None, None)) for row in clean])
             conn.commit()
             return len(clean)
         finally:

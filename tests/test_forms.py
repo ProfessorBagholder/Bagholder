@@ -78,7 +78,8 @@ class NeverGuessTest(unittest.TestCase):
              mock.patch.object(enrich.localmodel, "available", return_value=True), \
              mock.patch.object(enrich.localmodel, "chat", side_effect=AssertionError("asked a model about a form")):
             out = enrich.enrich_document("sedar", b"%PDF-1.7 no title", "application/pdf")
-        self.assertEqual(out, {"subject": "", "summary": ""}, "the row's own type says what it is")
+        self.assertEqual(out, {"subject": "", "summary": "", "final": True},
+                         "the row's own type says what it is, and the read is done: no half is coming")
 
     def test_a_form_this_app_reads_never_sees_a_model(self):
         with mock.patch.object(enrich, "document_text", return_value=F1), \
