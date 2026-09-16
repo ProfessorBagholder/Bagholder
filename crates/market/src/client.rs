@@ -280,6 +280,8 @@ fn gunzip(raw: &[u8]) -> Vec<u8> {
 pub struct Response {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The final answer's headers, names lower-cased.
+    pub headers: Vec<(String, String)>,
 }
 
 impl Response {
@@ -393,7 +395,7 @@ pub fn request(
         if head.status >= 400 {
             return Err(Error::Status(head.status));
         }
-        return Ok(Response { status: head.status, body: gunzip(&raw) });
+        return Ok(Response { status: head.status, body: gunzip(&raw), headers: head.headers.clone() });
     }
     Err(Error::Transport("too many redirects".into()))
 }

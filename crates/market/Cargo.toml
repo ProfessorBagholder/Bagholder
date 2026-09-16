@@ -20,3 +20,5 @@ openssl = "0.10"
 flate2 = "1"
 # the exchange zone a Yahoo chart names, from the system's own tzdata
 tz-rs = "0.7"
+# the filing sources' page patterns; Python's `re` for the same ones
+regex = "1"

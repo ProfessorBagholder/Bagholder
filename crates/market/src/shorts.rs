@@ -454,7 +454,7 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> bool {
         return false;
     }
     let crumb = match session.get(YAHOO_CRUMB_URL, timeout) {
-        Ok(a) => a.body.trim().to_string(),
+        Ok(a) => a.text().trim().to_string(),
         Err(e) => {
             eprintln!("bagholder shorts: yahoo would not open: {}", e);
             return false;
@@ -587,7 +587,7 @@ pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, c
                 if answered.status != 200 {
                     continue;
                 }
-                let doc: Value = match serde_json::from_str(&answered.body) {
+                let doc: Value = match serde_json::from_str(&answered.text()) {
                     Ok(Value::Object(m)) => Value::Object(m),
                     _ => {
                         eprintln!("bagholder shorts: {} float from yahoo failed: not a statistics answer", form);

@@ -10,7 +10,10 @@ edition.workspace = true
 # same symbols, so this is its own process: the market crate talks to it over
 # a pipe, one request per line, and the session's cookies live here.
 [dependencies]
-wreq = { version = "=6.0.0-rc.31", features = ["cookies"] }
-wreq-util = "=3.0.0-rc.14"
+# the compression features are not optional: without them no Accept-Encoding
+# goes out and the TLS extensions differ, and SEDAR+'s gate turns the session
+# away
+wreq = { version = "=6.0.0-rc.31", features = ["cookies", "gzip", "brotli", "zstd", "deflate"] }
+wreq-util = { version = "=3.0.0-rc.14", features = ["emulation", "emulation-compression"] }
 tokio = { version = "1", features = ["rt"] }
 serde_json = { version = "1", features = ["preserve_order"] }

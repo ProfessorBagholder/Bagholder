@@ -95,7 +95,7 @@ pub fn clean_text(t: &str) -> String {
 /// in the table is retried against its longest prefix that is, which is how
 /// `&notit;` reads as `\u{ac}it;` -- the legacy names are recognised without
 /// their semicolon.
-fn unescape(t: &str) -> String {
+pub fn unescape(t: &str) -> String {
     if !t.contains('&') {
         return t.to_string();
     }
