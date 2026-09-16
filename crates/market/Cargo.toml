@@ -1,0 +1,20 @@
+[package]
+name = "bagholder-market"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bagholder-model = { path = "../model" }
+bagholder-store = { path = "../store" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The standard library has no HTTPS. ureq is a blocking client over rustls,
+# which is what the Python side does with urllib over its own SSL context.
+# ureq only wires a TLS backend in when it is handed one; the platform's own
+# store is what Python's ssl context uses too.
+# The HTTP client is built on OpenSSL: some of these hosts gate on the TLS
+# handshake, and OpenSSL is what Python reaches them through. Same reason
+# curl_cffi exists on the Python side for SEDAR+.
+openssl = "0.10"
+flate2 = "1"
