@@ -102,12 +102,6 @@ html[data-theme="light"] .heat-chg{color:rgba(27,29,39,.78)}
 .gth.on{color:var(--ink)}
 /* short interest: a label, the figure, and what stands behind it, so the row reads across
    the card's width instead of three numbers stranded in it */
-.si-v{font-size:14px;font-weight:500;text-align:right;white-space:nowrap}
-.si-strip{margin:0 0 10px;padding:9px 11px;border-radius:8px;background:rgba(var(--ink-rgb),.045)}
-.si-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:7px;font-size:12px;font-weight:500}
-.si-sh > span{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink55);white-space:nowrap}
-.si-cells{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}
-.si-cells .si-v{text-align:left;font-size:13.5px}
 .nw-head,.nw-row{display:grid;grid-template-columns:66px minmax(0,1fr) auto minmax(64px,auto);gap:12px;padding:0 16px;white-space:nowrap}
 .nw-head{padding-bottom:6px;margin:0 -16px}
 .nw-bare{grid-template-columns:66px minmax(0,1fr)}
@@ -514,6 +508,7 @@ const state = {
   fearIndex: (function () { try { return localStorage.getItem("bh2.fear") || "stocks"; } catch (e) { return "stocks"; } })(),
   newsReading: "",     // a listing whose wire is being read for the card's chip
   newsKind: (function () { try { const k = localStorage.getItem("bh2.newsKind"); return k === "disc" || k === "releases" ? k : "stories"; } catch (e) { return "stories"; } })(),   // the News card: the stories, the releases, or the disclosures
+  newsKindChosen: null,   // the tab the reader picked, which a chip may borrow from and gives back
   discCat: "all",       // the Disclosures card's category filter (a category value, or "all")
   discSource: null,     // the one source the Disclosures card is narrowed to, from a click on its source cell
   discOpening: null,    // the id of a disclosure whose document is being opened (the row shows "Opening…")
@@ -2633,26 +2628,6 @@ function shortSpan(key) {
   if (a.length !== 3 || b.length !== 3) return "";
   return a[1] === b[1] ? MON[Number(a[1]) - 1] + " " + Number(a[2]) + "–" + Number(b[2]) : shortDay(ends[0]) + " – " + shortDay(ends[1]);
 }
-function shortsFigures(s) {
-  // label, figure, and what stands behind the figure — the row grammar the card and the
-  // News tile's strip both read from, so one listing reads the same in both places
-  const change = s.change == null ? "" : (s.change > 0 ? "+" : "") + qty(s.change);
-  const against = s.previous == null ? "" : "from " + qty(s.previous) + (s.previousOf ? " on " + shortDay(s.previousOf) : "");
-  return [
-    { label: "Short shares", value: qty(s.shares), note: [change, against].filter(Boolean).join(" · ") },
-    { label: "Of float", value: s.ofFloat == null ? "—" : n2(s.ofFloat, 2) + "%",
-      note: s.float ? "of " + qty(s.float) + " shares floating" : "" },
-    { label: "Days to cover", value: s.daysToCover == null ? "—" : n2(s.daysToCover, 1),
-      note: s.averageVolume ? "at " + qty(Math.round(s.averageVolume)) + " a day" : "" },
-    { label: "Short volume", value: s.volumePct == null ? "—" : n2(s.volumePct, 1) + "%", bar: s.volumePct,
-      note: (s.shortVolume != null && s.totalVolume != null
-              ? qty(Math.round(s.shortVolume)) + " of " + qty(Math.round(s.totalVolume)) + " shares traded" : "") +
-            (s.volumeOf ? (s.shortVolume != null ? " · " : "") + shortSpan(s.volumeOf) : "") },
-  ];
-}
-// the tile's own date, and only that: each tile carries the date of the figures it draws,
-// which are not all on the same clock, and the regulator behind them is named once in the spec
-// rather than three times over one page
 function shortsHeader(title, right) {
   return '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px"><h5>' + title + "</h5>" +
     '<span style="margin-left:auto;font-size:11px;color:var(--ink55)">' + esc(right || "") + "</span></div>";
@@ -2733,20 +2708,6 @@ function shortsSectionHtml(t) {
   return '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch">' +
     shortsVolumeCardHtml(s) + shortsFloatCardHtml(s) + "</div>" + shortsHistoryHtml(s);
 }
-// the same listing, compact, for the News card once it is scoped to a symbol — the card is
-// half the width of the instrument page's, so the figures stack under their labels
-function shortsStripHtml(only) {
-  if (!only || !only.symbol) return "";
-  ensureShorts(only);                       // any ticker the chip names, held or not
-  const rec = _shorts[shortsKey(only)];
-  if (!rec || !rec.ok || !rec.covered) return "";
-  const s = rec.shorts || {};
-  const cell = (f) => '<div><div class="lbl">' + f.label + '</div><div class="si-v tab">' + f.value + "</div></div>";
-  return '<div class="si-strip"><div class="si-sh">Short interest<span>' + (s.asOf ? "as of " + esc(shortDay(s.asOf)) : "") +
-    '</span></div><div class="si-cells">' +
-    shortsFigures(s).map(cell).join("") + "</div></div>";
-}
-
 // ---------------------------------------------------------------------------
 // Disclosures: an instrument's regulatory filings from every source (SEDAR+,
 // SEC, …), on the trade/holding detail. Fetched per symbol from /api/filings
@@ -3503,6 +3464,28 @@ function chipChange(only) {
   if (!_sugQuotes[k] && !_sugPending[k]) sugQuoteSchedule([only]);
   return _sugQuotes[k] ? _sugQuotes[k].percentChange : null;
 }
+// A ticker searched for is meant to be found. A wire carries what it is sent, and a Canadian
+// small cap's carries only the company's own releases, so a chip taken while Stories was on
+// showed `No news.` with a dozen releases sitting behind the next tab — which is what the card
+// did before releases were told apart from stories at all. The chip borrows the tab that holds
+// its listing's items, and gives it back when the chip goes.
+function newsKindFor(only) {
+  const kind = state.newsKind;
+  if (!only || kind === "disc") return kind;
+  const items = (((state.model || {}).markets || {}).news) || [];
+  const mine = (n) => (n.tags || []).some((t) => bareSymbol(t.symbol) === only.symbol && String(t.exchange || "").toUpperCase() === only.exchange);
+  const has = (k) => items.some((n) => (k === "releases" ? n.kind === "release" : n.kind !== "release") && mine(n));
+  if (has(kind)) return kind;
+  const other = kind === "releases" ? "stories" : "releases";
+  return has(other) ? other : kind;
+}
+function newsChip(only) {
+  // the reader's own tab is remembered while a chip borrows another, and restored when it clears
+  if (only && state.newsKindChosen == null) state.newsKindChosen = state.newsKind;
+  state.newsSymbol = only;
+  if (only) state.newsKind = newsKindFor(only);
+  else if (state.newsKindChosen != null) { state.newsKind = state.newsKindChosen; state.newsKindChosen = null; }
+}
 function newsCardHtml(items) {
   const scope = state.newsScope, only = state.newsSymbol, q = state.newsQuery.trim().toUpperCase();
   const chipPct = chipChange(only);
@@ -3543,7 +3526,6 @@ function newsCardHtml(items) {
     msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
-    (only ? shortsStripHtml(only) : "") +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
@@ -3680,7 +3662,7 @@ function newsDiscLookup(text) {
       if (state.newsKind !== kind || state.newsQuery.trim().toUpperCase() !== key) return;
       // the chip, not the filter: a listing outside the scope on show (a holding while Watchlist is
       // chosen, one sold since its items were read) is the listing asked for, and the scope must not hide it
-      state.newsSymbol = only;
+      newsChip(only);
       state.newsQuery = "";
       if (kind !== "disc" && !itemsFor(only)) {
         // no items for it: the wire is read now, and the model brings its rows
@@ -4753,8 +4735,8 @@ function act(name, arg, ev) {
     case "noop": break;
     case "heatOpen": openHolding(arg.id); break;
     case "listingOpen": openListing(arg); break;
-    case "newsSym": state.newsSymbol = { symbol: arg.symbol, exchange: arg.exchange }; render(); break;
-    case "newsSymClear": state.newsSymbol = null; render(); break;
+    case "newsSym": newsChip({ symbol: arg.symbol, exchange: arg.exchange }); render(); break;
+    case "newsSymClear": newsChip(null); render(); break;
     case "discCat": state.discCat = arg.cat; render(); break;
     case "discSource": state.discSource = arg.source; render(); break;
     case "discSourceClear": state.discSource = null; render(); break;
@@ -4768,10 +4750,10 @@ function act(name, arg, ev) {
       clearTimeout(_discOpenTimer); _discOpenTimer = setTimeout(() => { state.discOpening = null; render(); }, 4000);
       break;
     }
-    case "newsKind": state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
+    case "newsKind": state.newsKindChosen = null; state.newsKind = arg.kind === "disc" || arg.kind === "releases" ? arg.kind : "stories"; try { localStorage.setItem("bh2.newsKind", state.newsKind); } catch (e) {} render(); break;
     case "shortsScope": state.shortsScope = arg.scope; try { localStorage.setItem("bh2.shorts", arg.scope); } catch (e) {} render(); break;
     case "fearIndex": state.fearIndex = arg.index; try { localStorage.setItem("bh2.fear", arg.index); } catch (e) {} ensureFear(arg.index); render(); break;
-    case "newsScope": state.newsSymbol = null; state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
+    case "newsScope": newsChip(null); state.newsScope = arg.scope; try { localStorage.setItem("bh2.news", arg.scope); } catch (e) {} render(); break;
     case "newsOpen": if (arg.url) window.open(arg.url, "_blank", "noopener"); break;
     case "chipEdit": state.picker = arg.key === "search" ? "fields" : arg.key; state.menuOpen = false; render(); break;
     case "chipRemove": clearField(arg.key); break;
