@@ -550,6 +550,7 @@ fn handle(app: &App, req: Request) {
                 }))
             });
         }
+        "/api/watch" => with_conn(app, req, |conn| bagholder_store::csvimport::status(conn)),
         "/api/data" => {
             let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
             match data_summary(&conn, &app.db_path().display().to_string()) {
@@ -654,6 +655,60 @@ fn handle_post(app: &App, mut req: Request, path: &str) {
                 Ok(json!({"ok": true, "journal": entries}))
             });
         }
+        "/api/import" => {
+            let text = match doc.get("text") {
+                Some(Value::String(t)) if !bagholder_model::pytext::py_strip(t).is_empty() => t.clone(),
+                _ => {
+                    send_json(req, 400, &json!({"ok": false, "error": "text required"}));
+                    return;
+                }
+            };
+            let name = { let n = field_s(&doc, "name"); if n.is_empty() { "upload.csv".to_string() } else { n } };
+            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            match bagholder_store::csvimport::import_text(&conn, &name, &text) {
+                Ok(report) => send_json(req, 200, &report),
+                Err(e) => {
+                    eprintln!("bagholder: import failed: {}", e);
+                    send_json(req, 500, &json!({"ok": false, "error": e}));
+                }
+            }
+        }
+        "/api/watch" => {
+            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            let folder = field_s(&doc, "path");
+            let run = || -> rusqlite::Result<(u16, Value)> {
+                let set = bagholder_store::csvimport::set_watch_folder(&conn, &folder)?;
+                if set.get("ok") != Some(&json!(true)) {
+                    return Ok((400, set));
+                }
+                let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+                result["status"] = bagholder_store::csvimport::status(&conn)?;
+                Ok((200, result))
+            };
+            match run() {
+                Ok((code, v)) => send_json(req, code, &v),
+                Err(e) => fail(req, e),
+            }
+        }
+        "/api/watch/scan" => {
+            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            let run = || -> rusqlite::Result<Value> {
+                let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+                result["status"] = bagholder_store::csvimport::status(&conn)?;
+                Ok(result)
+            };
+            match run() {
+                Ok(v) => {
+                    let code = if v.get("ok") == Some(&json!(true)) { 200 } else { 400 };
+                    send_json(req, code, &v)
+                }
+                Err(e) => fail(req, e),
+            }
+        }
+        "/api/watch/clear" => with_conn(app, req, |conn| {
+            bagholder_store::csvimport::clear_watch_folder(conn)?;
+            bagholder_store::csvimport::status(conn)
+        }),
         "/api/groups" => with_conn(app, req, move |conn| {
             let groups = bagholder_store::tables::save_trade_groups(conn, doc.get("groups"))?;
             Ok(json!({"ok": true, "groups": groups}))
@@ -744,6 +799,9 @@ fn handle_post(app: &App, mut req: Request, path: &str) {
     }
 }
 
+/// `bagholder.WATCH_SCAN_SEC`.
+const WATCH_SCAN_SEC: u64 = 10 * 60;
+
 fn fail(req: Request, e: rusqlite::Error) {
     eprintln!("bagholder: {}", e);
     send_json(req, 500, &json!({"ok": false, "error": "store failed"}));
@@ -776,6 +834,22 @@ fn main() {
     eprintln!("bagholder {} on http://{}/  (db: {})", APP_VERSION, addr, app.db_path().display());
 
     let app = std::sync::Arc::new(app);
+
+    // `bagholder.watch_loop`: the watched folder, at start and every ten
+    // minutes; new or changed CSVs are imported
+    {
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            if let Ok(conn) = app.open() {
+                let watching = bagholder_store::csvimport::watch_folder(&conn).map(|f| !f.is_empty()).unwrap_or(false);
+                if watching {
+                    let _ = bagholder_store::csvimport::scan_folder(&conn, None, false);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(WATCH_SCAN_SEC));
+        });
+    }
+
     for req in server.incoming_requests() {
         let app = app.clone();
         std::thread::spawn(move || handle(&app, req));

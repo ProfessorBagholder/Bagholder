@@ -18,7 +18,7 @@ pub fn py_space(c: char) -> bool {
     matches!(c as u32, 0x9 | 0xa | 0xb | 0xc | 0xd | 0x1c | 0x1d | 0x1e | 0x1f | 0x20 | 0x85 | 0xa0 | 0x1680 | 0x2000 | 0x2001 | 0x2002 | 0x2003 | 0x2004 | 0x2005 | 0x2006 | 0x2007 | 0x2008 | 0x2009 | 0x200a | 0x2028 | 0x2029 | 0x202f | 0x205f | 0x3000)
 }
 
-fn ascii_digits(text: &str) -> String {
+pub fn ascii_digits(text: &str) -> String {
     text.chars()
         .map(|c| {
             let cp = c as u32;
@@ -250,3 +250,31 @@ pub fn csv_records(text: &str) -> Result<Vec<Map<String, Value>>, String> {
         .collect())
 }
 
+
+/// `str.strip()`: Python's whitespace from both ends.
+pub fn py_strip(text: &str) -> &str {
+    text.trim_matches(py_space)
+}
+
+/// `int()` on digits a pattern's `\d` matched, in whatever script they are.
+pub fn py_int(text: &str) -> Option<i64> {
+    ascii_digits(py_strip(text)).parse().ok()
+}
+
+/// `uuid.uuid4()`, from the system's own randomness.
+pub fn uuid4() -> String {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b));
+    if read.is_err() {
+        // no /dev/urandom: the clock and the process, which is unique enough
+        // for an id no two rows of one import share
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let seed = n ^ ((std::process::id() as u128) << 64);
+        b.copy_from_slice(&seed.to_le_bytes());
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: Vec<String> = b.iter().map(|x| format!("{:02x}", x)).collect();
+    format!("{}-{}-{}-{}-{}", h[0..4].concat(), h[4..6].concat(), h[6..8].concat(), h[8..10].concat(), h[10..16].concat())
+}

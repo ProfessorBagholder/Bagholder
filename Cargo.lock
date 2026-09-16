@@ -129,6 +129,7 @@ name = "bagholder-store"
 version = "1.10.0"
 dependencies = [
  "bagholder-model",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

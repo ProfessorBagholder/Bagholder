@@ -132,6 +132,12 @@ def main():
         # runs with the writes; a ticker neither held nor watched, so nothing is
         # stored for it beforehand
         news_code, news_got = call("/api/news/symbol?symbol=BNS")
+        # an import through the route; Python then imports the same file into
+        # the copy and must find every row already there
+        csv_text = ("Date,Action,Symbol,Quantity,Price,Amount\n2019-03-04,buy,RTEST,3,10.5,-31.5\n"
+                    "2019-03-05,sell,RTEST,1,11,11\n2019-03-06,dividend,RTEST,,,0.4\nbad,buy,X,1,1,1\n")
+        import_code, import_got = call("/api/import", body={"name": "route-test.csv", "text": csv_text})
+        empty_code, _ = call("/api/import", body={"name": "x.csv", "text": "  "})
 
         shutil.copy(os.path.join(rshome, "bagholder.db"), os.path.join(pyhome, "bagholder.db"))
         import store
@@ -173,6 +179,20 @@ def main():
                 bad.append("/api/news/symbol: the wire answered with nothing")
             if news_got.get("count") and len(stored) != news_got["count"]:
                 bad.append(f"/api/news/symbol: {news_got['count']} answered, {len(stored)} stored")
+
+        import csvimport
+        if import_code != 200:
+            bad.append(f"/api/import: HTTP {import_code}")
+        else:
+            want = csvimport.parse_csv(csv_text, "route-test.csv")
+            if import_got.get("added") != len(want["activities"]) or import_got.get("skippedCount") != len(want["skipped"]):
+                bad.append(f"/api/import: {import_got!r}")
+            again = csvimport.import_text("route-test.csv", csv_text)
+            if again["added"] != 0 or again["duplicates"] != import_got.get("added"):
+                bad.append(f"/api/import: Python found {again['added']} new rows in what the route stored")
+        if empty_code != 400:
+            bad.append(f"/api/import with no text: HTTP {empty_code}")
+        checks.append(("/api/watch", lambda: csvimport.status()))
 
         for path, want_fn in checks:
             code, got = call(path)

@@ -10,3 +10,5 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # SQLite itself, built from source so a copy of the app carries its own and
 # does not depend on what the machine happens to have.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# the CSV importer's patterns; Python's `re` for the same ones
+regex = "1"
