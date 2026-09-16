@@ -251,6 +251,45 @@ fn main() {
                 "marked": marked,
             })).unwrap());
         }
+        // the remaining store writers, then what they left behind
+        "admin" => {
+            let doc = stdin_json();
+            let now = doc.get("now").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let a = |k: &str| -> Vec<Value> { doc.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default() };
+            use bagholder_store::admin as ad;
+            ad::upsert_securities(&conn, &a("securities"), &now).unwrap();
+            let journal = if doc.get("journal").is_some() {
+                ad::save_journal(&conn, doc.get("journal")).unwrap()
+            } else { Default::default() };
+            let entries: Vec<Value> = a("journalEntries").iter().map(|e| {
+                let k = e.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                json!(ad::save_journal_entry(&conn, k, e.get(1)).unwrap())
+            }).collect();
+            let tiles = ad::save_tiles(&conn, &a("tiles")).unwrap();
+            let want: Vec<String> = a("missing").iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            let pull: Vec<Value> = a("pullTimes").iter().map(|t| {
+                json!(ad::activity_pull_due(&conn, t.as_i64().unwrap_or(0)).unwrap())
+            }).collect();
+            println!("{}", serde_json::to_string(&json!({
+                "securities": ad::list_securities(&conn).unwrap(),
+                "journal": journal,
+                "journalEntries": entries,
+                "tiles": tiles,
+                "missing": ad::missing_security_ids(&conn, &want).unwrap(),
+                "needsBackfill": ad::needs_security_id_backfill(&conn).unwrap(),
+                "exposures": ad::exposures_map(&conn).unwrap(),
+                "pullDue": pull,
+            })).unwrap());
+        }
+        "wipe" => {
+            let doc = stdin_json();
+            bagholder_store::admin::clear_synced_data(
+                &conn,
+                doc.get("keepJournal").and_then(|v| v.as_bool()).unwrap_or(true),
+                doc.get("keepMarket").and_then(|v| v.as_bool()).unwrap_or(true),
+            ).unwrap();
+            println!("{}", serde_json::to_string(&json!({"ok": true})).unwrap());
+        }
         "snapshot" => {
             bagholder_store::relabel::ensure(&conn).unwrap();
             println!("{}", serde_json::to_string(&bagholder_store::snapshot::snapshot(&conn, true).unwrap()).unwrap());

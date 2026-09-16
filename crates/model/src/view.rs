@@ -723,11 +723,19 @@ pub fn slim(view: &Value, detail: Option<&str>) -> Value {
                         if keep {
                             r.clone()
                         } else {
-                            let mut m = r.as_object().cloned().unwrap_or_default();
-                            for k in DETAIL_KEYS {
-                                m.remove(k);
+                            // rebuilt rather than removed from: serde_json's
+                            // `Map::remove` under `preserve_order` swaps the
+                            // last entry into the hole, and the row would
+                            // reach the page with its keys shuffled
+                            let mut kept = Map::new();
+                            if let Some(m) = r.as_object() {
+                                for (k, v) in m {
+                                    if !DETAIL_KEYS.contains(&k.as_str()) {
+                                        kept.insert(k.clone(), v.clone());
+                                    }
+                                }
                             }
-                            Value::Object(m)
+                            Value::Object(kept)
                         }
                     })
                     .collect()

@@ -273,8 +273,8 @@ pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> 
             source = "csv".into();
         }
         row.insert("source".into(), json!(source));
-        row.remove("canonicalId");
-        row.remove("canonical_id");
+        // as above: a swap-remove would shuffle the row's keys
+        let row: Map<String, Value> = row.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
         let row = Value::Object(row);
 
         let k = Key::of(&row);

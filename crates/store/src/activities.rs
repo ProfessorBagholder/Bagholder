@@ -372,8 +372,9 @@ pub fn insert_local(conn: &Connection, act: &Value, new_id: &dyn Fn() -> String)
         source = "manual".into();
     }
     payload.insert("source".into(), json!(source));
-    payload.remove("canonicalId");
-    payload.remove("canonical_id");
+    // rebuilt rather than removed from, so the row keeps its key order:
+    // serde_json's `Map::remove` under `preserve_order` is a swap-remove
+    payload = payload.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
     insert_activity(conn, &Value::Object(payload), None, None, new_id)
 }
 
