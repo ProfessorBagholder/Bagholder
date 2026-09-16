@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/model"]
+
+[workspace.package]
+version = "1.10.0"
+edition = "2021"
+rust-version = "1.85"
