@@ -2,6 +2,7 @@ package app
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -142,7 +143,7 @@ func orderNotice(before *store.Order, upd *ws.OrderUpdate) *notice {
 		return &notice{"problems", "order:" + oid + ":cancelled", "Order cancelled · " + sym, orderWords(before) + tail}
 	}
 	filled := py.Deref(upd.FilledQty, 0)
-	if py.Contains(LiveStatuses, now) && filled > py.Deref(before.FilledQty, 0) && filled < before.Quantity {
+	if slices.Contains(LiveStatuses, now) && filled > py.Deref(before.FilledQty, 0) && filled < before.Quantity {
 		return &notice{"fills", "order:" + oid + ":partial:" + qtyWords(filled), "Partly filled · " + sym, qtyWords(filled) + " of " + qtyWords(before.Quantity) + at + tail}
 	}
 	return nil
@@ -302,8 +303,16 @@ func (a *App) refreshOrders(onlyID string) map[string]any {
 		return map[string]any{"ok": false, "skipped": "no session"}
 	}
 	var live []store.Order
-	for _, o := range a.st.ListOrders(0) {
-		if py.Contains(LiveStatuses, o.Status) && (onlyID == "" || o.ID == onlyID) {
+	var rows []store.Order
+	if onlyID != "" {
+		if o := a.st.GetOrder(onlyID); o != nil {
+			rows = []store.Order{*o}
+		}
+	} else {
+		rows = a.st.ListOrders(0)
+	}
+	for _, o := range rows {
+		if slices.Contains(LiveStatuses, o.Status) && (onlyID == "" || o.ID == onlyID) {
 			live = append(live, o)
 		}
 	}
@@ -370,7 +379,6 @@ func (a *App) refreshOrders(onlyID string) map[string]any {
 	added := 0
 	if onlyID == "" {
 		if identity := ws.IdentityFrom(sess); identity != "" {
-			rows := a.st.ListOrders(0)
 			known := map[string]bool{}
 			for _, o := range rows {
 				known[o.ID] = true
@@ -408,12 +416,7 @@ func (a *App) refreshOrders(onlyID string) map[string]any {
 }
 
 func (a *App) anyLiveOrders() bool {
-	for _, o := range a.st.ListOrders(0) {
-		if py.Contains(LiveStatuses, o.Status) {
-			return true
-		}
-	}
-	return false
+	return a.st.LiveOrderCount(LiveStatuses, nil) > 0
 }
 
 func (a *App) ordersLoop() {
@@ -435,7 +438,7 @@ func (a *App) cancelOrder(orderID string) map[string]any {
 	if row == nil {
 		return map[string]any{"ok": false, "error": "No such order."}
 	}
-	if !py.Contains(LiveStatuses, row.Status) {
+	if !slices.Contains(LiveStatuses, row.Status) {
 		return map[string]any{"ok": false, "error": "That order is not open."}
 	}
 	if !a.cfg.OrdersLive {

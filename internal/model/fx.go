@@ -1,17 +1,28 @@
 package model
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ProfessorBagholder/Bagholder/internal/py"
+)
 
 func rateOn(fx map[string]float64, day string) float64 {
 	d := cut(day, 10)
 	if d == "" {
 		return FXFallback
 	}
-	for i := 0; i < 12; i++ {
-		if r, ok := fx[d]; ok && r > 0 {
+	if r, ok := fx[d]; ok && r > 0 {
+		return r
+	}
+	t, ok := py.ParseDate(d)
+	if !ok {
+		return FXFallback
+	}
+	for i := 1; i < 12; i++ {
+		t = t.AddDate(0, 0, -1)
+		if r, ok := fx[py.DateStr(t)]; ok && r > 0 {
 			return r
 		}
-		d = shiftDate(d, -1)
 	}
 	return FXFallback
 }

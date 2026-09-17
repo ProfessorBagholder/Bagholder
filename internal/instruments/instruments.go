@@ -1,6 +1,7 @@
 package instruments
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -127,7 +128,7 @@ func Search(text string) []Match {
 			words = append(words, py.Fields(strings.ReplaceAll(x, "/", " "))...)
 		}
 		rank := -1
-		if py.Contains(names, q) {
+		if slices.Contains(names, q) {
 			rank = 0
 		} else if len([]rune(q)) < 2 {
 			rank = -1

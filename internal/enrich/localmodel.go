@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,9 +44,11 @@ type LocalModel struct {
 	phase    string
 	detail   string
 	proc     *exec.Cmd
+	procDone chan struct{}
 	endpoint string
 	model    string
 	http     *http.Client
+	chat     *http.Client
 }
 
 func NewLocalModel(home string) *LocalModel {
@@ -79,24 +83,21 @@ func (l *LocalModel) llamafileSHA() string {
 	return envOr("BAGHOLDER_LLAMAFILE_SHA256", DefaultLlamafileSHA256)
 }
 
-func (l *LocalModel) modelsDir() string {
-	d := filepath.Join(l.Home, "models")
-	os.MkdirAll(d, 0o755)
-	return d
-}
+func (l *LocalModel) modelsDir() string { return filepath.Join(l.Home, "models") }
 
 func (l *LocalModel) llamafilePath() string {
 	return filepath.Join(l.modelsDir(), "summarizer.llamafile")
 }
 
 func (l *LocalModel) getOK(rawURL string, timeout time.Duration) bool {
-	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return false
 	}
 	req.Header.Set("User-Agent", "Bagholder")
-	resp, err := client.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	resp, err := l.http.Do(req.WithContext(ctx))
 	if err != nil {
 		return false
 	}
@@ -244,6 +245,9 @@ func (l *LocalModel) download(path string) bool {
 	if !allowed {
 		return false
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false
+	}
 	tmp := strings.TrimSuffix(path, filepath.Ext(path)) + ".part"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -305,17 +309,29 @@ func (l *LocalModel) spawn(path string) bool {
 			return false
 		}
 	}
+	done := make(chan struct{})
 	l.mu.Lock()
-	l.proc = cmd
+	l.proc, l.procDone = cmd, done
 	l.mu.Unlock()
-	go cmd.Wait()
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
 	return true
 }
 
 func (l *LocalModel) waitReady() bool {
 	base := fmt.Sprintf("http://%s:%d", ManagedHost, l.managedPort())
 	deadline := time.Now().Add(StartTimeout * time.Second)
+	l.mu.Lock()
+	done := l.procDone
+	l.mu.Unlock()
 	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			return false
+		default:
+		}
 		l.mu.Lock()
 		proc := l.proc
 		l.mu.Unlock()
@@ -332,18 +348,24 @@ func (l *LocalModel) waitReady() bool {
 
 func (l *LocalModel) Shutdown() {
 	l.mu.Lock()
-	proc := l.proc
-	l.proc = nil
+	proc, done := l.proc, l.procDone
+	l.proc, l.procDone = nil, nil
 	l.mu.Unlock()
-	if proc != nil && proc.Process != nil && (proc.ProcessState == nil || !proc.ProcessState.Exited()) {
-		proc.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { proc.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			proc.Process.Kill()
-		}
+	if proc == nil || proc.Process == nil {
+		return
+	}
+	select {
+	case <-done:
+		return
+	default:
+	}
+	if err := proc.Process.Signal(syscall.SIGTERM); err != nil {
+		_ = proc.Process.Kill()
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = proc.Process.Kill()
 	}
 }
 
@@ -359,8 +381,13 @@ func (l *LocalModel) Chat(prompt string, maxTokens int) string {
 		model = "local"
 	}
 	body, _ := json.Marshal(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "temperature": 0.1, "max_tokens": maxTokens, "stream": false})
-	client := &http.Client{Timeout: l.chatTimeout()}
-	resp, err := client.Post(base+"/v1/chat/completions", "application/json", strings.NewReader(string(body)))
+	l.mu.Lock()
+	if l.chat == nil {
+		l.chat = &http.Client{Timeout: l.chatTimeout()}
+	}
+	chat := l.chat
+	l.mu.Unlock()
+	resp, err := chat.Post(base+"/v1/chat/completions", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return ""
 	}

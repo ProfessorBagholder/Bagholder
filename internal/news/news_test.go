@@ -10,12 +10,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/market"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
 )
+
+var testMu sync.Mutex
 
 type stubTransport func(*http.Request) (*http.Response, error)
 
@@ -161,7 +164,9 @@ func TestTMXIsAskedUnderTheCodeTheQuoteUsesAndResolvesAWrongVenue(t *testing.T) 
 		form := q.symbol()
 		switch q.OperationName {
 		case "getNewsForSymbol":
+			testMu.Lock()
 			asked = append(asked, form)
+			testMu.Unlock()
 			if form == "QIMC:CNX" || form == "CH" {
 				return reply(200, tmxNews(item)), nil
 			}
@@ -226,7 +231,9 @@ func TestAUSListingReadsItsReleasesBesideItsNewsEachOnce(t *testing.T) {
 	asked := []string{}
 	c := newClient(t, now, func(r *http.Request) (*http.Response, error) {
 		u := r.URL.String()
+		testMu.Lock()
 		asked = append(asked, u)
+		testMu.Unlock()
 		if strings.Contains(u, "press_release") {
 			return reply(200, feeds["press_release"]), nil
 		}
@@ -261,7 +268,9 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 			}
 			sym := q.symbol()
 			if media, _ := q.Variables["companyInNews"].(bool); !media {
+				testMu.Lock()
 				calls = append(calls, sym)
+				testMu.Unlock()
 			}
 			if sym == "SHOP" {
 				return reply(200, tmxNews(shop)), nil
@@ -272,7 +281,9 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 			return reply(200, `{"data": {"rows": []}}`), nil
 		}
 		sym, _, _ := strings.Cut(r.URL.Query().Get("q"), "|")
+		testMu.Lock()
 		calls = append(calls, sym)
+		testMu.Unlock()
 		if sym == "NVDA" {
 			return reply(200, `{"data": {"rows": [{"id": "9", "title": "Nine", "publisher": "Zacks", "created": "Sep 11, 2026", "ago": "30 minutes ago", "url": "u9", "related_symbols": ["nvda|stocks"]}]}}`), nil
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -176,7 +177,7 @@ func inDateScope(f *Filters, today, day string) bool {
 		return b.from <= day && day <= b.to
 	}
 	if len(f.Years) > 0 {
-		return py.Contains(f.Years, cut(day, 4))
+		return slices.Contains(f.Years, cut(day, 4))
 	}
 	return true
 }
@@ -200,10 +201,10 @@ func tradeMatches(t *Trade, f *Filters, today string) bool {
 		return false
 	}
 	L := &f.Lists
-	if len(L.Account) > 0 && !py.Contains(L.Account, t.Account) {
+	if len(L.Account) > 0 && !slices.Contains(L.Account, t.Account) {
 		return false
 	}
-	if len(L.Symbol) > 0 && !py.Contains(L.Symbol, t.Symbol) && !py.Contains(L.Symbol, t.Underlying) {
+	if len(L.Symbol) > 0 && !slices.Contains(L.Symbol, t.Symbol) && !slices.Contains(L.Symbol, t.Underlying) {
 		return false
 	}
 	if len(L.Grade) > 0 {
@@ -211,7 +212,7 @@ func tradeMatches(t *Trade, f *Filters, today string) bool {
 		if g == "" {
 			g = "Ungraded"
 		}
-		if !py.Contains(L.Grade, g) {
+		if !slices.Contains(L.Grade, g) {
 			return false
 		}
 	}
@@ -222,7 +223,7 @@ func tradeMatches(t *Trade, f *Filters, today string) bool {
 		}
 		any := false
 		for _, x := range tags {
-			if py.Contains(L.Tag, x) {
+			if slices.Contains(L.Tag, x) {
 				any = true
 				break
 			}
@@ -231,13 +232,13 @@ func tradeMatches(t *Trade, f *Filters, today string) bool {
 			return false
 		}
 	}
-	if len(L.Kind) > 0 && !py.Contains(L.Kind, t.Kind) {
+	if len(L.Kind) > 0 && !slices.Contains(L.Kind, t.Kind) {
 		return false
 	}
-	if len(L.Exchange) > 0 && !py.Contains(L.Exchange, t.Exchange) {
+	if len(L.Exchange) > 0 && !slices.Contains(L.Exchange, t.Exchange) {
 		return false
 	}
-	if len(L.Side) > 0 && !py.Contains(L.Side, t.Side) {
+	if len(L.Side) > 0 && !slices.Contains(L.Side, t.Side) {
 		return false
 	}
 	if len(L.Result) > 0 {
@@ -247,7 +248,7 @@ func tradeMatches(t *Trade, f *Filters, today string) bool {
 		} else if t.PnlCad < 0 {
 			res = "Losers"
 		}
-		if !py.Contains(L.Result, res) {
+		if !slices.Contains(L.Result, res) {
 			return false
 		}
 	}
@@ -937,7 +938,7 @@ func portfolioView(base *Base, f *Filters, positions []*Position) PortfolioView 
 	names := f.Lists.Account
 	var accounts []AccountRow
 	for _, a := range base.Accounts {
-		if strings.ToLower(a.Status) != "closed" && (len(names) == 0 || py.Contains(names, a.Name)) {
+		if strings.ToLower(a.Status) != "closed" && (len(names) == 0 || slices.Contains(names, a.Name)) {
 			accounts = append(accounts, a)
 		}
 	}
@@ -1109,16 +1110,16 @@ func positionMatches(p *Position, f *Filters) bool {
 		return false
 	}
 	L := &f.Lists
-	if len(L.Account) > 0 && !py.Contains(L.Account, p.Account) {
+	if len(L.Account) > 0 && !slices.Contains(L.Account, p.Account) {
 		return false
 	}
-	if len(L.Symbol) > 0 && !py.Contains(L.Symbol, p.Symbol) && !py.Contains(L.Symbol, p.Underlying) {
+	if len(L.Symbol) > 0 && !slices.Contains(L.Symbol, p.Symbol) && !slices.Contains(L.Symbol, p.Underlying) {
 		return false
 	}
-	if len(L.Kind) > 0 && !py.Contains(L.Kind, p.Kind) {
+	if len(L.Kind) > 0 && !slices.Contains(L.Kind, p.Kind) {
 		return false
 	}
-	if len(L.Exchange) > 0 && !py.Contains(L.Exchange, p.Exchange) {
+	if len(L.Exchange) > 0 && !slices.Contains(L.Exchange, p.Exchange) {
 		return false
 	}
 	return true
@@ -1439,13 +1440,13 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 	accts := L.Account
 	search := strings.ToUpper(f.Search)
 	inScope := func(r *CashRow) bool {
-		if len(accts) > 0 && !py.Contains(accts, r.Account) {
+		if len(accts) > 0 && !slices.Contains(accts, r.Account) {
 			return false
 		}
 		if search != "" && !strings.Contains(strings.ToUpper(r.Symbol), search) {
 			return false
 		}
-		if len(L.Symbol) > 0 && !py.Contains(L.Symbol, r.Symbol) {
+		if len(L.Symbol) > 0 && !slices.Contains(L.Symbol, r.Symbol) {
 			return false
 		}
 		return inDateScope(f, today, r.Date)
@@ -1543,13 +1544,13 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 		if !payers[p.Symbol] || p.Short {
 			continue
 		}
-		if (len(accts) == 0 || py.Contains(accts, p.Account)) && (search == "" || strings.Contains(strings.ToUpper(p.Symbol), search)) {
+		if (len(accts) == 0 || slices.Contains(accts, p.Account)) && (search == "" || strings.Contains(strings.ToUpper(p.Symbol), search)) {
 			held = append(held, p)
 		}
 	}
 	var forYoc []CashRow
 	for _, r := range base.Cashflow {
-		if r.Kind == "Dividend" && (len(accts) == 0 || py.Contains(accts, r.Account)) && (search == "" || strings.Contains(strings.ToUpper(r.Symbol), search)) {
+		if r.Kind == "Dividend" && (len(accts) == 0 || slices.Contains(accts, r.Account)) && (search == "" || strings.Contains(strings.ToUpper(r.Symbol), search)) {
 			forYoc = append(forYoc, r)
 		}
 	}
@@ -1570,11 +1571,15 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 	cutKey := pad4(cy) + "-" + pad2s(cm)
 	thisYear := cut(today, 4)
 
+	yocBySym := map[string][]*CashRow{}
+	for i := range forYoc {
+		r := &forYoc[i]
+		yocBySym[r.Symbol] = append(yocBySym[r.Symbol], r)
+	}
 	sumFor := func(sym string, pred func(r *CashRow) bool) float64 {
 		s := 0.0
-		for i := range forYoc {
-			r := &forYoc[i]
-			if r.Symbol == sym && pred(r) {
+		for _, r := range yocBySym[sym] {
+			if pred(r) {
 				s += r.AmountCad
 			}
 		}
@@ -1604,9 +1609,9 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 			}
 		}
 		var rs []CashRow
-		for _, r := range forYoc {
-			if r.Symbol == sym && r.Per != nil && *r.Per != 0 {
-				rs = append(rs, r)
+		for _, r := range yocBySym[sym] {
+			if r.Per != nil && *r.Per != 0 {
+				rs = append(rs, *r)
 			}
 		}
 		if len(rs) == 0 {
@@ -1618,10 +1623,8 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 			return nil
 		}
 		var dates []string
-		for _, r := range forYoc {
-			if r.Symbol == sym {
-				dates = append(dates, r.Date)
-			}
+		for _, r := range yocBySym[sym] {
+			dates = append(dates, r.Date)
 		}
 		freq := PaymentsPerYear(dates)
 		verified := freq != nil
@@ -1666,10 +1669,8 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 				ex = cut(q.ExDividendDate, 10)
 			}
 			var paid []string
-			for _, r := range forYoc {
-				if r.Symbol == sym {
-					paid = append(paid, r.Date)
-				}
+			for _, r := range yocBySym[sym] {
+				paid = append(paid, r.Date)
 			}
 			sort.Strings(paid)
 			if len(paid) > 0 {
@@ -1976,7 +1977,7 @@ func BuildView(base *Base, filters any) *View {
 	} else if len(f.Years) > 0 {
 		shown = []EquityPoint{}
 		for _, p := range series {
-			if py.Contains(f.Years, cut(p.D, 4)) {
+			if slices.Contains(f.Years, cut(p.D, 4)) {
 				shown = append(shown, p)
 			}
 		}

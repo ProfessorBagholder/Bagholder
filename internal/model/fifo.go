@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -57,9 +58,8 @@ func fillLess(x, y *fill) bool {
 	if x.a.TransactionDate != y.a.TransactionDate {
 		return x.a.TransactionDate < y.a.TransactionDate
 	}
-	rx, ry := fillRank(x), fillRank(y)
-	if rx != ry {
-		return rx < ry
+	if x.rank != y.rank {
+		return x.rank < y.rank
 	}
 	if x.a.OccurredAt != y.a.OccurredAt {
 		return x.a.OccurredAt < y.a.OccurredAt
@@ -336,7 +336,7 @@ func (m *matcher) applySplits(key, day string) {
 					lot.Qty *= sp.factor
 					lot.Price /= sp.factor
 					label := splitLabel(sp.factor)
-					if !py.Contains(lot.Flags, label) {
+					if !slices.Contains(lot.Flags, label) {
 						lot.Flags = append(lot.Flags, label)
 					}
 				}
@@ -424,7 +424,9 @@ func MatchFIFO(activities []*Act) *FIFOResult {
 		if side == "" {
 			continue
 		}
-		fills = append(fills, &fill{a: a, side: side, qty: math.Abs(a.Quantity)})
+		f := &fill{a: a, side: side, qty: math.Abs(a.Quantity)}
+		f.rank = fillRank(f)
+		fills = append(fills, f)
 	}
 	sort.SliceStable(fills, func(i, j int) bool { return fillLess(fills[i], fills[j]) })
 	inferZeroQtyOptionFills(fills)
@@ -496,7 +498,7 @@ func MatchFIFO(activities []*Act) *FIFOResult {
 			m.rolledKeys[rollKeyOf(a)] = true
 			if moved > EPS {
 				for _, s := range m.closed[before:] {
-					if !py.Contains(s.Flags, "rolled") {
+					if !slices.Contains(s.Flags, "rolled") {
 						s.Flags = append(s.Flags, "rolled")
 					}
 				}
@@ -749,7 +751,7 @@ func foldOptionRolls(closed []*Slice, openLots []*Lot) []*Slice {
 			row.Pnl = raw - row.Commission
 			row.PnlCad = row.Pnl
 			row.ID = stableTradeID(row)
-			if !py.Contains(row.Flags, "rolled") {
+			if !slices.Contains(row.Flags, "rolled") {
 				row.Flags = append(row.Flags, "rolled")
 			}
 		} else if len(openCands) > 0 {
@@ -768,7 +770,7 @@ func foldOptionRolls(closed []*Slice, openLots []*Lot) []*Slice {
 			}
 			adj := cover.Pnl / (qty * multiplier(row.Symbol))
 			row.Price += adj
-			if !py.Contains(row.Flags, "rolled") {
+			if !slices.Contains(row.Flags, "rolled") {
 				row.Flags = append(row.Flags, "rolled")
 			}
 		} else {

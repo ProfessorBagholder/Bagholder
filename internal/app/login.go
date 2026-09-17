@@ -137,6 +137,7 @@ func maskWS(data, key []byte) []byte {
 type miniWS struct {
 	conn   net.Conn
 	buf    []byte
+	read   []byte
 	nextID int
 	mu     sync.Mutex
 }
@@ -187,7 +188,10 @@ func (w *miniWS) recvExact(n int, deadline time.Time) ([]byte, error) {
 			remain = 50 * time.Millisecond
 		}
 		_ = w.conn.SetReadDeadline(time.Now().Add(remain))
-		chunk := make([]byte, 65536)
+		if w.read == nil {
+			w.read = make([]byte, 65536)
+		}
+		chunk := w.read
 		k, err := w.conn.Read(chunk)
 		if k > 0 {
 			w.buf = append(w.buf, chunk[:k]...)

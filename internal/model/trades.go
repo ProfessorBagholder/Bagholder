@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -88,13 +89,13 @@ func journalOf(journal map[string]store.JournalEntry, id string) (string, string
 }
 
 func collapseTrade(gid string, members []*Slice, locked bool, status string, actsByID map[string]*Act, securities *Securities, journal map[string]store.JournalEntry) *Trade {
-	slices := append([]*Slice{}, members...)
-	sort.SliceStable(slices, func(i, j int) bool { return sliceLess(slices[i], slices[j]) })
-	t0 := slices[0]
+	members_ := append([]*Slice{}, members...)
+	sort.SliceStable(members_, func(i, j int) bool { return sliceLess(members_[i], members_[j]) })
+	t0 := members_[0]
 	var qty, entryNotional, exitNotional, pnl, pnlCad, fees, feesCad float64
-	entryDate, exitDate := slices[0].EntryDate, slices[0].ExitDate
+	entryDate, exitDate := members_[0].EntryDate, members_[0].ExitDate
 	entryWhen, exitWhen := "", ""
-	for i, s := range slices {
+	for i, s := range members_ {
 		qty += s.Quantity
 		entryNotional += s.EntryPrice * s.Quantity
 		exitNotional += s.ExitPrice * s.Quantity
@@ -138,16 +139,16 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 	}
 	basis := math.Abs(entry * qty * mult)
 	secID := ""
-	for _, s := range slices {
+	for _, s := range members_ {
 		if s.SecurityID != "" {
 			secID = s.SecurityID
 			break
 		}
 	}
 	var ids []string
-	for _, s := range slices {
+	for _, s := range members_ {
 		for _, k := range []string{s.BuyActivityID, s.SellActivityID} {
-			if k != "" && !py.Contains(ids, k) {
+			if k != "" && !slices.Contains(ids, k) {
 				ids = append(ids, k)
 			}
 		}
@@ -160,7 +161,7 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 	}
 	openedIDs := map[string]bool{}
 	closedIDs := map[string]bool{}
-	for _, s := range slices {
+	for _, s := range members_ {
 		openedIDs[s.BuyActivityID] = true
 		closedIDs[s.SellActivityID] = true
 	}
@@ -199,7 +200,7 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 	}
 	flagSet := map[string]bool{}
 	flags := []string{}
-	for _, s := range slices {
+	for _, s := range members_ {
 		for _, fl := range s.Flags {
 			if !flagSet[fl] {
 				flagSet[fl] = true
@@ -225,8 +226,8 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 	if basis > 0 {
 		pnlPct = py.Ptr(pnl / basis)
 	}
-	legs := make([]SlimSlice, 0, len(slices))
-	for _, s := range slices {
+	legs := make([]SlimSlice, 0, len(members_))
+	for _, s := range members_ {
 		legs = append(legs, slimSlice(s))
 	}
 	return &Trade{TradeCore: TradeCore{
@@ -258,7 +259,7 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 		Fees:          fees,
 		FeesCad:       feesCad,
 		PnlPct:        pnlPct,
-		LegCount:      len(slices),
+		LegCount:      len(members_),
 		Opened:        Summary{Qty: qty, Avg: entry, Fills: opens},
 		Closed:        Summary{Qty: qty, Avg: exitPx, Fills: closes},
 		NetCash:       pnl,
@@ -386,7 +387,7 @@ func BuildPositions(openLots []*Lot, lastPrices map[string]LastPrice, balances [
 	nickIDs := map[string][]string{}
 	for _, acc := range accounts {
 		nick := normAccountName(firstNonEmpty(acc.Nickname, acc.UnifiedAccountType, acc.Type))
-		if !py.Contains(nickIDs[nick], acc.ID) {
+		if !slices.Contains(nickIDs[nick], acc.ID) {
 			nickIDs[nick] = append(nickIDs[nick], acc.ID)
 		}
 	}

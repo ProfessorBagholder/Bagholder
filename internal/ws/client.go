@@ -116,7 +116,10 @@ func (c *Client) HTTPJSON(method, rawURL string, body any, headers map[string]st
 		return map[string]any{"error": "url_error", "_http_status": 0, "_error": err.Error()}
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return map[string]any{"error": "url_error", "_http_status": 0, "_error": err.Error()}
+	}
 	text := bodyText(raw)
 	if resp.StatusCode >= 400 {
 		var parsed map[string]any
@@ -396,10 +399,6 @@ func IdentityFrom(obj map[string]any) string {
 	return ""
 }
 
-func TokenInfoOK(info map[string]any) bool {
-	return len(info) > 0 && info["error"] == nil && info["_http_status"] == nil
-}
-
 func (c *Client) GraphQL(sess Session, operation string, variables map[string]any, query string) (map[string]any, error) {
 	token := sess.Str("access_token")
 	headers := map[string]string{
@@ -492,11 +491,4 @@ func PublicSyncError(msg string) string {
 		return "unknown error"
 	}
 	return msg
-}
-
-func ErrorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }

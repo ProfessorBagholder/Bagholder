@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
@@ -895,5 +894,3 @@ func (s *Store) ClearNotifications() int64 {
 	n, _ := res.RowsAffected()
 	return n
 }
-
-var _ = time.Now

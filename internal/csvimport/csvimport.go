@@ -161,15 +161,6 @@ func compactLower(s string) string {
 	return compactRE.ReplaceAllString(strings.ToLower(py.Strip(s)), "")
 }
 
-func containsAny(s string, needles ...string) bool {
-	for _, n := range needles {
-		if strings.Contains(s, n) {
-			return true
-		}
-	}
-	return false
-}
-
 func Categorize(activityType, activitySubType string) string {
 	t := compactLower(activityType)
 	s := compactLower(activitySubType)

@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
@@ -149,5 +148,3 @@ func (s *Session) SetCookie(rawURL, name, value string) {
 	}
 	s.client.SetCookies(u, []*fhttp.Cookie{{Name: name, Value: value}})
 }
-
-var _ = time.Second

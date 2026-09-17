@@ -223,7 +223,7 @@ func iso(value string) string {
 var cdataRE = regexp.MustCompile(`(?s)^\s*<!\[CDATA\[(.*?)\]\]>\s*$`)
 
 func tag(xml, name string) string {
-	re := regexp.MustCompile(`(?s)<` + regexp.QuoteMeta(name) + `[^>]*>(.*?)</` + regexp.QuoteMeta(name) + `>`)
+	re := py.RE(`(?s)<` + regexp.QuoteMeta(name) + `[^>]*>(.*?)</` + regexp.QuoteMeta(name) + `>`)
 	m := re.FindStringSubmatch(xml)
 	if m == nil {
 		return ""
@@ -637,12 +637,12 @@ func NamesListing(headline, symbol, name string, us bool) bool {
 			}
 			forms = append(forms, e+`(?:`+strings.Join(suffixes, "|")+`)`)
 		}
-		formRE := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:` + strings.Join(forms, "|") + `)(?:[^A-Za-z0-9]|$)`)
+		formRE := py.RE(`(?i)(?:^|[^A-Za-z0-9])(?:` + strings.Join(forms, "|") + `)(?:[^A-Za-z0-9]|$)`)
 		if formRE.MatchString(head) {
 			return true
 		}
 		if len(sym) >= 3 && !mostlyCaps {
-			bareRE := regexp.MustCompile(`(?:^|[^A-Za-z0-9.$])` + e + `(?:[^A-Za-z0-9]|$)`)
+			bareRE := py.RE(`(?:^|[^A-Za-z0-9.$])` + e + `(?:[^A-Za-z0-9]|$)`)
 			if bareRE.MatchString(head) {
 				return true
 			}

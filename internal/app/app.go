@@ -24,19 +24,20 @@ import (
 )
 
 const (
-	AppVersion        = "1.44.0"
-	Repo              = "ProfessorBagholder/Bagholder"
-	RepoURL           = "https://github.com/" + Repo
-	ReleaseURL        = "https://api.github.com/repos/" + Repo + "/releases/latest"
-	RestartCode       = 3
-	UpdateHealthySec  = 20
-	UpdateMaxBytes    = 50 * 1024 * 1024
-	UpdateCheckHours  = 1
-	UpdatesOffMessage = "This copy is updated with docker compose pull; a new release is a new image."
-	ImagePage         = RepoURL + "/pkgs/container/bagholder"
-	Protocol          = "2026-09-17.1"
-	EnrichVersion     = 11
-	LoginURL          = "https://my.wealthsimple.com/app/login"
+	AppVersion            = "1.44.0"
+	Repo                  = "ProfessorBagholder/Bagholder"
+	RepoURL               = "https://github.com/" + Repo
+	ReleaseURL            = "https://api.github.com/repos/" + Repo + "/releases/latest"
+	RestartCode           = 3
+	UpdateHealthySec      = 20
+	UpdateMaxBytes        = 50 * 1024 * 1024
+	UpdateDownloadMinutes = 30
+	UpdateCheckHours      = 1
+	UpdatesOffMessage     = "This copy is updated with docker compose pull; a new release is a new image."
+	ImagePage             = RepoURL + "/pkgs/container/bagholder"
+	Protocol              = "2026-09-17.1"
+	EnrichVersion         = 11
+	LoginURL              = "https://my.wealthsimple.com/app/login"
 
 	TokenCheckSec         = 30
 	TokenRefreshMarginSec = 300
@@ -195,6 +196,10 @@ type App struct {
 
 	serverMu sync.Mutex
 	server   *serverHandle
+
+	staticMu    sync.Mutex
+	staticCache map[string]*staticEntry
+	bracketKick chan struct{}
 }
 
 var cooldown = map[string]float64{"quotes": 60.0, "market": 300.0}
@@ -210,10 +215,10 @@ func New(cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := st.Ensure(); err != nil {
+	if err := st.EnsureChanged(); err != nil {
 		return nil, err
 	}
-	a := &App{cfg: cfg, st: st, stopCh: make(chan struct{}), jobs: map[string]*job{}, searchCache: map[string][]SearchRow{}, bracketSaid: map[string]bool{}, stopAllowed: map[string]bool{}, universeKick: make(chan struct{}, 1)}
+	a := &App{cfg: cfg, st: st, stopCh: make(chan struct{}), jobs: map[string]*job{}, searchCache: map[string][]SearchRow{}, bracketSaid: map[string]bool{}, stopAllowed: map[string]bool{}, universeKick: make(chan struct{}, 1), bracketKick: make(chan struct{}, 1)}
 	a.model = model.New(st)
 	a.mk = market.NewClient(st)
 	a.ws = ws.NewClient(cfg.Home)
@@ -241,15 +246,7 @@ func New(cfg Config) (*App, error) {
 	return a, nil
 }
 
-func (a *App) Store() *store.Store        { return a.st }
-func (a *App) Model() *model.Model        { return a.model }
-func (a *App) Market() *market.Client     { return a.mk }
-func (a *App) WS() *ws.Client             { return a.ws }
-func (a *App) Notifier() *notify.Notifier { return a.notify }
-func (a *App) Pipeline() *disclosures.Pipeline {
-	return a.pipeline
-}
-func (a *App) Config() Config { return a.cfg }
+func (a *App) Pipeline() *disclosures.Pipeline { return a.pipeline }
 
 func ensureHome(home string) error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -358,7 +355,7 @@ func (a *App) deleteSessionAndBook() {
 }
 
 func (a *App) loadBook() store.Snapshot {
-	_ = a.st.Ensure()
+	_ = a.st.EnsureChanged()
 	return a.st.Snapshot(true)
 }
 

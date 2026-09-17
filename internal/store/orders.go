@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"encoding/json"
 	"strings"
 
@@ -332,6 +331,49 @@ func (s *Store) ListBrackets(statuses []string) []Bracket {
 	return out
 }
 
+func inClause(values []string) (string, []any) {
+	marks := make([]string, len(values))
+	args := make([]any, len(values))
+	for i, v := range values {
+		marks[i] = "?"
+		args[i] = v
+	}
+	return strings.Join(marks, ","), args
+}
+
+func (s *Store) LiveOrderCount(statuses, roles []string) int {
+	s.must()
+	if len(statuses) == 0 {
+		return 0
+	}
+	marks, args := inClause(statuses)
+	q := "SELECT COUNT(*) FROM orders WHERE status IN (" + marks + ")"
+	if len(roles) > 0 {
+		rm, ra := inClause(roles)
+		q += " AND COALESCE(role, '') IN (" + rm + ")"
+		args = append(args, ra...)
+	}
+	var n int
+	_ = s.db.QueryRow(q, args...).Scan(&n)
+	return n
+}
+
+func (s *Store) LiveBracketCount(statuses []string, except string) int {
+	s.must()
+	if len(statuses) == 0 {
+		return 0
+	}
+	marks, args := inClause(statuses)
+	q := "SELECT COUNT(*) FROM brackets WHERE status IN (" + marks + ")"
+	if except != "" {
+		q += " AND status != ?"
+		args = append(args, except)
+	}
+	var n int
+	_ = s.db.QueryRow(q, args...).Scan(&n)
+	return n
+}
+
 func (s *Store) GetBracket(bracketID string) *Bracket {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM brackets WHERE id = ?", bracketID)
@@ -351,5 +393,3 @@ func (s *Store) BracketForOrder(orderID string) *Bracket {
 	b := bracketFromRow(r)
 	return &b
 }
-
-var _ = sql.ErrNoRows

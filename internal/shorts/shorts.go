@@ -775,10 +775,3 @@ func (c *Client) ForListing(symbol, exchange, currency string, now time.Time, tr
 	rec.DaysToCover = c.DaysToCover(&rec)
 	return rec, true
 }
-
-func (c *Client) ClearFiles() {
-	c.mu.Lock()
-	c.files = map[string]*fileTable{}
-	c.shares = map[string]floatHit{}
-	c.mu.Unlock()
-}

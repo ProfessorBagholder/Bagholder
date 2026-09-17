@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -463,7 +464,7 @@ func (a *App) fearStale(rec *store.Gauge, now time.Time) bool {
 
 func (a *App) fearPayload(index string) map[string]any {
 	which := strings.ToLower(py.Strip(index))
-	if !py.Contains(fear.Indexes, which) {
+	if !slices.Contains(fear.Indexes, which) {
 		return map[string]any{"ok": false, "error": "no such index"}
 	}
 	held := a.st.Gauge(which)
@@ -576,6 +577,30 @@ func (a *App) shortsPayload(symbol, exchange, currency string, trend bool) map[s
 	return map[string]any{"ok": true, "covered": true, "shorts": rec}
 }
 
+type shortsRow struct {
+	store.Short
+	PositionID *string
+	Held       bool
+	Watched    bool
+}
+
+func (r shortsRow) MarshalJSON() ([]byte, error) {
+	b, err := r.Short.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	tail, err := json.Marshal(struct {
+		PositionID *string `json:"positionId"`
+		Held       bool    `json:"held"`
+		Watched    bool    `json:"watched"`
+	}{r.PositionID, r.Held, r.Watched})
+	if err != nil {
+		return nil, err
+	}
+	out := append(b[:len(b)-1], ',')
+	return append(out, tail[1:]...), nil
+}
+
 func (a *App) shortsFeed() map[string]any {
 	base := a.model.Base()
 	type src struct {
@@ -590,7 +615,7 @@ func (a *App) shortsFeed() map[string]any {
 	for _, w := range base.Watchlist {
 		watched[[2]string{strings.ToUpper(market.TMXSymbol(w.Symbol)), strings.ToUpper(w.Exchange)}] = src{w.Name, w.Exchange, ""}
 	}
-	rows := []map[string]any{}
+	rows := []shortsRow{}
 	for _, r := range a.st.AllShorts() {
 		key := [2]string{r.Symbol, r.Exchange}
 		s, ok := held[key]
@@ -600,23 +625,18 @@ func (a *App) shortsFeed() map[string]any {
 		if !ok || r.Shares == nil {
 			continue
 		}
-		raw, _ := json.Marshal(r)
-		row := map[string]any{}
-		_ = json.Unmarshal(raw, &row)
+		row := shortsRow{Short: r}
 		if s.name != "" {
-			row["name"] = s.name
+			row.Short.Name = s.name
 		}
 		if s.exchange != "" {
-			row["exchange"] = s.exchange
+			row.Short.Exchange = s.exchange
 		}
 		if s.positionID != "" {
-			row["positionId"] = s.positionID
-		} else {
-			row["positionId"] = nil
+			row.PositionID = strPtr(s.positionID)
 		}
-		_, h := held[key]
-		_, w := watched[key]
-		row["held"], row["watched"] = h, w
+		_, row.Held = held[key]
+		_, row.Watched = watched[key]
 		rows = append(rows, row)
 	}
 	a.shortsMu.Lock()
@@ -985,14 +1005,14 @@ func (a *App) filingsNotice(sym string, fresh []store.Filing) (string, string) {
 		if title == "" {
 			title = py.Strip(r.Type)
 		}
-		if title != "" && !py.Contains(named, title) {
+		if title != "" && !slices.Contains(named, title) {
 			named = append(named, title)
 		}
 	}
 	var sources []string
 	for _, r := range fresh {
 		src := py.Strip(r.Source)
-		if src != "" && !py.Contains(sources, src) {
+		if src != "" && !slices.Contains(sources, src) {
 			sources = append(sources, src)
 		}
 	}

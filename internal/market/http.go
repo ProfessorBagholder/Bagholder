@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -311,15 +310,6 @@ func (c *Client) PostJSON(rawURL string, payload any, headers map[string]string)
 		return nil, nil
 	}
 	return out, nil
-}
-
-func sortedKeys(m map[string]float64) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func stamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }

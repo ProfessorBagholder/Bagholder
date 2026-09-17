@@ -48,7 +48,7 @@ func moneyText(n float64) string {
 }
 
 func formDate(text, label string) string {
-	m := regexp.MustCompile(`(?i)` + label + `\s*(\d{4})\s*YYYY\s*(\d{1,2})\s*(\d{1,2})\s*MM`).FindStringSubmatch(text)
+	m := py.RE(`(?i)` + label + `\s*(\d{4})\s*YYYY\s*(\d{1,2})\s*(\d{1,2})\s*MM`).FindStringSubmatch(text)
 	if m == nil {
 		return ""
 	}

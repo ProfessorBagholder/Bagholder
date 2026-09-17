@@ -51,7 +51,6 @@ type Sedar struct {
 	last    time.Time
 	scope   map[string]scopeHit
 	scopeMu sync.Mutex
-	docSess *browserhttp.Session
 }
 
 func NewSedar() *Sedar { return &Sedar{scope: map[string]scopeHit{}} }

@@ -4,11 +4,24 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
+
+var reCache sync.Map
+
+func RE(pattern string) *regexp.Regexp {
+	if v, ok := reCache.Load(pattern); ok {
+		return v.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(pattern)
+	reCache.Store(pattern, re)
+	return re
+}
 
 func S(v any) string {
 	switch x := v.(type) {
@@ -376,32 +389,11 @@ func DateStr(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-func Contains(list []string, x string) bool {
-	for _, v := range list {
-		if v == x {
-			return true
-		}
-	}
-	return false
-}
-
-func Uniq(list []string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, v := range list {
-		if !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 func Hex(v uint64) string { return strconv.FormatUint(v, 16) }
 
 func Itoa(n int) string { return strconv.Itoa(n) }
 
-const SpaceChars = " \t\n\r\x0b\x0c\x1c\x1d\x1e\x1f\x85                 　"
+const SpaceChars = " \t\n\r\x0b\x0c\x1c\x1d\x1e\x1f\u0085                 　"
 
 func PtrInt64(v int64) *int64 { return &v }
 

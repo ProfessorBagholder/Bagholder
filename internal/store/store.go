@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	_ "time/tzdata"
 
@@ -55,6 +56,15 @@ type Store struct {
 	mu   sync.Mutex
 
 	ready bool
+	gen   atomic.Uint64
+
+	verMu      sync.Mutex
+	verGen     uint64
+	verFull    string
+	verCore    string
+	bookGen    uint64
+	bookVer    string
+	ensuredGen uint64
 }
 
 func Home() string {
@@ -76,7 +86,7 @@ func Open(home string) (*Store, error) {
 		return nil, err
 	}
 	path := filepath.Join(home, "bagholder.db")
-	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_txlock=immediate"
+	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-16000)&_pragma=temp_store(MEMORY)&_pragma=foreign_keys(ON)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -123,12 +133,7 @@ func (s *Store) prepare() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ready {
-		var v string
-		err := s.db.QueryRow("SELECT value FROM meta WHERE key = 'schema_version'").Scan(&v)
-		if err == nil && v == strconv.Itoa(SchemaVersion) {
-			return nil
-		}
-		s.ready = false
+		return nil
 	}
 	if err := s.initSchema(); err != nil {
 		return err
@@ -144,7 +149,9 @@ func (s *Store) must() {
 }
 
 func (s *Store) exec(q string, args ...any) (sql.Result, error) {
-	return s.db.Exec(q, args...)
+	res, err := s.db.Exec(q, args...)
+	s.gen.Add(1)
+	return res, err
 }
 
 func (s *Store) tx(fn func(tx *sql.Tx) error) error {
@@ -156,8 +163,12 @@ func (s *Store) tx(fn func(tx *sql.Tx) error) error {
 		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	s.gen.Add(1)
+	return err
 }
+
+func (s *Store) Generation() uint64 { return s.gen.Load() }
 
 func scanRow(rows *sql.Rows) (map[string]any, error) {
 	cols, err := rows.Columns()
@@ -518,6 +529,9 @@ const schemaSQL = `
             PRIMARY KEY (id, symbol, exchange)
         );
         CREATE INDEX IF NOT EXISTS news_published ON news (published_at);
+        CREATE INDEX IF NOT EXISTS activities_when ON activities (COALESCE(occurred_at, transaction_date), id);
+        CREATE INDEX IF NOT EXISTS activities_security ON activities (security_id, account_id);
+        CREATE INDEX IF NOT EXISTS balances_account_security ON balances (account_id, security_id);
 
         CREATE TABLE IF NOT EXISTS universes (
             key TEXT NOT NULL,
@@ -1013,9 +1027,36 @@ func scaleOptionUnitPrices(tx *sql.Tx) error {
 }
 
 func (s *Store) Ensure() error {
+	s.mu.Lock()
+	if s.ready {
+		var v string
+		err := s.db.QueryRow("SELECT value FROM meta WHERE key = 'schema_version'").Scan(&v)
+		if err != nil || v != strconv.Itoa(SchemaVersion) {
+			s.ready = false
+		}
+	}
+	s.mu.Unlock()
 	if err := s.prepare(); err != nil {
 		return err
 	}
+	err := s.migrate()
+	s.verMu.Lock()
+	s.ensuredGen = s.gen.Load()
+	s.verMu.Unlock()
+	return err
+}
+
+func (s *Store) EnsureChanged() error {
+	s.verMu.Lock()
+	same := s.ensuredGen == s.gen.Load() && s.ensuredGen != 0
+	s.verMu.Unlock()
+	if same {
+		return nil
+	}
+	return s.Ensure()
+}
+
+func (s *Store) migrate() error {
 	return s.tx(func(tx *sql.Tx) error {
 		if _, err := relabelWhenRowsChanged(tx); err != nil {
 			return err
@@ -1098,6 +1139,24 @@ func hashString(s string) uint64 {
 
 func (s *Store) Versions() (string, string) {
 	s.must()
+	gen := s.gen.Load()
+	s.verMu.Lock()
+	if s.verGen == gen && s.verFull != "" {
+		full, core := s.verFull, s.verCore
+		s.verMu.Unlock()
+		return full, core
+	}
+	s.verMu.Unlock()
+	full, core := s.computeVersions()
+	s.verMu.Lock()
+	if s.gen.Load() == gen {
+		s.verGen, s.verFull, s.verCore = gen, full, core
+	}
+	s.verMu.Unlock()
+	return full, core
+}
+
+func (s *Store) computeVersions() (string, string) {
 	parts := make([]string, 0, len(versionSQL)+len(versionMeta))
 	for _, q := range versionSQL {
 		var a, b any
@@ -1139,13 +1198,27 @@ func (s *Store) CoreVersion() string {
 
 func (s *Store) BookVersion() string {
 	s.must()
+	gen := s.gen.Load()
+	s.verMu.Lock()
+	if s.bookGen == gen && s.bookVer != "" {
+		v := s.bookVer
+		s.verMu.Unlock()
+		return v
+	}
+	s.verMu.Unlock()
 	parts := []string{}
 	for _, q := range []string{"SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities", "SELECT COUNT(*), MAX(fetched_at) FROM securities"} {
 		var a, b any
 		_ = s.db.QueryRow(q).Scan(&a, &b)
 		parts = append(parts, versionPart(a)+":"+versionPart(b))
 	}
-	return strings.Join(parts, "|")
+	v := strings.Join(parts, "|")
+	s.verMu.Lock()
+	if s.gen.Load() == gen {
+		s.bookGen, s.bookVer = gen, v
+	}
+	s.verMu.Unlock()
+	return v
 }
 
 type StatusCounts struct {

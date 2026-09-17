@@ -5,7 +5,6 @@ import (
 	"math"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -982,5 +981,3 @@ func (c *Client) RefreshPeriodic(symbols []Rec, now time.Time) RefreshResult {
 func (c *Client) RefreshInBackground(symbols []Rec) {
 	go c.RefreshAll(symbols)
 }
-
-var _ = sort.Strings

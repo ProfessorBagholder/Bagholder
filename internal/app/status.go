@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,7 +228,7 @@ func (a *App) historyPayload(query string) map[string]any {
 	if tf == "" {
 		tf = "1d"
 	}
-	if rec.Symbol == "" || len(start) != 10 || len(end) != 10 || !py.Contains(market.Timeframes, tf) {
+	if rec.Symbol == "" || len(start) != 10 || len(end) != 10 || !slices.Contains(market.Timeframes, tf) {
 		return map[string]any{"ok": false, "error": "symbol, from, to and a known tf are required"}
 	}
 	inst := market.ChartInstrument(rec)
@@ -239,7 +240,7 @@ func (a *App) historyPayload(query string) map[string]any {
 	count := 0
 	_, intraday := market.IntradaySeconds[tf]
 	switch {
-	case src == nil || !py.Contains(available, tf):
+	case src == nil || !slices.Contains(available, tf):
 	case intraday && !a.mk.IntradayReady(inst, tf, start, now):
 		a.mk.EnsureIntradayInBackground(inst, tf, start, end)
 		pending = true

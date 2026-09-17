@@ -1,7 +1,6 @@
 package model
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
@@ -141,18 +140,5 @@ func (s *Securities) CashCurrencies() map[string]string {
 			out[sid] = ccy
 		}
 	}
-	return out
-}
-
-func (s *Securities) KnownExchanges() []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, sid := range s.order {
-		if e := s.Exchange(sid); e != "" && !seen[e] {
-			seen[e] = true
-			out = append(out, e)
-		}
-	}
-	sort.Strings(out)
 	return out
 }

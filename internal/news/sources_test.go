@@ -338,7 +338,9 @@ func TestEverySourceIsMergedOneRowPerStoryTheWiresCopyFirst(t *testing.T) {
 	}
 	asked := []string{}
 	stubExtra(t, func(key, symbol, exchange, currency, name string) ([]store.WireItem, bool, error) {
+		testMu.Lock()
 		asked = append(asked, key+"|"+name)
+		testMu.Unlock()
 		return answers[key], true, nil
 	})
 	src, rows, ok := ReadListing(c, "CH", "TSX-V", "CAD", now, "Charbone Hydrogen Corp", false, nil)
@@ -370,7 +372,9 @@ func TestASourceThatFailsOrIsNotDueKeepsItsStoredStories(t *testing.T) {
 	asked := []string{}
 	stubWire(t, "tmx", []store.WireItem{row("tmx:2", "New wire item", "2026-09-16T12:10:00Z", "Pub", "story")}, true)
 	stubExtra(t, func(key, symbol, exchange, currency, name string) ([]store.WireItem, bool, error) {
+		testMu.Lock()
 		asked = append(asked, key)
+		testMu.Unlock()
 		if key == "yahoo" {
 			return nil, true, fmt.Errorf("down")
 		}
@@ -578,7 +582,15 @@ func TestAListingIsDueWhileAnyOfItsSourcesIs(t *testing.T) {
 		return []store.WireItem{}, true, nil
 	})
 	started, landed := []string{}, []string{}
-	n := Refresh(c, listings, now.Add(time.Minute), nil, func(due []Listing) { started = append(started, syms(due)...) }, func(l Listing, ok bool) { landed = append(landed, fmt.Sprintf("%s:%v", l.Symbol, ok)) })
+	n := Refresh(c, listings, now.Add(time.Minute), nil, func(due []Listing) {
+		testMu.Lock()
+		started = append(started, syms(due)...)
+		testMu.Unlock()
+	}, func(l Listing, ok bool) {
+		testMu.Lock()
+		landed = append(landed, fmt.Sprintf("%s:%v", l.Symbol, ok))
+		testMu.Unlock()
+	})
 	sort.Strings(started)
 	sort.Strings(landed)
 	if n != 2 || !reflect.DeepEqual(started, []string{"CH", "HG"}) || !reflect.DeepEqual(landed, []string{"CH:true", "HG:true"}) {

@@ -3,8 +3,8 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -143,6 +143,7 @@ const (
 	NasdaqSearchURL = "https://api.nasdaq.com/api/autocomplete/slookup/10?search=%s"
 	TSXSearchURL    = "https://www.tsx.com/json/company-directory/search/%s/%s"
 	SearchMax       = 12
+	SearchCacheMax  = 256
 )
 
 var (
@@ -173,7 +174,7 @@ func parseNasdaqSearch(data map[string]any) []SearchRow {
 	rows, _ := data["data"].([]any)
 	for _, raw := range rows {
 		q, ok := raw.(map[string]any)
-		if !ok || !py.Contains(NasdaqAssets, strings.ToUpper(py.S(q["asset"]))) {
+		if !ok || !slices.Contains(NasdaqAssets, strings.ToUpper(py.S(q["asset"]))) {
 			continue
 		}
 		ex := NasdaqExchanges[strings.ToUpper(py.S(q["exchange"]))]
@@ -182,7 +183,7 @@ func parseNasdaqSearch(data map[string]any) []SearchRow {
 		if i := strings.LastIndex(sym, "."); i >= 0 {
 			tail = sym[i+1:]
 		}
-		if ex == "" || sym == "" || py.Contains(NasdaqDerivativeSuffixes, tail) {
+		if ex == "" || sym == "" || slices.Contains(NasdaqDerivativeSuffixes, tail) {
 			continue
 		}
 		name := py.S(q["name"])
@@ -318,7 +319,7 @@ func (a *App) symbolSearch(text string) SearchResult {
 	if len(venues) > 0 {
 		var kept []SearchRow
 		for _, r := range rows {
-			if py.Contains(venues, strings.ToUpper(r.Exchange)) {
+			if slices.Contains(venues, strings.ToUpper(r.Exchange)) {
 				kept = append(kept, r)
 			}
 		}
@@ -328,6 +329,9 @@ func (a *App) symbolSearch(text string) SearchResult {
 	}
 	if len(errs) == 0 {
 		a.searchMu.Lock()
+		if len(a.searchCache) >= SearchCacheMax {
+			a.searchCache = map[string][]SearchRow{}
+		}
 		a.searchCache[key] = rows
 		a.searchMu.Unlock()
 	}
@@ -474,14 +478,14 @@ func (a *App) orderRequest(b map[string]any) (*store.Order, map[string]any, stri
 		return nil, nil, "Side must be Buy or Sell."
 	}
 	execType := strings.ToUpper(py.S(b["type"]))
-	if !py.Contains(OrderExecTypes, execType) {
+	if !slices.Contains(OrderExecTypes, execType) {
 		return nil, nil, "Order type must be Market, Limit, Stop or Stop limit."
 	}
 	tif := strings.ToUpper(py.S(b["tif"]))
 	if tif == "" {
 		tif = "DAY"
 	}
-	if !py.Contains(OrderTifs, tif) {
+	if !slices.Contains(OrderTifs, tif) {
 		return nil, nil, "Time in force must be Day or Good till cancelled."
 	}
 	qty := py.Num(b["quantity"], 0)
@@ -647,8 +651,6 @@ func (a *App) placeOrder(body map[string]any) map[string]any {
 	}
 	return r
 }
-
-func absf(x float64) float64 { return math.Abs(x) }
 
 func orderRowMap(row *store.Order) map[string]any {
 	var sl, tp any

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/market"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
@@ -280,7 +280,7 @@ var skipDocRE = regexp.MustCompile(`(?i)(?:-index|-index-headers)\.(?:htm|html)$
 var xslRE = regexp.MustCompile(`/xsl[^/]*/`)
 
 func xmlVals(xml, tag string) []string {
-	re := regexp.MustCompile(`<` + tag + `>([^<]+)</` + tag + `>`)
+	re := py.RE(`<` + tag + `>([^<]+)</` + tag + `>`)
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(xml, -1) {
 		out = append(out, strings.TrimSpace(m[1]))
@@ -304,7 +304,7 @@ func (e *Edgar) Enrichment(row Row) *Enrichment {
 	}
 	var owners []string
 	for _, n := range xmlVals(xml, "reportingPersonName") {
-		if n != "" && !py.Contains(owners, n) {
+		if n != "" && !slices.Contains(owners, n) {
 			owners = append(owners, n)
 		}
 	}
@@ -428,5 +428,3 @@ func (e *Edgar) Document(row Row) ([]byte, string, error) {
 	}
 	return raw, ct, nil
 }
-
-var _ = time.Second

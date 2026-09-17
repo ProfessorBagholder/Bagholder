@@ -4,8 +4,8 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"math"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 
 const (
 	BracketPollSec     = 5
+	BracketIdlePollSec = 60
 	TrailMinMove       = 0.005
 	TargetBackOff      = 0.01
 	BracketRollSec     = 7 * 86400
@@ -58,7 +59,7 @@ func (a *App) awaitCancels(b store.Bracket, seconds int) {
 	for i := 0; i < seconds; i++ {
 		var open []store.Order
 		for _, o := range a.ownExitRows(b) {
-			if py.Contains(BracketInflight, o.Status) {
+			if slices.Contains(BracketInflight, o.Status) {
 				open = append(open, o)
 			}
 		}
@@ -73,6 +74,7 @@ func (a *App) awaitCancels(b store.Bracket, seconds int) {
 }
 
 func (a *App) createBracket(row *store.Order) *store.Bracket {
+	defer a.kickBrackets()
 	b := store.Bracket{ID: "bracket-" + py.UUID4(), OrderID: row.ID, AccountID: row.AccountID, SecurityID: row.SecurityID, Symbol: row.Symbol, Currency: row.Currency, Tif: BracketTif, SlTrailUnit: "pct", Status: "waiting"}
 	q := row.Quantity
 	b.Quantity = &q
@@ -245,7 +247,7 @@ func (a *App) armStep(b store.Bracket, entry *store.Order) {
 			a.st.UpdateBracket(b.ID, store.BracketPatch{"status": "cancelled", "outcome": "entry not found"})
 			return
 		}
-		if py.Contains([]string{"pending", "sent", "cancelling", "dry"}, entry.Status) {
+		if slices.Contains([]string{"pending", "sent", "cancelling", "dry"}, entry.Status) {
 			return
 		}
 		filled := py.Deref(entry.FilledQty, 0)
@@ -320,7 +322,7 @@ func (a *App) stopAllowedFor(securityID string) bool {
 		a.logf("bagholder bracket: order types for %s unknown: %s\n", securityID, errText(err))
 		return false
 	}
-	ok := py.Contains(ws.ParseMarketData(data).OrderTypes, "STOP")
+	ok := slices.Contains(ws.ParseMarketData(data).OrderTypes, "STOP")
 	a.stopAllowedMu.Lock()
 	a.stopAllowed[securityID] = ok
 	a.stopAllowedMu.Unlock()
@@ -340,7 +342,7 @@ func (a *App) ownExitRows(b store.Bracket) []store.Order {
 func (a *App) endBracket(b store.Bracket, outcome, note string) string {
 	pending := false
 	for _, o := range a.ownExitRows(b) {
-		if py.Contains(BracketResting, o.Status) {
+		if slices.Contains(BracketResting, o.Status) {
 			if err := a.cancelExit(o.ID); err != "" {
 				a.logf("bagholder bracket: %s for %s: cancel of %s refused: %s; tried again on the next check\n", b.ID, b.Symbol, o.ID, err)
 			}
@@ -359,7 +361,7 @@ func (a *App) endBracket(b store.Bracket, outcome, note string) string {
 		tail = "; its resting exit is being cancelled"
 	}
 	a.logf("bagholder bracket: %s for %s: %s%s\n", b.ID, b.Symbol, outcome, tail)
-	if !py.Contains(BracketEndedQuietly, outcome) {
+	if !slices.Contains(BracketEndedQuietly, outcome) {
 		acct := ""
 		if entry := a.st.GetOrder(b.OrderID); entry != nil {
 			acct = entry.Account
@@ -376,12 +378,12 @@ func (a *App) endBracket(b store.Bracket, outcome, note string) string {
 func (a *App) closingStep(b store.Bracket) {
 	var open []store.Order
 	for _, o := range a.ownExitRows(b) {
-		if py.Contains(BracketInflight, o.Status) {
+		if slices.Contains(BracketInflight, o.Status) {
 			open = append(open, o)
 		}
 	}
 	for _, o := range open {
-		if py.Contains(BracketResting, o.Status) {
+		if slices.Contains(BracketResting, o.Status) {
 			if err := a.cancelExit(o.ID); err != "" {
 				a.logf("bagholder bracket: %s for %s: cancel of %s refused again: %s\n", b.ID, b.Symbol, o.ID, err)
 			}
@@ -395,11 +397,11 @@ func (a *App) closingStep(b store.Bracket) {
 
 func (a *App) sweepExits() {
 	for _, o := range a.st.ListOrders(0) {
-		if (o.Role != "stop" && o.Role != "target") || !py.Contains(BracketResting, o.Status) {
+		if (o.Role != "stop" && o.Role != "target") || !slices.Contains(BracketResting, o.Status) {
 			continue
 		}
 		b := a.st.BracketForOrder(o.ParentID)
-		heldBy := b != nil && py.Contains(BracketLive, b.Status) && (b.Status == "closing" || o.ID == b.SlOrderID || o.ID == b.TpOrderID)
+		heldBy := b != nil && slices.Contains(BracketLive, b.Status) && (b.Status == "closing" || o.ID == b.SlOrderID || o.ID == b.TpOrderID)
 		if heldBy {
 			continue
 		}
@@ -414,7 +416,7 @@ func (a *App) sweepExits() {
 
 func (a *App) nothingResting(b store.Bracket) bool {
 	for _, o := range a.ownExitRows(b) {
-		if py.Contains(BracketInflight, o.Status) {
+		if slices.Contains(BracketInflight, o.Status) {
 			return false
 		}
 	}
@@ -422,7 +424,7 @@ func (a *App) nothingResting(b store.Bracket) bool {
 }
 
 func (a *App) closedElsewhere(b store.Bracket) string {
-	if !py.Contains(watchStatuses, b.Status) || b.ArmedAt == "" || !a.nothingResting(b) {
+	if !slices.Contains(watchStatuses, b.Status) || b.ArmedAt == "" || !a.nothingResting(b) {
 		return ""
 	}
 	sold := a.st.SoldSince(b.AccountID, b.SecurityID, b.ArmedAt, b.Symbol)
@@ -557,13 +559,13 @@ func (a *App) reconcileStep(b store.Bracket, entry *store.Order) string {
 		a.endBracket(b, "target", "")
 		return "done"
 	}
-	if b.SlOrderID != "" && stopRow != nil && py.Contains(BracketResting, stopRow.Status) && priceMoved(stopRow.StopPrice, b.SlPrice) {
+	if b.SlOrderID != "" && stopRow != nil && slices.Contains(BracketResting, stopRow.Status) && priceMoved(stopRow.StopPrice, b.SlPrice) {
 		a.st.UpdateBracket(b.ID, store.BracketPatch{"slPrice": *stopRow.StopPrice})
 		a.logf("bagholder bracket: %s for %s: stop moved by hand to %s; the bracket follows\n", b.ID, b.Symbol, fstr(stopRow.StopPrice))
 		v := *stopRow.StopPrice
 		b.SlPrice = &v
 	}
-	if b.TpOrderID != "" && tpRow != nil && py.Contains(BracketResting, tpRow.Status) && priceMoved(tpRow.LimitPrice, b.TpPrice) {
+	if b.TpOrderID != "" && tpRow != nil && slices.Contains(BracketResting, tpRow.Status) && priceMoved(tpRow.LimitPrice, b.TpPrice) {
 		a.st.UpdateBracket(b.ID, store.BracketPatch{"tpPrice": *tpRow.LimitPrice})
 		a.logf("bagholder bracket: %s for %s: target moved by hand to %s; the bracket follows\n", b.ID, b.Symbol, fstr(tpRow.LimitPrice))
 	}
@@ -571,7 +573,7 @@ func (a *App) reconcileStep(b store.Bracket, entry *store.Order) string {
 	if nativeStop && stopRow.Status == "expired" {
 		a.st.UpdateBracket(b.ID, store.BracketPatch{"slOrderId": "", "error": ""})
 		a.logf("bagholder bracket: %s for %s: stop expired at Wealthsimple; placed again\n", b.ID, b.Symbol)
-	} else if nativeStop && py.Contains([]string{"cancelled", "rejected", "failed"}, stopRow.Status) {
+	} else if nativeStop && slices.Contains([]string{"cancelled", "rejected", "failed"}, stopRow.Status) {
 		why := "stop cancelled at Wealthsimple by hand"
 		if stopRow.Status != "cancelled" {
 			why = "stop " + stopRow.Status + " at Wealthsimple"
@@ -586,7 +588,7 @@ func (a *App) reconcileStep(b store.Bracket, entry *store.Order) string {
 	if placedTarget && tpRow.Status == "expired" {
 		a.st.UpdateBracket(b.ID, store.BracketPatch{"tpOrderId": "", "error": ""})
 		a.logf("bagholder bracket: %s for %s: target expired at Wealthsimple; placed again\n", b.ID, b.Symbol)
-	} else if placedTarget && py.Contains([]string{"cancelled", "rejected", "failed"}, tpRow.Status) {
+	} else if placedTarget && slices.Contains([]string{"cancelled", "rejected", "failed"}, tpRow.Status) {
 		why := "target cancelled at Wealthsimple by hand"
 		if tpRow.Status != "cancelled" {
 			why = "target " + tpRow.Status + " at Wealthsimple"
@@ -750,15 +752,15 @@ func (a *App) bracketTick(quotes map[string]*ws.Quote) map[string]any {
 			case b.Status == "firing" && b.SlOrderID != "" && b.TpOrderID == "":
 				a.refreshOrders(b.SlOrderID)
 			case b.Status == "armed" && b.SlKind != "" && b.SlOrderID == "":
-				if prev := a.exitRow(b, "stop"); prev != nil && py.Contains(BracketInflight, prev.Status) {
+				if prev := a.exitRow(b, "stop"); prev != nil && slices.Contains(BracketInflight, prev.Status) {
 					a.refreshOrders(prev.ID)
 				}
 			case b.Status == "target_placed" && b.TpOrderID == "":
-				if prev := a.exitRow(b, "target"); prev != nil && py.Contains(BracketInflight, prev.Status) {
+				if prev := a.exitRow(b, "target"); prev != nil && slices.Contains(BracketInflight, prev.Status) {
 					a.refreshOrders(prev.ID)
 				}
 			case b.Status == "stopping":
-				if prev := a.exitRow(b, "target"); prev != nil && py.Contains(BracketInflight, prev.Status) {
+				if prev := a.exitRow(b, "target"); prev != nil && slices.Contains(BracketInflight, prev.Status) {
 					a.refreshOrders(prev.ID)
 				}
 			case b.Status == "closing":
@@ -778,7 +780,7 @@ func (a *App) bracketTick(quotes map[string]*ws.Quote) map[string]any {
 	if quotes == nil {
 		idSet := map[string]bool{}
 		for _, b := range live {
-			if py.Contains(watchStatuses, b.Status) {
+			if slices.Contains(watchStatuses, b.Status) {
 				idSet[b.SecurityID] = true
 			}
 		}
@@ -816,7 +818,7 @@ func (a *App) bracketTick(quotes map[string]*ws.Quote) map[string]any {
 		if cur = a.st.GetBracket(b.ID); cur == nil {
 			continue
 		}
-		if py.Contains(watchStatuses, cur.Status) {
+		if slices.Contains(watchStatuses, cur.Status) {
 			a.watchStep(*cur, quotes[cur.SecurityID])
 		}
 	}
@@ -825,11 +827,38 @@ func (a *App) bracketTick(quotes map[string]*ws.Quote) map[string]any {
 }
 
 func (a *App) bracketLoop() {
-	for !a.wait(BracketPollSec * time.Second) {
+	idle := 0
+	for {
+		wait := BracketPollSec * time.Second
+		if idle >= 3 {
+			wait = BracketIdlePollSec * time.Second
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-a.stopCh:
+			t.Stop()
+			return
+		case <-a.bracketKick:
+			t.Stop()
+			idle = 0
+		case <-t.C:
+		}
 		if !a.connectedIdle() {
 			continue
 		}
+		if a.st.LiveBracketCount(BracketLive, "") == 0 && a.st.LiveOrderCount(BracketResting, []string{"stop", "target"}) == 0 {
+			idle++
+		} else {
+			idle = 0
+		}
 		a.bracketTick(nil)
+	}
+}
+
+func (a *App) kickBrackets() {
+	select {
+	case a.bracketKick <- struct{}{}:
+	default:
 	}
 }
 
@@ -838,7 +867,7 @@ func (a *App) cancelBracket(bracketID string) map[string]any {
 	if b == nil {
 		return map[string]any{"ok": false, "error": "No such bracket."}
 	}
-	if !py.Contains(BracketLive, b.Status) {
+	if !slices.Contains(BracketLive, b.Status) {
 		return map[string]any{"ok": false, "error": "That bracket is not live."}
 	}
 	a.endBracket(*b, "cancelled by the user", "")
@@ -850,7 +879,7 @@ func (a *App) adjustBracket(bracketID, leg string, price, trail any, remove bool
 	if b == nil {
 		return map[string]any{"ok": false, "error": "No such bracket."}
 	}
-	if !py.Contains(BracketLive, b.Status) {
+	if !slices.Contains(BracketLive, b.Status) {
 		return map[string]any{"ok": false, "error": "That bracket is not live."}
 	}
 	leg = strings.ToLower(leg)
@@ -950,23 +979,5 @@ func (a *App) adjustBracket(bracketID, leg string, price, trail any, remove bool
 }
 
 func (a *App) openOrdersCount() int {
-	entries := 0
-	for _, o := range a.st.ListOrders(0) {
-		role := o.Role
-		if role == "" {
-			role = "entry"
-		}
-		if py.Contains(LiveStatuses, o.Status) && role == "entry" {
-			entries++
-		}
-	}
-	brackets := 0
-	for _, b := range a.st.ListBrackets(nil) {
-		if py.Contains(BracketLive, b.Status) && b.Status != "waiting" {
-			brackets++
-		}
-	}
-	return entries + brackets
+	return a.st.LiveOrderCount(LiveStatuses, []string{"", "entry"}) + a.st.LiveBracketCount(BracketLive, "waiting")
 }
-
-var _ = strconv.Itoa

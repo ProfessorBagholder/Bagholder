@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -237,7 +238,7 @@ func NavAccountGroups(accounts []Item) (map[string][]string, []string) {
 		if _, ok := groups[nick]; !ok {
 			order = append(order, nick)
 		}
-		if !py.Contains(groups[nick], aid) {
+		if !slices.Contains(groups[nick], aid) {
 			groups[nick] = append(groups[nick], aid)
 		}
 	}
@@ -1066,10 +1067,10 @@ var WSStatusMap = map[string]string{"FILLED": "filled", "POSTED": "filled", "CAN
 
 func AppStatus(wsStatus string) string {
 	s := strings.ToUpper(wsStatus)
-	if py.Contains(WSPending, s) {
+	if slices.Contains(WSPending, s) {
 		return "pending"
 	}
-	if py.Contains(WSCancelling, s) {
+	if slices.Contains(WSCancelling, s) {
 		return "cancelling"
 	}
 	if v, ok := WSStatusMap[s]; ok {

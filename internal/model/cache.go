@@ -16,6 +16,7 @@ type inputs struct {
 type Model struct {
 	st      *store.Store
 	mu      sync.Mutex
+	buildMu sync.Mutex
 	rw      sync.RWMutex
 	version string
 	core    string
@@ -29,16 +30,20 @@ func New(st *store.Store) *Model {
 	return &Model{st: st}
 }
 
-func (m *Model) Store() *store.Store { return m.st }
-
-func (m *Model) RLock()   { m.rw.RLock() }
-func (m *Model) RUnlock() { m.rw.RUnlock() }
-
 func (m *Model) BaseModel(force bool) *Base {
 	today := TodayLocal()
 	full, core := m.st.Versions()
 	version := full + "|" + today
 	coreKey := core + "|" + today
+	m.mu.Lock()
+	if !force && m.base != nil && m.version == version {
+		b := m.base
+		m.mu.Unlock()
+		return b
+	}
+	m.mu.Unlock()
+	m.buildMu.Lock()
+	defer m.buildMu.Unlock()
 	m.mu.Lock()
 	if !force && m.base != nil && m.version == version {
 		b := m.base
@@ -113,19 +118,27 @@ func (m *Model) View(filters any, detail string) []byte {
 }
 
 func marshalView(v *View, detail string) []byte {
-	for _, t := range v.Trades {
-		t.Detail = detail != "" && t.ID == detail
-	}
-	for _, p := range v.Positions {
-		p.Detail = detail != "" && p.ID == detail
+	if detail != "" {
+		w := *v
+		for i, t := range v.Trades {
+			if t.ID == detail {
+				w.Trades = append([]*Trade{}, v.Trades...)
+				c := *t
+				c.Detail = true
+				w.Trades[i] = &c
+			}
+		}
+		for i, p := range v.Positions {
+			if p.ID == detail {
+				w.Positions = append([]*Position{}, v.Positions...)
+				c := *p
+				c.Detail = true
+				w.Positions[i] = &c
+			}
+		}
+		v = &w
 	}
 	out, err := json.Marshal(v)
-	for _, t := range v.Trades {
-		t.Detail = false
-	}
-	for _, p := range v.Positions {
-		p.Detail = false
-	}
 	if err != nil {
 		panic(err)
 	}

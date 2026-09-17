@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"sort"
 	"strings"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
@@ -50,8 +49,13 @@ func (s *Store) UpsertFXRates(mapping map[string]float64) int {
 	}
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare("INSERT OR IGNORE INTO fx_rates(pair, date, rate) VALUES (?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
 		for _, d := range SortedKeys(clean) {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO fx_rates(pair, date, rate) VALUES (?, ?, ?)", FXPair, d, clean[d]); err != nil {
+			if _, err := stmt.Exec(FXPair, d, clean[d]); err != nil {
 				return err
 			}
 		}
@@ -96,8 +100,13 @@ func (s *Store) UpsertBenchmarkPrices(mapping map[string]float64, symbol string)
 	}
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare("INSERT OR IGNORE INTO benchmark_prices(symbol, date, close) VALUES (?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
 		for _, d := range SortedKeys(clean) {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO benchmark_prices(symbol, date, close) VALUES (?, ?, ?)", symbol, d, clean[d]); err != nil {
+			if _, err := stmt.Exec(symbol, d, clean[d]); err != nil {
 				return err
 			}
 		}
@@ -294,8 +303,13 @@ func (s *Store) UpsertPriceHistory(symbol string, bars []DailyBar, source string
 	_ = s.tx(func(tx *sql.Tx) error {
 		var newest sql.NullString
 		_ = tx.QueryRow("SELECT MAX(date) FROM price_history WHERE symbol = ?", sym).Scan(&newest)
+		stmt, err := tx.Prepare("INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
 		for _, c := range clean {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", sym, c.Date, nullable(c.Open), nullable(c.High), nullable(c.Low), c.Close, nullable(c.Volume), source); err != nil {
+			if _, err := stmt.Exec(sym, c.Date, nullable(c.Open), nullable(c.High), nullable(c.Low), c.Close, nullable(c.Volume), source); err != nil {
 				return err
 			}
 		}
@@ -440,10 +454,4 @@ func (s *Store) MarketData() MarketData {
 		md.Benchmarks[sym] = s.BenchmarkPrices(sym)
 	}
 	return md
-}
-
-func sortStrings(in []string) []string {
-	out := append([]string{}, in...)
-	sort.Strings(out)
-	return out
 }

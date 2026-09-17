@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
@@ -44,6 +45,11 @@ func (s Session) Clone() Session {
 type Files struct {
 	Home string
 	mu   sync.Mutex
+
+	sessMod  time.Time
+	sessSize int64
+	sess     Session
+	sessOK   bool
 }
 
 func (f *Files) SessionPath() string  { return filepath.Join(f.Home, "session.json") }
@@ -72,15 +78,31 @@ func (f *Files) atomicWrite(path string, data []byte, mode os.FileMode) error {
 func (f *Files) LoadSession() Session {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	info, err := os.Stat(f.SessionPath())
+	if err != nil {
+		f.sessOK = false
+		return nil
+	}
+	if f.sessOK && f.sessMod.Equal(info.ModTime()) && f.sessSize == info.Size() {
+		if f.sess == nil {
+			return nil
+		}
+		return f.sess.Clone()
+	}
 	raw, err := os.ReadFile(f.SessionPath())
 	if err != nil {
+		f.sessOK = false
 		return nil
 	}
 	var sess Session
 	if err := json.Unmarshal(raw, &sess); err != nil {
+		sess = nil
+	}
+	f.sessMod, f.sessSize, f.sess, f.sessOK = info.ModTime(), info.Size(), sess, true
+	if sess == nil {
 		return nil
 	}
-	return sess
+	return sess.Clone()
 }
 
 func (f *Files) SaveSession(sess Session) error {

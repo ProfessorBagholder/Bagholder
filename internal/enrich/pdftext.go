@@ -13,15 +13,6 @@ import (
 
 func PDFDisabled() bool { return os.Getenv("BAGHOLDER_NO_PDF") != "" }
 
-func PDFAvailable() bool { return !PDFDisabled() }
-
-func PDFStatus() string {
-	if PDFDisabled() {
-		return "off"
-	}
-	return "ready"
-}
-
 func PDFPending() bool { return false }
 
 func PDFText(data []byte) string {

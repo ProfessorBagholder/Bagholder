@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/model"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
@@ -213,58 +212,6 @@ func Rounded(v any) any {
 	}
 }
 
-func Diff(path string, want, got any, out *[]string) {
-	switch w := want.(type) {
-	case map[string]any:
-		g, ok := got.(map[string]any)
-		if !ok {
-			*out = append(*out, path+": want object, got "+py.S(got))
-			return
-		}
-		for k, wv := range w {
-			gv, ok := g[k]
-			if !ok {
-				*out = append(*out, path+"."+k+": missing")
-				continue
-			}
-			Diff(path+"."+k, wv, gv, out)
-		}
-		for k := range g {
-			if _, ok := w[k]; !ok {
-				*out = append(*out, path+"."+k+": unexpected")
-			}
-		}
-	case []any:
-		g, ok := got.([]any)
-		if !ok {
-			*out = append(*out, path+": want list, got "+py.S(got))
-			return
-		}
-		if len(w) != len(g) {
-			*out = append(*out, path+": want "+strconv.Itoa(len(w))+" items, got "+strconv.Itoa(len(g)))
-			return
-		}
-		for i := range w {
-			Diff(path+"["+strconv.Itoa(i)+"]", w[i], g[i], out)
-		}
-	case float64:
-		g, ok := got.(float64)
-		if !ok || math.Abs(py.Round(w, 6)-py.Round(g, 6)) > 1e-9 {
-			*out = append(*out, path+": want "+py.Repr(w)+", got "+py.S(got))
-		}
-	case nil:
-		if got != nil {
-			*out = append(*out, path+": want null, got "+py.S(got))
-		}
-	default:
-		wb, _ := json.Marshal(want)
-		gb, _ := json.Marshal(got)
-		if string(wb) != string(gb) {
-			*out = append(*out, path+": want "+string(wb)+", got "+string(gb))
-		}
-	}
-}
-
 func Generic(v any) any {
 	b, _ := json.Marshal(v)
 	var out any
@@ -437,5 +384,3 @@ func hex4(r rune) string {
 	}
 	return s
 }
-
-var _ = utf8.RuneLen

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ func (a Activity) Clone() Activity {
 }
 
 func (a *Activity) HasFlag(f string) bool {
-	return py.Contains(a.Flags, f)
+	return slices.Contains(a.Flags, f)
 }
 
 func LooksLikeHomemadeID(aid string) bool {
@@ -1046,7 +1047,7 @@ type Snapshot struct {
 }
 
 func (s *Store) Snapshot(withActivities bool) Snapshot {
-	_ = s.Ensure()
+	_ = s.EnsureChanged()
 	snap := Snapshot{Activities: []Activity{}, Accounts: []Account{}, Balances: []Balance{}, Margin: []Margin{}, NavHistory: []NavPoint{}, NavByAccount: map[string][]NavPoint{}, Securities: []Security{}}
 	if withActivities {
 		snap.Activities, _ = s.allActivities()

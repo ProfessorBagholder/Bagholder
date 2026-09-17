@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -88,7 +89,7 @@ func isCryptoActivity(a *Act) bool {
 }
 
 func kindOf(a *Act) string {
-	if py.Contains(Kinds, a.Kind) {
+	if slices.Contains(Kinds, a.Kind) {
 		return a.Kind
 	}
 	if isCryptoActivity(a) {
@@ -453,6 +454,7 @@ type fill struct {
 	a             *Act
 	side          string
 	qty           float64
+	rank          int
 	rollDirection string
 	rtBefore      string
 }

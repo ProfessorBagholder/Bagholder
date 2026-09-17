@@ -2,8 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,7 +27,6 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/model"
 	"github.com/ProfessorBagholder/Bagholder/internal/notify"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
-	"github.com/ProfessorBagholder/Bagholder/internal/store"
 )
 
 type serverHandle struct {
@@ -157,18 +157,67 @@ func dictOr(m map[string]any) map[string]any {
 	return m
 }
 
-func (a *App) staticFile(name string) ([]byte, bool) {
+type staticEntry struct {
+	data []byte
+	etag string
+	mod  time.Time
+	size int64
+	disk bool
+}
+
+func (a *App) staticFile(name string) (*staticEntry, bool) {
+	a.staticMu.Lock()
+	defer a.staticMu.Unlock()
+	if a.staticCache == nil {
+		a.staticCache = map[string]*staticEntry{}
+	}
+	cur := a.staticCache[name]
 	if a.cfg.AppDir != "" {
-		if data, err := os.ReadFile(filepath.Join(a.cfg.AppDir, name)); err == nil {
-			return data, true
+		path := filepath.Join(a.cfg.AppDir, name)
+		if info, err := os.Stat(path); err == nil {
+			if cur != nil && cur.disk && cur.mod.Equal(info.ModTime()) && cur.size == info.Size() {
+				return cur, true
+			}
+			if data, err := os.ReadFile(path); err == nil {
+				e := &staticEntry{data: data, etag: etagOf(data), mod: info.ModTime(), size: info.Size(), disk: true}
+				a.staticCache[name] = e
+				return e, true
+			}
 		}
+	}
+	if cur != nil && !cur.disk {
+		return cur, true
 	}
 	if a.cfg.Static != nil {
 		if data, err := fs.ReadFile(a.cfg.Static, name); err == nil {
-			return data, true
+			e := &staticEntry{data: data, etag: etagOf(data), size: int64(len(data))}
+			a.staticCache[name] = e
+			return e, true
 		}
 	}
 	return nil, false
+}
+
+func etagOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+func (rs *responder) sendStatic(e *staticEntry, contentType string) {
+	h := rs.w.Header()
+	h.Set("ETag", e.etag)
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Content-Type-Options", "nosniff")
+	if rs.r.Header.Get("If-None-Match") == e.etag {
+		rs.code = 304
+		rs.w.WriteHeader(304)
+		return
+	}
+	h.Set("Content-Type", contentType)
+	h.Set("Content-Length", strconv.Itoa(len(e.data)))
+	rs.code = 200
+	rs.w.WriteHeader(200)
+	_, _ = rs.w.Write(e.data)
 }
 
 func (a *App) modelFilters(q url.Values) any {
@@ -228,8 +277,6 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-type flusher interface{ Flush() }
-
 func (a *App) doGet(rs *responder, port int) {
 	r := rs.r
 	path := r.URL.Path
@@ -246,7 +293,7 @@ func (a *App) doGet(rs *responder, port int) {
 		h.Set("Cache-Control", "no-store")
 		h.Set("X-Content-Type-Options", "nosniff")
 		rs.w.WriteHeader(200)
-		fl, _ := rs.w.(flusher)
+		fl, _ := rs.w.(http.Flusher)
 		ctx := r.Context()
 		a.loginStream(func(chunk []byte) error {
 			if _, err := rs.w.Write(chunk); err != nil {
@@ -266,12 +313,12 @@ func (a *App) doGet(rs *responder, port int) {
 		}
 		return
 	case "/", "/index.html", "/ledger.html", "/v2", "/v2/":
-		data, ok := a.staticFile("ledger.html")
+		e, ok := a.staticFile("ledger.html")
 		if !ok {
 			rs.send(404, map[string]any{"ok": false, "error": "ledger.html missing"}, "")
 			return
 		}
-		rs.send(200, data, "text/html; charset=utf-8")
+		rs.sendStatic(e, "text/html; charset=utf-8")
 		return
 	case "/api/order/quote":
 		rs.send(200, a.ticketQuote(q.Get("symbol"), q.Get("security"), q.Get("account"), q.Get("exchange")), "")
@@ -359,12 +406,12 @@ func (a *App) doGet(rs *responder, port int) {
 		rs.send(200, a.historyPayload(query), "")
 		return
 	case "/lightweight-charts.js":
-		data, ok := a.staticFile("lightweight-charts.js")
+		e, ok := a.staticFile("lightweight-charts.js")
 		if !ok {
 			rs.send(404, map[string]any{"ok": false, "error": "lightweight-charts.js missing"}, "")
 			return
 		}
-		rs.send(200, data, "application/javascript; charset=utf-8")
+		rs.sendStatic(e, "application/javascript; charset=utf-8")
 		return
 	case "/api/watch":
 		rs.send(200, csvimport.Status(a.st), "")
@@ -401,12 +448,12 @@ func (a *App) doGet(rs *responder, port int) {
 		rs.send(200, map[string]any{"ok": true, "id": detail.ID, "legs": detail.Legs, "fills": detail.Fills}, "")
 		return
 	case "/favicon.png", "/favicon.ico":
-		data, ok := a.staticFile("favicon.png")
+		e, ok := a.staticFile("favicon.png")
 		if !ok {
 			rs.send(404, map[string]any{"ok": false, "error": "favicon missing"}, "")
 			return
 		}
-		rs.send(200, data, "image/png")
+		rs.sendStatic(e, "image/png")
 		return
 	case "/api/book":
 		book := a.loadBook()
@@ -448,7 +495,7 @@ func (a *App) streamNotifications(rs *responder) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	rs.w.WriteHeader(200)
-	fl, _ := rs.w.(flusher)
+	fl, _ := rs.w.(http.Flusher)
 	var afterID *int64
 	if n, err := strconv.ParseInt(after, 10, 64); err == nil && after != "" {
 		afterID = &n
@@ -666,7 +713,7 @@ func (a *App) bindServer() (*serverHandle, error) {
 			last = err
 			continue
 		}
-		srv := &http.Server{Handler: a.handle(port), ReadHeaderTimeout: 30 * time.Second}
+		srv := &http.Server{Handler: a.handle(port), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 		h := &serverHandle{srv: srv, port: port}
 		a.serverMu.Lock()
 		a.server = h
@@ -688,8 +735,8 @@ func (a *App) iconPath() string {
 	}
 	p := filepath.Join(a.cfg.Home, "favicon.png")
 	if !isFile(p) {
-		if data, ok := a.staticFile("favicon.png"); ok {
-			_ = os.WriteFile(p, data, 0o644)
+		if e, ok := a.staticFile("favicon.png"); ok {
+			_ = os.WriteFile(p, e.data, 0o644)
 		}
 	}
 	return p
@@ -728,7 +775,7 @@ func openBrowser(target string) {
 
 func (a *App) Run() int {
 	_ = ensureHome(a.cfg.Home)
-	_ = a.st.Ensure()
+	_ = a.st.EnsureChanged()
 	a.bootSession()
 	h, err := a.bindServer()
 	if err != nil {
@@ -784,11 +831,9 @@ func (a *App) Run() int {
 	a.setStop()
 	a.shutdownServer()
 	a.closeLoginBrowser(nil)
+	a.enricher.Model.Shutdown()
 	a.mu.Lock()
 	code := a.exitCode
 	a.mu.Unlock()
 	return code
 }
-
-var _ = errors.New
-var _ store.Activity

@@ -10,13 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/ProfessorBagholder/Bagholder/internal/py"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
 )
 
@@ -135,7 +135,7 @@ func (n *Notifier) KindOn(kind string) bool {
 func (n *Notifier) SetSettings(patch map[string]any) map[string]bool {
 	cur := n.Settings()
 	for k, v := range patch {
-		if b, ok := v.(bool); ok && py.Contains(SettingKeys, k) {
+		if b, ok := v.(bool); ok && slices.Contains(SettingKeys, k) {
 			cur[k] = b
 		}
 	}
@@ -252,7 +252,7 @@ func FreshSince[T any](st *store.Store, stream string, items []T, at func(T) str
 }
 
 func (n *Notifier) Emit(kind, key, title, body string, extra map[string]any) *store.Notification {
-	if !py.Contains(Kinds, kind) || !n.KindOn(kind) {
+	if !slices.Contains(Kinds, kind) || !n.KindOn(kind) {
 		return nil
 	}
 	return n.post(kind, key, title, body, extra)
@@ -277,12 +277,6 @@ func (n *Notifier) post(kind, key, title, body string, extra map[string]any) *st
 	n.cond.Broadcast()
 	n.mu.Unlock()
 	return row
-}
-
-func (n *Notifier) Wake() {
-	n.mu.Lock()
-	n.cond.Broadcast()
-	n.mu.Unlock()
 }
 
 func (n *Notifier) enqueue(row store.Notification, channel string) {

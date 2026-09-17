@@ -336,9 +336,6 @@ func Cells(buf []byte) map[cellKey]any {
 			}
 		}
 	}
-	if collecting != nil {
-		strs = shared(collecting)
-	}
 	return out
 }
 

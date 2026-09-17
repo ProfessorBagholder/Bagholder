@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
@@ -41,7 +42,7 @@ func CleanJournalEntry(val any) *JournalEntry {
 	}
 	for _, t := range rawTags {
 		s := strings.TrimSpace(py.S(t))
-		if s != "" && !py.Contains(tags, s) {
+		if s != "" && !slices.Contains(tags, s) {
 			tags = append(tags, s)
 		}
 	}

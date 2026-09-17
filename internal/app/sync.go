@@ -57,58 +57,6 @@ func (a *App) fetchNicknameNavHistory(sess ws.Session, accounts []ws.Item) ([]st
 	return points, errs
 }
 
-func (a *App) refreshNavOnly(allowRefresh bool) map[string]any {
-	_ = a.st.Ensure()
-	sess := a.loadSession()
-	if sess == nil || sess.Str("access_token") == "" {
-		return map[string]any{"ok": false, "error": "not connected"}
-	}
-	identity := ws.IdentityFrom(sess)
-	if identity == "" {
-		identity = ws.IdentityFrom(a.ws.TokenInfo(sess))
-	}
-	if identity == "" {
-		return map[string]any{"ok": false, "error": "no identity"}
-	}
-	accounts := a.loadBook().Accounts
-	if len(accounts) == 0 {
-		return map[string]any{"ok": false, "error": "no accounts stored"}
-	}
-	items := make([]ws.Item, 0, len(accounts))
-	for _, acc := range accounts {
-		items = append(items, accountItem(acc))
-	}
-	lastBy := a.st.NavLastDates()
-	navHistory, err := a.ws.FetchNavHistory(sess, identity, lastBy[""])
-	if err != nil {
-		if notAuthorized(err) {
-			if allowRefresh && a.ws.RefreshSession(a.sessionOrEmpty(), true) {
-				return a.refreshNavOnly(false)
-			}
-			return map[string]any{"ok": false, "error": "Session expired. Connect again."}
-		}
-		navHistory = nil
-	}
-	combined := []store.NavPoint{}
-	for _, rec := range navHistory {
-		rec.AccountID = ""
-		combined = append(combined, rec)
-	}
-	nicknamePts, navErrors := a.fetchNicknameNavHistory(sess, items)
-	combined = append(combined, nicknamePts...)
-	a.st.UpsertNav(combined)
-	nickSet := map[string]bool{}
-	allDays := 0
-	for _, p := range combined {
-		if p.AccountID != "" {
-			nickSet[p.AccountID] = true
-		} else {
-			allDays++
-		}
-	}
-	return map[string]any{"ok": true, "allDays": allDays, "accounts": len(nickSet), "errors": navErrors}
-}
-
 func accountItem(acc store.Account) ws.Item {
 	item := ws.Item{"id": acc.ID, "nickname": acc.Nickname, "unifiedAccountType": acc.UnifiedAccountType, "currency": acc.Currency, "status": acc.Status, "type": acc.Type, "marginAccountId": acc.MarginAccountID}
 	if acc.NetLiquidationValue != nil {
@@ -412,7 +360,7 @@ func accountItemsByID(accounts []store.Account) []ws.Item {
 }
 
 func (a *App) fillListings(sess ws.Session, fromSync bool) bool {
-	_ = a.st.Ensure()
+	_ = a.st.EnsureChanged()
 	if sess == nil || sess.Str("access_token") == "" {
 		return false
 	}
@@ -559,7 +507,7 @@ func (a *App) activitySyncBounds() (string, bool) {
 }
 
 func (a *App) runSync(allowRefresh, forceActivity bool) bool {
-	_ = a.st.Ensure()
+	_ = a.st.EnsureChanged()
 	a.mu.Lock()
 	if a.state.syncing {
 		a.mu.Unlock()
@@ -746,7 +694,7 @@ func (a *App) noteSyncFailed(reason string) {
 }
 
 func (a *App) bootSession() {
-	_ = a.st.Ensure()
+	_ = a.st.EnsureChanged()
 	sess := a.loadSession()
 	if sess == nil {
 		a.mu.Lock()
