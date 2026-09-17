@@ -701,6 +701,10 @@ func (a *App) capturing() bool {
 }
 
 func (a *App) captureLoop(proc *browserProc, debugPort int, attempt int) {
+	if flag(os.Getenv("BAGHOLDER_LOGIN_NO_POLL")) {
+		a.logf("bagholder login: cookie polling off; the window is not touched over DevTools\n")
+		return
+	}
 	var refused any
 	for a.attemptIs(attempt) {
 		if !a.capturing() {
