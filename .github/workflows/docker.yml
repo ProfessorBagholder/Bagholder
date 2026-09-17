@@ -1,18 +1,18 @@
 # Publishes the web app's image to GitHub's container registry on every release tag,
 # as ghcr.io/professorbagholder/bagholder:<version> and :latest, so a Docker user
-# updates with `docker compose pull && docker compose up -d`. A tag named test-<name>,
-# or a manual run of the workflow on a branch with a name given, publishes a pre-release
-# image under that name only, never :latest, so a branch can be handed to testers as
-# `docker pull ghcr.io/professorbagholder/bagholder:<name>`.
+# updates with `docker compose pull && docker compose up -d`. A manual run of the
+# workflow on a branch takes an image tag and publishes the branch under that tag only,
+# never :latest, so a branch can be handed to testers as
+# `docker pull ghcr.io/professorbagholder/bagholder:<tag>`.
 name: Docker image
 
 on:
   push:
-    tags: ["v*.*.*", "test-*"]
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       name:
-        description: "Image tag for a pre-release build of this ref (test-<name>)"
+        description: "Image tag for this branch's build, e.g. go-v1.44.0"
         required: true
         type: string
 
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       # the image carries the release's version and nothing else: the tag and the app must agree
       - name: The app's version is the tag's
-        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        if: github.ref_type == 'tag'
         run: |
           want="${GITHUB_REF_NAME#v}"
           have="$(sed -n 's/^\tAppVersion *= "\(.*\)"$/\1/p' internal/app/app.go)"
@@ -44,8 +44,7 @@ jobs:
           images: ghcr.io/professorbagholder/bagholder
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v') }}
-            type=ref,event=tag,enable=${{ startsWith(github.ref_name, 'test-') }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
             type=raw,value=${{ inputs.name }},enable=${{ github.event_name == 'workflow_dispatch' }}
       - uses: docker/build-push-action@v6
         with:
