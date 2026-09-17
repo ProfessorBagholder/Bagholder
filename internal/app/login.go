@@ -701,8 +701,7 @@ func (a *App) capturing() bool {
 }
 
 func (a *App) captureLoop(proc *browserProc, debugPort int, attempt int) {
-	refused := ""
-	refusedSet := false
+	var refused any
 	for a.attemptIs(attempt) {
 		if !a.capturing() {
 			return
@@ -711,7 +710,7 @@ func (a *App) captureLoop(proc *browserProc, debugPort int, attempt int) {
 		if len(cdpPages(debugPort)) > 0 {
 			body = a.tryCaptureFromCDP(debugPort)
 		}
-		if body != nil && truthy(body["access_token"]) && a.attemptIs(attempt) && !(refusedSet && py.S(body["refresh_token"]) == refused) {
+		if body != nil && truthy(body["access_token"]) && a.attemptIs(attempt) && body["refresh_token"] != refused {
 			if !a.capturing() {
 				return
 			}
@@ -720,7 +719,7 @@ func (a *App) captureLoop(proc *browserProc, debugPort int, attempt int) {
 				a.closeLoginBrowser(proc)
 				return
 			}
-			refused, refusedSet = py.S(body["refresh_token"]), true
+			refused = body["refresh_token"]
 			a.logf("bagholder login: Wealthsimple refused the captured session on refresh; still watching the window\n")
 		}
 		time.Sleep(secs(captureEverySec))
