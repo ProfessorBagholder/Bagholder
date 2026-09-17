@@ -1128,6 +1128,30 @@ class QuoteTest(unittest.TestCase):
         self.assertEqual(p["HBIX"]["last"], 7.0)
         self.assertEqual(model.held_symbols(base), [{"symbol": "VEQT", "exchange": "", "currency": "CAD", "kind": "Shares"}, {"symbol": "HBIX", "exchange": "", "currency": "CAD", "kind": "Shares"}])
 
+    def test_positions_and_cashflow_find_the_quote_under_the_bare_ticker(self):
+        snapshot = {
+            "activities": [buy("b1", "QNC.TO", 100, 10.0, "2026-01-05", accountType="Cashflow"),
+                           act(id="d1", category="dividend", activityType="Dividend", rawType="DIVIDEND", quantity=100, unitPrice=0.05, netCashAmount=5.0, transactionDate="2026-06-15", symbol="QNC.TO", currency="CAD", accountType="Cashflow")],
+            "accounts": [], "balances": [], "navHistory": [], "navByAccount": {}, "syncedAt": "", "tradeGroups": [], "notes": {}, "securities": [],
+        }
+        market_data = {"fx": {}, "benchmark": {},
+                       "distributions": {"QNC": [{"exDate": "2026-06-01", "payDate": "2026-06-15", "amount": 0.05, "currency": "CAD"},
+                                                 {"exDate": "2026-09-01", "payDate": "2026-09-15", "amount": 0.05, "currency": "CAD"}]},
+                       "quotes": {"QNC": {"price": 12.5, "priceChange": 0.5, "percentChange": 4.1667, "fetchedAt": "2026-09-07T14:00:00Z", "exDividendDate": "2026-09-01"}}}
+        base = model.build_base(snapshot, market_data, {}, today="2026-09-07")
+        p = base["positions"][0]
+        self.assertEqual(p["symbol"], "QNC.TO")
+        self.assertEqual(p["last"], 12.5)
+        self.assertEqual(p["priceSource"], "quote")
+        self.assertEqual(p["priceChange"], 0.5)
+        self.assertEqual(market.quote_symbols_needing_refresh(model.held_symbols(base)), [("QNC", "tmx", "QNC")], "the quote loop keeps it under the bare ticker")
+        holding = next(x for x in model.build_view(base, {})["cashflow"]["holdings"] if x["symbol"] == "QNC.TO")
+        self.assertEqual((holding["per"], holding["freq"], holding["freqVerified"]), (0.05, 4, True), "the declared record under QNC prices the QNC.TO holding")
+        self.assertEqual((holding["nextExDate"], holding["nextPayDate"]), ("2026-09-01", "2026-09-15"))
+        self.assertEqual(model.under_ticker({"QNC": 1}, "QNC.TO"), 1)
+        self.assertEqual(model.under_ticker({"QNC.TO": 2, "QNC": 1}, "QNC.TO"), 2, "an exact key wins")
+        self.assertIsNone(model.under_ticker({}, "QNC.TO"))
+
     def test_quote_sources_cover_every_held_kind(self):
         src = market.quote_source
         self.assertEqual(src({"symbol": "VEQT", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}), ("tmx", "VEQT"))

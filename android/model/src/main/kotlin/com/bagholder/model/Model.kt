@@ -1523,7 +1523,7 @@ object Model {
             var lastPx = last?.first ?: (if (qty != 0.0) cost / (qty * mult) else 0.0)
             var lastAt = last?.second ?: ""
             var priceSource = "fill"
-            val quote = quotes[symbol]
+            val quote = bySymbol(quotes, symbol)
             val qpx = quote?.price
             if (quote != null && qpx != null && qpx != 0.0) {
                 lastPx = qpx
@@ -1690,6 +1690,14 @@ object Model {
     /** Verified payment frequency from actual payment dates (any order).
      * Only the most recent gaps count (the last three), so a fund that changes
      * its schedule is re-read after two payments at the new cadence. */
+    fun bareTicker(symbol: String): String {
+        var s = symbol.trim().uppercase()
+        for (suffix in listOf(".TO", ".V", ".CN", ".NE")) if (s.endsWith(suffix)) s = s.dropLast(suffix.length)
+        return s
+    }
+
+    fun <T> bySymbol(mapping: Map<String, T>, symbol: String): T? = mapping[symbol] ?: mapping[bareTicker(symbol)]
+
     fun paymentsPerYear(dates: List<String>): Int? {
         val days = dates.map { it.take(10) }.filter { it.isNotEmpty() }.toSet().sorted()
         if (days.size < 2) return null

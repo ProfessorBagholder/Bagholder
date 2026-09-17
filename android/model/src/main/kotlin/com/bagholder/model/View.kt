@@ -472,10 +472,10 @@ object ModelView {
             // Preferred: the fund's own declared record (TMX Money): the latest
             // distribution that has gone ex, and payments per year from the gaps
             // between its recent ex-dates, so a schedule change shows at once.
-            val declared = (pub[sym] ?: emptyList()).filter { it.exDate <= today }.sortedByDescending { it.exDate }
+            val declared = (Model.bySymbol(pub, sym) ?: emptyList()).filter { it.exDate <= today }.sortedByDescending { it.exDate }
             if (declared.isNotEmpty()) {
                 val per = declared[0].amount
-                val freq = Model.paymentsPerYear((pub[sym] ?: emptyList()).map { it.exDate })
+                val freq = Model.paymentsPerYear((Model.bySymbol(pub, sym) ?: emptyList()).map { it.exDate })
                 if (per != 0.0 && freq != null) return Rate(per, freq, per * freq, true, "declared")
             }
             // Otherwise this holding's own payment rows.
@@ -492,7 +492,7 @@ object ModelView {
          * to be paid, whether or not it has gone ex, else the last known one. */
         fun distributionDates(sym: String): List<Any> {
             fun payOf(d: Distribution): String { val p = d.payDate.take(10); return if (p.isEmpty()) d.exDate else p }
-            val recs2 = (pub[sym] ?: emptyList()).sortedWith(compareBy({ payOf(it) }, { it.exDate }))
+            val recs2 = (Model.bySymbol(pub, sym) ?: emptyList()).sortedWith(compareBy({ payOf(it) }, { it.exDate }))
             val unpaid = recs2.filter { payOf(it) >= today }
             val pick = unpaid.firstOrNull() ?: recs2.lastOrNull()
             val ex: String
@@ -501,7 +501,7 @@ object ModelView {
                 ex = pick.exDate
                 pay = pick.payDate.take(10)
             } else {
-                ex = (quotes[sym]?.exDividendDate ?: "").take(10)
+                ex = (Model.bySymbol(quotes, sym)?.exDividendDate ?: "").take(10)
                 val paid = forYoc.filter { it.symbol == sym }.map { it.date }.sorted()
                 pay = paid.lastOrNull() ?: ""
             }
@@ -509,7 +509,7 @@ object ModelView {
         }
 
         fun lastPrice(p: Position): Pair<Double, String> {
-            val px = quotes[p.symbol]?.price
+            val px = Model.bySymbol(quotes, p.symbol)?.price
             if (px != null && px > 0) return Pair(px, "close")
             return Pair(p.last, "fill")
         }

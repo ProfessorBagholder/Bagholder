@@ -1,0 +1,310 @@
+{
+  "expect": {
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "bySymbol": [],
+    "cashflowCount": 1,
+    "cashflowHoldings": [
+      {
+        "all": 5.0,
+        "annual": 20.0,
+        "exPast": true,
+        "freq": 4,
+        "freqVerified": true,
+        "nextExDate": "2026-09-01",
+        "nextPayDate": "2026-09-15",
+        "payPast": false,
+        "per": 0.05,
+        "qty": 100.0,
+        "symbol": "QNC.TO",
+        "ttm": 5.0,
+        "yoc": 0.02,
+        "ytd": 5.0
+      }
+    ],
+    "cashflowMonths": [
+      {
+        "count": 1,
+        "key": "2026-06",
+        "label": "Jun '26",
+        "value": 5.0
+      },
+      {
+        "count": 0,
+        "key": "2026-07",
+        "label": "Jul '26",
+        "value": 0.0
+      },
+      {
+        "count": 0,
+        "key": "2026-08",
+        "label": "Aug '26",
+        "value": 0.0
+      },
+      {
+        "count": 0,
+        "key": "2026-09",
+        "label": "Sep '26",
+        "value": 0.0
+      }
+    ],
+    "cashflowSkipped": [],
+    "cashflowTiles": [
+      {
+        "count": 0,
+        "label": "2024",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2025",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 1,
+        "label": "2026 YTD",
+        "perMonth": 5.0,
+        "total": 5.0
+      },
+      {
+        "count": 1,
+        "label": "All time",
+        "perMonth": 5.0,
+        "total": 5.0
+      },
+      {
+        "count": 1,
+        "label": "Last 12 months",
+        "perMonth": 5.0,
+        "total": 5.0
+      },
+      {
+        "book": 1000.0,
+        "earned": 5.0,
+        "label": "Yield on cost",
+        "projected": 1.666667,
+        "yield": 0.02
+      }
+    ],
+    "cashflowTotal": 5.0,
+    "equity": {
+      "annualized": {
+        "count": 0,
+        "first": "",
+        "last": "",
+        "rate": null,
+        "years": 0.0
+      },
+      "drawdown": {
+        "abs": null,
+        "at": "",
+        "pct": null,
+        "peakAt": ""
+      },
+      "label": "All accounts",
+      "series": []
+    },
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0
+        }
+      ],
+      "graded": 0,
+      "ungraded": 0
+    },
+    "kpi": {
+      "avgHold": null,
+      "avgLoss": 0.0,
+      "avgWin": 0.0,
+      "breakeven": 0,
+      "count": 0,
+      "expectancy": null,
+      "grossLoss": 0,
+      "grossWin": 0,
+      "losses": 0,
+      "profitFactor": 0.0,
+      "realized": 0,
+      "winRate": null,
+      "wins": 0
+    },
+    "monthly": [],
+    "options": {
+      "accounts": [
+        "Cashflow"
+      ],
+      "exchanges": [],
+      "kinds": [
+        "Shares"
+      ],
+      "symbols": [
+        "QNC.TO"
+      ],
+      "tags": [],
+      "years": []
+    },
+    "portfolio": {
+      "accountCount": 1,
+      "allocation": [
+        {
+          "account": "Cashflow",
+          "id": "rt:b1",
+          "share": 1.0,
+          "symbol": "QNC.TO",
+          "value": 1250.0
+        }
+      ],
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "cash": 0,
+      "cashPct": null,
+      "costBasis": 1000.0,
+      "dayChange": 50.0,
+      "dayChangePct": 0.041667,
+      "hasMargin": false,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": 0.0,
+      "marketValue": 1250.0,
+      "nav": null,
+      "navAccounts": 0,
+      "positionCount": 1,
+      "unrealized": 250.0,
+      "unrealizedPct": 0.25
+    },
+    "positions": [
+      {
+        "account": "Cashflow",
+        "alloc": 1.0,
+        "avg": 10.0,
+        "cost": 1000.0,
+        "currency": "CAD",
+        "dayChange": 50.0,
+        "exchange": "",
+        "fills": [
+          "BUY"
+        ],
+        "grade": "",
+        "held": 245,
+        "id": "rt:b1",
+        "kind": "Shares",
+        "qty": 100.0,
+        "short": false,
+        "symbol": "QNC.TO"
+      }
+    ],
+    "positionsSummary": {
+      "book": 1000.0,
+      "count": 1,
+      "mv": 1250.0,
+      "unreal": 250.0
+    },
+    "queue": [],
+    "trades": [],
+    "years": []
+  },
+  "filters": {},
+  "journal": {},
+  "market": {
+    "benchmark": {},
+    "distributions": {
+      "QNC": [
+        {
+          "amount": 0.05,
+          "currency": "CAD",
+          "exDate": "2026-06-01",
+          "payDate": "2026-06-15"
+        },
+        {
+          "amount": 0.05,
+          "currency": "CAD",
+          "exDate": "2026-09-01",
+          "payDate": "2026-09-15"
+        }
+      ]
+    },
+    "fx": {},
+    "quotes": {
+      "QNC": {
+        "exDividendDate": "2026-09-01",
+        "fetchedAt": "2026-09-07T14:00:00Z",
+        "percentChange": 4.1667,
+        "price": 12.5,
+        "priceChange": 0.5
+      }
+    }
+  },
+  "snapshot": {
+    "accounts": [],
+    "activities": [
+      {
+        "accountId": "acct-1",
+        "accountType": "Cashflow",
+        "activitySubType": "BUY",
+        "activityType": "Trade",
+        "category": "trade",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "b1",
+        "name": "LUNR",
+        "netCashAmount": -1000.0,
+        "occurredAt": "2026-01-05T15:00:00+00:00",
+        "quantity": 100,
+        "rawType": "DIY_BUY",
+        "securityId": "",
+        "symbol": "QNC.TO",
+        "transactionDate": "2026-01-05",
+        "unitPrice": 10.0
+      },
+      {
+        "accountId": "acct-1",
+        "accountType": "Cashflow",
+        "activitySubType": "",
+        "activityType": "Dividend",
+        "category": "dividend",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "d1",
+        "name": "LUNR",
+        "netCashAmount": 5.0,
+        "occurredAt": "2026-06-15T15:00:00+00:00",
+        "quantity": 100,
+        "rawType": "DIVIDEND",
+        "securityId": "",
+        "symbol": "QNC.TO",
+        "transactionDate": "2026-06-15",
+        "unitPrice": 0.05
+      }
+    ],
+    "balances": [],
+    "margin": [],
+    "navByAccount": {},
+    "navHistory": [],
+    "notes": {},
+    "securities": [],
+    "syncedAt": "",
+    "tradeGroups": []
+  },
+  "today": "2026-09-07"
+}
