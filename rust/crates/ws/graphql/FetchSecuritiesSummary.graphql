@@ -1,0 +1,26 @@
+query FetchSecuritiesSummary($ids: [ID!]!) {
+  securities(ids: $ids) {
+    id
+    buyable
+    sellable
+    wsTradeEligible
+    securityType
+    currency
+    status
+    stock { name symbol primaryExchange primaryMic }
+    optionDetails { multiplier optionType strikePrice expiryDate underlyingSecurity { id } }
+    quoteV2(currency: null) {
+      __typename
+      securityId
+      ask
+      bid
+      currency
+      price
+      sessionPrice
+      quotedAsOf
+      previousBaseline
+      ... on EquityQuote { marketStatus askSize bidSize close high last lastSize low open mid referenceClose }
+      ... on OptionQuote { marketStatus askSize bidSize close high last lastSize low open mid underlyingSpot }
+    }
+  }
+}

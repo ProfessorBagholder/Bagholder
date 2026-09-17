@@ -27,6 +27,9 @@ __MACOSX/
 # Python
 __pycache__/
 *.pyc
+
+# Rust build output
+rust/target/
 .claude/
 
 # the compose data folder: the database and the login

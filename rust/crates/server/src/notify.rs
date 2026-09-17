@@ -1,0 +1,883 @@
+//! Notifications: what Bagholder tells the person about while they are not
+//! looking.
+//!
+//! Every event starts here, since the server is what keeps watching while the
+//! page sits in a background tab or is closed. Each becomes one row, keyed so
+//! the same event is never told twice. Where the computer has a desktop, the
+//! server posts the row as the system's own notification under Bagholder's
+//! name and icon: on a Mac through a small applet it builds for itself in the
+//! home folder, on Windows through a toast registered under Bagholder's name,
+//! on Linux through the desktop's notification service. Where it has none, the
+//! page shows the row through the browser's Notification API. Every open page
+//! keeps the history, fed by a stream of every row as it is made.
+
+use rusqlite::{Connection, Result};
+use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::Sender;
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
+
+use crate::app::{app, log, now_iso};
+
+pub const KINDS: [&str; 6] = ["fills", "problems", "connection", "updates", "releases", "disclosures"];
+pub const RELEASE_SCOPES: [&str; 3] = ["releasesHeld", "releasesWatched", "releasesAll"];
+pub const DISCLOSURE_SCOPES: [&str; 3] = ["disclosuresHeld", "disclosuresWatched", "disclosuresAll"];
+pub const SETTINGS_KEY: &str = "notify_settings";
+/// A comment on the stream this often keeps the connection through proxies
+/// and sleeps.
+pub const HEARTBEAT: Duration = Duration::from_secs(15);
+/// "browser": never post from this process; the page shows them.
+pub const MODE_ENV: &str = "BAGHOLDER_NOTIFY";
+pub const APP_NAME: &str = "Bagholder";
+pub const MAC_BUNDLE_ID: &str = "com.bagholder.notifier";
+pub const WATERMARK: &str = "notify_seen:";
+
+pub fn setting_keys() -> Vec<&'static str> {
+    let mut out = vec!["fills", "problems", "connection", "updates"];
+    out.extend(RELEASE_SCOPES);
+    out.extend(DISCLOSURE_SCOPES);
+    out
+}
+
+fn url() -> String {
+    format!("http://127.0.0.1:{}/", *app().port.lock().unwrap())
+}
+
+fn icon() -> PathBuf {
+    app().root.join("favicon.png")
+}
+
+/// Every kind off until it is turned on from the menu.
+pub fn settings(conn: &Connection) -> Result<Map<String, Value>> {
+    let raw = bagholder_store::tables::get_meta(conn, SETTINGS_KEY, "")?;
+    let parsed: Value = serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap_or_else(|_| json!({}));
+    let m = parsed.as_object().cloned().unwrap_or_default();
+    Ok(setting_keys().into_iter().map(|k| (k.to_string(), json!(crate::app::truthy(m.get(k))))).collect())
+}
+
+fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Vec<String> {
+    let on = settings(conn).unwrap_or_default();
+    keys.iter().filter(|k| on.get(**k).and_then(|v| v.as_bool()).unwrap_or(false)).map(|k| k[prefix.len()..].to_lowercase()).collect()
+}
+
+pub fn disclosure_scopes(conn: &Connection) -> Vec<String> {
+    scopes(conn, &DISCLOSURE_SCOPES, "disclosures")
+}
+
+pub fn release_scopes(conn: &Connection) -> Vec<String> {
+    scopes(conn, &RELEASE_SCOPES, "releases")
+}
+
+pub fn kind_on(conn: &Connection, kind: &str) -> bool {
+    match kind {
+        "disclosures" => !disclosure_scopes(conn).is_empty(),
+        "releases" => !release_scopes(conn).is_empty(),
+        k => settings(conn).ok().and_then(|m| m.get(k).and_then(|v| v.as_bool())).unwrap_or(false),
+    }
+}
+
+/// Unknown keys and non-booleans are ignored.
+pub fn set_settings(conn: &Connection, patch: &Value) -> Result<Map<String, Value>> {
+    let mut cur = settings(conn)?;
+    if let Some(p) = patch.as_object() {
+        for (k, v) in p {
+            if setting_keys().contains(&k.as_str()) {
+                if let Value::Bool(b) = v {
+                    cur.insert(k.clone(), json!(b));
+                }
+            }
+        }
+    }
+    bagholder_store::tables::set_meta(conn, SETTINGS_KEY, &bagholder_store::tables::json_text(&Value::Object(cur.clone())))?;
+    Ok(cur)
+}
+
+/// The kinds, the native channel, and the unread count.
+pub fn status(conn: &Connection) -> Result<Value> {
+    let mut out = settings(conn)?;
+    out.insert("native".into(), json!(native_channel()));
+    out.insert("unread".into(), json!(bagholder_store::feeds::unread_notifications(conn)?));
+    Ok(Value::Object(out))
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
+}
+
+pub fn native_channel() -> String {
+    #[cfg(test)]
+    if let Some(c) = test_hooks::CHANNEL.lock().unwrap().clone() {
+        return c;
+    }
+    let mode = std::env::var(MODE_ENV).unwrap_or_default();
+    let display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
+    channel_for(&mode, std::env::consts::OS, &|n| which(n).is_some(), display)
+}
+
+/// The channel a system offers: its mode, its kind, the tools it has and
+/// whether it has a desktop.
+pub(crate) fn channel_for(mode: &str, os: &str, has: &dyn Fn(&str) -> bool, display: bool) -> String {
+    let mode = mode.trim().to_lowercase();
+    if ["browser", "off", "0", "none"].contains(&mode.as_str()) {
+        return String::new();
+    }
+    if os == "macos" {
+        return if has("osascript") { "mac".into() } else { String::new() };
+    }
+    if os == "windows" {
+        return if has("powershell.exe") || has("pwsh.exe") || has("powershell") { "windows".into() } else { String::new() };
+    }
+    if has("notify-send") && display {
+        return "linux".into();
+    }
+    String::new()
+}
+
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::sync::Mutex;
+    /// A channel standing in for the system's.
+    pub static CHANNEL: Mutex<Option<String>> = Mutex::new(None);
+    /// While set, deliveries are recorded here and never reach the system.
+    pub static DELIVERED: Mutex<Option<Vec<(String, String, String)>>> = Mutex::new(None);
+    /// The heartbeat, in milliseconds, when set.
+    pub static HEARTBEAT_MS: Mutex<Option<u64>> = Mutex::new(None);
+}
+
+fn heartbeat() -> Duration {
+    #[cfg(test)]
+    if let Some(ms) = *test_hooks::HEARTBEAT_MS.lock().unwrap() {
+        return Duration::from_millis(ms);
+    }
+    HEARTBEAT
+}
+
+/// What a stream has that it has not shown before, and
+/// nothing it held when it was first met.
+///
+/// Each stream carries a mark: the newest moment it has shown and the items it
+/// showed at that moment. A stream met for the first time shows nothing and
+/// its mark is set from it; after that it shows what is newer than the mark,
+/// and what shares the mark's moment without having been shown.
+pub fn fresh_since<A, I, S>(conn: &Connection, stream: &str, items: &[Value], at: A, ident: I, seen: S) -> Vec<Value>
+where
+    A: Fn(&Value) -> String,
+    I: Fn(&Value) -> String,
+    S: Fn(&Value) -> bool,
+{
+    let key = format!("{}{}", WATERMARK, stream);
+    let raw = bagholder_store::tables::get_meta(conn, &key, "").unwrap_or_default();
+    let (mark, shown_raw) = match raw.split_once('|') { Some((a, b)) => (a.to_string(), b.to_string()), None => (raw.clone(), String::new()) };
+    let shown: Vec<String> = shown_raw.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+    let stamped: Vec<(String, String, &Value)> = items.iter().map(|i| (at(i), ident(i), i)).collect();
+    let newest = stamped.iter().map(|(w, _, _)| w.clone()).max().unwrap_or_default();
+    let remember = |top: &str| {
+        let mut at_top: Vec<String> = stamped.iter().filter(|(w, _, _)| w == top).map(|(_, i, _)| i.clone()).collect();
+        if top == mark {
+            at_top.extend(shown.iter().cloned());
+        }
+        at_top.sort();
+        at_top.dedup();
+        let _ = bagholder_store::tables::set_meta(conn, &key, &format!("{}|{}", top, at_top.join(",")));
+    };
+    if raw.is_empty() {
+        if !newest.is_empty() {
+            remember(&newest);
+        }
+        return vec![];
+    }
+    let out: Vec<Value> = stamped
+        .iter()
+        .filter(|(w, i, v)| (*w > mark || (*w == mark && !shown.contains(i))) && !seen(v))
+        .map(|(_, _, v)| (*v).clone())
+        .collect();
+    if !out.is_empty() || newest > mark {
+        remember(if newest > mark { &newest } else { &mark });
+    }
+    out
+}
+
+/// The id a stream item is known by when no other is given.
+pub fn default_ident(i: &Value) -> String {
+    match i {
+        Value::Object(_) => crate::app::f(i, "id"),
+        other => crate::app::s(Some(other)),
+    }
+}
+
+fn wake() -> &'static (Mutex<u64>, Condvar) {
+    static W: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
+    W.get_or_init(|| (Mutex::new(0), Condvar::new()))
+}
+
+/// One notification, if its kind is on and this key has not
+/// been told before.
+pub fn emit(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
+    if !KINDS.contains(&kind) || !kind_on(conn, kind) {
+        return None;
+    }
+    post(conn, kind, key, title, body, extra)
+}
+
+pub fn test_notification(conn: &Connection) -> Option<Value> {
+    let stamp = {
+        let now = crate::app::now_unix();
+        let micros = ((now.fract()) * 1_000_000.0) as i64;
+        format!("{}{:06}", now_iso().replace(['-', ':', 'T', 'Z'], ""), micros)
+    };
+    post(conn, "test", &format!("test:{}", stamp), APP_NAME, "Notifications reach you here.", None)
+}
+
+fn post(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
+    let channel = native_channel();
+    // posted from here, the row is the server's own to show: seen from the start
+    let row = bagholder_store::feeds::add_notification(conn, kind, key, title, body, extra.as_ref(), !channel.is_empty(), &now_iso()).ok()??;
+    if !channel.is_empty() {
+        enqueue(crate::app::f(&row, "title"), crate::app::f(&row, "body"), channel);
+    }
+    let (m, c) = wake();
+    *m.lock().unwrap() += 1;
+    c.notify_all();
+    Some(row)
+}
+
+fn enqueue(title: String, body: String, chan: String) {
+    static WORKER: OnceLock<Mutex<Sender<(String, String, String)>>> = OnceLock::new();
+    let tx = WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(String, String, String)>();
+        crate::app::spawn("bagholder-notify", move || {
+            for (title, body, ch) in rx {
+                if !deliver(&ch, &title, &body) {
+                    log(&format!("bagholder notify: {} not shown ({})", title, ch));
+                }
+            }
+        });
+        Mutex::new(tx)
+    });
+    let _ = tx.lock().unwrap().send((title, body, chan));
+}
+
+/// Post one notification through the system.
+pub fn deliver(channel: &str, title: &str, body: &str) -> bool {
+    #[cfg(test)]
+    {
+        if let Some(v) = test_hooks::DELIVERED.lock().unwrap().as_mut() {
+            v.push((channel.to_string(), title.to_string(), body.to_string()));
+            return true;
+        }
+        if !channel.is_empty() {
+            panic!("a test reached the system's notifications");
+        }
+    }
+    match channel {
+        "mac" => mac_deliver(title, body),
+        "windows" => windows_deliver(title, body),
+        "linux" => linux_deliver(title, body),
+        _ => false,
+    }
+}
+
+// --- macOS: an applet of Bagholder's own ---------------------------------------
+
+fn mac_script() -> String {
+    format!(
+        "on run\n\tset t to system attribute \"BAGHOLDER_TITLE\"\n\tif t is \"\" then\n\t\topen location \"{}\"\n\telse\n\t\tdisplay notification (system attribute \"BAGHOLDER_BODY\") with title t\n\tend if\nend run\n",
+        url()
+    )
+}
+
+pub fn mac_app_path() -> PathBuf {
+    app().home.join(format!("{}.app", APP_NAME))
+}
+
+fn mac_stamp() -> String {
+    let mut h = openssl::sha::Sha1::new();
+    h.update(mac_script().as_bytes());
+    if let Ok(b) = std::fs::read(icon()) {
+        h.update(&b);
+    }
+    h.finish().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn run(cmd: &str, args: &[&str]) -> bool {
+    Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// The applet, built once and again whenever its script, the
+/// app's address or the icon changes.
+pub fn mac_app() -> Option<PathBuf> {
+    let appdir = mac_app_path();
+    let stamp_file = appdir.join("Contents/Resources/bagholder.stamp");
+    let want = mac_stamp();
+    if appdir.join("Contents/MacOS/applet").exists() && std::fs::read_to_string(&stamp_file).ok().as_deref() == Some(want.as_str()) {
+        return Some(appdir);
+    }
+    match mac_build(&appdir, &want) {
+        Ok(p) => p,
+        Err(e) => {
+            log(&format!("bagholder notify: the notifier app could not be built: {}", e));
+            None
+        }
+    }
+}
+
+fn mac_build(appdir: &Path, stamp: &str) -> std::io::Result<Option<PathBuf>> {
+    if which("osacompile").is_none() {
+        return Ok(None);
+    }
+    let work = std::env::temp_dir().join(format!("bagholder-notifier-{}", crate::app::uuid4()));
+    std::fs::create_dir_all(&work)?;
+    let result = (|| -> std::io::Result<Option<PathBuf>> {
+        let script = work.join("notifier.applescript");
+        std::fs::write(&script, mac_script())?;
+        let built = work.join(format!("{}.app", APP_NAME));
+        let ws = |p: &Path| p.to_string_lossy().into_owned();
+        if !run("osacompile", &["-o", &ws(&built), &ws(&script)]) {
+            return Err(std::io::Error::other("osacompile failed"));
+        }
+        let plist = built.join("Contents/Info.plist");
+        if !run("plutil", &["-replace", "CFBundleIdentifier", "-string", MAC_BUNDLE_ID, &ws(&plist)])
+            || !run("plutil", &["-replace", "CFBundleDisplayName", "-string", APP_NAME, &ws(&plist)])
+        {
+            return Err(std::io::Error::other("plutil failed"));
+        }
+        if let Some(icns) = mac_icon(&work) {
+            let res = built.join("Contents/Resources");
+            std::fs::copy(&icns, res.join("applet.icns"))?;
+            let car = res.join("Assets.car");
+            if car.exists() {
+                std::fs::remove_file(car)?;
+            }
+            run("plutil", &["-remove", "CFBundleIconName", &ws(&plist)]);
+        }
+        std::fs::write(built.join("Contents/Resources/bagholder.stamp"), stamp)?;
+        if which("codesign").is_some() {
+            // sealed last, with the stamp inside the seal
+            run("codesign", &["--force", "--sign", "-", &ws(&built)]);
+        }
+        if appdir.exists() {
+            std::fs::remove_dir_all(appdir)?;
+        }
+        if let Some(parent) = appdir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&built, appdir)?;
+        Ok(Some(appdir.to_path_buf()))
+    })();
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+fn mac_icon(work: &Path) -> Option<PathBuf> {
+    let src = icon();
+    if which("sips").is_none() || which("iconutil").is_none() || !src.exists() {
+        return None;
+    }
+    let iconset = work.join("icon.iconset");
+    std::fs::create_dir_all(&iconset).ok()?;
+    let sizes: [(u32, &[&str]); 6] = [
+        (16, &["icon_16x16.png"]),
+        (32, &["icon_16x16@2x.png", "icon_32x32.png"]),
+        (64, &["icon_32x32@2x.png"]),
+        (128, &["icon_128x128.png"]),
+        (256, &["icon_128x128@2x.png", "icon_256x256.png"]),
+        (512, &["icon_256x256@2x.png", "icon_512x512.png"]),
+    ];
+    for (size, names) in sizes {
+        let first = iconset.join(names[0]);
+        let sz = size.to_string();
+        if !run("sips", &["-z", &sz, &sz, &src.to_string_lossy(), "--out", &first.to_string_lossy()]) {
+            return None;
+        }
+        for other in &names[1..] {
+            std::fs::copy(&first, iconset.join(other)).ok()?;
+        }
+    }
+    let icns = work.join("icon.icns");
+    if !run("iconutil", &["-c", "icns", &iconset.to_string_lossy(), "-o", &icns.to_string_lossy()]) {
+        return None;
+    }
+    if icns.exists() { Some(icns) } else { None }
+}
+
+fn mac_deliver(title: &str, body: &str) -> bool {
+    if let Some(appdir) = mac_app() {
+        let out = mac_open_command(&appdir, title, body).output();
+        match out {
+            Ok(o) if o.status.success() => return true,
+            Ok(o) => log(&format!("bagholder notify: the notifier app refused: {}", String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => log(&format!("bagholder notify: the notifier app refused: {}", e)),
+        }
+    }
+    // without the app: the system's plain notification, under Script Editor's name
+    mac_plain_command(title, body)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn mac_open_command(appdir: &Path, title: &str, body: &str) -> Command {
+    let mut c = Command::new("open");
+    c.args(["-n", "-W", "--env", &format!("BAGHOLDER_TITLE={}", title), "--env", &format!("BAGHOLDER_BODY={}", body)]).arg(appdir);
+    c
+}
+
+fn mac_plain_command(title: &str, body: &str) -> Command {
+    let mut c = Command::new("osascript");
+    c.args(["-e", "display notification (system attribute \"BAGHOLDER_BODY\") with title (system attribute \"BAGHOLDER_TITLE\")"])
+        .env("BAGHOLDER_TITLE", title)
+        .env("BAGHOLDER_BODY", body);
+    c
+}
+
+// --- Windows: a toast under an app id registered as Bagholder --------------------
+
+const WINDOWS_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml('<toast activationType="protocol" launch="__URL__"><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
+$t = $xml.GetElementsByTagName('text')
+$t.Item(0).AppendChild($xml.CreateTextNode($env:BAGHOLDER_TITLE)) | Out-Null
+$t.Item(1).AppendChild($xml.CreateTextNode($env:BAGHOLDER_BODY)) | Out-Null
+$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('__APP__').Show($toast)
+"#;
+
+pub fn windows_script() -> String {
+    WINDOWS_SCRIPT.replace("__URL__", &url()).replace("__APP__", APP_NAME)
+}
+
+fn windows_deliver(title: &str, body: &str) -> bool {
+    // the app id a toast is shown under, with Bagholder's name and icon, in the
+    // person's own registry hive
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        let key = format!("HKCU\\Software\\Classes\\AppUserModelId\\{}", APP_NAME);
+        run("reg", &["add", &key, "/v", "DisplayName", "/t", "REG_SZ", "/d", APP_NAME, "/f"]);
+        if icon().exists() {
+            run("reg", &["add", &key, "/v", "IconUri", "/t", "REG_SZ", "/d", &icon().to_string_lossy(), "/f"]);
+        }
+    });
+    let shell = if which("powershell.exe").is_some() || which("powershell").is_some() { "powershell" } else { "pwsh" };
+    windows_command(shell, title, body)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn windows_command(shell: &str, title: &str, body: &str) -> Command {
+    let mut c = Command::new(shell);
+    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &windows_script()])
+        .env("BAGHOLDER_TITLE", title)
+        .env("BAGHOLDER_BODY", body);
+    c
+}
+
+// --- Linux ------------------------------------------------------------------------
+
+fn linux_deliver(title: &str, body: &str) -> bool {
+    linux_command(title, body).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+fn linux_command(title: &str, body: &str) -> Command {
+    let mut cmd = Command::new("notify-send");
+    cmd.arg(format!("--app-name={}", APP_NAME));
+    if icon().exists() {
+        cmd.arg(format!("--icon={}", icon().to_string_lossy()));
+    }
+    cmd.args([title, body]);
+    cmd
+}
+
+// --- the page's channel -------------------------------------------------------------
+
+/// Every row made after `after` (or after the stream opens),
+/// each once, with a comment between them every heartbeat. `write` answers
+/// false when the reader has gone.
+pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
+    let mut last = match after {
+        Some(a) => a,
+        None => app().open().ok().and_then(|c| bagholder_store::feeds::latest_notification_id(&c).ok()).unwrap_or(0),
+    };
+    if !write(": bagholder\n\n") {
+        return;
+    }
+    while !app().stopping() {
+        let rows = app().open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
+        if rows.is_empty() {
+            let (m, c) = wake();
+            let g = m.lock().unwrap();
+            let _ = c.wait_timeout(g, heartbeat());
+            let rows = app().open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
+            if rows.is_empty() {
+                if !write(": ping\n\n") {
+                    return;
+                }
+                continue;
+            }
+            for r in rows {
+                let id = r["id"].as_i64().unwrap_or(0);
+                last = last.max(id);
+                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
+                    return;
+                }
+            }
+            continue;
+        }
+        for r in rows {
+            let id = r["id"].as_i64().unwrap_or(0);
+            last = last.max(id);
+            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::app::f;
+    use bagholder_store::feeds as st;
+    use std::ffi::OsStr;
+    use std::sync::MutexGuard;
+
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// One store for the whole test binary; each test starts it empty, with
+    /// every kind off, nothing posted on this machine.
+    fn setup() -> (MutexGuard<'static, ()>, Connection) {
+        let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(MODE_ENV, "browser");
+        let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        crate::app::init(home, root, "127.0.0.1".into());
+        let conn = app().open().unwrap();
+        bagholder_store::relabel::ensure(&conn).unwrap();
+        conn.execute("DELETE FROM notifications", []).unwrap();
+        conn.execute("DELETE FROM meta WHERE key = ? OR key LIKE 'notify_seen:%'", [SETTINGS_KEY]).unwrap();
+        *test_hooks::CHANNEL.lock().unwrap() = Some(String::new());
+        *test_hooks::DELIVERED.lock().unwrap() = None;
+        *test_hooks::HEARTBEAT_MS.lock().unwrap() = None;
+        {
+            let mut s = app().state.lock().unwrap();
+            s.connected = false;
+            s.error.clear();
+            s.sync_fails = 0;
+            s.sync_first_fail.clear();
+        }
+        (g, conn)
+    }
+
+    fn set(conn: &Connection, v: Value) -> Map<String, Value> {
+        set_settings(conn, &v).unwrap()
+    }
+
+    fn off() -> Map<String, Value> {
+        setting_keys().into_iter().map(|k| (k.to_string(), json!(false))).collect()
+    }
+
+    fn list(conn: &Connection) -> Vec<Value> {
+        st::list_notifications(conn, 0, "", false, 1000, false).unwrap()
+    }
+
+    fn id(v: &Value) -> i64 {
+        v["id"].as_i64().unwrap()
+    }
+
+    fn argv(c: &Command) -> Vec<String> {
+        std::iter::once(c.get_program()).chain(c.get_args()).map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    fn env_of(c: &Command, k: &str) -> String {
+        c.get_envs().find(|(n, _)| *n == OsStr::new(k)).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    #[test]
+    fn test_every_kind_is_off_until_turned_on_and_the_settings_round_trip() {
+        let (_g, conn) = setup();
+        assert_eq!(settings(&conn).unwrap(), off());
+        let out = set(&conn, json!({"fills": true, "bogus": true, "updates": "yes"}));
+        let mut want = off();
+        want.insert("fills".into(), json!(true));
+        assert_eq!(out, want, "unknown keys and non-booleans are ignored");
+        assert_eq!(settings(&conn).unwrap(), out);
+        let mut st_want = out.clone();
+        st_want.insert("native".into(), json!(""));
+        st_want.insert("unread".into(), json!(0));
+        assert_eq!(status(&conn).unwrap(), Value::Object(st_want), "the kinds, the channel and the unread count");
+        assert_eq!(channel_for("", "macos", &|_| true, false), "mac");
+        assert_eq!(channel_for("", "windows", &|n| n == "powershell", false), "windows");
+        assert_eq!(channel_for("", "linux", &|n| n == "notify-send", true), "linux");
+        assert_eq!(channel_for("", "linux", &|_| false, false), "", "no desktop: the page is the channel");
+        assert_eq!(channel_for("browser", "macos", &|_| true, true), "", "told to stand aside");
+    }
+
+    #[test]
+    fn test_a_kind_that_is_off_is_not_told_and_a_key_is_told_once() {
+        let (_g, conn) = setup();
+        assert!(emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).is_none());
+        set(&conn, json!({"fills": true}));
+        let row = emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        assert_eq!((f(&row, "kind"), f(&row, "title"), f(&row, "body"), f(&row, "seenAt"), f(&row, "readAt")), ("fills".into(), "Order filled · QNC".into(), "Bought 5 at 1.75".into(), String::new(), String::new()));
+        assert!(emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "again", None).is_none(), "the same event is never told twice");
+        assert!(emit(&conn, "bogus", "x", "t", "b", None).is_none(), "an unknown kind is nothing");
+        assert!(emit(&conn, "disclosures", "f1", "t", "b", None).is_none(), "no set of tickers chosen");
+        set(&conn, json!({"disclosuresWatched": true}));
+        assert_eq!(disclosure_scopes(&conn), vec!["watched".to_string()]);
+        assert!(emit(&conn, "disclosures", "f1", "t", "b", None).is_some(), "any set on: the kind is told");
+        assert!(id(&test_notification(&conn).unwrap()) > id(&row), "the test goes out whatever the kinds say");
+        assert_eq!(list(&conn).len(), 3);
+    }
+
+    #[test]
+    fn test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"fills": true}));
+        let ids: Vec<i64> = (0..3).map(|i| id(&emit(&conn, "fills", &format!("k{}", i), "t", "b", None).unwrap())).collect();
+        assert_eq!(st::mark_notifications_seen(&conn, &[ids[0]], &now_iso()).unwrap(), 1);
+        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[1..]);
+        assert_eq!(st::list_notifications(&conn, ids[1], "", false, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[2..]);
+        // NOTIFICATIONS_KEPT is a constant of the store crate and cannot be lowered here: four rows stay
+        emit(&conn, "fills", "k9", "t", "b", None);
+        let newest: Vec<String> = st::list_notifications(&conn, 0, "", false, 1000, true).unwrap().iter().map(|r| f(r, "key")).collect();
+        assert_eq!(newest, ["k9", "k2", "k1", "k0"], "the history reads newest first");
+        assert_eq!(st::unread_notifications(&conn).unwrap(), 4);
+        assert_eq!(st::mark_notifications_read(&conn, Some(&[ids[2]]), &now_iso()).unwrap(), 1);
+        assert_eq!(st::unread_notifications(&conn).unwrap(), 3);
+        assert_eq!(st::mark_notifications_read(&conn, None, &now_iso()).unwrap(), 3, "no ids: every unread one");
+        assert_eq!((st::unread_notifications(&conn).unwrap(), st::mark_notifications_read(&conn, None, &now_iso()).unwrap()), (0, 0));
+        assert!(list(&conn).iter().all(|r| !f(r, "readAt").is_empty()));
+        assert_eq!(st::clear_notifications(&conn).unwrap(), 4);
+        assert_eq!((list(&conn), st::latest_notification_id(&conn).unwrap()), (vec![], 0));
+    }
+
+    /// Runs the stream on a thread; its chunks arrive on the channel, and it
+    /// ends once `stop_after` data chunks have gone out.
+    fn open_stream(after: Option<i64>, stop_after: usize) -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut rows = 0;
+            stream(after, |chunk| {
+                if chunk.starts_with("id: ") {
+                    rows += 1;
+                }
+                let _ = tx.send(chunk.to_string());
+                rows < stop_after
+            });
+        });
+        rx
+    }
+
+    fn next(rx: &std::sync::mpsc::Receiver<String>) -> String {
+        rx.recv_timeout(Duration::from_secs(5)).expect("the stream said something")
+    }
+
+    fn next_row(rx: &std::sync::mpsc::Receiver<String>) -> String {
+        loop {
+            let c = next(rx);
+            if c != ": ping\n\n" {
+                return c;
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_stream_sends_every_row_after_the_id_the_page_brings_with_pings_between() {
+        let (_g, conn) = setup();
+        *test_hooks::HEARTBEAT_MS.lock().unwrap() = Some(50);
+        set(&conn, json!({"fills": true}));
+        let old = emit(&conn, "fills", "old", "Old", "b", None).unwrap();
+        st::mark_notifications_seen(&conn, &[id(&old)], &now_iso()).unwrap();
+        let first = emit(&conn, "fills", "first", "First", "b", None).unwrap();
+        let rx = open_stream(Some(id(&old)), 2);
+        let (hello, row1, ping) = (next(&rx), next(&rx), next(&rx));
+        let second = emit(&conn, "fills", "second", "Second", "b", None).unwrap();
+        let row2 = next_row(&rx);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the reader gone: the stream ends");
+        assert_eq!(hello, ": bagholder\n\n");
+        assert!(row1.starts_with(&format!("id: {}\ndata: ", id(&first))) && row1.contains("\"title\": \"First\""), "{}", row1);
+        assert_eq!(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection");
+        assert!(row2.starts_with(&format!("id: {}\ndata: ", id(&second))), "{}", row2);
+
+        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
+        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
+        let rx = open_stream(None, 1);
+        assert_eq!((next(&rx), next(&rx)), (": bagholder\n\n".to_string(), ": ping\n\n".to_string()), "no id: only what is made after the stream opens");
+        let third = emit(&conn, "fills", "third", "Third", "b", None).unwrap();
+        let chunk = next_row(&rx);
+        assert!(chunk.starts_with(&format!("id: {}\n", id(&third))) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
+    }
+
+    fn order() -> Value {
+        json!({"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"})
+    }
+
+    fn with(base: &Value, patch: Value) -> Value {
+        let mut o = base.as_object().unwrap().clone();
+        o.extend(patch.as_object().unwrap().clone());
+        Value::Object(o)
+    }
+
+    fn t4(a: &str, b: &str, c: &str, d: &str) -> Option<(String, String, String, String)> {
+        Some((a.into(), b.into(), c.into(), d.into()))
+    }
+
+    #[test]
+    fn test_a_fill_read_back_is_told_by_its_role() {
+        use crate::orders::order_notice;
+        let o = order();
+        assert_eq!(order_notice(&o, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), t4("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"));
+        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
+        assert_eq!(order_notice(&stop, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.6374})), t4("fills", "order:o2:filled", "Stopped out · QNC", "Sold 5 at 1.64 · 🚀 Trading"));
+        let target = with(&o, json!({"id": "o3", "side": "SELL", "limitPrice": 1.93, "role": "target"}));
+        assert_eq!(order_notice(&target, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.93})).unwrap().2, "Target hit · QNC");
+        assert_eq!(order_notice(&with(&o, json!({"status": "filled"})), &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), None, "read back filled again: nothing new");
+        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), t4("fills", "order:o1:partial:40", "Partly filled · QNC", "40 of 100 at 64.50 · 🚀 Trading"));
+        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0, "filledQty": 40.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), None, "the same partial fill again");
+    }
+
+    #[test]
+    fn test_problems_are_told_but_not_the_persons_own_cancel_nor_a_legs_expiry() {
+        use crate::orders::order_notice;
+        let o = order();
+        assert_eq!(order_notice(&o, &json!({"status": "rejected", "error": "Limit price has too many decimal places. Max allowed: 2"})),
+            t4("problems", "order:o1:rejected", "Order rejected · QNC", "Buy 5 at 1.75 limit · Limit price has too many decimal places. Max allowed: 2"));
+        assert_eq!(order_notice(&o, &json!({"status": "failed"})).unwrap().2, "Order not sent · QNC");
+        assert_eq!(order_notice(&o, &json!({"status": "expired"})), t4("problems", "order:o1:expired", "Order expired · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
+        assert_eq!(order_notice(&o, &json!({"status": "cancelled"})), t4("problems", "order:o1:cancelled", "Order cancelled · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
+        assert_eq!(order_notice(&with(&o, json!({"status": "cancelling"})), &json!({"status": "cancelled"})), None, "a cancel asked for here is not told");
+        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
+        assert_eq!(order_notice(&stop, &json!({"status": "expired"})), None, "a leg's expiry is the engine's to place again");
+        assert_eq!(order_notice(&stop, &json!({"status": "cancelled"})), None);
+        assert_eq!(order_notice(&stop, &json!({"status": "rejected", "error": "no shares"})).unwrap().3, "Sell 5 stop 1.66 · no shares");
+        // `_order_words` and `_price_words` are private to orders.rs: read through a rejection's body
+        let words = |ord: Value| order_notice(&ord, &json!({"status": "rejected", "error": "e"})).unwrap().3;
+        assert_eq!(words(with(&o, json!({"type": "MARKET"}))), "Buy 5 at market · e");
+        assert_eq!(words(with(&o, json!({"type": "STOP_LIMIT", "stopPrice": 1.6, "limitPrice": 1.55, "side": "SELL", "quantity": 2.5}))), "Sell 2.5 stop 1.60 · limit 1.55 · e");
+        let prices: Vec<String> = [json!(1.6374), json!(0.625), json!(0.54), json!(12), Value::Null]
+            .into_iter()
+            .map(|p| words(with(&o, json!({"limitPrice": p}))).trim_start_matches("Buy 5 at ").trim_end_matches(" limit · e").to_string())
+            .collect();
+        assert_eq!(prices, ["1.64", "0.625", "0.54", "12.00", "—"]);
+    }
+
+    #[test]
+    fn test_the_session_expiring_is_told_on_the_transition_and_a_failing_sync_on_the_third_time() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"connection": true}));
+        crate::session::note_session_expired();
+        assert_eq!(list(&conn), Vec::<Value>::new(), "not connected: nothing expired");
+        app().state.lock().unwrap().connected = true;
+        crate::session::note_session_expired();
+        crate::session::note_session_expired();
+        assert!(!app().state.lock().unwrap().connected);
+        for _ in 0..4 {
+            crate::session::note_sync_failed("Wealthsimple did not answer");
+        }
+        let got: Vec<(String, String)> = list(&conn).iter().map(|r| (f(r, "title"), f(r, "body"))).collect();
+        assert_eq!(got, [("Sign in needed".to_string(), "The Wealthsimple session expired. Connect again from the menu.".to_string()), ("Sync failing".to_string(), "Wealthsimple did not answer".to_string())]);
+    }
+
+    #[test]
+    fn test_posted_by_the_server_a_row_is_stored_seen_and_handed_to_the_system() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"fills": true}));
+        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
+        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
+        let row = emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && test_hooks::DELIVERED.lock().unwrap().as_ref().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_ne!(f(&row, "seenAt"), "", "the server shows it: no page shows it too");
+        assert_eq!(test_hooks::DELIVERED.lock().unwrap().clone().unwrap(), vec![("mac".to_string(), "Order filled · QNC".to_string(), "Bought 5 at 1.75".to_string())]);
+        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap(), Vec::<Value>::new(), "nothing left for a page");
+    }
+
+    #[test]
+    fn test_each_system_is_asked_in_its_own_words() {
+        let (_g, _conn) = setup();
+        *app().port.lock().unwrap() = 8799;
+        let c = mac_open_command(Path::new("/x/Bagholder.app"), "Stopped out · QNC", "Sold 5 at 1.64");
+        assert_eq!(argv(&c), ["open", "-n", "-W", "--env", "BAGHOLDER_TITLE=Stopped out · QNC", "--env", "BAGHOLDER_BODY=Sold 5 at 1.64", "/x/Bagholder.app"]);
+        assert!(mac_script().contains("open location \"http://127.0.0.1:8799/\""));
+        let c = mac_plain_command("T", "B");
+        assert_eq!((argv(&c)[0].as_str(), env_of(&c, "BAGHOLDER_TITLE").as_str(), env_of(&c, "BAGHOLDER_BODY").as_str()), ("osascript", "T", "B"), "without the applet, the system's plain notification");
+        let c = windows_command("powershell.exe", "T", "B");
+        let a = argv(&c);
+        assert_eq!((a[0].as_str(), &a[1..7], env_of(&c, "BAGHOLDER_TITLE").as_str()), ("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden"].map(String::from)[..], "T"));
+        assert!(a.last().unwrap().contains("CreateToastNotifier('Bagholder')"));
+        assert!(a.last().unwrap().contains("launch=\"http://127.0.0.1:8799/\""), "a click on the toast opens the app");
+        let a = argv(&linux_command("T", "B"));
+        assert_eq!([&a[..2], &a[a.len() - 2..]].concat(), ["notify-send", "--app-name=Bagholder", "T", "B"]);
+        assert!(a[2].starts_with("--icon="));
+        assert!(!deliver("", "T", "B"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_the_mac_applet_is_built_once_under_bagholders_name_and_icon() {
+        if !Path::new("/usr/bin/osacompile").exists() {
+            return; // the applet is built with macOS's own tools
+        }
+        let (_g, _conn) = setup();
+        *app().port.lock().unwrap() = 8799;
+        let appdir = mac_app().expect("built");
+        assert_eq!(appdir, app().home.join("Bagholder.app"));
+        let plist = Command::new("plutil").args(["-p"]).arg(appdir.join("Contents/Info.plist")).output().unwrap();
+        let plist = String::from_utf8_lossy(&plist.stdout);
+        assert!(plist.contains("\"CFBundleName\" => \"Bagholder\""), "{}", plist);
+        assert!(plist.contains("\"CFBundleIdentifier\" => \"com.bagholder.notifier\""));
+        assert!(!plist.contains("CFBundleIconName"), "the app's own icon file");
+        assert!(std::fs::metadata(appdir.join("Contents/Resources/applet.icns")).unwrap().len() > 10000, "the icon built from the favicon");
+        assert!(!appdir.join("Contents/Resources/Assets.car").exists());
+        assert!(appdir.join("Contents/Resources/Scripts").exists() && mac_script().contains("open location \"http://127.0.0.1:8799/\""));
+        let stamp = std::fs::read_to_string(appdir.join("Contents/Resources/bagholder.stamp")).unwrap();
+        let mtime = std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap();
+        assert_eq!(mac_app(), Some(appdir.clone()));
+        assert_eq!(std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap(), mtime, "already built: not built again");
+        *app().port.lock().unwrap() = 8800;
+        assert_ne!(mac_stamp(), stamp, "a new address means a new applet");
+    }
+
+    #[test]
+    fn test_a_disclosure_is_told_by_the_documents_own_title_and_the_form_code_stands_in() {
+        use crate::feeds::filings_notice;
+        let rows = [json!({"id": "sec:1", "source": "SEC", "type": "144", "subject": "Proposed sale of 40,000 shares by an officer"})];
+        assert_eq!(filings_notice("NBIS", &rows), ("New disclosure · NBIS".to_string(), "Proposed sale of 40,000 shares by an officer · SEC EDGAR".to_string()));
+        // a row without a title is read over the network for one: not exercised here
+        let many: Vec<Value> = (0..4).map(|i| json!({"id": format!("sec:{}", i), "source": "SEC", "type": "4", "subject": format!("Insider report {}", i)})).collect();
+        assert_eq!(filings_notice("NBIS", &many), ("4 new disclosures · NBIS".to_string(), "Insider report 0, Insider report 1, Insider report 2 and more · SEC EDGAR".to_string()));
+    }
+
+    #[test]
+    fn test_a_stream_met_for_the_first_time_shows_nothing_and_never_shows_its_past() {
+        let (_g, conn) = setup();
+        let at = |i: &Value| f(i, "at");
+        let fresh = |s: &str, items: &[Value]| -> Vec<String> { fresh_since(&conn, s, items, at, default_ident, |_| false).iter().map(|i| f(i, "id")).collect() };
+        let held = vec![json!({"id": "a", "at": "2026-05-01"}), json!({"id": "b", "at": "2026-06-01"})];
+        assert!(fresh("s1", &held).is_empty(), "met for the first time: nothing");
+        assert_eq!(bagholder_store::tables::get_meta(&conn, "notify_seen:s1", "").unwrap(), "2026-06-01|b");
+        assert!(fresh("s1", &held).is_empty(), "the same again: still nothing");
+        let mut later = held.clone();
+        later.push(json!({"id": "c", "at": "2026-07-01"}));
+        assert_eq!(fresh("s1", &later), ["c"], "what comes after the mark");
+        assert!(fresh("s1", &later).is_empty(), "and never again");
+        let mut both = later.clone();
+        both.push(json!({"id": "d", "at": "2026-07-01"}));
+        both.push(json!({"id": "old", "at": "2026-02-01"}));
+        assert_eq!(fresh("s1", &both), ["d"]);
+        assert!(fresh("s1", &both).is_empty());
+        assert!(fresh("s2", &held).is_empty());
+        for k in ["notify_seen:s1", "notify_seen:s2"] {
+            assert!(!bagholder_store::tables::get_meta(&conn, k, "").unwrap().is_empty());
+        }
+    }
+}

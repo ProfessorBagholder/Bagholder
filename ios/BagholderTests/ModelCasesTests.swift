@@ -2,7 +2,7 @@ import XCTest
 @testable import Bagholder
 
 /// The shared model cases in ../../tests/cases, run through the Swift model.
-/// The same files run through the Python model (tests/test_cases.py) and the
+/// The same files run through the Python model (python/tests/test_cases.py) and the
 /// Kotlin one; a rule changed in one place fails here. tests/README.md
 /// describes the format: `expect` is the view for the case's filters, floats
 /// rounded to six places.

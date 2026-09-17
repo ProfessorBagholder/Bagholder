@@ -1,0 +1,69 @@
+query FetchActivityFeedItems($first: Int, $cursor: Cursor, $condition: ActivityCondition, $orderBy: [ActivitiesOrderBy!] = OCCURRED_AT_DESC) {
+  activityFeedItems(
+    first: $first
+    after: $cursor
+    condition: $condition
+    orderBy: $orderBy
+  ) {
+    edges {
+      node {
+        ...Activity
+        __typename
+      }
+      __typename
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+      __typename
+    }
+    __typename
+  }
+}
+
+fragment Activity on ActivityFeedItem {
+  accountId
+  aftOriginatorName
+  aftTransactionCategory
+  aftTransactionType
+  amount
+  amountSign
+  assetQuantity
+  assetSymbol
+  canonicalId
+  currency
+  eTransferEmail
+  eTransferName
+  externalCanonicalId
+  identityId
+  institutionName
+  occurredAt
+  p2pHandle
+  p2pMessage
+  spendMerchant
+  securityId
+  billPayCompanyName
+  billPayPayeeNickname
+  redactedExternalAccountNumber
+  opposingAccountId
+  status
+  subType
+  type
+  strikePrice
+  contractType
+  expiryDate
+  chequeNumber
+  provisionalCreditAmount
+  primaryBlocker
+  interestRate
+  frequency
+  counterAssetSymbol
+  rewardProgram
+  counterPartyCurrency
+  counterPartyCurrencyAmount
+  counterPartyName
+  fxRate
+  fees
+  reference
+  __typename
+}

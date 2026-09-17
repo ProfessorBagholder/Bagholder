@@ -1,12 +1,12 @@
 # Mobile
 
-Decided 2026-09-08: Bagholder stays local-first on every platform. Nothing leaves the user's device, so there is no server for the apps to lean on, and each app carries the whole model. The apps are plain native, SwiftUI on iOS (`ios/`) and Jetpack Compose on Android (`android/`), in this repository. Each has its own implementation of the model, and the three implementations, with `model.py` as the reference, are held to the same answers by the shared cases in `tests/cases`, which every implementation's tests run: a rule changed in one place and not the others fails a PR before it lands. What the apps show is `SPEC.md` (§8 for the phone); how work lands is `CLAUDE.md`. This file is how the apps are built, run, seeded and tested, and what the platforms will not allow.
+Decided 2026-09-08: Bagholder stays local-first on every platform. Nothing leaves the user's device, so there is no server for the apps to lean on, and each app carries the whole model. The apps are plain native, SwiftUI on iOS (`ios/`) and Jetpack Compose on Android (`android/`), in this repository. Each has its own implementation of the model, and the implementations, with `python/model.py` as the reference and the Rust port's `rust/crates/model` beside it, are held to the same answers by the shared cases in `tests/cases`, which every implementation's tests run: a rule changed in one place and not the others fails a PR before it lands. What the apps show is `SPEC.md` (§8 for the phone); how work lands is `CLAUDE.md`. This file is how the apps are built, run, seeded and tested, and what the platforms will not allow.
 
 ## What is where
 
 - `ios/Bagholder/`: `Model.swift` + `ModelView.swift` (the model), `Screens.swift` (every screen), `Charts.swift`, `Theme.swift` (the page's tokens and the spec's formatting), `AppState.swift` (`Book`: the keychain session, the last pull, the journal, the filters, the pull, the market loop, the login web view), `Market.swift` (quotes, distribution records, index closes, daily bars), `WSPull.swift` (the Wealthsimple pull). `ios/BagholderTests/ModelCasesTests.swift` runs the shared cases.
 - `android/app/src/main/kotlin/com/bagholder/app/`: `MainActivity.kt` (every screen), `Charts.kt`, `Theme.kt`, `Journal.kt` (`Book`), `Store.kt`, `Market.kt`, `WSPull.kt`, `Queries.kt` (the GraphQL documents, generated from the Swift file). `android/model/` is the model; its test runs the shared cases.
-- The version is one number across the product: `APP_VERSION` in `bagholder.py`, `MARKETING_VERSION` in `ios/Bagholder.xcodeproj/project.pbxproj`, `versionName` in `android/app/build.gradle.kts`.
+- The version is one number across the product: `APP_VERSION` in `python/bagholder.py` and `rust/crates/server/src/app.rs`, `MARKETING_VERSION` in `ios/Bagholder.xcodeproj/project.pbxproj`, `versionName` in `android/app/build.gradle.kts`.
 
 ## Build, run, test
 

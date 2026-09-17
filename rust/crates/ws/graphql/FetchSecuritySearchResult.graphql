@@ -1,0 +1,38 @@
+query FetchSecuritySearchResult($query: String!) {
+  securitySearch(input: {query: $query}) {
+    results {
+      ...SecuritySearchResult
+      __typename
+    }
+    __typename
+  }
+}
+
+fragment SecuritySearchResult on Security {
+  id
+  buyable
+  status
+  currency
+  securityType
+  wsTradeEligible
+  stock {
+    symbol
+    name
+    primaryExchange
+    primaryMic
+    __typename
+  }
+  securityGroups {
+    id
+    name
+    __typename
+  }
+  quoteV2 {
+    ... on EquityQuote {
+      marketStatus
+      __typename
+    }
+    __typename
+  }
+  __typename
+}

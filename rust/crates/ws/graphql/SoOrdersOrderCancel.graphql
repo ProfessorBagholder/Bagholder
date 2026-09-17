@@ -1,0 +1,6 @@
+mutation SoOrdersOrderCancel($cancelOrderRequest: CancelOrderRequest!) {
+  orderServiceCancelOrder(cancelOrderRequest: $cancelOrderRequest) {
+    externalId
+    errors { code message }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": "0.2",
+  "name": "disclosures",
+  "display_name": "Regulatory disclosures",
+  "version": "1.0.0",
+  "description": "An instrument's regulatory filings from every source that covers it (SEDAR+ Canada, SEC EDGAR US), merged and tagged by source and category, handed to Claude.",
+  "author": {
+    "name": "Bagholder"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "disclosures-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/disclosures-mcp",
+      "args": []
+    }
+  },
+  "tools": [
+    {
+      "name": "disclosures_list",
+      "description": "List a company's filings from every source, merged and tagged by source and category."
+    },
+    {
+      "name": "disclosures_document",
+      "description": "Download one filing to a local file."
+    },
+    {
+      "name": "sedar_resolve_profile",
+      "description": "Find a Canadian issuer's SEDAR+ profile number."
+    }
+  ]
+}
