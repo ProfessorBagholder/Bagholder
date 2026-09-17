@@ -407,7 +407,7 @@ func (a *App) sweepFilings(now time.Time) int {
 
 func (a *App) readFear(index string) map[string]any {
 	rec := fear.Read(a.mk, index)
-	if rec != nil {
+	if len(rec) > 0 {
 		a.st.SaveGauge(index, rec, "", FearVersion)
 	}
 	return rec
@@ -441,7 +441,7 @@ func (a *App) fearPayload(index string) map[string]any {
 		return map[string]any{"ok": true, "gauge": held}
 	}
 	rec := a.readFear(which)
-	if rec == nil {
+	if len(rec) == 0 {
 		return map[string]any{"ok": false, "error": "the index did not answer"}
 	}
 	return map[string]any{"ok": true, "gauge": rec}
@@ -454,7 +454,7 @@ func (a *App) sweepFear(now time.Time) int {
 		if held != nil && held.Score != nil && !a.fearStale(held, now) {
 			continue
 		}
-		if a.readFear(which) != nil {
+		if len(a.readFear(which)) > 0 {
 			done++
 		}
 	}

@@ -372,9 +372,15 @@ func (c *Client) PostJSONList(rawURL string, payload any, headers map[string]str
 		return nil, err
 	}
 	c.NoteSource(SourceOfURL(rawURL), true, nil)
-	var out []map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	var items []any
+	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, err
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
+			out = append(out, m)
+		}
 	}
 	return out, nil
 }

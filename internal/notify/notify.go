@@ -581,9 +581,9 @@ func (n *Notifier) Stream(w io.Writer, flush func(), after *int64, alive func() 
 	}
 	flush()
 	for alive() {
+		n.mu.Lock()
 		rows := n.Store.ListNotifications(last, "", false, 0, false)
 		if len(rows) == 0 {
-			n.mu.Lock()
 			timer := time.AfterFunc(time.Duration(heartbeat*float64(time.Second)), func() {
 				n.mu.Lock()
 				n.cond.Broadcast()
@@ -598,6 +598,7 @@ func (n *Notifier) Stream(w io.Writer, flush func(), after *int64, alive func() 
 			flush()
 			continue
 		}
+		n.mu.Unlock()
 		for _, r := range rows {
 			if r.ID > last {
 				last = r.ID

@@ -666,7 +666,7 @@ func (c *Client) CAPosition(symbol, exchange string, now time.Time) (Record, str
 		return Record{}, "", "", false
 	}
 	shares := row["shares"].(float64)
-	rec := Record{AsOf: held.key, Shares: &shares, Series: []store.ShortPoint{}}
+	rec := Record{AsOf: held.key, Shares: &shares}
 	if ch, ok := row["change"].(float64); ok {
 		rec.Change = &ch
 		rec.Previous = py.Ptr(shares - ch)
