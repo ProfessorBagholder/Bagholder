@@ -4477,6 +4477,10 @@ function render() {
   // nodes holding them outlive the redraw
   const keepHeat = state.page === "markets" || state.page === "heatmap" ? document.getElementById("heatBox") : null;
   const keepTab = document.getElementById("tabInd");
+  // the sign-in window's image is the live stream itself: a new element would
+  // open a new stream and show nothing until its first frame, so the redraw
+  // puts the one already showing back in its place
+  const keepLogin = state.loginView ? document.getElementById("loginFrame") : null;
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
@@ -4485,7 +4489,8 @@ function render() {
   const alone = state.page === "heatmap";   // the heatmap on its own: no header, no tabs, no frame
   document.documentElement.classList.toggle("display-heat", alone);
   root.innerHTML = (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
-  if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
+  if (keepLogin && keepLogin.getAttribute("src")) { const fresh = document.getElementById("loginFrame"); if (fresh) fresh.replaceWith(keepLogin); }
+  if (state.loginView) loginFrameLoop();   // a first draw (or one without a stream yet) attaches the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);
