@@ -364,3 +364,67 @@ fn test_update_button_refuses_during_a_sync() {
     bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": false}).to_string()).unwrap();
     assert_eq!(update::start_update()["ok"], false, "nothing to install");
 }
+
+// ---------------------------------------------------------------------------
+// news: a searched ticker
+// ---------------------------------------------------------------------------
+
+use bagholder_market::news::{self, Ask, Clock, Net, NetError, Readers, WireAnswer};
+
+#[test]
+fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
+    // No directory carries every venue, so the venue comes from the app's own knowledge: the
+    // security records the sync brought, then TMX's resolver, which names the venue it verified
+    // by the quote. A ticker TMX cannot place is a US one.
+    let _g = guard();
+    let c = app().open().unwrap();
+    let today = bagholder_market::clock_now().0;
+    let seen = std::sync::Mutex::new((Vec::<String>::new(), None::<String>));
+    let get = |url: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
+        seen.lock().unwrap().0.push(url.to_string());
+        Ok(r#"{"data": {"rows": []}}"#.into())
+    };
+    let post = |_: &str, body: &Value, _: &[(&str, &str)]| -> Result<Value, NetError> {
+        seen.lock().unwrap().1 = Some(body["variables"]["symbol"].as_str().unwrap_or("").to_string());
+        Ok(json!({"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}))
+    };
+    let net = Net { get: &get, post: &post, pace: false };
+    let wire = |c: &Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, s, e, cc, cl);
+    let extra = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(Some(vec![])) };
+    let readers = Readers { wire: &wire, extra: &extra };
+    // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
+    bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
+    let out = crate::feeds::news_symbol_payload_with("QIMC", "", "", &readers, &|_, _, _| None);
+    assert_eq!((out["source"].as_str().unwrap(), seen.lock().unwrap().1.clone()), ("tmx", Some("QIMC:CNX".to_string())));
+    *seen.lock().unwrap() = (vec![], None);
+    // TMX cannot place it: Nasdaq, whose items name the symbols they belong to
+    bagholder_store::tables::set_meta(&c, "tmx_form:KO", &format!("none@{}", today)).unwrap();
+    let out = crate::feeds::news_symbol_payload_with("KO", "", "", &readers, &|_, _, _| None);
+    assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NASDAQ", false));
+}
+
+#[test]
+fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
+    let _g = guard();
+    let c = app().open().unwrap();
+    let now = bagholder_market::clock_now().1 as i64;
+    // every source read a moment ago: only a forced read asks them again
+    for k in news::EXTRA_SOURCES {
+        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@TSX", k), &Clock::at(now).stamp()).unwrap();
+    }
+    let read = std::sync::Mutex::new((None::<(String, String, String)>, Vec::<String>::new()));
+    let wire = |_: &Connection, s: &str, e: &str, cc: &str, _: &Clock| {
+        read.lock().unwrap().0 = Some((s.to_string(), e.to_string(), cc.to_string()));
+        ("tmx".to_string(), Some(WireAnswer::default()))
+    };
+    let extra = |_: &str, ask: &Ask| -> Result<Option<Vec<Value>>, NetError> {
+        read.lock().unwrap().1.push(ask.name.clone());
+        Ok(Some(vec![]))
+    };
+    let listing = |_: &Connection, _: &str, _: &str| Some(json!({"symbol": "SXHI", "name": "Ninepoint SpaceX HighShares ETF", "exchange": "TSX", "currency": "CAD"}));
+    let out = crate::feeds::news_symbol_payload_with("SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing);
+    assert_eq!(out["exchange"], "TSX");
+    let got = read.lock().unwrap().clone();
+    assert_eq!(got.0, Some(("SXHI".to_string(), "TSX".to_string(), "CAD".to_string())));
+    assert!(!got.1.is_empty() && got.1.iter().all(|n| n == "Ninepoint SpaceX HighShares ETF"), "every source asked, forced, under the name TMX gives");
+}

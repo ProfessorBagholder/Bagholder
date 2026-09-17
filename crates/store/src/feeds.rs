@@ -145,8 +145,9 @@ pub fn news_key(symbol: &str, exchange: &str) -> String {
     format!("{}@{}", up(symbol), up(exchange))
 }
 
-/// `replace_news`: the wire's latest items for one listing, in place of
-/// what it had.
+/// `replace_news`: a listing's latest items, in place of what it had. Each
+/// row is stored under the source it was read from (`via`: tmx, nasdaq,
+/// yahoo, sa, gnews), `source` when it names none.
 pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &str, rows: &[Value], now: &str) -> Result<()> {
     let sym = up(symbol);
     let ex = up(exchange);
@@ -160,7 +161,7 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
         conn.execute(
             "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
-                id, sym, ex, source, field_s(r, "headline"), field_s(r, "source"),
+                id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
                 field_s(r, "url"), field_s(r, "publishedAt"), now, kind,
             ],
         )?;
@@ -170,6 +171,13 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
         rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
     )?;
     Ok(())
+}
+
+/// `news_for`: a listing's stored items, newest first.
+pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id")?;
+    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], crate::snapshot::news_from_row)?;
+    rows.collect()
 }
 
 /// `news_ids`: the ids a listing's stored items carry, so a wire's new
@@ -208,7 +216,11 @@ pub fn news_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
 
 pub fn forget_news(conn: &Connection, symbol: &str, exchange: &str) -> Result<()> {
     conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
-    conn.execute("DELETE FROM meta WHERE key = ?", [format!("news_fetched:{}", news_key(symbol, exchange))])?;
+    let tail = format!(":{}", news_key(symbol, exchange));
+    conn.execute(
+        "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
+        rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
+    )?;
     Ok(())
 }
 

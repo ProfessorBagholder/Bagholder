@@ -129,7 +129,8 @@ fn home() -> PathBuf {
 }
 
 fn llamafile_path() -> PathBuf {
-    let d = home().join("models");
+    // a test never makes or fills the person's model folder
+    let d = bagholder_store::guard_home(&home()).expect("a test reached the real ~/.bagholder").join("models");
     let _ = std::fs::create_dir_all(&d);
     d.join("summarizer.llamafile")
 }

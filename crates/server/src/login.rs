@@ -849,6 +849,9 @@ pub fn cancel_login() -> Value {
 /// Open the login window, or bring forward the
 /// one the app already has up.
 pub fn start_login_browser() -> Value {
+    if let Err(e) = bagholder_store::guard_home(&app().home) {
+        return json!({"ok": false, "error": e});
+    }
     log("bagholder login: connect requested");
     if browser_alive() {
         if let Some(u) = browser_ws() {

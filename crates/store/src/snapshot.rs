@@ -74,7 +74,7 @@ fn watch_from_row(r: &Row) -> rusqlite::Result<Value> {
 
 /// `_news_from_row`: an item with no kind is a story, which is what a
 /// row stored before releases were told apart is.
-fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
+pub fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
     let kind = { let k = text(r, "kind")?; if k.is_empty() { "story".to_string() } else { k } };
     Ok(json!({
         "id": text(r, "id")?,

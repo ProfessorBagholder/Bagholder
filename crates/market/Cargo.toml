@@ -18,5 +18,10 @@ flate2 = "1"
 tz-rs = "0.7"
 # the filing sources' page patterns
 regex = "1"
+# a headline's accents taken off, so `Québec` and `Quebec` are one word
+unicode-normalization = "0.1"
 # the text of an issuer PDF where no system pdftotext is present
 pdf-extract = "0.9"
+
+[dev-dependencies]
+tempfile = "3"

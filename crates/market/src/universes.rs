@@ -166,7 +166,7 @@ pub fn parse_tile_quote(data: &Value) -> Option<Value> {
 }
 
 pub fn fetch_screener() -> Option<Vec<Value>> {
-    pace("api.nasdaq.com");
+    pace("api.nasdaq.com", 0.6);
     let text = get_text(SCREENER_URL, &nasdaq_headers()).ok()?;
     let data: Value = serde_json::from_str(&text).ok()?;
     Some(parse_screener(&data))
@@ -175,7 +175,7 @@ pub fn fetch_screener() -> Option<Vec<Value>> {
 /// The S&P/TSX 60, its constituents by index weight,
 /// each quoted for the day's change and its sector.
 pub fn fetch_canada() -> Option<Vec<Value>> {
-    pace("app-money.tmx.com");
+    pace("app-money.tmx.com", 0.6);
     let payload = json!({
         "operationName": "getIndexConstituents",
         "variables": {"symbol": CANADA_INDEX},
@@ -186,7 +186,7 @@ pub fn fetch_canada() -> Option<Vec<Value>> {
     let mut out = Vec::new();
     for c in cons {
         let symbol = field_s(&c, "symbol");
-        pace("app-money.tmx.com");
+        pace("app-money.tmx.com", 0.6);
         let q = post_json(
             crate::tmx::TMX_URL,
             &json!({

@@ -356,6 +356,7 @@ fn put_in_place(src: &Path, dest: &Path, copy: bool) -> std::io::Result<()> {
 /// the new files put in place, the marker the supervisor watches left.
 fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
     let home = &app().home;
+    bagholder_store::guard_home(home)?;
     let dir = app_dir();
     let previous = home.join("previous");
     if previous.exists() {
@@ -387,6 +388,9 @@ pub fn rollback() -> bool {
 }
 
 fn rollback_in(home: &Path, dir: &Path) -> bool {
+    if bagholder_store::guard_home(home).is_err() {
+        return false;
+    }
     let previous = home.join("previous");
     if !previous.exists() {
         return false;
@@ -479,6 +483,10 @@ fn pull(tag: &str) -> Result<(), String> {
 /// Bring this copy to `tag`, then restart. Never
 /// fails; a failure lands in the state's update error and nothing is changed.
 pub fn perform_update(tag: &str, rec: &Value) {
+    if let Err(e) = bagholder_store::guard_home(&app().home) {
+        log(&format!("bagholder update: {}", e));
+        return;
+    }
     let done = if update_mode() == "git" { pull(tag) } else { install_release(tag, rec) };
     match done {
         Ok(()) => {

@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 
 use bagholder_model::base::Base;
 
-pub const APP_VERSION: &str = "1.43.2";
+pub const APP_VERSION: &str = "1.44.0";
 /// Bumped whenever the page and the server change together.
-pub const PROTOCOL: &str = "2026-09-16.1";
+pub const PROTOCOL: &str = "2026-09-17.1";
 /// Bump when title/summary logic improves, so read rows are re-read once.
 pub const ENRICH_VERSION: i64 = 11;
 pub const REPO: &str = "ProfessorBagholder/Bagholder";
@@ -91,9 +91,8 @@ impl App {
 
     /// A connection to the store, ready.
     pub fn open(&self) -> rusqlite::Result<Connection> {
-        let conn = Connection::open(self.db_path())?;
-        conn.busy_timeout(Duration::from_secs(30))?;
-        Ok(conn)
+        // every connection passes here: a test never opens the live database
+        bagholder_store::connect(&self.home)
     }
 
     pub fn ws_home(&self) -> bagholder_ws::session::Home {

@@ -276,10 +276,12 @@ pub fn tiles_set(body: &Value) -> Value {
 // news
 // ---------------------------------------------------------------------------
 
-/// The market feed, the shares held, the watched
-/// listings.
-pub fn news_listings() -> Vec<(String, String, String)> {
-    let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string())];
+/// The market feed, the shares held, the watched listings. One listing, one
+/// read, under its bare ticker: the book's QNC.TO and the watchlist's QNC are
+/// the same wire. The name the book records for it is what Google is searched
+/// for.
+pub fn news_listings() -> Vec<news::Listing> {
+    let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string(), String::new())];
     let b = match base() { Some(b) => b, None => return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for p in &b.positions {
@@ -289,34 +291,53 @@ pub fn news_listings() -> Vec<(String, String, String)> {
         let key = (tmx_symbol(&f(p, "symbol")), f(p, "exchange").to_uppercase());
         if !key.0.is_empty() && !seen.contains(&key) {
             seen.insert(key.clone());
-            out.push((key.0, f(p, "exchange"), f(p, "currency")));
+            out.push((key.0, f(p, "exchange"), f(p, "currency"), f(p, "name")));
         }
     }
     for w in &b.watchlist {
         let key = (tmx_symbol(&f(w, "symbol")), f(w, "exchange").to_uppercase());
         if !key.0.is_empty() && !seen.contains(&key) && instruments::find(&f(w, "symbol"), &f(w, "exchange")).is_none() && key.1 != "CRYPTO" {
             seen.insert(key.clone());
-            out.push((key.0, f(w, "exchange"), f(w, "currency")));
+            out.push((key.0, f(w, "exchange"), f(w, "currency"), f(w, "name")));
         }
     }
     out
 }
 
-/// The wires for every listing older than fifteen
-/// minutes. Never fails.
+/// Bare symbols the running news pass has still to read (`*` the market feed).
+fn news_pass() -> &'static Mutex<HashSet<String>> {
+    static LEFT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    LEFT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub fn news_reading() -> Vec<String> {
+    let mut left: Vec<String> = news_pass().lock().unwrap().iter().cloned().collect();
+    left.sort();
+    left
+}
+
+/// Every source for every listing with one due. Never fails. Each listing's
+/// items reach the model as it lands, and the listings still to read are in
+/// the status, so the News card says a read is under way instead of `No
+/// news.` while a pass runs.
 pub fn refresh_news() -> usize {
     app().single_flight("news", 0, || {
         let listings = news_listings();
-        let c = match conn() { Some(c) => c, None => return 0 };
-        let (today_s, now, stamp) = bagholder_market::clock_now();
-        let mut on_new = |sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(&c, sym, ex, rows, ids);
-        match news::refresh(&c, &listings, &today_s, now, &stamp, Some(&mut on_new)) {
-            Ok(n) => {
-                if n > 0 {
-                    app().invalidate();
-                }
-                n
-            }
+        let (today_s, now, _) = bagholder_market::clock_now();
+        let clock = news::Clock { today: today_s, now: now as i64 };
+        let key = |l: &news::Listing| { let t = tmx_symbol(&l.0); (if t.is_empty() { l.0.clone() } else { t }).to_uppercase() };
+        let start = |due: &[news::Listing]| {
+            *news_pass().lock().unwrap() = due.iter().map(key).collect();
+        };
+        let done = |l: &news::Listing, _answered: bool| {
+            news_pass().lock().unwrap().remove(&key(l));
+            app().invalidate();
+        };
+        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(c, sym, ex, rows, ids);
+        let got = news::refresh(&conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
+        news_pass().lock().unwrap().clear();
+        match got {
+            Ok(n) => n,
             Err(e) => {
                 log(&format!("bagholder news: refresh failed: {}", e));
                 0
@@ -325,7 +346,7 @@ pub fn refresh_news() -> usize {
     })
 }
 
-/// At start, then every five minutes.
+/// At start, then every five minutes, each listing read once per fifteen.
 pub fn news_loop() {
     while !app().stopping() {
         refresh_news();
@@ -335,40 +356,72 @@ pub fn news_loop() {
     }
 }
 
-/// One listing's wire read now, for the News
-/// card's search.
+/// One listing's news read now from every source, for the News card's search:
+/// a ticker neither held nor watched has no rows until asked for. The rows are
+/// stored under the listing (tagged as neither held nor watched, so they show
+/// only under its chip) and the model reloads.
 pub fn news_symbol_payload(symbol: &str, exchange: &str, currency: &str) -> Value {
+    news_symbol_payload_with(symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today))
+}
+
+pub fn news_symbol_payload_with(
+    symbol: &str,
+    exchange: &str,
+    currency: &str,
+    readers: &news::Readers,
+    listing_of: &dyn Fn(&Connection, &str, &str) -> Option<Value>,
+) -> Value {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
     let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "the wire did not answer"}) };
-    let (today_s, now, stamp) = bagholder_market::clock_now();
+    let (today_s, now, _) = bagholder_market::clock_now();
+    let clock = news::Clock { today: today_s.clone(), now: now as i64 };
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
+    // the name is what Google is searched for: the security record's, else the one TMX's quote gives
+    let (known, known_ex, known_ccy) = instrument_meta(&c, &sym);
+    let mut name = if known != sym { known } else { String::new() };
     if ex.is_empty() {
-        let (_, e, cc) = instrument_meta(&c, &sym);
-        ex = e;
-        if !cc.is_empty() {
-            ccy = cc;
+        // the venue from what the app already knows: the security records the
+        // sync brought, then TMX's own resolver, which names the venue it
+        // verified by the quote and so covers the venues no public directory
+        // carries (the CSE, Cboe Canada). Nothing is guessed: a ticker TMX
+        // cannot place is a US one, and Nasdaq keeps only the items that name it.
+        ex = known_ex;
+        if !known_ccy.is_empty() {
+            ccy = known_ccy;
+        }
+    }
+    let mut listing = None;
+    if ex.is_empty() || (name.is_empty() && !matches!(tmx_form(&ex, &ccy), None | Some(":US"))) {
+        listing = listing_of(&c, &sym, &today_s);
+    }
+    if let Some(l) = &listing {
+        if name.is_empty() && f(l, "name").to_uppercase() != sym {
+            name = f(l, "name");
         }
         if ex.is_empty() {
-            let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today_s);
-            if !form.is_empty() && !form.ends_with(":US") {
-                if ccy.is_empty() {
-                    ccy = "CAD".into();
-                }
-            } else {
-                ex = "NASDAQ".into();
-                ccy = "USD".into();
-            }
+            ex = f(l, "exchange");
+            ccy = f(l, "currency");
         }
     }
-    let (src, rows) = news::fetch_symbol(&c, &sym, &ex, &ccy, &today_s, now as i64);
-    let rows = match rows { Some(r) => r, None => return json!({"ok": false, "error": "the wire did not answer"}) };
-    if src.is_empty() {
-        return json!({"ok": true, "count": 0, "source": "", "exchange": ex});
+    if ex.is_empty() {
+        let form = bagholder_market::tmx::tmx_resolve(&c, &tmx_symbol(&sym), &today_s);
+        if !form.is_empty() && !form.ends_with(":US") {
+            if ccy.is_empty() {
+                ccy = "CAD".into();
+            }
+        } else {
+            ex = "NASDAQ".into();
+            ccy = "USD".into();
+        }
     }
-    let _ = sf::replace_news(&c, &sym, &ex, &src, &rows, &stamp);
+    let (src, rows) = match news::read_listing(&c, readers, &sym, &ex, &ccy, &name, true, &clock, None) {
+        Ok(got) => got,
+        Err(_) => return json!({"ok": false, "error": "the wire did not answer"}),
+    };
+    let rows = match rows { Some(r) => r, None => return json!({"ok": false, "error": "the wire did not answer"}) };
     let _ = sf::trim_news(&c, news::KEEP);
     app().invalidate();
     json!({"ok": true, "count": rows.len(), "source": src, "exchange": ex})

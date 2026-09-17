@@ -222,11 +222,21 @@ const YAHOO_SUFFIX: [(&str, &str); 6] = [
 const YAHOO_FORMS_CAD: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
 const YAHOO_FORMS_USD: [&str; 1] = [""];
 
-/// The venue's own suffix first, then the other venues
-/// of the listing's currency, so a wrong or missing venue still finds it.
+/// The venue's own suffix first, then the other venues of its market, so a
+/// wrong or missing venue still finds it. The venue names the market before
+/// the currency does: a watched listing keeps no currency, and read by
+/// currency alone a Nasdaq listing was asked for as a Toronto one, which is
+/// another security (`PLTR.TO` is Palantir's Canadian depositary receipt, not
+/// the stock) or nothing at all; a TSX listing that trades in US dollars is
+/// still a Toronto one. Only a venue the app does not name leaves the currency
+/// to decide.
 pub fn yahoo_forms(rec: &Value) -> Vec<String> {
     let root = yahoo_root(&field_s(rec, "symbol"));
-    let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
+    let ccy = match bagholder_model::venues::tmx_form(&field_s(rec, "exchange"), "") {
+        Some(":US") => "USD".to_string(),
+        Some(_) => "CAD".to_string(),
+        None => { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } }
+    };
     if root.is_empty() || root.contains(' ') {
         return vec![];
     }
