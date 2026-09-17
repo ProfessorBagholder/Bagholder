@@ -1,7 +1,6 @@
 package fear
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -38,41 +37,25 @@ var Bands = []struct {
 	Name string
 }{{25, "Extreme fear"}, {45, "Fear"}, {56, "Neutral"}, {76, "Greed"}}
 
-func num(v any) *float64 {
-	f, ok := py.NumOK(v)
-	if !ok {
-		return nil
-	}
-	return &f
-}
-
-func Band(score any) string {
-	n := num(score)
-	if n == nil {
-		return ""
-	}
+func Band(score float64) string {
 	for _, b := range Bands {
-		if *n < b.Edge {
+		if score < b.Edge {
 			return b.Name
 		}
 	}
 	return "Extreme greed"
 }
 
-func Rating(given any, score any) string {
-	text := strings.TrimSpace(py.S(given))
+func Rating(given string, score float64) string {
+	text := strings.TrimSpace(given)
 	if text == "" {
 		return Band(score)
 	}
 	return strings.ToUpper(text[:1]) + strings.ToLower(text[1:])
 }
 
-func day(ms any) string {
-	n := num(ms)
-	if n == nil {
-		return ""
-	}
-	sec := *n / 1000.0
+func day(ms float64) string {
+	sec := ms / 1000.0
 	return time.Unix(int64(sec), int64((sec-float64(int64(sec)))*1e9)).UTC().Format("2006-01-02")
 }
 
@@ -87,36 +70,70 @@ func moment(text string) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-func reading(label string, score any) map[string]any {
-	n := num(score)
-	if n == nil {
+func reading(label string, score py.JSONNum) map[string]any {
+	if !score.OK {
 		return nil
 	}
-	return map[string]any{"label": label, "score": py.Round(*n, 1), "rating": Band(*n)}
+	return map[string]any{"label": label, "score": py.Round(score.F, 1), "rating": Band(score.F)}
 }
 
-func ParseStocks(data map[string]any) map[string]any {
-	fg, _ := data["fear_and_greed"].(map[string]any)
-	score := num(fg["score"])
-	if score == nil {
+type indicator struct {
+	Score  py.JSONNum  `json:"score"`
+	Rating py.JSONText `json:"rating"`
+}
+
+type Stocks struct {
+	FearAndGreed struct {
+		Score          py.JSONNum  `json:"score"`
+		Rating         py.JSONText `json:"rating"`
+		Timestamp      py.JSONText `json:"timestamp"`
+		PreviousClose  py.JSONNum  `json:"previous_close"`
+		Previous1Week  py.JSONNum  `json:"previous_1_week"`
+		Previous1Month py.JSONNum  `json:"previous_1_month"`
+		Previous1Year  py.JSONNum  `json:"previous_1_year"`
+	} `json:"fear_and_greed"`
+	Historical struct {
+		Data []py.JSONLoose[struct {
+			X py.JSONNum `json:"x"`
+			Y py.JSONNum `json:"y"`
+		}] `json:"data"`
+	} `json:"fear_and_greed_historical"`
+	Momentum   py.JSONLoose[indicator] `json:"market_momentum_sp125"`
+	Strength   py.JSONLoose[indicator] `json:"stock_price_strength"`
+	Breadth    py.JSONLoose[indicator] `json:"stock_price_breadth"`
+	PutCall    py.JSONLoose[indicator] `json:"put_call_options"`
+	Volatility py.JSONLoose[indicator] `json:"market_volatility_vix_50"`
+	JunkBonds  py.JSONLoose[indicator] `json:"junk_bond_demand"`
+	SafeHaven  py.JSONLoose[indicator] `json:"safe_haven_demand"`
+}
+
+func (s Stocks) indicators() []indicator {
+	return []indicator{s.Momentum.V, s.Strength.V, s.Breadth.V, s.PutCall.V, s.Volatility.V, s.JunkBonds.V, s.SafeHaven.V}
+}
+
+func ParseStocks(data Stocks) map[string]any {
+	fg := data.FearAndGreed
+	if !fg.Score.OK {
 		return map[string]any{}
 	}
-	earlier := []map[string]any{reading("Previous close", fg["previous_close"]), reading("A week ago", fg["previous_1_week"]), reading("A month ago", fg["previous_1_month"]), reading("A year ago", fg["previous_1_year"])}
+	score := fg.Score.F
+	earlier := []map[string]any{reading("Previous close", fg.PreviousClose), reading("A week ago", fg.Previous1Week), reading("A month ago", fg.Previous1Month), reading("A year ago", fg.Previous1Year)}
 	parts := []map[string]any{}
-	for _, p := range Parts {
-		part, _ := data[p.Key].(map[string]any)
-		if value := num(part["score"]); value != nil {
-			parts = append(parts, map[string]any{"name": p.Name, "score": py.Round(*value, 1), "rating": Rating(part["rating"], *value)})
+	indicators := data.indicators()
+	for i, p := range Parts {
+		part := indicators[i]
+		if part.Score.OK {
+			parts = append(parts, map[string]any{"name": p.Name, "score": py.Round(part.Score.F, 1), "rating": Rating(string(part.Rating), part.Score.F)})
 		}
 	}
 	series := []map[string]any{}
-	hist, _ := data["fear_and_greed_historical"].(map[string]any)
-	points, _ := hist["data"].([]any)
-	for _, raw := range points {
-		point, _ := raw.(map[string]any)
-		d, value := day(point["x"]), num(point["y"])
-		if d != "" && value != nil {
-			series = append(series, map[string]any{"date": d, "score": py.Round(*value, 1)})
+	for _, raw := range data.Historical.Data {
+		point := raw.V
+		if !point.X.OK || !point.Y.OK {
+			continue
+		}
+		if d := day(point.X.F); d != "" {
+			series = append(series, map[string]any{"date": d, "score": py.Round(point.Y.F, 1)})
 		}
 	}
 	sort.SliceStable(series, func(i, j int) bool { return series[i]["date"].(string) < series[j]["date"].(string) })
@@ -126,21 +143,27 @@ func ParseStocks(data map[string]any) map[string]any {
 			previous = append(previous, r)
 		}
 	}
-	return map[string]any{"index": "stocks", "source": Sources["stocks"], "score": py.Round(*score, 1), "rating": Rating(fg["rating"], *score), "asOf": moment(py.S(fg["timestamp"])), "previous": previous, "parts": parts, "series": series}
+	return map[string]any{"index": "stocks", "source": Sources["stocks"], "score": py.Round(score, 1), "rating": Rating(string(fg.Rating), score), "asOf": moment(string(fg.Timestamp)), "previous": previous, "parts": parts, "series": series}
 }
 
-func ParseCrypto(data map[string]any) map[string]any {
-	items, _ := data["data"].([]any)
+type Crypto struct {
+	Data []py.JSONLoose[struct {
+		Value          py.JSONNum  `json:"value"`
+		Classification py.JSONText `json:"value_classification"`
+		Timestamp      py.JSONNum  `json:"timestamp"`
+	}] `json:"data"`
+}
+
+func ParseCrypto(data Crypto) map[string]any {
 	rows := []map[string]any{}
-	for _, raw := range items {
-		row, _ := raw.(map[string]any)
+	for _, raw := range data.Data {
+		row := raw.V
 		var d string
-		if ts := num(row["timestamp"]); ts != nil {
-			d = day(*ts * 1000)
+		if row.Timestamp.OK {
+			d = day(row.Timestamp.F * 1000)
 		}
-		value := num(row["value"])
-		if d != "" && value != nil {
-			rows = append(rows, map[string]any{"date": d, "score": py.Round(*value, 1), "rating": Rating(row["value_classification"], *value)})
+		if d != "" && row.Value.OK {
+			rows = append(rows, map[string]any{"date": d, "score": py.Round(row.Value.F, 1), "rating": Rating(string(row.Classification), row.Value.F)})
 		}
 	}
 	if len(rows) == 0 {
@@ -179,10 +202,13 @@ func Read(c *market.Client, index string) map[string]any {
 	default:
 		return map[string]any{}
 	}
-	text, err := c.GetText(url, headers)
-	var data map[string]any
-	if err == nil {
-		err = json.Unmarshal([]byte(text), &data)
+	var stocks Stocks
+	var crypto Crypto
+	var err error
+	if which == "stocks" {
+		err = c.GetJSON(url, headers, &stocks)
+	} else {
+		err = c.GetJSON(url, headers, &crypto)
 	}
 	if err != nil {
 		src := Sources[which]
@@ -193,7 +219,7 @@ func Read(c *market.Client, index string) map[string]any {
 		return map[string]any{}
 	}
 	if which == "stocks" {
-		return ParseStocks(data)
+		return ParseStocks(stocks)
 	}
-	return ParseCrypto(data)
+	return ParseCrypto(crypto)
 }

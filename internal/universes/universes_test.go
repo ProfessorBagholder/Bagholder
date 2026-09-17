@@ -18,9 +18,9 @@ const screenerJSON = `{"data": {"rows": [
 	{"symbol": "ABC", "name": "No country", "lastsale": "$2.00", "pctchange": "0.1%", "marketCap": "100.00", "sector": "Telecommunications", "country": ""}
 ]}}`
 
-func jsonMap(t *testing.T, text string) map[string]any {
+func decode[T any](t *testing.T, text string) T {
 	t.Helper()
-	var out map[string]any
+	var out T
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func symbols(rows []store.Universe) []string {
 }
 
 func TestRowsAreParsedAndSectorsFolded(t *testing.T) {
-	rows := ParseScreener(jsonMap(t, screenerJSON))
+	rows := ParseScreener(decode[Screener](t, screenerJSON))
 	type view struct {
 		Symbol        string
 		Last          *float64
@@ -69,7 +69,7 @@ func TestRowsAreParsedAndSectorsFolded(t *testing.T) {
 }
 
 func TestUSAndInternationalAreTheLargestByCap(t *testing.T) {
-	rows := ParseScreener(jsonMap(t, screenerJSON))
+	rows := ParseScreener(decode[Screener](t, screenerJSON))
 	if got := symbols(USRows(rows, 5)); !reflect.DeepEqual(got, []string{"NVDA", "JPM"}) {
 		t.Errorf("US companies with a market cap, largest first: %v", got)
 	}
@@ -82,15 +82,15 @@ func TestUSAndInternationalAreTheLargestByCap(t *testing.T) {
 }
 
 func TestConstituentsAndTileQuote(t *testing.T) {
-	cons := ParseConstituents(jsonMap(t, `{"data": {"constituents": [{"symbol": "RY", "quotedMarketValue": 398317400940, "longName": "Royal Bank of Canada", "weight": 9.823, "exchange": "TSX"}, {"weight": 1}]}}`))
+	cons := ParseConstituents(decode[Constituents](t, `{"data": {"constituents": [{"symbol": "RY", "quotedMarketValue": 398317400940, "longName": "Royal Bank of Canada", "weight": 9.823, "exchange": "TSX"}, {"weight": 1}]}}`))
 	if want := []Constituent{{Symbol: "RY", Name: "Royal Bank of Canada", Weight: 9.823, Cap: 398317400940.0, Exchange: "TSX"}}; !reflect.DeepEqual(cons, want) {
 		t.Errorf("cons = %+v, want %+v", cons, want)
 	}
-	q := ParseTileQuote(jsonMap(t, `{"data": {"getQuoteBySymbol": {"symbol": "RY", "name": "Royal Bank", "price": 180.1, "percentChange": 0.42, "sector": "Financial Services"}}}`))
+	q := ParseTileQuote(decode[Tile](t, `{"data": {"getQuoteBySymbol": {"symbol": "RY", "name": "Royal Bank", "price": 180.1, "percentChange": 0.42, "sector": "Financial Services"}}}`))
 	if want := (&TileQuote{PercentChange: py.Ptr(0.42), Sector: "Financials", Name: "Royal Bank"}); !reflect.DeepEqual(q, want) {
 		t.Errorf("q = %+v, want %+v", q, want)
 	}
-	if got := ParseTileQuote(jsonMap(t, `{"data": {"getQuoteBySymbol": null}}`)); got != nil {
+	if got := ParseTileQuote(decode[Tile](t, `{"data": {"getQuoteBySymbol": null}}`)); got != nil {
 		t.Errorf("q = %+v, want nil", got)
 	}
 }

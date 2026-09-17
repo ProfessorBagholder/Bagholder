@@ -113,6 +113,11 @@ func (c *Client) get(url string, headers map[string]string) (string, error) {
 	return c.Market.GetText(url, merged(headers))
 }
 
+func (c *Client) getJSON(url string, headers map[string]string, v any) error {
+	c.pacer.Pace(hostOf(url), PaceSec)
+	return c.Market.GetJSON(url, merged(headers), v)
+}
+
 func (c *Client) post(url string, payload any, headers map[string]string) (map[string]any, error) {
 	c.pacer.Pace(hostOf(url), PaceSec)
 	return c.Market.PostJSON(url, payload, merged(headers))
@@ -141,19 +146,22 @@ func (c *Client) tmxRecord(key string) map[string]any {
 }
 
 func (c *Client) nasdaqSummary(symbol string) (string, string) {
-	raw, err := c.get(strings.Replace(NasdaqSummaryURL, "%s", symbol, 1), map[string]string{"Accept": "application/json, text/plain, */*"})
-	if err != nil {
+	type labelled struct {
+		Value py.JSONText `json:"value"`
+	}
+	var d struct {
+		Data struct {
+			SummaryData struct {
+				Sector   py.JSONLoose[labelled] `json:"Sector"`
+				Industry py.JSONLoose[labelled] `json:"Industry"`
+			} `json:"summaryData"`
+		} `json:"data"`
+	}
+	if c.getJSON(strings.Replace(NasdaqSummaryURL, "%s", symbol, 1), map[string]string{"Accept": "application/json, text/plain, */*"}, &d) != nil {
 		return "", ""
 	}
-	var d map[string]any
-	if json.Unmarshal([]byte(raw), &d) != nil {
-		return "", ""
-	}
-	data, _ := d["data"].(map[string]any)
-	s, _ := data["summaryData"].(map[string]any)
-	sector, _ := s["Sector"].(map[string]any)
-	industry, _ := s["Industry"].(map[string]any)
-	return py.S(sector["value"]), py.S(industry["value"])
+	s := d.Data.SummaryData
+	return string(s.Sector.V.Value), string(s.Industry.V.Value)
 }
 
 type ShareClass struct {
@@ -411,19 +419,18 @@ func (c *Client) isharesPage(symbol string) (string, error) {
 	empty := len(c.isharesMap) == 0
 	c.mu.Unlock()
 	if empty {
-		raw, err := c.get(ISharesScreener, map[string]string{"Accept": "application/json, text/plain, */*"})
-		if err != nil {
-			return "", err
-		}
-		var d map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, "\ufeff")), &d); err != nil {
+		var d map[string]py.JSONLoose[struct {
+			LocalExchangeTicker py.JSONText `json:"localExchangeTicker"`
+			ProductPageUrl      py.JSONText `json:"productPageUrl"`
+		}]
+		if err := c.getJSON(ISharesScreener, map[string]string{"Accept": "application/json, text/plain, */*"}, &d); err != nil {
 			return "", err
 		}
 		c.mu.Lock()
 		for _, raw := range d {
-			rec, ok := raw.(map[string]any)
-			if ok && py.S(rec["localExchangeTicker"]) != "" && py.S(rec["productPageUrl"]) != "" {
-				c.isharesMap[strings.ToUpper(py.S(rec["localExchangeTicker"]))] = py.S(rec["productPageUrl"])
+			rec := raw.V
+			if rec.LocalExchangeTicker != "" && rec.ProductPageUrl != "" {
+				c.isharesMap[strings.ToUpper(string(rec.LocalExchangeTicker))] = string(rec.ProductPageUrl)
 			}
 		}
 		c.mu.Unlock()
@@ -856,20 +863,45 @@ func rawOf(v any) float64 {
 	return numOr(v, 0)
 }
 
-func ParseYahooSummary(data map[string]any) (map[string]float64, []Holding) {
-	qs, _ := data["quoteSummary"].(map[string]any)
-	results, _ := qs["result"].([]any)
-	res := map[string]any{}
-	if len(results) > 0 {
-		res, _ = results[0].(map[string]any)
+type rawNum float64
+
+func (r *rawNum) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
 	}
-	th, _ := res["topHoldings"].(map[string]any)
+	*r = rawNum(rawOf(v))
+	return nil
+}
+
+type yahooTopHoldings struct {
+	SectorWeightings []py.JSONLoose[map[string]rawNum] `json:"sectorWeightings"`
+	Holdings         []py.JSONLoose[struct {
+		Symbol         py.JSONText `json:"symbol"`
+		HoldingName    py.JSONText `json:"holdingName"`
+		HoldingPercent rawNum      `json:"holdingPercent"`
+	}] `json:"holdings"`
+}
+
+type YahooSummaryData struct {
+	QuoteSummary struct {
+		Result []py.JSONLoose[struct {
+			TopHoldings yahooTopHoldings `json:"topHoldings"`
+		}] `json:"result"`
+	} `json:"quoteSummary"`
+}
+
+func ParseYahooSummary(data YahooSummaryData) (map[string]float64, []Holding) {
+	results := data.QuoteSummary.Result
+	var th yahooTopHoldings
+	if len(results) > 0 {
+		th = results[0].V.TopHoldings
+	}
 	sectors := map[string]float64{}
-	weights, _ := th["sectorWeightings"].([]any)
-	for _, raw := range weights {
-		entry, _ := raw.(map[string]any)
-		for _, k := range sortedKeysAny(entry) {
-			w := rawOf(entry[k])
+	for _, raw := range th.SectorWeightings {
+		entry := raw.V
+		for _, k := range sortedKeys(entry) {
+			w := float64(entry[k])
 			n := NormSector(strings.ReplaceAll(k, "_", " "))
 			if n != "" && w > 0 {
 				sectors[n] = py.Round(sectors[n]+w*100.0, 4)
@@ -877,11 +909,10 @@ func ParseYahooSummary(data map[string]any) (map[string]float64, []Holding) {
 		}
 	}
 	holdings := []Holding{}
-	rows, _ := th["holdings"].([]any)
-	for _, raw := range rows {
-		h, _ := raw.(map[string]any)
-		sym := strings.TrimSpace(py.S(h["symbol"]))
-		w := rawOf(h["holdingPercent"])
+	for _, raw := range th.Holdings {
+		h := raw.V
+		sym := strings.TrimSpace(string(h.Symbol))
+		w := float64(h.HoldingPercent)
 		if sym != "" && w > 0 {
 			ex := ""
 			for _, sv := range []struct{ suf, venue string }{{".TO", "TSX"}, {".V", "TSX-V"}, {".CN", "CSE"}, {".NE", "CBOE CANADA"}} {
@@ -893,13 +924,13 @@ func ParseYahooSummary(data map[string]any) (map[string]float64, []Holding) {
 			if ex != "" {
 				ccy = "CAD"
 			}
-			holdings = append(holdings, Holding{Ticker: sym, Name: py.S(h["holdingName"]), Weight: py.Round(w*100.0, 4), Exchange: ex, Currency: ccy, Fund: IsFund(py.S(h["holdingName"]))})
+			holdings = append(holdings, Holding{Ticker: sym, Name: string(h.HoldingName), Weight: py.Round(w*100.0, 4), Exchange: ex, Currency: ccy, Fund: IsFund(string(h.HoldingName))})
 		}
 	}
 	return sectors, holdings
 }
 
-func sortedKeysAny(m map[string]any) []string {
+func sortedKeys(m map[string]rawNum) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -913,12 +944,8 @@ func (c *Client) YahooFund(symbol, name, exchange string) (*Breakdown, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := c.get(strings.Replace(strings.Replace(YahooSummary, "%s", YahooSymbol(symbol, exchange), 1), "%s", crumb, 1), map[string]string{"Cookie": cookie, "Accept": "application/json"})
-	if err != nil {
-		return nil, err
-	}
-	var d map[string]any
-	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+	var d YahooSummaryData
+	if err := c.getJSON(strings.Replace(strings.Replace(YahooSummary, "%s", YahooSymbol(symbol, exchange), 1), "%s", crumb, 1), map[string]string{"Cookie": cookie, "Accept": "application/json"}, &d); err != nil {
 		return nil, err
 	}
 	sectors, holdings := ParseYahooSummary(d)

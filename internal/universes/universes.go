@@ -1,7 +1,6 @@
 package universes
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -28,11 +27,8 @@ var Keys = []string{"ca", "us", "intl"}
 
 var pacer = market.NewPacer()
 
-func num(v any) *float64 {
-	if v == nil {
-		return nil
-	}
-	s := strings.TrimSpace(strings.NewReplacer("$", "", "%", "", ",", "").Replace(py.S(v)))
+func num(v py.JSONText) *float64 {
+	s := strings.TrimSpace(strings.NewReplacer("$", "", "%", "", ",", "").Replace(string(v)))
 	if s == "" || s == "N/A" || s == "NA" || s == "None" {
 		return nil
 	}
@@ -60,16 +56,28 @@ type ScreenerRow struct {
 	Country       string
 }
 
-func ParseScreener(data map[string]any) []ScreenerRow {
-	d, _ := data["data"].(map[string]any)
-	rows, _ := d["rows"].([]any)
+type Screener struct {
+	Data struct {
+		Rows []py.JSONLoose[struct {
+			Symbol    py.JSONText `json:"symbol"`
+			Name      py.JSONText `json:"name"`
+			LastSale  py.JSONText `json:"lastsale"`
+			PctChange py.JSONText `json:"pctchange"`
+			MarketCap py.JSONText `json:"marketCap"`
+			Sector    py.JSONText `json:"sector"`
+			Country   py.JSONText `json:"country"`
+		}] `json:"rows"`
+	} `json:"data"`
+}
+
+func ParseScreener(data Screener) []ScreenerRow {
 	out := []ScreenerRow{}
-	for _, raw := range rows {
-		r, ok := raw.(map[string]any)
-		if !ok || py.S(r["symbol"]) == "" {
+	for _, raw := range data.Data.Rows {
+		r := raw.V
+		if r.Symbol == "" {
 			continue
 		}
-		out = append(out, ScreenerRow{Symbol: strings.TrimSpace(py.S(r["symbol"])), Name: strings.TrimSpace(py.S(r["name"])), Last: num(r["lastsale"]), PercentChange: num(r["pctchange"]), Cap: py.Deref(num(r["marketCap"]), 0), Sector: SectorOf(py.S(r["sector"])), Country: strings.TrimSpace(py.S(r["country"]))})
+		out = append(out, ScreenerRow{Symbol: strings.TrimSpace(string(r.Symbol)), Name: strings.TrimSpace(string(r.Name)), Last: num(r.LastSale), PercentChange: num(r.PctChange), Cap: py.Deref(num(r.MarketCap), 0), Sector: SectorOf(string(r.Sector)), Country: strings.TrimSpace(string(r.Country))})
 	}
 	return out
 }
@@ -110,20 +118,31 @@ type Constituent struct {
 	Exchange string
 }
 
-func ParseConstituents(data map[string]any) []Constituent {
-	d, _ := data["data"].(map[string]any)
-	rows, _ := d["constituents"].([]any)
+type Constituents struct {
+	Data struct {
+		Constituents []py.JSONLoose[struct {
+			Symbol            py.JSONText `json:"symbol"`
+			LongName          py.JSONText `json:"longName"`
+			ShortName         py.JSONText `json:"shortName"`
+			Weight            py.JSONText `json:"weight"`
+			QuotedMarketValue py.JSONText `json:"quotedMarketValue"`
+			Exchange          py.JSONText `json:"exchange"`
+		}] `json:"constituents"`
+	} `json:"data"`
+}
+
+func ParseConstituents(data Constituents) []Constituent {
 	out := []Constituent{}
-	for _, raw := range rows {
-		c, ok := raw.(map[string]any)
-		if !ok || py.S(c["symbol"]) == "" {
+	for _, raw := range data.Data.Constituents {
+		c := raw.V
+		if c.Symbol == "" {
 			continue
 		}
-		name := py.S(c["longName"])
+		name := string(c.LongName)
 		if name == "" {
-			name = py.S(c["shortName"])
+			name = string(c.ShortName)
 		}
-		out = append(out, Constituent{Symbol: strings.TrimSpace(py.S(c["symbol"])), Name: strings.TrimSpace(name), Weight: py.Deref(num(c["weight"]), 0), Cap: py.Deref(num(c["quotedMarketValue"]), 0), Exchange: strings.TrimSpace(py.S(c["exchange"]))})
+		out = append(out, Constituent{Symbol: strings.TrimSpace(string(c.Symbol)), Name: strings.TrimSpace(name), Weight: py.Deref(num(c.Weight), 0), Cap: py.Deref(num(c.QuotedMarketValue), 0), Exchange: strings.TrimSpace(string(c.Exchange))})
 	}
 	return out
 }
@@ -134,23 +153,24 @@ type TileQuote struct {
 	Name          string
 }
 
-func ParseTileQuote(data map[string]any) *TileQuote {
-	d, _ := data["data"].(map[string]any)
-	q, _ := d["getQuoteBySymbol"].(map[string]any)
+type Tile struct {
+	Data struct {
+		GetQuoteBySymbol map[string]py.JSONText `json:"getQuoteBySymbol"`
+	} `json:"data"`
+}
+
+func ParseTileQuote(data Tile) *TileQuote {
+	q := data.Data.GetQuoteBySymbol
 	if len(q) == 0 {
 		return nil
 	}
-	return &TileQuote{PercentChange: num(q["percentChange"]), Sector: SectorOf(py.S(q["sector"])), Name: strings.TrimSpace(py.S(q["name"]))}
+	return &TileQuote{PercentChange: num(q["percentChange"]), Sector: SectorOf(string(q["sector"])), Name: strings.TrimSpace(string(q["name"]))}
 }
 
 func FetchScreener(c *market.Client) ([]ScreenerRow, error) {
 	pacer.Pace("api.nasdaq.com", 0.6)
-	text, err := c.GetText(ScreenerURL, NasdaqHeaders)
-	if err != nil {
-		return nil, err
-	}
-	var data map[string]any
-	if err := json.Unmarshal([]byte(text), &data); err != nil {
+	var data Screener
+	if err := c.GetJSON(ScreenerURL, NasdaqHeaders, &data); err != nil {
 		return nil, err
 	}
 	return ParseScreener(data), nil
@@ -158,15 +178,16 @@ func FetchScreener(c *market.Client) ([]ScreenerRow, error) {
 
 func FetchCanada(c *market.Client) ([]store.Universe, error) {
 	pacer.Pace("app-money.tmx.com", 0.6)
-	data, err := c.PostJSON(market.TMXURL, map[string]any{"operationName": "getIndexConstituents", "variables": map[string]any{"symbol": CanadaIndex}, "query": TMXConstituentsQuery}, TMXHeaders)
-	if err != nil {
+	var data Constituents
+	if err := c.PostJSONInto(market.TMXURL, map[string]any{"operationName": "getIndexConstituents", "variables": map[string]any{"symbol": CanadaIndex}, "query": TMXConstituentsQuery}, TMXHeaders, &data); err != nil {
 		return nil, err
 	}
 	out := []store.Universe{}
 	for _, con := range ParseConstituents(data) {
 		var q *TileQuote
 		pacer.Pace("app-money.tmx.com", 0.6)
-		qd, err := c.PostJSON(market.TMXURL, map[string]any{"operationName": "getQuoteBySymbol", "variables": map[string]any{"symbol": con.Symbol, "locale": "en"}, "query": TMXTileQuery}, TMXHeaders)
+		var qd Tile
+		err := c.PostJSONInto(market.TMXURL, map[string]any{"operationName": "getQuoteBySymbol", "variables": map[string]any{"symbol": con.Symbol, "locale": "en"}, "query": TMXTileQuery}, TMXHeaders, &qd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bagholder universes: %s quote failed: %s\n", con.Symbol, err)
 		} else {

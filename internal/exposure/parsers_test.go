@@ -1,6 +1,7 @@
 package exposure
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -35,10 +36,10 @@ const harvestFofHTML = `<table><tr><th>HOLDINGS</th><th>As at 2026/08/31</th></t
 
 const ninepointHTML = `<div><table><tr><td>Facts</td></tr><tr><td>Ticker</td><td>CCHI:TSX</td></tr><tr><td>Underlying Stock**</td><td>Cameco Corp. (CCO:TSX)</td></tr></table></div>`
 
-var yahooJSON = map[string]any{"quoteSummary": map[string]any{"result": []any{map[string]any{"topHoldings": map[string]any{
-	"holdings":         []any{map[string]any{"symbol": "AAPL", "holdingName": "Apple Inc", "holdingPercent": map[string]any{"raw": 0.07}}, map[string]any{"symbol": "RY.TO", "holdingName": "Royal Bank of Canada", "holdingPercent": map[string]any{"raw": 0.03}}},
-	"sectorWeightings": []any{map[string]any{"realestate": map[string]any{"raw": 0.02}}, map[string]any{"technology": map[string]any{"raw": 0.30}}, map[string]any{"financial_services": map[string]any{"raw": 0.20}}},
-}}}}}
+const yahooJSON = `{"quoteSummary": {"result": [{"topHoldings": {
+	"holdings": [{"symbol": "AAPL", "holdingName": "Apple Inc", "holdingPercent": {"raw": 0.07}}, {"symbol": "RY.TO", "holdingName": "Royal Bank of Canada", "holdingPercent": {"raw": 0.03}}],
+	"sectorWeightings": [{"realestate": {"raw": 0.02}}, {"technology": {"raw": 0.30}}, {"financial_services": {"raw": 0.20}}]
+}}]}}`
 
 type isharesRow struct {
 	Ticker  string
@@ -118,11 +119,34 @@ func TestNinepointPage(t *testing.T) {
 }
 
 func TestYahooSummary(t *testing.T) {
-	sectors, holdings := ParseYahooSummary(yahooJSON)
+	var d YahooSummaryData
+	if err := json.Unmarshal([]byte(yahooJSON), &d); err != nil {
+		t.Fatal(err)
+	}
+	sectors, holdings := ParseYahooSummary(d)
 	equal(t, sectors, map[string]float64{"Real Estate": 2.0, "Information Technology": 30.0, "Financials": 20.0}, "")
 	got := []venueRow{}
 	for _, h := range holdings {
 		got = append(got, venueRow{h.Ticker, h.Weight, h.Exchange})
 	}
 	equal(t, got, []venueRow{{"AAPL", 7.0, ""}, {"RY.TO", 3.0, "TSX"}}, "")
+}
+
+func TestNasdaqSummaryAndTheISharesScreener(t *testing.T) {
+	s := &stub{pages: map[string]page{
+		strings.Replace(NasdaqSummaryURL, "%s", "AAPL", 1): {text: `{"data": {"symbol": "AAPL", "summaryData": {"Sector": {"label": "Sector", "value": "Technology"}, "Industry": {"label": "Industry", "value": "Computer Manufacturing"}}}, "status": {"rCode": 200}}`},
+		strings.Replace(NasdaqSummaryURL, "%s", "NONE", 1): {text: `{"data": null, "status": {"rCode": 400}}`},
+		ISharesScreener: {text: "\ufeff" + `{"239832": {"localExchangeTicker": "XIC", "productPageUrl": "/ca/investors/en/products/239832/"}, "1": {"localExchangeTicker": "", "productPageUrl": "/x"}, "2": "junk"}`},
+	}}
+	c := newClient(t, s)
+	sector, industry := c.nasdaqSummary("AAPL")
+	equal(t, [2]string{sector, industry}, [2]string{"Technology", "Computer Manufacturing"}, "")
+	sector, industry = c.nasdaqSummary("NONE")
+	equal(t, [2]string{sector, industry}, [2]string{"", ""}, "")
+	page, err := c.isharesPage("XIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, page, "/ca/investors/en/products/239832/", "")
+	equal(t, c.isharesMap, map[string]string{"XIC": "/ca/investors/en/products/239832/"}, "")
 }
