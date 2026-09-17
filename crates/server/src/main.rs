@@ -1,132 +1,56 @@
-//! The Bagholder server.
+//! The Bagholder server: the page and its assets, the model behind them, the
+//! Wealthsimple session and sync, orders, and the market-data loops.
 //!
-//! Ported from `bagholder.py`. What is here so far is the read side: the page
-//! and its assets, the model behind them, and the status the header shows.
-//! The Wealthsimple client, the sync and the order routes are still Python's.
-//!
-//! The gate is the same one the Python server applies: loopback only unless it
-//! was bound elsewhere on purpose, the Host header has to name 127.0.0.1 and
-//! the port, and a write has to come from the page itself.
+//! The gate: loopback only unless it was bound elsewhere on purpose, the Host
+//! header has to name 127.0.0.1 and the port, and a write has to come from the
+//! page itself.
 
 mod app;
 mod feeds;
 mod login;
 mod notify;
+mod orders;
 mod session;
+mod update;
 mod versions;
 
-use std::io::Cursor;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::time::Duration;
 
 use serde_json::{json, Value};
-use tiny_http::{Header, Request, Response, Server};
+use tiny_http::{Header, Request, Response, Server, StatusCode};
 
-use bagholder_model::base::Base;
-use bagholder_model::value::field_s;
+use app::{app, f, log, s, spawn, truthy};
 
-/// `bagholder.APP_VERSION`.
-const APP_VERSION: &str = "1.42.0";
-/// `bagholder.PROTOCOL`: bumped whenever the page and the server change
-/// together, so the page says to restart rather than degrading quietly.
-const PROTOCOL: &str = "2026-09-16.1";
-
-const DEFAULT_PORT: u16 = 8765;
-
-struct Cache {
-    version: String,
-    base: Option<Base>,
-}
-
-struct App {
-    home: PathBuf,
-    root: PathBuf,
-    bind_host: String,
-    port: u16,
-    started_at: String,
-    cache: Mutex<Cache>,
-}
-
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
+const PORTS: [u16; 3] = [8765, 8766, 8767];
+const ACTIVITY_PULL_SEC: i64 = 24 * 60 * 60;
 
 fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("BAGHOLDER_HOME") {
-        return PathBuf::from(h);
+    let env = std::env::var("BAGHOLDER_HOME").unwrap_or_default();
+    if !env.trim().is_empty() {
+        return PathBuf::from(env.trim());
     }
-    let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let base = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into());
     Path::new(&base).join(".bagholder")
 }
 
-impl App {
-    fn db_path(&self) -> PathBuf {
-        self.home.join("bagholder.db")
+/// Where the page and its assets are: beside the executable, or in a checkout
+/// the executable was built in, or the working folder.
+fn root_dir() -> PathBuf {
+    let env = std::env::var("BAGHOLDER_ROOT").unwrap_or_default();
+    if !env.trim().is_empty() {
+        return PathBuf::from(env.trim());
     }
-
-    fn open(&self) -> rusqlite::Result<rusqlite::Connection> {
-        let conn = rusqlite::Connection::open(self.db_path())?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))?;
-        bagholder_store::relabel::ensure(&conn)?;
-        Ok(conn)
-    }
-
-    /// `model.base_model`: today is part of the key, because a YTD tile and
-    /// the current year's return must roll over at midnight even when nothing
-    /// in the database has changed.
-    fn base_for(&self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-        let today = bagholder_model::clock::today_local();
-        let version = format!("{}|{}", versions::data_version(conn)?, today);
-        {
-            let cache = self.cache.lock().unwrap();
-            if cache.base.is_some() && cache.version == version {
-                return Ok(());
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        for d in dir.ancestors().take(4) {
+            if d.join("ledger.html").is_file() {
+                return d.to_path_buf();
             }
         }
-        let snapshot = bagholder_store::snapshot::snapshot(conn, true)?;
-        let market = bagholder_store::market::market_data(conn)?;
-        let journal = bagholder_store::snapshot::journal(conn)?;
-        let base = bagholder_model::base::build_base(&snapshot, &market, &journal, Some(&today));
-        let mut cache = self.cache.lock().unwrap();
-        cache.version = version;
-        cache.base = Some(base);
-        Ok(())
     }
-
-    fn status_payload(&self, conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
-        let (acts, accounts, synced) = versions::status_counts(conn)?;
-        let today = bagholder_model::clock::today_local();
-        Ok(json!({
-            "ok": true,
-            // the Wealthsimple session is still Python's, so nothing here is connected yet
-            "connected": false,
-            "email": "",
-            "lastSync": synced,
-            "activityCount": acts,
-            "accountCount": accounts,
-            "capturing": false,
-            "syncing": false,
-            "listingsFilling": false,
-            "syncStep": "",
-            "error": "",
-            "dataVersion": format!("{}|{}", versions::data_version(conn)?, today),
-            "summaryReady": false,
-            "protocol": PROTOCOL,
-            "startedAt": self.started_at,
-            "version": APP_VERSION,
-            "latestVersion": "",
-            "updateAvailable": false,
-            "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
-            "canUpdate": false,
-            "updateBy": "app",
-            "loginView": "",
-            "ordersLive": false,
-            "openOrders": 0,
-            "updating": "",
-            "updateError": "",
-            "notify": json!({}),
-        }))
-    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // --------------------------------------------------------------------------
@@ -141,50 +65,42 @@ fn header(req: &Request, name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `Handler._local`.
-fn is_local(app: &App, req: &Request) -> bool {
-    if app.bind_host != "127.0.0.1" {
+fn is_local(req: &Request) -> bool {
+    if app().bind_host != "127.0.0.1" {
         // bound beyond loopback on purpose (a container); the peer is its bridge
         return true;
     }
     match req.remote_addr() {
         Some(addr) => {
             let ip = addr.ip().to_string();
-            ip == "127.0.0.1" || ip == "::1"
+            ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1"
         }
         None => false,
     }
 }
 
-/// `Handler._host_ok`: the name must be 127.0.0.1 and the port this server's,
-/// so a page served from anywhere else cannot reach the API.
-fn host_ok(app: &App, req: &Request) -> bool {
+fn host_ok(req: &Request) -> bool {
     let raw = header(req, "Host").trim().to_lowercase();
     if raw.is_empty() || raw.contains(',') {
         return false;
     }
-    if app.bind_host != "127.0.0.1" {
-        // a container's port may be published under another number
+    if app().bind_host != "127.0.0.1" {
+        // a container's port may be published under another number; the name must still be 127.0.0.1
         let (name, port) = match raw.split_once(':') { Some(p) => p, None => return false };
         return name == "127.0.0.1" && !port.is_empty() && port.len() <= 5 && port.bytes().all(|c| c.is_ascii_digit());
     }
-    raw == format!("127.0.0.1:{}", app.port)
+    raw == format!("127.0.0.1:{}", *app().port.lock().unwrap())
 }
 
-/// `Handler._write_ok`.
 fn write_ok(req: &Request) -> bool {
-    let site = header(req, "Sec-Fetch-Site").trim().to_lowercase();
-    if site == "same-origin" {
+    if header(req, "Sec-Fetch-Site").trim().to_lowercase() == "same-origin" {
         return true;
     }
     !header(req, "X-Bagholder").trim().is_empty()
 }
 
-fn gate(app: &App, req: &Request, write: bool) -> bool {
-    if !is_local(app, req) || !host_ok(app, req) {
-        return false;
-    }
-    !(write && !write_ok(req))
+fn gate(req: &Request, write: bool) -> bool {
+    is_local(req) && host_ok(req) && !(write && !write_ok(req))
 }
 
 // --------------------------------------------------------------------------
@@ -195,14 +111,12 @@ fn hdr(name: &str, value: &str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap()
 }
 
-/// `Handler._send`.
 fn send(req: Request, code: u16, body: Vec<u8>, content_type: &str) {
     let response = Response::from_data(body)
         .with_status_code(code)
         .with_header(hdr("Content-Type", content_type))
         .with_header(hdr("Cache-Control", "no-store"))
-        .with_header(hdr("X-Content-Type-Options", "nosniff"))
-        .with_header(hdr("Referrer-Policy", "no-referrer"));
+        .with_header(hdr("X-Content-Type-Options", "nosniff"));
     let _ = req.respond(response);
 }
 
@@ -210,35 +124,43 @@ fn send_json(req: Request, code: u16, body: &Value) {
     send(req, code, serde_json::to_vec(body).unwrap_or_default(), "application/json; charset=utf-8");
 }
 
-fn forbidden(req: Request) {
-    send_json(req, 403, &json!({"ok": false}));
+/// A body written as it is made: the writer pushes chunks, the response reads
+/// them; a gone client ends the writer.
+struct ChanReader {
+    rx: Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
 }
 
-fn not_found(req: Request) {
-    send_json(req, 404, &json!({"ok": false, "error": "not found"}));
+impl Read for ChanReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.buf.len() {
+            match self.rx.recv() {
+                Ok(b) => {
+                    self.buf = b;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.buf.len() - self.pos);
+        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+fn stream<F: FnOnce(SyncSender<Vec<u8>>) + Send + 'static>(req: Request, content_type: &str, produce: F) {
+    let (tx, rx) = sync_channel::<Vec<u8>>(4);
+    spawn("bagholder-stream", move || produce(tx));
+    let reader = ChanReader { rx, buf: Vec::new(), pos: 0 };
+    let headers = vec![hdr("Content-Type", content_type), hdr("Cache-Control", "no-store"), hdr("X-Content-Type-Options", "nosniff")];
+    let response = Response::new(StatusCode(200), headers, reader, None, None);
+    let _ = req.respond(response);
 }
 
 fn query_of(url: &str) -> &str {
     url.split_once('?').map(|(_, q)| q).unwrap_or("")
-}
-
-fn path_of(url: &str) -> &str {
-    url.split('?').next().unwrap_or(url)
-}
-
-/// One parameter out of a query string, percent-decoded.
-fn query_param(query: &str, name: &str) -> Option<String> {
-    for pair in query.split('&') {
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        if percent_decode(k) == name {
-            let v = percent_decode(v);
-            let v = v.trim().to_string();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    None
 }
 
 fn percent_decode(s: &str) -> String {
@@ -247,350 +169,358 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'+' => { out.push(b' '); i += 1 }
-            b'%' if i + 2 < b.len() => {
-                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
-                match u8::from_str_radix(hex, 16) {
-                    Ok(v) => { out.push(v); i += 3 }
-                    Err(_) => { out.push(b[i]); i += 1 }
-                }
+            b'+' => {
+                out.push(b' ');
+                i += 1
             }
-            c => { out.push(c); i += 1 }
+            b'%' if i + 2 < b.len() + 0 && i + 2 <= b.len() - 1 => match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16) {
+                Ok(v) => {
+                    out.push(v);
+                    i += 3
+                }
+                Err(_) => {
+                    out.push(b[i]);
+                    i += 1
+                }
+            },
+            c => {
+                out.push(c);
+                i += 1
+            }
         }
     }
     String::from_utf8_lossy(&out).to_string()
 }
 
-/// `bagholder._model_filters`: an unreadable filter object is no filter, not
-/// an error.
-fn model_filters(query: &str) -> Option<Value> {
-    let raw = query_param(query, "filters")?;
-    serde_json::from_str(&raw).ok()
+/// `parse_qs(q).get(name)[0]`, raw (blank values dropped, as parse_qs does).
+fn first(query: &str, name: &str) -> String {
+    for pair in query.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if percent_decode(k) == name && !v.is_empty() {
+            return percent_decode(v);
+        }
+    }
+    String::new()
 }
 
-fn static_file(app: &App, name: &str) -> Option<Vec<u8>> {
-    std::fs::read(app.root.join(name)).ok()
+/// `bagholder._query_param`: stripped, None when blank.
+fn qp(query: &str, name: &str) -> Option<String> {
+    let v = first(query, name).trim().to_string();
+    if v.is_empty() { None } else { Some(v) }
+}
+
+fn yes(v: Option<String>) -> bool {
+    matches!(v.as_deref(), Some("1") | Some("true") | Some("yes"))
+}
+
+fn static_file(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(app().root.join(name)).ok()
+}
+
+// --------------------------------------------------------------------------
+// what the header shows
+// --------------------------------------------------------------------------
+
+fn status_payload() -> Value {
+    let conn = app().open().ok();
+    let (acts, accounts, synced) = conn.as_ref().and_then(|c| versions::status_counts(c).ok()).unwrap_or((0, 0, String::new()));
+    let data_version = conn.as_ref().and_then(|c| versions::data_version(c).ok()).unwrap_or_default();
+    let upd = update::update_status();
+    let sess = session::load_session();
+    let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or(json!({}));
+    let open_orders = orders::open_orders_count();
+    let can_update = update::can_update(None);
+    let off = update::updates_off();
+    let st = app().state.lock().unwrap();
+    let connected = st.connected && sess.as_ref().map(|x| truthy(x.get("access_token"))).unwrap_or(false);
+    let email = if !st.email.is_empty() { st.email.clone() } else { sess.as_ref().map(|x| f(x, "email")).unwrap_or_default() };
+    json!({
+        "ok": true,
+        "connected": connected,
+        "email": email,
+        "lastSync": if st.last_sync.is_empty() { synced } else { st.last_sync.clone() },
+        "activityCount": acts,
+        "accountCount": accounts,
+        "capturing": st.capturing,
+        "syncing": st.syncing,
+        "listingsFilling": st.listings_filling,
+        "syncStep": st.sync_step,
+        "error": st.error,
+        "dataVersion": format!("{}|{}", data_version, bagholder_model::clock::today_local()),
+        "summaryReady": bagholder_market::enrich::summary_status() == "ready",
+        "protocol": app::PROTOCOL,
+        "startedAt": app().started_at,
+        "version": app::APP_VERSION,
+        "latestVersion": s(upd.get("latest")),
+        "updateAvailable": truthy(upd.get("updateAvailable")),
+        "updateUrl": if off { update::image_page() } else { let u = s(upd.get("url")); if u.is_empty() { update::repo_url() } else { u } },
+        "canUpdate": can_update,
+        "updateBy": if off { "image" } else { "app" },
+        "loginView": login::login_view(),
+        "ordersLive": orders::orders_live(),
+        "openOrders": open_orders,
+        "updating": st.updating,
+        "updateError": st.update_error,
+        "notify": notify_status,
+    })
 }
 
 // --------------------------------------------------------------------------
 // routing
 // --------------------------------------------------------------------------
 
-fn handle(app: &App, req: Request) {
+fn handle(mut req: Request) {
     let url = req.url().to_string();
-    let path = path_of(&url).to_string();
+    let path = url.split('?').next().unwrap_or("").to_string();
     let query = query_of(&url).to_string();
-    let method = req.method().as_str().to_string();
-
+    let method = req.method().as_str().to_uppercase();
     if method == "POST" {
-        if !gate(app, &req, true) {
-            forbidden(req);
-            return;
+        if !gate(&req, true) {
+            return send_json(req, 403, &json!({"ok": false}));
         }
-        handle_post(app, req, &path);
-        return;
+        let body = read_json(&mut req);
+        return handle_post(req, &path, body);
     }
-    if method != "GET" {
-        send_json(req, 404, &json!({"ok": false, "error": "not found"}));
-        return;
+    if method != "GET" && method != "HEAD" {
+        return send_json(req, if method == "OPTIONS" { 403 } else { 501 }, &json!({"ok": false}));
     }
-    if !gate(app, &req, false) {
-        forbidden(req);
-        return;
+    if !gate(&req, false) {
+        return send_json(req, 403, &json!({"ok": false}));
     }
+    handle_get(req, &path, &query);
+}
 
-    match path.as_str() {
-        "/" | "/index.html" | "/ledger.html" | "/v2" | "/v2/" => match static_file(app, "ledger.html") {
-            Some(data) => send(req, 200, data, "text/html; charset=utf-8"),
-            None => send_json(req, 404, &json!({"ok": false, "error": "ledger.html missing"})),
-        },
-        "/lightweight-charts.js" => match static_file(app, "lightweight-charts.js") {
-            Some(data) => send(req, 200, data, "text/javascript; charset=utf-8"),
-            None => not_found(req),
-        },
-        "/favicon.png" => match static_file(app, "favicon.png") {
-            Some(data) => send(req, 200, data, "image/png"),
-            None => not_found(req),
-        },
-        "/api/status" => {
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-            match app.status_payload(&conn) {
-                Ok(p) => send_json(req, 200, &p),
-                Err(e) => fail(req, e),
-            }
-        }
-        "/api/model" => {
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-            if let Err(e) = app.base_for(&conn) {
-                return fail(req, e);
-            }
-            let status = match app.status_payload(&conn) { Ok(s) => s, Err(e) => return fail(req, e) };
-            let cache = app.cache.lock().unwrap();
-            let base = cache.base.as_ref().expect("base built above");
-            let full = bagholder_model::view::build_view(base, model_filters(&query).as_ref());
-            // the legs and fills of the one trade the page has open, and no
-            // other: sending every leg on every poll is most of the payload
-            let detail = query_param(&query, "trade");
-            let mut payload = bagholder_model::view::slim(&full, detail.as_deref());
-            if let Value::Object(m) = &mut payload {
-                m.insert("status".into(), status);
-            }
-            drop(cache);
-            send_json(req, 200, &payload);
-        }
-        "/api/trade" => {
-            // the legs and fills of one trade or holding, fetched when its page opens
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-            if let Err(e) = app.base_for(&conn) {
-                return fail(req, e);
-            }
-            let id = query_param(&query, "trade").or_else(|| query_param(&query, "id"));
-            let cache = app.cache.lock().unwrap();
-            let base = cache.base.as_ref().expect("base built above");
-            let found = id.as_deref().and_then(|i| bagholder_model::view::trade_detail(base, i));
-            drop(cache);
-            match found {
-                Some(mut d) => {
-                    if let Value::Object(m) = &mut d {
-                        m.insert("ok".into(), json!(true));
-                    }
-                    send_json(req, 200, &d)
-                }
-                None => send_json(req, 404, &json!({"ok": false, "error": "no such trade"})),
-            }
-        }
-        "/api/orders" => with_conn(app, req, |conn| {
-            let securities = bagholder_store::admin::list_securities(conn)?;
-            let mut orders = bagholder_store::orders::list_orders(conn, 200)?;
-            for o in orders.iter_mut() {
-                let sid = field_s(o, "securityId");
-                let exch = securities
-                    .iter()
-                    .find(|s| field_s(s, "id") == sid)
-                    .map(|s| field_s(s, "primaryExchange"))
-                    .unwrap_or_default();
-                if let Value::Object(m) = o {
-                    m.insert("exchange".into(), json!(exch));
-                }
-            }
-            Ok(json!({
-                "ok": true,
-                "orders": orders,
-                "brackets": bagholder_store::orders::list_brackets(conn, &[])?,
-                // orders are not placed from here yet; see the README
-                "live": false,
-                "refreshedAt": "",
-            }))
+fn read_json(req: &mut Request) -> Value {
+    let n = req.body_length().unwrap_or(0);
+    if n == 0 || n > 1_048_576 {
+        return json!({});
+    }
+    let mut raw = Vec::with_capacity(n);
+    let _ = req.as_reader().take(n as u64).read_to_end(&mut raw);
+    if raw.is_empty() {
+        return json!({});
+    }
+    serde_json::from_slice(&raw).unwrap_or_else(|_| json!({}))
+}
+
+fn handle_get(req: Request, path: &str, query: &str) {
+    match path {
+        "/api/login/stream" => stream(req, "multipart/x-mixed-replace; boundary=frame", |tx| {
+            login::login_stream(|chunk| tx.send(chunk.to_vec()).is_ok());
         }),
-        "/api/notifications" => with_conn(app, req, |conn| {
-            Ok(json!({
-                "ok": true,
-                "settings": notify::status(conn)?,
-                "kinds": notify::KINDS,
-                "rows": bagholder_store::feeds::list_notifications(conn, 0, "", false, 50, true)?,
-                "unread": bagholder_store::feeds::unread_notifications(conn)?,
-            }))
-        }),
-        "/api/filings" => {
-            let sym = query_param(&query, "symbol").unwrap_or_default();
-            with_conn(app, req, move |conn| {
-                Ok(json!({
-                    "ok": true,
-                    "symbol": bagholder_store::feeds::filing_key(&sym),
-                    "filings": bagholder_store::feeds::filings_for(conn, &sym)?,
-                    "fetchedAt": bagholder_store::feeds::filings_fetched_for(conn, &sym)?,
-                    "profileNo": bagholder_store::feeds::sedar_profile(conn, &sym)?,
-                }))
-            })
+        "/api/login/frame" => match login::login_frame() {
+            Some(data) => send(req, 200, data, "image/jpeg"),
+            None => send(req, 204, vec![], "application/json; charset=utf-8"),
+        },
+        "/" | "/index.html" | "/ledger.html" | "/v2" | "/v2/" => match std::fs::read(feeds::ledger_path()) {
+            Ok(data) => send(req, 200, data, "text/html; charset=utf-8"),
+            Err(_) => send_json(req, 404, &json!({"ok": false, "error": "ledger.html missing"})),
+        },
+        "/api/order/quote" => {
+            let v = orders::ticket_quote(&first(query, "symbol"), &first(query, "security"), &first(query, "account"), &first(query, "exchange"));
+            send_json(req, 200, &v)
         }
-        "/api/shorts" => {
-            let sym = query_param(&query, "symbol").unwrap_or_default();
-            let ex = query_param(&query, "exchange").unwrap_or_default();
-            with_conn(app, req, move |conn| {
-                match bagholder_store::feeds::shorts_for(conn, &sym, &ex)? {
-                    Some(row) => Ok(json!({"ok": true, "shorts": row})),
-                    None => Ok(json!({"ok": false, "error": "nothing stored for that listing"})),
-                }
-            })
-        }
-        "/api/shorts/feed" => with_conn(app, req, |conn| {
-            Ok(json!({"ok": true, "rows": bagholder_store::feeds::all_shorts(conn)?}))
-        }),
-        "/api/news/symbol" => {
-            // One listing's wire read now, for the News card's search: a ticker
-            // neither held nor watched has no rows until asked for. The rows are
-            // stored under the listing and the model reloads.
-            let sym = query_param(&query, "symbol").unwrap_or_default().trim().to_uppercase();
-            if sym.is_empty() {
-                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
-                return;
-            }
-            let ex0 = query_param(&query, "exchange").unwrap_or_default().trim().to_string();
-            let ccy0 = query_param(&query, "currency").unwrap_or_default().trim().to_string();
-            with_conn(app, req, move |conn| {
-                let today = bagholder_market::now_stamp()[..10].to_string();
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                let (mut ex, mut ccy) = (ex0.clone(), ccy0.clone());
-                if ex.is_empty() {
-                    // the venue from what the app already knows: the security
-                    // records the sync brought, then TMX's own resolver, which
-                    // names the venue it verified by the quote and so covers the
-                    // venues no public directory carries (the CSE, Cboe Canada).
-                    // Nothing is guessed: a ticker TMX cannot place is a US one,
-                    // and Nasdaq keeps only the items that name it.
-                    let meta = instrument_meta(conn, &sym)?;
-                    ex = meta.1;
-                    if !meta.2.is_empty() {
-                        ccy = meta.2;
-                    }
-                    if ex.is_empty() {
-                        let form = bagholder_market::tmx::tmx_resolve(
-                            conn, &bagholder_model::venues::tmx_symbol(&sym), &today);
-                        if !form.is_empty() && !form.ends_with(":US") {
-                            // TMX, under the form its resolver just remembered
-                            if ccy.is_empty() {
-                                ccy = "CAD".into();
-                            }
-                        } else {
-                            ex = "NASDAQ".into();
-                            ccy = "USD".into();
+        "/api/symbols/search" => send_json(req, 200, &bagholder_market::search::symbol_search(&app().db_path(), &first(query, "q"))),
+        "/api/symbols/quote" => {
+            // a glance at a listing the watchlist's add row offers: its price and day change, not stored
+            let rec = json!({"symbol": qp(query, "symbol").unwrap_or_default(), "exchange": qp(query, "exchange").unwrap_or_default(),
+                             "currency": qp(query, "currency").unwrap_or_default(), "kind": "Shares"});
+            let mut out = json!({"ok": true, "price": null, "priceChange": null, "percentChange": null});
+            if !f(&rec, "symbol").is_empty() {
+                if let Ok(conn) = app().open() {
+                    let (today, _, _) = bagholder_market::clock_now();
+                    if let Some(Value::Object(q)) = bagholder_market::quotes::peek_quote(&conn, &rec, &today) {
+                        for (k, v) in q {
+                            out[k] = v;
                         }
                     }
                 }
-                let (src, rows) = bagholder_market::news::fetch_symbol(conn, &sym, &ex, &ccy, &today, now);
-                let rows = match rows {
-                    Some(r) => r,
-                    None => return Ok(json!({"ok": false, "error": "the wire did not answer"})),
-                };
-                if src.is_empty() {
-                    return Ok(json!({"ok": true, "count": 0, "source": "", "exchange": ex}));
-                }
-                bagholder_store::feeds::replace_news(conn, &sym, &ex, &src, &rows, &bagholder_market::now_stamp())?;
-                bagholder_store::feeds::trim_news(conn, bagholder_market::news::KEEP)?;
-                Ok(json!({"ok": true, "count": rows.len(), "source": src, "exchange": ex}))
-            })
-        }
-        "/api/fear" => {
-            let which = query_param(&query, "index").unwrap_or_else(|| "stocks".into()).to_lowercase();
-            if !bagholder_market::fear::INDEXES.contains(&which.as_str()) {
-                send_json(req, 200, &json!({"ok": false, "error": "no such index"}));
-                return;
             }
-            let stamp = now_iso();
-            let now_unix = unix_now();
-            with_conn(app, req, move |conn| {
-                // What was read before is answered from the store at once, so
-                // the meter is drawn with the page rather than after a round
-                // trip to its publisher; a reading past its minutes is read
-                // again first.
-                let held = bagholder_store::feeds::gauge(conn, &which)?;
-                let has_score = held.as_ref().map(|g| !g.get("score").map(|s| s.is_null()).unwrap_or(true)).unwrap_or(false);
-                if has_score && !fear_stale(held.as_ref().unwrap(), now_unix) {
-                    return Ok(json!({"ok": true, "gauge": held}));
-                }
-                let rec = bagholder_market::fear::read(&which);
-                if rec.as_object().map(|m| m.is_empty()).unwrap_or(true) {
-                    // the publisher did not answer: whatever is stored still stands
-                    return Ok(match held {
-                        Some(g) if has_score => json!({"ok": true, "gauge": g}),
-                        _ => json!({"ok": false, "error": "the index did not answer"}),
-                    });
-                }
-                bagholder_store::feeds::save_gauge(conn, &which, &rec, &stamp, FEAR_VERSION)?;
-                Ok(json!({"ok": true, "gauge": bagholder_store::feeds::gauge(conn, &which)?}))
-            })
+            send_json(req, 200, &out)
         }
-        "/api/history" => {
-            let q = |k: &str| query_param(&query, k).unwrap_or_default();
-            let ccy = { let c = q("currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-            let kind = { let k = q("kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-            let rec = json!({"symbol": q("symbol"), "exchange": q("exchange"), "currency": ccy, "kind": kind});
-            let start: String = q("from").chars().take(10).collect();
-            let end: String = q("to").chars().take(10).collect();
-            let tf = { let t = q("tf"); if t.is_empty() { "1d".to_string() } else { t } };
-            if field_s(&rec, "symbol").is_empty()
-                || start.len() != 10
-                || end.len() != 10
-                || !bagholder_market::history::TIMEFRAMES.contains(&tf.as_str())
-            {
-                send_json(req, 200, &json!({"ok": false, "error": "symbol, from, to and a known tf are required"}));
-                return;
+        "/api/filings" => {
+            let symbol = match qp(query, "symbol") { Some(x) => x, None => return send_json(req, 400, &json!({"ok": false, "error": "symbol required"})) };
+            let v = feeds::filings_payload(&symbol, yes(qp(query, "refresh")), qp(query, "name").as_deref(), qp(query, "exchange").as_deref(), qp(query, "currency").as_deref());
+            send_json(req, 200, &v)
+        }
+        "/api/listing" => {
+            // one listing's own page, held or not
+            let g = |k| qp(query, k).unwrap_or_default();
+            send_json(req, 200, &feeds::listing_payload(&g("symbol"), &g("exchange"), &g("currency"), &g("name")))
+        }
+        "/api/fear" => send_json(req, 200, &feeds::fear_payload(&qp(query, "index").unwrap_or_else(|| "stocks".into()))),
+        "/api/shorts/feed" => send_json(req, 200, &feeds::shorts_feed()),
+        "/api/shorts" => {
+            let v = feeds::shorts_payload(&qp(query, "symbol").unwrap_or_default(), qp(query, "exchange").as_deref(), qp(query, "currency").as_deref(), yes(qp(query, "trend")));
+            send_json(req, 200, &v)
+        }
+        "/api/news/symbol" => {
+            let g = |k| qp(query, k).unwrap_or_default();
+            send_json(req, 200, &feeds::news_symbol_payload(&g("symbol"), &g("exchange"), &g("currency")))
+        }
+        "/api/filings/feed" => send_json(req, 200, &feeds::filings_feed(&qp(query, "scope").unwrap_or_default(), 200)),
+        "/api/filings/doc" => {
+            let (symbol, id) = match (qp(query, "symbol"), qp(query, "id")) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return send_json(req, 400, &json!({"ok": false, "error": "symbol and id required"})),
+            };
+            match feeds::filings_document(&symbol, &id) {
+                Ok((data, ct)) => send(req, 200, data, if ct.is_empty() { "application/pdf" } else { &ct }),
+                Err(e) => send_json(req, 502, &json!({"ok": false, "error": e})),
             }
-            let inst = bagholder_market::history::chart_instrument(&rec);
-            let src = bagholder_market::history::history_source(&inst);
-            let (today, now_unix, stamp) = bagholder_market::clock_now();
-            let db = app.db_path();
-            with_conn(app, req, move |conn| {
-                use bagholder_market::history as h;
-                let available = h::offered_timeframes(conn, &inst, &start, &today, now_unix);
-                let mut pending = false;
-                let bars = if src.is_none() || !available.contains(&tf.as_str()) {
-                    vec![]
-                } else if h::INTRADAY.contains(&tf.as_str()) && !h::intraday_ready(conn, &inst, &tf, &start, &today, now_unix) {
-                    // never block the chart on a minute-data fetch: hand back what
-                    // is stored, fetch the rest in the background, and let the
-                    // page ask again
-                    h::ensure_intraday_in_background(db, inst.clone(), tf.clone(), start.clone(), end.clone());
-                    pending = true;
-                    vec![]
-                } else {
-                    h::ensure_bars(conn, &inst, &tf, &start, &end, &today, now_unix, &stamp).unwrap_or_default()
-                };
-                let reason = if !bars.is_empty() || pending { String::new() } else { h::chart_reason(&inst, &tf) };
+        }
+        "/api/filings/enrich" => {
+            let (symbol, id) = match (qp(query, "symbol"), qp(query, "id")) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return send_json(req, 400, &json!({"ok": false, "error": "symbol and id required"})),
+            };
+            send_json(req, 200, &feeds::filings_enrich(&symbol, &id))
+        }
+        "/api/orders" => send_json(req, 200, &guarded(|| orders::orders_payload(true))),
+        "/api/notifications" => {
+            let v = app().open().and_then(|conn| {
                 Ok(json!({
                     "ok": true,
-                    "symbol": field_s(&rec, "symbol"),
-                    "chartSymbol": field_s(&inst, "symbol"),
-                    "source": src.as_ref().map(|(s, _)| s.clone()).unwrap_or_default(),
-                    "tf": tf,
-                    "available": available,
-                    "bars": bars,
-                    "pending": pending,
-                    "reason": reason,
+                    "settings": notify::status(&conn)?,
+                    "kinds": notify::KINDS,
+                    "rows": bagholder_store::feeds::list_notifications(&conn, 0, "", false, 50, true)?,
+                    "unread": bagholder_store::feeds::unread_notifications(&conn)?,
                 }))
             });
-        }
-        "/api/watch" => with_conn(app, req, |conn| bagholder_store::csvimport::status(conn)),
-        "/api/data" => {
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-            match data_summary(&conn, &app.db_path().display().to_string()) {
-                Ok(mut s) => {
-                    if let Value::Object(m) = &mut s {
-                        m.insert("ok".into(), json!(true));
-                        // the Wealthsimple session is still Python's
-                        m.insert("sessionPresent".into(), json!(false));
-                    }
-                    send_json(req, 200, &s)
-                }
-                Err(e) => fail(req, e),
+            match v {
+                Ok(v) => send_json(req, 200, &v),
+                Err(e) => store_failed(req, e),
             }
         }
-        _ => not_found(req),
+        "/api/notifications/stream" => {
+            let after = { let a = first(query, "after").trim().to_string(); if a.is_empty() { header(&req, "Last-Event-ID").trim().to_string() } else { a } };
+            let after = if !after.is_empty() && after.bytes().all(|c| c.is_ascii_digit()) { after.parse::<i64>().ok() } else { None };
+            stream(req, "text/event-stream; charset=utf-8", move |tx| {
+                notify::stream(after, |chunk| tx.send(chunk.as_bytes().to_vec()).is_ok());
+            })
+        }
+        "/api/status" => send_json(req, 200, &status_payload()),
+        "/api/history" => send_json(req, 200, &feeds::history_payload(query)),
+        "/lightweight-charts.js" => match static_file("lightweight-charts.js") {
+            Some(data) => send(req, 200, data, "application/javascript; charset=utf-8"),
+            None => send_json(req, 404, &json!({"ok": false, "error": "lightweight-charts.js missing"})),
+        },
+        "/favicon.png" | "/favicon.ico" => match static_file("favicon.png") {
+            Some(data) => send(req, 200, data, "image/png"),
+            None => send_json(req, 404, &json!({"ok": false, "error": "favicon missing"})),
+        },
+        "/api/watch" => match app().open().and_then(|c| bagholder_store::csvimport::status(&c)) {
+            Ok(v) => send_json(req, 200, &v),
+            Err(e) => store_failed(req, e),
+        },
+        "/api/data" => match app().open().and_then(|c| data_summary(&c)) {
+            Ok(mut v) => {
+                v["ok"] = json!(true);
+                v["sessionPresent"] = json!(session::load_session().is_some());
+                send_json(req, 200, &v)
+            }
+            Err(e) => store_failed(req, e),
+        },
+        "/api/model" => {
+            if let (Ok(conn), Ok(base)) = (app().open(), app().base()) {
+                let (today, now, _) = bagholder_market::clock_now();
+                if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::symbols_of::payer_symbols(&base)) {
+                    app().kick("market", || {
+                        feeds::refresh_market_data();
+                    });
+                } else {
+                    let mut syms = bagholder_model::symbols_of::held_symbols(&base);
+                    syms.extend(bagholder_model::markets::quote_symbols(&base));
+                    let due = bagholder_market::quotes::quote_symbols_needing_refresh(&conn, &syms, now, bagholder_market::quotes::QUOTE_REFRESH_MINUTES).map(|v| !v.is_empty()).unwrap_or(false);
+                    if due {
+                        app().kick("quotes", || {
+                            feeds::refresh_quotes();
+                        });
+                    }
+                }
+            }
+            let filters = qp(query, "filters").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let trade = qp(query, "trade");
+            let built = std::panic::catch_unwind(|| {
+                app().base().map(|base| {
+                    let full = bagholder_model::view::build_view(&base, filters.as_ref());
+                    bagholder_model::view::slim(&full, trade.as_deref())
+                })
+            });
+            match built {
+                Ok(Ok(mut payload)) => {
+                    payload["status"] = status_payload();
+                    send_json(req, 200, &payload)
+                }
+                Ok(Err(e)) => {
+                    log(&format!("model failed: {}", e));
+                    send_json(req, 500, &json!({"ok": false, "error": "model failed: OperationalError"}))
+                }
+                Err(_) => send_json(req, 500, &json!({"ok": false, "error": "model failed: Exception"})),
+            }
+        }
+        "/api/trade" => {
+            // the legs and fills of one trade or holding, fetched when its page opens
+            let id = qp(query, "id").unwrap_or_default();
+            let found = std::panic::catch_unwind(|| app().base().map(|base| bagholder_model::view::trade_detail(&base, &id)));
+            match found {
+                Ok(Ok(Some(mut d))) => {
+                    d["ok"] = json!(true);
+                    send_json(req, 200, &d)
+                }
+                Ok(Ok(None)) => send_json(req, 404, &json!({"ok": false, "error": "no such trade"})),
+                Ok(Err(e)) => {
+                    log(&format!("model failed: {}", e));
+                    send_json(req, 500, &json!({"ok": false, "error": "model failed: OperationalError"}))
+                }
+                Err(_) => send_json(req, 500, &json!({"ok": false, "error": "model failed: Exception"})),
+            }
+        }
+        "/api/book" => match app().open().and_then(|c| bagholder_store::snapshot::snapshot(&c, true)) {
+            Ok(book) => {
+                let or = |k: &str, d: Value| book.get(k).filter(|v| truthy(Some(v))).cloned().unwrap_or(d);
+                send_json(req, 200, &json!({
+                    "ok": true,
+                    "activities": or("activities", json!([])),
+                    "accounts": or("accounts", json!([])),
+                    "balances": or("balances", json!([])),
+                    "navHistory": or("navHistory", json!([])),
+                    "navByAccount": or("navByAccount", json!({})),
+                    "syncedAt": or("syncedAt", json!("")),
+                    "tradeGroups": or("tradeGroups", json!([])),
+                    "notes": or("notes", json!({})),
+                    "securities": or("securities", json!([])),
+                }))
+            }
+            Err(e) => store_failed(req, e),
+        },
+        _ => send_json(req, 404, &json!({"ok": false, "error": "not found"})),
     }
 }
 
-/// `store.data_summary`: the row counts the Data & storage dialog shows before
-/// a wipe.
-fn data_summary(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<Value> {
+/// A route whose work panicked answers a 500 rather than dropping the
+/// connection; the panic has been logged by the hook.
+fn guarded<F: FnOnce() -> Value + std::panic::UnwindSafe>(work: F) -> Value {
+    std::panic::catch_unwind(work).unwrap_or_else(|_| json!({"ok": false, "error": "internal error"}))
+}
+
+fn store_failed(req: Request, e: rusqlite::Error) {
+    log(&format!("bagholder: {}", e));
+    send_json(req, 500, &json!({"ok": false, "error": "store failed"}));
+}
+
+/// `store.data_summary`: the row counts the Data & storage dialog shows before a wipe.
+fn data_summary(conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
     let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
     let journal_raw = bagholder_store::tables::get_meta(conn, "journal_v2", "")?;
-    let journal_n = serde_json::from_str::<Value>(&journal_raw)
-        .ok()
-        .and_then(|v| v.as_object().map(|m| m.len()))
-        .unwrap_or(0);
-    let (first, last): (Option<String>, Option<String>) = conn.query_row(
-        "SELECT MIN(transaction_date), MAX(transaction_date) FROM activities",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let journal_n = serde_json::from_str::<Value>(&journal_raw).ok().and_then(|v| v.as_object().map(|m| m.len())).unwrap_or(0);
+    let (first_act, last_act): (Option<String>, Option<String>) =
+        conn.query_row("SELECT MIN(transaction_date), MAX(transaction_date) FROM activities", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(json!({
-        "path": path,
+        "path": app().db_path().display().to_string(),
         "activities": count("SELECT COUNT(*) FROM activities")?,
-        "firstActivity": first.unwrap_or_default(),
-        "lastActivity": last.unwrap_or_default(),
+        "firstActivity": first_act.unwrap_or_default(),
+        "lastActivity": last_act.unwrap_or_default(),
         "accounts": count("SELECT COUNT(*) FROM accounts")?,
         "balances": count("SELECT COUNT(*) FROM balances")?,
         "navDays": count("SELECT COUNT(*) FROM nav_history")?,
@@ -603,301 +533,335 @@ fn data_summary(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<Val
     }))
 }
 
-/// Opens the store, runs one reader, and answers with what it returned.
-/// `bagholder._instrument_meta`: (issuer name, exchange, currency) Bagholder
-/// holds for a symbol, to steer the sources. Falls back to the bare symbol.
-fn instrument_meta(conn: &rusqlite::Connection, symbol: &str) -> rusqlite::Result<(String, String, String)> {
-    let sym = symbol.trim().to_uppercase();
-    for sec in bagholder_store::admin::list_securities(conn)? {
-        if field_s(&sec, "symbol").trim().to_uppercase() == sym {
-            let name = field_s(&sec, "name").trim().to_string();
-            return Ok((
-                if name.is_empty() { sym.clone() } else { name },
-                field_s(&sec, "primaryExchange").trim().to_string(),
-                field_s(&sec, "currency").trim().to_string(),
-            ));
-        }
-    }
-    Ok((sym, String::new(), String::new()))
+fn ids_of(v: Option<&Value>) -> Option<Vec<i64>> {
+    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
 }
 
-fn with_conn<F>(app: &App, req: Request, f: F)
-where
-    F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value>,
-{
-    let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-    match f(&conn) {
+fn handle_post(req: Request, path: &str, body: Value) {
+    let body = if body.is_object() { body } else { json!({}) };
+    let with_store = |req: Request, work: &dyn Fn(&rusqlite::Connection) -> rusqlite::Result<Value>| match app().open().and_then(|c| work(&c)) {
         Ok(v) => send_json(req, 200, &v),
-        Err(e) => fail(req, e),
-    }
-}
-
-/// The write routes that only touch the store. Anything that would reach
-/// Wealthsimple is not here: the session, the sync and the order routes are
-/// still Python's, and they answer 404 rather than pretending.
-fn handle_post(app: &App, mut req: Request, path: &str) {
-    let mut body = Vec::new();
-    let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
-    let doc: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let now = now_iso();
-
+        Err(e) => store_failed(req, e),
+    };
     match path {
+        "/api/login/start" => send_json(req, 200, &login::start_login_browser()),
+        "/api/login/cancel" => send_json(req, 200, &login::cancel_login()),
+        "/api/login/input" => send_json(req, 200, &login::login_input(&body)),
+        "/api/update" => send_json(req, 200, &update::start_update()),
+        "/api/capture" => send_json(req, 200, &session::capture_tokens(&body)),
+        "/api/refresh" => send_json(req, 200, &session::refresh_now()),
+        "/api/sync" => {
+            if session::load_session().is_none() {
+                return send_json(req, 200, &json!({"ok": false, "error": "not connected"}));
+            }
+            app().state.lock().unwrap().error.clear();
+            spawn("bagholder-sync", || {
+                feeds::sync_then_market();
+            });
+            send_json(req, 200, &json!({"ok": true, "syncing": true}))
+        }
+        "/api/data/clear" => {
+            if app().state.lock().unwrap().syncing {
+                return send_json(req, 409, &json!({"ok": false, "error": "A sync is running. Wait for it to finish."}));
+            }
+            let run = || -> rusqlite::Result<Value> {
+                let conn = app().open()?;
+                bagholder_store::admin::clear_synced_data(&conn, !truthy(body.get("journal")), !truthy(body.get("market")))?;
+                data_summary(&conn)
+            };
+            match run() {
+                Ok(mut summary) => {
+                    if truthy(body.get("session")) {
+                        session::delete_session();
+                    }
+                    {
+                        let mut st = app().state.lock().unwrap();
+                        st.last_sync.clear();
+                        st.error.clear();
+                    }
+                    app().invalidate();
+                    summary["ok"] = json!(true);
+                    summary["sessionPresent"] = json!(session::load_session().is_some());
+                    send_json(req, 200, &summary)
+                }
+                Err(e) => store_failed(req, e),
+            }
+        }
+        "/api/order" => send_json(req, 200, &guarded(|| orders::place_order(&body))),
+        "/api/order/cancel" => send_json(req, 200, &guarded(|| orders::cancel_order(&s(body.get("id"))))),
+        "/api/order/modify" => send_json(req, 200, &guarded(|| orders::modify_order(&s(body.get("id")), body.get("quantity"), body.get("limitPrice")))),
+        "/api/bracket/adjust" => send_json(req, 200, &guarded(|| {
+            orders::adjust_bracket(&s(body.get("id")), &s(body.get("leg")), body.get("price"), body.get("trail"), truthy(body.get("remove")))
+        })),
+        "/api/bracket/cancel" => send_json(req, 200, &guarded(|| orders::cancel_bracket(&s(body.get("id"))))),
+        "/api/notifications/settings" => with_store(req, &|conn| {
+            notify::set_settings(conn, &body)?;
+            Ok(json!({"ok": true, "settings": notify::status(conn)?}))
+        }),
+        "/api/notifications/test" => with_store(req, &|conn| {
+            let row = notify::test_notification(conn);
+            Ok(json!({"ok": row.is_some(), "id": row.as_ref().and_then(|r| r.get("id").cloned()).unwrap_or(json!(0))}))
+        }),
+        "/api/notifications/read" => with_store(req, &|conn| {
+            let ids = ids_of(body.get("ids"));
+            Ok(json!({"ok": true, "read": bagholder_store::feeds::mark_notifications_read(conn, ids.as_deref(), &app::now_iso())?}))
+        }),
+        "/api/notifications/clear" => with_store(req, &|conn| Ok(json!({"ok": true, "cleared": bagholder_store::feeds::clear_notifications(conn)?}))),
+        "/api/notifications/seen" => with_store(req, &|conn| {
+            let ids = ids_of(body.get("ids")).unwrap_or_default();
+            Ok(json!({"ok": true, "seen": bagholder_store::feeds::mark_notifications_seen(conn, &ids, &app::now_iso())?}))
+        }),
+        "/api/orders/refresh" => send_json(req, 200, &guarded(|| {
+            let mut r = orders::refresh_orders("");
+            if let (Value::Object(m), Value::Object(p)) = (&mut r, orders::orders_payload(false)) {
+                for (k, v) in p {
+                    m.insert(k, v);
+                }
+            }
+            r
+        })),
+        "/api/markets/refresh" => send_json(req, 200, &feeds::kick_universes()),
+        "/api/watchlist/add" => send_json(req, 200, &feeds::watch_add(&body)),
+        "/api/watchlist/remove" => send_json(req, 200, &feeds::watch_remove(&body)),
+        "/api/tiles/set" => send_json(req, 200, &feeds::tiles_set(&body)),
         "/api/journal" => {
-            let id = field_s(&doc, "id").trim().to_string();
+            let id = s(body.get("id")).trim().to_string();
             if id.is_empty() {
-                send_json(req, 400, &json!({"ok": false, "error": "id required"}));
-                return;
+                return send_json(req, 400, &json!({"ok": false, "error": "id required"}));
             }
             let entry = json!({
-                "thesis": doc.get("thesis").cloned().unwrap_or(Value::Null),
-                "tags": doc.get("tags").cloned().unwrap_or(Value::Null),
-                "grade": doc.get("grade").cloned().unwrap_or(Value::Null),
+                "thesis": body.get("thesis").cloned().unwrap_or(Value::Null),
+                "tags": body.get("tags").cloned().unwrap_or(Value::Null),
+                "grade": body.get("grade").cloned().unwrap_or(Value::Null),
             });
-            with_conn(app, req, move |conn| {
+            with_store(req, &|conn| {
                 let entries = bagholder_store::admin::save_journal_entry(conn, &id, Some(&entry))?;
+                app().invalidate();
                 Ok(json!({"ok": true, "journal": entries}))
-            });
+            })
+        }
+        "/api/disconnect" => {
+            session::delete_session();
+            send_json(req, 200, &json!({"ok": true}))
+        }
+        "/api/book/append" => {
+            let result = guarded(|| orders::append_manual(&body));
+            app().invalidate();
+            send_json(req, 200, &result)
         }
         "/api/import" => {
-            let text = match doc.get("text") {
+            let text = match body.get("text") {
                 Some(Value::String(t)) if !bagholder_model::pytext::py_strip(t).is_empty() => t.clone(),
-                _ => {
-                    send_json(req, 400, &json!({"ok": false, "error": "text required"}));
-                    return;
-                }
+                _ => return send_json(req, 400, &json!({"ok": false, "error": "text required"})),
             };
-            let name = { let n = field_s(&doc, "name"); if n.is_empty() { "upload.csv".to_string() } else { n } };
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
+            let name = { let n = s(body.get("name")); if n.is_empty() { "upload.csv".to_string() } else { n } };
+            let conn = match app().open() { Ok(c) => c, Err(e) => return store_failed(req, e) };
             match bagholder_store::csvimport::import_text(&conn, &name, &text) {
-                Ok(report) => send_json(req, 200, &report),
+                Ok(report) => {
+                    if truthy(report.get("added")) {
+                        app().invalidate();
+                    }
+                    send_json(req, 200, &report)
+                }
                 Err(e) => {
-                    eprintln!("bagholder: import failed: {}", e);
-                    send_json(req, 500, &json!({"ok": false, "error": e}));
+                    log(&format!("bagholder: import failed: {}", e));
+                    send_json(req, 500, &json!({"ok": false, "error": e}))
                 }
             }
         }
         "/api/watch" => {
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
-            let folder = field_s(&doc, "path");
             let run = || -> rusqlite::Result<(u16, Value)> {
-                let set = bagholder_store::csvimport::set_watch_folder(&conn, &folder)?;
+                let conn = app().open()?;
+                let set = bagholder_store::csvimport::set_watch_folder(&conn, &s(body.get("path")))?;
                 if set.get("ok") != Some(&json!(true)) {
                     return Ok((400, set));
                 }
                 let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+                if truthy(result.get("added")) {
+                    app().invalidate();
+                }
                 result["status"] = bagholder_store::csvimport::status(&conn)?;
                 Ok((200, result))
             };
             match run() {
                 Ok((code, v)) => send_json(req, code, &v),
-                Err(e) => fail(req, e),
+                Err(e) => store_failed(req, e),
             }
         }
         "/api/watch/scan" => {
-            let conn = match app.open() { Ok(c) => c, Err(e) => return fail(req, e) };
             let run = || -> rusqlite::Result<Value> {
+                let conn = app().open()?;
                 let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+                if truthy(result.get("ok")) && truthy(result.get("added")) {
+                    app().invalidate();
+                }
                 result["status"] = bagholder_store::csvimport::status(&conn)?;
                 Ok(result)
             };
             match run() {
                 Ok(v) => {
-                    let code = if v.get("ok") == Some(&json!(true)) { 200 } else { 400 };
+                    let code = if truthy(v.get("ok")) { 200 } else { 400 };
                     send_json(req, code, &v)
                 }
-                Err(e) => fail(req, e),
+                Err(e) => store_failed(req, e),
             }
         }
-        "/api/watch/clear" => with_conn(app, req, |conn| {
+        "/api/watch/clear" => with_store(req, &|conn| {
             bagholder_store::csvimport::clear_watch_folder(conn)?;
             bagholder_store::csvimport::status(conn)
         }),
-        "/api/groups" => with_conn(app, req, move |conn| {
-            let groups = bagholder_store::tables::save_trade_groups(conn, doc.get("groups"))?;
-            Ok(json!({"ok": true, "groups": groups}))
-        }),
-        "/api/notes" => with_conn(app, req, move |conn| {
-            let notes = bagholder_store::tables::save_trade_notes(conn, doc.get("notes"))?;
-            Ok(json!({"ok": true, "notes": notes}))
-        }),
-        "/api/watchlist/add" => {
-            // the bare ticker: Wealthsimple's `.TO` on a dual listing is not
-            // the app's convention
-            let sym = bagholder_model::venues::tmx_symbol(&field_s(&doc, "symbol"));
-            if sym.is_empty() {
-                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
-                return;
-            }
-            let ex = field_s(&doc, "exchange");
-            let inst = bagholder_model::instruments::find(&sym, &ex);
-            let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| field_s(&doc, "name"));
-            let ccy = inst.map(|i| i.currency.to_string()).filter(|c| !c.is_empty()).unwrap_or_else(|| field_s(&doc, "currency"));
-            let sid = field_s(&doc, "securityId");
-            with_conn(app, req, move |conn| {
-                bagholder_store::feeds::add_watch(conn, &sym, &ex, &name, &ccy, &sid, &now)?;
-                Ok(json!({"ok": true, "watchlist": bagholder_store::feeds::list_watchlist(conn)?}))
-            });
-        }
-        "/api/watchlist/remove" => {
-            let raw = field_s(&doc, "symbol");
-            let sym = bagholder_model::venues::tmx_symbol(&raw);
-            if sym.is_empty() {
-                send_json(req, 200, &json!({"ok": false, "error": "symbol required"}));
-                return;
-            }
-            let ex = field_s(&doc, "exchange");
-            with_conn(app, req, move |conn| {
-                bagholder_store::feeds::remove_watch(conn, &sym, &ex)?;
-                // a row kept under Wealthsimple's own form of the ticker
-                bagholder_store::feeds::remove_watch(conn, raw.trim(), &ex)?;
-                bagholder_store::feeds::forget_news(conn, &sym, &ex)?;
-                Ok(json!({"ok": true, "watchlist": bagholder_store::feeds::list_watchlist(conn)?}))
-            });
-        }
-        "/api/tiles/set" => {
-            // only instruments the directory knows, twelve at most
-            let mut rows: Vec<Value> = Vec::new();
-            let mut seen: Vec<&str> = Vec::new();
-            if let Some(list) = doc.get("tiles").and_then(|v| v.as_array()) {
-                for r in list {
-                    if let Some(i) = bagholder_model::instruments::find(&field_s(r, "symbol"), &field_s(r, "exchange")) {
-                        if !seen.contains(&i.symbol) {
-                            seen.push(i.symbol);
-                            rows.push(json!({"symbol": i.symbol, "exchange": i.exchange}));
-                        }
-                    }
-                }
-            }
-            if rows.len() > 12 {
-                send_json(req, 200, &json!({"ok": false, "error": "at most 12 tiles"}));
-                return;
-            }
-            with_conn(app, req, move |conn| {
-                let tiles = bagholder_store::admin::save_tiles(conn, &rows)?;
-                Ok(json!({"ok": true, "tiles": tiles}))
-            });
-        }
-        "/api/notifications/read" => {
-            let ids: Option<Vec<i64>> = doc.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect());
-            with_conn(app, req, move |conn| {
-                let n = bagholder_store::feeds::mark_notifications_read(conn, ids.as_deref(), &now)?;
-                Ok(json!({"ok": true, "read": n}))
-            });
-        }
-        "/api/notifications/seen" => {
-            let ids: Vec<i64> = doc.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect()).unwrap_or_default();
-            with_conn(app, req, move |conn| {
-                let n = bagholder_store::feeds::mark_notifications_seen(conn, &ids, &now)?;
-                Ok(json!({"ok": true, "seen": n}))
-            });
-        }
-        "/api/notifications/clear" => with_conn(app, req, |conn| {
-            Ok(json!({"ok": true, "cleared": bagholder_store::feeds::clear_notifications(conn)?}))
-        }),
-        "/api/notifications/settings" => with_conn(app, req, move |conn| {
-            let saved = notify::set_settings(conn, &doc)?;
-            Ok(json!({"ok": true, "settings": saved}))
-        }),
-        _ => send_json(req, 404, &json!({"ok": false, "error": "not ported"})),
+        "/api/groups" => with_store(req, &|conn| Ok(json!({"ok": true, "groups": bagholder_store::tables::save_trade_groups(conn, body.get("groups"))?}))),
+        "/api/notes" => with_store(req, &|conn| Ok(json!({"ok": true, "notes": bagholder_store::tables::save_trade_notes(conn, body.get("notes"))?}))),
+        _ => send_json(req, 404, &json!({"ok": false, "error": "not found"})),
     }
 }
 
-/// `bagholder.WATCH_SCAN_SEC`.
-const WATCH_SCAN_SEC: u64 = 10 * 60;
+// --------------------------------------------------------------------------
+// start
+// --------------------------------------------------------------------------
 
-fn fail(req: Request, e: rusqlite::Error) {
-    eprintln!("bagholder: {}", e);
-    send_json(req, 500, &json!({"ok": false, "error": "store failed"}));
+fn port_choices() -> Vec<u16> {
+    let env = std::env::var("BAGHOLDER_PORT").unwrap_or_default();
+    match env.trim().parse::<u16>() {
+        Ok(p) if p >= 1024 && env.trim().bytes().all(|c| c.is_ascii_digit()) => vec![p],
+        _ => PORTS.to_vec(),
+    }
+}
+
+fn open_browser(url: &str) {
+    let cmd: (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else if cfg!(windows) {
+        ("cmd", vec!["/C", "start", "", url])
+    } else {
+        ("xdg-open", vec![url])
+    };
+    let _ = std::process::Command::new(cmd.0).args(&cmd.1).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+}
+
+fn serve() -> i32 {
+    let home = home_dir();
+    let _ = std::fs::create_dir_all(&home);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+    }
+    let bind_host = { let b = std::env::var("BAGHOLDER_BIND").unwrap_or_default().trim().to_string(); if b.is_empty() { "127.0.0.1".to_string() } else { b } };
+    let a = app::init(home, root_dir(), bind_host.clone());
+    match a.open() {
+        Ok(conn) => {
+            if let Err(e) = bagholder_store::relabel::ensure(&conn) {
+                log(&format!("bagholder: the store could not be prepared: {}", e));
+                return 1;
+            }
+        }
+        Err(e) => {
+            log(&format!("bagholder: the store could not be opened: {}", e));
+            return 1;
+        }
+    }
+    session::boot_session();
+
+    let mut bound = None;
+    let mut last_err = String::new();
+    for port in port_choices() {
+        match Server::http(format!("{}:{}", bind_host, port)) {
+            Ok(srv) => {
+                bound = Some((srv, port));
+                break;
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    let (server, port) = match bound {
+        Some(b) => b,
+        None => {
+            let ports: Vec<String> = port_choices().iter().map(|p| p.to_string()).collect();
+            eprintln!("Could not bind {}:{} ({})", bind_host, ports.join("-"), last_err);
+            return 1;
+        }
+    };
+    *a.port.lock().unwrap() = port;
+
+    spawn("bagholder-auto-sync", session::auto_sync_loop);
+    spawn("bagholder-market", || {
+        feeds::refresh_market_data();
+    });
+    spawn("bagholder-update-check", || {
+        update::check_for_update();
+    });
+    spawn("bagholder-quote-loop", feeds::quote_loop);
+    spawn("bagholder-portfolio-loop", session::portfolio_loop);
+    spawn("bagholder-orders-loop", orders::orders_loop);
+    spawn("bagholder-bracket-loop", orders::bracket_loop);
+    spawn("bagholder-exposure-loop", feeds::exposure_loop);
+    // rows added before the bare-ticker convention (Wealthsimple's `.TO` on a dual listing) take it now
+    if let Ok(conn) = a.open() {
+        for w in bagholder_store::feeds::list_watchlist(&conn).unwrap_or_default() {
+            let sym = f(&w, "symbol");
+            let bare = bagholder_model::venues::tmx_symbol(&sym);
+            if !bare.is_empty() && bare != sym {
+                let _ = bagholder_store::feeds::remove_watch(&conn, &sym, &f(&w, "exchange"));
+                let _ = bagholder_store::feeds::add_watch(&conn, &bare, &f(&w, "exchange"), &f(&w, "name"), &f(&w, "currency"), &f(&w, "securityId"), &f(&w, "addedAt"));
+            }
+        }
+    }
+    spawn("bagholder-news-loop", feeds::news_loop);
+    spawn("bagholder-universe-loop", feeds::universe_loop);
+    spawn("bagholder-market-loop", feeds::market_loop);
+    spawn("bagholder-archive", feeds::archive_loop);
+    spawn("bagholder-watch", feeds::watch_loop);
+    spawn("bagholder-filings-sweep", feeds::filings_sweep_loop);
+    spawn("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
+    spawn("bagholder-fear-sweep", feeds::fear_sweep_loop);
+
+    let url = format!("http://127.0.0.1:{}", port);
+    println!("Bagholder  {}", url);
+    // a second instance run for verification must not open anyone's browser
+    if std::env::var("BAGHOLDER_NO_BROWSER").unwrap_or_default().trim().is_empty() {
+        open_browser(&url);
+    }
+    if a.state.lock().unwrap().connected {
+        let due = a.open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, app::now_unix() as i64 - 0).ok()).unwrap_or(false);
+        let _ = ACTIVITY_PULL_SEC;
+        if due {
+            spawn("bagholder-boot-sync", || {
+                session::run_sync(true, true);
+            });
+        } else {
+            spawn("bagholder-listings", || {
+                if let Some(sess) = session::load_session() {
+                    session::fill_listings(&sess, false);
+                }
+            });
+        }
+    }
+
+    let server = std::sync::Arc::new(server);
+    {
+        let server = server.clone();
+        spawn("bagholder-stop-watch", move || {
+            while !app().wait(Duration::from_secs(3600)) {}
+            server.unblock();
+        });
+    }
+    for req in server.incoming_requests() {
+        spawn("bagholder-request", move || handle(req));
+    }
+    a.exit_code.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn main() {
-    let home = home_dir();
-    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let bind_host = env_or("BAGHOLDER_BIND", "127.0.0.1");
-    let port: u16 = env_or("BAGHOLDER_PORT", &DEFAULT_PORT.to_string()).parse().unwrap_or(DEFAULT_PORT);
-    let started_at = now_iso();
-
-    let app = App {
-        home,
-        root,
-        bind_host: bind_host.clone(),
-        port,
-        started_at,
-        cache: Mutex::new(Cache { version: String::new(), base: None }),
-    };
-
-    let addr = format!("{}:{}", bind_host, port);
-    let server = match Server::http(&addr) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("bagholder: cannot bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
-    eprintln!("bagholder {} on http://{}/  (db: {})", APP_VERSION, addr, app.db_path().display());
-
-    let app = std::sync::Arc::new(app);
-
-    // `bagholder.watch_loop`: the watched folder, at start and every ten
-    // minutes; new or changed CSVs are imported
-    {
-        let app = app.clone();
-        std::thread::spawn(move || loop {
-            if let Ok(conn) = app.open() {
-                let watching = bagholder_store::csvimport::watch_folder(&conn).map(|f| !f.is_empty()).unwrap_or(false);
-                if watching {
-                    let _ = bagholder_store::csvimport::scan_folder(&conn, None, false);
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_secs(WATCH_SCAN_SEC));
-        });
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("bagholder {}", app::APP_VERSION);
+        return;
     }
-
-    for req in server.incoming_requests() {
-        let app = app.clone();
-        std::thread::spawn(move || handle(&app, req));
+    let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
+    if child || update::updates_off() {
+        // the supervisor exists to restart an updated server; a copy that never updates runs plain
+        std::process::exit(serve());
     }
-}
-
-/// `bagholder.FEAR_VERSION` and `FEAR_STALE_MIN`: CNN moves its index through
-/// the session, the crypto one once a day.
-const FEAR_VERSION: i64 = 1;
-const FEAR_STALE_MIN: f64 = 15.0;
-
-fn fear_stale(rec: &Value, now_unix: f64) -> bool {
-    if rec.get("readVersion").and_then(|v| v.as_i64()).unwrap_or(0) < FEAR_VERSION {
-        return true;
-    }
-    match bagholder_market::quotes::instant_secs_public(&field_s(rec, "fetchedAt")) {
-        Some(then) => (now_unix - then) > FEAR_STALE_MIN * 60.0,
-        None => true,
-    }
-}
-
-fn unix_now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
-}
-
-fn now_iso() -> String {
-    // the started-at stamp the page compares across a restart
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    let (y, m, d) = bagholder_model::dates::from_days(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
-}
-
-/// Kept so the reader type is used even before the write routes land.
-#[allow(dead_code)]
-fn body_of(req: &mut Request) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let _ = std::io::Read::read_to_end(req.as_reader(), &mut buf);
-    let _ = Cursor::new(&buf);
-    buf
+    std::process::exit(update::supervise(&home_dir(), update::UPDATE_HEALTHY_SEC));
 }
