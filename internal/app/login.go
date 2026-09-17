@@ -1155,6 +1155,10 @@ func (a *App) loginTraceLoop(attempt int) {
 				id := py.S(p["requestId"])
 				a.logf("bagholder login: request failed (%s) %s %s\n", py.S(p["type"]), py.S(p["errorText"]), sent[id])
 				delete(sent, id)
+			case "Page.javascriptDialogOpening":
+				a.logf("bagholder login: page dialog (%s) %s\n", py.S(p["type"]), py.S(p["message"]))
+			case "Page.navigatedWithinDocument":
+				a.logf("bagholder login: page %s (in document)\n", safeURL(py.S(p["url"])))
 			case "Runtime.consoleAPICalled":
 				args, _ := p["args"].([]any)
 				parts := make([]string, 0, len(args))
