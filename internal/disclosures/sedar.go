@@ -1,6 +1,7 @@
 package disclosures
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
+	xhtml "golang.org/x/net/html"
 )
 
 const (
@@ -92,7 +94,7 @@ var (
 	selectedRE  = regexp.MustCompile(`<option[^>]*selected[^>]*value="([^"]*)"|value="([^"]*)"[^>]*selected`)
 	viParamRE   = regexp.MustCompile(`(?i)<input\b([^>]*class="[^"]*viewInstanceFormParameter[^"]*"[^>]*)>`)
 	searchActRE = regexp.MustCompile(`(?s)(?:appSearchButton|-searchButton)[^>]*?onclick="[^"]*?cat\w*Callback\('(W\d+)','(\w+)'[^"]*?containerNodeId:'(W\d+)'`)
-	menuAnchor  = regexp.MustCompile(`(?s)<a[^>]*?catCallback\('(W\d+)','invokeMenuCb'[^>]*>(.*?)</a>`)
+	menuCbRE    = regexp.MustCompile(`catCallback\('(W\d+)','invokeMenuCb'`)
 	catCallback = regexp.MustCompile(`catCallback\('(W\d+)'`)
 	instRE      = regexp.MustCompile(`viewInstance/view\.html\?id=([0-9a-f]+)`)
 	instUpdRE   = regexp.MustCompile(`update\.html\?id=([0-9a-f]+)`)
@@ -101,11 +103,8 @@ var (
 	appRE       = regexp.MustCompile(`/(csa-\w+)/viewInstance`)
 	tagRE       = regexp.MustCompile(`<[^>]+>`)
 	issuerRE    = regexp.MustCompile(`appReceiveFocus">\s*([^<]*?\((\d{9})\))\s*</span>`)
-	docLinkRE   = regexp.MustCompile(`(?s)<a class="appDocumentView appResourceLink appDocumentLink" href="([^"]+)"[^>]*>\s*<span>(.*?)</span>`)
 	submittedRE = regexp.MustCompile(`<span aria-hidden="true">\s*(\d{1,2} \w{3} \d{4}[^<]*?)\s*</span>`)
-	sizeRE      = regexp.MustCompile(`(?i)(\d[\d.,]* ?(?:KB|MB|bytes))`)
-	riRowRE     = regexp.MustCompile(`(?s)<tr[^>]*appTblRow[^>]*>(.*?)</tr>`)
-	tdRE        = regexp.MustCompile(`(?s)<td[^>]*>(.*?)</td>`)
+	sizeRE      = regexp.MustCompile(`(?i)^\d[\d.,]* ?(?:KB|MB|bytes)`)
 	drmRE       = regexp.MustCompile(`drmKey=([0-9a-f]+)`)
 	nineRE      = regexp.MustCompile(`^\d{9}$`)
 	submitRE    = regexp.MustCompile(`^(\d{1,2}) (\w{3}) (\d{4})(?:\s+(\d{1,2}):(\d{2}))?`)
@@ -196,20 +195,71 @@ func sedarText(s string) string {
 	return py.Strip(py.CollapseSpace(html.UnescapeString(tagRE.ReplaceAllString(s, " "))))
 }
 
+func cleanText(s string) string {
+	return py.Strip(py.CollapseSpace(s))
+}
+
+type tagText struct {
+	b    strings.Builder
+	open bool
+}
+
+func (t *tagText) begin() {
+	t.b.Reset()
+	t.open = true
+}
+
+func (t *tagText) take(z *xhtml.Tokenizer, tt xhtml.TokenType) {
+	if !t.open {
+		return
+	}
+	if tt == xhtml.TextToken {
+		t.b.Write(z.Text())
+	} else {
+		t.b.WriteByte(' ')
+	}
+}
+
+func (t *tagText) end() string {
+	t.open = false
+	return cleanText(t.b.String())
+}
+
 func issuerMenuNode(doc, name string) string {
 	fallback := ""
 	want := strings.ToLower(cutRunes(sedarText(name), 20))
-	for _, m := range menuAnchor.FindAllStringSubmatch(doc, -1) {
-		t := sedarText(m[2])
-		if t == "" || strings.Contains(strings.ToLower(t), "search for profiles") {
-			continue
+	z := xhtml.NewTokenizer(strings.NewReader(doc))
+	var text tagText
+	node := ""
+	for {
+		tt := z.Next()
+		if tt == xhtml.ErrorToken {
+			break
 		}
-		if want != "" && strings.Contains(strings.ToLower(t), want) {
-			return m[1]
+		if tt == xhtml.StartTagToken || tt == xhtml.SelfClosingTagToken || tt == xhtml.EndTagToken {
+			tag, _ := z.TagName()
+			if !text.open && tt == xhtml.StartTagToken && string(tag) == "a" {
+				if m := menuCbRE.FindSubmatch(z.Raw()); m != nil {
+					node = string(m[1])
+					text.begin()
+				}
+				continue
+			}
+			if text.open && tt == xhtml.EndTagToken && string(tag) == "a" {
+				t := text.end()
+				if t == "" || strings.Contains(strings.ToLower(t), "search for profiles") {
+					continue
+				}
+				if want != "" && strings.Contains(strings.ToLower(t), want) {
+					return node
+				}
+				if fallback == "" {
+					fallback = node
+				}
+				continue
+			}
 		}
-		if fallback == "" {
-			fallback = m[1]
-		}
+		text.take(z, tt)
 	}
 	return fallback
 }
@@ -393,42 +443,143 @@ type Filing struct {
 	URL         string `json:"url"`
 }
 
+const (
+	docLinkPrefix = `<a class="appDocumentView appResourceLink appDocumentLink" href="`
+	issuerTail    = `appReceiveFocus">`
+	submittedTag  = `<span aria-hidden="true">`
+)
+
+type docLink struct {
+	start, end int
+	rawURL     string
+	file       string
+}
+
+type textSpan struct {
+	pos, end int
+	text, no string
+}
+
+func docLinkAt(doc string, start, tagEnd int, raw []byte) (docLink, bool) {
+	q := bytes.IndexByte(raw[len(docLinkPrefix):], '"')
+	if q < 1 {
+		return docLink{}, false
+	}
+	href := string(raw[len(docLinkPrefix) : len(docLinkPrefix)+q])
+	i := tagEnd
+	for i < len(doc) && strings.IndexByte(" \t\n\f\r", doc[i]) >= 0 {
+		i++
+	}
+	if !strings.HasPrefix(doc[i:], "<span>") {
+		return docLink{}, false
+	}
+	i += len("<span>")
+	n := strings.Index(doc[i:], "</span>")
+	if n < 0 {
+		return docLink{}, false
+	}
+	return docLink{start: start, end: i + n + len("</span>"), rawURL: html.UnescapeString(href), file: sedarText(doc[i : i+n])}, true
+}
+
+func scanFilings(doc string) ([]docLink, []textSpan, []textSpan) {
+	var links []docLink
+	var issuers, dates []textSpan
+	z := xhtml.NewTokenizer(strings.NewReader(doc))
+	off, skip := 0, 0
+	pending, pendingDate := -1, false
+	for {
+		tt := z.Next()
+		if tt == xhtml.ErrorToken {
+			break
+		}
+		raw := z.Raw()
+		start := off
+		off += len(raw)
+		switch tt {
+		case xhtml.TextToken:
+			continue
+		case xhtml.EndTagToken:
+			if pending >= 0 && string(raw) == "</span>" {
+				snippet := doc[pending:off]
+				if pendingDate {
+					if m := submittedRE.FindStringSubmatch(snippet); m != nil {
+						dates = append(dates, textSpan{pos: pending, end: off, text: strings.TrimSpace(m[1])})
+					}
+				} else if m := issuerRE.FindStringSubmatch(snippet); m != nil {
+					issuers = append(issuers, textSpan{pos: pending, end: off, text: sedarText(m[1]), no: m[2]})
+				}
+			}
+			pending = -1
+		case xhtml.StartTagToken:
+			pending = -1
+			if start >= skip && bytes.HasPrefix(raw, []byte(docLinkPrefix)) {
+				if l, ok := docLinkAt(doc, start, off, raw); ok {
+					links = append(links, l)
+					skip = l.end
+				}
+			} else if bytes.HasSuffix(raw, []byte(issuerTail)) {
+				pending, pendingDate = start+len(raw)-len(issuerTail), false
+			} else if string(raw) == submittedTag {
+				pending, pendingDate = start, true
+			}
+		default:
+			pending = -1
+		}
+	}
+	return links, issuers, dates
+}
+
+func sizeIn(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			continue
+		}
+		j := i + 1
+		for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == '.' || s[j] == ',') {
+			j++
+		}
+		if j < len(s) && s[j] == ' ' {
+			j++
+		}
+		if j < len(s) && strings.IndexByte("kKmMbB\xe2", s[j]) >= 0 {
+			if m := sizeRE.FindString(s[i:]); m != "" {
+				return m
+			}
+		}
+		i = j - 1
+	}
+	return ""
+}
+
 func ParseFilings(doc string) []Filing {
 	out := []Filing{}
-	for _, m := range docLinkRE.FindAllStringSubmatchIndex(doc, -1) {
-		rawURL := html.UnescapeString(doc[m[2]:m[3]])
-		start := m[0] - 2600
+	links, issuers, dates := scanFilings(doc)
+	ii, di := 0, 0
+	for _, l := range links {
+		start := l.start - 2600
 		if start < 0 {
 			start = 0
 		}
-		before := doc[start:m[0]]
-		end := m[1] + 1400
+		end := l.end + 1400
 		if end > len(doc) {
 			end = len(doc)
 		}
-		after := doc[m[1]:end]
-		var issuer []string
-		for _, im := range issuerRE.FindAllStringSubmatch(before, -1) {
-			issuer = im
+		for ii < len(issuers) && issuers[ii].end <= l.start {
+			ii++
 		}
-		sub := submittedRE.FindStringSubmatch(after)
-		size := sizeRE.FindStringSubmatch(after)
-		profileNo := ""
-		issuerName := ""
-		if issuer != nil {
-			profileNo = issuer[2]
-			issuerName = sedarText(issuer[1])
+		profileNo, issuerName := "", ""
+		if ii > 0 && issuers[ii-1].pos >= start {
+			profileNo, issuerName = issuers[ii-1].no, issuers[ii-1].text
 		}
-		file := sedarText(doc[m[4]:m[5]])
+		for di < len(dates) && dates[di].pos < l.end {
+			di++
+		}
 		submitted := ""
-		if sub != nil {
-			submitted = strings.TrimSpace(sub[1])
+		if di < len(dates) && dates[di].end <= end {
+			submitted = dates[di].text
 		}
-		sz := ""
-		if size != nil {
-			sz = size[1]
-		}
-		out = append(out, Filing{ID: FilingID(rawURL, profileNo, file, submitted), Issuer: issuerName, ProfileNo: profileNo, File: file, Submitted: submitted, SubmittedAt: sedarISO(submitted), Size: sz, URL: rawURL})
+		sz := sizeIn(doc[l.end:end])
+		out = append(out, Filing{ID: FilingID(l.rawURL, profileNo, l.file, submitted), Issuer: issuerName, ProfileNo: profileNo, File: l.file, Submitted: submitted, SubmittedAt: sedarISO(submitted), Size: sz, URL: l.rawURL})
 	}
 	return out
 }
@@ -459,13 +610,45 @@ type Profile struct {
 	Type         string `json:"type"`
 }
 
+func tableRows(doc string) [][]string {
+	var rows [][]string
+	var cells []string
+	var cell tagText
+	inRow := false
+	z := xhtml.NewTokenizer(strings.NewReader(doc))
+	for {
+		tt := z.Next()
+		if tt == xhtml.ErrorToken {
+			break
+		}
+		if tt == xhtml.StartTagToken || tt == xhtml.SelfClosingTagToken || tt == xhtml.EndTagToken {
+			tag, _ := z.TagName()
+			switch {
+			case !inRow:
+				if tt == xhtml.StartTagToken && string(tag) == "tr" && bytes.Contains(z.Raw(), []byte("appTblRow")) {
+					inRow, cells = true, nil
+				}
+				continue
+			case tt == xhtml.EndTagToken && string(tag) == "tr":
+				rows = append(rows, cells)
+				inRow, cell.open = false, false
+				continue
+			case tt == xhtml.StartTagToken && string(tag) == "td" && !cell.open:
+				cell.begin()
+				continue
+			case tt == xhtml.EndTagToken && string(tag) == "td" && cell.open:
+				cells = append(cells, cell.end())
+				continue
+			}
+		}
+		cell.take(z, tt)
+	}
+	return rows
+}
+
 func ParseReportingIssuers(doc string) []Profile {
 	out := []Profile{}
-	for _, row := range riRowRE.FindAllStringSubmatch(doc, -1) {
-		var cells []string
-		for _, c := range tdRE.FindAllStringSubmatch(row[1], -1) {
-			cells = append(cells, sedarText(c[1]))
-		}
+	for _, cells := range tableRows(doc) {
 		idx := -1
 		for i, c := range cells {
 			if nineRE.MatchString(c) {
