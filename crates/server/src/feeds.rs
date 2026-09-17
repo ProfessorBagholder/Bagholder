@@ -937,7 +937,7 @@ pub trait Readers {
     fn disclosures_available(&self) -> bool { disclosures::available() }
     fn enrichment(&self, row: &Value) -> Option<Value> { disclosures::enrichment(row) }
     fn content(&self, row: &Value) -> disclosures::Fetched<(Vec<u8>, String)> { disclosures::content(row) }
-    fn enrich_document(&self, source: &str, data: &[u8], ct: &str) -> Value { enrich::enrich_document(source, data, ct) }
+    fn enrich_document_of(&self, code: &str, source: &str, data: &[u8], ct: &str) -> Value { enrich::enrich_document_of(code, source, data, ct) }
 }
 
 struct LiveReaders;
@@ -979,7 +979,7 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
     if !model {
         model = r.wait_for_summary(enrich::SUMMARY_WAIT_SEC);
     }
-    let info = r.enrich_document(&f(&row, "source"), &data, &ct);
+    let info = r.enrich_document_of(&f(&row, "type"), &f(&row, "source"), &data, &ct);
     let new_subject = f(&info, "subject");
     let got_summary = f(&info, "summary");
     if is_true(&info, "final") {
@@ -1850,7 +1850,7 @@ mod tests {
             self.reads.set(self.reads.get() + 1);
             Ok((b"%PDF-1.4 body".to_vec(), "application/pdf".into()))
         }
-        fn enrich_document(&self, _: &str, _: &[u8], _: &str) -> Value {
+        fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> Value {
             let mut v = json!({"subject": self.read.0, "summary": self.read.1});
             if self.final_ {
                 v["final"] = json!(true);

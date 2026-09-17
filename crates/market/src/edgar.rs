@@ -350,7 +350,8 @@ pub fn enrichment(row: &Value) -> Option<Value> {
 pub fn enrichment_with(row: &Value, document: &dyn Fn(&Value) -> Fetched<(Vec<u8>, String)>) -> Option<Value> {
     let typ = s(row.get("type")).to_uppercase();
     if !typ.starts_with("SCHEDULE 13") {
-        return None;
+        // every other form carries its own name, which needs no download
+        return crate::formnames::title_of(&typ).map(|t| json!({"subject": t, "summary": ""}));
     }
     static XSL: OnceLock<Regex> = OnceLock::new();
     let raw_url = XSL.get_or_init(|| Regex::new(r"/xsl[^/]*/").unwrap()).replace_all(&s(row.get("url")), "/").into_owned();

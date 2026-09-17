@@ -219,3 +219,33 @@ fn test_a_bare_name_is_still_no_summary() {
     set_chat(|_, _| "Quantum eMotion Corp.".into());
     assert_eq!(enrich::summarize("the filing's text"), "");
 }
+
+// --- the form's own name --------------------------------------------------------
+
+#[test]
+fn test_a_form_is_named_by_its_code() {
+    use bagholder_market::formnames::title_of;
+    assert_eq!(title_of("4").unwrap(), "Form 4: Statement of changes in beneficial ownership");
+    assert_eq!(title_of("144").unwrap(), "Form 144: Notice of proposed sale of securities");
+    assert_eq!(title_of("424B5").unwrap(), "Form 424B5: Prospectus");
+    assert_eq!(title_of("S-1/A").unwrap(), "Form S-1: Registration statement (amended)");
+    assert_eq!(title_of("DEF 14A").unwrap(), "Form DEF 14A: Proxy statement");
+    assert!(title_of("8-K").is_none(), "a current report is named by its items");
+    assert!(title_of("45-106F1").is_none(), "not one of the SEC's own codes");
+}
+
+#[test]
+fn test_a_current_report_is_named_by_its_items() {
+    use bagholder_market::formnames::items_title;
+    let one = "Item 2.02 Results of Operations and Financial Condition. Item 9.01 Financial Statements and Exhibits.";
+    assert_eq!(items_title("8-K", one).unwrap(), "Form 8-K: Results of operations and financial condition");
+    let two = "Item 5.02 Departure of Directors. Item 7.01 Regulation FD Disclosure. Item 9.01 Exhibits.";
+    assert_eq!(
+        items_title("8-K", two).unwrap(),
+        "Form 8-K: Departure or election of directors or officers and Regulation FD disclosure"
+    );
+    let many = "Item 1.01. Item 2.01. Item 3.02. Item 8.01.";
+    assert_eq!(items_title("8-K", many).unwrap(), "Form 8-K: Entry into a material agreement and 3 other items");
+    assert!(items_title("8-K", "no items here").is_none());
+    assert!(items_title("8-K", "Item 9.01 Financial Statements and Exhibits").is_none(), "every report has exhibits");
+}

@@ -352,7 +352,13 @@ pub fn title_from_model(text: &str) -> String {
 /// document, both from its readable text. `final` says the document has been
 /// read for good -- a regulator's form, read exactly or not at all -- and no
 /// model will add to it.
-pub fn enrich_document(_source: &str, data: &[u8], content_type: &str) -> Value {
+pub fn enrich_document(source: &str, data: &[u8], content_type: &str) -> Value {
+    enrich_document_of("", source, data, content_type)
+}
+
+/// The same, told which form the document is, so a current report is named by
+/// its own items and the model is asked for the sentence alone.
+pub fn enrich_document_of(code: &str, _source: &str, data: &[u8], content_type: &str) -> Value {
     let is_pdf = data.starts_with(b"%PDF-");
     let mut subject = if is_pdf { extract_pdf_subject(data) } else { String::new() };
     if is_junk_title(&subject) {
@@ -371,9 +377,16 @@ pub fn enrich_document(_source: &str, data: &[u8], content_type: &str) -> Value 
     if crate::forms::is_form(&text) {
         return json!({"subject": subject, "summary": "", "final": true});
     }
+    if let Some(named) = crate::formnames::items_title(code, &text) {
+        subject = named;   // the report's own items, better than any sentence about them
+    } else if subject.is_empty() {
+        if let Some(named) = crate::formnames::any_title(code) {
+            subject = named;
+        }
+    }
     let summary = summarize(&text);
     if subject.is_empty() {
-        subject = title_from_model(&text);
+        subject = title_from_model(&text);   // a form the regulator does not name: the model reads one
     }
     json!({"subject": subject, "summary": summary})
 }
