@@ -138,7 +138,7 @@ fn get_ok(url: &str, timeout: Duration) -> bool {
     crate::client::request("GET", url, &[("User-Agent", "Bagholder")], None, timeout).is_ok()
 }
 
-/// `localmodel._detect_running`: a user-run endpoint, if one answers now.
+/// A user-run endpoint, if one answers now.
 fn detect_running() -> Option<(String, String)> {
     if let Some(r) = hooks::DETECT.with(|h| h.borrow().as_ref().map(|f| f())) {
         return r;
@@ -154,7 +154,7 @@ fn detect_running() -> Option<(String, String)> {
     None
 }
 
-/// `localmodel.status`: off, detecting, downloading, starting, ready, failed.
+/// Off, detecting, downloading, starting, ready, failed.
 pub fn status() -> &'static str {
     if let Some(r) = hooks::STATUS.with(|h| h.borrow().as_ref().map(|f| f())) {
         return r;
@@ -170,7 +170,7 @@ pub fn available() -> bool {
     !endpoint().is_empty()
 }
 
-/// `localmodel.wait_ready`: wait at most `seconds` for a model that is coming
+/// Wait at most `seconds` for a model that is coming
 /// up right now. A download is never waited for.
 pub fn wait_ready(seconds: f64) -> bool {
     endpoint();
@@ -189,7 +189,7 @@ pub fn wait_ready(seconds: f64) -> bool {
     available()
 }
 
-/// `localmodel.endpoint`: the base URL of a working local model, or "" if none
+/// The base URL of a working local model, or "" if none
 /// is up yet. Never blocks on a download.
 pub fn endpoint() -> String {
     if let Some(r) = hooks::ENDPOINT.with(|h| h.borrow().as_ref().map(|f| f())) {
@@ -212,7 +212,7 @@ pub fn endpoint() -> String {
     String::new()
 }
 
-/// `localmodel.ensure`: start provisioning if it is not already under way.
+/// Start provisioning if it is not already under way.
 pub fn ensure() {
     if hooks::ENSURE.with(|h| h.borrow().as_ref().map(|f| f()).is_some()) {
         return;
@@ -362,7 +362,7 @@ fn wait_started() -> bool {
     false
 }
 
-/// `localmodel.shutdown`: stop the model server this app started.
+/// Stop the model server this app started.
 pub fn shutdown() {
     let proc = state().lock().unwrap().proc.take();
     if let Some(mut p) = proc {
@@ -373,7 +373,7 @@ pub fn shutdown() {
     }
 }
 
-/// `localmodel.chat`: one completion from the local model over the
+/// One completion from the local model over the
 /// OpenAI-compatible API both Ollama and llamafile speak, or "".
 pub fn chat(prompt: &str, max_tokens: i64) -> String {
     if let Some(r) = hooks::CHAT.with(|h| h.borrow().as_ref().map(|f| f(prompt, max_tokens))) {

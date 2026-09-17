@@ -1,13 +1,16 @@
 # bagholder-ws
 
-The Wealthsimple client, ported from `bagholder.py`.
+The Wealthsimple client: the session and token refresh, the GraphQL operations,
+the account, activity, balance, margin, NAV and security fetches, the activity
+mapper, and one sync pull.
 
-Ported so far: the GraphQL operations and the activity mapper. The session,
-the token refresh and the sync itself are next; the order routes after that.
+The operations in `graphql/` are the exact text Wealthsimple's web client
+sends, recovered from its public web bundle and included rather than retyped.
 
-The seventeen operations in `graphql/` are the exact text `bagholder.QUERIES`
-holds, extracted from it rather than retyped, and `qcheck` compares them
-character for character. They were recovered from the public web bundle.
+## Tests
 
-    cargo build -p bagholder-ws
-    python3 crates/ws/maptest.py
+    cargo test -p bagholder-ws
+
+`tests/mapping.rs` covers the mapper, sync bounds and NAV helpers with no
+network; `tests/http.rs` runs the client against a stand-in server on
+127.0.0.1.

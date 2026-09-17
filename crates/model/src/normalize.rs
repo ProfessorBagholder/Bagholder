@@ -1,5 +1,5 @@
 //! Activity normalization: a copy of each raw Wealthsimple row with crypto and
-//! option events expressed as trade fills. `model.normalize_activity`.
+//! option events expressed as trade fills. `normalize_activity`.
 //!
 //! The raw rows are never rewritten in the store; this is a derived copy.
 
@@ -10,13 +10,13 @@ use crate::value::{compact, field_num, field_s, norm_account_name, num, EPS};
 
 pub const KINDS: [&str; 4] = ["Shares", "Options", "Crypto", "Futures"];
 
-/// `model.is_crypto_activity`.
+/// `is_crypto_activity`.
 pub fn is_crypto_activity(a: &Value) -> bool {
     compact(&field_s(a, "rawType")).starts_with("CRYPTO")
         || compact(&field_s(a, "activityType")).starts_with("CRYPTO")
 }
 
-/// `model.kind_of`: an explicit kind wins, then crypto, then the symbol.
+/// `kind_of`: an explicit kind wins, then crypto, then the symbol.
 pub fn kind_of(a: &Value) -> String {
     let k = field_s(a, "kind");
     if KINDS.contains(&k.as_str()) { return k; }
@@ -29,13 +29,13 @@ fn type_fields(a: &Value) -> (String, String) {
     (compact(&field_s(a, "activityType")), compact(&field_s(a, "activitySubType")))
 }
 
-/// `model.is_intentional_open`: a row that says it opens a position.
+/// `is_intentional_open`: a row that says it opens a position.
 pub fn is_intentional_open(a: &Value) -> bool {
     let (at, sub) = type_fields(a);
     at.contains("TOOPEN") || sub.contains("TOOPEN") || at == "STO" || at == "BTO" || sub == "STO" || sub == "BTO"
 }
 
-/// `model.is_close_only`: a row that can only reduce a position -- an explicit
+/// `is_close_only`: a row that can only reduce a position -- an explicit
 /// close, or the expiry/assignment/exercise the broker posts for one.
 pub fn is_close_only(a: &Value) -> bool {
     let (at, sub) = type_fields(a);
@@ -48,7 +48,7 @@ pub fn is_close_only(a: &Value) -> bool {
     false
 }
 
-/// `model.opening_direction`: which way a fill opens, or `None` when it can
+/// `opening_direction`: which way a fill opens, or `None` when it can
 /// only close. A bare share sale is never read as a short unless the row says
 /// it opened one, so a sale of something bought before the history starts does
 /// not invent a short position.
@@ -74,7 +74,7 @@ fn push_flag(m: &mut Map<String, Value>, flag: &str) {
     if let Some(Value::Array(a)) = m.get_mut("flags") { a.push(Value::String(flag.into())); }
 }
 
-/// `model.normalize_activity`.
+/// `normalize_activity`.
 pub fn normalize_activity(activity: &Value) -> Value {
     let mut a: Map<String, Value> = match activity {
         Value::Object(o) => o.clone(),
@@ -196,7 +196,7 @@ pub fn normalize_activities(activities: &[Value]) -> Vec<Value> {
     activities.iter().map(normalize_activity).collect()
 }
 
-/// `model.fifo_account`: the nickname when there is one, so two accounts with
+/// `fifo_account`: the nickname when there is one, so two accounts with
 /// the same symbol keep separate books; the ids only when there is not.
 pub fn fifo_account(a: &Value) -> String {
     let nick = norm_account_name(&field_s(a, "accountType"));
@@ -206,24 +206,24 @@ pub fn fifo_account(a: &Value) -> String {
     field_s(a, "accountId")
 }
 
-/// `model.book_key`.
+/// `book_key`.
 pub fn book_key(a: &Value) -> String {
     format!("{}::{}::{}", fifo_account(a), field_s(a, "symbol"), field_s(a, "currency"))
 }
 
-/// `model.roll_key`: what an option roll is folded within -- one account, one
+/// `roll_key`: what an option roll is folded within -- one account, one
 /// underlying, one right.
 pub fn roll_key(a: &Value) -> (String, String, &'static str) {
     let sym = field_s(a, "symbol");
     (fifo_account(a), underlying_symbol(&sym), option_right(&sym))
 }
 
-/// `model.is_multileg`.
+/// `is_multileg`.
 pub fn is_multileg(a: &Value) -> bool {
     compact(&field_s(a, "rawType")).contains("MULTILEG")
 }
 
-/// `model.fold_stkdis`: net the +N/-N name-change rows posted on one day, and
+/// `fold_stkdis`: net the +N/-N name-change rows posted on one day, and
 /// open whatever is left over at $0.
 /// The same folding, keeping each surviving row's index in the caller's list.
 /// The netted replacement row has no origin, since it is not one of them.
@@ -301,5 +301,5 @@ pub fn fold_stkdis(activities: &[Value]) -> Vec<Value> {
     rest
 }
 
-/// `model.num` re-exported for callers that hold a raw `Value`.
+/// `num` re-exported for callers that hold a raw `Value`.
 pub fn n(v: Option<&Value>) -> f64 { num(v, 0.0) }

@@ -1,8 +1,7 @@
 //! The app's clock. Activities are pulled and read in America/Edmonton, so an
 //! instant becomes a date and a time there, not in UTC.
 //!
-//! The zone comes from the system's own tzdata, the same files Python's
-//! `zoneinfo` reads, rather than from a snapshot compiled into this binary.
+//! The zone comes from the system's own tzdata, rather than from a snapshot compiled into this binary.
 //! The rules move: Alberta's switch to permanent Central Standard Time during
 //! 2026 is in the system database already, and a bundled copy a version behind
 //! puts every winter fill an hour out.
@@ -10,7 +9,7 @@
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use std::sync::OnceLock;
 
-/// `store.ACTIVITY_PULL_TZ`.
+/// `ACTIVITY_PULL_TZ`.
 pub const TZ_NAME: &str = "America/Edmonton";
 
 fn zone() -> &'static Option<tz::TimeZone> {
@@ -29,9 +28,9 @@ fn local_parts(unix: i64) -> Option<(i64, u32, u32, u32, u32)> {
     Some((y, m, d, (secs / 3600) as u32, ((secs % 3600) / 60) as u32))
 }
 
-/// `model.when_parts`: an ISO instant becomes `(YYYY-MM-DD, HH:MM)` locally.
+/// `when_parts`: an ISO instant becomes `(YYYY-MM-DD, HH:MM)` locally.
 /// A bare date has no time, and an unreadable instant keeps its first ten
-/// characters, as the Python fallback does.
+/// characters.
 pub fn when_parts(occurred: &str) -> (String, String) {
     let s = occurred.trim();
     if s.is_empty() {
@@ -45,7 +44,7 @@ pub fn when_parts(occurred: &str) -> (String, String) {
         .map(|d| d.with_timezone(&Utc))
         .ok()
         .or_else(|| {
-            // No offset at all: Python reads it as naive and pins it to UTC.
+            // No offset at all: read as naive and pinned to UTC.
             NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S")
                 .or_else(|_| NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S%.f"))
                 .or_else(|_| NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M"))
@@ -59,7 +58,7 @@ pub fn when_parts(occurred: &str) -> (String, String) {
     }
 }
 
-/// `model.today_local`.
+/// `today_local`.
 pub fn today_local() -> String {
     match local_parts(Utc::now().timestamp()) {
         Some((y, m, d, _, _)) => crate::dates::fmt(y, m, d),

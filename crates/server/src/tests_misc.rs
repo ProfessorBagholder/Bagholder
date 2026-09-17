@@ -1,6 +1,6 @@
-//! Ported from tests/test_store.py: StoreTest (status, protocol, port, update
-//! check, history endpoint), VersionsTest, TilesTest, WatchlistTest,
-//! InAppUpdateTest (the parts reachable without a network or a child process).
+//! Status, protocol, port, update
+//! check, history endpoint, versions, tiles, watchlist and in-app update
+//! (the parts reachable without a network or a child process).
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ fn guard() -> std::sync::MutexGuard<'static, ()> {
     g
 }
 
-/// A fresh database of its own, as the Python setUp's temporary home.
+/// A fresh database of its own, in a temporary home.
 struct Db {
     dir: PathBuf,
     conn: Connection,

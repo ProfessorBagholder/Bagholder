@@ -40,7 +40,7 @@ fn f64_at(b: &[u8], off: usize) -> f64 {
     f64::from_le_bytes(a)
 }
 
-/// `xls.streams`: the named streams of an OLE compound file.
+/// The named streams of an OLE compound file.
 pub fn streams(raw: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
     if raw.len() < 512 || raw[..8] != MAGIC {
         return Err("not an OLE compound file".into());
@@ -58,8 +58,8 @@ pub fn streams(raw: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
     }
 
     // A sector past the end of the file reads as the bytes that are there,
-    // as a slice does in Python; only a table that has to be unpacked from a
-    // sector cut short is refused, which is where Python's `unpack_from` raises.
+    // as a clamped slice does; only a table that has to be unpacked from a
+    // sector cut short is refused, which is an error.
     let sector = |i: i32| -> Result<&[u8], String> {
         let from = (512 + (i.max(0) as usize) * ssz).min(raw.len());
         let from = if i < 0 { raw.len() } else { from };
@@ -170,7 +170,7 @@ pub fn streams(raw: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
     Ok(out)
 }
 
-/// `xls.records`: the stream's records, as (id, body).
+/// The stream's records, as (id, body).
 pub fn records(buf: &[u8]) -> Vec<(u16, &[u8])> {
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -184,7 +184,7 @@ pub fn records(buf: &[u8]) -> Vec<(u16, &[u8])> {
     out
 }
 
-/// `xls._number`: a packed number -- the low two bits are flags, the rest is
+/// A packed number -- the low two bits are flags, the rest is
 /// either a 30-bit signed integer or the top half of a double, and bit 0 means
 /// the value is in hundredths.
 fn number(v: u32) -> f64 {
@@ -197,14 +197,14 @@ fn number(v: u32) -> f64 {
     if v & 1 != 0 { x / 100.0 } else { x }
 }
 
-/// A record read that needs bytes the record does not have: where Python's
-/// `unpack_from` raises, a cut-short workbook is refused rather than read as
+/// A record read that needs bytes the record does not have: a
+/// cut-short workbook is refused rather than read as
 /// zeros.
 fn need(data: &[u8], upto: usize) -> Result<(), String> {
     if upto > data.len() { Err("truncated record".into()) } else { Ok(()) }
 }
 
-/// `xls._text`: a length, a flag saying how wide its characters are, then the
+/// A length, a flag saying how wide its characters are, then the
 /// characters.
 fn text(data: &[u8], off: usize) -> Result<String, String> {
     need(data, off + 3)?;
@@ -215,12 +215,12 @@ fn text(data: &[u8], off: usize) -> Result<String, String> {
     Ok(decode(&data[from..to], wide))
 }
 
-/// Python's `bytes.decode(..., "replace")` for the two widths the format uses.
+/// Text decoded with invalid units replaced by U+FFFD, for the two widths the format uses.
 fn decode(body: &[u8], wide: bool) -> String {
     if wide {
         let units: Vec<u16> = body.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         let mut s = String::from_utf16_lossy(&units);
-        // an odd trailing byte is a truncated unit, which Python replaces
+        // an odd trailing byte is a truncated unit, which is replaced
         if body.len() % 2 == 1 {
             s.push('\u{fffd}');
         }
@@ -231,7 +231,7 @@ fn decode(body: &[u8], wide: bool) -> String {
     }
 }
 
-/// `xls._shared`: the workbook's shared strings, which cells then refer to by
+/// The workbook's shared strings, which cells then refer to by
 /// number.
 fn shared(chunks: &[&[u8]]) -> Result<Vec<String>, String> {
     let mut buf: Vec<u8> = Vec::new();
@@ -264,7 +264,7 @@ fn shared(chunks: &[&[u8]]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// `xls.cells`: {(row, column): value} for the records this reads, ignoring
+/// {(row, column): value} for the records this reads, ignoring
 /// the rest.
 pub fn cells(buf: &[u8]) -> Result<HashMap<(u16, u16), Value>, String> {
     let mut out: HashMap<(u16, u16), Value> = HashMap::new();
@@ -322,7 +322,7 @@ pub fn cells(buf: &[u8]) -> Result<HashMap<(u16, u16), Value>, String> {
     Ok(out)
 }
 
-/// `xls.table`: the workbook's first stream as rows of cells, blanks filled
+/// The workbook's first stream as rows of cells, blanks filled
 /// in.
 pub fn table(raw: &[u8]) -> Result<Vec<Vec<Value>>, String> {
     let found = streams(raw)?;

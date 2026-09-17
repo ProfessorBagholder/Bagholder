@@ -1,18 +1,21 @@
 # bagholder-store
 
-The SQLite store in Rust, ported from `store.py`. It reads and writes the same
-`~/.bagholder/bagholder.db` the Python app does.
+The SQLite store: `~/.bagholder/bagholder.db`, its schema and migrations, and
+every read and write the app makes against it -- activities and the Wealthsimple
+merge, CSV import, accounts, balances, margin, NAV, securities, the journal,
+market data, orders and the feeds.
 
-Ported so far: the schema, every migration, and `ensure()`.
+The DDL lives in `sql/schema_0.sql` and `sql/schema_1.sql` and is
+`include_str!`d by `schema.rs`. `relabel::ensure` creates or migrates a
+database and relabels option rows stored under Wealthsimple's own labels.
 
-The DDL is not retyped. `sql/schema_0.sql` and `sql/schema_1.sql` are the exact
-text `store._init_schema` executes, extracted from it and `include_str!`d, so
-the two cannot drift.
+## Testing
 
-    cargo build -p bagholder-store
-    python3 crates/store/ensuretest.py
+    cargo test -p bagholder-store
 
-`ensuretest.py` writes a database, fills it with raw Wealthsimple option rows
-under the broker's own labels, copies it, runs each implementation's `ensure()`
-on its own copy and compares every table row for row -- so the relabelling and
-the one-shot unit-price scaling cannot differ.
+## Demo book
+
+`demo-book` writes a made-up book for the README screenshots:
+
+    cargo run -p bagholder-store --bin demo-book -- --home /tmp/bh-demo        # a desktop data directory
+    cargo run -p bagholder-store --bin demo-book -- --pull /tmp/bh-demo-phone  # last-pull.json + journal.json for the apps

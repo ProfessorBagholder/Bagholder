@@ -1,6 +1,6 @@
-//! Python's character predicates -- `str.isalpha`, `isdigit`, `isupper`,
-//! `isspace`, and `\w` -- as range tables generated from CPython's own
-//! unicodedata (Unicode 15.0.0), so a character reads the same in both.
+//! Unicode character predicates -- alphabetic, digit, uppercase, space and
+//! word character -- as range tables generated from the Unicode 15.0.0
+//! character database, so a character reads the same on every platform.
 
 pub const ALPHA: [(u32, u32); 659] = [
     (0x41, 0x5a), (0x61, 0x7a), (0xaa, 0xaa), (0xb5, 0xb5), (0xba, 0xba), (0xc0, 0xd6),
@@ -467,7 +467,7 @@ fn within(table: &[(u32, u32)], c: char) -> bool {
     table.binary_search_by(|(a, b)| if cp < *a { std::cmp::Ordering::Greater } else if cp > *b { std::cmp::Ordering::Less } else { std::cmp::Ordering::Equal }).is_ok()
 }
 
-/// `str.isalpha()` of one character.
+/// Whether one character is alphabetic.
 pub fn is_alpha(c: char) -> bool { within(&ALPHA, c) }
 /// `str.isdigit()` of one character.
 pub fn is_digit(c: char) -> bool { within(&DIGIT, c) }

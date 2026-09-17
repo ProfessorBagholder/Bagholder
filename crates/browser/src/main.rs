@@ -4,7 +4,7 @@
 //! stdout its answer, `{"status": ..., "url": final url, "headers": [[name,
 //! value], ...], "body": text}` -- or `"base64"` in place of `"body"` when the
 //! request asked for bytes -- or `{"error": ...}`. Redirects are followed and
-//! cookies kept for the life of the process, as a `curl_cffi` session does.
+//! cookies kept for the life of the process.
 
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};

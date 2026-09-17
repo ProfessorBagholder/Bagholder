@@ -12,12 +12,12 @@ use crate::fifo::Slice;
 use crate::symbols::option_multiplier;
 
 /// The rate used when the book carries none at all, so a missing rate cannot
-/// empty a figure. `model.FX_FALLBACK`.
+/// empty a figure. `FX_FALLBACK`.
 pub const FX_FALLBACK: f64 = 1.35;
 
 pub type Fx = HashMap<String, f64>;
 
-/// `model.rate_on`: the rate on the day, or the most recent one within a
+/// `rate_on`: the rate on the day, or the most recent one within a
 /// fortnight before it.
 pub fn rate_on(fx: &Fx, day: &str) -> f64 {
     let mut d = head10(day);
@@ -35,7 +35,7 @@ pub fn rate_on(fx: &Fx, day: &str) -> f64 {
     FX_FALLBACK
 }
 
-/// `model.to_cad`: only USD is converted; everything else is already CAD.
+/// `to_cad`: only USD is converted; everything else is already CAD.
 pub fn to_cad(fx: &Fx, amount: f64, currency: &str, day: &str) -> f64 {
     let ccy = if currency.is_empty() { "CAD".to_string() } else { currency.to_uppercase() };
     if ccy != "USD" {
@@ -44,7 +44,7 @@ pub fn to_cad(fx: &Fx, amount: f64, currency: &str, day: &str) -> f64 {
     amount * rate_on(fx, day)
 }
 
-/// `model.apply_fx`: each leg is converted on its own date, so a trade held
+/// `apply_fx`: each leg is converted on its own date, so a trade held
 /// across a move in the dollar keeps the gain the dollar made.
 pub fn apply_fx(slices: &mut [Slice], fx: &Fx) {
     for t in slices.iter_mut() {

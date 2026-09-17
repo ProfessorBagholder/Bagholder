@@ -42,7 +42,7 @@ fn strike_from_symbol(symbol: &str) -> f64 {
     tok.parse().unwrap_or(0.0)
 }
 
-/// `model.synthesize_assignment_shares`: an assigned short option delivers
+/// `synthesize_assignment_shares`: an assigned short option delivers
 /// shares, but Wealthsimple posts only the option row, with the strike cash on
 /// it. A call assignment sells contracts x 100 shares at the strike, a put
 /// assignment buys them.
@@ -120,7 +120,7 @@ pub fn synthesize_assignment_shares(activities: &[Value], underlying_id_of: &dyn
     out
 }
 
-/// `model.synthesize_expiries`: Wealthsimple does not always post an expiry
+/// `synthesize_expiries`: Wealthsimple does not always post an expiry
 /// row, so an option lot still open after its expiry date is closed at $0 on
 /// that date.
 pub fn synthesize_expiries(open_lots: &[Lot], today: &str) -> Vec<Value> {

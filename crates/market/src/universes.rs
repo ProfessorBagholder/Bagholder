@@ -22,7 +22,7 @@ pub const SCREENER_URL: &str =
 
 pub const KEYS: [&str; 3] = ["ca", "us", "intl"];
 
-/// `universes._num`: a screener field is written for a page -- `$1.23`,
+/// A screener field is written for a page -- `$1.23`,
 /// `-0.45%`, `1,234` -- and `N/A` where there is no figure.
 fn n(v: Option<&Value>) -> Option<f64> {
     let raw = match v {
@@ -43,13 +43,13 @@ fn n_or(v: Option<&Value>, default: f64) -> f64 {
     n(v).unwrap_or(default)
 }
 
-/// Python's `x or 0.0`: no figure and a zero figure are the same thing here,
+/// No figure and a zero figure are the same thing here,
 /// and a negative zero is a zero.
 fn or_zero(v: f64) -> f64 {
     if v == 0.0 { 0.0 } else { v }
 }
 
-/// A number the way Python writes one back into JSON: absent where there is
+/// A number written back into JSON: absent where there is
 /// none.
 fn maybe(v: Option<f64>) -> Value {
     match v {
@@ -58,13 +58,12 @@ fn maybe(v: Option<f64>) -> Value {
     }
 }
 
-/// `universes.sector_of`.
 pub fn sector_of(name: &str) -> String {
     let s = bagholder_model::exposure::norm_sector(name);
     if s.is_empty() { "Not classified".into() } else { s }
 }
 
-/// `universes.parse_screener`: Nasdaq's screener rows into
+/// Nasdaq's screener rows into
 /// {symbol, name, last, percentChange, cap, sector, country}.
 pub fn parse_screener(data: &Value) -> Vec<Value> {
     let rows = data
@@ -105,7 +104,7 @@ fn tile(r: &Value) -> Value {
     })
 }
 
-/// The largest by market cap, tiles sized by market cap. Python's `sorted` is
+/// The largest by market cap, tiles sized by market cap. The sort is
 /// stable, so equal caps keep the screener's own order.
 fn largest(rows: &[Value], take: usize, keep: impl Fn(&str) -> bool) -> Vec<Value> {
     let mut picked: Vec<&Value> = rows
@@ -118,18 +117,16 @@ fn largest(rows: &[Value], take: usize, keep: impl Fn(&str) -> bool) -> Vec<Valu
     picked.into_iter().take(take).map(tile).collect()
 }
 
-/// `universes.us_rows`.
 pub fn us_rows(rows: &[Value], take: usize) -> Vec<Value> {
     largest(rows, take, |c| c == "United States")
 }
 
-/// `universes.intl_rows`: the largest companies listed in the US from outside
+/// The largest companies listed in the US from outside
 /// the US and Canada.
 pub fn intl_rows(rows: &[Value], take: usize) -> Vec<Value> {
     largest(rows, take, |c| c != "United States" && c != "Canada" && !c.is_empty())
 }
 
-/// `universes.parse_constituents`.
 pub fn parse_constituents(data: &Value) -> Vec<Value> {
     let rows = data
         .get("data")
@@ -156,7 +153,6 @@ pub fn parse_constituents(data: &Value) -> Vec<Value> {
     out
 }
 
-/// `universes.parse_tile_quote`.
 pub fn parse_tile_quote(data: &Value) -> Option<Value> {
     let q = data.get("data")?.get("getQuoteBySymbol")?;
     if !q.is_object() || q.as_object()?.is_empty() {
@@ -169,7 +165,6 @@ pub fn parse_tile_quote(data: &Value) -> Option<Value> {
     }))
 }
 
-/// `universes.fetch_screener`.
 pub fn fetch_screener() -> Option<Vec<Value>> {
     pace("api.nasdaq.com");
     let text = get_text(SCREENER_URL, &nasdaq_headers()).ok()?;
@@ -177,7 +172,7 @@ pub fn fetch_screener() -> Option<Vec<Value>> {
     Some(parse_screener(&data))
 }
 
-/// `universes.fetch_canada`: the S&P/TSX 60, its constituents by index weight,
+/// The S&P/TSX 60, its constituents by index weight,
 /// each quoted for the day's change and its sector.
 pub fn fetch_canada() -> Option<Vec<Value>> {
     pace("app-money.tmx.com");
@@ -220,7 +215,7 @@ pub fn fetch_canada() -> Option<Vec<Value>> {
     Some(out)
 }
 
-/// `universes.refresh`: read every universe; each answer replaces its rows.
+/// Read every universe; each answer replaces its rows.
 /// Returns the keys that answered.
 pub fn refresh(conn: &rusqlite::Connection, now: &str) -> Vec<String> {
     let mut done: Vec<String> = Vec::new();

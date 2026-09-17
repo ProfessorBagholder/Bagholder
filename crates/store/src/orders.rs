@@ -38,7 +38,7 @@ fn js(r: &Row, name: &str) -> Result<Value> {
     })
 }
 
-/// `store._order_from_row`.
+/// `_order_from_row`.
 pub fn order_from_row(r: &Row) -> Result<Value> {
     let source = { let s = text(r, "source")?; if s.is_empty() { "bagholder".to_string() } else { s } };
     let role = { let s = text(r, "role")?; if s.is_empty() { "entry".to_string() } else { s } };
@@ -75,7 +75,7 @@ pub fn order_from_row(r: &Row) -> Result<Value> {
     }))
 }
 
-/// `store.insert_order`: a new ticket, written before anything is sent.
+/// `insert_order`: a new ticket, written before anything is sent.
 pub fn insert_order(conn: &Connection, row: &Value, now: &str) -> Result<()> {
     let created = { let c = field_s(row, "createdAt"); if c.is_empty() { now.to_string() } else { c } };
     let source = { let s = field_s(row, "source"); if s.is_empty() { "bagholder".to_string() } else { s } };
@@ -127,7 +127,7 @@ const ORDER_NUM: [(&str, &str); 5] = [
     ("limitPrice", "limit_price"), ("stopPrice", "stop_price"),
 ];
 
-/// `store.update_order`: a status, the broker's own order id, or an error on
+/// `update_order`: a status, the broker's own order id, or an error on
 /// a ticket that already exists. Only the named fields are touched.
 pub fn update_order(conn: &Connection, order_id: &str, patch: &Value, now: &str) -> Result<()> {
     let p = match patch.as_object() { Some(p) => p, None => return Ok(()) };
@@ -157,7 +157,7 @@ pub fn update_order(conn: &Connection, order_id: &str, patch: &Value, now: &str)
     Ok(())
 }
 
-/// `store.list_orders`: newest first.
+/// `list_orders`: newest first.
 pub fn list_orders(conn: &Connection, limit: i64) -> Result<Vec<Value>> {
     let mut stmt = conn.prepare("SELECT * FROM orders ORDER BY created_at DESC, rowid DESC LIMIT ?")?;
     let mut rows = stmt.query([limit])?;
@@ -177,7 +177,7 @@ pub fn get_order(conn: &Connection, order_id: &str) -> Result<Option<Value>> {
     }
 }
 
-/// `store.mark_order_fill_booked`: record that this order's fill has been
+/// `mark_order_fill_booked`: record that this order's fill has been
 /// written as a local activity, so a later status poll does not book it twice.
 ///
 /// The booked quantity only ever grows; a smaller value never lowers it.
@@ -196,7 +196,7 @@ pub fn mark_order_fill_booked(conn: &Connection, order_id: &str, qty: f64, now: 
 // brackets
 // --------------------------------------------------------------------------
 
-/// `store._bracket_from_row`.
+/// `_bracket_from_row`.
 pub fn bracket_from_row(r: &Row) -> Result<Value> {
     let tif = { let t = text(r, "tif")?; if t.is_empty() { "DAY".to_string() } else { t } };
     let unit = { let t = text(r, "sl_trail_unit")?; if t.is_empty() { "pct".to_string() } else { t } };
@@ -232,14 +232,14 @@ pub fn bracket_from_row(r: &Row) -> Result<Value> {
     }))
 }
 
-/// `store.BRACKET_TEXT`.
+/// `BRACKET_TEXT`.
 const BRACKET_TEXT: [(&str, &str); 14] = [
     ("symbol", "symbol"), ("currency", "currency"), ("tif", "tif"), ("slKind", "sl_kind"),
     ("slTrailUnit", "sl_trail_unit"), ("slOrderId", "sl_order_id"), ("tpOrderId", "tp_order_id"),
     ("status", "status"), ("outcome", "outcome"), ("error", "error"), ("movedAt", "moved_at"),
     ("armedAt", "armed_at"), ("slMode", "sl_mode"), ("missedAt", "missed_at"),
 ];
-/// `store.BRACKET_NUM`.
+/// `BRACKET_NUM`.
 const BRACKET_NUM: [(&str, &str); 8] = [
     ("quantity", "quantity"), ("slPrice", "sl_price"), ("slTrail", "sl_trail"),
     ("highWater", "high_water"), ("tpPrice", "tp_price"), ("attempts", "attempts"),
@@ -338,7 +338,7 @@ pub fn bracket_for_order(conn: &Connection, order_id: &str) -> Result<Option<Val
     match rows.next()? { Some(r) => Ok(Some(bracket_from_row(r)?)), None => Ok(None) }
 }
 
-/// `store.symbol_for_security`: the symbol the book uses for a security, from
+/// `symbol_for_security`: the symbol the book uses for a security, from
 /// its activity rows.
 ///
 /// For an option that is the contract name, which the securities table does

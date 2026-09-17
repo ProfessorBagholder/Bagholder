@@ -203,7 +203,7 @@ fn first(query: &str, name: &str) -> String {
     String::new()
 }
 
-/// `bagholder._query_param`: stripped, None when blank.
+/// Stripped, None when blank.
 fn qp(query: &str, name: &str) -> Option<String> {
     let v = first(query, name).trim().to_string();
     if v.is_empty() { None } else { Some(v) }
@@ -509,7 +509,7 @@ fn store_failed(req: Request, e: rusqlite::Error) {
     send_json(req, 500, &json!({"ok": false, "error": "store failed"}));
 }
 
-/// `store.data_summary`: the row counts the Data & storage dialog shows before a wipe.
+/// The row counts the Data & storage dialog shows before a wipe.
 fn data_summary(conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
     let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
     let journal_raw = bagholder_store::tables::get_meta(conn, "journal_v2", "")?;
@@ -868,8 +868,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    //! Ported from tests/test_page.py, tests/test_package.py and the protocol
-    //! check in tests/test_store.py.
+    //! The page, the package contents and the protocol check.
     use std::path::PathBuf;
 
     fn root() -> PathBuf {

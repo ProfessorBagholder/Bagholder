@@ -1,4 +1,4 @@
-//! `model.build_book`: the matched book.
+//! `build_book`: the matched book.
 //!
 //! Every activity normalized, with the shares an assignment delivered and the
 //! expiries the broker never posted added, then the FIFO match. It depends on

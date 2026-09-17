@@ -10,7 +10,7 @@ use crate::base::build_base;
 use crate::view::build_view;
 
 // --------------------------------------------------------------------------
-// numbers that keep Python's int/float distinction
+// numbers that keep the int/float distinction
 // --------------------------------------------------------------------------
 
 fn is_int(v: &Value) -> bool {
@@ -35,7 +35,7 @@ pub fn neg(a: &Value) -> Value {
     if is_int(a) { json!(-a.as_i64().unwrap()) } else { json!(-f(a)) }
 }
 
-/// Python's `round(x, n)` on a float: the exact binary value rounded half-even.
+/// Rounds to `n` places on a float: the exact binary value rounded half-even.
 pub fn round_half_even(x: f64, n: usize) -> f64 {
     format!("{:.*}", n, x).parse().unwrap()
 }

@@ -1,6 +1,5 @@
 //! Manual activity, the order ticket, reading orders back from Wealthsimple,
-//! and the bracket engine: `bagholder.py` from `_manual_from_fields` to
-//! `adjust_bracket`.
+//! and the bracket engine.
 //!
 //! Without live orders (`BAGHOLDER_DRY_ORDERS=1`) nothing that places, cancels
 //! or modifies an order is ever sent: the ticket is recorded as `dry`, and the
@@ -31,7 +30,7 @@ pub mod seam {
     pub static GQL: Mutex<Option<Gql>> = Mutex::new(None);
     pub static LIVE: Mutex<Option<bool>> = Mutex::new(None);
     pub static SESSION: Mutex<Option<Option<Value>>> = Mutex::new(None);
-    /// 0: a spawned thread never runs (Python's patched `threading.Thread`); 1: it runs inline.
+    /// 0: a spawned thread never runs; 1: it runs inline.
     pub static SPAWN_INLINE: AtomicBool = AtomicBool::new(false);
     pub fn reset() {
         *GQL.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -60,7 +59,6 @@ use crate::session::{ensure_fresh_token, load_session};
 // small tools
 // ---------------------------------------------------------------------------
 
-/// `bagholder.ORDERS_LIVE`.
 pub fn orders_live() -> bool {
     #[cfg(test)]
     if let Some(v) = *seam::LIVE.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -91,7 +89,7 @@ fn or0(v: &Value, k: &str) -> f64 {
     on(v, k).unwrap_or(0.0)
 }
 
-/// Python's `a or b` over optional floats.
+/// The first value that is present and non-zero.
 fn or_f(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     match a {
         Some(x) if x != 0.0 => Some(x),
@@ -99,7 +97,7 @@ fn or_f(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
-/// Python's `a or b` over JSON values.
+/// The first JSON value that is truthy (not null, false, zero or empty).
 fn or_v<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value> {
     if truthy(a) {
         a
@@ -125,7 +123,7 @@ fn set(v: &mut Value, k: &str, x: Value) {
     }
 }
 
-/// Python's `round(x, n)`.
+/// `x` rounded to `n` decimals, ties to even.
 fn round_half_even(x: f64, n: usize) -> f64 {
     format!("{:.*}", n, x).parse().unwrap_or(x)
 }
@@ -138,7 +136,7 @@ fn rp(v: Option<f64>) -> String {
     }
 }
 
-/// Python's `"%g" % x`.
+/// `x` in `%g` form: six significant digits, trailing zeros dropped.
 fn fmt_g(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() { "-0".into() } else { "0".into() };
@@ -166,7 +164,6 @@ fn upper(v: Option<&Value>) -> String {
     s(v).trim().to_uppercase()
 }
 
-/// `bagholder._date_only`.
 fn date_only(v: Option<&Value>) -> String {
     let t = s(v);
     let t = t.trim();
@@ -202,7 +199,6 @@ fn parse_z(t: &str) -> Option<i64> {
     t.strip_suffix('Z').and_then(parse_ymdhms)
 }
 
-/// `bagholder._parse_utc`.
 fn parse_utc(v: Option<&Value>) -> Option<i64> {
     let t = s(v);
     let t = t.trim();
@@ -386,7 +382,6 @@ fn normalize_local_row(act: &Value) -> Value {
     Value::Object(act)
 }
 
-/// `bagholder.append_manual`.
 pub fn append_manual(body: &Value) -> Value {
     let rows: Vec<Value> = if let Some(Value::Array(a)) = body.get("activities") {
         a.iter().filter(|r| r.is_object()).cloned().collect()
@@ -449,7 +444,6 @@ fn ticket_session() -> Option<Value> {
     }
 }
 
-/// `bagholder.order_accounts`.
 pub fn order_accounts(accounts: Option<&[Value]>) -> Vec<Value> {
     let owned;
     let list: &[Value] = match accounts {
@@ -480,7 +474,6 @@ pub fn order_accounts(accounts: Option<&[Value]>) -> Vec<Value> {
     out
 }
 
-/// `bagholder.resolve_security`.
 pub fn resolve_security(symbol: &str, security_id: &str) -> Option<Value> {
     let rows = must(bagholder_store::admin::list_securities(&db()));
     let sid = security_id.trim();
@@ -499,7 +492,6 @@ pub fn resolve_security(symbol: &str, security_id: &str) -> Option<Value> {
     same.into_iter().next()
 }
 
-/// `bagholder.parse_quote`.
 pub fn parse_quote(node: &Value) -> Option<Value> {
     if !node.is_object() || !tr(node, "id") {
         return None;
@@ -553,7 +545,6 @@ pub fn parse_quote(node: &Value) -> Option<Value> {
     }))
 }
 
-/// `bagholder.parse_market_data`.
 pub fn parse_market_data(data: &Value) -> Value {
     let empty = json!({});
     let sec = data.get("security").filter(|v| v.is_object()).unwrap_or(&empty);
@@ -573,7 +564,6 @@ pub fn parse_market_data(data: &Value) -> Value {
     json!({"orderTypes": types, "marginRate": jo(rate)})
 }
 
-/// `bagholder.parse_buying_power`.
 pub fn parse_buying_power(data: &Value) -> Value {
     let empty = json!({});
     let mut view = data;
@@ -585,7 +575,6 @@ pub fn parse_buying_power(data: &Value) -> Value {
     json!({"buyingPower": jo(on(bp, "quantity")), "cash": jo(on(cash, "quantity")), "currency": s(or_v(bp.get("currency"), cash.get("currency")))})
 }
 
-/// `bagholder.fetch_quotes`.
 pub fn fetch_quotes(sess: &Value, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
     let ids: Vec<String> = security_ids.iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     let mut out = HashMap::new();
@@ -616,7 +605,6 @@ fn bare_symbol(sym: &str) -> String {
     sym
 }
 
-/// `bagholder.parse_listing_search`.
 pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Option<Value> {
     let (want_sym, want_ex) = (bare_symbol(symbol), exchange.trim().to_uppercase());
     let empty = json!({});
@@ -638,7 +626,6 @@ pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Optio
     None
 }
 
-/// `bagholder.lookup_listing`.
 pub fn lookup_listing(sess: &Value, symbol: &str, exchange: &str) -> Option<Value> {
     let data = match gql(sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
         Ok(d) => d,
@@ -654,7 +641,6 @@ pub fn lookup_listing(sess: &Value, symbol: &str, exchange: &str) -> Option<Valu
     sec
 }
 
-/// `bagholder.ticket_quote`.
 pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> Value {
     let name_of = || if symbol.is_empty() { security_id.to_string() } else { symbol.to_string() };
     let mut sec = resolve_security(symbol, security_id);
@@ -745,12 +731,11 @@ pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange:
     })
 }
 
-/// `bagholder.order_tick`.
 pub fn order_tick(price: Option<f64>) -> Option<f64> {
     price.map(|p| round_half_even(p, if p >= 1.0 { 2 } else { 4 }))
 }
 
-/// `bagholder.order_request`: (row, request) or the error.
+/// (row, request) or the error.
 pub fn order_request(body: &Value) -> Result<(Value, Value), String> {
     let empty = json!({});
     let b = if body.is_object() { body } else { &empty };
@@ -859,7 +844,6 @@ pub fn order_request(body: &Value) -> Result<(Value, Value), String> {
     Ok((row, req))
 }
 
-/// `bagholder.submit_order`.
 pub fn submit_order(row: &mut Value, req: &Value) -> Value {
     let id = f(row, "id");
     if !orders_live() {
@@ -905,7 +889,6 @@ pub fn submit_order(row: &mut Value, req: &Value) -> Value {
     json!({"ok": true, "id": id, "status": "sent", "wsOrderId": ws_id})
 }
 
-/// `bagholder.place_order`.
 pub fn place_order(body: &Value) -> Value {
     let (mut row, req) = match order_request(body) {
         Ok(x) => x,
@@ -993,7 +976,7 @@ fn order_words(o: &Value) -> String {
     format!("{} {} {}", side, qty_words(on(o, "quantity")), how)
 }
 
-/// `bagholder.order_notice`: (kind, key, title, body).
+/// (kind, key, title, body).
 pub fn order_notice(before: &Value, upd: &Value) -> Option<(String, String, String, String)> {
     let (was, now) = (f(before, "status"), f(upd, "status"));
     let sym = if tr(before, "symbol") { f(before, "symbol") } else { "?".into() };
@@ -1045,7 +1028,6 @@ pub fn order_notice(before: &Value, upd: &Value) -> Option<(String, String, Stri
     None
 }
 
-/// `bagholder.app_status`.
 pub fn app_status(ws_status: &str) -> String {
     let s = ws_status.to_uppercase();
     if WS_PENDING.contains(&s.as_str()) {
@@ -1060,7 +1042,6 @@ pub fn app_status(ws_status: &str) -> String {
     }
 }
 
-/// `bagholder.parse_extended_order`.
 pub fn parse_extended_order(data: &Value) -> Option<Value> {
     let o = data.get("soOrdersExtendedOrder")?;
     if !o.is_object() || !tr(o, "status") {
@@ -1159,7 +1140,6 @@ fn refreshed_at() -> String {
     REFRESHED_AT.lock().unwrap().clone()
 }
 
-/// `bagholder.kick_orders_refresh`.
 pub fn kick_orders_refresh() -> bool {
     let at = refreshed_at();
     if !at.is_empty() {
@@ -1184,7 +1164,6 @@ pub fn kick_orders_refresh() -> bool {
     true
 }
 
-/// `bagholder.book_order_fill`.
 pub fn book_order_fill(order: &Value, upd: &Value) -> bool {
     if !order.is_object() {
         return false;
@@ -1263,7 +1242,6 @@ pub fn book_order_fill(order: &Value, upd: &Value) -> bool {
     true
 }
 
-/// `bagholder.refresh_orders`.
 pub fn refresh_orders(only_id: &str) -> Value {
     let sess = match ticket_session() {
         Some(s) => s,
@@ -1359,7 +1337,6 @@ pub fn refresh_orders(only_id: &str) -> Value {
     json!({"ok": failed == 0, "read": read, "added": added, "failed": failed})
 }
 
-/// `bagholder.orders_loop`.
 pub fn orders_loop() {
     while !app().wait(Duration::from_secs(ORDERS_REFRESH_SEC)) {
         if !connected_not_syncing() {
@@ -1377,7 +1354,6 @@ pub fn orders_loop() {
     }
 }
 
-/// `bagholder.cancel_order`.
 pub fn cancel_order(order_id: &str) -> Value {
     #[cfg(test)]
     if let Some(v) = bracket_seam::CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
@@ -1420,7 +1396,6 @@ pub fn cancel_order(order_id: &str) -> Value {
     json!({"ok": true, "id": id, "status": "cancelling"})
 }
 
-/// `bagholder.orders_payload`.
 pub fn orders_payload(kick: bool) -> Value {
     if kick {
         kick_orders_refresh();
@@ -1434,7 +1409,6 @@ pub fn orders_payload(kick: bool) -> Value {
     json!({"ok": true, "orders": orders, "brackets": brackets(&[]), "live": orders_live(), "refreshedAt": refreshed_at()})
 }
 
-/// `bagholder.open_orders_count`.
 pub fn open_orders_count() -> i64 {
     let entries = list_orders().iter().filter(|o| is_live(o) && (o.get("role").is_none() || f(o, "role") == "entry")).count();
     let live = brackets(&[]).iter().filter(|b| BRACKET_LIVE.contains(&f(b, "status").as_str()) && f(b, "status") != "waiting").count();
@@ -1507,7 +1481,6 @@ fn await_cancels(b: &Value, seconds: u32) {
     }
 }
 
-/// `bagholder.create_bracket`.
 pub fn create_bracket(order_row: &Value) -> Value {
     let empty = json!({});
     let sl = order_row.get("stopLoss").filter(|v| truthy(Some(v))).unwrap_or(&empty);
@@ -1524,7 +1497,7 @@ pub fn create_bracket(order_row: &Value) -> Value {
     get_bracket(&id).unwrap_or(b)
 }
 
-/// Bracket test seams: `_stop_allowed`, `cancel_order`, the said lines and the caches.
+/// Bracket test seams: `stop_allowed`, `cancel_order`, the said lines and the caches.
 #[cfg(test)]
 pub mod bracket_seam {
     use super::*;
@@ -2136,7 +2109,7 @@ fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
     e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into())
 }
 
-/// `bagholder.bracket_tick`: quotes by security id, fetched here when None.
+/// Quotes by security id, fetched here when None.
 pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
     if BRACKET_LOCK.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return json!({"ok": false, "skipped": "running"});
@@ -2230,7 +2203,6 @@ pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
     json!({"ok": true, "brackets": live.len()})
 }
 
-/// `bagholder.bracket_loop`.
 pub fn bracket_loop() {
     while !app().wait(Duration::from_secs(BRACKET_POLL_SEC)) {
         if !connected_not_syncing() {
@@ -2242,7 +2214,6 @@ pub fn bracket_loop() {
     }
 }
 
-/// `bagholder.cancel_bracket`.
 pub fn cancel_bracket(bracket_id: &str) -> Value {
     let b = match get_bracket(bracket_id) {
         Some(b) => b,
@@ -2255,7 +2226,6 @@ pub fn cancel_bracket(bracket_id: &str) -> Value {
     json!({"ok": true, "id": gv(&b, "id")})
 }
 
-/// `bagholder.modify_order`.
 pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Option<&Value>) -> Value {
     let row = match get_order(order_id) {
         Some(r) => r,
@@ -2334,7 +2304,6 @@ pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Optio
     json!({"ok": true, "id": id})
 }
 
-/// `bagholder.adjust_bracket`.
 pub fn adjust_bracket(bracket_id: &str, leg: &str, price: Option<&Value>, trail: Option<&Value>, remove: bool) -> Value {
     let b = match get_bracket(bracket_id) {
         Some(b) => b,

@@ -1,5 +1,5 @@
 //! Option rows stored under Wealthsimple's labels, relabelled and rescaled by
-//! `store.ensure` (tests/test_store.py).
+//! `ensure`.
 
 mod common;
 use bagholder_store::{relabel, tables};
@@ -87,8 +87,7 @@ fn test_relabel_stored_options_multileg_and_expiry() {
     assert_eq!(strike["activitySubType"], "BUYTOCLOSE");
 }
 
-/// StatusCountsTest. Python counts calls to a patched `_relabel_option_trades`;
-/// here the relabel reports whether it ran.
+/// The relabel reports whether it ran.
 #[test]
 fn test_the_option_relabel_runs_once_until_the_rows_change() {
     let d = db();

@@ -27,13 +27,13 @@ const INSERT_SQL: &str = "INSERT INTO activities (
         source, raw_type, aft_type, counter_symbol, security_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-/// `store.looks_like_homemade_id`: an id Bagholder made, not the broker.
+/// `looks_like_homemade_id`: an id Bagholder made, not the broker.
 pub fn looks_like_homemade_id(aid: &str) -> bool {
     let s = aid.trim();
     s.is_empty() || s.contains('|') || s.to_lowercase().starts_with("manual")
 }
 
-/// `store.is_real_account`: an account Wealthsimple actually has, as opposed
+/// `is_real_account`: an account Wealthsimple actually has, as opposed
 /// to the placeholders an import invents.
 pub fn is_real_account(account_id: &str) -> bool {
     let s = account_id.trim();
@@ -43,14 +43,14 @@ pub fn is_real_account(account_id: &str) -> bool {
     !INVENTED_ACCOUNTS.contains(&s.to_lowercase().as_str())
 }
 
-/// `store._round_qty`: eight decimals, which is what a crypto quantity needs
+/// `_round_qty`: eight decimals, which is what a crypto quantity needs
 /// and what the match keys compare on.
 pub fn round_qty(v: Option<&Value>) -> f64 {
     let n = num(v, 0.0);
     (n * 1e8).round() / 1e8
 }
 
-/// Either spelling of a field, camelCase first, as the Python readers accept.
+/// Either spelling of a field, camelCase first.
 fn either(act: &Value, camel: &str, snake: &str) -> String {
     let v = field_s(act, camel);
     if v.is_empty() { field_s(act, snake) } else { v }
@@ -60,7 +60,7 @@ fn either_val<'a>(act: &'a Value, camel: &str, snake: &str) -> Option<&'a Value>
     get(act, camel).or_else(|| get(act, snake))
 }
 
-/// `store.trade_side`.
+/// `trade_side`.
 pub fn trade_side(act: &Value) -> String {
     bagholder_model::fifo::trade_side(act)
 }
@@ -85,7 +85,7 @@ fn key_account(act: &Value, include_account: bool) -> String {
 /// The price and cash as the match keys read them: under the camelCase name
 /// only.
 ///
-/// `store.field_match_key` spells this
+/// `field_match_key` spells this
 /// `act.get("unitPrice") if "unitPrice" in act or "unit_price" in act else act.get("unit_price")`,
 /// and both branches of that read `unitPrice`, so a row in the snake_case
 /// spelling matches on 0.0 rather than on its price. `_insert_params` tests
@@ -96,7 +96,7 @@ fn key_price(act: &Value, camel: &str) -> f64 {
     round_qty(get(act, camel))
 }
 
-/// `store.field_match_key`: what makes two rows the same fill when neither
+/// `field_match_key`: what makes two rows the same fill when neither
 /// carries the broker's id.
 pub fn field_match_key(act: &Value, include_account: bool) -> (String, String, String, f64, f64, f64) {
     (
@@ -109,7 +109,7 @@ pub fn field_match_key(act: &Value, include_account: bool) -> (String, String, S
     )
 }
 
-/// `store.link_match_key`: the same, ordered for linking an imported row to a
+/// `link_match_key`: the same, ordered for linking an imported row to a
 /// broker one.
 pub fn link_match_key(act: &Value, include_account: bool) -> (String, String, f64, f64, String, String) {
     (
@@ -122,7 +122,7 @@ pub fn link_match_key(act: &Value, include_account: bool) -> (String, String, f6
     )
 }
 
-/// `store._canonical_from_row`: the broker's id, never one Bagholder made.
+/// `_canonical_from_row`: the broker's id, never one Bagholder made.
 pub fn canonical_from_row(act: &Value, source: &str) -> Option<String> {
     if source != "wealthsimple" {
         return None;
@@ -149,8 +149,7 @@ fn real(row: &Row, idx: usize) -> rusqlite::Result<Value> {
     })
 }
 
-/// `store._row_to_activity`: the row as the model wants it, with the fallbacks
-/// the Python reader applies -- a missing settlement date is the transaction
+/// The row as the model wants it, with these fallbacks -- a missing settlement date is the transaction
 /// date, a missing book or fifo id the account's.
 pub fn row_to_activity(row: &Row) -> rusqlite::Result<Value> {
     let canonical = row.get::<_, Option<String>>(1)?.filter(|s| !s.is_empty());
@@ -194,7 +193,7 @@ pub fn row_to_activity(row: &Row) -> rusqlite::Result<Value> {
 
 const SELECT_ALL: &str = "SELECT id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id FROM activities";
 
-/// `store._all_activities`: every row, oldest first.
+/// `_all_activities`: every row, oldest first.
 pub fn all_activities(conn: &Connection) -> Result<Vec<Value>> {
     let sql = format!("{SELECT_ALL} ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC");
     let mut stmt = conn.prepare(&sql)?;
@@ -212,7 +211,7 @@ pub fn activity_by_id(conn: &Connection, id: &str) -> Result<Option<Value>> {
     }
 }
 
-/// A number stored as NULL rather than zero, as Python's `_num(v, None)`.
+/// A number stored as NULL rather than zero.
 fn opt_real(act: &Value, camel: &str, snake: &str) -> Value {
     match either_val(act, camel, snake) {
         None | Some(Value::Null) => Value::Null,
@@ -235,7 +234,7 @@ fn real_or_zero(act: &Value, camel: &str, snake: &str) -> f64 {
     }
 }
 
-/// `store._insert_params`.
+/// `_insert_params`.
 fn insert_params(act: &Value, assigned_id: &str, canonical_id: Option<&str>) -> Vec<Value> {
     let mut occurred = either(act, "occurredAt", "occurred_at").trim().to_string();
     let mut date = either(act, "transactionDate", "transaction_date").trim().to_string();
@@ -329,7 +328,7 @@ fn bind(params: &[Value]) -> Vec<Box<dyn rusqlite::ToSql>> {
         .collect()
 }
 
-/// `store.insert_activity`: one row. The caller decides the canonical id, and
+/// `insert_activity`: one row. The caller decides the canonical id, and
 /// none is ever fabricated.
 pub fn insert_activity(
     conn: &Connection,
@@ -360,7 +359,7 @@ pub fn insert_activity(
     Ok(activity_by_id(conn, &aid)?.unwrap_or(Value::Null))
 }
 
-/// `store.insert_local`: a typed-in or imported row. It gets a Bagholder id
+/// `insert_local`: a typed-in or imported row. It gets a Bagholder id
 /// and never a fabricated canonical id.
 pub fn insert_local(conn: &Connection, act: &Value, new_id: &dyn Fn() -> String) -> Result<Value> {
     let mut payload: Map<String, Value> = match act {
@@ -378,12 +377,12 @@ pub fn insert_local(conn: &Connection, act: &Value, new_id: &dyn Fn() -> String)
     insert_activity(conn, &Value::Object(payload), None, None, new_id)
 }
 
-/// `store.activity_count`.
+/// `activity_count`.
 pub fn activity_count(conn: &Connection) -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get(0))
 }
 
-/// `store.canonical_ids`: every broker id the store already holds.
+/// `canonical_ids`: every broker id the store already holds.
 pub fn canonical_ids(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT canonical_id FROM activities WHERE canonical_id IS NOT NULL AND canonical_id != ''")?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;

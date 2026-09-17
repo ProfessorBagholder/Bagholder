@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use bagholder_model::base::Base;
 
-/// `bagholder.APP_VERSION`.
 pub const APP_VERSION: &str = "1.43.2";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-16.1";
@@ -21,7 +20,7 @@ pub const PROTOCOL: &str = "2026-09-16.1";
 pub const ENRICH_VERSION: i64 = 11;
 pub const REPO: &str = "ProfessorBagholder/Bagholder";
 
-/// What the header and the loops know, `bagholder._state`.
+/// What the header and the loops know.
 #[derive(Default)]
 pub struct State {
     pub connected: bool,
@@ -117,7 +116,7 @@ impl App {
         self.stopping()
     }
 
-    /// `model.base_model`: rebuilt when the data or the day has changed.
+    /// Rebuilt when the data or the day has changed.
     pub fn base(&self) -> rusqlite::Result<std::sync::Arc<Base>> {
         let conn = self.open()?;
         let today = bagholder_model::clock::today_local();
@@ -151,14 +150,13 @@ impl App {
         Ok(base)
     }
 
-    /// `model.invalidate`.
     pub fn invalidate(&self) {
         let mut cache = self.cache.lock().unwrap();
         cache.version.clear();
         cache.base = None;
     }
 
-    /// `bagholder.single_flight`: run `f` only when no other call of that name
+    /// Run `f` only when no other call of that name
     /// is in flight; otherwise answer `busy` at once.
     pub fn single_flight<T, F: FnOnce() -> T>(&self, name: &str, busy: T, f: F) -> T {
         {
@@ -183,7 +181,7 @@ impl App {
         f()
     }
 
-    /// `bagholder.kick`: start a background job unless one is running or its
+    /// Start a background job unless one is running or its
     /// cooldown holds. True when a thread was started.
     pub fn kick<F: FnOnce() + Send + 'static>(&'static self, name: &str, f: F) -> bool {
         {
@@ -250,7 +248,7 @@ pub fn f(v: &Value, k: &str) -> String {
     s(v.get(k))
 }
 
-/// `bagholder._num(v, default)`: an absent or unreadable number is the default.
+/// An absent or unreadable number is the default.
 pub fn num(v: Option<&Value>, default: Option<f64>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => default,

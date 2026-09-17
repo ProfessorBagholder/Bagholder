@@ -12,7 +12,7 @@ pub const OPTION_UNIT_PRICE_SCALE_META: &str = "option_unit_price_scale_v1";
 
 const RAW: &str = "UPPER(REPLACE(IFNULL(raw_type,''), '-', '_'))";
 
-/// `store._relabel_when_rows_changed`: relabel newly arrived option rows and
+/// `_relabel_when_rows_changed`: relabel newly arrived option rows and
 /// nothing else.
 ///
 /// Doing this on every read meant six UPDATEs over the whole table each time
@@ -24,7 +24,7 @@ pub fn relabel_when_rows_changed(conn: &Connection) -> Result<bool> {
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    // Python formats a missing maximum as the string "None".
+    // a missing maximum is written as the string "None"
     let key = format!("{}|{}", n, m.unwrap_or_else(|| "None".into()));
     let stamped: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [OPTION_RELABEL_META], |r| r.get(0))
@@ -40,7 +40,7 @@ pub fn relabel_when_rows_changed(conn: &Connection) -> Result<bool> {
     Ok(true)
 }
 
-/// `store._relabel_option_trades`: OPTIONS_BUY / OPTIONS_SELL were stored as
+/// `_relabel_option_trades`: OPTIONS_BUY / OPTIONS_SELL were stored as
 /// LIMIT_ORDER and the like. They are trades.
 pub fn relabel_option_trades(conn: &Connection) -> Result<()> {
     conn.execute_batch(&format!(
@@ -54,7 +54,7 @@ pub fn relabel_option_trades(conn: &Connection) -> Result<()> {
     relabel_option_closes(conn)
 }
 
-/// `store._relabel_option_closes`: the close and open semantics of
+/// `_relabel_option_closes`: the close and open semantics of
 /// OPTIONS_MULTILEG, expiry and assignment rows.
 pub fn relabel_option_closes(conn: &Connection) -> Result<()> {
     conn.execute_batch(&format!(
@@ -73,7 +73,7 @@ pub fn relabel_option_closes(conn: &Connection) -> Result<()> {
     ))
 }
 
-/// `store._is_option_symbol`: the store's own cheaper reading, which is not
+/// `_is_option_symbol`: the store's own cheaper reading, which is not
 /// the model's -- it only has to spot the shapes the price scaling cares about.
 fn is_option_symbol(symbol: &str) -> bool {
     let compact = symbol.trim().to_uppercase();
@@ -87,12 +87,12 @@ fn is_option_symbol(symbol: &str) -> bool {
     compact.ends_with(" C") || compact.ends_with(" P")
 }
 
-/// `store._cash_near`.
+/// `_cash_near`.
 fn cash_near(a: f64, b: f64) -> bool {
     (a - b).abs() <= f64::max(0.02, 0.02 * f64::max(f64::max(a.abs(), b.abs()), 1e-9))
 }
 
-/// `store._scale_option_unit_prices`: one-shot, divide an option's unit price
+/// `_scale_option_unit_prices`: one-shot, divide an option's unit price
 /// by a hundred when the cash says the stored price was contract cash.
 ///
 /// Wealthsimple's option amount is contract cash, so the per-share price is
@@ -133,7 +133,7 @@ pub fn scale_option_unit_prices(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store.ensure`: the schema, then the relabelling, then the one-shot price
+/// `ensure`: the schema, then the relabelling, then the one-shot price
 /// scaling stamped so it never runs twice.
 pub fn ensure(conn: &Connection) -> Result<()> {
     crate::schema::init_schema(conn)?;

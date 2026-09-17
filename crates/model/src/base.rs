@@ -1,4 +1,4 @@
-//! `model.build_base`: everything the view is computed from, in one object.
+//! `build_base`: everything the view is computed from, in one object.
 //!
 //! It depends on the snapshot, the market data and the day, so one filter
 //! change re-runs `build_view` alone.

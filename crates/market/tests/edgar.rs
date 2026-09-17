@@ -1,4 +1,4 @@
-//! Port of tests/test_edgar.py. No network: the ticker map is primed and the
+//! EDGAR. No network: the ticker map is primed and the
 //! submissions, index and document requests are given as closures.
 use bagholder_market::disclosures::{self as d, Fetched, Provider, SourceError};
 use bagholder_market::edgar;

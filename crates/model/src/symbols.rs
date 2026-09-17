@@ -4,7 +4,7 @@
 
 use crate::value::{compact, fold_spaces_upper};
 
-/// `model.is_option_symbol`.
+/// `is_option_symbol`.
 pub fn is_option_symbol(symbol: &str) -> bool {
     let u = fold_spaces_upper(symbol);
     if u.is_empty() { return false; }
@@ -58,7 +58,7 @@ fn valid_root(head: &str) -> bool {
     b[1..].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'.')
 }
 
-/// `model.underlying_symbol`: the name the contract is written on, or the
+/// `underlying_symbol`: the name the contract is written on, or the
 /// symbol itself when it is not an option. An em dash for an empty symbol,
 /// as the page prints it.
 pub fn underlying_symbol(symbol: &str) -> String {
@@ -74,14 +74,14 @@ pub fn underlying_symbol(symbol: &str) -> String {
     t.to_string()
 }
 
-/// `model.option_multiplier`: a contract is a hundred shares, anything else
+/// `option_multiplier`: a contract is a hundred shares, anything else
 /// is one unit.
 pub fn option_multiplier(symbol: &str) -> f64 {
     if is_option_symbol(symbol) { 100.0 } else { 1.0 }
 }
 
-/// `model.option_right`: a symbol is a put only when it says so; everything
-/// else reads as a call, matching the Python fallback.
+/// `option_right`: a symbol is a put only when it says so; everything
+/// else reads as a call.
 pub fn option_right(symbol: &str) -> &'static str {
     let u = fold_spaces_upper(symbol);
     if u.ends_with(" PUT") || u.ends_with(" P") { return "PUT"; }
@@ -99,7 +99,7 @@ pub fn option_right(symbol: &str) -> &'static str {
     "CALL"
 }
 
-/// `model.is_multileg`.
+/// `is_multileg`.
 pub fn is_multileg_raw(raw_type: &str) -> bool {
     compact(raw_type).contains("MULTILEG")
 }

@@ -1,5 +1,5 @@
 //! One filter object, applied to the trades and the positions alike:
-//! `model.clean_filters`, `model.trade_matches`, `model.position_matches`.
+//! `clean_filters`, `trade_matches`, `position_matches`.
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -84,7 +84,7 @@ fn is_iso_date(s: &str) -> bool {
         && b[8..10].iter().all(|c| c.is_ascii_digit())
 }
 
-/// `model.clean_filters`: whatever the page sent, reduced to the shape the
+/// `clean_filters`: whatever the page sent, reduced to the shape the
 /// model will act on. Anything unrecognised falls back to the default rather
 /// than filtering the book to nothing.
 pub fn clean_filters(raw: Option<&Value>) -> Filters {
@@ -146,7 +146,7 @@ pub fn clean_filters(raw: Option<&Value>) -> Filters {
     f
 }
 
-/// `model.date_bounds`: the explicit range, then the preset; `None` when the
+/// `date_bounds`: the explicit range, then the preset; `None` when the
 /// years list is doing the filtering instead.
 pub fn date_bounds(f: &Filters, today: &str) -> Option<(String, String)> {
     if !f.from.is_empty() || !f.to.is_empty() {
@@ -166,7 +166,7 @@ pub fn date_bounds(f: &Filters, today: &str) -> Option<(String, String)> {
     None
 }
 
-/// `model.in_date_scope`.
+/// `in_date_scope`.
 pub fn in_date_scope(f: &Filters, today: &str, day: &str) -> bool {
     if let Some((lo, hi)) = date_bounds(f, today) {
         return lo.as_str() <= day && day <= hi.as_str();
@@ -182,7 +182,7 @@ fn contains_ci(haystack: &str, needle_upper: &str) -> bool {
     haystack.to_uppercase().contains(needle_upper)
 }
 
-/// `model.trade_matches`.
+/// `trade_matches`.
 pub fn trade_matches(t: &Value, f: &Filters, today: &str) -> bool {
     let s = f.search.to_uppercase();
     if !s.is_empty()
@@ -256,7 +256,7 @@ pub fn trade_matches(t: &Value, f: &Filters, today: &str) -> bool {
     in_date_scope(f, today, &field_s(t, "exitDate"))
 }
 
-/// `model.position_matches`.
+/// `position_matches`.
 pub fn position_matches(p: &Value, f: &Filters) -> bool {
     let s = f.search.to_uppercase();
     if !s.is_empty() && !contains_ci(&field_s(p, "symbol"), &s) && !contains_ci(&field_s(p, "name"), &s) {

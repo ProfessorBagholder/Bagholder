@@ -1,4 +1,4 @@
-//! The derived trading model: the same pipeline as `model.py`, which the
+//! The derived trading model: one pipeline, which the
 //! shared cases in `tests/cases` hold every implementation to.
 //!
 //! ```text

@@ -1,5 +1,5 @@
 //! What the market readers are asked for, read off the built model:
-//! `model.held_symbols`, `payer_symbols`, `intraday_archive_symbols`,
+//! `held_symbols`, `payer_symbols`, `intraday_archive_symbols`,
 //! `watch_exposure_key`, and the one-shot journal migration
 //! `migrate_legacy_notes`.
 
@@ -11,7 +11,7 @@ use crate::fifo::Slice;
 use crate::trades::{group_id_for_keys, slice_member_key};
 use crate::value::field_s;
 
-/// `model.held_symbols`: every held instrument, with what a quote source needs.
+/// `held_symbols`: every held instrument, with what a quote source needs.
 pub fn held_symbols(base: &Base) -> Vec<Value> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -26,7 +26,7 @@ pub fn held_symbols(base: &Base) -> Vec<Value> {
     out
 }
 
-/// `model.payer_symbols`: held positions that have paid a distribution.
+/// `payer_symbols`: held positions that have paid a distribution.
 pub fn payer_symbols(base: &Base) -> Vec<Value> {
     let payers: HashSet<String> = base.cashflow.iter().filter(|r| field_s(r, "kind") == "Dividend").map(|r| field_s(r, "symbol")).collect();
     let mut seen = HashSet::new();
@@ -43,7 +43,7 @@ pub fn payer_symbols(base: &Base) -> Vec<Value> {
     out
 }
 
-/// `model.intraday_archive_symbols`: every symbol traded or held in the past
+/// `intraday_archive_symbols`: every symbol traded or held in the past
 /// year, with the earliest date its bars are wanted from.
 pub fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
     let since = crate::dates::shift_date(&base.today, -365);
@@ -80,12 +80,12 @@ pub fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
     out.into_values().collect()
 }
 
-/// `model.watch_exposure_key`.
+/// `watch_exposure_key`.
 pub fn watch_exposure_key(symbol: &str, exchange: &str, currency: &str) -> String {
     format!("share:{}:{}", crate::venues::tmx_symbol(symbol), crate::venues::tmx_form(exchange, currency).unwrap_or(""))
 }
 
-/// `model.migrate_legacy_notes`: the old page's note keys (a hash of the slices
+/// `migrate_legacy_notes`: the old page's note keys (a hash of the slices
 /// in a lane group) mapped onto round-trip ids, so an existing journal is not
 /// lost.
 pub fn migrate_legacy_notes(closed: &[Slice], saved_groups: &[Value], notes: &Map<String, Value>) -> Map<String, Value> {

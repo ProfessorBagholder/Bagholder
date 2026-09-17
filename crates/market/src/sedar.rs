@@ -39,7 +39,7 @@ fn unavailable(m: impl Into<String>) -> SourceError {
     SourceError::Unavailable(m.into())
 }
 
-/// `sedar.available`: whether the helper that clears the gate is installed.
+/// Whether the helper that clears the gate is installed.
 pub fn available() -> bool {
     Session::available()
 }
@@ -53,7 +53,7 @@ macro_rules! re {
     };
 }
 
-// --- character offsets, as Python slices a str ---------------------------------
+// --- character offsets ---------------------------------------------------------
 
 /// The byte offset `n` characters before `at`, or the start.
 fn back_chars(s: &str, at: usize, n: usize) -> usize {
@@ -132,7 +132,7 @@ fn session(st: &mut State) -> Fetched<&mut Session> {
     Ok(st.session.as_mut().unwrap())
 }
 
-/// `sedar.reset`: drop the session so the next call opens a fresh one.
+/// Drop the session so the next call opens a fresh one.
 pub fn reset() {
     state().lock().unwrap().session = None;
 }
@@ -149,7 +149,7 @@ re!(re_search_action, r#"(?s)(?:appSearchButton|-searchButton)[^>]*?onclick="[^"
 re!(re_menu_anchor, r"(?s)<a[^>]*?catCallback\('(W\d+)','invokeMenuCb'[^>]*>(.*?)</a>");
 re!(re_callback_node, r"catCallback\('(W\d+)'");
 
-/// `sedar._form_fields`: the form as the browser serializes it before a
+/// The form as the browser serializes it before a
 /// callback -- every named input, each select's chosen option, checked boxes
 /// only, the callback fields left for the caller.
 pub fn form_fields(html: &str) -> Vec<(String, String)> {
@@ -173,8 +173,7 @@ pub fn form_fields(html: &str) -> Vec<(String, String)> {
             out.push((name, val));
         } else if tag == "select" {
             let end = m.get(0).unwrap().end();
-            // Python's html.find("</select>", end) of -1 slices to one short of
-            // the end
+            // an unclosed select runs to one character short of the end
             let stop = match html[end..].find("</select>") {
                 Some(i) => end + i,
                 None => html.char_indices().next_back().map(|(i, _)| i).unwrap_or(0).max(end),
@@ -190,7 +189,7 @@ pub fn form_fields(html: &str) -> Vec<(String, String)> {
     out
 }
 
-/// `sedar._vi_params`: the hidden viewInstanceFormParameter inputs every
+/// The hidden viewInstanceFormParameter inputs every
 /// callback carries.
 pub fn vi_params(html: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -203,12 +202,12 @@ pub fn vi_params(html: &str) -> Vec<(String, String)> {
     out
 }
 
-/// `sedar._search_action`: (node, name, container) for a page's Search control.
+/// (node, name, container) for a page's Search control.
 pub fn search_action(page: &str) -> Option<(String, String, String)> {
     re_search_action().captures(page).map(|m| (m[1].to_string(), m[2].to_string(), m[3].to_string()))
 }
 
-/// `sedar._issuer_menu_node`: on a reporting-issuer result, the menu node that
+/// On a reporting-issuer result, the menu node that
 /// opens the issuer itself.
 pub fn issuer_menu_node(html: &str, name: Option<&str>) -> Option<String> {
     let mut fallback: Option<String> = None;
@@ -228,7 +227,7 @@ pub fn issuer_menu_node(html: &str, name: Option<&str>) -> Option<String> {
     fallback
 }
 
-/// Python's `str.lower()` index of `needle` in `hay`, as a character index.
+/// The character index of `needle` in `hay` lowercased.
 fn lower_find_chars(hay: &str, needle: &str) -> Option<usize> {
     let lowered: String = hay.to_lowercase();
     let byte = lowered.find(needle)?;
@@ -239,7 +238,7 @@ fn byte_of_char(s: &str, n: usize) -> usize {
     s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len())
 }
 
-/// `sedar._docs_menu_node`: on an issuer profile, the "Search and download
+/// On an issuer profile, the "Search and download
 /// documents for this profile" menu node.
 pub fn docs_menu_node(html: &str) -> Option<String> {
     let idx_chars = lower_find_chars(html, "search and download documents for this profile")?;
@@ -248,7 +247,7 @@ pub fn docs_menu_node(html: &str) -> Option<String> {
     re_callback_node().captures(&html[start..idx]).map(|c| c[1].to_string())
 }
 
-/// `urllib.parse.urlencode` over pairs: `quote_plus` on each side.
+/// Pairs form-encoded: each side percent-encoded, spaces as `+`.
 pub fn urlencode(pairs: &[(String, String)]) -> String {
     fn quote_plus(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
@@ -393,14 +392,13 @@ impl View {
 re!(re_tags, r"<[^>]+>");
 re!(re_ws, r"\s+");
 
-/// `sedar._text`.
 pub fn text(s: &str) -> String {
     let t = re_tags().replace_all(s, " ");
     let t = unescape(&t);
     trim_space(&re_ws().replace_all(&t, " ")).to_string()
 }
 
-/// `sedar.filing_id`: the document's drmKey when the row carries one,
+/// The document's drmKey when the row carries one,
 /// otherwise a short digest of the profile, file name and submitted time.
 pub fn filing_id(url: &str, profile_no: &str, file: &str, submitted: &str) -> String {
     static DRM: OnceLock<Regex> = OnceLock::new();
@@ -418,7 +416,7 @@ re!(re_doc_link, r#"(?s)<a class="appDocumentView appResourceLink appDocumentLin
 re!(re_submitted, r#"<span aria-hidden="true">\s*(\d{1,2} \w{3} \d{4}[^<]*?)\s*</span>"#);
 re!(re_size, r"(?i)(\d[\d.,]* ?(?:KB|MB|bytes))");
 
-/// `sedar.parse_filings`: document search rows into filings, as the page gives
+/// Document search rows into filings, as the page gives
 /// them.
 pub fn parse_filings(html: &str) -> Vec<Value> {
     let mut out = Vec::new();
@@ -450,7 +448,7 @@ pub fn parse_filings(html: &str) -> Vec<Value> {
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/// `sedar._iso`: "13 Sep 2026 20:42 EDT" as "2026-09-13T20:42", the zone
+/// "13 Sep 2026 20:42 EDT" as "2026-09-13T20:42", the zone
 /// dropped (it is only ever Eastern).
 pub fn iso(submitted: &str) -> String {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -465,7 +463,7 @@ re!(re_ri_row, r"(?s)<tr[^>]*appTblRow[^>]*>(.*?)</tr>");
 re!(re_td, r"(?s)<td[^>]*>(.*?)</td>");
 re!(re_nine, r"^\d{9}$");
 
-/// `sedar.parse_reporting_issuers`: reporting-issuer rows, every field indexed
+/// Reporting-issuer rows, every field indexed
 /// off the profile-number cell.
 pub fn parse_reporting_issuers(html: &str) -> Vec<Value> {
     let mut out = Vec::new();
@@ -486,13 +484,13 @@ pub fn parse_reporting_issuers(html: &str) -> Vec<Value> {
 
 // --- high-level operations -------------------------------------------------------
 
-/// A lookup's outcome; `NotFound` is Python's `ProfileNotFound`.
+/// A lookup's outcome; `NotFound` is no profile matching.
 pub enum Lookup {
     Found(Vec<Value>),
     NotFound,
 }
 
-/// `sedar.resolve_profile`: every reporting-issuer profile matching a name or
+/// Every reporting-issuer profile matching a name or
 /// number, best first.
 pub fn resolve_profile(query: &str) -> Fetched<Lookup> {
     let q = trim_space(query).to_string();
@@ -524,7 +522,7 @@ pub fn rank(rows: &mut [Value], q: &str) -> Vec<Value> {
     rows.to_vec()
 }
 
-/// `sedar.list_filings`: filings for one issuer, resolving the issuer from the
+/// Filings for one issuer, resolving the issuer from the
 /// query when no profile number is given.
 pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize) -> Fetched<Option<Value>> {
     let mut profile: Option<Value> = None;
@@ -576,7 +574,7 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
     Ok(Some(json!({"profile": profile_out, "scoped": scoped, "filings": filings})))
 }
 
-/// `sedar._scoped_documents`: the issuer's document page, reused for a short
+/// The issuer's document page, reused for a short
 /// window so a run of its documents walks the chain once.
 fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Option<String> {
     if let Some(h) = st.scope.fresh(profile_no) {
@@ -587,7 +585,7 @@ fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Opt
     html
 }
 
-/// `sedar._scoped_documents_uncached`: search the reporting-issuer list for
+/// Search the reporting-issuer list for
 /// the profile, open the issuer, and follow its documents link; each step
 /// pushes a new view instance.
 fn scoped_documents_uncached(st: &mut State, profile_no: &str, name: Option<&str>) -> Fetched<Option<String>> {
@@ -611,7 +609,7 @@ fn scoped_documents_uncached(st: &mut State, profile_no: &str, name: Option<&str
     Ok(Some(view.page.clone()))
 }
 
-/// `sedar.newest`: the newest filings across SEDAR+.
+/// The newest filings across SEDAR+.
 pub fn newest(limit: usize) -> Fetched<Vec<Value>> {
     let html = {
         let mut st = state().lock().unwrap();
@@ -622,7 +620,7 @@ pub fn newest(limit: usize) -> Fetched<Vec<Value>> {
     Ok(f)
 }
 
-/// `sedar._is_document`: a real document, not the site's HTML error page.
+/// A real document, not the site's HTML error page.
 fn is_document(a: &crate::browser::Answer) -> bool {
     let ct = a.header("content-type").unwrap_or("").to_lowercase();
     if a.status != 200 || a.body.is_empty() {
@@ -635,7 +633,7 @@ fn is_document(a: &crate::browser::Answer) -> bool {
     trimmed.first() != Some(&b'<')
 }
 
-/// `sedar._download_bytes`: re-scope to the profile, match the document by its
+/// Re-scope to the profile, match the document by its
 /// drmKey, fetch it in that live session. A document URL is bound to the
 /// session that minted it, so it is re-minted here rather than reused.
 pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fetched<Option<(Vec<u8>, String)>> {
@@ -663,7 +661,7 @@ pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fet
 
 // --- the provider interface ------------------------------------------------------
 
-/// `sedar.covers`: Canadian listings; a US listing is EDGAR's.
+/// Canadian listings; a US listing is EDGAR's.
 pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
     let ex = exchange.to_uppercase();
     let cur = currency.to_uppercase();
@@ -673,7 +671,7 @@ pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
     cur == "CAD" || CA_EXCHANGES.contains(&ex.as_str()) || (ex.is_empty() && cur.is_empty())
 }
 
-/// `sedar._sedar_category`: a document name in the shared vocabulary.
+/// A document name in the shared vocabulary.
 pub fn category(file: &str) -> &'static str {
     let f = file.to_lowercase();
     let any = |ks: &[&str]| ks.iter().any(|k| f.contains(k));
@@ -698,12 +696,11 @@ pub fn category(file: &str) -> &'static str {
     d::OTHER
 }
 
-/// `sedar.categorize`.
 pub fn categorize(row: &Value) -> String {
     category(row.get("type").and_then(|v| v.as_str()).unwrap_or("")).to_string()
 }
 
-/// `sedar._split_type_title`: a document file name into a type and the
+/// A document file name into a type and the
 /// language qualifier beside it.
 pub fn split_type_title(file: &str) -> (String, String) {
     static PDF: OnceLock<Regex> = OnceLock::new();
@@ -719,7 +716,7 @@ pub fn split_type_title(file: &str) -> (String, String) {
             let start = m.get(0).unwrap().start();
             let typ = name[..start].trim_matches([' ', '-', '–']).to_string();
             let lang = &m[1];
-            // str.title(): the first letter up, the rest down
+            // title case: the first letter up, the rest down
             let mut ch = lang.chars();
             let titled = format!("{}{}", ch.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default(), ch.as_str().to_lowercase());
             return (typ, format!("({})", titled));
@@ -728,7 +725,6 @@ pub fn split_type_title(file: &str) -> (String, String) {
     (name, String::new())
 }
 
-/// `sedar._to_item`.
 pub fn to_item(raw: &Value, profile_no: &str) -> Value {
     let g = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let (typ, title) = split_type_title(&g("file"));
@@ -748,7 +744,7 @@ pub fn to_item(raw: &Value, profile_no: &str) -> Value {
     })
 }
 
-/// `sedar.fetch`: one Canadian issuer's filings as disclosure items.
+/// One Canadian issuer's filings as disclosure items.
 pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: usize, profile_no: &str) -> Fetched<Vec<Value>> {
     let query = if name.is_empty() { symbol } else { name };
     let result = match list_filings(Some(query), Some(profile_no), limit)? {
@@ -759,7 +755,7 @@ pub fn fetch(symbol: &str, name: &str, _exchange: &str, _currency: &str, limit: 
     Ok(result["filings"].as_array().cloned().unwrap_or_default().iter().map(|r| to_item(r, &pno)).collect())
 }
 
-/// `sedar.document`: one stored row's document. (bytes, content type).
+/// One stored row's document. (bytes, content type).
 pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
     let g = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let issuer = g("issuer");

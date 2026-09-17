@@ -1,4 +1,4 @@
-//! Port of tests/test_disclosures.py.
+//! Filing sources: matching, categories and routing.
 use bagholder_market::disclosures as d;
 use serde_json::json;
 

@@ -1,4 +1,4 @@
-//! Round trips: `model.build_trades` and `model.collapse_trade`.
+//! Round trips: `build_trades` and `collapse_trade`.
 //!
 //! A trade is a position going from flat to open and back to flat. Partial
 //! exits are legs of the same trade, and the id is stable from the first fill
@@ -16,7 +16,7 @@ use crate::value::{field_num, field_s, fmt8, num_repr};
 
 pub type Journal = Map<String, Value>;
 
-/// `model.slice_member_key`: what a saved group names its members by.
+/// `slice_member_key`: what a saved group names its members by.
 pub fn slice_member_key(t: &Slice) -> String {
     if !t.buy_activity_id.is_empty() && !t.sell_activity_id.is_empty() {
         return [t.buy_activity_id.clone(), t.sell_activity_id.clone(), fmt8(t.quantity)].join("|");
@@ -24,7 +24,7 @@ pub fn slice_member_key(t: &Slice) -> String {
     t.id.clone()
 }
 
-/// `model.group_id_for_keys`: the legacy ledger.html group id, FNV-1a over the
+/// `group_id_for_keys`: the legacy ledger.html group id, FNV-1a over the
 /// sorted member keys.
 pub fn group_id_for_keys(keys: &[String]) -> String {
     let mut sorted: Vec<&String> = keys.iter().collect();
@@ -55,7 +55,7 @@ fn slim_slice(s: &Slice) -> Value {
     })
 }
 
-/// `model._fill_row`: one broker fill as the page prints it.
+/// `_fill_row`: one broker fill as the page prints it.
 pub fn fill_row_public(a: &Value) -> Value { fill_row(a) }
 
 fn fill_row(a: &Value) -> Value {
@@ -79,7 +79,7 @@ fn fill_row(a: &Value) -> Value {
     })
 }
 
-/// `model.collapse_trade`: one group of slices as a single round trip.
+/// `collapse_trade`: one group of slices as a single round trip.
 #[allow(clippy::too_many_arguments)]
 pub fn collapse_trade(
     gid: &str,
@@ -214,7 +214,7 @@ pub fn collapse_trade(
     })
 }
 
-/// `model.build_trades`: the saved manual groups first, then whatever is left
+/// `build_trades`: the saved manual groups first, then whatever is left
 /// grouped by round trip.
 pub fn build_trades(
     closed: &[Slice],
@@ -284,7 +284,7 @@ pub fn build_trades(
     trades
 }
 
-/// `model.last_fill_prices`: symbol -> the newest fill that carried a price.
+/// `last_fill_prices`: symbol -> the newest fill that carried a price.
 pub fn last_fill_prices(activities: &[Value]) -> Map<String, Value> {
     let mut idx: Vec<usize> = (0..activities.len()).collect();
     idx.sort_by(|i, j| {
@@ -308,7 +308,7 @@ pub fn last_fill_prices(activities: &[Value]) -> Map<String, Value> {
     out
 }
 
-/// `model.quote_fits`: a quote prices a position only when its source is the
+/// `quote_fits`: a quote prices a position only when its source is the
 /// kind's. The coin BTC's Coinbase price must never price a share called BTC,
 /// and a listing's TMX price never a coin. No source stated is taken as the
 /// kind's own.

@@ -1,6 +1,6 @@
 //! The SQLite schema and the migrations that bring an older database up to it.
 //!
-//! The DDL is the same text `store.py` runs, kept in `sql/` and included here,
+//! The DDL is kept in `sql/` and included here,
 //! so the two cannot drift. Everything else in this module is a migration: a
 //! table created by an earlier version keeps its columns, because
 //! `CREATE TABLE IF NOT EXISTS` adds none.
@@ -8,7 +8,7 @@
 use rusqlite::{Connection, Result};
 use std::collections::HashSet;
 
-/// `store.SCHEMA_VERSION`.
+/// `SCHEMA_VERSION`.
 pub const SCHEMA_VERSION: i64 = 13;
 
 pub const BENCHMARK_SYMBOL: &str = "SP500";
@@ -46,7 +46,7 @@ fn add_missing(conn: &Connection, table: &str, cols: &[(&str, &str)]) -> Result<
     Ok(())
 }
 
-/// `store._init_schema`.
+/// `_init_schema`.
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_0)?;
 
@@ -73,7 +73,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store._migrate_nav_history`: the table gained an account column and a
+/// `_migrate_nav_history`: the table gained an account column and a
 /// composite key, so a single-account history is moved under the empty id.
 fn migrate_nav_history(conn: &Connection) -> Result<()> {
     if !table_exists(conn, "nav_history")? {
@@ -100,7 +100,7 @@ fn migrate_nav_history(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store._ensure_bar_columns`: bars stored before the chart drew candles hold
+/// `_ensure_bar_columns`: bars stored before the chart drew candles hold
 /// closes only, so the table is rebuilt and refetched rather than patched.
 fn ensure_bar_columns(conn: &Connection) -> Result<()> {
     let cols = columns(conn, "price_bars")?;
@@ -114,7 +114,7 @@ fn ensure_bar_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store._ensure_activity_security_id`.
+/// `_ensure_activity_security_id`.
 fn ensure_activity_security_id(conn: &Connection) -> Result<()> {
     add_missing(conn, "activities", &[("security_id", "TEXT")])
 }
@@ -161,7 +161,7 @@ fn ensure_notifications_columns(conn: &Connection) -> Result<()> {
     add_missing(conn, "notifications", &[("read_at", "TEXT")])
 }
 
-/// `store._ensure_news_columns`: a news table from before releases were told
+/// `_ensure_news_columns`: a news table from before releases were told
 /// apart gains the kind, and each row is told by the name of the wire it came
 /// on -- a wire's item is a release, a publisher's a story.
 fn ensure_news_columns(conn: &Connection) -> Result<()> {
@@ -175,7 +175,7 @@ fn ensure_news_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store._ensure_filings_columns`: a filings table created under the
+/// `_ensure_filings_columns`: a filings table created under the
 /// single-source schema brought up to the multi-source shape. The old
 /// `file`/`submitted`/`submitted_at` columns are left in place but unused; a
 /// refresh repopulates every row under the new ones.
@@ -202,7 +202,7 @@ fn ensure_filings_columns(conn: &Connection) -> Result<()> {
     )
 }
 
-/// `store._migrate_spy_meta`: one-shot copy of the legacy `meta.spy_by_date`
+/// `_migrate_spy_meta`: one-shot copy of the legacy `meta.spy_by_date`
 /// map into `benchmark_prices`.
 fn migrate_spy_meta(conn: &Connection) -> Result<()> {
     let already: i64 = conn.query_row(
@@ -230,7 +230,7 @@ fn migrate_spy_meta(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `store._migrate_history_sources`: runs once when the chart's history
+/// `_migrate_history_sources`: runs once when the chart's history
 /// sources change. Bars from a source that gave closes only are dropped; the
 /// fetch stamps of every symbol either source served are dropped, so the chart
 /// refetches the whole span from the source that replaced it.

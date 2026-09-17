@@ -1,4 +1,4 @@
-//! `tests/test_store.py` KeptConnectionTest and the venue-keyed quote refresh:
+//! Kept connections and the venue-keyed quote refresh:
 //! the transport keeps a connection per host. Served from a loopback listener,
 //! never the network.
 

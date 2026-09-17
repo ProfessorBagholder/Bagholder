@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 
 use bagholder_model::value::{field_s, get, num};
 
-/// `store.NOTIFICATIONS_KEPT`.
+/// `NOTIFICATIONS_KEPT`.
 pub const NOTIFICATIONS_KEPT: i64 = 200;
 
 fn text(r: &Row, name: &str) -> Result<String> {
@@ -47,7 +47,7 @@ fn truthy(v: &Value) -> bool {
 // exposure
 // --------------------------------------------------------------------------
 
-/// `store.replace_exposure`: one record -- the sectors and countries as
+/// `replace_exposure`: one record -- the sectors and countries as
 /// `{name: fraction}`, the share of the holding they cover, and where it came
 /// from.
 pub fn replace_exposure(conn: &Connection, key: &str, rec: &Value, now: &str) -> Result<()> {
@@ -97,7 +97,7 @@ pub fn list_watchlist(conn: &Connection) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// `store.add_watch`: following a listing already followed keeps its place and
+/// `add_watch`: following a listing already followed keeps its place and
 /// fills in what was blank.
 pub fn add_watch(
     conn: &Connection,
@@ -140,12 +140,12 @@ pub fn remove_watch(conn: &Connection, symbol: &str, exchange: &str) -> Result<b
 // news
 // --------------------------------------------------------------------------
 
-/// `store.news_key`.
+/// `news_key`.
 pub fn news_key(symbol: &str, exchange: &str) -> String {
     format!("{}@{}", up(symbol), up(exchange))
 }
 
-/// `store.replace_news`: the wire's latest items for one listing, in place of
+/// `replace_news`: the wire's latest items for one listing, in place of
 /// what it had.
 pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &str, rows: &[Value], now: &str) -> Result<()> {
     let sym = up(symbol);
@@ -172,7 +172,7 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
     Ok(())
 }
 
-/// `store.news_ids`: the ids a listing's stored items carry, so a wire's new
+/// `news_ids`: the ids a listing's stored items carry, so a wire's new
 /// items can be told from the ones it had.
 pub fn news_ids(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT id FROM news WHERE symbol = ? AND exchange = ?")?;
@@ -180,7 +180,7 @@ pub fn news_ids(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<S
     rows.collect()
 }
 
-/// `store.has_wire_release`: whether a wire has carried a release for this
+/// `has_wire_release`: whether a wire has carried a release for this
 /// ticker under any venue and any form the book writes it.
 pub fn has_wire_release(conn: &Connection, symbol: &str) -> Result<bool> {
     let sym = up(symbol);
@@ -212,7 +212,7 @@ pub fn forget_news(conn: &Connection, symbol: &str, exchange: &str) -> Result<()
     Ok(())
 }
 
-/// `store.trim_news`: keep the newest `keep` items over every symbol.
+/// `trim_news`: keep the newest `keep` items over every symbol.
 pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
     conn.execute(
         "DELETE FROM news WHERE rowid NOT IN (SELECT rowid FROM news ORDER BY published_at DESC, id LIMIT ?)",
@@ -227,8 +227,8 @@ pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
 
 pub fn filing_key(symbol: &str) -> String { up(symbol) }
 
-/// A column that may not exist on this table at all, which is what the Python
-/// reader's `k in r.keys()` guard allows for: the legacy filings columns are
+/// A column that may not exist on this table at all, so it reads as empty
+/// when absent: the legacy filings columns are
 /// gone from a table created under the current schema.
 fn maybe(r: &Row, name: &str) -> String {
     match r.as_ref().column_index(name) {
@@ -237,7 +237,7 @@ fn maybe(r: &Row, name: &str) -> String {
     }
 }
 
-/// `store._filing_from_row`: the old single-source columns stand in when the
+/// `_filing_from_row`: the old single-source columns stand in when the
 /// new ones are empty, so a row written before the schema changed still reads.
 fn filing_from_row(r: &Row) -> Result<Value> {
     let or = |a: &str, b: &str| -> Result<String> {
@@ -259,7 +259,7 @@ fn filing_from_row(r: &Row) -> Result<Value> {
         "subject": maybe(r, "subject"),
         "summary": maybe(r, "summary"),
         "enrichedAt": maybe(r, "enriched_at"),
-        // Python's reader coerces a missing value to "", including this one
+        // a missing value reads as "", this one included
         "enrichVersion": match r.get::<_, Option<i64>>("enrich_version")? { Some(v) => json!(v), None => json!("") },
         // read for good: a regulator's form, read from its own boxes
         "enrichFinal": match r.as_ref().column_index("enrich_final") {
@@ -297,7 +297,7 @@ pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Va
     match rows.next()? { Some(r) => Ok(Some(filing_from_row(r)?)), None => Ok(None) }
 }
 
-/// `store.set_filing_enrichment`: what was read out of a document, stamped
+/// `set_filing_enrichment`: what was read out of a document, stamped
 /// with the version of the logic that read it so a better one re-reads it
 /// once. A value not given is left as it was.
 pub fn set_filing_enrichment(
@@ -338,7 +338,7 @@ pub fn set_filing_enrichment(
     Ok(())
 }
 
-/// `store.replace_filings`: one source's disclosures for a symbol, in place of
+/// `replace_filings`: one source's disclosures for a symbol, in place of
 /// what that source had.
 ///
 /// Other sources' rows are untouched, and so is what has been read from the
@@ -395,7 +395,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[V
 // short selling
 // --------------------------------------------------------------------------
 
-/// `store.SHORT_FIELDS` and `store._SHORT_COLUMNS`, paired.
+/// `SHORT_FIELDS` and `_SHORT_COLUMNS`, paired.
 pub const SHORT_FIELDS: [(&str, &str); 16] = [
     ("market", "market"), ("asOf", "as_of"), ("shares", "shares"), ("previous", "previous"),
     ("previousOf", "previous_of"), ("change", "change"), ("float", "float_shares"), ("ofFloat", "of_float"),
@@ -404,7 +404,7 @@ pub const SHORT_FIELDS: [(&str, &str); 16] = [
     ("volumePct", "volume_pct"), ("name", "name"),
 ];
 
-/// `store._short_row`.
+/// `_short_row`.
 pub fn short_row(r: &Row) -> Result<Value> {
     let mut out = Map::new();
     out.insert("symbol".into(), json!(text(r, "symbol")?));
@@ -432,7 +432,7 @@ pub fn short_row(r: &Row) -> Result<Value> {
     Ok(Value::Object(out))
 }
 
-/// `store.save_shorts`: one listing's short selling.
+/// `save_shorts`: one listing's short selling.
 ///
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
@@ -484,7 +484,7 @@ pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Opt
 // gauges
 // --------------------------------------------------------------------------
 
-/// `store.save_gauge`: one published index's reading. What the publisher gives
+/// `save_gauge`: one published index's reading. What the publisher gives
 /// beyond the score travels in the payload.
 pub fn save_gauge(conn: &Connection, name: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
     let key = name.trim().to_lowercase();
@@ -561,7 +561,7 @@ fn notification(r: &Row) -> Result<Value> {
     }))
 }
 
-/// `store.add_notification`: one row, keyed so the same event is never stored
+/// `add_notification`: one row, keyed so the same event is never stored
 /// twice; the oldest beyond the last kept go.
 ///
 /// A row the server shows itself is stored seen, so no page shows it too.
@@ -594,7 +594,7 @@ pub fn add_notification(
     match rows.next()? { Some(r) => Ok(Some(notification(r)?)), None => Ok(None) }
 }
 
-/// `store.list_notifications`: rows after an id, and from a time when one is
+/// `list_notifications`: rows after an id, and from a time when one is
 /// given, oldest first -- newest first for the history.
 pub fn list_notifications(
     conn: &Connection,
@@ -625,7 +625,7 @@ pub fn list_notifications(
     Ok(out)
 }
 
-/// `store.mark_notifications_seen`: a page has shown these, so no page shows
+/// `mark_notifications_seen`: a page has shown these, so no page shows
 /// them again.
 pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Result<usize> {
     if ids.is_empty() {
@@ -645,11 +645,11 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 // universes
 // --------------------------------------------------------------------------
 
-/// `store.replace_universe`.
+/// `replace_universe`.
 pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str) -> Result<()> {
     conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
     for r in rows {
-        // Python keeps the row when `r.get("symbol")` is truthy
+        // the row is kept when its symbol is present and non-empty
         if !r.get("symbol").map(truthy).unwrap_or(false) {
             continue;
         }
@@ -671,7 +671,7 @@ pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str)
 // the remaining readers
 // --------------------------------------------------------------------------
 
-/// `store.dividend_symbols`: the symbols that have paid, with the listing
+/// `dividend_symbols`: the symbols that have paid, with the listing
 /// exchange when the securities table knows it.
 pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
     let mut stmt = conn.prepare(
@@ -697,7 +697,7 @@ pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// `store.all_shorts`: every listing's stored short selling, for the ranked
+/// `all_shorts`: every listing's stored short selling, for the ranked
 /// list.
 pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
     let mut stmt = conn.prepare("SELECT * FROM shorts")?;
@@ -709,7 +709,7 @@ pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// `store.mark_filings_fetched`: when a symbol's disclosures were last
+/// `mark_filings_fetched`: when a symbol's disclosures were last
 /// refreshed, and its SEDAR+ profile number when one was found.
 pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, now: &str) -> Result<()> {
     let sym = filing_key(symbol);
@@ -744,7 +744,7 @@ pub fn filings_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
-/// `store.sedar_profile`.
+/// `sedar_profile`.
 pub fn sedar_profile(conn: &Connection, symbol: &str) -> Result<String> {
     crate::tables::get_meta(conn, &format!("sedar_profile:{}", filing_key(symbol)), "")
 }
@@ -759,7 +759,7 @@ pub fn forget_filings(conn: &Connection, symbol: &str) -> Result<()> {
     Ok(())
 }
 
-/// `store.sold_since`: the shares sold in an account since a moment, from the
+/// `sold_since`: the shares sold in an account since a moment, from the
 /// activity feed -- by security id when there is one, else by symbol.
 pub fn sold_since(conn: &Connection, account_id: &str, security_id: &str, since_iso: &str, symbol: &str) -> Result<f64> {
     let q: Option<f64> = if !security_id.is_empty() {
@@ -778,7 +778,7 @@ pub fn sold_since(conn: &Connection, account_id: &str, security_id: &str, since_
     Ok(q.unwrap_or(0.0))
 }
 
-/// `store.position_quantity`: Wealthsimple's own balance for one security in
+/// `position_quantity`: Wealthsimple's own balance for one security in
 /// one account, as last read. Nothing when it is not known.
 pub fn position_quantity(conn: &Connection, account_id: &str, security_id: &str) -> Result<Option<f64>> {
     conn.query_row(
@@ -797,12 +797,12 @@ pub fn latest_notification_id(conn: &Connection) -> Result<i64> {
     Ok(m.unwrap_or(0))
 }
 
-/// `store.unread_notifications`: how many the person has not looked at.
+/// `unread_notifications`: how many the person has not looked at.
 pub fn unread_notifications(conn: &Connection) -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL", [], |r| r.get(0))
 }
 
-/// `store.mark_notifications_read`: every unread one when no ids are given.
+/// `mark_notifications_read`: every unread one when no ids are given.
 pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str) -> Result<usize> {
     match ids {
         None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
@@ -820,13 +820,13 @@ pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str
     }
 }
 
-/// `store.clear_notifications`: the history emptied, and the keys with it --
+/// `clear_notifications`: the history emptied, and the keys with it --
 /// an event already told is only untold while its row stands.
 pub fn clear_notifications(conn: &Connection) -> Result<usize> {
     conn.execute("DELETE FROM notifications", [])
 }
 
-/// `store.exposure_record`: one record by its key, or nothing.
+/// `exposure_record`: one record by its key, or nothing.
 pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<Value>> {
     let all = crate::admin::exposures_map(conn)?;
     Ok(all.get(key).cloned())

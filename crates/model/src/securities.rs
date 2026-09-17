@@ -34,7 +34,7 @@ const MIC_MAP: [(&str, &str); 8] = [
     ("NEOE", "Cboe Canada"),
 ];
 
-/// `model.exchange_label`: the name the page prints, from the exchange field
+/// `exchange_label`: the name the page prints, from the exchange field
 /// when there is one and the MIC when there is not.
 pub fn exchange_label(sec: Option<&Value>) -> String {
     let sec = match sec { Some(s) => s, None => return String::new() };
@@ -50,7 +50,7 @@ pub fn exchange_label(sec: Option<&Value>) -> String {
     MIC_MAP.iter().find(|(k, _)| *k == mic).map(|(_, v)| (*v).to_string()).unwrap_or_default()
 }
 
-/// `model.listing_ticker`: `SHOP.TO` -> `SHOP`.
+/// `listing_ticker`: `SHOP.TO` -> `SHOP`.
 pub fn listing_ticker(sym: &str) -> String {
     let s = sym.trim();
     if let Some(i) = s.rfind('.') {
@@ -62,7 +62,7 @@ pub fn listing_ticker(sym: &str) -> String {
     s.to_string()
 }
 
-/// `model.is_alpha_venue`: Alpha is where a trade printed, not where the name
+/// `is_alpha_venue`: Alpha is where a trade printed, not where the name
 /// is listed.
 pub fn is_alpha_venue(sec: Option<&Value>) -> bool {
     let sec = match sec { Some(s) => s, None => return false };
@@ -71,11 +71,10 @@ pub fn is_alpha_venue(sec: Option<&Value>) -> bool {
     exch == "ALPHA EXCHANGE" || exch == "ALPHA" || mic == "XATS"
 }
 
-/// `model.Securities`.
+/// `Securities`.
 pub struct Securities {
     pub by_id: HashMap<String, Value>,
-    /// Insertion order, because `preferred` takes the first record that fits
-    /// and Python iterates the dictionary in that order.
+    /// Insertion order, because `preferred` takes the first record that fits.
     order: Vec<String>,
 }
 

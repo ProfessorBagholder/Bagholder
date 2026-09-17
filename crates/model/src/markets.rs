@@ -1,4 +1,4 @@
-//! The Markets tab: `model.markets_view` and everything it reads.
+//! The Markets tab: `markets_view` and everything it reads.
 //!
 //! The tile row, the watchlist with its quotes, the heatmap of what the book
 //! holds, and the news items each tagged with the listings they were read for.
@@ -12,7 +12,7 @@ use crate::instruments;
 use crate::venues::{tmx_symbol, watch_exposure_key, SHARE_KEY};
 use crate::value::{field_s, get, num};
 
-/// `news.MARKET`: the feed whose items belong to the market rather than to a
+/// `MARKET`: the feed whose items belong to the market rather than to a
 /// listing.
 const MARKET_FEED: (&str, &str) = ("*", "MARKET");
 
@@ -32,13 +32,13 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-/// `model.watch_quote_key`: where a watched listing's quote is kept -- its
+/// `watch_quote_key`: where a watched listing's quote is kept -- its
 /// symbol and venue, so a listing the book also holds elsewhere keeps its own.
 pub fn watch_quote_key(symbol: &str, exchange: &str) -> String {
     format!("{}@{}", symbol.trim().to_uppercase(), exchange.trim().to_uppercase())
 }
 
-/// `model.tile_list`: the saved set, else the default; only what the directory
+/// `tile_list`: the saved set, else the default; only what the directory
 /// knows, twelve at most.
 fn tile_list(base: &Base) -> Vec<&'static instruments::Instrument> {
     let saved = base.tiles.as_ref().and_then(|v| v.as_array());
@@ -63,7 +63,7 @@ fn tile_list(base: &Base) -> Vec<&'static instruments::Instrument> {
     out
 }
 
-/// `model.tile_symbols`: the tile row keyed as a watched instrument is.
+/// `tile_symbols`: the tile row keyed as a watched instrument is.
 pub fn tile_symbols(base: &Base) -> Vec<Value> {
     tile_list(base)
         .into_iter()
@@ -76,7 +76,7 @@ pub fn tile_symbols(base: &Base) -> Vec<Value> {
         .collect()
 }
 
-/// `model.tile_decimals`: the instrument's own price scale.
+/// `tile_decimals`: the instrument's own price scale.
 fn tile_decimals(inst: &instruments::Instrument) -> i64 {
     if inst.symbol == "BTCUSD" {
         return 0;
@@ -88,7 +88,7 @@ fn tile_decimals(inst: &instruments::Instrument) -> i64 {
     }
 }
 
-/// `model.tile_rows`.
+/// `tile_rows`.
 pub fn tile_rows(base: &Base) -> Vec<Value> {
     let mut out = Vec::new();
     for inst in tile_list(base) {
@@ -118,7 +118,7 @@ pub fn tile_rows(base: &Base) -> Vec<Value> {
     out
 }
 
-/// `model.watch_symbols`: every watched listing, with what a quote source
+/// `watch_symbols`: every watched listing, with what a quote source
 /// needs to price it.
 pub fn watch_symbols(base: &Base) -> Vec<Value> {
     let mut out = Vec::new();
@@ -142,7 +142,7 @@ pub fn watch_symbols(base: &Base) -> Vec<Value> {
     out
 }
 
-/// `model.quote_symbols`: the watched listings, then the tile row's
+/// `quote_symbols`: the watched listings, then the tile row's
 /// instruments not already among them.
 pub fn quote_symbols(base: &Base) -> Vec<Value> {
     let mut out = watch_symbols(base);
@@ -157,7 +157,7 @@ pub fn quote_symbols(base: &Base) -> Vec<Value> {
     out
 }
 
-/// `model.dominant_sector`: the sector a record gives most weight to.
+/// `dominant_sector`: the sector a record gives most weight to.
 pub fn dominant_sector(rec: Option<&Value>) -> String {
     let sectors = match rec.and_then(|r| r.get("sectors")).and_then(|s| s.as_object()) {
         Some(s) => s,
@@ -182,7 +182,7 @@ fn lk(symbol: &str, exchange: &str) -> (String, String) {
     (tmx_symbol(symbol), exchange.trim().to_uppercase())
 }
 
-/// `model.watch_rows`.
+/// `watch_rows`.
 pub fn watch_rows(base: &Base, positions: &[Value]) -> Vec<Value> {
     let mut held: Vec<((String, String), &Value)> = Vec::new();
     for p in positions {
@@ -236,7 +236,7 @@ pub fn watch_rows(base: &Base, positions: &[Value]) -> Vec<Value> {
     out
 }
 
-/// `model.heatmap_items`: one tile per symbol held, its market value in CAD
+/// `heatmap_items`: one tile per symbol held, its market value in CAD
 /// summed over the accounts holding it.
 pub fn heatmap_items(positions: &[Value], exposures: &Map<String, Value>, cad: &dyn Fn(f64, &str) -> f64) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
@@ -279,7 +279,7 @@ pub fn heatmap_items(positions: &[Value], exposures: &Map<String, Value>, cad: &
 // news
 // --------------------------------------------------------------------------
 
-/// `model.news_text_key`: a headline as one story -- letters and digits only,
+/// `news_text_key`: a headline as one story -- letters and digits only,
 /// one case, one space between words.
 pub fn news_text_key(headline: &str) -> String {
     let lower = headline.to_lowercase();
@@ -304,7 +304,7 @@ const FRENCH_WORDS: [&str; 20] = [
 ];
 const FRENCH_LETTERS: [char; 14] = ['à', 'â', 'ç', 'é', 'è', 'ê', 'ë', 'î', 'ï', 'ô', 'û', 'ù', 'ü', 'ÿ'];
 
-/// `model.looks_french`: accented letters or French function words, two or
+/// `looks_french`: accented letters or French function words, two or
 /// more.
 pub fn looks_french(headline: &str) -> bool {
     let t = headline.to_lowercase();
@@ -312,7 +312,7 @@ pub fn looks_french(headline: &str) -> bool {
     if accents >= 2 {
         return true;
     }
-    // whole words, as the Python pattern's \b does
+    // whole words, bounded by \b
     let words: Vec<&str> = t.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();
     let hits = words.iter().filter(|w| FRENCH_WORDS.contains(w) || **w == "la").count();
     hits >= 2
@@ -342,7 +342,7 @@ fn when_minutes(iso: &str) -> Option<f64> {
     Some(days * 1440.0 + hh * 60.0 + mm + ss / 60.0 - offset_minutes)
 }
 
-/// `model.drop_translations`: a release posted in French beside its English
+/// `drop_translations`: a release posted in French beside its English
 /// original -- the same wire, a listing in common, within three hours -- is one
 /// story. The English row stays.
 fn drop_translations(rows: Vec<Value>) -> Vec<Value> {
@@ -378,7 +378,7 @@ fn drop_translations(rows: Vec<Value>) -> Vec<Value> {
     out
 }
 
-/// `model.news_rows`: every item kept, newest first, each tagged with the
+/// `news_rows`: every item kept, newest first, each tagged with the
 /// listings it was read for. An item two listings share is one row with two
 /// tags.
 pub fn news_rows(base: &Base, positions: &[Value], watch: &[Value]) -> Vec<Value> {
@@ -472,7 +472,7 @@ pub fn news_rows(base: &Base, positions: &[Value], watch: &[Value]) -> Vec<Value
     drop_translations(rows)
 }
 
-/// `model.markets_view`.
+/// `markets_view`.
 pub fn markets_view(base: &Base, positions: &[Value]) -> Value {
     let today = base.today.clone();
     let cad = |amount: f64, currency: &str| to_cad(&base.fx, amount, currency, &today);

@@ -1,4 +1,4 @@
-//! `store.versions`: a cheap fingerprint of everything the derived model reads.
+//! A cheap fingerprint of everything the derived model reads.
 //!
 //! The first value says whether the model is current at all. The second leaves
 //! the quotes out: when nothing but a price has moved, the match, the closed
@@ -34,7 +34,7 @@ const QUOTES_SQL: &str = "SELECT COUNT(*), MAX(fetched_at), TOTAL(price) FROM qu
 const VERSION_META: [&str; 5] = ["synced_at", "trade_groups", "trade_notes", "journal_v2", "market_tiles"];
 
 /// One scalar as the fingerprint spells it. SQLite hands back whatever the
-/// column held, and Python prints it with `%s`.
+/// column held, printed as text (`None` for null, `1.0` for a whole real).
 fn scalar(conn: &Connection, sql: &str, idx: usize) -> Result<String> {
     conn.query_row(sql, [], |r| {
         Ok(match r.get_ref(idx)? {
@@ -51,10 +51,8 @@ fn scalar(conn: &Connection, sql: &str, idx: usize) -> Result<String> {
 
 /// FNV-1a over the stored text.
 ///
-/// Python uses the built-in `hash`, which is salted per process, so the
-/// fingerprint it produces is only ever comparable to another taken by the same
-/// run -- which is all it is used for. A stable hash is used here instead: the
-/// values will not match Python's, and they are not meant to.
+/// The fingerprint is only ever compared with another taken by the same
+/// run, so any hash would do; this one is stable across runs.
 fn text_hash(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
@@ -88,7 +86,7 @@ pub fn data_version(conn: &Connection) -> Result<String> {
     Ok(versions(conn)?.0)
 }
 
-/// `store.book_version`: the rows the FIFO match itself depends on.
+/// The rows the FIFO match itself depends on.
 pub fn book_version(conn: &Connection) -> Result<String> {
     let acts = format!(
         "{}:{}",
@@ -99,7 +97,7 @@ pub fn book_version(conn: &Connection) -> Result<String> {
     Ok(format!("{}|{}", acts, secs))
 }
 
-/// `store.status_counts`: what the header needs, read without counting the
+/// What the header needs, read without counting the
 /// tables themselves.
 pub fn status_counts(conn: &Connection) -> Result<(i64, i64, String)> {
     let acts: i64 = conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get(0))?;

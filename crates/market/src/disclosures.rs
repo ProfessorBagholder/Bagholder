@@ -25,8 +25,7 @@ pub const CATEGORIES: [&str; 7] = [FINANCIALS, EVENTS, GOVERNANCE, OFFERINGS, IN
 #[derive(Debug, Clone)]
 pub enum SourceError {
     Unavailable(String),
-    /// Anything else that went wrong, with Python's `"%s: %s" % (type, e)`
-    /// shape already applied.
+    /// Anything else that went wrong, as `kind: message`.
     Other(String),
 }
 
@@ -44,7 +43,7 @@ fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pat).unwrap())
 }
 
-/// `disclosures.clean`: tags to spaces, whitespace collapsed.
+/// Tags to spaces, whitespace collapsed.
 pub fn clean(text: &str) -> String {
     static TAGS: OnceLock<Regex> = OnceLock::new();
     static WS: OnceLock<Regex> = OnceLock::new();
@@ -61,7 +60,7 @@ fn name_tokens(name: &str) -> std::collections::HashSet<String> {
     re(&SPLIT, r"[^a-z0-9]+").split(&n).filter(|t| t.chars().count() > 1).map(|t| t.to_string()).collect()
 }
 
-/// `disclosures.names_match`: whether two issuer names plausibly denote the
+/// Whether two issuer names plausibly denote the
 /// same company, used to reject a ticker that collides with an unrelated filer
 /// in another market.
 pub fn names_match(a: &str, b: &str) -> bool {
@@ -79,12 +78,12 @@ fn sort_key(item: &Value) -> (String, String) {
     (date, s("source"))
 }
 
-/// `disclosures.available`: true when at least one source can be reached.
+/// True when at least one source can be reached.
 pub fn available() -> bool {
     crate::sedar::available() || crate::edgar::available()
 }
 
-/// A filing source, as `disclosures.PROVIDERS` lists them.
+/// A filing source.
 pub trait Provider {
     fn source(&self) -> &str;
     fn available(&self) -> bool;
@@ -125,7 +124,7 @@ pub fn providers() -> [&'static dyn Provider; 2] {
     [&Sedar, &Edgar]
 }
 
-/// `disclosures.fetch`: every covering source's filings for one instrument,
+/// Every covering source's filings for one instrument,
 /// merged newest first, with each source's outcome beside them. A source that
 /// fails is recorded and skipped; the others still return.
 pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Value {
@@ -167,7 +166,7 @@ fn outcome_of(e: &SourceError) -> Value {
     }
 }
 
-/// `disclosures.document`: the document a stored row points at, from its
+/// The document a stored row points at, from its
 /// source. (bytes, content type).
 pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
     document_from(&providers(), row)
@@ -182,7 +181,7 @@ pub fn document_from(providers: &[&dyn Provider], row: &Value) -> Fetched<(Vec<u
     }
 }
 
-/// `disclosures.content`: the document's readable substance, past a cover form
+/// The document's readable substance, past a cover form
 /// where the provider can tell.
 pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
     let src = row.get("source").and_then(|v| v.as_str()).unwrap_or("");
@@ -193,7 +192,7 @@ pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
     }
 }
 
-/// `disclosures.enrichment`: a provider's deterministic title and summary for
+/// A provider's deterministic title and summary for
 /// a structured filing it can parse exactly, or None.
 pub fn enrichment(row: &Value) -> Option<Value> {
     match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
@@ -202,7 +201,7 @@ pub fn enrichment(row: &Value) -> Option<Value> {
     }
 }
 
-/// `disclosures.categorize`: a stored row's category re-derived from its type,
+/// A stored row's category re-derived from its type,
 /// so a change to a mapping applies on read. Falls back to the stored one.
 pub fn categorize(row: &Value) -> Value {
     let stored = row.get("category").cloned().unwrap_or(Value::Null);
@@ -214,7 +213,8 @@ pub fn categorize(row: &Value) -> Value {
     if derived.is_empty() { stored } else { json!(derived) }
 }
 
-/// Python's `repr()` of a string, for the messages that quote one.
+/// A string quoted for a message: single quotes, or double quotes when it
+/// holds a single quote and no double quote, backslashes escaped.
 pub fn repr_quoted(s: &str) -> String {
     if s.contains('\'') && !s.contains('"') {
         format!("\"{}\"", s.replace('\\', "\\\\"))

@@ -14,11 +14,10 @@ pub use crate::client::Error as FetchError;
 
 pub const TIMEOUT_SEC: u64 = 30;
 
-/// `market.UA`.
 pub const UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
-/// `market.SOURCE_LABELS`, in the order the health list is reported in.
+/// Each source's label, in the order the health list is reported in.
 pub const SOURCE_LABELS: [(&str, &str); 9] = [
     ("tmx", "TMX Money"),
     ("yahoo", "Yahoo Finance"),
@@ -44,7 +43,6 @@ const HOST_NEEDLES: [(&str, &str); 9] = [
 ];
 
 
-/// `market.source_of_url`.
 pub fn source_of_url(url: &str) -> String {
     let host = url
         .split("://")
@@ -62,7 +60,7 @@ pub fn source_of_url(url: &str) -> String {
     if host.is_empty() { "other".to_string() } else { host }
 }
 
-/// `market.describe_failure`: a failure in words a user can act on.
+/// A failure in words a user can act on.
 pub fn describe_failure(e: &FetchError) -> String {
     match e {
         FetchError::Status(429) => "refused the request (too many)".into(),
@@ -85,15 +83,14 @@ fn health() -> &'static Mutex<BTreeMap<String, Health>> {
     H.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-/// `market.note_source`.
 pub fn note_source(name: &str, ok: bool, error: Option<&FetchError>) {
     let at = crate::now_stamp();
-    // a failure with nothing to say for itself reads as Python's does
+    // a failure with nothing to say for itself reads as unreachable
     let error = if ok { String::new() } else { error.map(describe_failure).unwrap_or_else(|| "could not be reached".into()) };
     health().lock().unwrap().insert(name.to_string(), Health { ok, at, error });
 }
 
-/// `market.source_health`: every source touched since start, in a fixed order.
+/// Every source touched since start, in a fixed order.
 pub fn source_health() -> Vec<Value> {
     let snap = health().lock().unwrap();
     SOURCE_LABELS
@@ -105,7 +102,7 @@ pub fn source_health() -> Vec<Value> {
 }
 
 
-/// `market._get_text`. A 404 is a symbol the source does not carry, not the
+/// A 404 is a symbol the source does not carry, not the
 /// source failing, so it is not recorded against its health.
 pub fn get_text(url: &str, headers: &[(&str, &str)]) -> Result<String, FetchError> {
     let default: Vec<(&str, &str)> = vec![("User-Agent", UA), ("Accept", "text/csv,application/json,*/*;q=0.8")];
@@ -124,7 +121,6 @@ pub fn get_text(url: &str, headers: &[(&str, &str)]) -> Result<String, FetchErro
     }
 }
 
-/// `market._post_json`.
 pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result<Value, FetchError> {
     let body = serde_json::to_string(payload).unwrap_or_default();
     let mut hdrs: Vec<(&str, &str)> = vec![

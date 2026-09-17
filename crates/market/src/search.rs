@@ -30,7 +30,7 @@ fn s(v: Option<&Value>) -> String {
     bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
 
-/// `bagholder.parse_nasdaq_search`: US shares and ETFs on the exchanges
+/// US shares and ETFs on the exchanges
 /// Wealthsimple trades.
 pub fn parse_nasdaq_search(data: &Value) -> Vec<Value> {
     let mut out = Vec::new();
@@ -55,7 +55,7 @@ pub fn parse_nasdaq_search(data: &Value) -> Vec<Value> {
     out
 }
 
-/// `bagholder.parse_tsx_search`: that exchange's listings, one per issuer.
+/// That exchange's listings, one per issuer.
 pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<Value> {
     let rows = match data { Value::Object(_) => data.get("results").and_then(|d| d.as_array()).cloned().unwrap_or_default(), _ => vec![] };
     let mut out = Vec::new();
@@ -68,7 +68,7 @@ pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<Value> {
     out
 }
 
-/// `bagholder.rank_search`: exact symbols first, then symbols starting with the
+/// Exact symbols first, then symbols starting with the
 /// text, then the rest, each group in the order the sources gave; duplicates
 /// dropped; at most twelve.
 pub fn rank_search(text: &str, rows: Vec<Value>) -> Vec<Value> {
@@ -103,7 +103,7 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<Value>>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// `bagholder.symbol_search`: the listings the directories find for the text,
+/// The listings the directories find for the text,
 /// remembered for the process. A source that fails leaves the others' answer;
 /// nothing is remembered when one failed.
 pub fn symbol_search(conn_path: &std::path::Path, text: &str) -> Value {

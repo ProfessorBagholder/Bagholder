@@ -1,4 +1,4 @@
-//! FIFO matching per (account, symbol, currency): `model.match_fifo`.
+//! FIFO matching per (account, symbol, currency): `match_fifo`.
 //!
 //! Returns the closed slices, the lots still open, and the fills that could
 //! not be matched to anything. Option rolls are the hard part: Wealthsimple
@@ -15,7 +15,7 @@ use crate::normalize::{
     opening_direction, roll_key,
 };
 use crate::symbols::{is_option_symbol, option_multiplier, option_right, underlying_symbol};
-use crate::value::{compact, field_num, field_s, fmt8, get, num, s as vs, EPS};
+use crate::value::{compact, field_num, field_s, fmt8, get, s as vs, EPS};
 
 // --------------------------------------------------------------------------
 // the rows the matcher works with
@@ -73,7 +73,7 @@ pub struct Slice {
     pub sell_activity_id: String,
     pub security_id: String,
     pub flags: Vec<String>,
-    /// Filled in by `apply_fx`; absent until then, as the Python dict is.
+    /// Filled in by `apply_fx`; absent until then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fees_cad: Option<f64>,
 }
@@ -103,7 +103,7 @@ struct Fill {
     rt_before: Option<String>,
     /// Where this row came from in the caller's list, when it came from one.
     /// The inference rewrites a multileg row's quantity, price and sub-type,
-    /// and the Python fill holds the very dict the activity list holds, so the
+    /// and the fill stands for the very row the activity list holds, so the
     /// rewrite has to land back there too: `actsById` feeds the fill rows the
     /// page prints under a trade.
     src: Option<usize>,
@@ -119,7 +119,7 @@ pub struct Matched {
 // identity
 // --------------------------------------------------------------------------
 
-/// `model.stable_trade_id`: stable from the first fill, so a journal entry
+/// `stable_trade_id`: stable from the first fill, so a journal entry
 /// survives later exits.
 pub fn stable_trade_id(t: &Slice) -> String {
     [
@@ -136,7 +136,7 @@ pub fn stable_trade_id(t: &Slice) -> String {
     .join("|")
 }
 
-/// `store.trade_side`: which way a row goes, read from the sub-type, then the
+/// `trade_side`: which way a row goes, read from the sub-type, then the
 /// type, then the sign of the quantity.
 pub fn trade_side(a: &Value) -> String {
     let sub = {
@@ -186,7 +186,7 @@ fn set_str(a: &mut Value, key: &str, v: &str) {
 // fill ordering
 // --------------------------------------------------------------------------
 
-/// `model._fill_rank`: within a day, opens come before closes so a same-day
+/// `_fill_rank`: within a day, opens come before closes so a same-day
 /// round trip matches against its own entry rather than an older lot.
 fn fill_rank(f: &Fill) -> u8 {
     let t = compact(&field_s(&f.a, "activityType"));
@@ -207,7 +207,7 @@ fn fill_sort_key(f: &Fill) -> (String, u8, String, String) {
 // slices
 // --------------------------------------------------------------------------
 
-/// `model._make_slice`: one closed piece of a lot against one fill.
+/// `_make_slice`: one closed piece of a lot against one fill.
 fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, symbol: Option<&str>) -> Slice {
     let exit_commission = if fill_qty > 0.0 { field_num(a, "commission") * (matched / fill_qty) } else { 0.0 };
     let entry_commission = if lot.qty > 0.0 { lot.commission * (matched / lot.qty) } else { 0.0 };
@@ -266,7 +266,7 @@ fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, sym
     t
 }
 
-/// `model._dust`: a sale that exceeds the lots by a residue is rounding, not a
+/// `_dust`: a sale that exceeds the lots by a residue is rounding, not a
 /// short. Crypto quantities come back net of in-kind fees, so 1% of the fill
 /// is tolerated there; elsewhere only float noise or under a cent of value.
 fn dust(remaining: f64, fill_qty: f64, a: &Value) -> bool {
@@ -282,7 +282,7 @@ fn dust(remaining: f64, fill_qty: f64, a: &Value) -> bool {
 // option quantity inference (Wealthsimple multileg rows often carry qty 0)
 // --------------------------------------------------------------------------
 
-/// `model._is_clean_option_qty`: a quantity is plausible when it makes the
+/// `_is_clean_option_qty`: a quantity is plausible when it makes the
 /// cash divide into a price quoted in cents (or in hundredths of a cent).
 fn is_clean_option_qty(cash: f64, qty: f64) -> bool {
     if !(qty > 0.0) { return false; }
@@ -292,7 +292,7 @@ fn is_clean_option_qty(cash: f64, qty: f64) -> bool {
     (px * 10000.0 - (px * 10000.0).round()).abs() < 1e-4
 }
 
-/// `model._infer_standalone_option_qty`: the smallest contract count that
+/// `_infer_standalone_option_qty`: the smallest contract count that
 /// gives a clean price, falling back to one.
 fn infer_standalone_option_qty(cash: f64) -> f64 {
     let abs_cash = cash.abs();
@@ -322,7 +322,7 @@ fn set_fill_side(f: &mut Fill, side: &str, sub: &str) {
     }
 }
 
-/// `model._resolve_option_fill_side`: an expiry or assignment row does not say
+/// `_resolve_option_fill_side`: an expiry or assignment row does not say
 /// which way it goes, so it is read from what the book still holds.
 fn resolve_option_fill_side(f: &mut Fill, rem: &Dirs) {
     let raw = format!("{}{}", compact(&field_s(&f.a, "rawType")), compact(&field_s(&f.a, "activityType")));
@@ -348,7 +348,7 @@ fn resolve_option_fill_side(f: &mut Fill, rem: &Dirs) {
     }
 }
 
-/// `model.infer_zero_qty_option_fills`: fills in the quantity a multileg row
+/// `infer_zero_qty_option_fills`: fills in the quantity a multileg row
 /// left at zero, and decides which direction a roll is closing, by walking the
 /// fills in order and tracking what each book and each roll chain still holds.
 fn infer_zero_qty_option_fills(fills: &mut Vec<Fill>) {
@@ -494,7 +494,7 @@ fn infer_zero_qty_option_fills(fills: &mut Vec<Fill>) {
 // corporate actions
 // --------------------------------------------------------------------------
 
-/// `model.replacement_index`: per (account, symbol, currency), the first date
+/// `replacement_index`: per (account, symbol, currency), the first date
 /// the ticker was removed and the dates of real trades, so the sale of a
 /// renamed holding can find the old book.
 struct Replacement {
@@ -536,7 +536,7 @@ fn replacement_index(activities: &[Value]) -> Replacement {
     Replacement { removed, trades }
 }
 
-/// `model.ticker_was_replaced`: the ticker went away before this date and
+/// `ticker_was_replaced`: the ticker went away before this date and
 /// nothing has traded in it since.
 fn ticker_was_replaced(ix: &Replacement, account: &str, symbol: &str, currency: &str, by_date: &str) -> bool {
     let key = (account.to_string(), symbol.to_string(), currency.to_string());
@@ -545,7 +545,7 @@ fn ticker_was_replaced(ix: &Replacement, account: &str, symbol: &str, currency: 
     !ix.trades.get(&key).map_or(false, |ds| ds.iter().any(|d| d > removed_on))
 }
 
-/// `model.split_markers`: Wealthsimple posts a share split as a quantity-zero
+/// `split_markers`: Wealthsimple posts a share split as a quantity-zero
 /// corporate action with no ratio, so the ratio is inferred from the median
 /// fill price on either side of it. Lot quantities are multiplied by the
 /// factor and prices divided by it.
@@ -603,7 +603,7 @@ fn split_markers(activities: &[Value]) -> HashMap<(String, String, String), f64>
 // --------------------------------------------------------------------------
 
 /// Books in insertion order, because the search for a renamed ticker takes the
-/// first book that matches and Python dictionaries preserve that order.
+/// first book that matches.
 #[derive(Default)]
 struct Books {
     keys: Vec<String>,
@@ -654,19 +654,19 @@ fn lot_from(a: &Value, qty: f64, price: f64, direction: &str, commission: f64, k
     }
 }
 
-/// `model.match_fifo`.
+/// `match_fifo`.
 pub fn match_fifo(activities: &[Value]) -> Matched {
     let mut owned = activities.to_vec();
     match_fifo_in_place(&mut owned)
 }
 
-/// `model.match_fifo`, writing the inference back into `activities`.
+/// `match_fifo`, writing the inference back into `activities`.
 ///
 /// A row that already carries `flags` is one the caller normalized, and the
-/// Python fill holds that same dict, so what the inference decides about it --
+/// fill stands for that same row, so what the inference decides about it --
 /// the contract count behind a quantity-zero multileg, the price that implies,
 /// which way it closes -- is visible to the caller afterwards. A row this
-/// function normalizes itself is a fresh copy in Python too, and is left alone.
+/// function normalizes itself is a fresh copy, and is left alone.
 pub fn match_fifo_in_place(activities: &mut Vec<Value>) -> Matched {
     let prepared: Vec<(Option<usize>, Value)> = activities
         .iter()
@@ -891,7 +891,7 @@ fn pool_of<'a>(
     &mut rolled[n].1
 }
 
-/// `model.match_fifo.apply_splits`: every split on this book dated on or
+/// `match_fifo.apply_splits`: every split on this book dated on or
 /// before the day is applied to the open lots, once.
 fn apply_splits(
     books: &mut Books,
@@ -923,7 +923,7 @@ fn apply_splits(
     if keep.is_empty() { pending.remove(&skey); } else { pending.insert(skey, keep); }
 }
 
-/// `model.match_fifo.close_against`: take quantity off the front of a book.
+/// `match_fifo.close_against`: take quantity off the front of a book.
 #[allow(clippy::too_many_arguments)]
 fn close_against(
     books: &mut Books,
@@ -952,7 +952,7 @@ fn close_against(
     remaining
 }
 
-/// `model.match_fifo.close_rolled`: close the legs an earlier roll carried
+/// `match_fifo.close_rolled`: close the legs an earlier roll carried
 /// forward; they take this contract's symbol. Once a chain has been rolled, a
 /// buy-back beyond the known shorts also closes the chain's older contracts,
 /// nearest expiry first -- those are the legs the rolls moved here without

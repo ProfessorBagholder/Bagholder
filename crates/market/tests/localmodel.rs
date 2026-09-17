@@ -1,4 +1,4 @@
-//! Port of tests/test_localmodel.py: endpoint resolution, checksum
+//! Endpoint resolution, checksum
 //! verification, chat reply parsing and graceful failure. Nothing is
 //! downloaded, spawned or requested: `localmodel::hooks` stand in.
 

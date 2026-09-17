@@ -1,4 +1,4 @@
-//! `store.snapshot`: everything the model is built from, in one read.
+//! `snapshot`: everything the model is built from, in one read.
 
 use rusqlite::{Connection, Result, Row};
 use serde_json::{json, Map, Value};
@@ -26,7 +26,7 @@ fn real(row: &Row, name: &str) -> rusqlite::Result<Value> {
     })
 }
 
-/// `store._security_from_row`.
+/// `_security_from_row`.
 fn security_from_row(r: &Row) -> rusqlite::Result<Value> {
     Ok(json!({
         "id": text(r, "id")?,
@@ -39,7 +39,7 @@ fn security_from_row(r: &Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// `store._exposure_from_row`: the two weight maps are stored as JSON text, and
+/// `_exposure_from_row`: the two weight maps are stored as JSON text, and
 /// anything unreadable is simply no exposure rather than an error.
 fn exposure_from_row(r: &Row) -> rusqlite::Result<Value> {
     let js = |v: Option<String>| -> Value {
@@ -60,7 +60,7 @@ fn exposure_from_row(r: &Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// `store._watch_from_row`.
+/// `_watch_from_row`.
 fn watch_from_row(r: &Row) -> rusqlite::Result<Value> {
     Ok(json!({
         "symbol": text(r, "symbol")?,
@@ -72,7 +72,7 @@ fn watch_from_row(r: &Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// `store._news_from_row`: an item with no kind is a story, which is what a
+/// `_news_from_row`: an item with no kind is a story, which is what a
 /// row stored before releases were told apart is.
 fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
     let kind = { let k = text(r, "kind")?; if k.is_empty() { "story".to_string() } else { k } };
@@ -90,7 +90,7 @@ fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// `store._tiles_from`: the saved Markets tile row, or `None` when it has
+/// `_tiles_from`: the saved Markets tile row, or `None` when it has
 /// never been saved -- which is not the same as an empty row.
 pub fn tiles_from(raw: &str) -> Value {
     if raw.is_empty() {
@@ -115,7 +115,7 @@ pub fn tiles_from(raw: &str) -> Value {
     Value::Array(out)
 }
 
-/// `store._universes`.
+/// `_universes`.
 fn universes(conn: &Connection) -> Result<Map<String, Value>> {
     let mut stmt = conn.prepare("SELECT * FROM universes ORDER BY key, value DESC, symbol")?;
     let mut rows = stmt.query([])?;
@@ -149,7 +149,7 @@ where
     Ok(out)
 }
 
-/// `store.snapshot`.
+/// `snapshot`.
 pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
     let activities = if with_activities { all_activities(conn)? } else { vec![] };
 
@@ -166,7 +166,7 @@ pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
         }))
     })?;
 
-    // no ORDER BY, as the Python read has none: the rowid order is the order
+    // no ORDER BY: the rowid order is the order
     let balances = collect(conn, "SELECT * FROM balances", |r| {
         Ok(json!({
             "accountId": opt_text(r, "account_id")?,
@@ -265,7 +265,7 @@ pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
     }))
 }
 
-/// `store.journal`: the per-trade entries the page writes.
+/// `journal`: the per-trade entries the page writes.
 pub fn journal(conn: &Connection) -> Result<Map<String, Value>> {
     let raw = get_meta(conn, crate::tables::JOURNAL_META, "")?;
     if raw.is_empty() {
@@ -277,7 +277,7 @@ pub fn journal(conn: &Connection) -> Result<Map<String, Value>> {
     }
 }
 
-/// `store._clean_journal_entry` and `store._clean_journal`.
+/// `_clean_journal_entry` and `_clean_journal`.
 pub fn clean_journal(raw: Option<&Value>) -> Map<String, Value> {
     let m = match raw { Some(Value::Object(m)) => m, _ => return Map::new() };
     let mut out = Map::new();
@@ -293,7 +293,7 @@ pub fn clean_journal(raw: Option<&Value>) -> Map<String, Value> {
     out
 }
 
-/// `store._clean_journal_entry`. Tags arrive as a list, or as the comma-
+/// `_clean_journal_entry`. Tags arrive as a list, or as the comma-
 /// separated string an older page wrote.
 fn clean_journal_entry(val: &Value) -> Option<Value> {
     let o = val.as_object()?;

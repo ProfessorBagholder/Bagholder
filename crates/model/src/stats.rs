@@ -11,7 +11,7 @@ use crate::value::{field_s, get, num};
 
 pub const GRADES: [&str; 4] = ["A", "B", "C", "F"];
 
-/// `model.metrics`.
+/// `metrics`.
 pub fn metrics(trades: &[Value]) -> Value {
     let vals: Vec<f64> = trades.iter().map(|t| num(get(t, "pnlCad"), 0.0)).collect();
     let wins: Vec<f64> = vals.iter().copied().filter(|v| *v > 0.0).collect();
@@ -54,7 +54,7 @@ pub fn metrics(trades: &[Value]) -> Value {
     })
 }
 
-/// `model.by_symbol`: grouped by the underlying, so a chain of contracts sits
+/// `by_symbol`: grouped by the underlying, so a chain of contracts sits
 /// under the name it is written on.
 pub fn by_symbol(trades: &[Value]) -> Vec<Value> {
     struct G { pnl: f64, n: usize, wins: usize, hold: f64, legs: i64, ids: Vec<String> }
@@ -98,13 +98,13 @@ pub fn by_symbol(trades: &[Value]) -> Vec<Value> {
     rows
 }
 
-/// `model.month_label`: `2026-02` -> `Feb '26`.
+/// `month_label`: `2026-02` -> `Feb '26`.
 pub fn month_label(key: &str) -> String {
     let m: usize = key[5..7].parse().unwrap_or(1);
     format!("{} '{}", MONTHS[m - 1], &key[2..4])
 }
 
-/// `model.monthly`.
+/// `monthly`.
 pub fn monthly(trades: &[Value]) -> Vec<Value> {
     struct B { label: String, value: f64, count: usize, ids: Vec<String> }
     let mut by: std::collections::BTreeMap<String, B> = std::collections::BTreeMap::new();
@@ -123,7 +123,7 @@ pub fn monthly(trades: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-/// `model.grade_buckets`.
+/// `grade_buckets`.
 pub fn grade_buckets(trades: &[Value]) -> Value {
     let mut buckets = Vec::new();
     for g in GRADES {
@@ -139,7 +139,7 @@ pub fn grade_buckets(trades: &[Value]) -> Value {
     json!({"buckets": buckets, "ungraded": ungraded, "graded": trades.len() - ungraded})
 }
 
-/// `model.review_queue`: the closed trades still missing a grade or a thesis.
+/// `review_queue`: the closed trades still missing a grade or a thesis.
 pub fn review_queue(trades: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for t in trades {
@@ -170,7 +170,7 @@ pub fn review_queue(trades: &[Value]) -> Vec<Value> {
 
 const SCHEDULES: [i64; 8] = [52, 26, 24, 12, 6, 4, 2, 1];
 
-/// `model.payments_per_year`: the frequency read from the payment dates
+/// `payments_per_year`: the frequency read from the payment dates
 /// themselves, never assumed from the instrument.
 ///
 /// Only the last three gaps count, so a fund that changes its schedule is
@@ -197,7 +197,7 @@ pub fn payments_per_year(dates: &[String]) -> Option<i64> {
     gaps.sort_unstable();
     let median = gaps[gaps.len() / 2];
     let per_year = 365.25 / median as f64;
-    // `min` keeps the first of equal distances, as Python's does.
+    // `min` keeps the first of equal distances.
     let mut best = SCHEDULES[0];
     let mut best_d = (SCHEDULES[0] as f64 - per_year).abs();
     for s in SCHEDULES.iter().skip(1) {

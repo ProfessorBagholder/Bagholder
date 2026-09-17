@@ -91,7 +91,7 @@ const LABELS: [(&str, &str); 17] = [
 /// the directory carries a rate under its price.
 const RATE_FROM_PRICE: [&str; 2] = ["ZQ", "SR3"];
 
-/// `instruments.implied_rate`: the rate such a contract is pricing -- the
+/// `implied_rate`: the rate such a contract is pricing -- the
 /// contract's own definition, not a reading of it.
 pub fn implied_rate(symbol: &str, price: Option<f64>) -> Option<f64> {
     let sym = symbol.trim().to_uppercase();
@@ -123,7 +123,7 @@ pub fn rows() -> Vec<Value> {
         .collect()
 }
 
-/// `instruments.find`: the instrument a watched row is, by symbol and venue,
+/// `find`: the instrument a watched row is, by symbol and venue,
 /// or nothing when the row is a listing.
 pub fn find(symbol: &str, exchange: &str) -> Option<&'static Instrument> {
     let sym = symbol.trim().to_uppercase();
@@ -131,7 +131,7 @@ pub fn find(symbol: &str, exchange: &str) -> Option<&'static Instrument> {
     INSTRUMENTS.iter().find(|r| r.symbol == sym && r.exchange.to_uppercase() == ex)
 }
 
-/// `instruments.search`: an exact symbol or alias first, then one starting
+/// `search`: an exact symbol or alias first, then one starting
 /// with the text, then one with a word starting with it.
 ///
 /// A single letter matches only an exact symbol, so `V` finds Visa's listings
@@ -175,7 +175,7 @@ pub fn search(text: &str) -> Vec<Value> {
             ));
         }
     }
-    // a stable sort on the rank alone, as Python's is
+    // a stable sort on the rank alone
     out.sort_by_key(|(rank, _)| *rank);
     out.into_iter().map(|(_, r)| r).collect()
 }

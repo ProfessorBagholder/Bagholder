@@ -1,4 +1,4 @@
-//! Port of tests/test_forms.py.
+//! Reading regulators' fill-in forms.
 use bagholder_market::{enrich, forms};
 use serde_json::json;
 

@@ -38,7 +38,7 @@ fn ws_collapse(s: &str) -> String {
 re!(re_ws, r"\s+");
 re!(re_tags, r"<[^>]+>");
 
-/// `str.split()`: runs of Python whitespace.
+/// Words split on runs of Unicode whitespace, empty pieces dropped.
 fn split_space(s: &str) -> Vec<&str> {
     s.split(is_space).filter(|w| !w.is_empty()).collect()
 }
@@ -68,7 +68,7 @@ fn utf16(bytes: &[u8], big: bool) -> String {
     s
 }
 
-/// `enrich.extract_pdf_subject`: the cleaned /Title from a PDF's metadata.
+/// The cleaned /Title from a PDF's metadata.
 pub fn extract_pdf_subject(data: &[u8]) -> String {
     let m = title_lit().captures(data).or_else(|| title_hex().captures(data));
     let m = match m { Some(m) => m, None => return String::new() };
@@ -87,7 +87,7 @@ pub fn extract_pdf_subject(data: &[u8]) -> String {
     clean_subject(&s)
 }
 
-/// `enrich.readable`: whether a string reads as a title, or is bytes that
+/// Whether a string reads as a title, or is bytes that
 /// merely decoded into characters. A title is letters, digits and ordinary
 /// punctuation, and mostly letters.
 pub fn readable(s: &str) -> bool {
@@ -146,7 +146,7 @@ fn strip_sec_header(text: &str) -> String {
     trim_space(&t).to_string()
 }
 
-/// `enrich.html_text`: readable text from a SEC filing's HTML.
+/// Readable text from a SEC filing's HTML.
 pub fn html_text(data: &[u8]) -> String {
     let s = String::from_utf8_lossy(data).into_owned();
     // `<(script|style|head)[^>]*>.*?</\1>`: the regex crate has no back
@@ -156,12 +156,10 @@ pub fn html_text(data: &[u8]) -> String {
     strip_sec_header(trim_space(&ws_collapse(&unescape(&s))))
 }
 
-/// `enrich.pdf_text`.
 pub fn pdf_text(data: &[u8]) -> String {
     trim_space(&ws_collapse(&crate::pdftext::text(data))).to_string()
 }
 
-/// `enrich.document_text`.
 pub mod hooks {
     use std::cell::RefCell;
     pub type DocumentText = Box<dyn Fn(&[u8], &str) -> String>;
@@ -186,17 +184,14 @@ pub fn document_text(data: &[u8], content_type: &str) -> String {
 const PROMPT: &str = "Below is the text of a company regulatory filing. In ONE short sentence, at most 20 words, say what it contains or announces \u{2014} name the actual documents, events, or figures, not the company. If it is a cover form listing exhibits, name those exhibits. Do not restate the form type or begin with 'This filing'.\n\nFILING TEXT:\n%s\n\nSUMMARY (one sentence):";
 const TITLE_PROMPT: &str = "Give a short, specific title for this company filing: a noun phrase of at most 8 words naming what it is \u{2014} the documents, event, or figures it contains. Not a form code, not the company name alone, no quotes, no preamble.\n\nFILING TEXT:\n%s\n\nTitle:";
 
-/// `enrich.summary_available`.
 pub fn summary_available() -> bool {
     crate::localmodel::available()
 }
 
-/// `enrich.wait_for_summary`.
 pub fn wait_for_summary(seconds: f64) -> bool {
     crate::localmodel::wait_ready(seconds)
 }
 
-/// `enrich.summary_status`.
 pub fn summary_status() -> &'static str {
     if crate::pdftext::pending() {
         return "downloading";
@@ -217,7 +212,7 @@ fn is_initial(word: &str) -> bool {
     b.iter().enumerate().all(|(i, c)| if i % 2 == 0 { c.is_ascii_lowercase() } else { *c == b'.' })
 }
 
-/// `enrich.first_sentence`: the first sentence of the model's answer, which
+/// The first sentence of the model's answer, which
 /// is not the text up to its first full stop. A stop ends a sentence only when
 /// the word before it is not an abbreviation or an initial and what follows
 /// begins a new one.
@@ -267,12 +262,12 @@ pub fn first_sentence(out: &str) -> String {
 re!(re_hedge, r"(?i)\b(likely|probably|presumably|apparently|possibly|perhaps|seems?\s+to|appears?\s+to|may\s+be|might\s+be|could\s+be|suggests?\s+that|unclear|not\s+specified|unspecified|i\s+think|it\s+is\s+not\s+clear)\b");
 re!(re_lower_word, r"\b[a-z]{3,}\b");
 
-/// `enrich.hedged`: whether a model's line is a guess rather than a reading.
+/// Whether a model's line is a guess rather than a reading.
 pub fn hedged(out: &str) -> bool {
     re_hedge().is_match(out)
 }
 
-/// `enrich.summarize_output`: the model's answer made a summary, or "" for a
+/// The model's answer made a summary, or "" for a
 /// bare name, a guess or no statement at all.
 pub fn summary_from(answer: &str) -> String {
     let out = first_sentence(&strip_preamble(answer));
@@ -285,7 +280,7 @@ pub fn summary_from(answer: &str) -> String {
     out.chars().take(240).collect()
 }
 
-/// `enrich.summarize`: one-sentence summary of a filing's text, or "".
+/// One-sentence summary of a filing's text, or "".
 pub fn summarize(text: &str) -> String {
     let text = trim_space(text);
     if text.is_empty() {
@@ -300,7 +295,7 @@ re!(re_bullets, r"^[*#>\-\s]+");
 re!(re_preamble, r"(?i)^\s*(sure[,!.]?\s+)?(here(?:'?s| is| are)\b[^:]*:?\s*)");
 re!(re_label, r"(?i)^\s*(title|summary|answer)\s*[:\-]\s*");
 
-/// `enrich._strip_preamble`: drop the chatty preamble a small model prepends.
+/// Drop the chatty preamble a small model prepends.
 pub fn strip_preamble(out: &str) -> String {
     let out = re_special_tokens().replace_all(out, " ").into_owned();
     let out = trim_space(&ws_collapse(&out)).to_string();
@@ -316,7 +311,7 @@ pub fn strip_preamble(out: &str) -> String {
 re!(re_ex_digit, r"\bex-?\d");
 re!(re_five_digits, r"\d{5,}");
 
-/// `enrich._is_junk_title`: a title that is really a file name, exhibit label
+/// A title that is really a file name, exhibit label
 /// or document id.
 pub fn is_junk_title(s: &str) -> bool {
     let low = s.to_lowercase();
@@ -329,7 +324,7 @@ pub fn is_junk_title(s: &str) -> bool {
     low.contains(".htm") || low.contains(".xml") || low.contains(".pdf") || low.contains("exhibit") || re_ex_digit().is_match(&low) || re_five_digits().is_match(&low)
 }
 
-/// `enrich.title_from_model`'s reading of an answer.
+/// A title read from the model's answer.
 pub fn title_from(answer: &str) -> String {
     let out = strip_preamble(answer);
     let out = trim_space(out.trim_end_matches(['.', ':'])).to_string();
@@ -342,7 +337,7 @@ pub fn title_from(answer: &str) -> String {
     out.chars().take(90).collect()
 }
 
-/// `enrich.title_from_model`: a short title for a filing from the local
+/// A short title for a filing from the local
 /// model, or "".
 pub fn title_from_model(text: &str) -> String {
     let text = trim_space(text);
@@ -353,7 +348,7 @@ pub fn title_from_model(text: &str) -> String {
     title_from(&crate::localmodel::chat(&TITLE_PROMPT.replacen("%s", &clipped, 1), 40))
 }
 
-/// `enrich.enrich_document`: a title and a one-sentence summary for one
+/// A title and a one-sentence summary for one
 /// document, both from its readable text. `final` says the document has been
 /// read for good -- a regulator's form, read exactly or not at all -- and no
 /// model will add to it.

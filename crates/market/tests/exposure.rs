@@ -1,4 +1,4 @@
-//! Port of tests/test_exposure.py: the issuers' parsers, the names folded onto one set,
+//! The issuers' parsers, the names folded onto one set,
 //! the look-through (sources stood in for through `exposure::hooks`), and the
 //! Portfolio's and Markets' slices.
 

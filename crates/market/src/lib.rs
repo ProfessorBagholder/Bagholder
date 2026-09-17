@@ -27,7 +27,7 @@ pub mod tmx;
 pub mod universes;
 pub mod xls;
 
-/// `store.quote_fetched_at`, re-exported so the quote loop can ask when each
+/// When each quote was stored, re-exported so the quote loop can ask when each
 /// symbol was last priced.
 pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<serde_json::Map<String, serde_json::Value>> {
     bagholder_store::market::quote_fetched_at(conn)

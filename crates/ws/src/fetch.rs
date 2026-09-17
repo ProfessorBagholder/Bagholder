@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 use crate::session::{CallError, Client};
 use bagholder_model::value::{field_s, get, num};
 
-/// `bagholder.fetch_all_accounts`.
 pub fn fetch_all_accounts(client: &Client, sess: &Value, identity_id: &str) -> Result<Vec<Value>, CallError> {
     let mut accounts: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -43,7 +42,7 @@ pub fn fetch_all_accounts(client: &Client, sess: &Value, identity_id: &str) -> R
     Ok(accounts)
 }
 
-/// `bagholder.activity_fetch_condition`: the window one pull asks for. The
+/// The window one pull asks for. The
 /// start date is what turns a daily pull into new rows only.
 pub fn activity_fetch_condition(account_id: &str, start_date: Option<&str>, now_unix: i64) -> Value {
     let end_secs = now_unix + 86400;
@@ -71,7 +70,6 @@ pub fn activity_fetch_condition(account_id: &str, start_date: Option<&str>, now_
     Value::Object(cond)
 }
 
-/// `bagholder.fetch_activities_for_account`.
 pub fn fetch_activities_for_account(
     client: &Client,
     sess: &Value,
@@ -113,7 +111,7 @@ pub fn fetch_activities_for_account(
     Ok(items)
 }
 
-/// `bagholder.fetch_balances`: twenty accounts to a request.
+/// Twenty accounts to a request.
 pub fn fetch_balances(client: &Client, sess: &Value, account_ids: &[String]) -> Result<Vec<Value>, CallError> {
     let ids: Vec<&String> = account_ids.iter().filter(|i| !i.is_empty()).collect();
     let mut balances = Vec::new();
@@ -145,7 +143,7 @@ pub fn fetch_balances(client: &Client, sess: &Value, account_ids: &[String]) -> 
     Ok(balances)
 }
 
-/// `bagholder.parse_margin`: the buying power as Wealthsimple answers it -- a
+/// The buying power as Wealthsimple answers it -- a
 /// Money when it is available, the reason when it is not, and nothing at all
 /// when the account has no margin figures.
 pub fn parse_margin(data: &Value) -> Option<Value> {
@@ -186,7 +184,7 @@ pub fn parse_margin(data: &Value) -> Option<Value> {
     Some(json!({"buyingPower": Value::Null, "currency": "CAD", "unavailable": why}))
 }
 
-/// `bagholder.margin_account_ids`: the open margin accounts, which are the
+/// The open margin accounts, which are the
 /// only ones whose buying power is margin available.
 ///
 /// Wealthsimple answers the buying-power query for every self-directed account
@@ -209,7 +207,7 @@ pub fn margin_account_ids(accounts: &[Value]) -> Vec<String> {
     out
 }
 
-/// `bagholder._money_amount`: the first Money.amount present among the named
+/// The first Money.amount present among the named
 /// keys, with its currency.
 pub fn money_amount(node: &Value, keys: &[&str]) -> (Option<f64>, Option<String>) {
     if !node.is_object() {
@@ -228,7 +226,7 @@ pub fn money_amount(node: &Value, keys: &[&str]) -> (Option<f64>, Option<String>
     (None, None)
 }
 
-/// `bagholder._nav_points_from_payload`: one page of daily net liquidation.
+/// One page of daily net liquidation.
 pub fn nav_points_from_payload(data: &Value) -> (Vec<Value>, Value) {
     let ident = data.get("identity").cloned().unwrap_or(Value::Null);
     let acc = data.get("account").cloned().unwrap_or(Value::Null);
@@ -255,7 +253,7 @@ pub fn nav_points_from_payload(data: &Value) -> (Vec<Value>, Value) {
     (points, hist.get("pageInfo").cloned().unwrap_or(json!({})))
 }
 
-/// `bagholder._paginate_nav_history`: a year at a time from `since` (or 2020),
+/// A year at a time from `since` (or 2020),
 /// eight pages a year at most, one point a day.
 pub fn paginate_nav_history(client: &Client, sess: &Value, operation: &str, extra: &Value, since: Option<&str>, today: &str) -> Result<Vec<Value>, CallError> {
     let since: String = since.unwrap_or("").chars().take(10).collect();
@@ -300,13 +298,13 @@ pub fn paginate_nav_history(client: &Client, sess: &Value, operation: &str, extr
     Ok(by_date.into_values().collect())
 }
 
-/// `bagholder.fetch_nav_history`: identity-wide net liquidation.
+/// Identity-wide net liquidation.
 pub fn fetch_nav_history(client: &Client, sess: &Value, identity_id: &str, since: Option<&str>, today: &str) -> Result<Vec<Value>, CallError> {
     paginate_nav_history(client, sess, "IdentityHistoricalFinancialsQuery",
         &json!({"identityId": identity_id, "currency": "CAD", "limit": 400, "includeNetDeposits": true}), since, today)
 }
 
-/// `bagholder.fetch_account_nav_history`: one account's daily net liquidation.
+/// One account's daily net liquidation.
 pub fn fetch_account_nav_history(client: &Client, sess: &Value, account_id: &str, since: Option<&str>, today: &str) -> Result<Vec<Value>, CallError> {
     let aid = account_id.trim();
     if aid.is_empty() {
@@ -316,7 +314,7 @@ pub fn fetch_account_nav_history(client: &Client, sess: &Value, account_id: &str
         &json!({"id": aid, "currency": "CAD", "resolution": "DAILY", "first": 400}), since, today)
 }
 
-/// `bagholder.merge_nav_points`: equity and net deposits summed by date across
+/// Equity and net deposits summed by date across
 /// account series.
 pub fn merge_nav_points(series: &[Vec<Value>]) -> Vec<Value> {
     let mut by_date: std::collections::BTreeMap<String, serde_json::Map<String, Value>> = std::collections::BTreeMap::new();
@@ -359,7 +357,7 @@ pub fn merge_nav_points(series: &[Vec<Value>]) -> Vec<Value> {
     by_date.into_values().map(Value::Object).collect()
 }
 
-/// `bagholder.fetch_margin`: one buying-power request per margin account; only
+/// One buying-power request per margin account; only
 /// accounts that answer are rows. A failure is said once on the terminal.
 pub fn fetch_margin(client: &Client, sess: &Value, account_ids: &[String], now: &str) -> Vec<Value> {
     let mut rows = Vec::new();
@@ -388,7 +386,6 @@ pub fn fetch_margin(client: &Client, sess: &Value, account_ids: &[String], now: 
     rows
 }
 
-/// `bagholder._security_record`.
 pub fn security_record(sec: &Value, sid: &str) -> Option<Value> {
     let m = sec.as_object()?;
     if m.is_empty() {
@@ -411,7 +408,6 @@ pub fn security_record(sec: &Value, sid: &str) -> Option<Value> {
     }))
 }
 
-/// `bagholder.fetch_security`.
 pub fn fetch_security(client: &Client, sess: &Value, security_id: &str) -> Option<Value> {
     let sid = security_id.trim();
     if sid.is_empty() {
@@ -421,10 +417,9 @@ pub fn fetch_security(client: &Client, sess: &Value, security_id: &str) -> Optio
     security_record(data.get("security").unwrap_or(&Value::Null), sid)
 }
 
-/// `bagholder.SECURITY_BATCH`.
 pub const SECURITY_BATCH: usize = 50;
 
-/// `bagholder.fetch_securities`: one request per fifty ids; a failed batch
+/// One request per fifty ids; a failed batch
 /// falls back to one request per id.
 pub fn fetch_securities(client: &Client, sess: &Value, ids: &[String]) -> Vec<Value> {
     let mut uniq: Vec<String> = Vec::new();

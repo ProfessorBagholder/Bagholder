@@ -74,14 +74,13 @@ re!(re_book_dated, r"(?i)([A-Z0-9]{8,}(?:CAD|USD))-\d{4}-\d{2}-\d{2}");
 re!(re_book, r"(?i)([A-Z0-9]{8,}(?:CAD|USD))");
 re!(re_key_ccy, r"(?i)\b(USD|CAD)\b");
 
-/// Python's `re.match(pattern + "$")`: `$` also matches just before a final
-/// newline, which the strings reaching these patterns never carry, since each
-/// was stripped first.
+/// A pattern match on a string already stripped of surrounding whitespace, so
+/// no trailing newline reaches these patterns.
 fn caps<'a>(r: &Regex, s: &'a str) -> Option<regex::Captures<'a>> {
     r.captures(s)
 }
 
-/// `csvimport.normalize_header`.
+/// `normalize_header`.
 pub fn normalize_header(h: &str) -> String {
     let s = h.replace('\u{feff}', "");
     let s = trim_space(&s).trim_matches(['"', '\'']);
@@ -89,13 +88,13 @@ pub fn normalize_header(h: &str) -> String {
     re_header_space().replace_all(&s, "_").into_owned()
 }
 
-/// `csvimport.parse_number`: currency marks and thousands separators dropped,
+/// `parse_number`: currency marks and thousands separators dropped,
 /// parentheses a negative, anything unreadable 0.
 ///
-/// One deliberate difference: Python's `float()` reads `nan` and `inf`, and
-/// the importer then books a quantity or a price that is not a number -- a
-/// row that never matches itself, so re-importing the file adds it again,
-/// and a NaN that empties every total it reaches. Here they are unreadable,
+/// `nan` and `inf` are not numbers here. Read as numbers, the importer would
+/// book a quantity or a price that is not a number -- a row that never matches
+/// itself, so re-importing the file would add it again, and a NaN would empty
+/// every total it reaches. So they are unreadable,
 /// and read as 0 like any other unreadable cell.
 pub fn parse_number(raw: &str) -> f64 {
     let s = trim_space(raw);
@@ -118,7 +117,7 @@ fn d2(text: &str) -> String {
     format!("{:02}", parse_int(text).unwrap_or(0))
 }
 
-/// `csvimport.parse_date`: the dates the exports write, as YYYY-MM-DD, or "".
+/// `parse_date`: the dates the exports write, as YYYY-MM-DD, or "".
 pub fn parse_date(raw: &str) -> String {
     let s = trim_space(raw);
     if s.is_empty() {
@@ -163,12 +162,12 @@ pub fn parse_date(raw: &str) -> String {
     String::new()
 }
 
-/// `csvimport.is_footer_line`.
+/// `is_footer_line`.
 pub fn is_footer_line(text: &str) -> bool {
     re_footer().is_match(text)
 }
 
-/// `csvimport.detect_format`.
+/// `detect_format`.
 pub fn detect_format(headers: &[String]) -> &'static str {
     let norms: std::collections::HashSet<String> = headers.iter().map(|h| normalize_header(h)).collect();
     let has = |k: &str| norms.contains(k);
@@ -198,7 +197,7 @@ fn compact_lower(s: &str) -> String {
     re_compact().replace_all(&trim_space(s).to_lowercase(), "").into_owned()
 }
 
-/// `csvimport.categorize`.
+/// `categorize`.
 pub fn categorize(activity_type: &str, activity_sub_type: &str) -> &'static str {
     let t = compact_lower(activity_type);
     let s = compact_lower(activity_sub_type);
@@ -221,7 +220,7 @@ pub fn categorize(activity_type: &str, activity_sub_type: &str) -> &'static str 
     "other"
 }
 
-/// `csvimport.extract_instrument`: (symbol, name) from a statement
+/// `extract_instrument`: (symbol, name) from a statement
 /// description.
 pub fn extract_instrument(description: &str) -> (String, String) {
     let text = trim_space(description);
@@ -262,7 +261,7 @@ pub struct Parsed {
     pub shares_signed: f64,
 }
 
-/// `csvimport.parse_statement_description`.
+/// `parse_statement_description`.
 pub fn parse_statement_description(description: &str) -> Parsed {
     let (symbol, name) = extract_instrument(description);
     let mut p = Parsed {
@@ -297,7 +296,7 @@ impl Parsed {
     }
 }
 
-/// `csvimport.map_statement_type`: (activity type, sub-type, category) for a
+/// `map_statement_type`: (activity type, sub-type, category) for a
 /// statement's transaction code and description.
 pub fn map_statement_type(code: &str, description: &str) -> (String, String, String) {
     let raw = trim_space(code).to_string();
@@ -378,7 +377,7 @@ pub fn map_statement_type(code: &str, description: &str) -> (String, String, Str
     (or(&raw, "Unknown"), raw.to_uppercase(), categorize(&raw, description).into())
 }
 
-/// `csvimport.book_id_from_file_name`.
+/// `book_id_from_file_name`.
 pub fn book_id_from_file_name(name: &str) -> String {
     let n = name.rsplit('/').next().unwrap_or("");
     re_book_dated()
@@ -406,7 +405,7 @@ fn or_default(v: String, d: &str) -> String {
     if v.is_empty() { d.to_string() } else { v }
 }
 
-/// `csvimport.map_statement`: (activity, issue).
+/// `map_statement`: (activity, issue).
 pub fn map_statement(row: &Row, book_id: &str) -> (Option<Value>, Option<String>) {
     let settlement = parse_date(&pick(row, &["date", "settlement_date", "transaction_date"]));
     if settlement.is_empty() {
@@ -492,7 +491,7 @@ pub fn map_statement(row: &Row, book_id: &str) -> (Option<Value>, Option<String>
     })), issue)
 }
 
-/// `csvimport.map_canonical`.
+/// `map_canonical`.
 pub fn map_canonical(row: &Row) -> Option<Value> {
     let transaction_date = parse_date(&pick(row, &["transaction_date", "date", "trade_date", "activity_date"]));
     if transaction_date.is_empty() {
@@ -524,7 +523,7 @@ pub fn map_canonical(row: &Row) -> Option<Value> {
     }))
 }
 
-/// `csvimport.map_legacy`.
+/// `map_legacy`.
 pub fn map_legacy(row: &Row) -> Option<Value> {
     let transaction_date = parse_date(&pick(row, &["date", "transaction_date"]));
     if transaction_date.is_empty() {
@@ -585,7 +584,7 @@ fn skip(row: usize, message: &str, raw: String) -> Value {
     json!({"row": row, "message": message, "raw": raw})
 }
 
-/// `csvimport.parse_csv`: {format, activities, skipped, footerStripped,
+/// `parse_csv`: {format, activities, skipped, footerStripped,
 /// countsByType, rowCount}. An error is the file the csv reader refuses.
 pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
     let text = text.replace('\u{feff}', "");
@@ -664,7 +663,7 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
     }))
 }
 
-/// `csvimport.import_text`: parse one CSV and merge it into the store.
+/// `import_text`: parse one CSV and merge it into the store.
 pub fn import_text(conn: &Connection, name: &str, text: &str) -> std::result::Result<Value, String> {
     let report = parse_csv(text, name)?;
     let rows = report["activities"].as_array().cloned().unwrap_or_default();
@@ -691,12 +690,12 @@ pub fn import_text(conn: &Connection, name: &str, text: &str) -> std::result::Re
 
 // --- folder watching (the server scans; no browser needed) ---------------------
 
-/// `csvimport.is_junk_name`.
+/// `is_junk_name`.
 pub fn is_junk_name(name: &str) -> bool {
     name.starts_with("._") || name.to_uppercase().contains("__MACOSX")
 }
 
-/// `csvimport.is_csv_name`.
+/// `is_csv_name`.
 pub fn is_csv_name(name: &str) -> bool {
     name.to_lowercase().ends_with(".csv")
 }
@@ -711,7 +710,7 @@ pub fn expanduser(p: &str) -> String {
     p.to_string()
 }
 
-/// `csvimport.list_csv_files`.
+/// `list_csv_files`.
 pub fn list_csv_files(folder: &str) -> Vec<Value> {
     let mut names: Vec<String> = match std::fs::read_dir(folder) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
@@ -739,12 +738,12 @@ pub fn list_csv_files(folder: &str) -> Vec<Value> {
     out
 }
 
-/// `csvimport.watch_folder`.
+/// `watch_folder`.
 pub fn watch_folder(conn: &Connection) -> Result<String> {
     crate::tables::get_meta(conn, WATCH_META, "")
 }
 
-/// `csvimport.set_watch_folder`.
+/// `set_watch_folder`.
 pub fn set_watch_folder(conn: &Connection, path: &str) -> Result<Value> {
     let p = expanduser(trim_space(path));
     if p.is_empty() {
@@ -757,7 +756,7 @@ pub fn set_watch_folder(conn: &Connection, path: &str) -> Result<Value> {
     Ok(json!({"ok": true, "path": p}))
 }
 
-/// `csvimport.clear_watch_folder`.
+/// `clear_watch_folder`.
 pub fn clear_watch_folder(conn: &Connection) -> Result<()> {
     crate::tables::set_meta(conn, WATCH_META, "")?;
     crate::tables::set_meta(conn, WATCH_FILES_META, "")?;
@@ -779,7 +778,7 @@ fn stamp() -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, r / 3600, (r % 3600) / 60, r % 60)
 }
 
-/// Python's `str(e)` for a file that would not open.
+/// The error text for a file that would not open: `[Errno N] message: 'path'`.
 fn os_error(e: &std::io::Error, path: &str) -> String {
     let code = e.raw_os_error().unwrap_or(0);
     let msg = e.to_string();
@@ -787,7 +786,7 @@ fn os_error(e: &std::io::Error, path: &str) -> String {
     format!("[Errno {}] {}: '{}'", code, words, path)
 }
 
-/// `csvimport.scan_folder`: import every top-level CSV in the folder;
+/// `scan_folder`: import every top-level CSV in the folder;
 /// unchanged files are skipped unless forced.
 pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Result<Value> {
     let given = match folder { Some(f) if !f.is_empty() => f.to_string(), _ => watch_folder(conn)? };
@@ -847,7 +846,7 @@ pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Resu
     Ok(json!({"ok": true, "path": path, "added": added, "duplicates": duplicates, "files": files, "scannedAt": now}))
 }
 
-/// `csvimport.status`.
+/// `status`.
 pub fn status(conn: &Connection) -> Result<Value> {
     let path = watch_folder(conn)?;
     let seen = seen_files(conn)?;

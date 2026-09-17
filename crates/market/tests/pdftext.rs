@@ -1,5 +1,5 @@
-//! Port of tests/test_pdftext.py. The Rust engine has no provisioning step and no
-//! injectable extractor; what carries over is the routing of bytes.
+//! The routing of bytes to an engine. There is no provisioning step and no
+//! injectable extractor.
 use bagholder_market::pdftext;
 
 #[test]

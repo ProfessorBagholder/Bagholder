@@ -1,5 +1,5 @@
-//! One filter object applied to the whole base: `model.portfolio_view`,
-//! `model.cashflow_view` and `model.build_view`.
+//! One filter object applied to the whole base: `portfolio_view`,
+//! `cashflow_view` and `build_view`.
 //!
 //! Per-instrument figures stay in the instrument's own currency; everything
 //! that adds instruments together is CAD.
@@ -33,7 +33,7 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
 fn b(v: &Value, k: &str) -> f64 { num(get(v, k), 0.0) }
 fn flag(v: &Value, k: &str) -> bool { v.get(k).and_then(|x| x.as_bool()).unwrap_or(false) }
 
-/// `model.portfolio_view`: the Portfolio tiles, CAD aggregates over the
+/// `portfolio_view`: the Portfolio tiles, CAD aggregates over the
 /// accounts in scope.
 ///
 /// Market value, cost basis and unrealized P&L come from the open positions in
@@ -184,7 +184,7 @@ pub fn portfolio_view(base: &Base, f: &Filters, positions: &[Value]) -> Value {
     })
 }
 
-/// Python's `round(v, 2)`: half to even.
+/// Rounds to two places, half to even.
 fn round2(v: f64) -> f64 {
     let scaled = v * 100.0;
     let r = scaled.round();
@@ -200,7 +200,7 @@ struct Rate {
     source: &'static str,
 }
 
-/// `model.cashflow_view`.
+/// `cashflow_view`.
 pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_used: f64, has_margin: bool) -> Value {
     let today = base.today.clone();
     let accts = f.list("account");
@@ -228,7 +228,7 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
         .filter(|k| !f.list(k).is_empty())
         .map(|k| k.to_string())
         .collect();
-    // the ranges, in the insertion order of the Python dict
+    // the ranges, in their declared order
     for k in crate::filters::RANGE_KEYS {
         if f.ranges[k].v.is_some() {
             skipped.push(k.to_string());
@@ -523,7 +523,7 @@ fn trailing_year_month(day: &str) -> String {
     format!("{:04}-{:02}", cy, cm)
 }
 
-/// `model.build_view`.
+/// `build_view`.
 pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
     let f = clean_filters(filters);
     let today = base.today.clone();
@@ -710,10 +710,10 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
     })
 }
 
-/// `model.DETAIL_KEYS`: what a row carries only when the page has opened it.
+/// `DETAIL_KEYS`: what a row carries only when the page has opened it.
 pub const DETAIL_KEYS: [&str; 2] = ["legs", "fills"];
 
-/// `model.slim`: the view as the page receives it -- the legs and fills of one
+/// `slim`: the view as the page receives it -- the legs and fills of one
 /// trade or holding only, because sending every leg of every trade on every
 /// poll is most of the payload.
 pub fn slim(view: &Value, detail: Option<&str>) -> Value {
@@ -754,7 +754,7 @@ pub fn slim(view: &Value, detail: Option<&str>) -> Value {
     out
 }
 
-/// `model.trade_detail`: the legs and fills of one trade or holding, by id.
+/// `trade_detail`: the legs and fills of one trade or holding, by id.
 pub fn trade_detail(base: &Base, trade_id: &str) -> Option<Value> {
     for rows in [&base.trades, &base.positions] {
         for r in rows {

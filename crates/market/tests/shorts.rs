@@ -1,4 +1,4 @@
-//! Port of tests/test_shorts.py: short selling, which regulator answers for a
+//! Short selling, which regulator answers for a
 //! listing, what each report says, and the figure the app derives from them.
 
 use bagholder_market::shorts;
@@ -29,7 +29,7 @@ fn ca_grid() -> Vec<Vec<Value>> {
     ]
 }
 
-/// The caches are process-wide, as they are in Python; tests that touch them
+/// The caches are process-wide; tests that touch them
 /// take turns.
 fn serial() -> MutexGuard<'static, ()> {
     static M: Mutex<()> = Mutex::new(());
@@ -332,7 +332,7 @@ fn stats(value: Value) -> String {
     json!({"quoteSummary": {"result": [{"defaultKeyStatistics": {"floatShares": {"raw": value}}}]}}).to_string()
 }
 
-/// Python's fake session: the first answer whose mark is in the URL, else a 404.
+/// A fake session: the first answer whose mark is in the URL, else a 404.
 struct Yahoo {
     answers: Vec<(&'static str, String, u16)>,
     asked: RefCell<Vec<String>>,
@@ -596,7 +596,7 @@ fn test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes() {
     assert!(y.asked_with("QNC.V") > 0);
 }
 
-// --- ReadVersionTest (the part that is shorts.py's) ------------------------------
+// --- reading the version -------------------------------------------------------
 
 #[test]
 fn test_a_record_read_on_the_spot_names_its_listing() {

@@ -1,5 +1,5 @@
 //! Sector and country exposure: `exposure.norm_sector` and
-//! `model.exposure_slices`.
+//! `exposure_slices`.
 //!
 //! A share carries one sector and one country; a fund is looked through to
 //! what it holds. Whatever no record covers is named rather than hidden.
@@ -78,7 +78,7 @@ fn weight_map(v: Option<&Value>) -> Vec<(String, f64)> {
     }
 }
 
-/// `model.exposure_slices`: the open long positions in scope spread by sector
+/// `exposure_slices`: the open long positions in scope spread by sector
 /// and by country, largest first, `Not classified` last.
 pub fn exposure_slices(
     positions: &[Value],
@@ -171,7 +171,7 @@ const ISSUERS: [(&str, &[&str]); 7] = [
     ("globalx", &["global x", "horizons"]),
 ];
 
-/// Python's `\w` for a `str` pattern: a Unicode letter or digit, or `_`.
+/// A regex word character over Unicode text: a Unicode letter or digit, or `_`.
 fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }

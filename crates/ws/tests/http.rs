@@ -1,5 +1,5 @@
 //! The Wealthsimple client against a stand-in server on 127.0.0.1
-//! (tests/test_store.py, WealthsimpleHttpTest and StoreTest).
+//! and the store it writes to.
 //!
 //! Every test here sets `BAGHOLDER_WS_BASE`, so they run one at a time under
 //! one lock.

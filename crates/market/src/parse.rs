@@ -11,7 +11,6 @@ use bagholder_model::value::{get, num};
 
 pub type Series = BTreeMap<String, f64>;
 
-/// `market._num`.
 pub fn n(v: Option<&Value>, default: f64) -> f64 {
     num(v, default)
 }
@@ -21,7 +20,6 @@ fn is_iso(d: &str) -> bool {
     b.len() == 10 && b[4] == b'-' && b[7] == b'-'
 }
 
-/// `market.parse_boc_json`:
 /// `{"observations":[{"d":"2024-01-02","FXUSDCAD":{"v":"1.3316"}}]}`.
 pub fn parse_boc_json(text: &str) -> Series {
     let mut out = Series::new();
@@ -48,7 +46,7 @@ pub fn parse_boc_json(text: &str) -> Series {
     out
 }
 
-/// `market.parse_fred_csv`: `observation_date,SP500` rows. A `.` marks a
+/// `observation_date,SP500` rows. A `.` marks a
 /// holiday and is skipped.
 pub fn parse_fred_csv(text: &str) -> Series {
     let mut out = Series::new();
@@ -71,7 +69,7 @@ pub fn parse_fred_csv(text: &str) -> Series {
     out
 }
 
-/// `market.parse_stooq_csv`: `Date,Open,High,Low,Close,Volume`.
+/// `Date,Open,High,Low,Close,Volume`.
 pub fn parse_stooq_csv(text: &str) -> Series {
     let mut out = Series::new();
     for line in text.lines().skip(1) {
@@ -110,7 +108,6 @@ fn bars_from(rows: &[Value], date_key: &str) -> Vec<Value> {
     out
 }
 
-/// `market.parse_tmx_history`.
 pub fn parse_tmx_history(data: &Value) -> Vec<Value> {
     let rows = data
         .get("data")
@@ -121,7 +118,6 @@ pub fn parse_tmx_history(data: &Value) -> Vec<Value> {
     bars_from(&rows, "dateTime")
 }
 
-/// `market.parse_cboe_ca_history`.
 pub fn parse_cboe_ca_history(text: &str) -> Vec<Value> {
     let data: Value = serde_json::from_str(text).unwrap_or_else(|_| json!({}));
     let rows = data.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -138,7 +134,7 @@ fn valid_root(s: &str) -> bool {
         && b[1..].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'.')
 }
 
-/// `market.occ_code`: `QNC 20NOV26 3.00 CALL` -> `QNC261120C00003000`, the
+/// `QNC 20NOV26 3.00 CALL` -> `QNC261120C00003000`, the
 /// code Cboe keys its chains by.
 pub fn occ_code(symbol: &str) -> String {
     let u = symbol.split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase();
@@ -180,7 +176,7 @@ pub fn occ_code(symbol: &str) -> String {
     format!("{}{}{:02}{:02}{}{:08}", parts[0], yy, month, day, right, (strike * 1000.0).round() as i64)
 }
 
-/// `market.yahoo_split`: `YES.V` as Yahoo writes it -- the bare ticker and the
+/// `YES.V` as Yahoo writes it -- the bare ticker and the
 /// venues the suffix names.
 pub fn yahoo_split(text: &str) -> (String, Option<&'static [&'static str]>) {
     const VENUES: [(&str, &[&str]); 4] = [
@@ -198,7 +194,7 @@ pub fn yahoo_split(text: &str) -> (String, Option<&'static [&'static str]>) {
     (s, None)
 }
 
-/// `market.parse_coinbase`: `{"data":{"amount":"..."}}`.
+/// `{"data":{"amount":"..."}}`.
 pub fn parse_coinbase(text: &str) -> Option<f64> {
     let data: Value = serde_json::from_str(text).ok()?;
     let amount = data.get("data").and_then(|d| get(d, "amount"))?;
@@ -212,7 +208,7 @@ pub fn parse_coinbase(text: &str) -> Option<f64> {
     if v > 0.0 { Some(v) } else { None }
 }
 
-/// `market.parse_coinbase`, with the currency the pair names when the feed
+/// A Coinbase spot price, with the currency the pair names when the feed
 /// does not say.
 pub fn parse_coinbase_rec(text: &str, pair: &str) -> Option<Value> {
     let data: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
@@ -228,7 +224,7 @@ pub fn parse_coinbase_rec(text: &str, pair: &str) -> Option<Value> {
     Some(json!({"price": px, "currency": ccy}))
 }
 
-/// A number that is absent rather than zero, as `market._num(v, None)`.
+/// A number that is absent rather than zero.
 pub fn opt(v: Option<&Value>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => None,
@@ -240,7 +236,7 @@ pub fn opt(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-/// `market.parse_cboe_ca_quote`: outside a session `last` is 0, so the
+/// Outside a session `last` is 0, so the
 /// previous close stands in.
 pub fn parse_cboe_ca_quote(text: &str) -> Option<Value> {
     let data: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
@@ -262,7 +258,7 @@ pub fn parse_cboe_ca_quote(text: &str) -> Option<Value> {
     }))
 }
 
-/// `market.parse_cboe_options`: OCC code -> the row for one underlying's
+/// OCC code -> the row for one underlying's
 /// delayed chain.
 pub fn parse_cboe_options(text: &str) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
@@ -281,7 +277,7 @@ pub fn parse_cboe_options(text: &str) -> serde_json::Map<String, Value> {
     out
 }
 
-/// `market.option_mark`: one contract's price per share -- the bid/ask
+/// One contract's price per share -- the bid/ask
 /// midpoint while both are quoted, else the last trade, else the previous
 /// close.
 pub fn option_mark(row: &Value) -> Option<Value> {
@@ -294,7 +290,7 @@ pub fn option_mark(row: &Value) -> Option<Value> {
     let px = if bid > 0.0 && ask > 0.0 {
         (bid + ask) / 2.0
     } else {
-        // Python's `or` falls through a zero as well as a None
+        // a zero last trade falls through as a missing one does
         match opt(get(row, "last_trade_price")) {
             Some(v) if v != 0.0 => v,
             _ => prev.unwrap_or(0.0),
@@ -312,7 +308,7 @@ pub fn option_mark(row: &Value) -> Option<Value> {
     }))
 }
 
-/// `market.parse_coinbase_candles`: `[time, low, high, open, close, volume]`
+/// `[time, low, high, open, close, volume]`
 /// rows, oldest first.
 pub fn parse_coinbase_candles(text: &str) -> Vec<Value> {
     let rows: Vec<Value> = serde_json::from_str(if text.is_empty() { "[]" } else { text }).unwrap_or_default();

@@ -32,7 +32,7 @@ fn set_step(msg: &str) {
     app().state.lock().unwrap().sync_step = msg.to_string();
 }
 
-/// `bagholder.refresh_session`: the refresh grant, one at a time. A failure
+/// The refresh grant, one at a time. A failure
 /// says why on the header.
 pub fn refresh_session(sess: &mut Value, adopt: bool) -> bool {
     let home = app().ws_home();
@@ -51,7 +51,6 @@ pub fn token_info(sess: &Value) -> Value {
     Client { home: &home }.token_info(sess)
 }
 
-/// `bagholder.apply_token_info_client_id`.
 pub fn apply_token_info_client_id(sess: &mut Value, info: Option<&Value>) -> String {
     if f(sess, "access_token").is_empty() {
         return String::new();
@@ -73,7 +72,7 @@ pub fn apply_token_info_client_id(sess: &mut Value, info: Option<&Value>) -> Str
     cid
 }
 
-/// `bagholder.scrape_client_id`: the production client id from Wealthsimple's
+/// The production client id from Wealthsimple's
 /// login script, cached.
 pub fn scrape_client_id() -> String {
     let home = app().ws_home();
@@ -102,7 +101,7 @@ pub fn scrape_client_id() -> String {
     }
 }
 
-/// `bagholder.ensure_fresh_token`: refresh ahead of the expiry. Connected means
+/// Refresh ahead of the expiry. Connected means
 /// this grant produced a new token.
 pub fn ensure_fresh_token(sess: Option<Value>) -> bool {
     let mut sess = match sess.or_else(load_session) {
@@ -129,7 +128,7 @@ pub fn ensure_fresh_token(sess: Option<Value>) -> bool {
     ok
 }
 
-/// `bagholder.delete_session_and_book`: the login only; stored rows stay.
+/// The login only; stored rows stay.
 pub fn delete_session() {
     app().ws_home().delete_session();
     let mut st = app().state.lock().unwrap();
@@ -140,7 +139,6 @@ pub fn delete_session() {
     st.error.clear();
 }
 
-/// `bagholder.boot_session`.
 pub fn boot_session() {
     let conn = match app().open() { Ok(c) => c, Err(_) => return };
     let mut sess = match load_session() {
@@ -183,7 +181,7 @@ pub fn boot_session() {
     st.last_sync = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
 }
 
-/// `bagholder.note_session_expired`: told once per expiry.
+/// Told once per expiry.
 pub fn note_session_expired() {
     let was = {
         let mut st = app().state.lock().unwrap();
@@ -199,7 +197,7 @@ pub fn note_session_expired() {
     }
 }
 
-/// `bagholder.note_sync_failed`: the third failure in a row is told.
+/// The third failure in a row is told.
 pub fn note_sync_failed(reason: &str) {
     let (fails, first) = {
         let mut st = app().state.lock().unwrap();
@@ -254,7 +252,7 @@ fn fetch_nickname_nav_history(client: &Client, sess: &Value, accounts: &[Value],
     (points, errors)
 }
 
-/// `bagholder.run_sync`: the pull. Inserts new Wealthsimple rows only and never
+/// The pull. Inserts new Wealthsimple rows only and never
 /// rebuilds the table.
 pub fn run_sync(allow_refresh: bool, force_activity: bool) -> bool {
     {
@@ -409,7 +407,7 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
     Ok(true)
 }
 
-/// `bagholder.fill_listings`: stamp missing activity security ids and cache
+/// Stamp missing activity security ids and cache
 /// the listings the book names.
 pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
     if f(sess, "access_token").is_empty() {
@@ -516,7 +514,6 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
     ok
 }
 
-/// `bagholder.refresh_nav_only`.
 pub fn refresh_nav_only(allow_refresh: bool) -> Value {
     let sess = match load_session() { Some(s) if !f(&s, "access_token").is_empty() => s, _ => return json!({"ok": false, "error": "not connected"}) };
     let mut identity = identity_from(&sess);
@@ -556,7 +553,7 @@ pub fn refresh_nav_only(allow_refresh: bool) -> Value {
     json!({"ok": true, "allDays": combined.iter().filter(|p| f(p, "accountId").is_empty()).count(), "accounts": nicks.len(), "errors": errors})
 }
 
-/// `bagholder.refresh_portfolio`: net liquidation values, balances and buying
+/// Net liquidation values, balances and buying
 /// power read again between syncs.
 pub fn refresh_portfolio() -> Value {
     {
@@ -612,7 +609,7 @@ pub fn portfolio_loop() {
     }
 }
 
-/// `bagholder.refresh_now`: the grant, always.
+/// The grant, always.
 pub fn refresh_now() -> Value {
     let mut sess = match load_session() {
         Some(s) if !f(&s, "refresh_token").is_empty() => s,
@@ -632,7 +629,7 @@ pub fn refresh_now() -> Value {
     json!({"ok": ok, "error": st.error.trim(), "connected": ok})
 }
 
-/// `bagholder.auto_sync_loop`: the token kept fresh, and the weekday pull when
+/// The token kept fresh, and the weekday pull when
 /// it is due, backing off on failure.
 pub fn auto_sync_loop() {
     let mut delay = TOKEN_CHECK;
@@ -657,7 +654,7 @@ pub fn auto_sync_loop() {
     }
 }
 
-/// `bagholder.capture_tokens`: keep the captured login and take it over.
+/// Keep the captured login and take it over.
 pub fn capture_tokens(body: &Value) -> Value {
     if !body.is_object() {
         return json!({"ok": false, "error": "bad body"});

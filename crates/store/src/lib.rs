@@ -1,4 +1,4 @@
-//! The SQLite store: the same database file `store.py` reads and writes.
+//! The SQLite store: the database file every desktop copy reads and writes.
 
 pub mod schema;
 pub mod relabel;

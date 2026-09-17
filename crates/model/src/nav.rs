@@ -23,7 +23,7 @@ impl Point {
     }
 }
 
-/// A number that is absent rather than zero, as Python's `_num(x, None)`.
+/// A number that is absent rather than zero.
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => None,
@@ -34,7 +34,7 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-/// `model.equity_series`.
+/// `equity_series`.
 pub fn equity_series(points: &[Value]) -> Vec<Point> {
     let mut out: Vec<Point> = Vec::new();
     for p in points {
@@ -49,7 +49,7 @@ pub fn equity_series(points: &[Value]) -> Vec<Point> {
     out
 }
 
-/// `model._nav_on`: the equity as of the end of a day.
+/// `_nav_on`: the equity as of the end of a day.
 fn nav_on(series: &[Point], day: &str) -> Option<f64> {
     let mut v = None;
     for p in series {
@@ -61,7 +61,7 @@ fn nav_on(series: &[Point], day: &str) -> Option<f64> {
     v
 }
 
-/// `model._deposits_on`: the running net deposits as of the end of a day.
+/// `_deposits_on`: the running net deposits as of the end of a day.
 fn deposits_on(series: &[Point], day: &str) -> Option<f64> {
     let mut v = None;
     for p in series {
@@ -82,7 +82,7 @@ pub struct YearSpan {
     pub days: i64,
 }
 
-/// `model.year_return`: the daily chain-linked return for one calendar year,
+/// `year_return`: the daily chain-linked return for one calendar year,
 /// net of deposits.
 ///
 /// A balance under 1% of the account's peak is pre-history -- a few dollars
@@ -141,7 +141,7 @@ pub fn year_return(series: &[Point], year: &str, today: &str) -> Option<YearSpan
     Some(YearSpan { r, from: span_from, to, days })
 }
 
-/// `model.benchmark_return`: the index over the same span the account's year
+/// `benchmark_return`: the index over the same span the account's year
 /// covers -- the calendar year, or from `start` when the account was funded
 /// part way through it.
 pub fn benchmark_return(bench: &BTreeMap<String, f64>, year: &str, today: &str, start: Option<&str>) -> Option<f64> {
@@ -176,7 +176,7 @@ pub fn benchmark_return(bench: &BTreeMap<String, f64>, year: &str, today: &str, 
     Some(end / prev - 1.0)
 }
 
-/// `model.yearly_returns`.
+/// `yearly_returns`.
 pub fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &str) -> Vec<Value> {
     if series.is_empty() {
         return vec![];
@@ -222,7 +222,7 @@ pub fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &s
     out
 }
 
-/// `model.annualized`: the chain of usable years turned into a yearly rate.
+/// `annualized`: the chain of usable years turned into a yearly rate.
 pub fn annualized(years: &[Value]) -> Value {
     let mut prod = 1.0_f64;
     let mut days = 0_i64;
@@ -251,7 +251,7 @@ pub fn annualized(years: &[Value]) -> Value {
     })
 }
 
-/// `model._paired_flows`: the net deposit change per day, moved one day later
+/// `_paired_flows`: the net deposit change per day, moved one day later
 /// when the equity series only reflects the money the day after the deposit
 /// record does.
 fn paired_flows(series: &[Point]) -> Vec<f64> {
@@ -277,7 +277,7 @@ fn paired_flows(series: &[Point]) -> Vec<f64> {
     flows
 }
 
-/// `model.drawdown`: the deepest fall of the flow-adjusted equity index.
+/// `drawdown`: the deepest fall of the flow-adjusted equity index.
 pub fn drawdown(series: &[Point]) -> Value {
     if series.is_empty() {
         return json!({"pct": Value::Null, "abs": Value::Null, "at": "", "peakAt": ""});

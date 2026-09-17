@@ -1,9 +1,9 @@
-//! The HTML5 named character references, exactly as Python's
-//! `html.entities.html5` holds them -- including the legacy names that are
+//! The HTML5 named character references, exactly as the WHATWG
+//! table lists them -- including the legacy names that are
 //! recognised without their semicolon, which is why the table carries both
 //! spellings rather than one.
 //!
-//! Generated from CPython's own table; not written by hand.
+//! Generated from the WHATWG table; not written by hand.
 
 pub const HTML5: [(&str, &str); 2231] = [
     ("AElig", "\u{c6}"),

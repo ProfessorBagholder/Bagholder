@@ -1,5 +1,5 @@
-//! Every <table> on a page as rows of cell texts, read the way Python's
-//! `html.parser.HTMLParser` reads a page: tags matched case-insensitively,
+//! Every <table> on a page as rows of cell texts, read the way an
+//! HTML tokenizer reads a page: tags matched case-insensitively,
 //! attribute values in quotes skipped over when finding a tag's end, comments
 //! and declarations passed by, script and style bodies taken as raw text, and
 //! character references resolved in the text.
@@ -124,7 +124,6 @@ fn events(html: &str) -> Vec<Event> {
     out
 }
 
-/// `exposure.html_tables`.
 pub fn html_tables(html: &str) -> Vec<Vec<Vec<String>>> {
     static WS: OnceLock<Regex> = OnceLock::new();
     let ws = WS.get_or_init(|| Regex::new(r"\s+").unwrap());

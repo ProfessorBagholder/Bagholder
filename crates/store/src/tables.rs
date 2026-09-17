@@ -11,7 +11,7 @@ pub const FX_PAIR: &str = "USDCAD";
 pub const BENCHMARK_SYMBOL: &str = "SP500";
 pub const JOURNAL_META: &str = "journal_v2";
 
-/// A number that is absent rather than zero, as Python's `_num(v, None)`.
+/// A number that is absent rather than zero.
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => None,
@@ -46,7 +46,7 @@ fn arr(v: Option<&Value>) -> Vec<Value> {
 // meta
 // --------------------------------------------------------------------------
 
-/// `store.get_meta`.
+/// `get_meta`.
 pub fn get_meta(conn: &Connection, key: &str, default: &str) -> Result<String> {
     let v: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [key], |r| r.get(0))
@@ -55,7 +55,7 @@ pub fn get_meta(conn: &Connection, key: &str, default: &str) -> Result<String> {
     Ok(v.unwrap_or_else(|| default.to_string()))
 }
 
-/// `store.set_meta`.
+/// `set_meta`.
 pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -68,7 +68,7 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 // accounts, balances, margin
 // --------------------------------------------------------------------------
 
-/// `store.replace_accounts`: the account list, replaced whole. A row with no
+/// `replace_accounts`: the account list, replaced whole. A row with no
 /// id is not an account.
 pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
     conn.execute("DELETE FROM accounts", [])?;
@@ -97,7 +97,7 @@ pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// `store.replace_balances`.
+/// `replace_balances`.
 pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
     conn.execute("DELETE FROM balances", [])?;
     for b in balances {
@@ -117,7 +117,7 @@ pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// `store.replace_margin`: Wealthsimple's margin figures per account, replaced
+/// `replace_margin`: Wealthsimple's margin figures per account, replaced
 /// whole on every read -- buying power with its currency, or the reason it was
 /// unavailable. An account that answers nothing is not a row.
 pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
@@ -146,7 +146,7 @@ pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()
 // NAV
 // --------------------------------------------------------------------------
 
-/// `store._write_nav_points`: a point with no date or no equity is not a
+/// `_write_nav_points`: a point with no date or no equity is not a
 /// point; an existing day is updated rather than duplicated.
 fn write_nav_points(conn: &Connection, points: &[Value]) -> Result<()> {
     for rec in points {
@@ -176,18 +176,18 @@ fn write_nav_points(conn: &Connection, points: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// `store.upsert_nav`: insert or update daily values, deleting no day.
+/// `upsert_nav`: insert or update daily values, deleting no day.
 pub fn upsert_nav(conn: &Connection, points: &[Value]) -> Result<()> {
     write_nav_points(conn, points)
 }
 
-/// `store.replace_nav`.
+/// `replace_nav`.
 pub fn replace_nav(conn: &Connection, points: &[Value]) -> Result<()> {
     conn.execute("DELETE FROM nav_history", [])?;
     write_nav_points(conn, points)
 }
 
-/// `store.nav_last_dates`: the newest stored day per account. The empty string
+/// `nav_last_dates`: the newest stored day per account. The empty string
 /// is the identity-wide series.
 pub fn nav_last_dates(conn: &Connection) -> Result<Map<String, Value>> {
     let mut stmt = conn.prepare("SELECT account_id, MAX(date) AS last FROM nav_history GROUP BY account_id")?;
@@ -202,7 +202,7 @@ pub fn nav_last_dates(conn: &Connection) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
-/// `store._nav_point_from_row`: `netDeposits` is present only when the row has
+/// `_nav_point_from_row`: `netDeposits` is present only when the row has
 /// one, because a missing figure is not zero.
 pub fn nav_history(conn: &Connection, account_id: &str) -> Result<Vec<Value>> {
     let mut stmt = conn.prepare(
@@ -232,7 +232,7 @@ pub fn nav_history(conn: &Connection, account_id: &str) -> Result<Vec<Value>> {
 // FX and benchmark series
 // --------------------------------------------------------------------------
 
-/// `store._clean_date_map`: an ISO day mapped to a positive number, and
+/// `_clean_date_map`: an ISO day mapped to a positive number, and
 /// nothing else.
 pub fn clean_date_map(raw: Option<&Value>) -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
@@ -272,7 +272,7 @@ pub fn fx_last_date(conn: &Connection, pair: &str) -> Result<String> {
     Ok(d.unwrap_or_default())
 }
 
-/// `store.upsert_fx_rates`: `INSERT OR IGNORE`, so a rate already stored for a
+/// `upsert_fx_rates`: `INSERT OR IGNORE`, so a rate already stored for a
 /// day is never rewritten.
 pub fn upsert_fx_rates(conn: &Connection, mapping: Option<&Value>, pair: &str) -> Result<usize> {
     let clean = clean_date_map(mapping);
@@ -292,7 +292,7 @@ pub fn benchmark_prices(conn: &Connection, symbol: &str) -> Result<Map<String, V
     date_series(conn, "SELECT date, close FROM benchmark_prices WHERE symbol = ? ORDER BY date", symbol)
 }
 
-/// `store.benchmark_days`: how many days that index actually traded between
+/// `benchmark_days`: how many days that index actually traded between
 /// two dates, so a statutory holiday is not counted as a day of trading.
 pub fn benchmark_days(conn: &Connection, symbol: &str, start: &str, end: &str) -> Result<i64> {
     let s: String = start.chars().take(10).collect();
@@ -328,7 +328,7 @@ pub fn upsert_benchmark_prices(conn: &Connection, mapping: Option<&Value>, symbo
 // the journal: saved trade groups and the notes on them
 // --------------------------------------------------------------------------
 
-/// `store._clean_trade_groups`: a group needs an id and at least one member,
+/// `_clean_trade_groups`: a group needs an id and at least one member,
 /// members are deduplicated, and the first group to claim an id keeps it.
 pub fn clean_trade_groups(raw: Option<&Value>) -> Vec<Value> {
     let items = match raw { Some(Value::Array(a)) => a.clone(), _ => return vec![] };
@@ -361,7 +361,7 @@ pub fn clean_trade_groups(raw: Option<&Value>) -> Vec<Value> {
     out
 }
 
-/// Python's truthiness, which is what `bool(item.get("locked"))` applies.
+/// Truthiness: null, false, zero, and an empty string, array or object are false.
 fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
@@ -390,7 +390,7 @@ pub fn save_trade_groups(conn: &Connection, groups: Option<&Value>) -> Result<Ve
     Ok(clean)
 }
 
-/// `store._clean_trade_notes`: a note with nothing in it is not a note, and a
+/// `_clean_trade_notes`: a note with nothing in it is not a note, and a
 /// grade outside A/B/C/F is no grade.
 pub fn clean_trade_notes(raw: Option<&Value>) -> Map<String, Value> {
     let mut out = Map::new();
@@ -497,10 +497,10 @@ pub fn field_either(row: &Value, camel: &str, snake: &str) -> Option<Value> {
 }
 
 // --------------------------------------------------------------------------
-// JSON as Python writes it
+// JSON as the database stores it
 // --------------------------------------------------------------------------
 
-/// `json.dumps` with its defaults: `", "` and `": "` separators, and every
+/// Compact JSON with `", "` and `": "` separators, and every
 /// non-ASCII character escaped.
 ///
 /// These values are stored in `meta` and read back by whichever implementation
@@ -573,7 +573,7 @@ fn write_py_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// `json.dumps(..., sort_keys=True)`: the same formatting, with every object's
+/// `json_text` with sorted keys: the same formatting, with every object's
 /// keys in order. A ticket's stored request uses it so the same order is the
 /// same text whichever way it was built.
 pub fn json_text_sorted(v: &Value) -> String {

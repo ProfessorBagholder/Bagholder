@@ -1,4 +1,4 @@
-//! Port of tests/test_xls.py.
+//! Reading legacy Excel workbooks.
 use bagholder_market::xls;
 use serde_json::{json, Value};
 

@@ -65,10 +65,10 @@ fn headers() -> [(&'static str, &'static str); 2] {
     [("User-Agent", crate::http::UA), ("Accept", "*/*")]
 }
 
-// --- Python's numbers -----------------------------------------------------------
+// --- numbers ---------------------------------------------------------------------
 
-/// `shorts._num`: `float(_s(v).replace(",", "").strip())`, None where it is
-/// not a number.
+/// A field as a number, thousands separators dropped and whitespace trimmed;
+/// None where it is not a number.
 pub fn num(v: Option<&Value>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => None,
@@ -86,8 +86,7 @@ fn truthy(v: Option<f64>) -> bool {
 fn opt(v: Option<f64>) -> Value {
     match v {
         Some(x) if x.is_finite() => json!(x),
-        // json.dumps writes NaN and Infinity; serde_json cannot, and a figure
-        // that is not one is no figure
+        // JSON has no NaN or Infinity, and a figure that is not one is no figure
         _ => Value::Null,
     }
 }
@@ -108,7 +107,7 @@ fn field(v: &Value, k: &str) -> String {
 
 // --- which regulator, if any, publishes for a listing -------------------------
 
-/// `shorts.market_of`: "us", "ca", or "" for an instrument no one reports short
+/// "us", "ca", or "" for an instrument no one reports short
 /// selling on -- a coin, an index, a futures or currency contract, an option.
 pub fn market_of(symbol: &str, exchange: &str, currency: &str) -> &'static str {
     let sym = symbol.trim().to_uppercase();
@@ -147,7 +146,7 @@ fn prev_month(year: i64, month: u32) -> (i64, u32) {
     if month == 1 { (year - 1, 12) } else { (year, month - 1) }
 }
 
-/// `shorts.position_dates`: the reporting dates of the twice-monthly position
+/// The reporting dates of the twice-monthly position
 /// reports, newest first.
 pub fn position_dates(today: &str, back: usize) -> Vec<String> {
     let t = day_of(today);
@@ -164,7 +163,7 @@ pub fn position_dates(today: &str, back: usize) -> Vec<String> {
     out
 }
 
-/// `shorts.volume_periods`: the half-month periods the Canadian volume report
+/// The half-month periods the Canadian volume report
 /// covers, newest first.
 pub fn volume_periods(today: &str, back: usize) -> Vec<(String, String)> {
     let t = day_of(today);
@@ -181,7 +180,7 @@ pub fn volume_periods(today: &str, back: usize) -> Vec<(String, String)> {
     out
 }
 
-/// `shorts.trading_days`: the days the US volume file could be for, newest
+/// The days the US volume file could be for, newest
 /// first -- weekdays. A holiday has no file and is skipped by the asking.
 pub fn trading_days(today: &str, back: usize) -> Vec<String> {
     let t = day_of(today);
@@ -217,7 +216,7 @@ fn files() -> &'static Mutex<HashMap<String, Held>> {
     F.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Forget every whole-market file (`shorts._files.clear()`).
+/// Forget every whole-market file.
 pub fn clear_files() {
     files().lock().unwrap().clear();
 }
@@ -234,7 +233,7 @@ pub fn warm_file(name: &str, key: &str, rows: Map<String, Value>) {
     files().lock().unwrap().insert(name.to_string(), Held { key: key.to_string(), rows, at: Instant::now() });
 }
 
-/// `shorts._table`: a file every listing is looked up in, fetched at most once
+/// A file every listing is looked up in, fetched at most once
 /// every FILE_HOURS. A fetch that fails keeps what was already read rather
 /// than emptying it.
 pub fn table<F>(name: &str, build: F) -> Held
@@ -260,7 +259,7 @@ where
     held
 }
 
-/// `shorts.parse_us_volume`: FINRA's daily file, one pipe-separated line per
+/// FINRA's daily file, one pipe-separated line per
 /// symbol, a trailer at the end.
 pub fn parse_us_volume(text: &str) -> Map<String, Value> {
     let mut rows = Map::new();
@@ -298,7 +297,7 @@ pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
     None
 }
 
-/// `shorts.parse_ca_positions`: CIRO's position report -- issue name, symbol,
+/// CIRO's position report -- issue name, symbol,
 /// venue, shares short, net change.
 pub fn parse_ca_positions(grid: &[Vec<Value>]) -> Map<String, Value> {
     let mut rows = Map::new();
@@ -349,7 +348,7 @@ pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(
     None
 }
 
-/// `shorts.ca_traded`: a Canadian listing's own volume over the report's
+/// A Canadian listing's own volume over the report's
 /// period, from TMX's daily series under the venue's own form.
 pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, span: &str, today: &str) -> Option<f64> {
     let (start, end) = match span.split_once('/') { Some((a, b)) => (a.to_string(), b.to_string()), None => (span.to_string(), String::new()) };
@@ -377,7 +376,7 @@ pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, curr
     if traded.is_empty() { None } else { Some(traded.iter().sum()) }
 }
 
-/// `shorts.parse_ca_volume`: CIRO's short sale summary, the short part of a
+/// CIRO's short sale summary, the short part of a
 /// period's trading, per listing.
 pub fn parse_ca_volume(text: &str) -> Result<Map<String, Value>, String> {
     let mut rows = Map::new();
@@ -419,7 +418,7 @@ pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str
     None
 }
 
-/// `shorts._ca_positions_on`: one dated Canadian report, kept for the session
+/// One dated Canadian report, kept for the session
 /// so a run of them is read once.
 fn ca_positions_on(day: &str) -> Map<String, Value> {
     let name = format!("ca_position:{}", day);
@@ -435,7 +434,7 @@ fn ca_positions_on(day: &str) -> Map<String, Value> {
     rows
 }
 
-/// `shorts.ca_series`: the listing's position across the last reports, oldest
+/// The listing's position across the last reports, oldest
 /// first. Canada publishes one file per reporting date, so each is read on its
 /// own and kept.
 pub fn ca_series(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize) -> Vec<Value> {
@@ -473,7 +472,7 @@ fn yahoo() -> &'static Mutex<Option<Yahoo>> {
     Y.get_or_init(|| Mutex::new(None))
 }
 
-/// `shorts._yahoo_session`: a session that can read Yahoo's statistics. Its
+/// A session that can read Yahoo's statistics. Its
 /// own TLS handshake is the gate, so it goes through the browser helper;
 /// without it the float is simply unknown, as it is for a listing Yahoo does
 /// not carry.
@@ -501,7 +500,7 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> bool {
     true
 }
 
-/// `shorts._cboe_units`: the units a fund listed on Cboe Canada has in issue,
+/// The units a fund listed on Cboe Canada has in issue,
 /// from that venue's own directory -- its market capitalisation divided by its
 /// last price, which gives back the count the exchange put in, whole for every
 /// listing it carries.
@@ -539,7 +538,7 @@ pub fn parse_cboe_directory(text: &str) -> Option<Map<String, Value>> {
     }
 }
 
-/// `shorts._fund_units`: the units an exchange-traded fund has in issue, from
+/// The units an exchange-traded fund has in issue, from
 /// the market's own source. For a fund this is the float, not a stand-in.
 fn fund_units(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Option<f64> {
     fund_units_with(symbol, exchange, currency, |code| tmx_units(conn, code, today), cboe_units)
@@ -600,7 +599,7 @@ fn floats() -> &'static Mutex<HashMap<String, Float>> {
     F.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// `shorts.float_shares`: what a short position is measured against, the
+/// What a short position is measured against, the
 /// shares actually available to trade. For a company that is the free float
 /// Yahoo publishes, never swapped for the shares in issue; a fund's units in
 /// issue are its float, and stand in where no float is published for one.
@@ -623,7 +622,7 @@ pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, c
     })
 }
 
-/// Forget every float (`shorts._shares.clear()`).
+/// Forget every float.
 pub fn clear_floats() {
     floats().lock().unwrap().clear();
 }
@@ -711,7 +710,8 @@ where
     count
 }
 
-/// Python's truthiness for what a JSON answer carries.
+/// Whether a JSON value counts as present: not null, false, zero, or an empty
+/// string, array or object.
 fn truthy_json(v: &Value) -> bool {
     match v {
         Value::Null => false,
@@ -723,7 +723,7 @@ fn truthy_json(v: &Value) -> bool {
     }
 }
 
-/// `shorts._venue_fits`: whether a row's venue is the listing's.
+/// Whether a row's venue is the listing's.
 pub fn venue_fits(code: &str, exchange: &str) -> bool {
     let ex = exchange.trim().to_uppercase();
     if ex.is_empty() {
@@ -735,7 +735,7 @@ pub fn venue_fits(code: &str, exchange: &str) -> bool {
 
 // --- one listing ---------------------------------------------------------------
 
-/// `shorts.parse_us_position`: FINRA's answer into the newest settlement and
+/// FINRA's answer into the newest settlement and
 /// the run of them. Split from the request so the two can be compared on the
 /// same answer.
 pub fn parse_us_position(answered: &Value) -> Value {
@@ -771,7 +771,7 @@ pub fn parse_us_position(answered: &Value) -> Value {
     })
 }
 
-/// `shorts.us_position`: the newest settlement FINRA has for a US listing.
+/// The newest settlement FINRA has for a US listing.
 pub fn us_position(symbol: &str, today: &str) -> Value {
     let body = json!({
         "limit": 20,
@@ -787,7 +787,7 @@ pub fn us_position(symbol: &str, today: &str) -> Value {
     }
 }
 
-/// `shorts.us_volume`: the last trading day's short volume for a US listing.
+/// The last trading day's short volume for a US listing.
 pub fn us_volume(symbol: &str, today: &str) -> Value {
     let held = table("us_volume", || us_volume_file(today));
     us_volume_from(&held.key, &held.rows, symbol)
@@ -831,7 +831,6 @@ pub fn us_volume_from(key: &str, rows: &Map<String, Value>, symbol: &str) -> Val
     })
 }
 
-/// `shorts.ca_position`.
 pub fn ca_position(symbol: &str, exchange: &str, today: &str) -> Value {
     let held = table("ca_position", || ca_position_file(today));
     ca_position_from(&held.key, &held.rows, symbol, exchange, today)
@@ -859,7 +858,7 @@ pub fn ca_position_from(key: &str, rows: &Map<String, Value>, symbol: &str, exch
     })
 }
 
-/// `shorts.ca_volume`: the short part of a Canadian listing's trading over the
+/// The short part of a Canadian listing's trading over the
 /// report's period. A listing the report does not carry was not sold short in
 /// it, so its short volume is none of its trading rather than unknown, and
 /// what it did trade comes from the exchange.
@@ -890,7 +889,7 @@ pub fn ca_volume_from<F: FnOnce() -> Option<f64>>(key: &str, row: Option<&Value>
     }
 }
 
-/// `shorts.average_volume`: the average daily volume in the listing's own
+/// The average daily volume in the listing's own
 /// market over the period its short report covers. FINRA publishes the
 /// average itself; Canada's total is divided by the days the Canadian market
 /// actually traded, counted from the index series the app keeps.
@@ -908,14 +907,14 @@ pub fn average_volume(conn: &rusqlite::Connection, rec: &Value) -> Option<f64> {
     if days != 0 { Some(total.unwrap() / days as f64) } else { None }
 }
 
-/// `shorts.days_to_cover`: the position against that average daily volume.
+/// The position against that average daily volume.
 pub fn days_to_cover(conn: &rusqlite::Connection, rec: &Value) -> Option<f64> {
     let shares = num(rec.get("shares"));
     let average = average_volume(conn, rec);
     if truthy(shares) && truthy(average) { Some(round1(shares.unwrap() / average.unwrap())) } else { None }
 }
 
-/// `shorts.for_listing`: everything published about one listing's short
+/// Everything published about one listing's short
 /// selling, {} where nothing is.
 pub fn for_listing(
     conn: &rusqlite::Connection,

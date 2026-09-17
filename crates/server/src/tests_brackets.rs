@@ -1,4 +1,4 @@
-//! `tests/test_store.py` BracketEngineTest (with `_EngineBase` and `_OrdersBase`):
+//! The bracket engine:
 //! the stop loss and take profit after the fill, against a fake Wealthsimple.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -112,7 +112,7 @@ fn live(on: bool) {
     *lk(&seam::LIVE) = Some(on);
 }
 
-/// `_OrdersBase.setUp` + `_EngineBase.setUp`: a fresh book and a live fake Wealthsimple.
+/// A fresh book and a live fake Wealthsimple.
 fn setup() -> MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
     seam::reset();

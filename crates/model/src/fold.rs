@@ -1,11 +1,11 @@
-//! `model.fold_option_rolls`: a same-day cover plus a new short on the same
+//! `fold_option_rolls`: a same-day cover plus a new short on the same
 //! underlying is one roll, so the cover's P&L folds into the far contract's
 //! basis and the cover row goes away.
 //!
 //! A chain rolls more than once, and the covers are walked in date order over
 //! the *live* rows: a cover that was itself the target of an earlier fold has
 //! already had its basis adjusted, and the next fold must read that adjusted
-//! value. The Python list holds references for the same reason, so the covers
+//! value, so the covers
 //! here are indices into `closed` rather than copies of it.
 
 use std::collections::HashSet;
@@ -27,7 +27,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
         return;
     }
 
-    // Ordered once, before anything is mutated, as the Python list is.
+    // Ordered once, before anything is mutated.
     let mut covers: Vec<usize> = (0..closed.len())
         .filter(|i| closed[*i].open_direction == "SHORT" && is_option_symbol(&closed[*i].symbol))
         .collect();
@@ -81,7 +81,7 @@ pub fn fold_option_rolls(closed: &mut Vec<Slice>, open_lots: &mut [Lot]) {
             continue;
         }
         let cq = cover.quantity.abs();
-        // nearest quantity to the cover's wins, then the symbol, as Python sorts
+        // nearest quantity to the cover's wins, then the symbol
         if use_closed {
             closed_cands.sort_by(|i, j| {
                 let (a, b) = (&closed[*i], &closed[*j]);

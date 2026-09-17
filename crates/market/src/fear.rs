@@ -52,7 +52,7 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// `fear.band`: what a score is called on the publishers' own scale.
+/// What a score is called on the publishers' own scale.
 pub fn band(score: Option<f64>) -> String {
     let n = match score { Some(n) => n, None => return String::new() };
     for (edge, name) in BANDS {
@@ -63,7 +63,7 @@ pub fn band(score: Option<f64>) -> String {
     "Extreme greed".into()
 }
 
-/// `fear.rating`: the publisher's own word where it gives one, its own scale's
+/// The publisher's own word where it gives one, its own scale's
 /// word where it gives only a number.
 pub fn rating(given: &str, score: Option<f64>) -> String {
     let text = given.trim();
@@ -75,7 +75,7 @@ pub fn rating(given: &str, score: Option<f64>) -> String {
     format!("{}{}", first, chars.as_str().to_lowercase())
 }
 
-/// `fear._day`: a point's day, from the milliseconds both publishers stamp
+/// A point's day, from the milliseconds both publishers stamp
 /// their history with.
 fn day(ms: Option<f64>) -> String {
     let n = match ms { Some(n) => n, None => return String::new() };
@@ -84,7 +84,7 @@ fn day(ms: Option<f64>) -> String {
     bagholder_model::dates::fmt(y, m, d)
 }
 
-/// `fear._moment`: CNN stamps the live reading with an offset time; it is kept
+/// CNN stamps the live reading with an offset time; it is kept
 /// the way the app writes times.
 fn moment(text: &str) -> String {
     let s = text.trim();
@@ -121,7 +121,7 @@ fn reading(label: &str, score: Option<&Value>) -> Option<Value> {
     Some(json!({"label": label, "score": round1(n), "rating": band(Some(n))}))
 }
 
-/// `fear.parse_stocks`: the reading now, the readings it compares itself
+/// The reading now, the readings it compares itself
 /// against, its seven indicators, and a year of daily readings.
 pub fn parse_stocks(data: &Value) -> Value {
     let fg = data.get("fear_and_greed").cloned().unwrap_or_else(|| json!({}));
@@ -176,7 +176,7 @@ pub fn parse_stocks(data: &Value) -> Value {
     })
 }
 
-/// `fear.parse_crypto`: one reading a day, newest first. What it is compared
+/// One reading a day, newest first. What it is compared
 /// against is its own earlier days; it publishes no indicators.
 pub fn parse_crypto(data: &Value) -> Value {
     let mut rows: Vec<Value> = Vec::new();
@@ -220,7 +220,7 @@ pub fn parse_crypto(data: &Value) -> Value {
     })
 }
 
-/// `fear.read`: one index as its publisher gives it now, or nothing where it
+/// One index as its publisher gives it now, or nothing where it
 /// did not answer.
 pub fn read(index: &str) -> Value {
     let which = index.trim().to_lowercase();

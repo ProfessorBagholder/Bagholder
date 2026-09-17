@@ -1,4 +1,4 @@
-//! What the book paid out: `model.build_cashflow`.
+//! What the book paid out: `build_cashflow`.
 //!
 //! Dividends, interest, withholding tax and interest charges, each in its own
 //! currency with the CAD value converted on the day it was paid.
@@ -53,7 +53,7 @@ pub fn build_cashflow(activities: &[Value], securities: &Securities, fx: &Fx) ->
         let date = { let d = field_s(a, "transactionDate"); if d.is_empty() { day } else { d } };
         let currency = { let c = field_s(a, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
 
-        // Python's `_num(...) or None`: a zero reads as nothing to show.
+        // a zero reads as nothing to show
         let qty = field_num(a, "quantity");
         let per = field_num(a, "unitPrice");
 

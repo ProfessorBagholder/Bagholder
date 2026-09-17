@@ -55,7 +55,7 @@ enum ExposureJob {
     Watch(String, String, String),
 }
 
-/// `bagholder.refresh_exposures`: the exposure record of every held security
+/// The exposure record of every held security
 /// that has none or an old one, four at a time, each shown as it lands.
 pub fn refresh_exposures() -> Value {
     let c = match conn() { Some(c) => c, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
@@ -165,7 +165,7 @@ pub fn refresh_exposures() -> Value {
     json!({"ok": true, "held": held_n, "refreshed": done.load(Ordering::SeqCst)})
 }
 
-/// `bagholder.exposure_loop`: soon after start and every half hour.
+/// Soon after start and every half hour.
 pub fn exposure_loop() {
     let mut wait = EXPOSURE_FIRST_SEC;
     while !app().wait(Duration::from_secs(wait)) {
@@ -199,7 +199,6 @@ fn refresh_quote_symbols(what: &str, sym: &str) -> bool {
     }
 }
 
-/// `bagholder.watch_add`.
 pub fn watch_add(body: &Value) -> Value {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
@@ -230,7 +229,6 @@ pub fn watch_add(body: &Value) -> Value {
     json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
 }
 
-/// `bagholder.watch_remove`.
 pub fn watch_remove(body: &Value) -> Value {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
@@ -246,7 +244,7 @@ pub fn watch_remove(body: &Value) -> Value {
     json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
 }
 
-/// `bagholder.tiles_set`: the Markets tab's tile row, only instruments the
+/// The Markets tab's tile row, only instruments the
 /// directory knows, twelve at most.
 pub fn tiles_set(body: &Value) -> Value {
     let mut rows: Vec<Value> = Vec::new();
@@ -278,7 +276,7 @@ pub fn tiles_set(body: &Value) -> Value {
 // news
 // ---------------------------------------------------------------------------
 
-/// `bagholder.news_listings`: the market feed, the shares held, the watched
+/// The market feed, the shares held, the watched
 /// listings.
 pub fn news_listings() -> Vec<(String, String, String)> {
     let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string())];
@@ -304,7 +302,7 @@ pub fn news_listings() -> Vec<(String, String, String)> {
     out
 }
 
-/// `bagholder.refresh_news`: the wires for every listing older than fifteen
+/// The wires for every listing older than fifteen
 /// minutes. Never fails.
 pub fn refresh_news() -> usize {
     app().single_flight("news", 0, || {
@@ -327,7 +325,7 @@ pub fn refresh_news() -> usize {
     })
 }
 
-/// `bagholder.news_loop`: at start, then every five minutes.
+/// At start, then every five minutes.
 pub fn news_loop() {
     while !app().stopping() {
         refresh_news();
@@ -337,7 +335,7 @@ pub fn news_loop() {
     }
 }
 
-/// `bagholder.news_symbol_payload`: one listing's wire read now, for the News
+/// One listing's wire read now, for the News
 /// card's search.
 pub fn news_symbol_payload(symbol: &str, exchange: &str, currency: &str) -> Value {
     let sym = symbol.trim().to_uppercase();
@@ -386,7 +384,7 @@ pub const FILINGS_HOLD_MAX_MIN: f64 = 120.0;
 pub const FILINGS_HOLD_KEY: &str = "filings:held-since";
 pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
 
-/// `bagholder._instrument_meta`: (issuer name, exchange, currency) the book
+/// (issuer name, exchange, currency) the book
 /// holds for a symbol, else the bare symbol.
 pub fn instrument_meta(c: &Connection, symbol: &str) -> (String, String, String) {
     let sym = symbol.trim().to_uppercase();
@@ -399,7 +397,6 @@ pub fn instrument_meta(c: &Connection, symbol: &str) -> (String, String, String)
     (sym, String::new(), String::new())
 }
 
-/// `bagholder._filings_stale`.
 pub fn filings_stale(c: &Connection, symbol: &str, hours: Option<f64>) -> bool {
     let when = sf::filings_fetched_for(c, symbol).unwrap_or_default();
     if when.is_empty() {
@@ -411,7 +408,6 @@ pub fn filings_stale(c: &Connection, symbol: &str, hours: Option<f64>) -> bool {
     }
 }
 
-/// `bagholder._can_name_documents`.
 fn can_name_documents() -> bool {
     if enrich::summary_available() {
         return true;
@@ -423,7 +419,7 @@ fn can_name_documents() -> bool {
     status != "downloading"
 }
 
-/// `bagholder._naming_held`: a bounded hold on what cannot be named yet.
+/// A bounded hold on what cannot be named yet.
 fn naming_held(c: &Connection, holding: bool) -> bool {
     if !holding {
         let _ = set_meta(c, FILINGS_HOLD_KEY, "");
@@ -440,7 +436,7 @@ fn naming_held(c: &Connection, holding: bool) -> bool {
     }
 }
 
-/// `bagholder.filing_mark`: what makes a filing itself.
+/// What makes a filing itself.
 pub fn filing_mark(r: &Value) -> [String; 5] {
     [f(r, "source"), f(r, "date"), f(r, "type"), f(r, "title"), f(r, "size")]
 }
@@ -449,7 +445,7 @@ fn providers_cover(sym: &str, ex: &str, ccy: &str) -> bool {
     (sedar::available() && sedar::covers(sym, ex, ccy)) || (edgar::available() && edgar::covers(sym, ex, ccy))
 }
 
-/// `bagholder.known_filing_symbols`: the tickers to watch for filings.
+/// The tickers to watch for filings.
 pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
     let has = |k: &str| scopes.iter().any(|x| x == k);
     let mut rows: Vec<Value> = Vec::new();
@@ -500,7 +496,7 @@ pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
     out
 }
 
-/// `bagholder.sweep_filings`: while a Disclosures or Releases set is on, each
+/// While a Disclosures or Releases set is on, each
 /// chosen ticker not read within half an hour is read again and what is new is
 /// told. Returns how many tickers had something new.
 pub fn sweep_filings() -> usize {
@@ -578,7 +574,7 @@ fn feed_scope(key: &str) -> Vec<String> {
     .to_string()]
 }
 
-/// `bagholder.filings_feed`: the stored disclosures of every ticker in a set,
+/// The stored disclosures of every ticker in a set,
 /// newest first.
 pub fn filings_feed(scope: &str, limit: i64) -> Value {
     let key = { let k = scope.trim().to_lowercase(); if k.is_empty() { "all".to_string() } else { k } };
@@ -597,14 +593,13 @@ pub fn filings_feed(scope: &str, limit: i64) -> Value {
     json!({"ok": true, "scope": key, "filings": rows})
 }
 
-/// `bagholder.is_news_release`: a filed document that is the company's own
+/// A filed document that is the company's own
 /// press release.
 pub fn is_news_release(filing: &Value) -> bool {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&f(filing, "type"))
 }
 
-/// `bagholder.in_release_scope`.
 pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) -> bool {
     let owned;
     let scopes = match scopes {
@@ -638,7 +633,6 @@ pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) ->
     false
 }
 
-/// `bagholder.release_notice`.
 pub fn release_notice(sym: &str, rows: &[Value]) -> (String, String) {
     let when = |r: &Value| { let p = f(r, "publishedAt"); if p.is_empty() { f(r, "date") } else { p } };
     let mut newest: Vec<&Value> = rows.iter().collect();
@@ -664,7 +658,7 @@ fn release_key(sym: &str, rows: &[Value]) -> String {
     format!("release:{}:{}", sym, sha1_hex12(&ids.join("|")))
 }
 
-/// `bagholder.note_wire_releases`: the press releases a wire answered with that
+/// The press releases a wire answered with that
 /// are newer than any it showed for the listing.
 pub fn note_wire_releases(c: &Connection, symbol: &str, exchange: &str, rows: &[Value], new_ids: &[String]) {
     let scopes = notify::release_scopes(c);
@@ -682,7 +676,7 @@ pub fn note_wire_releases(c: &Connection, symbol: &str, exchange: &str, rows: &[
     notify::emit(c, "releases", &release_key(&sym, &fresh), &title, &body, Some(json!({"symbol": sym})));
 }
 
-/// `bagholder.filings_notice`: `New disclosure · QNC` and what was filed.
+/// `New disclosure · QNC` and what was filed.
 pub fn filings_notice(sym: &str, new: &[Value]) -> (String, String) {
     let mut named: Vec<String> = Vec::new();
     for r in new.iter().take(3) {
@@ -719,14 +713,13 @@ pub fn filings_notice(sym: &str, new: &[Value]) -> (String, String) {
     (title, body)
 }
 
-/// `bagholder.filings_sweep_loop`.
 pub fn filings_sweep_loop() {
     while !app().wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
         sweep_filings();
     }
 }
 
-/// `bagholder.refresh_filings`: one symbol's disclosures from every covering
+/// One symbol's disclosures from every covering
 /// source, stored per source. The total written, or -1 when no source could be
 /// reached.
 pub fn refresh_filings(symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> i64 {
@@ -789,7 +782,6 @@ pub fn refresh_filings_in(c: &Connection, sym: &str, name: Option<&str>, exchang
     }
 }
 
-/// `bagholder._source_status`.
 fn source_status(c: &Connection, sym: &str) -> Value {
     let stored: Map<String, Value> = serde_json::from_str::<Value>(&get_meta(c, &format!("filings_sources:{}", sym), "").unwrap_or_default())
         .ok()
@@ -808,7 +800,7 @@ fn source_status(c: &Connection, sym: &str) -> Value {
     Value::Object(out)
 }
 
-/// `bagholder.filings_payload`: the stored disclosures, refreshed first when
+/// The stored disclosures, refreshed first when
 /// forced or stale.
 pub fn filings_payload(symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Value {
     let sym = symbol.trim().to_uppercase();
@@ -844,7 +836,7 @@ pub fn filings_payload_in(c: &Connection, sym: &str, refresh: bool, refresh_fili
     })
 }
 
-/// `bagholder._fresh_filings`: rows read by an older logic blanked, categories
+/// Rows read by an older logic blanked, categories
 /// re-derived.
 fn fresh_filings(c: &Connection, sym: &str) -> Vec<Value> {
     let mut rows = sf::filings_for(c, sym).unwrap_or_default();
@@ -859,7 +851,7 @@ fn fresh_filings(c: &Connection, sym: &str) -> Vec<Value> {
     rows
 }
 
-/// `bagholder.filings_document`: (bytes, content type), or the error.
+/// (bytes, content type), or the error.
 pub fn filings_document(symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String), String> {
     let sym = symbol.trim().to_uppercase();
     let c = conn().ok_or_else(|| "store unavailable".to_string())?;
@@ -876,7 +868,7 @@ pub fn filings_document(symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String),
     Ok((data, if ct.is_empty() { "application/octet-stream".into() } else { ct }))
 }
 
-/// `bagholder.filings_enrich`: one document read for its subject and, with a
+/// One document read for its subject and, with a
 /// local model, a one-sentence summary; both cached on the row.
 pub fn filings_enrich(symbol: &str, doc_id: &str) -> Value {
     let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "no such document"}) };
@@ -971,7 +963,7 @@ pub const FEAR_STALE_MIN: f64 = 15.0;
 pub const FEAR_VERSION: i64 = 1;
 pub const FEAR_SWEEP_EVERY_SEC: u64 = 900;
 
-/// `bagholder.read_fear`: one index read from its publisher and kept.
+/// One index read from its publisher and kept.
 pub fn read_fear(index: &str) -> Value {
     let rec = fear::read(index);
     if truthy(Some(&rec)) {
@@ -996,7 +988,7 @@ fn has_score(rec: &Option<Value>) -> bool {
     rec.as_ref().map(|r| truthy(Some(r)) && !r.get("score").map(|v| v.is_null()).unwrap_or(true)).unwrap_or(false)
 }
 
-/// `bagholder.fear_payload`: one index's meter, from the store at once.
+/// One index's meter, from the store at once.
 pub fn fear_payload(index: &str) -> Value {
     let which = index.trim().to_lowercase();
     if !fear::INDEXES.contains(&which.as_str()) {
@@ -1017,7 +1009,7 @@ pub fn fear_payload(index: &str) -> Value {
     if truthy(Some(&rec)) { json!({"ok": true, "gauge": rec}) } else { json!({"ok": false, "error": "the index did not answer"}) }
 }
 
-/// `bagholder.sweep_fear`: keep both meters current.
+/// Keep both meters current.
 pub fn sweep_fear() -> usize {
     let mut done = 0;
     for which in fear::INDEXES {
@@ -1062,7 +1054,7 @@ fn shorts_stale(rec: &Value) -> bool {
     }
 }
 
-/// `bagholder.read_shorts`: one listing's short selling from its regulator,
+/// One listing's short selling from its regulator,
 /// kept. {} for a market where no one publishes it.
 pub fn read_shorts(symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Value {
     let c = match conn() { Some(c) => c, None => return json!({}) };
@@ -1074,7 +1066,7 @@ pub fn read_shorts(symbol: &str, exchange: &str, currency: &str, trend: bool, na
     rec
 }
 
-/// `bagholder.shorts_payload`: one listing's short selling, from the store at
+/// One listing's short selling, from the store at
 /// once where it was read before.
 pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Value {
     let sym = symbol.trim().to_uppercase();
@@ -1126,7 +1118,7 @@ pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&st
     json!({"ok": true, "covered": true, "shorts": rec})
 }
 
-/// `bagholder.shorts_feed`: every held or watched listing's stored short
+/// Every held or watched listing's stored short
 /// selling, each marked held or watched.
 pub fn shorts_feed() -> Value {
     let reading = SHORTS_LEFT.load(Ordering::SeqCst) > 0;
@@ -1160,7 +1152,7 @@ pub fn shorts_feed() -> Value {
     json!({"ok": true, "rows": rows, "reading": SHORTS_LEFT.load(Ordering::SeqCst) > 0})
 }
 
-/// `bagholder.listing_payload`: what the page for one listing needs, held or
+/// What the page for one listing needs, held or
 /// not.
 pub fn listing_payload(symbol: &str, exchange: &str, currency: &str, name: &str) -> Value {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
@@ -1240,7 +1232,7 @@ pub fn listing_payload_in(
     out
 }
 
-/// `bagholder.shorts_listings`: the shares held and the listings watched whose
+/// The shares held and the listings watched whose
 /// short selling is published.
 pub fn shorts_listings(scope: &str) -> Vec<(String, String, String, String)> {
     let b = match base() { Some(b) => b, None => return vec![] };
@@ -1268,7 +1260,7 @@ pub fn shorts_listings(scope: &str) -> Vec<(String, String, String, String)> {
     out
 }
 
-/// `bagholder.sweep_shorts`: keep every held and watched listing's short
+/// Keep every held and watched listing's short
 /// selling stored and current.
 pub fn sweep_shorts() -> usize {
     let c = match conn() { Some(c) => c, None => return 0 };
@@ -1316,7 +1308,7 @@ fn universe_kick() -> &'static (Mutex<bool>, Condvar) {
     K.get_or_init(|| (Mutex::new(false), Condvar::new()))
 }
 
-/// `bagholder.refresh_universes`: the heatmaps' tiles. Never fails.
+/// The heatmaps' tiles. Never fails.
 pub fn refresh_universes() -> Vec<String> {
     app().single_flight("universes", vec![], || {
         let c = match conn() { Some(c) => c, None => return vec![] };
@@ -1328,7 +1320,7 @@ pub fn refresh_universes() -> Vec<String> {
     })
 }
 
-/// `bagholder.universe_loop`: at start, then every thirty minutes, or sooner
+/// At start, then every thirty minutes, or sooner
 /// when the page asks.
 pub fn universe_loop() {
     while !app().stopping() {
@@ -1348,7 +1340,6 @@ pub fn universe_loop() {
     }
 }
 
-/// `bagholder.kick_universes`.
 pub fn kick_universes() -> Value {
     let (lock, cv) = universe_kick();
     *lock.lock().unwrap() = true;
@@ -1360,7 +1351,7 @@ pub fn kick_universes() -> Value {
 // market data
 // ---------------------------------------------------------------------------
 
-/// `bagholder.ledger_path`: the page, beside the app.
+/// The page, beside the app.
 pub fn ledger_path() -> std::path::PathBuf {
     app().root.join("ledger.html")
 }
@@ -1369,7 +1360,7 @@ fn payer_symbols() -> Vec<Value> {
     base().map(|b| bagholder_model::symbols_of::payer_symbols(&b)).unwrap_or_default()
 }
 
-/// `bagholder.refresh_market_data`: USD/CAD, S&P 500, declared distributions
+/// USD/CAD, S&P 500, declared distributions
 /// and quotes. Never fails.
 pub fn refresh_market_data() -> Value {
     app().single_flight("market", json!({}), || {
@@ -1385,7 +1376,7 @@ pub fn refresh_market_data() -> Value {
     })
 }
 
-/// `bagholder.refresh_quotes`: prices for held positions and watched listings.
+/// Prices for held positions and watched listings.
 pub fn refresh_quotes() -> usize {
     app().single_flight("quotes", 0, || {
         let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return 0 };
@@ -1400,7 +1391,7 @@ pub fn refresh_quotes() -> usize {
     })
 }
 
-/// `bagholder.refresh_periodic_market`: the rates, benchmarks and distributions
+/// The rates, benchmarks and distributions
 /// on their own clocks. Never fails; 0 when one is already running.
 pub fn refresh_periodic_market() -> Value {
     app().single_flight("periodic", json!(0), || {
@@ -1413,7 +1404,7 @@ pub fn refresh_periodic_market() -> Value {
     })
 }
 
-/// `bagholder.archive_intraday_bars`: a few instruments per call.
+/// A few instruments per call.
 pub fn archive_intraday_bars(limit: Option<usize>) -> Vec<String> {
     app().single_flight("archive", vec![], || {
         let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
@@ -1431,7 +1422,7 @@ pub const ARCHIVE_PASS_SEC: f64 = 1.0;
 pub const ARCHIVE_MIN_SEC: f64 = 0.5;
 pub const ARCHIVE_IDLE_SEC: f64 = 5.0 * 60.0;
 
-/// `bagholder._cpu_clock`: the calling thread's processor time, or the
+/// The calling thread's processor time, or the
 /// monotonic clock where the platform has no such counter.
 fn cpu_clock() -> f64 {
     #[cfg(unix)]
@@ -1458,7 +1449,7 @@ fn cpu_clock() -> f64 {
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
-/// `bagholder.archive_loop`: the backfill paced by the processor time it costs.
+/// The backfill paced by the processor time it costs.
 pub fn archive_loop() {
     let mut delay = 20.0f64;
     let mut batch = history::ARCHIVE_BATCH;
@@ -1480,14 +1471,14 @@ pub fn archive_loop() {
     }
 }
 
-/// `bagholder.quote_loop`: prices, every QUOTE_REFRESH_MINUTES.
+/// Prices, every QUOTE_REFRESH_MINUTES.
 pub fn quote_loop() {
     while !app().wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
         refresh_quotes();
     }
 }
 
-/// `bagholder.market_loop`: the periodic records and the update check, hourly.
+/// The periodic records and the update check, hourly.
 pub fn market_loop() {
     while !app().wait(Duration::from_secs(60 * bagholder_market::refresh::MARKET_CHECK_MINUTES)) {
         refresh_periodic_market();
@@ -1497,7 +1488,7 @@ pub fn market_loop() {
 
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
-/// `bagholder.scan_watched_folder`: new or changed CSVs imported. Never fails.
+/// New or changed CSVs imported. Never fails.
 pub fn scan_watched_folder() -> Option<Value> {
     let c = conn()?;
     if bagholder_store::csvimport::watch_folder(&c).ok()?.is_empty() {
@@ -1517,7 +1508,6 @@ pub fn watch_loop() {
     }
 }
 
-/// `bagholder.sync_then_market`.
 pub fn sync_then_market() -> bool {
     let ok = crate::session::run_sync(true, true);
     refresh_market_data();
@@ -1562,7 +1552,7 @@ fn qs_one(query: &str, name: &str) -> String {
     String::new()
 }
 
-/// `bagholder.history_payload`: bars for one instrument over a span, fetched
+/// Bars for one instrument over a span, fetched
 /// and cached on demand.
 pub fn history_payload(query: &str) -> Value {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
@@ -1601,7 +1591,7 @@ pub fn history_payload(query: &str) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// tests: ports of tests/test_filings.py and tests/test_listing.py
+// tests: filings and the listing page
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1771,7 +1761,7 @@ mod tests {
         let c = store();
         let fetch = stub(
             json!([]),
-            json!({"SEDAR+": {"available": false, "matched": false, "count": 0, "error": "curl_cffi missing"},
+            json!({"SEDAR+": {"available": false, "matched": false, "count": 0, "error": "the browser helper is missing"},
                    "SEC": {"available": false, "matched": false, "count": 0, "error": "network"}}),
         );
         let out = payload(&c, "SHOP", &fetch);
@@ -2002,7 +1992,7 @@ mod tests {
         assert_eq!(f(&sf::filing(&c, "QNC", "sec:1").unwrap().unwrap(), "subject"), "From EDGAR");
     }
 
-    // --- ListingPageTest (tests/test_listing.py)
+    // --- the listing page
 
     fn fill(when: &str, side: &str, qty: f64, price: f64) -> Value {
         json!({"when": when, "side": side, "qty": qty, "price": price})

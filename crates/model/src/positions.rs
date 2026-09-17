@@ -1,4 +1,4 @@
-//! Open positions: `model.build_positions`.
+//! Open positions: `build_positions`.
 //!
 //! The open lots rolled up per symbol, account, currency and direction. A
 //! position and the trade it becomes when it closes share one journal entry,
@@ -14,7 +14,7 @@ use crate::symbols::{option_multiplier, underlying_symbol};
 use crate::trades::{quote_fits, Journal};
 use crate::value::{field_s, get, norm_account_name, num};
 
-/// A number that is absent rather than zero, as Python's `_num(x, None)` is.
+/// A number that is absent rather than zero, read with no default.
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {
         None | Some(Value::Null) => None,
@@ -204,8 +204,8 @@ pub fn build_positions(
             m.insert("alloc".into(), json!(alloc));
         }
     }
-    // Python's sort is stable and descending on one key, which `sort_by` with a
-    // reversed comparison matches.
+    // A stable sort, descending on one key: `sort_by` with a reversed
+    // comparison.
     rows.sort_by(|a, b| {
         num(get(b, "alloc"), 0.0)
             .partial_cmp(&num(get(a, "alloc"), 0.0))
@@ -214,7 +214,7 @@ pub fn build_positions(
     rows
 }
 
-/// Python's `round`: half to even, returning an integer.
+/// Round half to even, returning an integer.
 fn round_half_even(v: f64) -> i64 {
     let r = v.round();
     if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {

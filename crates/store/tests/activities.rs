@@ -1,5 +1,5 @@
 //! Wealthsimple rows by canonical id, local rows without one, and the daily
-//! pull schedule (tests/test_store.py, StoreTest).
+//! pull schedule.
 
 mod common;
 use bagholder_store::{activities, admin, merge, orders, tables};
@@ -24,7 +24,7 @@ fn test_a_row_wealthsimple_revises_replaces_the_stored_copy() {
     let d = db();
     d.apply(&[ws_row()]);
     let stored_id = d.activities()[0]["id"].clone();
-    // map_activity(_ws_item(amount=999, assetQuantity=10))
+    // the same trade mapped again at amount 999, quantity 10
     let mut changed = with(ws_row(), json!({"description": "Buy 10 AAA @ 99.9", "unitPrice": 99.9, "netCashAmount": -999.0}));
     changed["description"] = json!("revised by Wealthsimple");
     let result = d.apply(&[changed.clone()]);
@@ -54,7 +54,7 @@ fn test_placeholder_dividend_becomes_the_paid_dividend() {
     approx(f(&rows[0]["netCashAmount"]).abs(), 1020.0);
 }
 
-/// The store half: `bagholder.append_manual` (server crate) normalizes the
+/// The store half: `append_manual` (server crate) normalizes the
 /// fields to this row and merges it.
 #[test]
 fn test_manual_has_no_canonical_id() {

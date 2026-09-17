@@ -1,11 +1,10 @@
 //! The GraphQL operations the Wealthsimple client sends.
 //!
-//! Each one is the exact text `bagholder.QUERIES` holds, extracted from it
-//! into `graphql/` and included here rather than retyped, so the two cannot
+//! Each one is the exact text Wealthsimple.s web client sends, kept
+//! in `graphql/` and included here rather than retyped, so the text cannot
 //! drift. They were recovered from the public web bundle; nothing here is
 //! invented.
 
-/// `bagholder.QUERIES`.
 pub const QUERIES: [(&str, &str); 17] = [
     ("FetchAccountCurrentMarginBuyingPowerV2", include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql")),
     ("FetchAccountHistoricalFinancials", include_str!("../graphql/FetchAccountHistoricalFinancials.graphql")),

@@ -17,7 +17,7 @@ use crate::activities::{
     is_real_account, link_match_key, looks_like_homemade_id,
 };
 
-/// `store._REVISABLE_COLUMNS`: what Wealthsimple revises on a row of its own.
+/// `_REVISABLE_COLUMNS`: what Wealthsimple revises on a row of its own.
 ///
 /// A dividend announced as a placeholder on the record date -- no cash, dated
 /// that day -- becomes the paid dividend on pay day under the same canonical
@@ -33,7 +33,7 @@ fn either(row: &Value, camel: &str, snake: &str) -> String {
     if v.is_empty() { field_s(row, snake) } else { v }
 }
 
-/// `store._differs`: numbers within a billionth are the same; everything else
+/// `_differs`: numbers within a billionth are the same; everything else
 /// compares as text, with absent reading as empty.
 fn differs(a: &Value, b: &Value) -> bool {
     let numeric = a.is_f64() || b.is_f64();
@@ -49,7 +49,7 @@ fn differs(a: &Value, b: &Value) -> bool {
     sa != sb
 }
 
-/// `store.find_link_candidates`: unlinked local rows matching symbol, side,
+/// `find_link_candidates`: unlinked local rows matching symbol, side,
 /// quantity, price and date -- and the account when it is a real one.
 pub fn find_link_candidates(conn: &Connection, act: &Value) -> Result<Vec<Value>> {
     let account = {
@@ -73,7 +73,7 @@ pub fn find_link_candidates(conn: &Connection, act: &Value) -> Result<Vec<Value>
     Ok(out)
 }
 
-/// `store.stamp_canonical_id`: mark a local row as the broker's, but only when
+/// `stamp_canonical_id`: mark a local row as the broker's, but only when
 /// it has no broker id already.
 ///
 /// The answer is whether this statement changed a row -- not the pooled
@@ -114,7 +114,7 @@ fn stored_columns(conn: &Connection, cid: &str) -> Result<Option<Map<String, Val
     Ok(Some(out))
 }
 
-/// `store._revise_wealthsimple_row`: replace the stored copy with the broker's
+/// `_revise_wealthsimple_row`: replace the stored copy with the broker's
 /// current version when a revisable field changed.
 pub fn revise_wealthsimple_row(conn: &Connection, cid: &str, row: &Value) -> Result<bool> {
     let incoming = crate::activities::insert_columns(row, "", Some(cid));
@@ -162,7 +162,7 @@ pub struct Applied {
     pub revised: usize,
 }
 
-/// `store.apply_wealthsimple_mapped`.
+/// `apply_wealthsimple_mapped`.
 pub fn apply_wealthsimple_mapped(
     conn: &Connection,
     rows: &[Value],
@@ -233,7 +233,7 @@ pub struct Merged {
     pub activities: Vec<Value>,
 }
 
-/// `store.merge_local_rows`: a CSV or typed merge, on date, account, symbol,
+/// `merge_local_rows`: a CSV or typed merge, on date, account, symbol,
 /// quantity, price and cash rather than on any id.
 pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> String) -> Result<Merged> {
     let mut stored: Vec<Value> = Vec::new();
@@ -304,7 +304,7 @@ pub fn revisable_view(row: &Value) -> Map<String, Value> {
 
 /// A field match key that can be a map key.
 ///
-/// Python compares the tuple's floats by value, so the bits are used here with
+/// The key's floats compare by value, so the bits are used here with
 /// a negative zero folded onto zero -- `0.0 == -0.0` there, and a row whose
 /// cash is written either way is the same fill.
 #[derive(PartialEq, Eq, Hash, Clone)]

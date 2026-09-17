@@ -18,11 +18,10 @@ pub const TMX_URL: &str = "https://app-money.tmx.com/graphql";
 
 pub const TMX_QUOTE_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName price priceChange percentChange prevClose currency dividendFrequency dividendYield dividendAmount exDividendDate } }";
 
-/// `market.TMX_FORMS`.
 const FORMS_CAD: [&str; 3] = ["", ":CNX", ":AQL"];
 const FORMS_USD: [&str; 1] = [":US"];
 
-/// `market.TMX_VENUE_OF_FORM`: the venue a quote must name for that form to be
+/// The venue a quote must name for that form to be
 /// the right one.
 const VENUE_OF_FORM: [(&str, &[&str]); 4] = [
     ("", &["TORONTO STOCK EXCHANGE", "TSX VENTURE"]),
@@ -31,10 +30,9 @@ const VENUE_OF_FORM: [(&str, &[&str]); 4] = [
     (":US", &["NYSE", "NASDAQ", "NEW YORK"]),
 ];
 
-/// `market.TMX_RESOLVE_RETRY_DAYS`.
 pub const RESOLVE_RETRY_DAYS: i64 = 1;
 
-/// `market.TMX_EXCHANGE_NAMES`: the venue a TMX quote names, in the app's own
+/// The venue a TMX quote names, in the app's own
 /// words.
 const EXCHANGE_NAMES: [(&str, &str); 8] = [
     ("VENTURE", "TSX-V"),
@@ -47,7 +45,6 @@ const EXCHANGE_NAMES: [(&str, &str); 8] = [
     ("NEW YORK", "NYSE"),
 ];
 
-/// `market.tmx_venue`.
 pub fn tmx_venue(name: &str) -> String {
     let up = name.to_uppercase();
     for (mark, venue) in EXCHANGE_NAMES {
@@ -58,12 +55,11 @@ pub fn tmx_venue(name: &str) -> String {
     String::new()
 }
 
-/// `market.tmx_bare`: the ticker without its venue suffix.
+/// The ticker without its venue suffix.
 pub fn tmx_bare(key: &str) -> String {
     key.split(':').next().unwrap_or("").to_string()
 }
 
-/// `market.parse_tmx_quote`.
 pub fn parse_tmx_quote(data: &Value) -> Option<Value> {
     let q = data.get("data")?.get("getQuoteBySymbol")?;
     let m = q.as_object()?;
@@ -94,7 +90,7 @@ fn ask(symbol: &str) -> Value {
     post_json(TMX_URL, &payload, &TMX_HEADERS).unwrap_or(Value::Null)
 }
 
-/// `market.tmx_remembered`: the form TMX answered to for this symbol, when one
+/// The form TMX answered to for this symbol, when one
 /// has been remembered.
 pub fn tmx_remembered(conn: &rusqlite::Connection, key: &str) -> String {
     if key.is_empty() || key.starts_with('^') {
@@ -108,7 +104,7 @@ pub fn tmx_remembered(conn: &rusqlite::Connection, key: &str) -> String {
     key.to_string()
 }
 
-/// `market.tmx_resolve`: which of TMX's forms answers, checked by the venue
+/// Which of TMX's forms answers, checked by the venue
 /// its quote names. Remembered for good; a miss remembered for a day.
 pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> String {
     if key.is_empty() || key.starts_with('^') {
@@ -156,7 +152,7 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
     String::new()
 }
 
-/// `market.tmx_lookup`: the remembered or given form first; when it answers
+/// The remembered or given form first; when it answers
 /// nothing, the form TMX resolves for the symbol instead.
 pub fn tmx_lookup<F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<Value>, String)
 where
@@ -174,8 +170,8 @@ where
     (r, first)
 }
 
-/// `market.tmx_lookup` for a lookup that can fail: a failure is raised past
-/// the lookup in Python, so it stops there -- nothing is resolved and nothing
+/// The TMX lookup for a lookup that can fail: a failure is passed straight
+/// back, so it stops there -- nothing is resolved and nothing
 /// is remembered on the strength of a request that did not get an answer.
 pub fn tmx_lookup_try<F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<Value>, String), E>
 where
@@ -193,12 +189,11 @@ where
     Ok((r, first))
 }
 
-/// `market.fetch_tmx_quote`.
 pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) -> Option<Value> {
     tmx_lookup(conn, tmx_sym, today, |k| parse_tmx_quote(&ask(k))).0
 }
 
-/// `market.tmx_listing`: the listing TMX knows a bare ticker as.
+/// The listing TMX knows a bare ticker as.
 ///
 /// The public directories cover the TSX and Nasdaq registries alone, so this
 /// is how a CSE or Cboe Canada listing is found by name.
@@ -224,7 +219,7 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Op
     Some(json!({"symbol": bare, "name": name, "exchange": venue, "currency": currency}))
 }
 
-/// `market.tmx_record_symbol`: the symbol a Canadian listing's declared
+/// The symbol a Canadian listing's declared
 /// distribution record is filed under.
 pub fn tmx_record_symbol(symbol: &str, exchange: &str) -> Option<String> {
     let s = bagholder_model::venues::tmx_symbol(symbol);
@@ -234,7 +229,6 @@ pub fn tmx_record_symbol(symbol: &str, exchange: &str) -> Option<String> {
     bagholder_model::venues::tmx_form(exchange, "CAD").map(|form| format!("{}{}", s, form))
 }
 
-/// `market.is_canadian_listing`.
 pub fn is_canadian_listing(exchange: &str, currency: &str) -> bool {
     const CANADIAN: [&str; 7] = ["TSX", "TSX-V", "TSXV", "CSE", "CBOE CANADA", "NEO", "ALPHA EXCHANGE"];
     let ex = exchange.trim().to_uppercase();
@@ -270,10 +264,9 @@ pub fn parse_tmx_dividends(data: &Value) -> Vec<Value> {
 
 pub const TMX_DIVIDENDS_QUERY: &str = "query getDividendsForSymbol($symbol: String!, $page: Int, $batch: Int) { dividends: getDividendsForSymbol(symbol: $symbol, page: $page, batch: $batch) { dividends { exDate payableDate amount currency } } }";
 
-/// `market.TMX_BATCH`.
 pub const TMX_BATCH: i64 = 24;
 
-/// `market.fetch_tmx`: the quote and the declared distribution history for one
+/// The quote and the declared distribution history for one
 /// Canadian listing. The exchange picks the form of the symbol.
 pub fn fetch_tmx(conn: &rusqlite::Connection, symbol: &str, exchange: &str, today: &str) -> (Option<Value>, Vec<Value>) {
     let sym = match tmx_record_symbol(symbol, exchange) { Some(s) => s, None => return (None, vec![]) };

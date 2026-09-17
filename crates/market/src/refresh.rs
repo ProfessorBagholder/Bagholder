@@ -23,7 +23,7 @@ pub const TMX_URL: &str = "https://app-money.tmx.com/graphql";
 pub const FX_START: &str = "2016-01-01";
 pub const TSX_START: &str = "2016-01-01";
 
-/// `market.TMX_INDICES`: the stored benchmark key -> TMX Money's index symbol.
+/// The stored benchmark key -> TMX Money's index symbol.
 pub const TMX_INDICES: [(&str, &str); 2] = [("TSX", "^TSX"), ("TSX60", "^TX60")];
 
 const TMX_HISTORY_QUERY: &str = "query getTimeSeriesData($symbol: String!, $freq: String, $interval: Int, $start: String, $end: String) { getTimeSeriesData(symbol: $symbol, freq: $freq, interval: $interval, start: $start, end: $end) { dateTime open high low close volume } }";
@@ -44,7 +44,6 @@ fn from_a_week_before(last: &str, fallback: &str) -> String {
     shift_date(last, -7)
 }
 
-/// `market.refresh_fx`.
 pub fn refresh_fx(conn: &Connection) -> usize {
     let last = fx_last_date(conn, FX_PAIR).unwrap_or_default();
     let start = from_a_week_before(&last, FX_START);
@@ -54,7 +53,7 @@ pub fn refresh_fx(conn: &Connection) -> usize {
     upsert_fx_rates(conn, Some(&series_to_value(&rates)), FX_PAIR).unwrap_or(0)
 }
 
-/// `market.refresh_benchmark`: the S&P 500's closes. FRED serves the trailing
+/// The S&P 500's closes. FRED serves the trailing
 /// ten years in one file; Stooq stands in when it does not answer.
 pub fn refresh_benchmark(conn: &Connection) -> usize {
     let mut mapping = get_text(FRED_URL, &[]).map(|t| parse_fred_csv(&t)).unwrap_or_default();
@@ -72,7 +71,7 @@ pub fn refresh_benchmark(conn: &Connection) -> usize {
     upsert_benchmark_prices(conn, Some(&series_to_value(&mapping)), BENCHMARK_SYMBOL).unwrap_or(0)
 }
 
-/// `market.refresh_tmx_index`: one index's daily closes, appended from a week
+/// One index's daily closes, appended from a week
 /// before the newest stored day.
 pub fn refresh_tmx_index(conn: &Connection, key: &str) -> usize {
     let symbol = match TMX_INDICES.iter().find(|(k, _)| *k == key) { Some((_, s)) => *s, None => return 0 };
@@ -98,7 +97,7 @@ pub fn refresh_tmx_index(conn: &Connection, key: &str) -> usize {
     upsert_benchmark_prices(conn, Some(&series_to_value(&mapping)), key).unwrap_or(0)
 }
 
-/// `market.refresh_tsx`: the S&P/TSX Composite and the S&P/TSX 60.
+/// The S&P/TSX Composite and the S&P/TSX 60.
 pub fn refresh_tsx(conn: &Connection) -> usize {
     TMX_INDICES.iter().map(|(key, _)| refresh_tmx_index(conn, key)).sum()
 }
@@ -124,7 +123,7 @@ impl Drop for Refreshing {
     }
 }
 
-/// `market.refresh_all`: FX, the benchmarks and the declared distributions for
+/// FX, the benchmarks and the declared distributions for
 /// the payer symbols. Never fails; the row counts written.
 pub fn refresh_all(conn: &Connection, symbols: &[Value]) -> Value {
     let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "skipped": true}) };
@@ -137,16 +136,13 @@ pub fn refresh_all(conn: &Connection, symbols: &[Value]) -> Value {
     })
 }
 
-/// `market.RECORD_STALE_HOURS`.
 pub const RECORD_STALE_HOURS: f64 = 20.0;
-/// `market.MARKET_ATTEMPT_HOURS`.
 pub const MARKET_ATTEMPT_HOURS: f64 = 6.0;
-/// `market.MARKET_CHECK_MINUTES`.
 pub const MARKET_CHECK_MINUTES: u64 = 60;
-/// `market.BOC_PUBLISH_ET`: 16:30 Eastern.
+/// 16:30 Eastern.
 pub const BOC_PUBLISH_MINUTE_ET: i64 = 16 * 60 + 30;
 
-/// `market.refresh_distributions`: quotes and declared distributions for the
+/// Quotes and declared distributions for the
 /// dividend payers whose record is stale, or all of them when forced.
 pub fn refresh_distributions(conn: &Connection, symbols: &[Value], force: bool) -> usize {
     let (today, now_unix, stamp) = crate::clock_now();
@@ -190,7 +186,7 @@ pub fn refresh_distributions(conn: &Connection, symbols: &[Value], force: bool) 
     done
 }
 
-/// `market.benchmark_stale`: any index the page can show with no closes, or
+/// Any index the page can show with no closes, or
 /// none within four days.
 pub fn benchmark_stale(conn: &Connection, today: &str) -> bool {
     let limit = shift_date(today, -STALE_DAYS);
@@ -200,7 +196,7 @@ pub fn benchmark_stale(conn: &Connection, today: &str) -> bool {
     })
 }
 
-/// `market.is_stale`: the rates, a benchmark, or a payer's record.
+/// The rates, a benchmark, or a payer's record.
 pub fn is_stale(conn: &Connection, today: &str, symbols: &[Value]) -> bool {
     let limit = shift_date(today, -STALE_DAYS);
     let fx = fx_last_date(conn, FX_PAIR).unwrap_or_default();
@@ -211,7 +207,7 @@ pub fn is_stale(conn: &Connection, today: &str, symbols: &[Value]) -> bool {
     !crate::quotes::stale_symbols(conn, symbols, now_unix, RECORD_STALE_HOURS).unwrap_or_default().is_empty()
 }
 
-/// `market.fx_day_published_but_missing`: the Bank of Canada has published
+/// The Bank of Canada has published
 /// today's rate (16:30 Eastern on a weekday) and the table does not have it.
 pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
     let (day, minute, _) = match crate::clockzone::local_at("America/Toronto", now_unix as i64) { Some(x) => x, None => return false };
@@ -223,7 +219,7 @@ pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
     fx_last_date(conn, FX_PAIR).unwrap_or_default() < day
 }
 
-/// `market.refresh_periodic`: USD/CAD and the benchmarks at most every six
+/// USD/CAD and the benchmarks at most every six
 /// hours (sooner once today's rate is out, or a benchmark is stale), and every
 /// payer's distribution record past its hours.
 pub fn refresh_periodic(conn: &Connection, symbols: &[Value]) -> Value {
@@ -245,10 +241,9 @@ pub fn refresh_periodic(conn: &Connection, symbols: &[Value]) -> Value {
     json!({"fx": fx, "benchmark": bench, "distributions": dist, "skipped": false})
 }
 
-/// `market.STALE_DAYS`.
 pub const STALE_DAYS: i64 = 4;
 
-/// `market.is_stale`, for the two series that are always needed. A book with
+/// Staleness for the two series that are always needed. A book with
 /// no rate within four days cannot convert a recent trade.
 pub fn series_stale(conn: &Connection, today: &str) -> bool {
     let limit = shift_date(today, -STALE_DAYS);

@@ -1,5 +1,5 @@
 //! Margin, securities, trade groups and notes, NAV, the watchlist and the tile
-//! row (tests/test_store.py).
+//! row.
 
 mod common;
 use bagholder_store::{admin, feeds, schema, snapshot, tables};

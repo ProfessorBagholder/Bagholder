@@ -1,5 +1,4 @@
-//! Migrations run by `store.ensure` on a database an earlier version wrote
-//! (tests/test_store.py).
+//! Migrations run by `ensure` on a database an earlier version wrote.
 
 mod common;
 use bagholder_store::{feeds, market, schema};

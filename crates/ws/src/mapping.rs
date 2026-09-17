@@ -13,7 +13,6 @@ use bagholder_model::value::{compact, field_s, get, num};
 pub const MONTHS: [&str; 12] =
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
-/// `bagholder.SKIP_TYPE_MARKERS`.
 const SKIP_TYPE_MARKERS: [&str; 4] = ["SHARE_LENDING", "SHARELENDING", "STOCK_LENDING", "STOCKLENDING"];
 
 /// Fills that hit the cash book. Everything else -- pending limits, cancelled,
@@ -42,7 +41,6 @@ fn n(v: &Value, key: &str) -> f64 {
     num(get(v, key), 0.0)
 }
 
-/// `bagholder._date_only`.
 fn date_only(occurred: &str) -> String {
     let s = occurred.trim();
     if s.is_empty() {
@@ -51,7 +49,7 @@ fn date_only(occurred: &str) -> String {
     s.split('T').next().unwrap_or("").chars().take(10).collect()
 }
 
-/// `bagholder._asset_symbol`: an `EXCHANGE:` prefix is a venue, not part of
+/// An `EXCHANGE:` prefix is a venue, not part of
 /// the ticker.
 pub fn asset_symbol(item: &Value) -> String {
     let raw = field_s(item, "assetSymbol");
@@ -64,7 +62,6 @@ pub fn asset_symbol(item: &Value) -> String {
     raw.to_uppercase().trim().to_string()
 }
 
-/// `bagholder._counter_symbol`.
 pub fn counter_symbol(item: &Value) -> String {
     let raw = field_s(item, "counterAssetSymbol");
     let raw = raw.trim();
@@ -76,7 +73,7 @@ pub fn counter_symbol(item: &Value) -> String {
     raw.to_uppercase().trim().to_string()
 }
 
-/// `bagholder._type_blob`: `(type, subType, the four type fields joined)`.
+/// `(type, subType, the four type fields joined)`.
 fn type_blob(item: &Value) -> (String, String, String) {
     let typ = upper(item, "type").replace('-', "_");
     let sub = upper(item, "subType").replace('-', "_");
@@ -94,7 +91,7 @@ fn type_blob(item: &Value) -> (String, String, String) {
     (typ, sub, blob)
 }
 
-/// `bagholder._is_corp_share_move`: a corporate action, or a distribution that
+/// A corporate action, or a distribution that
 /// delivers shares rather than cash.
 pub fn is_corp_share_move(item: &Value) -> bool {
     let (typ, _sub, blob) = type_blob(item);
@@ -109,13 +106,12 @@ pub fn is_corp_share_move(item: &Value) -> bool {
         && (compact(&typ).contains("DIVIDEND") || blob.contains("DISTRIBUT"))
 }
 
-/// `bagholder._is_code_change`.
 pub fn is_code_change(item: &Value) -> bool {
     let (_, _, blob) = type_blob(item);
     CODE_CHANGE_BLOBS.iter().any(|k| blob.contains(k))
 }
 
-/// `bagholder.skip_activity`: whether this row should not be stored.
+/// Whether this row should not be stored.
 pub fn skip_activity(item: &Value) -> bool {
     if !item.is_object() {
         return true;
@@ -151,7 +147,7 @@ pub fn skip_activity(item: &Value) -> bool {
     blob.contains("SHARE_LENDING") || blob.contains("SHARELENDING")
 }
 
-/// `bagholder.option_symbol`: an OCC-ish display, so an option rolls up into
+/// An OCC-ish display, so an option rolls up into
 /// the ticker it is written on.
 pub fn option_symbol(item: &Value) -> String {
     let under = asset_symbol(item);
@@ -181,7 +177,7 @@ pub fn option_symbol(item: &Value) -> String {
     format!("{} {:02}{}{:02} {:.2} {}", under, day, mon, year % 100, strike_f, cp)
 }
 
-/// `bagholder.signed_cash`: buys, withdrawals and the source side of a
+/// Buys, withdrawals and the source side of a
 /// transfer are negative; sells, deposits and income positive.
 pub fn signed_cash(item: &Value) -> f64 {
     let amount = n(item, "amount").abs();
@@ -219,7 +215,7 @@ fn accounts_list(accounts: Option<&Value>) -> Vec<Value> {
     }
 }
 
-/// `bagholder._account_type`: the nickname, else what the broker calls it.
+/// The nickname, else what the broker calls it.
 pub fn account_type(account_id: &str, accounts: Option<&Value>) -> String {
     let recs = accounts_list(accounts);
     if recs.is_empty() {
@@ -249,7 +245,7 @@ fn nick_of(rec: &Value) -> String {
     String::new()
 }
 
-/// `bagholder.nav_account_groups`: the nickname a NAV filter names, and the
+/// The nickname a NAV filter names, and the
 /// Wealthsimple ids behind it. The CAD and USD sides of one account share a
 /// nickname and so share a group.
 pub fn nav_account_groups(accounts: Option<&Value>) -> Map<String, Value> {
@@ -272,7 +268,7 @@ pub fn nav_account_groups(accounts: Option<&Value>) -> Map<String, Value> {
     groups
 }
 
-/// `bagholder.fifo_pool_ids`: the CAD and USD sides of one Wealthsimple
+/// The CAD and USD sides of one Wealthsimple
 /// account share a single FIFO book.
 ///
 /// A linked pair and a shared nickname both collapse to one root id; distinct
@@ -299,7 +295,7 @@ pub fn fifo_pool_ids(accounts: Option<&Value>) -> HashMap<String, String> {
         }
         let (ra, rb) = (find(parent, a), find(parent, b));
         if ra != rb {
-            // the lower id wins, as Python's min/max does
+            // the lower id wins
             let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
             parent.insert(hi, lo);
         }
@@ -345,13 +341,12 @@ fn is_option(item: &Value) -> bool {
     !field_s(item, "contractType").is_empty()
 }
 
-/// `bagholder._is_to_close`.
 fn is_to_close(sub: &str) -> bool {
     let c = compact(sub);
     c.contains("TOCLOSE") || ["BTC", "STC", "BUYTOCLOSE", "SELLTOCLOSE"].contains(&c.as_str())
 }
 
-/// Python's `%g`, which is what the descriptions are formatted with.
+/// `%g` form, which is what the descriptions are formatted with.
 fn g(v: f64) -> String {
     if v == 0.0 {
         return "0".into();
@@ -373,7 +368,7 @@ fn g(v: f64) -> String {
     }
 }
 
-/// `bagholder._human_desc`: what the row is called in the ledger.
+/// What the row is called in the ledger.
 fn human_desc(item: &Value, typ: &str, sub: &str, symbol: &str, qty: f64, px: f64, _cash: f64) -> String {
     let t = typ.to_uppercase().replace('-', "_");
     let s = sub.to_uppercase().replace('-', "_");
@@ -432,7 +427,7 @@ fn human_desc(item: &Value, typ: &str, sub: &str, symbol: &str, qty: f64, px: f6
     if titled.is_empty() { "Activity".into() } else { titled }
 }
 
-/// Python's `str.title`: every run of letters capitalised, the rest kept.
+/// Title case: every run of letters capitalised, the rest kept.
 fn title_case(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut start = true;
@@ -452,7 +447,7 @@ fn title_case(s: &str) -> String {
     out
 }
 
-/// `bagholder.map_activity_rows`: one GraphQL row becomes two when a code
+/// One GraphQL row becomes two when a code
 /// change names a different ticker -- the old one going out, the new one
 /// coming in.
 pub fn map_activity_rows(item: &Value, accounts: Option<&Value>) -> Vec<Value> {
@@ -490,7 +485,7 @@ pub fn map_activity_rows(item: &Value, accounts: Option<&Value>) -> Vec<Value> {
     }
 }
 
-/// `bagholder.map_activity`: one `ActivityFeedItem` as a ledger row, or
+/// One `ActivityFeedItem` as a ledger row, or
 /// nothing when the row is not one the book keeps.
 pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
     if skip_activity(item) {

@@ -36,7 +36,6 @@ pub const FRESH_MINUTES: f64 = 15.0;
 /// Items kept in the database, newest first.
 pub const KEEP: i64 = 400;
 
-/// `news.NASDAQ_HEADERS`.
 pub fn nasdaq_headers() -> [(&'static str, &'static str); 4] {
     [
         ("User-Agent", UA),
@@ -46,7 +45,7 @@ pub fn nasdaq_headers() -> [(&'static str, &'static str); 4] {
     ]
 }
 
-/// `news.TMX_HEADERS`: TMX Money's own page, not the quote client's.
+/// TMX Money's own page, not the quote client's.
 pub fn tmx_headers() -> [(&'static str, &'static str); 4] {
     [
         ("User-Agent", UA),
@@ -56,7 +55,7 @@ pub fn tmx_headers() -> [(&'static str, &'static str); 4] {
     ]
 }
 
-/// `news._pace`: one call to a host every six-tenths of a second.
+/// One call to a host every six-tenths of a second.
 pub fn pace(host: &str) {
     static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     let last = LAST.get_or_init(|| Mutex::new(HashMap::new()));
@@ -75,20 +74,20 @@ pub fn pace(host: &str) {
     }
 }
 
-/// `news.kind_of`: what an item is, told by where it came from. A wire carries
+/// What an item is, told by where it came from. A wire carries
 /// the company's own release; a publisher writes a story about it.
 pub fn kind_of(source: &str) -> &'static str {
     let s = source.to_lowercase();
     if WIRE_MARKS.iter().any(|m| s.contains(m)) { "release" } else { "story" }
 }
 
-/// `news.clean_text`: the HTML entities resolved and the whitespace collapsed.
+/// The HTML entities resolved and the whitespace collapsed.
 pub fn clean_text(t: &str) -> String {
     unescape(t).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `html.unescape`: CPython's own rule, since a headline carries whatever the
-/// wire put in it.
+/// HTML5 character references resolved by the WHATWG rules, semicolon optional,
+/// longest known prefix, since a headline carries whatever the wire put in it.
 ///
 /// A reference is `&` then a decimal or hexadecimal code point, or a name of
 /// up to 32 characters, each with the semicolon optional. A name that is not
@@ -176,8 +175,8 @@ fn lookup(name: &str) -> Option<&'static str> {
         .map(|i| crate::entities::HTML5[i].1)
 }
 
-/// `html._invalid_charrefs` and `html._invalid_codepoints`: what CPython puts
-/// in place of a code point that is not one.
+/// What a numeric reference to a code point that is not one resolves to, per
+/// the HTML5 replacement table.
 fn codepoint(n: u32) -> String {
     const INVALID: [(u32, char); 27] = [
         (0x00, '\u{fffd}'), (0x0d, '\r'), (0x80, '\u{20ac}'), (0x81, '\u{81}'), (0x82, '\u{201a}'),
@@ -205,7 +204,7 @@ fn codepoint(n: u32) -> String {
     char::from_u32(n).map(|c| c.to_string()).unwrap_or_default()
 }
 
-/// `html._invalid_codepoints`: the code points a document may not carry --
+/// The code points a document may not carry --
 /// the C0 and C1 controls that are not whitespace, and the non-characters.
 /// They are dropped rather than replaced.
 fn is_invalid_codepoint(n: u32) -> bool {
@@ -252,7 +251,6 @@ fn stamp_of(unix: i64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// `news.parse_tmx_news`.
 pub fn parse_tmx_news(data: &Value, symbol: &str) -> Vec<Value> {
     let items = data
         .get("data")
@@ -283,7 +281,7 @@ pub fn parse_tmx_news(data: &Value, symbol: &str) -> Vec<Value> {
     rows
 }
 
-/// `news.nasdaq_when`: Nasdaq gives a day and an age. The time is the age
+/// Nasdaq gives a day and an age. The time is the age
 /// taken off now, to the minute; an older item keeps the day alone at midnight
 /// UTC.
 pub fn nasdaq_when(row: &Value, now_unix: i64) -> String {
@@ -306,8 +304,8 @@ pub fn nasdaq_when(row: &Value, now_unix: i64) -> String {
     }
 }
 
-/// `news._AGO`: `(\d+)\s+(minute|hour|day)s?\s+ago`, case-insensitive, leftmost
-/// match, which is what Python's `search` finds.
+/// `(\d+)\s+(minute|hour|day)s?\s+ago`, case-insensitive, leftmost
+/// match.
 fn parse_ago(text: &str) -> Option<(i64, &'static str)> {
     let b = text.as_bytes();
     for start in 0..b.len() {
@@ -364,7 +362,6 @@ fn parse_created(text: &str) -> Option<(i64, u32, u32)> {
     Some((year.trim().parse().ok()?, m, day.trim().parse().ok()?))
 }
 
-/// `news.parse_nasdaq_news`.
 ///
 /// Nasdaq pads a symbol's feed with market-wide pieces; an item is kept only
 /// when the symbol is among the ones Nasdaq itself lists for it. A feed asked
@@ -426,7 +423,7 @@ pub fn parse_nasdaq_news(data: &Value, now_unix: i64, symbol: &str, kind: Option
     rows
 }
 
-/// `news.source_for`: which wire answers for a listing.
+/// Which wire answers for a listing.
 pub fn source_for(symbol: &str, exchange: &str, currency: &str) -> String {
     if symbol == MARKET.0 && exchange.to_uppercase() == MARKET.1 {
         return "nasdaq".into();
@@ -438,7 +435,7 @@ pub fn source_for(symbol: &str, exchange: &str, currency: &str) -> String {
     }
 }
 
-/// `news.fetch_symbol`: the latest items for one listing from its wire.
+/// The latest items for one listing from its wire.
 ///
 /// `None` means the wire failed and what is stored should stand; an empty list
 /// means it answered with nothing.
@@ -491,8 +488,8 @@ pub fn fetch_symbol(
             let rows = parse_tmx_news(&data, form);
             Ok(if rows.is_empty() { None } else { Some(Value::Array(rows)) })
         };
-        // a wire that failed leaves what is stored standing, as Python's
-        // exception does
+        // a wire that failed leaves what is stored standing, as a failed
+        // request does
         return match crate::tmx::tmx_lookup_try(conn, &code, today, ask) {
             Ok((got, _)) => (src, Some(got.and_then(|v| v.as_array().cloned()).unwrap_or_default())),
             Err(()) => (src, None),
@@ -522,7 +519,7 @@ pub fn fetch_symbol(
     (src, Some(rows))
 }
 
-/// `news.stale`: the listings whose news is older than the freshness window.
+/// The listings whose news is older than the freshness window.
 pub fn stale(
     conn: &rusqlite::Connection,
     listings: &[(String, String, String)],
@@ -545,7 +542,7 @@ pub fn stale(
     Ok(out)
 }
 
-/// `news.refresh`: read the wire for every stale listing; each answer replaces
+/// Read the wire for every stale listing; each answer replaces
 /// that listing's rows. Returns how many answered. `on_new` is handed
 /// everything the wire answered with and the ids the listing did not have
 /// before; what is worth telling about is the notifier's to decide.

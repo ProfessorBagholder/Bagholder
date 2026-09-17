@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use bagholder_market::client::{request, Error as HttpError};
+
 use bagholder_model::value::{field_s, get};
 
 pub const GRAPHQL: &str = "https://my.wealthsimple.com/graphql";
@@ -37,7 +37,6 @@ pub fn oauth_url() -> String {
 
 pub const REFUSED_LOGIN_MESSAGE: &str = "Saved login refused. Connect Wealthsimple again.";
 
-/// `bagholder.IDENTITY_KEYS`.
 const IDENTITY_KEYS: [&str; 6] = [
     "identity_canonical_id",
     "identityCanonicalId",
@@ -65,13 +64,12 @@ impl Home {
     pub fn client_id_path(&self) -> PathBuf { self.dir.join("client_id") }
     pub fn user_agent_path(&self) -> PathBuf { self.dir.join("user_agent") }
 
-    /// `bagholder.load_session`.
     pub fn load_session(&self) -> Option<Value> {
         let text = std::fs::read_to_string(self.session_path()).ok()?;
         serde_json::from_str(&text).ok()
     }
 
-    /// `bagholder.save_session`, written the way `_atomic_write` does: a
+    /// The session written atomically: a
     /// private temporary file renamed over the old one, so a crash cannot
     /// leave half a session behind.
     pub fn save_session(&self, sess: &Value) -> std::io::Result<()> {
@@ -79,7 +77,7 @@ impl Home {
         atomic_write(&self.session_path(), body.as_bytes(), 0o600)
     }
 
-    /// `bagholder.delete_session_and_book`: the login only. The stored
+    /// The login only. The stored
     /// activity rows stay.
     pub fn delete_session(&self) {
         let _ = std::fs::remove_file(self.session_path());
@@ -94,7 +92,7 @@ impl Home {
         let _ = atomic_write(&self.client_id_path(), cid.as_bytes(), 0o600);
     }
 
-    /// `bagholder.cached_user_agent`: the session's own, else the file.
+    /// The session's own, else the file.
     pub fn cached_user_agent(&self) -> String {
         if let Some(s) = self.load_session() {
             let v = field_s(&s, "user_agent").trim().to_string();
@@ -105,7 +103,6 @@ impl Home {
         std::fs::read_to_string(self.user_agent_path()).unwrap_or_default().trim().to_string()
     }
 
-    /// `bagholder.save_user_agent`.
     pub fn save_user_agent(&self, ua: &str) {
         if !ua.is_empty() {
             let _ = atomic_write(&self.user_agent_path(), ua.as_bytes(), 0o600);
@@ -122,7 +119,6 @@ fn set_mode(path: &Path, mode: u32) {
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) {}
 
-/// `bagholder._atomic_write`.
 fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -140,7 +136,7 @@ fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `bagholder._oauth_error_code`: the short OAuth `error` field and nothing
+/// The short OAuth `error` field and nothing
 /// else -- never a token, a client id, or a raw body.
 pub fn oauth_error_code(data: &Value) -> String {
     let err = match get(data, "error") { Some(Value::String(s)) => s.trim().to_string(), _ => return String::new() };
@@ -157,7 +153,6 @@ pub fn oauth_error_code(data: &Value) -> String {
     err
 }
 
-/// `bagholder._refresh_failure_message`.
 pub fn refresh_failure_message(data: &Value) -> String {
     let status = get(data, "_http_status").and_then(|v| v.as_i64());
     let oauth_err = oauth_error_code(data);
@@ -174,7 +169,7 @@ pub fn refresh_failure_message(data: &Value) -> String {
     if parts.is_empty() { "Wealthsimple token refresh failed".into() } else { parts.join(" ") }
 }
 
-/// `bagholder._expires_at_as_timestamp`: the expiry kept in the same shape the
+/// The expiry kept in the same shape the
 /// cookie uses.
 pub fn expires_at_as_timestamp(data: &Value, now_unix: f64) -> Option<String> {
     match get(data, "expires_at") {
@@ -185,8 +180,7 @@ pub fn expires_at_as_timestamp(data: &Value, now_unix: f64) -> Option<String> {
         }
         _ => {}
     }
-    // Python reads this with `int(...)`, which takes the string form too and
-    // truncates a float toward zero.
+    // A number or its string form, truncated toward zero.
     let raw = get(data, "expires_in")?;
     let expires_in = bagholder_model::value::num(Some(raw), f64::NAN);
     if expires_in.is_nan() {
@@ -203,7 +197,6 @@ fn stamp(unix: f64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// `bagholder._identity_from`.
 pub fn identity_from(obj: &Value) -> String {
     for k in IDENTITY_KEYS {
         if let Some(v) = get(obj, k) {
@@ -216,7 +209,7 @@ pub fn identity_from(obj: &Value) -> String {
     String::new()
 }
 
-/// `bagholder.client_id_from_token_info`: the OAuth application uid that
+/// The OAuth application uid that
 /// issued these tokens.
 pub fn client_id_from_token_info(info: &Value) -> String {
     let uid = field_s(info, "application_uid");
@@ -234,7 +227,7 @@ fn headers_for(sess: &Value, extra: &[(&str, String)], ua: &str) -> Vec<(String,
     if !ua.is_empty() {
         out.push(("User-Agent".into(), ua.to_string()));
     }
-    // `bagholder._ws_session_headers`
+    // the device and session headers
     let wssdi = field_s(sess, "wssdi");
     if !wssdi.is_empty() {
         out.push(("x-ws-device-id".into(), wssdi));
@@ -249,14 +242,14 @@ fn headers_for(sess: &Value, extra: &[(&str, String)], ua: &str) -> Vec<(String,
     out
 }
 
-/// `bagholder._http_json`: the parsed body, with the HTTP status folded in
-/// under `_http_status` when the call failed, exactly as Python returns it.
+/// The parsed body, with the HTTP status folded in
+/// under `_http_status` when the call failed.
 pub fn http_json(method: &str, url: &str, body: Option<&Value>, headers: &[(String, String)]) -> Value {
     http_json_timeout(method, url, body, headers, 60)
 }
 
 /// The same, with the call's own timeout. An HTTP error answers with its
-/// body and `_http_status`, as Python's `HTTPError` branch does; a failure to
+/// body and `_http_status`; a failure to
 /// reach the host at all is `transport`.
 pub fn http_json_timeout(method: &str, url: &str, body: Option<&Value>, headers: &[(String, String)], timeout_sec: u64) -> Value {
     let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -316,7 +309,7 @@ impl std::fmt::Display for CallError {
 }
 
 impl<'a> Client<'a> {
-    /// `bagholder.client_id_for`: the session's own, else the cached one.
+    /// The session's own, else the cached one.
     pub fn client_id_for(&self, sess: &Value) -> String {
         let cid = field_s(sess, "client_id").trim().to_string();
         if !cid.is_empty() {
@@ -326,7 +319,7 @@ impl<'a> Client<'a> {
         self.home.cached_client_id()
     }
 
-    /// `bagholder.refresh_session`: the refresh-token grant, with no
+    /// The refresh-token grant, with no
     /// Authorization header.
     ///
     /// Under the lock the session on disk is read again, and when another
@@ -395,7 +388,6 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
-    /// `bagholder.token_info`.
     pub fn token_info(&self, sess: &Value) -> Value {
         let token = field_s(sess, "access_token");
         if token.is_empty() {
@@ -416,7 +408,6 @@ impl<'a> Client<'a> {
         }
     }
 
-    /// `bagholder.graphql`.
     pub fn graphql(&self, sess: &Value, operation: &str, variables: &Value, query: Option<&str>) -> Result<Value, CallError> {
         let token = field_s(sess, "access_token");
         let mut extra: Vec<(&str, String)> = vec![
@@ -439,7 +430,7 @@ impl<'a> Client<'a> {
                 .ok_or_else(|| CallError::Failed(format!("unknown operation {}", operation)))?
                 .to_string(),
         };
-        // a variable that is absent is not sent at all, as Python's filter does
+        // a variable that is absent is not sent at all
         let vars: Map<String, Value> = variables
             .as_object()
             .map(|m| m.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect())

@@ -7,11 +7,11 @@ use serde_json::{json, Map, Value};
 
 use bagholder_model::value::{field_s, get};
 
-/// `store.SYNC_META_KEYS`: the bookmarks a wipe clears so the next sync starts
+/// `SYNC_META_KEYS`: the bookmarks a wipe clears so the next sync starts
 /// from zero.
 pub const SYNC_META_KEYS: [&str; 3] = ["synced_at", "last_activity_pull", "security_id_backfill_done"];
 
-/// `store.ACTIVITY_PULL_WEEKDAYS` / `_HOUR` / `_MINUTE`: one pull per weekday,
+/// `ACTIVITY_PULL_WEEKDAYS` / `_HOUR` / `_MINUTE`: one pull per weekday,
 /// after the market has closed.
 pub const ACTIVITY_PULL_HOUR: u32 = 14;
 pub const ACTIVITY_PULL_MINUTE: u32 = 0;
@@ -21,7 +21,7 @@ fn either(row: &Value, camel: &str, snake: &str) -> String {
     if v.is_empty() { field_s(row, snake) } else { v }
 }
 
-/// `store.upsert_securities`.
+/// `upsert_securities`.
 pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
     for raw in rows {
         if !raw.is_object() {
@@ -31,8 +31,8 @@ pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result
         if sid.is_empty() {
             continue;
         }
-        // the camelCase key wins only when it is present at all, as Python's
-        // `if ... is not None else ...` does
+        // the camelCase key wins only when it is present at all, even
+        // when empty
         let under = match get(raw, "underlyingId") {
             Some(v) => bagholder_model::value::s(Some(v)),
             None => field_s(raw, "underlying_id"),
@@ -80,7 +80,7 @@ pub fn list_securities(conn: &Connection) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// `store.missing_security_ids`: the ids the table does not hold, in the order
+/// `missing_security_ids`: the ids the table does not hold, in the order
 /// they were asked for, four hundred to a query.
 pub fn missing_security_ids(conn: &Connection, ids: &[String]) -> Result<Vec<String>> {
     let mut wanted: Vec<String> = Vec::new();
@@ -108,7 +108,7 @@ pub fn missing_security_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Str
     Ok(wanted.into_iter().filter(|s| !have.contains(s)).collect())
 }
 
-/// `store.needs_security_id_backfill`: whether any broker row with a symbol
+/// `needs_security_id_backfill`: whether any broker row with a symbol
 /// still has no security id.
 pub fn needs_security_id_backfill(conn: &Connection) -> Result<bool> {
     let n: i64 = conn.query_row(
@@ -119,21 +119,21 @@ pub fn needs_security_id_backfill(conn: &Connection) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// `store.exposures_map`: every record keyed by what it is for -- a security
+/// `exposures_map`: every record keyed by what it is for -- a security
 /// id, or a share or fund key.
 pub fn exposures_map(conn: &Connection) -> Result<Map<String, Value>> {
     let snapshot = crate::snapshot::snapshot(conn, false)?;
     Ok(snapshot.get("exposures").and_then(|v| v.as_object()).cloned().unwrap_or_default())
 }
 
-/// `store.save_journal`.
+/// `save_journal`.
 pub fn save_journal(conn: &Connection, entries: Option<&Value>) -> Result<Map<String, Value>> {
     let clean = crate::snapshot::clean_journal(entries.filter(|v| v.is_object()));
     crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(clean.clone())))?;
     Ok(clean)
 }
 
-/// `store.save_journal_entry`: merge one entry. An entry with no thesis, grade
+/// `save_journal_entry`: merge one entry. An entry with no thesis, grade
 /// or tags deletes the key.
 pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&Value>) -> Result<Map<String, Value>> {
     let kid = key.trim().to_string();
@@ -162,7 +162,7 @@ pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&Value>) -
     Ok(current)
 }
 
-/// `store.save_tiles`: the Markets tile row, in order. Saving it is what the
+/// `save_tiles`: the Markets tile row, in order. Saving it is what the
 /// tab's plus, cross and drag do.
 pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
     let raw = crate::tables::json_text(&Value::Array(rows.to_vec()));
@@ -172,7 +172,7 @@ pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
     Ok(clean)
 }
 
-/// `store.activity_pull_due`: due at 2:00 PM Mountain, Monday to Friday, after
+/// `activity_pull_due`: due at 2:00 PM Mountain, Monday to Friday, after
 /// the market has closed, and once per weekday.
 pub fn activity_pull_due(conn: &Connection, now_unix: i64) -> Result<bool> {
     let (y, m, d, hh, mm) = match local_parts(now_unix) { Some(p) => p, None => return Ok(false) };
@@ -224,14 +224,14 @@ fn stamp(unix: i64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// Monday is 0, as Python's `weekday()` is.
+/// Monday is 0.
 fn weekday_of(y: i64, m: u32, d: u32) -> u32 {
     let days = bagholder_model::dates::to_days(y, m, d);
     // 1970-01-01 was a Thursday, which is 3
     (((days + 3) % 7 + 7) % 7) as u32
 }
 
-/// `store.clear_synced_data`: wipe everything the sync wrote so the next one
+/// `clear_synced_data`: wipe everything the sync wrote so the next one
 /// starts from zero.
 ///
 /// The journal and the downloaded market data are kept unless told otherwise.

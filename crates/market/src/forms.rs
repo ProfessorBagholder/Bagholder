@@ -33,7 +33,7 @@ fn marks() -> &'static [Regex; 8] {
 /// form.
 pub const FORM_MARK_MIN: usize = 3;
 
-/// `forms.is_form`: a regulator's fill-in form rather than something written.
+/// A regulator's fill-in form rather than something written.
 pub fn is_form(text: &str) -> bool {
     marks().iter().filter(|m| m.is_match(text)).count() >= FORM_MARK_MIN
 }
@@ -57,7 +57,7 @@ fn grouped(n: f64, decimals: usize) -> String {
     match frac { Some(f) => format!("{}{}.{}", sign, out, f), None => format!("{}{}", sign, out) }
 }
 
-/// `forms._money`: a dollar amount without cents it does not have.
+/// A dollar amount without cents it does not have.
 fn money(n: Option<f64>) -> String {
     match n {
         None => String::new(),
@@ -65,7 +65,7 @@ fn money(n: Option<f64>) -> String {
     }
 }
 
-/// `forms._date`: a form's date boxes, `Start date 2026 YYYY 09 08 MM DD`.
+/// A form's date boxes, `Start date 2026 YYYY 09 08 MM DD`.
 fn date(text: &str, label: &str) -> String {
     let r = Regex::new(&format!(r"(?i){}\s*(\d{{4}})\s*YYYY\s*(\d{{1,2}})\s*(\d{{1,2}})\s*MM", label)).unwrap();
     match r.captures(text) {
@@ -76,8 +76,8 @@ fn date(text: &str, label: &str) -> String {
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/// `forms._day`: `2026-09-08` as `8 September 2026`. A month of 0 reads as
-/// December, since Python's `months[-1]` is the last one.
+/// `2026-09-08` as `8 September 2026`. A month of 0 reads as
+/// December, since a month index of -1 wraps to the last one.
 fn day(iso: &str) -> String {
     let parts: Vec<Option<i64>> = iso.split('-').map(parse_int).collect();
     if parts.len() != 3 || parts.iter().any(|p| p.is_none()) {
@@ -89,7 +89,7 @@ fn day(iso: &str) -> String {
     format!("{} {} {}", d, name, y)
 }
 
-/// `forms.read_45_106f1`: Form 45-106F1, Report of Exempt Distribution -- what
+/// Form 45-106F1, Report of Exempt Distribution -- what
 /// was raised, from how many purchasers, on what date, under which exemption.
 pub fn read_45_106f1(text: &str) -> Value {
     static AMOUNT: OnceLock<Regex> = OnceLock::new();
@@ -131,7 +131,7 @@ pub fn read_45_106f1(text: &str) -> Value {
     json!({"subject": subject, "summary": format!("{}.", head)})
 }
 
-/// `forms.read`: the document read exactly where this module knows its form,
+/// The document read exactly where this module knows its form,
 /// {} otherwise. A form is claimed by the words on its own first page.
 pub fn read(text: &str) -> Value {
     static CLAIM: OnceLock<Regex> = OnceLock::new();

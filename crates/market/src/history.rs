@@ -16,11 +16,10 @@ use crate::http::FetchError;
 use crate::tmx::{tmx_lookup, tmx_lookup_try, TMX_URL};
 use bagholder_model::value::{field_s, get, num};
 
-/// `market.COVERAGE_SLACK_DAYS`: a source covers a span when its first bar is
+/// A source covers a span when its first bar is
 /// within this of the span's start.
 pub const COVERAGE_SLACK_DAYS: i64 = 7;
 
-/// `market.HISTORY_STALE_HOURS`.
 pub const HISTORY_STALE_HOURS: f64 = 20.0;
 
 const TMX_HISTORY_QUERY: &str = "query getTimeSeriesData($symbol: String!, $freq: String, $interval: Int, $start: String, $end: String) { getTimeSeriesData(symbol: $symbol, freq: $freq, interval: $interval, start: $start, end: $end) { dateTime open high low close volume } }";
@@ -29,7 +28,7 @@ pub const COINBASE_CANDLES_URL: &str = "https://api.exchange.coinbase.com/produc
 pub const COINBASE_PRODUCT_URL: &str = "https://api.exchange.coinbase.com/products/{}";
 pub const YAHOO_CHART_RANGE_URL: &str = "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval={}";
 
-/// `market.history_candidates`: where an instrument's bars can come from, in
+/// Where an instrument's bars can come from, in
 /// order of preference.
 ///
 /// Shares and ETFs: TMX Money under the venue's form, then Yahoo under each
@@ -70,7 +69,7 @@ fn bars_meta_key(rec: &Value) -> String {
     format!("bars_source:{}", bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol")))
 }
 
-/// `market.ordered_candidates`: the candidates with the remembered winner
+/// The candidates with the remembered winner
 /// first.
 pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Value) -> Vec<(String, String)> {
     let cands = history_candidates(rec);
@@ -93,7 +92,7 @@ fn remember_winner(conn: &rusqlite::Connection, rec: &Value, source: &str, key: 
     let _ = bagholder_store::tables::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key));
 }
 
-/// `market.bar_currency`: the currency a candidate's bars are quoted in -- a
+/// The currency a candidate's bars are quoted in -- a
 /// crypto pair's quote currency, otherwise the listing's own.
 pub fn bar_currency(source_kind: &str, key: &str, rec: &Value) -> String {
     let _ = source_kind;
@@ -106,7 +105,7 @@ pub fn bar_currency(source_kind: &str, key: &str, rec: &Value) -> String {
     if c.is_empty() { "CAD".into() } else { c.to_uppercase() }
 }
 
-/// `market._rate_on_or_before`: the published rate for a day, or the most
+/// The published rate for a day, or the most
 /// recent one within a week.
 fn rate_on_or_before(fx: &BTreeMap<String, f64>, day: &str, days: i64) -> Option<f64> {
     for i in 0..days {
@@ -120,7 +119,7 @@ fn rate_on_or_before(fx: &BTreeMap<String, f64>, day: &str, days: i64) -> Option
     None
 }
 
-/// `market.in_position_currency`: bars in the position's currency, with the
+/// Bars in the position's currency, with the
 /// rates read from the store.
 ///
 /// USD bars become CAD at the Bank of Canada rate of the bar's own day. A bar
@@ -179,7 +178,7 @@ fn epoch_of_day(day: &str) -> i64 {
     }
 }
 
-/// `market._whole_bars`: only bars with an open, a high and a low -- the chart
+/// Only bars with an open, a high and a low -- the chart
 /// draws candlesticks or nothing.
 fn whole_bars(bars: Vec<Value>) -> Vec<Value> {
     bars.into_iter()
@@ -187,7 +186,7 @@ fn whole_bars(bars: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-/// `market.coinbase_market`: the Coinbase Exchange market for a pair, or
+/// The Coinbase Exchange market for a pair, or
 /// nothing when it does not trade there. Remembered; a miss for a day.
 pub fn coinbase_market(conn: &rusqlite::Connection, pair: &str, today: &str) -> String {
     let pair = pair.trim().to_uppercase();
@@ -217,10 +216,9 @@ pub fn coinbase_market(conn: &rusqlite::Connection, pair: &str, today: &str) -> 
     String::new()
 }
 
-/// `market.COINBASE_CANDLE_LIMIT`.
 pub const COINBASE_CANDLE_LIMIT: i64 = 300;
 
-/// `market.fetch_coinbase_candles`: candles of `granularity` seconds over the
+/// Candles of `granularity` seconds over the
 /// span, three hundred at a time, a few spans in parallel.
 pub fn fetch_coinbase_candles(product: &str, granularity: i64, start_ts: i64, end_ts: i64) -> Vec<Value> {
     let span = COINBASE_CANDLE_LIMIT * granularity;
@@ -279,7 +277,7 @@ fn iso_instant(ts: i64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// `market.fetch_yahoo`: a symbol Yahoo says it does not carry is remembered
+/// A symbol Yahoo says it does not carry is remembered
 /// for the day and not asked again; any other failure is the chain's to
 /// record.
 pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end_ts: i64, interval: &str, today: &str) -> Result<Vec<Value>, FetchError> {
@@ -302,7 +300,7 @@ pub fn fetch_yahoo(conn: &rusqlite::Connection, symbol: &str, start_ts: i64, end
     }
 }
 
-/// `market.fetch_daily_from`: one candidate's daily bars over a span, oldest
+/// One candidate's daily bars over a span, oldest
 /// first. A failure is returned, so the chain can say what failed.
 pub fn fetch_daily_from(
     conn: &rusqlite::Connection,
@@ -364,7 +362,7 @@ pub fn fetch_daily_from(
     }
 }
 
-/// `market._pick_covering`: the index of the first answer whose bars reach
+/// The index of the first answer whose bars reach
 /// back to the span's start, else the one reaching furthest back. The winner
 /// is remembered.
 fn pick_covering<F: Fn(&Value) -> i64>(
@@ -412,7 +410,7 @@ fn remember_notes(rec: &Value, which: &'static str, notes: Vec<(String, String, 
     chart_notes().lock().unwrap().insert((sym, which), notes);
 }
 
-/// `market.chart_reason`: why a chart has no bars, in one sentence -- what
+/// Why a chart has no bars, in one sentence -- what
 /// failed, or which sources were asked and had none.
 pub fn chart_reason(rec: &Value, tf: &str) -> String {
     let which: &'static str = if INTRADAY.contains(&tf) { "hourly" } else { "daily" };
@@ -451,7 +449,7 @@ pub fn chart_reason(rec: &Value, tf: &str) -> String {
     format!("No bars for this span from {}.", listed)
 }
 
-/// `market.fetch_history`: the chain, stopping as soon as one candidate covers
+/// The chain, stopping as soon as one candidate covers
 /// the span.
 pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end: &str, today: &str) -> (Vec<Value>, String) {
     let span_start = epoch_of_day(start);
@@ -483,7 +481,7 @@ pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end:
     }
 }
 
-/// `market.ensure_history`: the stored bars for a span, fetching when it was
+/// The stored bars for a span, fetching when it was
 /// never fetched or the copy is stale and the span reaches the present.
 pub fn ensure_history(
     conn: &rusqlite::Connection,
@@ -538,7 +536,7 @@ fn read_fx(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeMap<String, f64
     Ok(m.into_iter().filter_map(|(k, v)| v.as_f64().map(|f| (k, f))).collect())
 }
 
-/// `market.aggregate_daily`: weekly (Monday start) or monthly bars from daily
+/// Weekly (Monday start) or monthly bars from daily
 /// ones -- the period's first open, highest high, lowest low, last close and
 /// summed volume.
 pub fn aggregate_daily(bars: &[Value], tf: &str) -> Vec<Value> {
@@ -586,13 +584,12 @@ pub fn aggregate_daily(bars: &[Value], tf: &str) -> Vec<Value> {
     out
 }
 
-/// `market.TIMEFRAMES`.
 pub const TIMEFRAMES: [&str; 5] = ["1h", "4h", "1d", "1w", "1M"];
-/// `market.INTRADAY_SECONDS`: the two timeframes that need minute data.
+/// The two timeframes that need minute data.
 pub const INTRADAY: [&str; 2] = ["1h", "4h"];
 pub const INTRADAY_SECONDS: [(&str, i64); 2] = [("1h", 3600), ("4h", 14400)];
 
-/// `market.chart_instrument`: what the chart draws for an instrument -- itself,
+/// What the chart draws for an instrument -- itself,
 /// or for an option contract its underlying, since no source keeps contract
 /// history.
 pub fn chart_instrument(rec: &Value) -> Value {
@@ -606,7 +603,7 @@ pub fn chart_instrument(rec: &Value) -> Value {
     rec.clone()
 }
 
-/// `market.history_source`: the preferred source for an instrument's bars.
+/// The preferred source for an instrument's bars.
 pub fn history_source(rec: &Value) -> Option<(String, String)> {
     history_candidates(rec).into_iter().next()
 }
@@ -615,9 +612,8 @@ pub fn history_source(rec: &Value) -> Option<(String, String)> {
 // intraday bars
 // --------------------------------------------------------------------------
 
-/// `market.TMX_CHART_QUERY`.
 pub const TMX_CHART_QUERY: &str = "query getCompanyChart($symbol: String!, $from: String!, $to: String!) { intraday: getChartDataBySymbol(symbol: $symbol, fromDate: $from, toDate: $to) { dateTime open high low close volume } }";
-/// `market.SESSION_OPEN_MINUTES`: 9:30 exchange time.
+/// 9:30 exchange time.
 pub const SESSION_OPEN_MINUTES: i64 = 9 * 60 + 30;
 pub const TMX_INTRADAY_DAYS: i64 = 365;
 pub const YAHOO_INTRADAY_DAYS: i64 = 729;
@@ -631,7 +627,7 @@ pub const ARCHIVE_TOPUP_HOURS: f64 = 20.0;
 /// No daily source forgets its bars today; one that does goes here.
 pub const SHORT_DAILY_SOURCES: [&str; 0] = [];
 
-/// `market._minute_stamp`: (epoch, day, minute of day, offset) from
+/// (epoch, day, minute of day, offset) from
 /// `2026-09-02T09:30:00-04:00`, None where it is not a time.
 pub fn minute_stamp(text: &str) -> Option<(i64, String, i64, i64)> {
     let b = text.as_bytes();
@@ -697,7 +693,7 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-/// `market.parse_tmx_minutes`: one-minute bars from TMX's chart feed, with the
+/// One-minute bars from TMX's chart feed, with the
 /// exchange-local minute of day, oldest first.
 pub fn parse_tmx_minutes(data: &Value) -> Vec<Value> {
     let rows = data.get("data").and_then(|d| d.get("intraday")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
@@ -719,7 +715,7 @@ pub fn parse_tmx_minutes(data: &Value) -> Vec<Value> {
     out
 }
 
-/// `market.aggregate_session`: bars of `bucket_minutes` aligned to the session
+/// Bars of `bucket_minutes` aligned to the session
 /// open, the bucket's first open, highest high, lowest low, last close and
 /// summed volume; the bar's time is the bucket's start.
 pub fn aggregate_session(minutes: &[Value], bucket_minutes: i64) -> Vec<Value> {
@@ -782,7 +778,7 @@ fn sum_of(a: Option<&Value>, b: Option<&Value>, float_sum: f64) -> Value {
     }
 }
 
-/// `market.fetch_tmx_minutes`: one-minute bars over [start, end], a month at a
+/// One-minute bars over [start, end], a month at a
 /// time, a few months in parallel. A month that fails is a month with none.
 pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
     let mut chunks: Vec<(String, String)> = Vec::new();
@@ -807,7 +803,7 @@ pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
     out
 }
 
-/// `market.aggregate_hourly`: hourly bars onto a coarser grid aligned to the
+/// Hourly bars onto a coarser grid aligned to the
 /// clock.
 pub fn aggregate_hourly(bars: &[Value], seconds: i64) -> Vec<Value> {
     let mut out: BTreeMap<i64, Map<String, Value>> = BTreeMap::new();
@@ -846,7 +842,7 @@ pub fn aggregate_hourly(bars: &[Value], seconds: i64) -> Vec<Value> {
     out.into_values().map(Value::Object).collect()
 }
 
-/// `market.source_intraday_reach`: the earliest date a source has intraday bars
+/// The earliest date a source has intraday bars
 /// for.
 pub fn source_intraday_reach(source: &str, today: &str) -> String {
     match source {
@@ -857,7 +853,7 @@ pub fn source_intraday_reach(source: &str, today: &str) -> String {
     }
 }
 
-/// `market.intraday_reach`: the earliest date intraday bars exist for across
+/// The earliest date intraday bars exist for across
 /// the instrument's sources, or "".
 pub fn intraday_reach(rec: &Value, today: &str) -> String {
     history_candidates(rec)
@@ -868,7 +864,7 @@ pub fn intraday_reach(rec: &Value, today: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `market.available_timeframes`: what the chart can show for a trade starting
+/// What the chart can show for a trade starting
 /// on `start`.
 pub fn available_timeframes(rec: &Value, start: &str, today: &str) -> Vec<&'static str> {
     if history_candidates(rec).is_empty() {
@@ -888,12 +884,10 @@ fn miss_key(symbol: &str, tf: &str) -> String {
     format!("bars_miss:{}|{}", bagholder_model::venues::tmx_symbol(symbol), tf)
 }
 
-/// `market.record_intraday_miss`.
 pub fn record_intraday_miss(conn: &rusqlite::Connection, symbol: &str, tf: &str, now_stamp: &str) {
     let _ = bagholder_store::tables::set_meta(conn, &miss_key(symbol, tf), now_stamp);
 }
 
-/// `market.intraday_missed_recently`.
 pub fn intraday_missed_recently(conn: &rusqlite::Connection, symbol: &str, tf: &str, now_unix: f64) -> bool {
     let v = bagholder_store::tables::get_meta(conn, &miss_key(symbol, tf), "").unwrap_or_default();
     if v.is_empty() {
@@ -905,7 +899,7 @@ pub fn intraday_missed_recently(conn: &rusqlite::Connection, symbol: &str, tf: &
     }
 }
 
-/// `market.offered_timeframes`: the available timeframes less an intraday one
+/// The available timeframes less an intraday one
 /// a recent fetch could not supply and nothing is stored for.
 pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str, today: &str, now_unix: f64) -> Vec<&'static str> {
     let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
@@ -919,7 +913,7 @@ pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str,
         .collect()
 }
 
-/// `market.intraday_ready`: whether the stored bars already cover [start, now].
+/// Whether the stored bars already cover [start, now].
 pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start: &str, today: &str, now_unix: f64) -> bool {
     let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
     let reach = intraday_reach(rec, today);
@@ -937,7 +931,7 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start:
     !last.is_null() && last["startTs"].as_i64().map(|s| s <= start_ts).unwrap_or(false)
 }
 
-/// `market.ensure_intraday_in_background`: start the fetch for a span not
+/// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once.
 pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: String, start: String, end: String) {
     static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -959,7 +953,7 @@ pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: Str
     });
 }
 
-/// `market.fetch_intraday_from`: {tf: bars} of one candidate over the span.
+/// {tf: bars} of one candidate over the span.
 pub fn fetch_intraday_from(
     conn: &rusqlite::Connection,
     source: &str,
@@ -995,7 +989,7 @@ pub fn fetch_intraday_from(
             if !hourly.is_empty() {
                 out.insert("4h".into(), json!(aggregate_hourly(&hourly, 14400)));
                 out.insert("1h".into(), json!(hourly));
-                // Python's dict names 1h first
+                // 1h is named first
                 let four = out.remove("4h").unwrap();
                 out.insert("4h".into(), four);
             }
@@ -1023,7 +1017,7 @@ pub fn fetch_intraday_from(
     Ok(out)
 }
 
-/// `market.fetch_intraday`: {tf: bars} over the span from the first candidate
+/// {tf: bars} over the span from the first candidate
 /// whose reach covers it and that has bars for it; the remembered winner is
 /// tried first. The background sweep leaves the rate-limited sources alone.
 pub fn fetch_intraday(
@@ -1070,7 +1064,7 @@ pub fn fetch_intraday(
     }
 }
 
-/// `market.ensure_intraday`: stored bars of an intraday timeframe for the
+/// Stored bars of an intraday timeframe for the
 /// span, fetched from its start when never fetched and topped up when the span
 /// reaches the present and the copy is older than `max_age_hours`. Bars once
 /// stored are kept for good.
@@ -1141,7 +1135,7 @@ fn age_hours(last: &Value, now_unix: f64) -> Option<f64> {
     crate::quotes::instant_secs_public(&field_s(last, "fetchedAt")).map(|then| (now_unix - then) / 3600.0)
 }
 
-/// `market.archive_intraday`: keep the intraday bars of recently traded or
+/// Keep the intraday bars of recently traded or
 /// held instruments for good, a few per call -- those never fetched first,
 /// then those whose copy is older than a day. Returns the symbols worked.
 pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
@@ -1168,7 +1162,7 @@ pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str
     done
 }
 
-/// `market.archive_daily`: keep daily bars for instruments whose source forgets
+/// Keep daily bars for instruments whose source forgets
 /// them. No current source does, so this is idle until one is added.
 pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
     let mut todo: Vec<(u8, String, Value)> = Vec::new();
@@ -1196,7 +1190,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, n
     done
 }
 
-/// `market.ensure_bars`: bars for one timeframe over a span -- daily from the
+/// Bars for one timeframe over a span -- daily from the
 /// daily store, weekly and monthly aggregated from it, 1h and 4h from the
 /// intraday store.
 #[allow(clippy::too_many_arguments)]

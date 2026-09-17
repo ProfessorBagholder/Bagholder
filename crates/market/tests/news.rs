@@ -1,4 +1,4 @@
-//! Port of tests/test_news.py (parsing and routing; fetch/store/model tests live elsewhere).
+//! News: parsing and routing; fetch, store and model tests live elsewhere.
 use bagholder_market::news;
 use serde_json::{json, Value};
 

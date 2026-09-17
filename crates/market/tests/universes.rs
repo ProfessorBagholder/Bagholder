@@ -1,4 +1,4 @@
-//! Port of tests/test_universes.py (parsing half; StoreTest belongs to the store crate).
+//! Market universes: parsing; storage is tested with the store crate.
 use bagholder_market::universes;
 use serde_json::{json, Value};
 

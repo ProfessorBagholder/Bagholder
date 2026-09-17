@@ -1,6 +1,6 @@
-//! Ported from tests/test_store.py: OrderTicketTest, OrdersReadBackTest,
-//! StopFillBooksLocallyTest, OrdersPanelTest, FeedMatchingTest, OrderTickTest,
-//! NinetyDayRollTest, StopExpiryTest. Wealthsimple is always a fake here
+//! The order ticket, reading orders back, stop fills booked locally, the
+//! Orders panel, feed matching, the order tick, the ninety-day roll and stop
+//! expiry. Wealthsimple is always a fake here
 //! (`orders::seam`); nothing reaches the network and nothing is placed.
 #![allow(non_snake_case)]
 
@@ -69,7 +69,7 @@ fn unpatch() {
     seam::reset();
 }
 
-/// `_OrdersBase.setUp` on a wiped store.
+/// A wiped store, set up for an order test.
 fn setup() -> MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
     seam::reset();
@@ -124,7 +124,7 @@ fn tok() -> Value {
     json!({"access_token": "t"})
 }
 
-/// `_OrdersBase._sent`: a ticket sent live against a fake that answers ws-1.
+/// A ticket sent live against a fake that answers ws-1.
 fn sent_order() -> String {
     set_gql(|_, _| Ok(json!({"soOrdersCreateOrder": {"errors": [], "order": {"orderId": "ws-1"}}})));
     set_live(Some(true));
@@ -317,7 +317,7 @@ fn test_ticket_quote_answers_with_everything_the_panel_shows() {
         _ => panic!("{}", op),
     });
     set_session(Some(tok()));
-    // Python's default is live; the test process runs with BAGHOLDER_DRY_ORDERS=1, so the switch is set here.
+    // Orders are live by default; the test process runs with BAGHOLDER_DRY_ORDERS=1, so the switch is set here.
     set_live(Some(true));
     let r = o::ticket_quote("QNC", "", "acct-margin", "");
     assert_eq!(r["ok"], json!(true), "{}", r);
@@ -378,7 +378,7 @@ fn test_a_bad_ticket_is_refused_with_the_reason() {
 
 #[test]
 fn test_orders_are_live_unless_the_dry_setting_is_on() {
-    // Python asserts live when imported without BAGHOLDER_DRY_ORDERS; this process
+    // Orders are live without BAGHOLDER_DRY_ORDERS; this process
     // always sets it (tests_common), so the same rule is checked the other way.
     let _g = setup();
     assert_eq!(std::env::var("BAGHOLDER_DRY_ORDERS").as_deref(), Ok("1"));
@@ -551,7 +551,7 @@ fn test_cancel_needs_the_switch_and_a_live_order() {
     let oid = sent_order();
     set_live(Some(false));
     assert!(st(&o::cancel_order(&oid), "error").contains("Orders are off"));
-    set_live(Some(true)); // Python's default
+    set_live(Some(true)); // the default
     assert_eq!(st(&o::cancel_order("nope"), "error"), "No such order.");
     update_order(&oid, json!({"status": "filled"}));
     assert_eq!(st(&o::cancel_order(&oid), "error"), "That order is not open.");
@@ -589,7 +589,7 @@ fn test_cancel_goes_to_wealthsimple_by_external_id_and_the_row_says_cancelling()
 #[test]
 fn test_the_orders_tab_opening_kicks_a_read_unless_one_is_fresh() {
     // refresh_orders cannot be replaced in Rust; the spawned read runs inline
-    // against a fake feed, and what it asked stands for Python's `ran`.
+    // against a fake feed, and what it asked records that it ran.
     let _g = setup();
     let ran: Sent = Arc::default();
     let r2 = ran.clone();
@@ -795,7 +795,7 @@ fn engine() -> (MutexGuard<'static, ()>, Engine) {
 }
 
 impl Engine {
-    /// `_EngineBase._live()`: the fake Wealthsimple, orders on, a session, no threads.
+    /// The fake Wealthsimple, orders on, a session, no threads.
     fn live(&self) {
         let sent = self.sent.clone();
         let rej = self.rejections.clone();
@@ -928,7 +928,7 @@ fn test_edit_sends_wealthsimples_modify_with_the_new_price_and_quantity() {
     assert_eq!(sent.lock().unwrap().last().unwrap().1["input"], json!({"externalId": oid, "newLimitPrice": 165.0}));
     assert_eq!(o::modify_order(&oid, Some(&json!(30)), Some(&json!(165.0)))["unchanged"], json!(true));
     unpatch();
-    set_live(Some(true)); // Python's default outside the patches
+    set_live(Some(true)); // the default
     assert!(st(&o::modify_order(&oid, Some(&json!(0)), Some(&json!(165.0))), "error").contains("more than zero"));
     assert_eq!(st(&o::modify_order("nope", Some(&json!(1)), Some(&json!(1))), "error"), "No such order.");
     set_gql(|_, _| Ok(json!({"soOrdersModifyOrder": {"errors": [{"code": "x", "message": "Too late"}]}})));

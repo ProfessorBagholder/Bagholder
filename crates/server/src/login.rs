@@ -37,7 +37,7 @@ fn is_file(p: &str) -> bool {
     !p.is_empty() && std::path::Path::new(p).is_file()
 }
 
-/// `bagholder.find_chrome`: a Chromium-family browser capable of the DevTools
+/// A Chromium-family browser capable of the DevTools
 /// login flow.
 pub fn find_chrome() -> String {
     let explicit = std::env::var("BAGHOLDER_CHROME").unwrap_or_default().trim().to_string();
@@ -89,7 +89,7 @@ fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<String> {
     bagholder_market::client::request("GET", &url, &[("Host", &format!("127.0.0.1:{}", port))], None, timeout).ok().map(|r| r.text())
 }
 
-/// `bagholder._cdp_list`: the DevTools targets.
+/// The DevTools targets.
 fn cdp_list(port: u16, timeout: Duration) -> Vec<Value> {
     for path in ["/json/list", "/json"] {
         if let Some(raw) = http_get_local(port, path, timeout) {
@@ -104,7 +104,7 @@ fn cdp_list(port: u16, timeout: Duration) -> Vec<Value> {
     vec![]
 }
 
-/// `bagholder._cdp_pages`: the login Chrome's open windows and tabs.
+/// The login Chrome's open windows and tabs.
 fn cdp_pages(port: u16) -> Vec<Value> {
     cdp_list(port, WINDOW_CHECK).into_iter().filter(|t| t.is_object() && f(t, "type") == "page" && !f(t, "id").is_empty()).collect()
 }
@@ -169,7 +169,7 @@ pub fn unb64(text: &str) -> Vec<u8> {
 }
 
 impl Ws {
-    /// `bagholder._ws_connect`: always to 127.0.0.1, the Origin DevTools allows.
+    /// Always to 127.0.0.1, the Origin DevTools allows.
     pub fn connect(ws_url: &str, timeout: Duration) -> std::io::Result<Ws> {
         let rest = ws_url.split("://").nth(1).unwrap_or(ws_url);
         let (hostport, path) = match rest.find('/') { Some(i) => (&rest[..i], &rest[i..]), None => (rest, "/") };
@@ -300,7 +300,7 @@ impl Ws {
         }
     }
 
-    /// `bagholder._cdp_call`: one method call, its answer by id.
+    /// One method call, its answer by id.
     pub fn call(&mut self, method: &str, params: Option<Value>, timeout: Duration) -> Option<Value> {
         let id = self.next_id;
         self.next_id += 1;
@@ -357,7 +357,7 @@ fn unquote(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// `bagholder._json_with_access_token`: a cookie value that is, or URL-decodes
+/// A cookie value that is, or URL-decodes
 /// to, a JSON object carrying an access token.
 pub fn json_with_access_token(raw: &str) -> Option<Value> {
     let mut cur = raw.trim().to_string();
@@ -392,7 +392,6 @@ fn cookies_from_document_cookie(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// `bagholder._tokens_from_cookie_list`.
 pub fn tokens_from_cookie_list(cookies: &[Value]) -> Option<Value> {
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
@@ -583,7 +582,7 @@ fn wait_child(child: &mut Child, d: Duration) -> bool {
     false
 }
 
-/// `bagholder._close_login_browser`: gracefully through DevTools, then by
+/// Gracefully through DevTools, then by
 /// ending the process. Only ever the app's own instance.
 pub fn close_login_browser(only: Option<u32>) {
     let (mut child, current) = {
@@ -656,7 +655,7 @@ fn with_view<T>(f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
     out
 }
 
-/// `bagholder.login_frame`: the login window as a JPEG.
+/// The login window as a JPEG.
 pub fn login_frame() -> Option<Vec<u8>> {
     if !capturing() {
         return None;
@@ -720,7 +719,7 @@ fn screencast_loop(attempt: i64) {
     }
 }
 
-/// `bagholder.login_stream`: the window as a multipart JPEG stream, each frame
+/// The window as a multipart JPEG stream, each frame
 /// as Chromium pushes it.
 pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
     let mut last = u64::MAX;
@@ -771,7 +770,7 @@ fn key_event(ch: char, typ: &str) -> Value {
     ev
 }
 
-/// `bagholder.login_input`: one click, text, key or scroll from the page.
+/// One click, text, key or scroll from the page.
 pub fn login_input(ev: &Value) -> Value {
     let kind = f(ev, "kind");
     let x = crate::app::num(ev.get("x"), Some(0.0)).unwrap_or(0.0);
@@ -834,7 +833,6 @@ pub fn login_input(ev: &Value) -> Value {
     }
 }
 
-/// `bagholder.cancel_login`.
 pub fn cancel_login() -> Value {
     let was = {
         let mut st = app().state.lock().unwrap();
@@ -848,7 +846,7 @@ pub fn cancel_login() -> Value {
     json!({"ok": true, "cancelled": was})
 }
 
-/// `bagholder.start_login_browser`: open the login window, or bring forward the
+/// Open the login window, or bring forward the
 /// one the app already has up.
 pub fn start_login_browser() -> Value {
     log("bagholder login: connect requested");

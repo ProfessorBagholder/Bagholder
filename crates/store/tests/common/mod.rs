@@ -1,5 +1,5 @@
 //! What every store test starts from: a fresh database in a temporary home,
-//! through `store.ensure`, as `tests/test_store.py`'s setUp does.
+//! through `ensure`.
 #![allow(dead_code)]
 
 use rusqlite::Connection;
@@ -17,7 +17,7 @@ impl Db {
     pub fn path(&self) -> PathBuf {
         self.dir.path().join("bagholder.db")
     }
-    /// A fresh id each call, shaped like the uuid the Python store draws.
+    /// A fresh id each call, shaped like a uuid.
     pub fn new_id(&self) -> impl Fn() -> String + '_ {
         move || {
             let n = self.n.get() + 1;
@@ -71,8 +71,7 @@ pub fn f(v: &Value) -> f64 {
     v.as_f64().unwrap_or_else(|| panic!("not a number: {}", v))
 }
 
-/// `bagholder.map_activity(_ws_item(**over))`, as the Python mapper writes it
-/// (the mapper lives in the ws crate; these are its output for these items).
+/// A Wealthsimple trade as the ws crate's mapper writes it.
 pub fn ws_row() -> Value {
     json!({"canonicalId": "ws-cid-aaa-001", "occurredAt": "2024-06-15T13:45:22.123Z", "transactionDate": "2024-06-15", "settlementDate": "2024-06-15", "accountId": "acct-1", "bookId": "acct-1", "fifoId": "acct-1", "accountType": "", "activityType": "Trade", "activitySubType": "BUY", "description": "Buy 10 AAA @ 10", "direction": "DEBIT", "symbol": "AAA", "name": "AAA", "currency": "CAD", "quantity": 10.0, "unitPrice": 10.0, "commission": 0.0, "netCashAmount": -100.0, "category": "trade", "balance": null, "source": "wealthsimple", "rawType": "DIY_BUY", "aftType": "", "counterSymbol": "", "securityId": null})
 }

@@ -15,7 +15,6 @@ use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_re
 use crate::tmx;
 use bagholder_model::value::{field_s, get, num};
 
-/// `market.QUOTE_REFRESH_MINUTES`.
 pub const QUOTE_REFRESH_MINUTES: f64 = 1.0;
 
 pub const COINBASE_URL: &str = "https://api.coinbase.com/v2/prices/{}/spot";
@@ -23,7 +22,6 @@ pub const CBOE_CA_URL: &str = "https://www-api.cboe.com/ca/equities/securities-1
 pub const CBOE_OPTIONS_URL: &str = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json";
 pub const YAHOO_CHART_URL: &str = "https://query1.finance.yahoo.com/v8/finance/chart/";
 
-/// `market.YAHOO_HEADERS`.
 const YAHOO_HEADERS: [(&str, &str); 2] = [("User-Agent", "Mozilla/5.0"), ("Accept", "application/json")];
 
 /// Yahoo rate-limits bursts: one request at a time, well spaced, and after a
@@ -38,7 +36,6 @@ struct YahooGate {
 
 static YAHOO: Mutex<YahooGate> = Mutex::new(YahooGate { next_at: None, backoff_until: None });
 
-/// `market._yahoo_get`.
 fn yahoo_get(url: &str) -> Option<String> {
     {
         let mut gate = YAHOO.lock().unwrap();
@@ -70,8 +67,7 @@ fn yahoo_get(url: &str) -> Option<String> {
     }
 }
 
-/// `market._yahoo_get`, for the chart path: the body, or the failure as
-/// Python raises it -- a backoff in force reads as one, and a 404 keeps its
+/// A Yahoo request for the chart path: the body, or the failure -- a backoff in force reads as one, and a 404 keeps its
 /// code so the symbol can be remembered as one Yahoo does not carry.
 pub fn yahoo_get_result(url: &str) -> Result<String, crate::http::FetchError> {
     {
@@ -110,12 +106,12 @@ pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
     yahoo_get_result(url).map_err(|e| e.code())
 }
 
-/// `market.instant_secs`, for callers outside this module.
+/// An instant as epoch seconds, for callers outside this module.
 pub fn instant_secs_public(s: &str) -> Option<f64> {
     instant_secs(s)
 }
 
-/// `market.parse_yahoo_chart`: bars in the exchange's own local day and
+/// Bars in the exchange's own local day and
 /// minute, oldest first; a row with no close is dropped.
 ///
 /// Yahoo's `gmtoffset` is the offset today, not the bar's, so where the
@@ -168,7 +164,7 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
     out
 }
 
-/// `market.parse_yahoo_quote`: the chart's meta read as a quote.
+/// The chart's meta read as a quote.
 pub fn parse_yahoo_quote(text: &str) -> Option<Value> {
     let d: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
     let results = d.get("chart")?.get("result")?.as_array()?;
@@ -209,26 +205,24 @@ pub fn percent_encode(s: &str) -> String {
     out
 }
 
-/// `market.fetch_yahoo_quote`: a one-day chart, whose stated previous close is
+/// A one-day chart, whose stated previous close is
 /// yesterday's -- a longer range states the close before the range.
 pub fn fetch_yahoo_quote(code: &str) -> Option<Value> {
     let url = format!("{}{}?range=1d&interval=1d", YAHOO_CHART_URL, percent_encode(code));
     parse_yahoo_quote(&yahoo_get(&url)?)
 }
 
-/// `market.yahoo_root`.
 pub fn yahoo_root(symbol: &str) -> String {
     bagholder_model::venues::tmx_symbol(symbol).replace('.', "-")
 }
 
-/// `market.YAHOO_SUFFIX` / `YAHOO_FORMS`.
 const YAHOO_SUFFIX: [(&str, &str); 6] = [
     ("TSX", ".TO"), ("TSX-V", ".V"), ("TSXV", ".V"), ("CSE", ".CN"), ("CBOE CANADA", ".NE"), ("NEO", ".NE"),
 ];
 const YAHOO_FORMS_CAD: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
 const YAHOO_FORMS_USD: [&str; 1] = [""];
 
-/// `market.yahoo_forms`: the venue's own suffix first, then the other venues
+/// The venue's own suffix first, then the other venues
 /// of the listing's currency, so a wrong or missing venue still finds it.
 pub fn yahoo_forms(rec: &Value) -> Vec<String> {
     let root = yahoo_root(&field_s(rec, "symbol"));
@@ -254,7 +248,7 @@ pub fn yahoo_forms(rec: &Value) -> Vec<String> {
     forms.into_iter().map(|f| format!("{}{}", root, f)).collect()
 }
 
-/// `market.tmx_quote_symbol`: the form a listing's quote is filed under, or
+/// The form a listing's quote is filed under, or
 /// nothing when TMX does not carry it -- crypto, options, unknown venues.
 pub fn tmx_quote_symbol(symbol: &str, exchange: &str, currency: &str) -> Option<String> {
     let s = bagholder_model::venues::tmx_symbol(symbol);
@@ -264,7 +258,7 @@ pub fn tmx_quote_symbol(symbol: &str, exchange: &str, currency: &str) -> Option<
     bagholder_model::venues::tmx_form(exchange, currency).map(|f| format!("{}{}", s, f))
 }
 
-/// `market.quote_source`: which public source covers this instrument, and the
+/// Which public source covers this instrument, and the
 /// key it is filed under there.
 pub fn quote_source(rec: &Value) -> Option<(String, String)> {
     let kind = { let k = field_s(rec, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
@@ -300,7 +294,7 @@ pub fn quote_source(rec: &Value) -> Option<(String, String)> {
         .map(|q| ("tmx".to_string(), q))
 }
 
-/// `market.quote_symbols_needing_refresh`: the held instruments whose quote is
+/// The held instruments whose quote is
 /// older than the refresh interval, each with its source and key.
 pub fn quote_symbols_needing_refresh(
     conn: &rusqlite::Connection,
@@ -350,13 +344,11 @@ fn instant_secs(s: &str) -> Option<f64> {
     Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss)
 }
 
-/// `market.fetch_cboe_ca_quote`.
 pub fn fetch_cboe_ca_quote(sym: &str) -> Option<Value> {
     let url = CBOE_CA_URL.replace("{}", &percent_encode(sym));
     parse_cboe_ca_quote(&get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]).ok()?)
 }
 
-/// `market.fetch_cboe_option_chain`.
 pub fn fetch_cboe_option_chain(root: &str) -> Map<String, Value> {
     let url = CBOE_OPTIONS_URL.replace("{}", &percent_encode(root));
     match get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]) {
@@ -365,7 +357,7 @@ pub fn fetch_cboe_option_chain(root: &str) -> Map<String, Value> {
     }
 }
 
-/// `market.coinbase_prev_close`: the close of the last completed UTC day on the
+/// The close of the last completed UTC day on the
 /// pair's Coinbase market, in the pair's currency -- the pair's own market
 /// when Coinbase has one, else the USD market converted at the day's Bank of
 /// Canada rate. Remembered per day.
@@ -408,7 +400,7 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
     prev.filter(|p| *p != 0.0)
 }
 
-/// Python's `repr()` of a float, which is the shortest text that reads back as
+/// A float as its shortest round-trip text, which is the shortest text that reads back as
 /// the same number.
 pub fn float_repr(x: f64) -> String {
     if x.fract() == 0.0 && x.abs() < 1e16 {
@@ -418,7 +410,7 @@ pub fn float_repr(x: f64) -> String {
     if s.contains('e') {
         return s;
     }
-    // Rust writes 1e-7 as 0.0000001; Python switches to an exponent below 1e-4
+    // Rust writes 1e-7 as 0.0000001; the text switches to an exponent below 1e-4
     if x.abs() < 1e-4 || x.abs() >= 1e16 {
         let e = format!("{:e}", x);
         let (mant, exp) = e.split_once('e').unwrap();
@@ -428,7 +420,7 @@ pub fn float_repr(x: f64) -> String {
     s
 }
 
-/// `market.fetch_coinbase_spot`: the spot price, with the day's change against
+/// The spot price, with the day's change against
 /// the previous UTC day's close when Coinbase has a market to take it from.
 pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<Value> {
     let url = COINBASE_URL.replace("{}", pair);
@@ -442,7 +434,7 @@ pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str,
     Some(rec)
 }
 
-/// `market.occ_root`: the root of an OCC code, "" when it is not one.
+/// The root of an OCC code, "" when it is not one.
 pub fn occ_root(code: &str) -> String {
     static R: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     R.get_or_init(|| regex::Regex::new(r"^([A-Z][A-Z0-9.]{0,9})\d{6}[CP]\d{8}$").unwrap())
@@ -451,7 +443,7 @@ pub fn occ_root(code: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `market.fetch_for`: one quote from the named source. A chain is shared
+/// One quote from the named source. A chain is shared
 /// across the calls for one option root.
 pub fn fetch_for(
     conn: &rusqlite::Connection,
@@ -480,7 +472,6 @@ pub fn fetch_for(
     }
 }
 
-/// `market.refresh_quotes`.
 pub fn refresh_quotes(
     conn: &rusqlite::Connection,
     symbols: &[Value],
@@ -503,7 +494,7 @@ pub fn refresh_quotes(
     Ok(done)
 }
 
-/// `market.stale_symbols`: the dividend-paying Canadian listings whose declared
+/// The dividend-paying Canadian listings whose declared
 /// distribution record is older than its own stamp allows.
 ///
 /// The record has a separate fetch stamp from the quote: the quote loop keeps
@@ -567,10 +558,9 @@ pub fn yahoo_back_off() {
     YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
 }
 
-/// `market.PEEK_SECONDS`.
 pub const PEEK_SECONDS: u64 = 60;
 
-/// `market.peek_quote`: a listing's price and day change for a glance, from
+/// A listing's price and day change for a glance, from
 /// the source a watched listing uses, not stored, remembered for a minute.
 pub fn peek_quote(conn: &rusqlite::Connection, rec: &Value, today: &str) -> Option<Value> {
     static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = std::sync::OnceLock::new();

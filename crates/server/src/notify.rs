@@ -49,7 +49,7 @@ fn icon() -> PathBuf {
     app().root.join("favicon.png")
 }
 
-/// `notify.settings`: every kind off until it is turned on from the menu.
+/// Every kind off until it is turned on from the menu.
 pub fn settings(conn: &Connection) -> Result<Map<String, Value>> {
     let raw = bagholder_store::tables::get_meta(conn, SETTINGS_KEY, "")?;
     let parsed: Value = serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap_or_else(|_| json!({}));
@@ -62,17 +62,14 @@ fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Vec<String> {
     keys.iter().filter(|k| on.get(**k).and_then(|v| v.as_bool()).unwrap_or(false)).map(|k| k[prefix.len()..].to_lowercase()).collect()
 }
 
-/// `notify.disclosure_scopes`.
 pub fn disclosure_scopes(conn: &Connection) -> Vec<String> {
     scopes(conn, &DISCLOSURE_SCOPES, "disclosures")
 }
 
-/// `notify.release_scopes`.
 pub fn release_scopes(conn: &Connection) -> Vec<String> {
     scopes(conn, &RELEASE_SCOPES, "releases")
 }
 
-/// `notify.kind_on`.
 pub fn kind_on(conn: &Connection, kind: &str) -> bool {
     match kind {
         "disclosures" => !disclosure_scopes(conn).is_empty(),
@@ -81,7 +78,7 @@ pub fn kind_on(conn: &Connection, kind: &str) -> bool {
     }
 }
 
-/// `notify.set_settings`: unknown keys and non-booleans are ignored.
+/// Unknown keys and non-booleans are ignored.
 pub fn set_settings(conn: &Connection, patch: &Value) -> Result<Map<String, Value>> {
     let mut cur = settings(conn)?;
     if let Some(p) = patch.as_object() {
@@ -97,7 +94,7 @@ pub fn set_settings(conn: &Connection, patch: &Value) -> Result<Map<String, Valu
     Ok(cur)
 }
 
-/// `notify.status`: the kinds, the native channel, and the unread count.
+/// The kinds, the native channel, and the unread count.
 pub fn status(conn: &Connection) -> Result<Value> {
     let mut out = settings(conn)?;
     out.insert("native".into(), json!(native_channel()));
@@ -110,7 +107,6 @@ fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
-/// `notify.native_channel`.
 pub fn native_channel() -> String {
     #[cfg(test)]
     if let Some(c) = test_hooks::CHANNEL.lock().unwrap().clone() {
@@ -159,7 +155,7 @@ fn heartbeat() -> Duration {
     HEARTBEAT
 }
 
-/// `notify.fresh_since`: what a stream has that it has not shown before, and
+/// What a stream has that it has not shown before, and
 /// nothing it held when it was first met.
 ///
 /// Each stream carries a mark: the newest moment it has shown and the items it
@@ -217,7 +213,7 @@ fn wake() -> &'static (Mutex<u64>, Condvar) {
     W.get_or_init(|| (Mutex::new(0), Condvar::new()))
 }
 
-/// `notify.emit`: one notification, if its kind is on and this key has not
+/// One notification, if its kind is on and this key has not
 /// been told before.
 pub fn emit(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
     if !KINDS.contains(&kind) || !kind_on(conn, kind) {
@@ -226,7 +222,6 @@ pub fn emit(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, e
     post(conn, kind, key, title, body, extra)
 }
 
-/// `notify.test_notification`.
 pub fn test_notification(conn: &Connection) -> Option<Value> {
     let stamp = {
         let now = crate::app::now_unix();
@@ -265,7 +260,7 @@ fn enqueue(title: String, body: String, chan: String) {
     let _ = tx.lock().unwrap().send((title, body, chan));
 }
 
-/// `notify.deliver`: post one notification through the system.
+/// Post one notification through the system.
 pub fn deliver(channel: &str, title: &str, body: &str) -> bool {
     #[cfg(test)]
     {
@@ -311,7 +306,7 @@ fn run(cmd: &str, args: &[&str]) -> bool {
     Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// `notify.mac_app`: the applet, built once and again whenever its script, the
+/// The applet, built once and again whenever its script, the
 /// app's address or the icon changes.
 pub fn mac_app() -> Option<PathBuf> {
     let appdir = mac_app_path();
@@ -500,7 +495,7 @@ fn linux_command(title: &str, body: &str) -> Command {
 
 // --- the page's channel -------------------------------------------------------------
 
-/// `notify.stream`: every row made after `after` (or after the stream opens),
+/// Every row made after `after` (or after the stream opens),
 /// each once, with a comment between them every heartbeat. `write` answers
 /// false when the reader has gone.
 pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
@@ -545,7 +540,7 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
 
 #[cfg(test)]
 mod tests {
-    //! Ported from tests/test_notify.py.
+
     use super::*;
     use crate::app::f;
     use bagholder_store::feeds as st;

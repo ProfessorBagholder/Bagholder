@@ -1,5 +1,4 @@
-//! Activity mapping, sync bounds and NAV helpers with no HTTP
-//! (tests/test_store.py, StoreTest and WealthsimpleHttpTest).
+//! Activity mapping, sync bounds and NAV helpers, with no network.
 
 use bagholder_ws::{fetch, mapping, sync};
 use rusqlite::Connection;

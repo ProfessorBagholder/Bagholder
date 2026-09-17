@@ -1,19 +1,18 @@
-//! Python's own readings of text, where the Rust standard library reads the
-//! same text differently: `float()`, `str.splitlines()`, and the `csv`
-//! module's reader. Every figure imported or published passes through one of
-//! these, so they are CPython's rules exactly, not approximations of them.
+//! The app's own readings of text, where the Rust standard library reads the
+//! same text differently: a number, line splitting, and CSV rows. Every figure
+//! imported or published passes through one of these, so their rules are
+//! exact and fixed, not approximations.
 
 use serde_json::{json, Map, Value};
 
-/// `csv.field_size_limit()`'s default.
+/// The largest CSV field accepted, in characters.
 const FIELD_LIMIT: usize = 131072;
 
-/// The zero of every run of Unicode decimal digits, generated from Python's
-/// `unicodedata` (unicode 15.0.0): Python's `float()` reads any of them as the
-/// digit it is.
+/// The zero of every run of Unicode decimal digits, generated from the Unicode
+/// 15.0.0 character database: a number reads any of them as the digit it is.
 const DIGIT_ZEROS: [u32; 68] = [0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0];
 
-/// Python's whitespace for `str.strip()` and `float()`.
+/// The whitespace trimmed from text and from around a number.
 pub fn is_space_char(c: char) -> bool {
     matches!(c as u32, 0x9 | 0xa | 0xb | 0xc | 0xd | 0x1c | 0x1d | 0x1e | 0x1f | 0x20 | 0x85 | 0xa0 | 0x1680 | 0x2000 | 0x2001 | 0x2002 | 0x2003 | 0x2004 | 0x2005 | 0x2006 | 0x2007 | 0x2008 | 0x2009 | 0x200a | 0x2028 | 0x2029 | 0x202f | 0x205f | 0x3000)
 }
@@ -30,7 +29,7 @@ pub fn ascii_digits(text: &str) -> String {
         .collect()
 }
 
-/// `float()` on a string, as Python reads one: surrounding whitespace, a sign,
+/// A number read from a string: surrounding whitespace, a sign,
 /// `inf`/`infinity`/`nan` in any case, underscores between digits, and any
 /// script's decimal digits.
 pub fn parse_float(text: &str) -> Option<f64> {
@@ -62,7 +61,7 @@ pub fn parse_float(text: &str) -> Option<f64> {
         "inf" | "infinity" => f64::INFINITY,
         "nan" => f64::NAN,
         _ => {
-            // Rust also takes these spellings of its own; Python does not
+            // Rust also takes these spellings of its own, which are refused
             if !body.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'.' | b'e' | b'E' | b'+' | b'-')) {
                 return None;
             }
@@ -73,7 +72,7 @@ pub fn parse_float(text: &str) -> Option<f64> {
 }
 
 
-/// `float()` on a JSON value's text, None where Python raises.
+/// A number read from a JSON value's text, None where it is not one.
 pub fn float_value(v: &Value) -> Option<f64> {
     match v {
         Value::String(t) => parse_float(t),
@@ -82,7 +81,7 @@ pub fn float_value(v: &Value) -> Option<f64> {
     }
 }
 
-/// `str.splitlines()`: every line boundary Python knows.
+/// Lines split on every Unicode line boundary, `\r\n` counting as one.
 pub fn splitlines(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
@@ -107,11 +106,10 @@ pub fn splitlines(text: &str) -> Vec<&str> {
     out
 }
 
-/// `csv.reader(io.StringIO(text))` over the excel dialect, as CPython's
-/// reader walks it: the text is read a line at a time on `\n`; a quoted field
+/// CSV rows in the excel dialect: the text is read a line at a time on `\n`; a quoted field
 /// may run across lines and ends at its closing quote, whatever follows it on
 /// the line joining the field; a `\r` outside quotes must end its line, and
-/// Python refuses the file where it does not; a line with nothing on it is an
+/// the file is refused where it does not; a line with nothing on it is an
 /// empty row.
 pub fn csv_rows(text: &str) -> Result<Vec<Vec<String>>, String> {
     #[derive(PartialEq)]
@@ -251,7 +249,7 @@ pub fn csv_records(text: &str) -> Result<Vec<Map<String, Value>>, String> {
 }
 
 
-/// `str.strip()`: Python's whitespace from both ends.
+/// Whitespace (as `is_space_char` defines it) trimmed from both ends.
 pub fn trim_space(text: &str) -> &str {
     text.trim_matches(is_space_char)
 }

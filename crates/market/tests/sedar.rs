@@ -1,4 +1,4 @@
-//! Port of tests/test_sedar.py: the parsers pinned against the trimmed real
+//! The parsers pinned against the trimmed real
 //! result rows in tests/fixtures, the navigation helpers, the scope cache, and
 //! the MCP server's protocol. No network.
 use bagholder_market::sedar;
@@ -200,7 +200,7 @@ fn test_tools_list_offers_the_disclosure_tools() {
 
 #[test]
 fn test_resolve_without_the_sedar_dependency_is_a_clean_tool_error() {
-    // the Rust app's SEDAR+ dependency is the browser helper, not curl_cffi
+    // the Rust app's SEDAR+ dependency is the browser helper
     let r = &mcp(&[json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                           "params": {"name": "sedar_resolve_profile", "arguments": {"query": "Shopify"}}})])[0];
     let payload: Value = serde_json::from_str(s(&r["result"]["content"][0]["text"])).unwrap();

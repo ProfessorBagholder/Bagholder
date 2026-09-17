@@ -12,11 +12,11 @@ use crate::mapping;
 use crate::session::{CallError, Client};
 use bagholder_model::value::{field_s, get};
 
-/// `bagholder.TOKEN_REFRESH_MARGIN_SEC`: refresh this far ahead of the stated
+/// Refresh this far ahead of the stated
 /// expiry rather than waiting for a call to be refused.
 pub const TOKEN_REFRESH_MARGIN_SEC: f64 = 300.0;
 
-/// `bagholder._public_sync_error`: a failure in words the page may see.
+/// A failure in words the page may see.
 ///
 /// Anything that could carry a token is taken out before it can be shown; a
 /// certificate failure is named plainly because it is the one the user can act
@@ -28,7 +28,7 @@ pub fn public_sync_error(msg: &str) -> String {
         return "could not verify HTTPS certificates".into();
     }
     let mut out = redact(msg);
-    // collapse the whitespace, as the Python pattern does
+    // collapse the whitespace
     out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     if out.chars().count() > 180 {
         out = out.chars().take(177).collect::<String>() + "...";
@@ -36,7 +36,7 @@ pub fn public_sync_error(msg: &str) -> String {
     if out.is_empty() { "unknown error".into() } else { out }
 }
 
-/// The three substitutions `bagholder._public_sync_error` applies, in order.
+/// The three substitutions a public sync error goes through, in order.
 ///
 /// A failure reaches the page, so nothing that could be a token may survive
 /// this. The last pass is the backstop: if either word is still there at all,
@@ -144,7 +144,6 @@ fn redact_words(msg: &str) -> String {
     out
 }
 
-/// `bagholder._expires_at_unix`.
 pub fn expires_at_unix(sess: &Value) -> Option<f64> {
     let raw = get(sess, "expires_at")?;
     match raw {
@@ -184,7 +183,6 @@ fn parse_instant(s: &str) -> Option<f64> {
     Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss - offset)
 }
 
-/// `bagholder.token_refresh_needed`.
 pub fn token_refresh_needed(sess: &Value, now: f64) -> bool {
     match expires_at_unix(sess) {
         None => true,
@@ -192,7 +190,7 @@ pub fn token_refresh_needed(sess: &Value, now: f64) -> bool {
     }
 }
 
-/// `bagholder.activity_sync_bounds`: the full history only when the activity
+/// The full history only when the activity
 /// table has no rows yet.
 pub fn activity_sync_bounds(conn: &Connection) -> rusqlite::Result<(Option<String>, bool)> {
     if bagholder_store::activities::activity_count(conn)? == 0 {
@@ -202,11 +200,10 @@ pub fn activity_sync_bounds(conn: &Connection) -> rusqlite::Result<(Option<Strin
     Ok((if start.is_empty() { None } else { Some(start) }, false))
 }
 
-/// `store.PULL_OVERLAP_DAYS`: a daily pull asks for a fortnight, because a row
+/// A daily pull asks for a fortnight, because a row
 /// can be revised after it is first posted.
 pub const PULL_OVERLAP_DAYS: i64 = 14;
 
-/// `store.incremental_start_date`.
 pub fn incremental_start_date(conn: &Connection) -> rusqlite::Result<String> {
     // the newest row the broker sent, and only if it has none, the newest of
     // any source: an imported row must not shorten the window
@@ -248,7 +245,7 @@ fn now_stamp(now_unix: i64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-/// `bagholder.margin_boost_target`: the custodian account id a Margin Boost
+/// The custodian account id a Margin Boost
 /// feature points at.
 ///
 /// An account Wealthsimple lets back a margin account as collateral carries
@@ -281,7 +278,6 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
-/// `bagholder.slim_account`.
 pub fn slim_account(acc: &Value) -> Value {
     let nlv = acc
         .get("financials")
@@ -301,7 +297,7 @@ pub fn slim_account(acc: &Value) -> Value {
     })
 }
 
-/// `bagholder.slim_accounts`: the stored shape of every account, each
+/// The stored shape of every account, each
 /// collateral account naming the margin account it backs.
 pub fn slim_accounts(accounts: &[Value]) -> Vec<Value> {
     // the custodian account id resolved back to the account that owns it
@@ -337,7 +333,7 @@ pub fn slim_accounts(accounts: &[Value]) -> Vec<Value> {
     out
 }
 
-/// `bagholder.run_sync`, without the state flags the Python server keeps in
+/// The pull, without the state flags the server keeps in
 /// memory: one pull, and what it wrote.
 ///
 /// The caller has already made sure the access token is fresh.

@@ -1,4 +1,4 @@
-//! Port of tests/test_fear.py (parsing half; the stored/served half lives with store and server).
+//! Fear and greed readings: parsing; storing and serving are tested with store and server.
 use bagholder_market::fear;
 use serde_json::{json, Value};
 

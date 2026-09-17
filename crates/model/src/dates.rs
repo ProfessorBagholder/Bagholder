@@ -4,7 +4,7 @@
 pub const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// `YYYY-MM-DD` at the head of the string, or `None` when it is not a date.
-/// Python's `date.fromisoformat` is strict about the shape and about the day
+/// The reading is strict about the shape and about the day
 /// existing, and callers here depend on the failure.
 pub fn parse_iso(s: &str) -> Option<(i64, u32, u32)> {
     let b = s.as_bytes();
@@ -56,7 +56,7 @@ pub fn from_days(z: i64) -> (i64, u32, u32) {
 
 pub fn fmt(y: i64, m: u32, d: u32) -> String { format!("{:04}-{:02}-{:02}", y, m, d) }
 
-/// `model.days_between`: never negative, and an unreadable date is zero days
+/// `days_between`: never negative, and an unreadable date is zero days
 /// rather than an error.
 pub fn days_between(a: &str, b: &str) -> i64 {
     let (da, db) = (parse_iso(&head10(a)), parse_iso(&head10(b)));
@@ -66,7 +66,7 @@ pub fn days_between(a: &str, b: &str) -> i64 {
     }
 }
 
-/// `model.shift_date`: the date moved by whole days, or the leading ten
+/// `shift_date`: the date moved by whole days, or the leading ten
 /// characters unchanged when it cannot be read.
 pub fn shift_date(iso: &str, days: i64) -> String {
     let h = head10(iso);
@@ -78,7 +78,7 @@ pub fn shift_date(iso: &str, days: i64) -> String {
 
 pub fn head10(s: &str) -> String { s.chars().take(10).collect() }
 
-/// `model.option_expiry`: `LUNR 29AUG25 11.50 CALL` -> `2025-08-29`.
+/// `option_expiry`: `LUNR 29AUG25 11.50 CALL` -> `2025-08-29`.
 pub fn option_expiry(symbol: &str) -> String {
     let u = crate::value::fold_spaces_upper(symbol);
     let mut parts = u.splitn(3, ' ');

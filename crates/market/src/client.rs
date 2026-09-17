@@ -2,9 +2,7 @@
 //!
 //! Not a choice of convenience. Some of these hosts gate on the TLS
 //! handshake: FRED answers an OpenSSL client and stonewalls both rustls and
-//! macOS SecureTransport, which is the same reason `curl_cffi` exists on the
-//! Python side for SEDAR+. Python reaches these sources through its `ssl`
-//! module, which is OpenSSL, so this does too.
+//! macOS SecureTransport, so the client speaks through OpenSSL.
 //!
 //! One connection per host is kept open between requests, because for a
 //! request this small the handshake is the whole cost.
@@ -44,7 +42,7 @@ fn transport<E: std::fmt::Display>(e: E) -> Error {
     Error::Transport(e.to_string())
 }
 
-/// The CA bundle, looked up the way `market.default_ssl_context` does:
+/// The CA bundle, looked up in order:
 /// certifi's if the environment names one, then the system's.
 fn ca_file() -> Option<String> {
     let mut paths: Vec<String> = Vec::new();
@@ -232,7 +230,7 @@ fn read_to_close(conn: &mut Conn, out: &mut Vec<u8>) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&chunk[..n]),
             // a host that closes without a clean TLS shutdown has still sent
-            // its body; Python's ssl module tolerates the same thing
+            // its body, and that body is kept
             Err(_) => break,
         }
     }
@@ -265,7 +263,7 @@ fn read_chunked(conn: &mut Conn, out: &mut Vec<u8>) -> Result<(), Error> {
 }
 
 fn gunzip(raw: &[u8]) -> Vec<u8> {
-    // The two-byte magic the Python side checks for before decompressing.
+    // The gzip two-byte magic; anything else is returned as it came.
     if raw.len() < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
         return raw.to_vec();
     }
@@ -328,8 +326,7 @@ fn send(
             req.push_str(&format!("{}: {}\r\n", k, v));
             seen.push(k.to_lowercase());
         }
-        // `identity`, which is what Python's http.client sends when nothing
-        // asks otherwise. It is not cosmetic: FRED answers a keep-alive
+        // `identity` unless the caller asks otherwise. It is not cosmetic: FRED answers a keep-alive
         // request that asks for identity and simply never replies to one that
         // asks for gzip.
         if !seen.iter().any(|k| k == "accept-encoding") {

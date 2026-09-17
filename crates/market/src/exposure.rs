@@ -41,7 +41,7 @@ pub struct Ctx<'a> {
 
 
 /// Stand-ins for the network sources, per thread, so the look-through can be
-/// exercised on inline data (the Python tests patch the same functions).
+/// exercised on inline data.
 pub mod hooks {
     use serde_json::Value;
     use std::cell::RefCell;
@@ -72,7 +72,7 @@ fn s(v: Option<&Value>) -> String {
     bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
 
-/// `exposure._num`: thousands and percent signs dropped, parentheses negative.
+/// Thousands and percent signs dropped, parentheses negative.
 pub fn num(v: Option<&Value>, default: f64) -> f64 {
     let raw = match v {
         None | Some(Value::Null) => return default,
@@ -165,7 +165,6 @@ fn bloomberg(code: &str) -> String {
     BLOOMBERG_COUNTRY.iter().find(|(k, _)| *k == c).map(|(_, v)| v.to_string()).unwrap_or_default()
 }
 
-/// `exposure.norm_country`.
 pub fn norm_country(name: &str) -> String {
     let key = trim_space(name).to_lowercase();
     if key.is_empty() {
@@ -177,7 +176,6 @@ pub fn norm_country(name: &str) -> String {
     }
 }
 
-/// `exposure.venue_country`.
 pub fn venue_country(exchange: &str) -> String {
     let key = trim_space(exchange).to_uppercase();
     VENUE_COUNTRY.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default()
@@ -226,7 +224,7 @@ fn nasdaq_summary(symbol: &str) -> (String, String) {
     (val("Sector"), val("Industry"))
 }
 
-/// `exposure.classify_share`: {sector, industry, country, source} for one
+/// {sector, industry, country, source} for one
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
 pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Value {
@@ -391,7 +389,7 @@ fn ishares_page(symbol: &str) -> Result<String, FetchError> {
     Ok(map.lock().unwrap().get(&bagholder_model::venues::tmx_symbol(symbol)).cloned().unwrap_or_default())
 }
 
-/// `exposure.parse_ishares_csv`: the holdings CSV, a few preamble lines then a
+/// The holdings CSV, a few preamble lines then a
 /// header row starting with Ticker. (holdings, as of).
 pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
     let body = text.trim_start_matches('\u{feff}');
@@ -428,7 +426,7 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
         if i < 0 {
             return None;
         }
-        // Python's r[-1] where an index is -1 reads the last cell; the guards above keep that out
+        // a -1 index would read the last cell; the guards above keep that out
         r.get(i as usize).cloned()
     };
     let mut out = Vec::new();
@@ -458,9 +456,8 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
     (out, as_of)
 }
 
-/// `r[i]` as Python indexes a list: a negative index from the end; out of range
-/// is the IndexError Python raises, which no caller here survives, so the
-/// reader returns "" where the Python guard would have skipped the row first.
+/// A cell by index, a negative index counting from the end; out of range reads
+/// as "", since the callers' guards skip such a row first.
 fn index_of(r: &[String], i: i64) -> String {
     let n = r.len() as i64;
     let j = if i < 0 { n + i } else { i };
@@ -488,7 +485,7 @@ fn ishares_ca(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
 
 pub const HARVEST_PAGE: &str = "https://harvestportfolios.com/etf/{}/";
 
-/// `exposure.parse_harvest_tables`: holdings from a Harvest page's tables,
+/// Holdings from a Harvest page's tables,
 /// whichever shape the fund's page uses.
 pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String) {
     static CASH: OnceLock<Regex> = OnceLock::new();
@@ -565,7 +562,7 @@ fn harvest(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
 pub const NINEPOINT_LIST: &str = "https://www.ninepoint.com/landing-pages/ninepoint-highshares-etfs/";
 pub const NINEPOINT_BASE: &str = "https://www.ninepoint.com";
 
-/// `exposure.parse_ninepoint_page`: (ticker, underlying ticker, underlying
+/// (ticker, underlying ticker, underlying
 /// exchange) from a Ninepoint fund page.
 pub fn parse_ninepoint_page(html: &str) -> (String, String, String) {
     static TAGS: OnceLock<Regex> = OnceLock::new();
@@ -622,7 +619,7 @@ fn ninepoint(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
 
 pub const EVOLVE_PAGE: &str = "https://evolveetfs.com/product/{}/";
 
-/// `exposure.parse_evolve_page`: (sectors, holdings) from the page's embedded
+/// (sectors, holdings) from the page's embedded
 /// `portfolioBreakdownData` and `holdingsData`.
 pub fn parse_evolve_page(html: &str) -> (Map<String, Value>, Vec<Value>) {
     static BREAKDOWN: OnceLock<Regex> = OnceLock::new();
@@ -696,7 +693,6 @@ fn yahoo_session() -> Result<(String, String), FetchError> {
     Ok((cookie, crumb))
 }
 
-/// `exposure.yahoo_symbol`.
 pub fn yahoo_symbol(symbol: &str, exchange: &str) -> String {
     let ex = trim_space(exchange).to_uppercase();
     format!("{}{}", bagholder_model::venues::tmx_symbol(symbol), YAHOO_SUFFIX.iter().find(|(k, _)| *k == ex).map(|(_, v)| *v).unwrap_or(""))
@@ -707,7 +703,7 @@ fn round4(x: f64) -> f64 {
     format!("{:.4}", x).parse().unwrap_or(x)
 }
 
-/// `exposure.parse_yahoo_summary`: (sectors, holdings) from Yahoo's
+/// (sectors, holdings) from Yahoo's
 /// topHoldings module.
 pub fn parse_yahoo_summary(data: &Value) -> (Map<String, Value>, Vec<Value>) {
     let res = data.get("quoteSummary").and_then(|q| q.get("result")).and_then(|r| r.as_array()).and_then(|a| a.first()).cloned().unwrap_or(json!({}));
@@ -757,7 +753,7 @@ fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchEr
 
 // --- the look-through ------------------------------------------------------------
 
-/// `exposure.resolve_name`: a holding named without a ticker, the directories'
+/// A holding named without a ticker, the directories'
 /// first match on the name.
 pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
@@ -804,7 +800,7 @@ fn store_exposure(ctx: &Ctx, key: &str, rec: &Value) {
     let _ = bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp());
 }
 
-/// `exposure.share_exposure`: a classified share as an exposure record, cached
+/// A classified share as an exposure record, cached
 /// by ticker and venue form.
 pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Value {
     let key = format!("{}{}:{}", SHARE_KEY, bagholder_model::venues::tmx_symbol(symbol), bagholder_model::venues::tmx_form(exchange, currency).unwrap_or(""));
@@ -831,7 +827,7 @@ fn first_key(v: Option<&Value>) -> String {
     v.and_then(|x| x.as_object()).and_then(|m| m.keys().next().cloned()).unwrap_or_default()
 }
 
-/// `exposure.lookthrough`: holdings into {sectors, countries, coverage} --
+/// Holdings into {sectors, countries, coverage} --
 /// weights over the positive rows, each row classified as given, by its
 /// ticker, by its name, or by looking a fund through.
 pub fn lookthrough(ctx: &Ctx, holdings: &[Value], depth: usize, seen: &mut Vec<String>) -> Value {
@@ -904,7 +900,7 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Value], depth: usize, seen: &mut Vec<S
     json!({"sectors": sectors, "countries": countries, "coverage": covered.min(1.0)})
 }
 
-/// `exposure.fund_exposure`: a fund's {sectors, countries, coverage, source,
+/// A fund's {sectors, countries, coverage, source,
 /// asOf}, through its issuer's adapter, cached by ticker; None when no source
 /// covers its family or the source answered nothing.
 pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Option<Value> {
@@ -979,7 +975,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     Some(rec)
 }
 
-/// `exposure.refresh_security`: the exposure record for one of the book's
+/// The exposure record for one of the book's
 /// securities, stored under its id -- a fund looked through, a share
 /// classified.
 pub fn refresh_security(ctx: &Ctx, sec: &Value) -> Value {
@@ -997,7 +993,7 @@ pub fn refresh_security(ctx: &Ctx, sec: &Value) -> Value {
     rec
 }
 
-/// `exposure.stale`: the ids whose record is missing or older than a week.
+/// The ids whose record is missing or older than a week.
 pub fn stale(ctx: &Ctx, ids: &[String]) -> Vec<String> {
     ids.iter().filter(|sid| cache_get(ctx, sid).is_none()).cloned().collect()
 }

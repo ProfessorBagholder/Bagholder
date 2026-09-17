@@ -32,7 +32,7 @@ fn us_exchange(ex: &str) -> bool {
     US_EXCHANGES.contains(&ex.to_uppercase().as_str())
 }
 
-/// `edgar.available`: EDGAR needs nothing more.
+/// EDGAR needs nothing more.
 pub fn available() -> bool {
     true
 }
@@ -50,8 +50,7 @@ fn pace() {
     *last = Some(Instant::now());
 }
 
-/// The phrase urllib's `HTTPError` carries for a status, from the server's own
-/// reason line in Python; these are the standard ones.
+/// The standard reason phrase for an HTTP status, for failure messages.
 fn reason(code: u16) -> &'static str {
     match code {
         400 => "Bad Request",
@@ -94,7 +93,7 @@ fn tickers() -> &'static Mutex<Option<Tickers>> {
     T.get_or_init(|| Mutex::new(None))
 }
 
-/// `edgar._ticker_map`: {TICKER: (cik, title)} from SEC's published list,
+/// {TICKER: (cik, title)} from SEC's published list,
 /// loaded once.
 pub fn ticker_map() -> Fetched<Tickers> {
     let mut slot = tickers().lock().unwrap();
@@ -130,7 +129,7 @@ pub fn set_ticker_map(t: Tickers) {
     *tickers().lock().unwrap() = Some(t);
 }
 
-/// `edgar._bare`: a ticker as SEC writes it -- no venue suffix, dots to dashes.
+/// A ticker as SEC writes it -- no venue suffix, dots to dashes.
 pub fn bare(symbol: &str) -> String {
     let mut s = bagholder_model::textrules::trim_space(symbol).to_uppercase();
     for suf in [".TO", ".V", ".CN", ".NE", ".U"] {
@@ -141,7 +140,7 @@ pub fn bare(symbol: &str) -> String {
     s.replace('.', "-")
 }
 
-/// `edgar.covers`: a US listing, or any ticker SEC knows.
+/// A US listing, or any ticker SEC knows.
 pub fn covers(symbol: &str, exchange: &str, currency: &str) -> bool {
     if us_exchange(exchange) || currency.to_uppercase() == "USD" {
         return true;
@@ -163,7 +162,6 @@ const TITLES: [(&str, &str); 20] = [
     ("25", "Delisting notice"), ("425", "Business combination"),
 ];
 
-/// `edgar._category`.
 pub fn category(form: &str) -> &'static str {
     static FDIGIT: OnceLock<Regex> = OnceLock::new();
     let f = form.to_uppercase();
@@ -190,12 +188,11 @@ pub fn category(form: &str) -> &'static str {
     d::OTHER
 }
 
-/// `edgar.categorize`.
 pub fn categorize(row: &Value) -> String {
     category(row.get("type").and_then(|v| v.as_str()).unwrap_or("")).to_string()
 }
 
-/// `edgar._title`: the plain-English title beside the form code; EDGAR often
+/// The plain-English title beside the form code; EDGAR often
 /// repeats the form as the description, and then our own label reads better.
 pub fn title(form: &str, description: &str) -> String {
     let dd = d::clean(description);
@@ -213,7 +210,7 @@ fn s(v: Option<&Value>) -> String {
     bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
 
-/// `edgar.parse_submissions`: the submissions answer into items. Split from
+/// The submissions answer into items. Split from
 /// the request so the two implementations can be compared on one answer.
 pub fn parse_submissions(sub: &Value, cik: i64, limit: usize) -> Fetched<Vec<Value>> {
     let sub = match sub {
@@ -276,7 +273,7 @@ pub fn parse_submissions(sub: &Value, cik: i64, limit: usize) -> Fetched<Vec<Val
     Ok(items)
 }
 
-/// `edgar.fetch`: the issuer's recent filings, newest first, or nothing when
+/// The issuer's recent filings, newest first, or nothing when
 /// SEC does not know the ticker or the name guard rejects a collision.
 pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize) -> Fetched<Vec<Value>> {
     fetch_with(symbol, name, exchange, currency, limit, &get_json)
@@ -295,7 +292,7 @@ pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limi
     parse_submissions(&sub, cik, limit)
 }
 
-/// `edgar.has_filer`: whether SEC knows a filer for this instrument, from the
+/// Whether SEC knows a filer for this instrument, from the
 /// ticker map alone.
 pub fn has_filer(symbol: &str, name: &str, exchange: &str, currency: &str) -> bool {
     let map = match ticker_map() { Ok(m) => m, Err(_) => return false };
@@ -304,7 +301,7 @@ pub fn has_filer(symbol: &str, name: &str, exchange: &str, currency: &str) -> bo
     !(!us_listed && !name.is_empty() && !d::names_match(name, title))
 }
 
-/// `edgar.enrichment_from_xml`: a Schedule 13G/13D's title and summary read
+/// A Schedule 13G/13D's title and summary read
 /// from its XML fields. Split from the download so it can be compared on one
 /// document.
 pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
@@ -343,7 +340,7 @@ pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
     Some(json!({"subject": subject.chars().take(90).collect::<String>(), "summary": summary.chars().take(240).collect::<String>()}))
 }
 
-/// `edgar.enrichment`: a deterministic title and summary for a Schedule 13G or
+/// A deterministic title and summary for a Schedule 13G or
 /// 13D, read from its raw XML rather than the rendered page.
 pub fn enrichment(row: &Value) -> Option<Value> {
     enrichment_with(row, &document)
@@ -361,7 +358,7 @@ pub fn enrichment_with(row: &Value, document: &dyn Fn(&Value) -> Fetched<(Vec<u8
     enrichment_from_xml(&typ, &String::from_utf8_lossy(&data))
 }
 
-/// `edgar.pick_content`: of an accession's listing, the file that is the
+/// Of an accession's listing, the file that is the
 /// filing's substance -- the largest real document, the primary as the
 /// tiebreak -- or None for the primary itself.
 pub fn pick_content(items: &[Value], primary: &str) -> Option<String> {
@@ -392,7 +389,7 @@ pub fn pick_content(items: &[Value], primary: &str) -> Option<String> {
     if best == primary { None } else { Some(best) }
 }
 
-/// `edgar.content`: the filing's substance rather than its cover form.
+/// The filing's substance rather than its cover form.
 pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
     content_with(row, &get_json, &document)
 }
@@ -416,7 +413,7 @@ pub fn content_with(
     }
 }
 
-/// `edgar.document`: one EDGAR document, fetched directly. (bytes, content
+/// One EDGAR document, fetched directly. (bytes, content
 /// type as `get_content_type()` gives it).
 pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
     let url = s(row.get("url"));

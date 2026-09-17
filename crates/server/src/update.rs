@@ -67,7 +67,7 @@ pub fn app_dir() -> PathBuf {
         .unwrap_or_else(|| app().root.clone())
 }
 
-/// `bagholder.parse_version`: 'v1.2.3' -> (1, 2, 3).
+/// 'v1.2.3' -> (1, 2, 3).
 pub fn parse_version(tag: &str) -> Option<(u64, u64, u64)> {
     let t = tag.trim();
     let t = t.strip_prefix('v').unwrap_or(t);
@@ -106,7 +106,7 @@ fn fetch_release() -> Option<Value> {
     }
 }
 
-/// `bagholder.check_for_update`: the latest release against APP_VERSION, the
+/// The latest release against APP_VERSION, the
 /// record stored in meta. Never fails.
 pub fn check_for_update() -> Value {
     let mut record = json!({"checkedAt": now_iso(), "ok": false, "latest": "", "url": format!("{}/releases/latest", repo_url()), "updateAvailable": false});
@@ -143,7 +143,7 @@ pub fn check_for_update() -> Value {
     record
 }
 
-/// `bagholder.update_status`: the last check's record, {} when none.
+/// The last check's record, {} when none.
 pub fn update_status() -> Value {
     let raw = app().open().ok().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "").ok()).unwrap_or_default();
     match serde_json::from_str::<Value>(&raw) {
@@ -152,7 +152,7 @@ pub fn update_status() -> Value {
     }
 }
 
-/// `bagholder.release_assets`: {archive, sha} download URLs of this platform's
+/// {archive, sha} download URLs of this platform's
 /// archive and its .sha256, when the release carries both.
 pub fn release_assets(rel: &Value) -> Value {
     let tag = f(rel, "tag_name");
@@ -186,7 +186,7 @@ fn which(cmd: &str) -> bool {
     })
 }
 
-/// `bagholder.update_mode`: 'git' when this copy is a git checkout with git on
+/// 'git' when this copy is a git checkout with git on
 /// the path, else 'release'.
 pub fn update_mode() -> &'static str {
     if app().root.join(".git").exists() && which("git") { "git" } else { "release" }
@@ -196,7 +196,7 @@ fn git(args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("git").args(args).current_dir(&app().root).stdin(Stdio::null()).output()
 }
 
-/// `bagholder.git_update_ready`: a clean tree on master.
+/// A clean tree on master.
 pub fn git_update_ready() -> (bool, String) {
     let status = match git(&["status", "--porcelain"]) { Ok(o) => o, Err(e) => return (false, format!("git: {}", e)) };
     if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
@@ -209,7 +209,6 @@ pub fn git_update_ready() -> (bool, String) {
     (true, String::new())
 }
 
-/// `bagholder.can_update`.
 pub fn can_update(rec: Option<&Value>) -> bool {
     let owned;
     let rec = match rec {
@@ -261,7 +260,7 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// `bagholder._extract_release`: the archive's regular files into `staging`,
+/// The archive's regular files into `staging`,
 /// refusing an archive with any entry that would land outside it. Returns the
 /// relative paths written.
 fn extract_release(archive: &Path, staging: &Path) -> Result<Vec<String>, String> {
@@ -290,7 +289,7 @@ fn extract_release(archive: &Path, staging: &Path) -> Result<Vec<String>, String
     Ok(written)
 }
 
-/// In place of `_check_python`: the new executable is there and runs, and says
+/// The new executable is there and runs, and says
 /// it is the version being installed.
 fn check_binary(staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
     if !names.iter().any(|n| n == exe_name()) {
@@ -353,7 +352,7 @@ fn put_in_place(src: &Path, dest: &Path, copy: bool) -> std::io::Result<()> {
     std::fs::rename(&tmp, dest)
 }
 
-/// `bagholder._install_files`: the current copies kept under HOME/previous,
+/// The current copies kept under HOME/previous,
 /// the new files put in place, the marker the supervisor watches left.
 fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
     let home = &app().home;
@@ -382,7 +381,7 @@ fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), Stri
     std::fs::write(home.join("update-pending"), tag).map_err(|e| e.to_string())
 }
 
-/// `bagholder._rollback`: the previous copies put back.
+/// The previous copies put back.
 pub fn rollback() -> bool {
     rollback_in(&app().home, &app_dir())
 }
@@ -401,7 +400,7 @@ fn rollback_in(home: &Path, dir: &Path) -> bool {
     true
 }
 
-/// `bagholder.request_restart`: finish the response in flight, then stop
+/// Finish the response in flight, then stop
 /// serving so the supervisor restarts the server.
 pub fn request_restart() {
     app().exit_code.store(RESTART_CODE, std::sync::atomic::Ordering::SeqCst);
@@ -477,7 +476,7 @@ fn pull(tag: &str) -> Result<(), String> {
     std::fs::write(app().home.join("update-pending"), tag).map_err(|e| e.to_string())
 }
 
-/// `bagholder.perform_update`: bring this copy to `tag`, then restart. Never
+/// Bring this copy to `tag`, then restart. Never
 /// fails; a failure lands in the state's update error and nothing is changed.
 pub fn perform_update(tag: &str, rec: &Value) {
     let done = if update_mode() == "git" { pull(tag) } else { install_release(tag, rec) };
@@ -498,7 +497,7 @@ pub fn perform_update(tag: &str, rec: &Value) {
     }
 }
 
-/// `bagholder.start_update`: begin the update the page asked for, in the
+/// Begin the update the page asked for, in the
 /// background.
 pub fn start_update() -> Value {
     if updates_off() {
@@ -533,7 +532,7 @@ pub fn start_update() -> Value {
     json!({"ok": true})
 }
 
-/// `bagholder.supervise`: run the server as a child and start it again whenever
+/// Run the server as a child and start it again whenever
 /// it exits asking to be (an update). A restarted server that dies within
 /// `healthy_sec` of an update gets the previous files put back and is started
 /// once more. `home` is the data folder the update marker lives in.
@@ -590,7 +589,7 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
     }
 }
 
-/// `bagholder.check_for_update_if_due`: at most hourly.
+/// At most hourly.
 pub fn check_for_update_if_due() -> Value {
     let rec = update_status();
     if let Some(last) = parse_instant(&f(&rec, "checkedAt")) {

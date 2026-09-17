@@ -1,4 +1,4 @@
-//! Port of tests/test_enrich.py: subject extraction from PDF metadata, text
+//! Subject extraction from PDF metadata, text
 //! extraction, and the graceful behaviour when the local model is absent. The
 //! model is stood in for through `localmodel::hooks`; no network, no subprocess.
 

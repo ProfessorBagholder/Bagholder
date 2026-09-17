@@ -1,6 +1,5 @@
 //! A session that presents a browser's TLS handshake, for the hosts that gate
-//! on it, as `curl_cffi`'s `Session(impersonate="chrome")` is on the Python
-//! side. The handshake lives in the `bagholder-browser` helper beside this
+//! on it (Chrome's). The handshake lives in the `bagholder-browser` helper beside this
 //! binary; a session is one helper process, and its cookies are that
 //! process's.
 
@@ -75,7 +74,7 @@ fn unbase64(text: &str) -> Vec<u8> {
 
 impl Session {
     /// None where the helper is not there to start, and the source that needs
-    /// it is then simply unknown, as it is in Python without `curl_cffi`.
+    /// it is then simply unknown.
     pub fn new() -> Option<Session> {
         let mut child = Command::new(helper())
             .stdin(Stdio::piped())

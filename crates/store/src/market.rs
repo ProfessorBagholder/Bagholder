@@ -34,7 +34,7 @@ fn head10(s: &str) -> String {
 // distributions
 // --------------------------------------------------------------------------
 
-/// `store.distributions`: symbol -> the public record, newest first.
+/// `distributions`: symbol -> the public record, newest first.
 pub fn distributions(conn: &Connection) -> Result<Map<String, Value>> {
     let mut stmt = conn.prepare("SELECT * FROM distributions ORDER BY symbol, ex_date DESC")?;
     let mut rows = stmt.query([])?;
@@ -55,7 +55,7 @@ pub fn distributions(conn: &Connection) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
-/// `store.upsert_distributions`: a record with no ex-date or no positive
+/// `upsert_distributions`: a record with no ex-date or no positive
 /// amount is not a distribution.
 pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], source: &str) -> Result<usize> {
     let sym = sym_of(symbol);
@@ -97,7 +97,7 @@ pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], sou
 // quotes
 // --------------------------------------------------------------------------
 
-/// `store.quotes`.
+/// `quotes`.
 pub fn quotes(conn: &Connection) -> Result<Map<String, Value>> {
     let mut stmt = conn.prepare("SELECT * FROM quotes")?;
     let mut rows = stmt.query([])?;
@@ -121,7 +121,7 @@ pub fn quotes(conn: &Connection) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
-/// `store.upsert_quote`: the price fields are replaced outright, but a
+/// `upsert_quote`: the price fields are replaced outright, but a
 /// dividend figure already known is kept when the new quote does not carry
 /// one -- a price feed that says nothing about dividends must not erase them.
 pub fn upsert_quote(conn: &Connection, symbol: &str, rec: &Value, source: &str, now: &str) -> Result<()> {
@@ -189,7 +189,7 @@ pub fn mark_distributions_fetched(conn: &Connection, symbol: &str, when: &str) -
 // daily history
 // --------------------------------------------------------------------------
 
-/// `store.price_history`: daily bars for one symbol, oldest first.
+/// `price_history`: daily bars for one symbol, oldest first.
 pub fn price_history(conn: &Connection, symbol: &str, start: &str, end: &str) -> Result<Vec<Value>> {
     let sym = sym_of(symbol);
     if sym.is_empty() {
@@ -224,7 +224,7 @@ struct DayBar {
     volume: Option<f64>,
 }
 
-/// `store.upsert_price_history`.
+/// `upsert_price_history`.
 pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], source: &str) -> Result<usize> {
     let sym = sym_of(symbol);
     let mut clean: Vec<DayBar> = Vec::new();
@@ -284,7 +284,7 @@ pub fn history_fetch(conn: &Connection, symbol: &str) -> Result<Value> {
     }
 }
 
-/// `store.mark_history_fetched`: the stamp only ever reaches further back.
+/// `mark_history_fetched`: the stamp only ever reaches further back.
 pub fn mark_history_fetched(conn: &Connection, symbol: &str, start: &str, when: &str) -> Result<()> {
     let sym = sym_of(symbol);
     if sym.is_empty() || when.is_empty() {
@@ -301,7 +301,7 @@ pub fn mark_history_fetched(conn: &Connection, symbol: &str, start: &str, when: 
 // intraday bars
 // --------------------------------------------------------------------------
 
-/// `store.price_bars`.
+/// `price_bars`.
 pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_ts: i64) -> Result<Vec<Value>> {
     let sym = sym_of(symbol);
     let mut stmt = conn.prepare(
@@ -322,7 +322,7 @@ pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_
     Ok(out)
 }
 
-/// `store.upsert_price_bars`.
+/// `upsert_price_bars`.
 pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Value], source: &str) -> Result<usize> {
     let sym = sym_of(symbol);
     struct Bar { ts: i64, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64> }
@@ -330,7 +330,7 @@ pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Valu
     for b in bars {
         let time = get(b, "time");
         let close = opt_num(get(b, "close"));
-        // Python's `not close` also rejects a zero
+        // a zero close is rejected too
         match (time, close) {
             (Some(t), Some(c)) if c > 0.0 => clean.push(Bar {
                 ts: num(Some(t), 0.0) as i64,
@@ -368,7 +368,7 @@ pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Valu
     Ok(clean.len())
 }
 
-/// `store.last_bar_time`: one indexed lookup, rather than reading the archive
+/// `last_bar_time`: one indexed lookup, rather than reading the archive
 /// to look at its last row.
 pub fn last_bar_time(conn: &Connection, symbol: &str, tf: &str) -> Result<Option<i64>> {
     let sym = sym_of(symbol);
@@ -404,10 +404,10 @@ pub fn mark_bars_fetched(conn: &Connection, symbol: &str, tf: &str, start_ts: i6
     Ok(())
 }
 
-/// `store.BENCHMARK_SYMBOLS`.
+/// `BENCHMARK_SYMBOLS`.
 pub const BENCHMARK_SYMBOLS: [&str; 3] = ["SP500", "TSX", "TSX60"];
 
-/// `store.market_data`: what `build_base` is handed.
+/// `market_data`: what `build_base` is handed.
 pub fn market_data(conn: &Connection) -> Result<Value> {
     let mut benchmarks = Map::new();
     for sym in BENCHMARK_SYMBOLS.iter() {
