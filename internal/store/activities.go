@@ -10,7 +10,6 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
-// Activity is one row of the activities table as the app reads it.
 type Activity struct {
 	ID              string   `json:"id"`
 	CanonicalID     string   `json:"canonicalId"`
@@ -39,14 +38,12 @@ type Activity struct {
 	AftType         string   `json:"aftType"`
 	CounterSymbol   string   `json:"counterSymbol"`
 	SecurityID      string   `json:"securityId"`
-	// what normalization adds; absent from a stored row
+
 	Kind       string   `json:"kind,omitempty"`
 	Flags      []string `json:"flags,omitempty"`
 	Normalized bool     `json:"-"`
 }
 
-// MarshalJSON writes the row as the Python store did: a missing canonical or
-// security id is null, never "".
 func (a Activity) MarshalJSON() ([]byte, error) {
 	type plain Activity
 	type out struct {
@@ -64,7 +61,6 @@ func (a Activity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o)
 }
 
-// Clone copies the row, flags included.
 func (a Activity) Clone() Activity {
 	b := a
 	if a.Flags != nil {
@@ -77,12 +73,10 @@ func (a Activity) Clone() Activity {
 	return b
 }
 
-// HasFlag says whether the row carries a normalization flag.
 func (a *Activity) HasFlag(f string) bool {
 	return py.Contains(a.Flags, f)
 }
 
-// LooksLikeHomemadeID is true for an id the app made up rather than Wealthsimple.
 func LooksLikeHomemadeID(aid string) bool {
 	s := strings.TrimSpace(aid)
 	if s == "" || strings.Contains(s, "|") {
@@ -91,7 +85,6 @@ func LooksLikeHomemadeID(aid string) bool {
 	return strings.HasPrefix(strings.ToLower(s), "manual")
 }
 
-// IsRealAccount is true for a Wealthsimple account id rather than an invented one.
 func IsRealAccount(accountID string) bool {
 	s := strings.TrimSpace(accountID)
 	if s == "" || strings.HasPrefix(s, "~") {
@@ -105,7 +98,6 @@ func compactUpper(s string) string {
 	return r.Replace(strings.ToUpper(s))
 }
 
-// TradeSide is BUY, SELL or "" for an activity, from its sub type, its type, else the sign of its quantity.
 func TradeSide(a *Activity) string {
 	sub := compactUpper(a.ActivitySubType)
 	switch sub {
@@ -152,7 +144,6 @@ func activityDate(a *Activity) string {
 	return d
 }
 
-// FieldMatchKey is what a typed or imported row is matched on: date, account when real, symbol, quantity, price, cash.
 type FieldMatchKey struct {
 	Date, Account, Symbol string
 	Qty, Price, Cash      float64
@@ -166,7 +157,6 @@ func FieldKey(a *Activity, includeAccount bool) FieldMatchKey {
 	return FieldMatchKey{activityDate(a), account, strings.ToUpper(py.Strip(a.Symbol)), roundQty(a.Quantity), roundQty(a.UnitPrice), roundQty(a.NetCashAmount)}
 }
 
-// LinkMatchKey is what a Wealthsimple row is matched to a local one on: symbol, side, quantity, price, date, account.
 type LinkMatchKey struct {
 	Symbol, Side  string
 	Qty, Price    float64
@@ -194,7 +184,6 @@ func canonicalFromRow(a *Activity, source string) string {
 	return ""
 }
 
-// CanonicalFromRow is the Wealthsimple canonical id a row carries, "" when it has none it can be trusted on.
 func CanonicalFromRow(a *Activity, source string) string { return canonicalFromRow(a, source) }
 
 func rowToActivity(r map[string]any) Activity {
@@ -259,8 +248,6 @@ func insertParams(a *Activity, assignedID string, canonicalID any) []any {
 		nullable(a.Balance), a.Source, a.RawType, a.AftType, a.CounterSymbol, nullStr(strings.TrimSpace(a.SecurityID))}
 }
 
-// InsertActivity inserts one row. The caller decides the canonical id; nothing is fabricated.
-// A canonicalID of "" means none.
 func (s *Store) InsertActivity(a Activity, canonicalID string, assignedID string) (Activity, error) {
 	s.must()
 	source := a.Source
@@ -303,7 +290,6 @@ func (s *Store) InsertActivity(a Activity, canonicalID string, assignedID string
 	return out, err
 }
 
-// InsertLocal inserts a typed-in or CSV row: a Bagholder id, never a fabricated canonical id.
 func (s *Store) InsertLocal(a Activity) (Activity, error) {
 	source := a.Source
 	if source == "" || source == "wealthsimple" {
@@ -326,14 +312,12 @@ func (s *Store) allActivities() ([]Activity, error) {
 	return out, nil
 }
 
-// Activities is every stored row, oldest first.
 func (s *Store) Activities() []Activity {
 	s.must()
 	out, _ := s.allActivities()
 	return out
 }
 
-// ActivityCount is how many rows are stored.
 func (s *Store) ActivityCount() int {
 	s.must()
 	var n int
@@ -341,7 +325,6 @@ func (s *Store) ActivityCount() int {
 	return n
 }
 
-// CanonicalIDs is the set of Wealthsimple ids already stored.
 func (s *Store) CanonicalIDs() map[string]bool {
 	s.must()
 	out := map[string]bool{}
@@ -355,7 +338,6 @@ func (s *Store) CanonicalIDs() map[string]bool {
 	return out
 }
 
-// NewestWSOccurredAt is the newest Wealthsimple row's moment (any row's when none is Wealthsimple's).
 func (s *Store) NewestWSOccurredAt() string {
 	s.must()
 	row, _ := s.queryOne("SELECT occurred_at, transaction_date FROM activities WHERE source = 'wealthsimple' ORDER BY COALESCE(occurred_at, transaction_date) DESC LIMIT 1")
@@ -372,7 +354,6 @@ func (s *Store) NewestWSOccurredAt() string {
 	return strings.TrimSpace(v)
 }
 
-// IncrementalStartDate is the date bound for a daily pull: PullOverlapDays before the newest stored row; "" with nothing stored.
 func (s *Store) IncrementalStartDate() string {
 	newest := s.NewestWSOccurredAt()
 	if newest == "" {
@@ -391,7 +372,6 @@ func (s *Store) IncrementalStartDate() string {
 
 func inPullTZ(t time.Time) time.Time { return t.In(ActivityPullTZ) }
 
-// ActivityPullDue is true at 2:00 PM Mountain, Monday-Friday, once per weekday after the close.
 func (s *Store) ActivityPullDue(now time.Time) bool {
 	if now.IsZero() {
 		now = time.Now()
@@ -415,7 +395,6 @@ func (s *Store) ActivityPullDue(now time.Time) bool {
 	return inPullTZ(then).Before(close)
 }
 
-// MarkActivityPulled stamps the last pull.
 func (s *Store) MarkActivityPulled(when string) {
 	if when == "" {
 		when = nowISO()
@@ -423,7 +402,6 @@ func (s *Store) MarkActivityPulled(when string) {
 	s.SetMeta("last_activity_pull", when)
 }
 
-// FindLinkCandidates are the unlinked local rows that match symbol, side, qty, price, date (account if real).
 func (s *Store) FindLinkCandidates(a *Activity) []Activity {
 	s.must()
 	includeAccount := IsRealAccount(a.AccountID)
@@ -442,7 +420,6 @@ func (s *Store) FindLinkCandidates(a *Activity) []Activity {
 	return matches
 }
 
-// StampCanonicalID writes a Wealthsimple id onto a local row that had none. True when a row took it.
 func (s *Store) StampCanonicalID(activityID, canonicalID string) bool {
 	s.must()
 	cid := strings.TrimSpace(canonicalID)
@@ -531,14 +508,10 @@ func (s *Store) reviseWealthsimpleRow(cid string, row *Activity) bool {
 	return changed
 }
 
-// ApplyResult counts what a Wealthsimple pull did.
 type ApplyResult struct {
 	Inserted, Linked, Skipped, Revised int
 }
 
-// ApplyWealthsimpleMapped inserts every row whose canonical id is new; a known row is
-// replaced only when Wealthsimple itself revised it. Linking a typed/CSV row: exactly one
-// field match stamps the canonical id; several, the Wealthsimple row is inserted.
 func (s *Store) ApplyWealthsimpleMapped(rows []Activity) ApplyResult {
 	s.must()
 	var out ApplyResult
@@ -575,14 +548,12 @@ func (s *Store) ApplyWealthsimpleMapped(rows []Activity) ApplyResult {
 	return out
 }
 
-// MergeResult is what a CSV or typed merge did.
 type MergeResult struct {
 	Added      int        `json:"added"`
 	Duplicates int        `json:"duplicates"`
 	Activities []Activity `json:"activities"`
 }
 
-// MergeLocalRows merges CSV / typed rows on date, account, symbol, quantity, price, cash, not id.
 func (s *Store) MergeLocalRows(rows []Activity) MergeResult {
 	s.must()
 	out := MergeResult{Activities: []Activity{}}
@@ -626,7 +597,6 @@ func (s *Store) MergeLocalRows(rows []Activity) MergeResult {
 	return out
 }
 
-// Account is one stored Wealthsimple account.
 type Account struct {
 	ID                  string   `json:"id"`
 	Nickname            string   `json:"nickname"`
@@ -638,7 +608,6 @@ type Account struct {
 	MarginAccountID     string   `json:"marginAccountId"`
 }
 
-// ReplaceAccounts replaces the accounts table.
 func (s *Store) ReplaceAccounts(accounts []Account) {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
@@ -658,7 +627,6 @@ func (s *Store) ReplaceAccounts(accounts []Account) {
 	})
 }
 
-// Balance is one security's quantity in one account, as Wealthsimple last read it.
 type Balance struct {
 	AccountID          string   `json:"accountId"`
 	CustodianAccountID string   `json:"custodianAccountId"`
@@ -666,7 +634,6 @@ type Balance struct {
 	Quantity           *float64 `json:"quantity"`
 }
 
-// ReplaceBalances replaces the balances table.
 func (s *Store) ReplaceBalances(balances []Balance) {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
@@ -682,7 +649,6 @@ func (s *Store) ReplaceBalances(balances []Balance) {
 	})
 }
 
-// Margin is Wealthsimple's buying power for one account, or why it is unavailable.
 type Margin struct {
 	AccountID   string   `json:"accountId"`
 	BuyingPower *float64 `json:"buyingPower"`
@@ -691,7 +657,6 @@ type Margin struct {
 	FetchedAt   string   `json:"fetchedAt"`
 }
 
-// ReplaceMargin replaces the margin table whole.
 func (s *Store) ReplaceMargin(rows []Margin) {
 	s.must()
 	now := nowISO()
@@ -719,7 +684,6 @@ func (s *Store) ReplaceMargin(rows []Margin) {
 	})
 }
 
-// NavPoint is one day's net liquidation value, with the net deposits when known.
 type NavPoint struct {
 	Date        string   `json:"date"`
 	Equity      float64  `json:"equity"`
@@ -736,7 +700,6 @@ func navPointFromRow(r map[string]any) NavPoint {
 	return NavPoint{Date: str(r["date"]), Equity: py.Deref(fnum(r["equity"]), 0), Currency: ccy, NetDeposits: fnum(r["net_deposits"])}
 }
 
-// NavLastDates is the newest stored daily-value date per account_id ("" is All).
 func (s *Store) NavLastDates() map[string]string {
 	s.must()
 	out := map[string]string{}
@@ -773,13 +736,11 @@ func writeNavPoints(tx *sql.Tx, points []NavPoint) error {
 	return nil
 }
 
-// UpsertNav inserts or updates daily-value rows without deleting existing days.
 func (s *Store) UpsertNav(points []NavPoint) {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error { return writeNavPoints(tx, points) })
 }
 
-// ReplaceNav replaces the whole nav_history table.
 func (s *Store) ReplaceNav(points []NavPoint) {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
@@ -790,7 +751,6 @@ func (s *Store) ReplaceNav(points []NavPoint) {
 	})
 }
 
-// Security is one stored listing record.
 type Security struct {
 	ID              string `json:"id"`
 	Symbol          string `json:"symbol"`
@@ -802,7 +762,6 @@ type Security struct {
 	FetchedAt       string `json:"-"`
 }
 
-// MarshalJSON writes a missing underlying as null, as the Python store did.
 func (sec Security) MarshalJSON() ([]byte, error) {
 	type plain Security
 	type out struct {
@@ -820,7 +779,6 @@ func securityFromRow(r map[string]any) Security {
 	return Security{ID: str(r["id"]), Symbol: str(r["symbol"]), Name: str(r["name"]), PrimaryExchange: str(r["primary_exchange"]), PrimaryMic: str(r["primary_mic"]), Currency: str(r["currency"]), UnderlyingID: str(r["underlying_id"])}
 }
 
-// UpsertSecurities writes listing records.
 func (s *Store) UpsertSecurities(rows []Security) {
 	s.must()
 	now := nowISO()
@@ -843,7 +801,6 @@ func (s *Store) UpsertSecurities(rows []Security) {
 	})
 }
 
-// ListSecurities is every stored listing, by id.
 func (s *Store) ListSecurities() []Security {
 	s.must()
 	rows, _ := s.queryMaps("SELECT * FROM securities ORDER BY id")
@@ -854,7 +811,6 @@ func (s *Store) ListSecurities() []Security {
 	return out
 }
 
-// MissingSecurityIDs is the ids among these with no stored record, in order, once each.
 func (s *Store) MissingSecurityIDs(ids []string) []string {
 	s.must()
 	var wanted []string
@@ -893,7 +849,6 @@ func (s *Store) MissingSecurityIDs(ids []string) []string {
 	return out
 }
 
-// NeedsSecurityIDBackfill is true while a Wealthsimple row with a symbol has no security id.
 func (s *Store) NeedsSecurityIDBackfill() bool {
 	s.must()
 	var one int
@@ -901,7 +856,6 @@ func (s *Store) NeedsSecurityIDBackfill() bool {
 	return err == nil
 }
 
-// SymbolForSecurity is the symbol the book uses for a security, from its newest activity row.
 func (s *Store) SymbolForSecurity(securityID string) string {
 	s.must()
 	row, _ := s.queryOne("SELECT symbol FROM activities WHERE security_id = ? AND symbol IS NOT NULL AND symbol != '' ORDER BY occurred_at DESC LIMIT 1", securityID)
@@ -911,7 +865,6 @@ func (s *Store) SymbolForSecurity(securityID string) string {
 	return str(row["symbol"])
 }
 
-// SoldSince is the shares sold in that account since a moment, from the activity feed.
 func (s *Store) SoldSince(accountID, securityID, sinceISO, symbol string) float64 {
 	s.must()
 	var row map[string]any
@@ -926,7 +879,6 @@ func (s *Store) SoldSince(accountID, securityID, sinceISO, symbol string) float6
 	return py.Deref(fnum(row["q"]), 0)
 }
 
-// PositionQuantity is Wealthsimple's balance for one security in one account; nil when unknown.
 func (s *Store) PositionQuantity(accountID, securityID string) *float64 {
 	s.must()
 	row, _ := s.queryOne("SELECT SUM(quantity) AS q FROM balances WHERE account_id = ? AND security_id = ?", accountID, securityID)
@@ -936,7 +888,6 @@ func (s *Store) PositionQuantity(accountID, securityID string) *float64 {
 	return fnum(row["q"])
 }
 
-// BalancesCount is how many balance rows are stored.
 func (s *Store) BalancesCount() int {
 	s.must()
 	var n int
@@ -944,12 +895,10 @@ func (s *Store) BalancesCount() int {
 	return n
 }
 
-// DividendSymbol is a symbol that has paid a dividend, with its listing exchange when known.
 type DividendSymbol struct {
 	Symbol, Currency, Exchange string
 }
 
-// DividendSymbols lists the symbols that have paid a dividend.
 func (s *Store) DividendSymbols() []DividendSymbol {
 	s.must()
 	rows, _ := s.queryMaps("SELECT DISTINCT a.symbol AS symbol, a.currency AS currency, s.primary_exchange AS exchange FROM activities a LEFT JOIN securities s ON s.id = a.security_id WHERE a.category = 'dividend' AND IFNULL(a.symbol, '') != ''")
@@ -966,7 +915,6 @@ func (s *Store) DividendSymbols() []DividendSymbol {
 	return out
 }
 
-// TradeGroup is a saved manual grouping of slices (legacy).
 type TradeGroup struct {
 	ID      string   `json:"id"`
 	Locked  bool     `json:"locked"`
@@ -985,7 +933,7 @@ func cleanTradeGroups(raw any) []TradeGroup {
 		if !ok {
 			continue
 		}
-		gid := strings.TrimSpace(py.S(m["id"]))
+		gid := strings.TrimSpace(py.OrStr(m["id"]))
 		members, ok := m["members"].([]any)
 		if gid == "" || seen[gid] || !ok {
 			continue
@@ -993,7 +941,7 @@ func cleanTradeGroups(raw any) []TradeGroup {
 		var keys []string
 		used := map[string]bool{}
 		for _, x := range members {
-			k := strings.TrimSpace(py.S(x))
+			k := strings.TrimSpace(py.OrStr(x))
 			if k == "" || used[k] {
 				continue
 			}
@@ -1004,18 +952,11 @@ func cleanTradeGroups(raw any) []TradeGroup {
 			continue
 		}
 		seen[gid] = true
-		locked := false
-		if b, ok := m["locked"].(bool); ok {
-			locked = b
-		} else if m["locked"] != nil {
-			locked = py.Num(m["locked"], 0) != 0 || py.S(m["locked"]) != ""
-		}
-		out = append(out, TradeGroup{ID: gid, Locked: locked, Members: keys})
+		out = append(out, TradeGroup{ID: gid, Locked: py.Truthy(m["locked"]), Members: keys})
 	}
 	return out
 }
 
-// TradeGroups reads the saved groups.
 func (s *Store) TradeGroups() []TradeGroup {
 	raw := s.GetMeta("trade_groups")
 	if raw == "" {
@@ -1028,7 +969,6 @@ func (s *Store) TradeGroups() []TradeGroup {
 	return cleanTradeGroups(data)
 }
 
-// SaveTradeGroups cleans and saves the groups.
 func (s *Store) SaveTradeGroups(groups any) []TradeGroup {
 	clean := cleanTradeGroups(groups)
 	b, _ := json.Marshal(clean)
@@ -1036,7 +976,6 @@ func (s *Store) SaveTradeGroups(groups any) []TradeGroup {
 	return clean
 }
 
-// TradeNote is a legacy ledger.html note.
 type TradeNote struct {
 	Thesis  string `json:"thesis"`
 	Tag     string `json:"tag"`
@@ -1056,7 +995,7 @@ func cleanTradeNotes(raw any) map[string]TradeNote {
 		if kid == "" || !ok {
 			continue
 		}
-		thesis, tag, grade := py.S(v["thesis"]), py.S(v["tag"]), py.S(v["grade"])
+		thesis, tag, grade := py.OrStr(v["thesis"]), py.OrStr(v["tag"]), py.OrStr(v["grade"])
 		if grade != "A" && grade != "B" && grade != "C" && grade != "F" {
 			grade = ""
 		}
@@ -1068,7 +1007,6 @@ func cleanTradeNotes(raw any) map[string]TradeNote {
 	return out
 }
 
-// TradeNotes reads the legacy notes.
 func (s *Store) TradeNotes() map[string]TradeNote {
 	raw := s.GetMeta("trade_notes")
 	if raw == "" {
@@ -1081,7 +1019,6 @@ func (s *Store) TradeNotes() map[string]TradeNote {
 	return cleanTradeNotes(data)
 }
 
-// SaveTradeNotes cleans and saves the legacy notes.
 func (s *Store) SaveTradeNotes(notes any) map[string]TradeNote {
 	clean := cleanTradeNotes(notes)
 	b, _ := json.Marshal(clean)
@@ -1089,7 +1026,6 @@ func (s *Store) SaveTradeNotes(notes any) map[string]TradeNote {
 	return clean
 }
 
-// Snapshot is everything the model reads in one pass.
 type Snapshot struct {
 	Activities   []Activity            `json:"activities"`
 	Accounts     []Account             `json:"accounts"`
@@ -1109,7 +1045,6 @@ type Snapshot struct {
 	Securities   []Security            `json:"securities"`
 }
 
-// Snapshot reads the tables the model needs; withActivities false skips the activity rows.
 func (s *Store) Snapshot(withActivities bool) Snapshot {
 	_ = s.Ensure()
 	snap := Snapshot{Activities: []Activity{}, Accounts: []Account{}, Balances: []Balance{}, Margin: []Margin{}, NavHistory: []NavPoint{}, NavByAccount: map[string][]NavPoint{}, Securities: []Security{}}
@@ -1171,7 +1106,6 @@ func mustRows(rows []map[string]any, err error) []map[string]any {
 	return rows
 }
 
-// Tile is one saved market tile.
 type Tile struct {
 	Symbol   string `json:"symbol"`
 	Exchange string `json:"exchange"`
@@ -1201,12 +1135,10 @@ func tilesFrom(raw string) ([]Tile, bool) {
 	return out, true
 }
 
-// Tiles is the market tiles row as saved, and whether one was ever saved.
 func (s *Store) Tiles() ([]Tile, bool) {
 	return tilesFrom(s.GetMeta(TilesMeta))
 }
 
-// SaveTiles saves the tile row in order.
 func (s *Store) SaveTiles(rows []Tile) []Tile {
 	clean := []Tile{}
 	for _, r := range rows {
@@ -1221,7 +1153,6 @@ func (s *Store) SaveTiles(rows []Tile) []Tile {
 	return clean
 }
 
-// SortedKeys is the keys of a map in order, for a deterministic walk.
 func SortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

@@ -573,7 +573,7 @@ func graphqlErrors(result map[string]any) string {
 	}
 	msg := py.S(first["message"])
 	if msg == "" {
-		msg = py.S(first["code"])
+		msg = py.JSONStr(first["code"])
 	}
 	return msg
 }

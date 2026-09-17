@@ -8,7 +8,6 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
-// StopLoss is a ticket's stop loss leg.
 type StopLoss struct {
 	Kind      string   `json:"kind"`
 	Price     *float64 `json:"price"`
@@ -16,12 +15,10 @@ type StopLoss struct {
 	TrailUnit string   `json:"trailUnit"`
 }
 
-// TakeProfit is a ticket's take profit leg.
 type TakeProfit struct {
 	Price *float64 `json:"price"`
 }
 
-// Order is one ticket the app submitted, or one Wealthsimple reported from its own app.
 type Order struct {
 	ID            string         `json:"id"`
 	CreatedAt     string         `json:"createdAt"`
@@ -102,7 +99,6 @@ func jsonOrNil(v any, present bool) any {
 	return string(b)
 }
 
-// InsertOrder writes a new ticket, before anything is sent.
 func (s *Store) InsertOrder(o Order) {
 	s.must()
 	now := nowISO()
@@ -124,13 +120,11 @@ func (s *Store) InsertOrder(o Order) {
 		source, o.WsStatus, nullable(o.FilledQty), nullable(o.AvgFill), o.SubmittedAt, o.ExpiresAt, o.ParentID, role)
 }
 
-// OrderPatch is what a status read back or a change writes on a ticket. A nil pointer leaves a field alone.
 type OrderPatch map[string]any
 
 var orderTextCols = map[string]string{"status": "status", "wsOrderId": "ws_order_id", "error": "error", "wsStatus": "ws_status", "submittedAt": "submitted_at", "expiresAt": "expires_at", "tif": "tif", "currency": "currency", "symbol": "symbol"}
 var orderNumCols = map[string]string{"filledQty": "filled_qty", "avgFill": "avg_fill", "quantity": "quantity", "limitPrice": "limit_price", "stopPrice": "stop_price"}
 
-// UpdateOrder writes the given fields on an existing ticket.
 func (s *Store) UpdateOrder(orderID string, patch OrderPatch) {
 	var sets []string
 	var vals []any
@@ -159,7 +153,6 @@ func (s *Store) UpdateOrder(orderID string, patch OrderPatch) {
 	_, _ = s.exec("UPDATE orders SET "+strings.Join(sets, ", ")+" WHERE id = ?", vals...)
 }
 
-// ListOrders is the newest `limit` orders, newest first.
 func (s *Store) ListOrders(limit int) []Order {
 	s.must()
 	if limit <= 0 {
@@ -172,7 +165,6 @@ func (s *Store) ListOrders(limit int) []Order {
 	return out
 }
 
-// GetOrder is one order by id, nil when absent.
 func (s *Store) GetOrder(orderID string) *Order {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM orders WHERE id = ?", orderID)
@@ -183,7 +175,6 @@ func (s *Store) GetOrder(orderID string) *Order {
 	return &o
 }
 
-// MarkOrderFillBooked records that the fill of this order (up to qty) has been written as a local activity.
 func (s *Store) MarkOrderFillBooked(orderID string, qty float64) bool {
 	s.must()
 	res, err := s.exec("UPDATE orders SET fill_booked_qty = ?, updated_at = ? WHERE id = ? AND (fill_booked_qty IS NULL OR fill_booked_qty < ?)", qty, nowISO(), orderID, qty)
@@ -194,7 +185,6 @@ func (s *Store) MarkOrderFillBooked(orderID string, qty float64) bool {
 	return n > 0
 }
 
-// Bracket is the stop loss and take profit the app watches for an order.
 type Bracket struct {
 	ID          string   `json:"id"`
 	OrderID     string   `json:"orderId"`
@@ -243,7 +233,6 @@ func bracketFromRow(r map[string]any) Bracket {
 	return b
 }
 
-// InsertBracket writes a new bracket.
 func (s *Store) InsertBracket(b Bracket) {
 	s.must()
 	now := nowISO()
@@ -271,13 +260,11 @@ func (s *Store) InsertBracket(b Bracket) {
 		b.ID, b.OrderID, created, b.AccountID, b.SecurityID, b.Symbol, b.Currency, nullable(b.Quantity), tif, b.SlKind, nullable(b.SlPrice), nullable(b.SlTrail), unit, b.SlOrderID, native, b.SlMode, nullable(b.HighWater), nullable(b.TpPrice), b.TpOrderID, status, b.Outcome, b.Error, b.Attempts, b.MovedAt, b.ArmedAt, now)
 }
 
-// BracketPatch is what a step writes on a bracket; a key present with a nil value writes NULL.
 type BracketPatch map[string]any
 
 var bracketText = []struct{ key, col string }{{"symbol", "symbol"}, {"currency", "currency"}, {"tif", "tif"}, {"slKind", "sl_kind"}, {"slTrailUnit", "sl_trail_unit"}, {"slOrderId", "sl_order_id"}, {"tpOrderId", "tp_order_id"}, {"status", "status"}, {"outcome", "outcome"}, {"error", "error"}, {"movedAt", "moved_at"}, {"armedAt", "armed_at"}, {"slMode", "sl_mode"}, {"missedAt", "missed_at"}}
 var bracketNum = []struct{ key, col string }{{"quantity", "quantity"}, {"slPrice", "sl_price"}, {"slTrail", "sl_trail"}, {"highWater", "high_water"}, {"tpPrice", "tp_price"}, {"attempts", "attempts"}, {"slNative", "sl_native"}, {"seenHeld", "seen_held"}}
 
-// UpdateBracket writes the given fields on a bracket.
 func (s *Store) UpdateBracket(bracketID string, patch BracketPatch) {
 	var sets []string
 	var vals []any
@@ -324,7 +311,6 @@ func (s *Store) UpdateBracket(bracketID string, patch BracketPatch) {
 	_, _ = s.exec("UPDATE brackets SET "+strings.Join(sets, ", ")+" WHERE id = ?", vals...)
 }
 
-// ListBrackets is every bracket, oldest first, or those in the given statuses.
 func (s *Store) ListBrackets(statuses []string) []Bracket {
 	s.must()
 	out := []Bracket{}
@@ -346,7 +332,6 @@ func (s *Store) ListBrackets(statuses []string) []Bracket {
 	return out
 }
 
-// GetBracket is one bracket by id, nil when absent.
 func (s *Store) GetBracket(bracketID string) *Bracket {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM brackets WHERE id = ?", bracketID)
@@ -357,7 +342,6 @@ func (s *Store) GetBracket(bracketID string) *Bracket {
 	return &b
 }
 
-// BracketForOrder is the newest bracket on an order, nil when none.
 func (s *Store) BracketForOrder(orderID string) *Bracket {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM brackets WHERE order_id = ? ORDER BY created_at DESC LIMIT 1", orderID)

@@ -1,6 +1,3 @@
-// Package store is the local SQLite store: activities, accounts, balances, NAV,
-// the journal, market data, orders and brackets, and everything else the app
-// keeps. The live store is ~/.bagholder/bagholder.db (or BAGHOLDER_HOME/bagholder.db).
 package store
 
 import (
@@ -35,7 +32,6 @@ const (
 	NotificationsKept        = 200
 )
 
-// ActivityPullTZ is the zone the daily pull and the app's calendar day run on.
 var ActivityPullTZ = mustZone("America/Edmonton")
 
 func mustZone(name string) *time.Location {
@@ -52,18 +48,15 @@ var SyncMetaKeys = []string{"synced_at", "last_activity_pull", "security_id_back
 
 var invented = map[string]bool{"": true, "manual": true, "legacy": true, "statement": true, "canonical": true, "cad": true, "usd": true}
 
-// Store is one SQLite file, opened through a small pool of connections.
 type Store struct {
 	home string
 	path string
 	db   *sql.DB
 	mu   sync.Mutex
-	// the schema, once per open; the stamped version is still read on every
-	// borrow, so a database replaced under a running app is migrated as before
+
 	ready bool
 }
 
-// Home is the data folder: BAGHOLDER_HOME, else ~/.bagholder.
 func Home() string {
 	if env := strings.TrimSpace(os.Getenv("BAGHOLDER_HOME")); env != "" {
 		return env
@@ -75,7 +68,6 @@ func Home() string {
 	return filepath.Join(h, ".bagholder")
 }
 
-// Open opens (creating when needed) the store under a home folder.
 func Open(home string) (*Store, error) {
 	if home == "" {
 		home = Home()
@@ -101,7 +93,6 @@ func Open(home string) (*Store, error) {
 	return s, nil
 }
 
-// MustOpen is Open for tests and the entry point, which cannot go on without a store.
 func MustOpen(home string) *Store {
 	s, err := Open(home)
 	if err != nil {
@@ -118,22 +109,16 @@ func ensureHome(home string) error {
 	return nil
 }
 
-// Home is the data folder this store lives in.
 func (s *Store) Home() string { return s.home }
 
-// Path is the database file.
 func (s *Store) Path() string { return s.path }
 
-// Close releases every pooled connection.
 func (s *Store) Close() error { return s.db.Close() }
 
-// DB is the pool, for a test that wants to look at the tables directly.
 func (s *Store) DB() *sql.DB { return s.db }
 
 func nowISO() string { return py.NowStamp() }
 
-// ready runs the schema once per open and checks the stamped version on every
-// call, so a database replaced or rolled back under a live app is migrated.
 func (s *Store) prepare() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,12 +143,10 @@ func (s *Store) must() {
 	}
 }
 
-// exec runs one statement outside a transaction.
 func (s *Store) exec(q string, args ...any) (sql.Result, error) {
 	return s.db.Exec(q, args...)
 }
 
-// tx runs fn in an immediate transaction and commits it.
 func (s *Store) tx(fn func(tx *sql.Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -176,7 +159,6 @@ func (s *Store) tx(fn func(tx *sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// row reads one row as a map by column name.
 func scanRow(rows *sql.Rows) (map[string]any, error) {
 	cols, err := rows.Columns()
 	if err != nil {
@@ -226,7 +208,6 @@ func (s *Store) queryOne(q string, args ...any) (map[string]any, error) {
 	return rows[0], nil
 }
 
-// str is a text column as the app reads it: "" for NULL.
 func str(v any) string {
 	switch x := v.(type) {
 	case nil:
@@ -248,7 +229,6 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
-// fnum is a numeric column, nil for NULL.
 func fnum(v any) *float64 {
 	switch x := v.(type) {
 	case nil:
@@ -288,7 +268,6 @@ func inum(v any) int64 {
 	return 0
 }
 
-// nullable turns a pointer into the value sqlite stores, NULL for nil.
 func nullable(p *float64) any {
 	if p == nil {
 		return nil
@@ -302,10 +281,6 @@ func nullStr(s string) any {
 	}
 	return s
 }
-
-// --------------------------------------------------------------------------
-// schema
-// --------------------------------------------------------------------------
 
 const schemaSQL = `
         CREATE TABLE IF NOT EXISTS meta (
@@ -900,10 +875,6 @@ func ensureFilingsColumns(tx *sql.Tx) error {
 	return addColumns(tx, "filings", [][2]string{{"source", "TEXT"}, {"category", "TEXT"}, {"type", "TEXT"}, {"title", "TEXT"}, {"date", "TEXT"}, {"date_text", "TEXT"}, {"subject", "TEXT"}, {"summary", "TEXT"}, {"enriched_at", "TEXT"}, {"enrich_version", "INTEGER"}, {"enrich_final", "INTEGER"}})
 }
 
-// --------------------------------------------------------------------------
-// relabelling and the one-shot option price scale
-// --------------------------------------------------------------------------
-
 func relabelWhenRowsChanged(tx *sql.Tx) (bool, error) {
 	var n int64
 	var m sql.NullString
@@ -923,7 +894,6 @@ func relabelWhenRowsChanged(tx *sql.Tx) (bool, error) {
 	return true, err
 }
 
-// pyNone writes a NULL the way Python's "%s" wrote None into the relabel key.
 func pyNone(v sql.NullString) string {
 	if !v.Valid {
 		return "None"
@@ -1042,8 +1012,6 @@ func scaleOptionUnitPrices(tx *sql.Tx) error {
 	return nil
 }
 
-// Ensure builds the schema, relabels newly synced option rows once, and runs the
-// one-shot option price scale.
 func (s *Store) Ensure() error {
 	if err := s.prepare(); err != nil {
 		return err
@@ -1064,11 +1032,6 @@ func (s *Store) Ensure() error {
 	})
 }
 
-// --------------------------------------------------------------------------
-// meta
-// --------------------------------------------------------------------------
-
-// GetMeta reads one meta value, or the default when it is absent or NULL.
 func (s *Store) GetMeta(key string) string {
 	return s.GetMetaDefault(key, "")
 }
@@ -1083,19 +1046,16 @@ func (s *Store) GetMetaDefault(key, def string) string {
 	return v.String
 }
 
-// SetMeta writes one meta value.
 func (s *Store) SetMeta(key, value string) {
 	s.must()
 	_, _ = s.exec("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value)
 }
 
-// DeleteMeta drops one key.
 func (s *Store) DeleteMeta(key string) {
 	s.must()
 	_, _ = s.exec("DELETE FROM meta WHERE key = ?", key)
 }
 
-// MetaLike lists the values of every key with a prefix.
 func (s *Store) MetaLike(prefix string) map[string]string {
 	s.must()
 	rows, err := s.queryMaps("SELECT key, value FROM meta WHERE key LIKE ?", prefix+"%")
@@ -1108,10 +1068,6 @@ func (s *Store) MetaLike(prefix string) map[string]string {
 	}
 	return out
 }
-
-// --------------------------------------------------------------------------
-// versions: fingerprints of what the derived model reads
-// --------------------------------------------------------------------------
 
 var versionSQL = []string{
 	"SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
@@ -1140,7 +1096,6 @@ func hashString(s string) uint64 {
 	return h.Sum64()
 }
 
-// Versions is (everything, everything but the quotes) in one pass.
 func (s *Store) Versions() (string, string) {
 	s.must()
 	parts := make([]string, 0, len(versionSQL)+len(versionMeta))
@@ -1172,19 +1127,16 @@ func versionPart(v any) string {
 	return str(v)
 }
 
-// DataVersion is a cheap fingerprint of everything the derived model depends on.
 func (s *Store) DataVersion() string {
 	full, _ := s.Versions()
 	return full
 }
 
-// CoreVersion is the same, without the quotes.
 func (s *Store) CoreVersion() string {
 	_, core := s.Versions()
 	return core
 }
 
-// BookVersion is the fingerprint of what the FIFO match reads: the activity rows and the securities.
 func (s *Store) BookVersion() string {
 	s.must()
 	parts := []string{}
@@ -1196,7 +1148,6 @@ func (s *Store) BookVersion() string {
 	return strings.Join(parts, "|")
 }
 
-// StatusCounts is what the header needs: how many activities and accounts are stored, and when the last sync finished.
 type StatusCounts struct {
 	ActivityCount int    `json:"activityCount"`
 	AccountCount  int    `json:"accountCount"`
@@ -1211,7 +1162,6 @@ func (s *Store) StatusCounts() StatusCounts {
 	return StatusCounts{ActivityCount: acts, AccountCount: accounts, SyncedAt: s.GetMeta("synced_at")}
 }
 
-// DataSummary is the row counts the Data & storage dialog shows before a wipe.
 func (s *Store) DataSummary() map[string]any {
 	s.must()
 	count := func(q string) int {
@@ -1245,7 +1195,6 @@ func (s *Store) DataSummary() map[string]any {
 	}
 }
 
-// ClearSyncedData wipes everything Wealthsimple sync wrote so the next sync starts from zero.
 func (s *Store) ClearSyncedData(keepJournal, keepMarket bool) map[string]any {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {

@@ -25,12 +25,12 @@ const (
 )
 
 var (
-	BracketRetrySec      = []int{60, 300, 900, 3600}
-	BracketLive          = []string{"waiting", "armed", "firing", "target_placed", "stopping", "closing"}
-	BracketResting       = []string{"sent", "pending"}
-	BracketInflight      = []string{"sent", "pending", "cancelling"}
-	BracketEndedQuietly  = []string{"stopped", "target", "cancelled by the user", "both legs removed", "sold from the ticket"}
-	watchStatuses        = []string{"armed", "firing", "target_placed", "stopping"}
+	BracketRetrySec     = []int{60, 300, 900, 3600}
+	BracketLive         = []string{"waiting", "armed", "firing", "target_placed", "stopping", "closing"}
+	BracketResting      = []string{"sent", "pending"}
+	BracketInflight     = []string{"sent", "pending", "cancelling"}
+	BracketEndedQuietly = []string{"stopped", "target", "cancelled by the user", "both legs removed", "sold from the ticket"}
+	watchStatuses       = []string{"armed", "firing", "target_placed", "stopping"}
 )
 
 func fstr(p *float64) string {

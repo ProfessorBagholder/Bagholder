@@ -26,12 +26,12 @@ var holdingKeys = []string{"symbol", "qty", "per", "freq", "freqVerified", "annu
 var tileKeys = []string{"label", "total", "perMonth", "count", "yield", "projected", "earned", "book", "marginUsed", "interestPerMonth", "interestMonths"}
 
 type caseDoc struct {
-	Today    string                          `json:"today"`
-	Snapshot store.Snapshot                  `json:"snapshot"`
-	Market   caseMarket                      `json:"market"`
-	Filters  any                             `json:"filters"`
-	Journal  map[string]store.JournalEntry   `json:"journal"`
-	Expect   map[string]any                  `json:"expect"`
+	Today    string                        `json:"today"`
+	Snapshot store.Snapshot                `json:"snapshot"`
+	Market   caseMarket                    `json:"market"`
+	Filters  any                           `json:"filters"`
+	Journal  map[string]store.JournalEntry `json:"journal"`
+	Expect   map[string]any                `json:"expect"`
 }
 
 type caseMarket struct {

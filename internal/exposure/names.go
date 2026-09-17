@@ -1,6 +1,3 @@
-// Package exposure classifies the book's holdings by sector and country: a share by
-// its listing's own record, a fund looked through to its holdings from the issuer's
-// published record. Nothing here asks Wealthsimple for anything.
 package exposure
 
 import (
@@ -15,7 +12,6 @@ const (
 	FundKey  = "fund:"
 )
 
-// Sectors is the one set the Portfolio folds every source's names onto.
 var Sectors = []string{"Information Technology", "Financials", "Health Care", "Consumer Discretionary", "Consumer Staples", "Industrials", "Energy", "Materials", "Utilities", "Real Estate", "Communication Services"}
 
 var sectorAlias = map[string]string{
@@ -34,7 +30,6 @@ var sectorAlias = map[string]string{
 	"cash and/or derivatives": "", "cash": "", "other": "", "miscellaneous": "", "-": "", "n/a": "",
 }
 
-// NormSector is the sector under the name the Portfolio uses, "" for none (cash, other, blank).
 func NormSector(name string) string {
 	key := strings.ToLower(py.Strip(name))
 	if key == "" {
@@ -56,7 +51,6 @@ var countryAlias = map[string]string{
 	"broad": "", "global": "", "other": "", "-": "", "n/a": "", "cash": "",
 }
 
-// VenueCountry says which country a listing venue is in.
 var VenueCountry = map[string]string{
 	"TSX": "Canada", "TSX-V": "Canada", "TSXV": "Canada", "CSE": "Canada", "CBOE CANADA": "Canada", "NEO": "Canada", "ALPHA EXCHANGE": "Canada",
 	"TORONTO STOCK EXCHANGE": "Canada", "TSX VENTURE EXCHANGE": "Canada", "CANADIAN SECURITIES EXCHANGE": "Canada",
@@ -64,13 +58,11 @@ var VenueCountry = map[string]string{
 	"NASDAQ GLOBAL SELECT": "United States", "NASDAQ GLOBAL MARKET": "United States", "NASDAQ CAPITAL MARKET": "United States", "NEW YORK STOCK EXCHANGE": "United States",
 }
 
-// BloombergCountry is Bloomberg's market codes, as issuers write tickers ("MSFT US EQUITY").
 var BloombergCountry = map[string]string{"US": "United States", "UN": "United States", "UW": "United States", "UQ": "United States", "UA": "United States", "CN": "Canada", "CT": "Canada", "CV": "Canada",
 	"LN": "United Kingdom", "JP": "Japan", "JT": "Japan", "GR": "Germany", "GY": "Germany", "FP": "France", "AU": "Australia", "AT": "Australia", "HK": "Hong Kong",
 	"SW": "Switzerland", "SE": "Switzerland", "NA": "Netherlands", "SM": "Spain", "IM": "Italy", "KS": "South Korea", "TT": "Taiwan", "IN": "India", "IS": "India",
 	"BZ": "Brazil", "SS": "Sweden", "DC": "Denmark", "NO": "Norway", "FH": "Finland", "BB": "Belgium", "ID": "Ireland", "SP": "Singapore", "MM": "Mexico", "CH": "China", "C1": "China"}
 
-// NormCountry is a country under the app's own name for it.
 func NormCountry(name string) string {
 	key := strings.ToLower(py.Strip(name))
 	if key == "" {
@@ -82,7 +74,6 @@ func NormCountry(name string) string {
 	return py.Strip(name)
 }
 
-// VenueCountryOf is the country a listing venue is in, "" when unknown.
 func VenueCountryOf(exchange string) string {
 	return VenueCountry[strings.ToUpper(py.Strip(exchange))]
 }
@@ -95,7 +86,6 @@ var issuers = []struct {
 	{"bmo", regexp.MustCompile(`^bmo\b`)}, {"globalx", regexp.MustCompile(`^(global x|horizons)\b`)},
 }
 
-// IssuerOf is the fund family a name belongs to, "" for none.
 func IssuerOf(name string) string {
 	n := strings.ToLower(py.Strip(name))
 	for _, i := range issuers {
@@ -108,7 +98,6 @@ func IssuerOf(name string) string {
 
 var fundRE = regexp.MustCompile(`(?i)\b(ETF|Index|Fund|Portfolio|Trust)\b`)
 
-// IsFund is whether a name reads as a fund.
 func IsFund(name string) bool {
 	return fundRE.MatchString(name) || IssuerOf(name) != ""
 }

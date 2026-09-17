@@ -1,19 +1,3 @@
-// Package model is the derived trading model, computed from the SQLite store.
-//
-// Everything the page shows comes from here so that one list of trades feeds
-// every tile, table and chart, and so the numbers can be tested.
-//
-//	activities  -> Normalize          (crypto, options, stock-dividend notices)
-//	            -> MatchFIFO          (FIFO lots per account+symbol+currency, round-trip ids, option rolls)
-//	            -> ApplyFX            (P&L in CAD on the fill dates)
-//	            -> BuildTrades        (round trips + saved manual groups)
-//	            -> BuildPositions     (open lots rolled up per symbol+account)
-//	            -> BuildCashflow      (dividends, interest, withholding tax)
-//	nav_history -> equity series, yearly time-weighted returns, drawdown
-//	BuildView(filters) applies one filter object to all of the above.
-//
-// Currency: per-trade numbers are native. Anything that adds trades together uses
-// the CAD value converted on the fill date with the Bank of Canada rate.
 package model
 
 import (
@@ -33,22 +17,16 @@ var Grades = []string{"A", "B", "C", "F"}
 var Kinds = []string{"Shares", "Options", "Crypto", "Futures"}
 var Months = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
-// TimeTZ is the app's local zone, the one the calendar day is measured in.
 var TimeTZ = store.ActivityPullTZ
 
-// Now is the clock; a test may replace it.
 var Now = time.Now
 
-// TodayLocal is today's date in the app's zone.
 func TodayLocal() string {
 	return Now().In(TimeTZ).Format("2006-01-02")
 }
 
-// Act is a normalized activity: the store's row with a kind and flags, shared by
-// pointer so the match's inferences (a multileg's quantity and price) show in the fills.
 type Act = store.Activity
 
-// Lot is one open lot of a book.
 type Lot struct {
 	Qty         float64  `json:"qty"`
 	Price       float64  `json:"price"`
@@ -74,7 +52,6 @@ func (l *Lot) clone() *Lot {
 	return &c
 }
 
-// Slice is one closed lot: a lot matched against a fill.
 type Slice struct {
 	ID              string   `json:"id"`
 	RT              string   `json:"rt"`
@@ -120,7 +97,6 @@ func (s Slice) MarshalJSON() ([]byte, error) {
 	return json.Marshal(withFees{plain(s), s.FeesCad})
 }
 
-// SlimSlice is a trade's leg as the page reads it.
 type SlimSlice struct {
 	Key            string   `json:"key"`
 	Qty            float64  `json:"qty"`
@@ -136,7 +112,6 @@ type SlimSlice struct {
 	Flags          []string `json:"flags"`
 }
 
-// Fill is one execution as the trade page shows it.
 type Fill struct {
 	ID       string   `json:"id"`
 	When     string   `json:"when"`
@@ -152,14 +127,12 @@ type Fill struct {
 	Flags    []string `json:"flags"`
 }
 
-// Summary is a trade's opening or closing side in one line.
 type Summary struct {
 	Qty   float64 `json:"qty"`
 	Avg   float64 `json:"avg"`
 	Fills int     `json:"fills"`
 }
 
-// TradeCore is a closed round trip without its legs and fills.
 type TradeCore struct {
 	ID            string   `json:"id"`
 	Status        string   `json:"status"`
@@ -199,7 +172,6 @@ type TradeCore struct {
 	Tags          []string `json:"tags"`
 }
 
-// Trade is a closed round trip. Its legs and fills travel only when Detail is set.
 type Trade struct {
 	TradeCore
 	Legs   []SlimSlice `json:"legs"`
@@ -213,7 +185,6 @@ type tradeFull struct {
 	Fills []Fill      `json:"fills"`
 }
 
-// MarshalJSON writes the legs and fills only on the trade open on the page.
 func (t Trade) MarshalJSON() ([]byte, error) {
 	if t.Detail {
 		return json.Marshal(tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)})
@@ -235,7 +206,6 @@ func nonNilFills(s []Fill) []Fill {
 	return s
 }
 
-// PositionLot is one open lot as the position page lists it.
 type PositionLot struct {
 	Opened     string   `json:"opened"`
 	Qty        float64  `json:"qty"`
@@ -246,7 +216,6 @@ type PositionLot struct {
 	ActivityID string   `json:"activityId"`
 }
 
-// PositionCore is an open position without its lots and fills.
 type PositionCore struct {
 	ID            string        `json:"id"`
 	Symbol        string        `json:"symbol"`
@@ -284,7 +253,6 @@ type PositionCore struct {
 	Alloc         float64       `json:"alloc"`
 }
 
-// Position is an open position. Its fills travel only when Detail is set.
 type Position struct {
 	PositionCore
 	Fills  []Fill `json:"fills"`
@@ -296,7 +264,6 @@ type positionFull struct {
 	Fills []Fill `json:"fills"`
 }
 
-// MarshalJSON writes the fills only on the holding open on the page.
 func (p Position) MarshalJSON() ([]byte, error) {
 	if p.Detail {
 		return json.Marshal(positionFull{p.PositionCore, nonNilFills(p.Fills)})
@@ -304,7 +271,6 @@ func (p Position) MarshalJSON() ([]byte, error) {
 	return json.Marshal(p.PositionCore)
 }
 
-// CashRow is one Dividend, Interest, Withholding tax or Interest charge activity.
 type CashRow struct {
 	ID        string   `json:"id"`
 	Date      string   `json:"date"`
@@ -321,7 +287,6 @@ type CashRow struct {
 	AmountCad float64  `json:"amountCad"`
 }
 
-// Unmatched is a sell no lot could be found for.
 type Unmatched struct {
 	Symbol      string  `json:"symbol"`
 	Currency    string  `json:"currency"`
@@ -335,27 +300,23 @@ type Unmatched struct {
 	ActivityID  string  `json:"activityId"`
 }
 
-// FIFOResult is what the match produces.
 type FIFOResult struct {
 	Closed    []*Slice
 	Open      []*Lot
 	Unmatched []Unmatched
 }
 
-// EquityPoint is one day of the equity series.
 type EquityPoint struct {
 	D   string   `json:"d"`
 	V   float64  `json:"v"`
 	Dep *float64 `json:"dep"`
 }
 
-// LastPrice is the newest fill with a price for a symbol.
 type LastPrice struct {
 	Price float64 `json:"price"`
 	Date  string  `json:"date"`
 }
 
-// AccountRow is an account as the view lists it.
 type AccountRow struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
@@ -365,8 +326,8 @@ type AccountRow struct {
 	Nav      *float64 `json:"nav"`
 }
 
-func isOption(symbol string) bool  { return symbols.IsOption(symbol) }
-func underlying(symbol string) string { return symbols.Underlying(symbol) }
+func isOption(symbol string) bool      { return symbols.IsOption(symbol) }
+func underlying(symbol string) string  { return symbols.Underlying(symbol) }
 func multiplier(symbol string) float64 { return symbols.Multiplier(symbol) }
 
 func UnderlyingSymbol(symbol string) string { return symbols.Underlying(symbol) }

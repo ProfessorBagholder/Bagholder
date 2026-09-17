@@ -97,7 +97,9 @@ func USRows(rows []ScreenerRow, n int) []store.Universe {
 }
 
 func IntlRows(rows []ScreenerRow, n int) []store.Universe {
-	return pick(rows, n, func(r ScreenerRow) bool { return r.Country != "United States" && r.Country != "Canada" && r.Country != "" })
+	return pick(rows, n, func(r ScreenerRow) bool {
+		return r.Country != "United States" && r.Country != "Canada" && r.Country != ""
+	})
 }
 
 type Constituent struct {

@@ -178,7 +178,7 @@ func TestDisclosuresListCallsThePipeline(t *testing.T) {
 	if len(fake.calls) != 1 {
 		t.Fatalf("the pipeline was fetched %d times, want 1", len(fake.calls))
 	}
-	if got, want := fake.calls[0], (fetchCall{symbol: "NVDA", limit: 100}); got != want {
+	if got, want := fake.calls[0], (fetchCall{symbol: "NVDA"}); got != want {
 		t.Errorf("fetch arguments = %+v, want %+v", got, want)
 	}
 }

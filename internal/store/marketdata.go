@@ -23,7 +23,6 @@ func cleanDateMap(raw map[string]float64) map[string]float64 {
 	return out
 }
 
-// FXRates is date -> units of CAD per 1 unit of the foreign currency.
 func (s *Store) FXRates() map[string]float64 {
 	return s.FXRatesFor(FXPair)
 }
@@ -37,7 +36,6 @@ func (s *Store) FXRatesFor(pair string) map[string]float64 {
 	return out
 }
 
-// FXLastDate is the newest stored rate's day.
 func (s *Store) FXLastDate() string {
 	s.must()
 	var d sql.NullString
@@ -45,7 +43,6 @@ func (s *Store) FXLastDate() string {
 	return d.String
 }
 
-// UpsertFXRates writes days that are not stored yet; a day's rate is written once and never rewritten.
 func (s *Store) UpsertFXRates(mapping map[string]float64) int {
 	clean := cleanDateMap(mapping)
 	if len(clean) == 0 {
@@ -63,7 +60,6 @@ func (s *Store) UpsertFXRates(mapping map[string]float64) int {
 	return len(clean)
 }
 
-// BenchmarkPrices is date -> close for one index.
 func (s *Store) BenchmarkPrices(symbol string) map[string]float64 {
 	s.must()
 	out := map[string]float64{}
@@ -73,7 +69,6 @@ func (s *Store) BenchmarkPrices(symbol string) map[string]float64 {
 	return out
 }
 
-// BenchmarkDays is how many days that index actually traded between two dates, inclusive.
 func (s *Store) BenchmarkDays(symbol, start, end string) int {
 	s.must()
 	if len(start) > 10 {
@@ -87,7 +82,6 @@ func (s *Store) BenchmarkDays(symbol, start, end string) int {
 	return n
 }
 
-// BenchmarkLastDate is the newest stored close's day for one index.
 func (s *Store) BenchmarkLastDate(symbol string) string {
 	s.must()
 	var d sql.NullString
@@ -95,7 +89,6 @@ func (s *Store) BenchmarkLastDate(symbol string) string {
 	return d.String
 }
 
-// UpsertBenchmarkPrices writes closes not stored yet.
 func (s *Store) UpsertBenchmarkPrices(mapping map[string]float64, symbol string) int {
 	clean := cleanDateMap(mapping)
 	if len(clean) == 0 {
@@ -113,7 +106,6 @@ func (s *Store) UpsertBenchmarkPrices(mapping map[string]float64, symbol string)
 	return len(clean)
 }
 
-// Distribution is one declared distribution of a fund.
 type Distribution struct {
 	ExDate   string  `json:"exDate"`
 	PayDate  string  `json:"payDate"`
@@ -121,7 +113,6 @@ type Distribution struct {
 	Currency string  `json:"currency"`
 }
 
-// Distributions is symbol -> declared distributions newest first (the public record).
 func (s *Store) Distributions() map[string][]Distribution {
 	s.must()
 	out := map[string][]Distribution{}
@@ -132,7 +123,6 @@ func (s *Store) Distributions() map[string][]Distribution {
 	return out
 }
 
-// UpsertDistributions writes a symbol's declared record.
 func (s *Store) UpsertDistributions(symbol string, rows []Distribution, source string) int {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" {
@@ -176,7 +166,6 @@ func (s *Store) UpsertDistributions(symbol string, rows []Distribution, source s
 	return len(clean)
 }
 
-// Quote is a stored quote as the model reads it.
 type Quote struct {
 	Price             *float64 `json:"price"`
 	PriceChange       *float64 `json:"priceChange"`
@@ -192,7 +181,6 @@ type Quote struct {
 	Exchange          string   `json:"exchange,omitempty"`
 }
 
-// Quotes is every stored quote by symbol.
 func (s *Store) Quotes() map[string]Quote {
 	s.must()
 	out := map[string]Quote{}
@@ -203,7 +191,6 @@ func (s *Store) Quotes() map[string]Quote {
 	return out
 }
 
-// UpsertQuote writes one quote; a dividend field the new quote lacks keeps the stored one.
 func (s *Store) UpsertQuote(symbol string, rec Quote, source string) {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" {
@@ -225,7 +212,6 @@ func (s *Store) UpsertQuote(symbol string, rec Quote, source string) {
 		sym, nullable(rec.Price), nullable(rec.PriceChange), nullable(rec.PercentChange), nullable(rec.PrevClose), nullable(rec.DividendAmount), rec.DividendFrequency, ex, source, at)
 }
 
-// QuoteFetchedAt is symbol -> when its quote was last written.
 func (s *Store) QuoteFetchedAt() map[string]string {
 	s.must()
 	out := map[string]string{}
@@ -235,7 +221,6 @@ func (s *Store) QuoteFetchedAt() map[string]string {
 	return out
 }
 
-// DistributionsFetchedAt is symbol -> when its declared record was last fetched.
 func (s *Store) DistributionsFetchedAt() map[string]string {
 	s.must()
 	out := map[string]string{}
@@ -245,7 +230,6 @@ func (s *Store) DistributionsFetchedAt() map[string]string {
 	return out
 }
 
-// MarkDistributionsFetched stamps a symbol's declared record.
 func (s *Store) MarkDistributionsFetched(symbol, when string) {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" || when == "" {
@@ -255,7 +239,6 @@ func (s *Store) MarkDistributionsFetched(symbol, when string) {
 	_, _ = s.exec("INSERT INTO distribution_fetches(symbol, fetched_at) VALUES (?, ?) ON CONFLICT(symbol) DO UPDATE SET fetched_at = excluded.fetched_at", sym, when)
 }
 
-// DailyBar is one day's bar; open, high, low and volume may be absent.
 type DailyBar struct {
 	Date   string   `json:"date"`
 	Open   *float64 `json:"open"`
@@ -265,7 +248,6 @@ type DailyBar struct {
 	Volume *float64 `json:"volume"`
 }
 
-// PriceHistory is the daily bars for one symbol, oldest first.
 func (s *Store) PriceHistory(symbol, start, end string) []DailyBar {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" {
@@ -291,7 +273,6 @@ func (s *Store) PriceHistory(symbol, start, end string) []DailyBar {
 	return out
 }
 
-// UpsertPriceHistory writes daily bars: closed days once, the newest stored day may be replaced.
 func (s *Store) UpsertPriceHistory(symbol string, bars []DailyBar, source string) int {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	var clean []DailyBar
@@ -332,13 +313,11 @@ func (s *Store) UpsertPriceHistory(symbol string, bars []DailyBar, source string
 	return len(clean)
 }
 
-// Fetch is the stamp of a history fetch.
 type Fetch struct {
 	Start     string
 	FetchedAt string
 }
 
-// HistoryFetch is the last history fetch of a symbol, or nil.
 func (s *Store) HistoryFetch(symbol string) *Fetch {
 	s.must()
 	r, _ := s.queryOne("SELECT start, fetched_at FROM history_fetches WHERE symbol = ?", strings.ToUpper(strings.TrimSpace(symbol)))
@@ -348,7 +327,6 @@ func (s *Store) HistoryFetch(symbol string) *Fetch {
 	return &Fetch{Start: str(r["start"]), FetchedAt: str(r["fetched_at"])}
 }
 
-// MarkHistoryFetched stamps a symbol's daily history fetch.
 func (s *Store) MarkHistoryFetched(symbol, start, when string) {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" || when == "" {
@@ -361,7 +339,6 @@ func (s *Store) MarkHistoryFetched(symbol, start, when string) {
 	_, _ = s.exec("INSERT INTO history_fetches(symbol, start, fetched_at) VALUES (?, ?, ?) ON CONFLICT(symbol) DO UPDATE SET start = MIN(history_fetches.start, excluded.start), fetched_at = excluded.fetched_at", sym, start, when)
 }
 
-// Bar is one intraday bar.
 type Bar struct {
 	Time   int64    `json:"time"`
 	Open   *float64 `json:"open"`
@@ -371,7 +348,6 @@ type Bar struct {
 	Volume *float64 `json:"volume"`
 }
 
-// PriceBars is the intraday bars of one symbol and timeframe, oldest first.
 func (s *Store) PriceBars(symbol, tf string, startTs, endTs int64) []Bar {
 	s.must()
 	out := []Bar{}
@@ -381,7 +357,6 @@ func (s *Store) PriceBars(symbol, tf string, startTs, endTs int64) []Bar {
 	return out
 }
 
-// UpsertPriceBars writes intraday bars: closed bars once, the newest stored bar may be replaced.
 func (s *Store) UpsertPriceBars(symbol, tf string, bars []Bar, source string) int {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	var clean []Bar
@@ -417,7 +392,6 @@ func (s *Store) UpsertPriceBars(symbol, tf string, bars []Bar, source string) in
 	return len(clean)
 }
 
-// LastBarTime is the newest stored bar's time, or nil.
 func (s *Store) LastBarTime(symbol, tf string) *int64 {
 	s.must()
 	var ts sql.NullInt64
@@ -429,13 +403,11 @@ func (s *Store) LastBarTime(symbol, tf string) *int64 {
 	return &v
 }
 
-// BarFetch is the stamp of an intraday fetch.
 type BarFetch struct {
 	StartTs   int64
 	FetchedAt string
 }
 
-// BarFetchOf is the last intraday fetch for a symbol and timeframe, or nil.
 func (s *Store) BarFetchOf(symbol, tf string) *BarFetch {
 	s.must()
 	r, _ := s.queryOne("SELECT start_ts, fetched_at FROM bar_fetches WHERE symbol = ? AND tf = ?", strings.ToUpper(strings.TrimSpace(symbol)), tf)
@@ -445,7 +417,6 @@ func (s *Store) BarFetchOf(symbol, tf string) *BarFetch {
 	return &BarFetch{StartTs: inum(r["start_ts"]), FetchedAt: str(r["fetched_at"])}
 }
 
-// MarkBarsFetched stamps an intraday fetch.
 func (s *Store) MarkBarsFetched(symbol, tf string, startTs int64, when string) {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" || when == "" {
@@ -455,7 +426,6 @@ func (s *Store) MarkBarsFetched(symbol, tf string, startTs int64, when string) {
 	_, _ = s.exec("INSERT INTO bar_fetches(symbol, tf, start_ts, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(symbol, tf) DO UPDATE SET start_ts = MIN(bar_fetches.start_ts, excluded.start_ts), fetched_at = excluded.fetched_at", sym, tf, startTs, when)
 }
 
-// MarketData is what the model reads beside the book.
 type MarketData struct {
 	FX            map[string]float64
 	Benchmark     map[string]float64
@@ -464,7 +434,6 @@ type MarketData struct {
 	Quotes        map[string]Quote
 }
 
-// MarketData reads the FX, benchmark, distribution and quote tables.
 func (s *Store) MarketData() MarketData {
 	md := MarketData{FX: s.FXRates(), Benchmark: s.BenchmarkPrices(BenchmarkSymbol), Benchmarks: map[string]map[string]float64{}, Distributions: s.Distributions(), Quotes: s.Quotes()}
 	for _, sym := range BenchmarkSymbols {
@@ -473,7 +442,6 @@ func (s *Store) MarketData() MarketData {
 	return md
 }
 
-// sortStrings is a small convenience for callers that need a stable order.
 func sortStrings(in []string) []string {
 	out := append([]string{}, in...)
 	sort.Strings(out)

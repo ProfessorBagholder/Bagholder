@@ -119,20 +119,20 @@ func portChoices() []int {
 }
 
 type state struct {
-	connected      bool
-	capturing      bool
-	syncing        bool
-	syncStep       string
-	email          string
-	lastSync       string
-	err            string
-	chrome         *browserProc
-	loginAttempt   int
-	updating       string
-	updateError    string
+	connected       bool
+	capturing       bool
+	syncing         bool
+	syncStep        string
+	email           string
+	lastSync        string
+	err             string
+	chrome          *browserProc
+	loginAttempt    int
+	updating        string
+	updateError     string
 	listingsFilling bool
-	syncFails      int
-	syncFirstFail  string
+	syncFails       int
+	syncFirstFail   string
 }
 
 type job struct {
@@ -235,10 +235,10 @@ func New(cfg Config) (*App, error) {
 	return a, nil
 }
 
-func (a *App) Store() *store.Store       { return a.st }
-func (a *App) Model() *model.Model       { return a.model }
-func (a *App) Market() *market.Client    { return a.mk }
-func (a *App) WS() *ws.Client            { return a.ws }
+func (a *App) Store() *store.Store        { return a.st }
+func (a *App) Model() *model.Model        { return a.model }
+func (a *App) Market() *market.Client     { return a.mk }
+func (a *App) WS() *ws.Client             { return a.ws }
 func (a *App) Notifier() *notify.Notifier { return a.notify }
 func (a *App) Pipeline() *disclosures.Pipeline {
 	return a.pipeline

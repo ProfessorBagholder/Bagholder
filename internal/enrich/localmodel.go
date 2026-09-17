@@ -50,8 +50,10 @@ func NewLocalModel(home string) *LocalModel {
 	return &LocalModel{Home: home, phase: "off", http: &http.Client{Timeout: 3 * time.Second}}
 }
 
-func (l *LocalModel) userURL() string   { return strings.TrimRight(os.Getenv("BAGHOLDER_LLM_URL"), "/") }
-func (l *LocalModel) ollamaURL() string { return strings.TrimRight(envOr("BAGHOLDER_OLLAMA_URL", "http://127.0.0.1:11434"), "/") }
+func (l *LocalModel) userURL() string { return strings.TrimRight(os.Getenv("BAGHOLDER_LLM_URL"), "/") }
+func (l *LocalModel) ollamaURL() string {
+	return strings.TrimRight(envOr("BAGHOLDER_OLLAMA_URL", "http://127.0.0.1:11434"), "/")
+}
 func (l *LocalModel) ollamaModel() string {
 	return envOr("BAGHOLDER_OLLAMA_MODEL", "llama3.2")
 }
@@ -69,7 +71,9 @@ func (l *LocalModel) chatTimeout() time.Duration {
 	}
 	return time.Duration(f * float64(time.Second))
 }
-func (l *LocalModel) llamafileURL() string { return envOr("BAGHOLDER_LLAMAFILE_URL", DefaultLlamafileURL) }
+func (l *LocalModel) llamafileURL() string {
+	return envOr("BAGHOLDER_LLAMAFILE_URL", DefaultLlamafileURL)
+}
 func (l *LocalModel) llamafileSHA() string {
 	return envOr("BAGHOLDER_LLAMAFILE_SHA256", DefaultLlamafileSHA256)
 }
@@ -80,7 +84,9 @@ func (l *LocalModel) modelsDir() string {
 	return d
 }
 
-func (l *LocalModel) llamafilePath() string { return filepath.Join(l.modelsDir(), "summarizer.llamafile") }
+func (l *LocalModel) llamafilePath() string {
+	return filepath.Join(l.modelsDir(), "summarizer.llamafile")
+}
 
 func (l *LocalModel) getOK(rawURL string, timeout time.Duration) bool {
 	client := &http.Client{Timeout: timeout}

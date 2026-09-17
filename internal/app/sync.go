@@ -761,7 +761,7 @@ func (a *App) bootSession() {
 		infoOK = len(info) > 0 && info["error"] == nil && info["_http_status"] == nil
 		if infoOK {
 			a.ws.ApplyTokenInfoClientID(sess, info)
-			if id := py.S(info["identity_canonical_id"]); id != "" && sess.Str("identity_canonical_id") == "" {
+			if id := py.JSONStr(info["identity_canonical_id"]); id != "" && sess.Str("identity_canonical_id") == "" {
 				sess["identity_canonical_id"] = id
 			}
 			if email := py.S(info["email"]); email != "" {

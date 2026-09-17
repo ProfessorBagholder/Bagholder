@@ -1,6 +1,3 @@
-// Package py holds the small helpers that keep the Go port's arithmetic and text
-// handling identical to the Python reference: Python's rounding, its %g, its
-// Unicode whitespace, its ISO date parsing.
 package py
 
 import (
@@ -13,7 +10,6 @@ import (
 	"unicode"
 )
 
-// S is Python's str(v) for the JSON values a feed hands back, "" for None.
 func S(v any) string {
 	switch x := v.(type) {
 	case nil:
@@ -54,8 +50,6 @@ func JSONStr(v any) string {
 	return S(v)
 }
 
-// Repr is Python's repr of a float: the shortest round-tripping digits, laid out
-// positionally when the exponent is between -4 and 15 and with an exponent otherwise.
 func Repr(f float64) string {
 	if math.IsNaN(f) {
 		return "nan"
@@ -107,8 +101,6 @@ func Repr(f float64) string {
 	return out
 }
 
-// Num is Python's float(v) for a JSON value, with a default for None, "" and
-// anything that does not read as a number.
 func Num(v any, def float64) float64 {
 	f, ok := NumOK(v)
 	if !ok {
@@ -117,7 +109,6 @@ func Num(v any, def float64) float64 {
 	return f
 }
 
-// NumOK is Num that says whether the value read as a number.
 func NumOK(v any) (float64, bool) {
 	switch x := v.(type) {
 	case nil:
@@ -154,10 +145,8 @@ func NumOK(v any) (float64, bool) {
 	return 0, false
 }
 
-// Ptr returns a pointer to a float, the shape a nullable figure takes in JSON.
 func Ptr(f float64) *float64 { return &f }
 
-// Deref reads a nullable figure, a default for None.
 func Deref(p *float64, def float64) float64 {
 	if p == nil {
 		return def
@@ -165,7 +154,6 @@ func Deref(p *float64, def float64) float64 {
 	return *p
 }
 
-// Round is Python's round(x, n): to n decimals, ties to even on the exact binary value.
 func Round(x float64, n int) float64 {
 	if math.IsNaN(x) || math.IsInf(x, 0) {
 		return x
@@ -182,27 +170,22 @@ func Round(x float64, n int) float64 {
 	return f
 }
 
-// RoundInt is Python's round(x): the nearest integer, ties to even.
 func RoundInt(x float64) int {
 	return int(math.RoundToEven(x))
 }
 
-// G is Python's "%g" % x: six significant digits, trailing zeros dropped.
 func G(x float64) string {
 	return strconv.FormatFloat(x, 'g', 6, 64)
 }
 
-// Fixed is Python's "%.nf" % x.
 func Fixed(x float64, n int) string {
 	return strconv.FormatFloat(x, 'f', n, 64)
 }
 
-// IsInteger is float.is_integer().
 func IsInteger(x float64) bool {
 	return !math.IsInf(x, 0) && !math.IsNaN(x) && x == math.Trunc(x)
 }
 
-// Commas writes a whole number with thousands separators, Python's "{:,.0f}".
 func Commas(n float64) string {
 	s := strconv.FormatFloat(math.Abs(n), 'f', 0, 64)
 	var b strings.Builder
@@ -218,7 +201,6 @@ func Commas(n float64) string {
 	return b.String()
 }
 
-// IsSpace is Python's str.isspace for one rune.
 func IsSpace(r rune) bool {
 	switch r {
 	case '\t', '\n', '\v', '\f', '\r', ' ', 0x1c, 0x1d, 0x1e, 0x1f, 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
@@ -227,15 +209,12 @@ func IsSpace(r rune) bool {
 	return r >= 0x2000 && r <= 0x200a
 }
 
-// SpaceClass is Python's \s inside a Go character class.
 const SpaceClass = `\t\n\x0b\x0c\r\x1c-\x1f \x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 
-// Strip is Python's str.strip().
 func Strip(s string) string {
 	return strings.TrimFunc(s, IsSpace)
 }
 
-// CollapseSpace is re.sub(r"\s+", " ", s) with Python's Unicode whitespace.
 func CollapseSpace(s string) string {
 	var b strings.Builder
 	space := false
@@ -256,12 +235,10 @@ func CollapseSpace(s string) string {
 	return b.String()
 }
 
-// Fields is Python's str.split() with no separator.
 func Fields(s string) []string {
 	return strings.FieldsFunc(s, IsSpace)
 }
 
-// Title is Python's str.title().
 func Title(s string) string {
 	var b strings.Builder
 	prev := false
@@ -281,7 +258,6 @@ func Title(s string) string {
 	return b.String()
 }
 
-// Capitalize is s[:1].upper() + s[1:].
 func Capitalize(s string) string {
 	if s == "" {
 		return s
@@ -290,12 +266,10 @@ func Capitalize(s string) string {
 	return string(unicode.ToUpper(r[0])) + string(r[1:])
 }
 
-// IsWordRune is a character Python's \b counts as part of a word.
 func IsWordRune(r rune) bool {
 	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsNumber(r)
 }
 
-// Lines is str.splitlines(): every line break Python knows, the breaks dropped.
 func Lines(s string) []string {
 	var out []string
 	start := 0
@@ -317,7 +291,6 @@ func Lines(s string) []string {
 	return out
 }
 
-// UUID4 is uuid.uuid4() as a string.
 func UUID4() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -328,20 +301,14 @@ func UUID4() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// Stamp is the app's timestamp form, "%Y-%m-%dT%H:%M:%SZ" in UTC.
 func Stamp(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-// NowStamp is Stamp(now).
 func NowStamp() string {
 	return Stamp(time.Now())
 }
 
-// ParseISO is datetime.fromisoformat for the forms the app meets: a date, or a
-// date and a time with optional fractional seconds and an optional Z or ±HH:MM
-// offset. A value without an offset is naive: it comes back in UTC with naive
-// true so the caller can decide what it meant.
 func ParseISO(s string) (t time.Time, naive bool, ok bool) {
 	s = strings.TrimSpace(s)
 	if len(s) < 10 {
@@ -392,14 +359,11 @@ func isDigits(s string) bool {
 	return true
 }
 
-// ParseStamp reads the app's own "%Y-%m-%dT%H:%M:%SZ" form (a trailing Z or a
-// +00:00 offset), as datetime.fromisoformat(s.replace("Z", "+00:00")) does.
 func ParseStamp(s string) (time.Time, bool) {
 	t, _, ok := ParseISO(strings.Replace(s, "Z", "+00:00", 1))
 	return t, ok
 }
 
-// ParseDate reads YYYY-MM-DD, false for anything else.
 func ParseDate(s string) (time.Time, bool) {
 	if len(s) < 10 {
 		return time.Time{}, false
@@ -408,12 +372,10 @@ func ParseDate(s string) (time.Time, bool) {
 	return t, err == nil
 }
 
-// DateStr is the ISO day of a time.
 func DateStr(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// Contains is `x in list`.
 func Contains(list []string, x string) bool {
 	for _, v := range list {
 		if v == x {
@@ -423,7 +385,6 @@ func Contains(list []string, x string) bool {
 	return false
 }
 
-// Uniq keeps the first of every value, in order.
 func Uniq(list []string) []string {
 	seen := map[string]bool{}
 	out := []string{}
@@ -462,4 +423,31 @@ func CommasFixed(n float64, decimals int) string {
 		out = "-" + out
 	}
 	return out
+}
+
+func Truthy(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case string:
+		return x != ""
+	case bool:
+		return x
+	case float64:
+		return x != 0
+	case int:
+		return x != 0
+	case []any:
+		return len(x) > 0
+	case map[string]any:
+		return len(x) > 0
+	}
+	return true
+}
+
+func OrStr(v any) string {
+	if !Truthy(v) {
+		return ""
+	}
+	return JSONStr(v)
 }

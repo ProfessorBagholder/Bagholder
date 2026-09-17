@@ -389,7 +389,7 @@ var IdentityKeys = []string{"identity_canonical_id", "identityCanonicalId", "can
 
 func IdentityFrom(obj map[string]any) string {
 	for _, k := range IdentityKeys {
-		if v := py.S(obj[k]); v != "" {
+		if v := py.JSONStr(obj[k]); v != "" {
 			return v
 		}
 	}

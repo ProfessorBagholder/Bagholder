@@ -13,7 +13,6 @@ var CanadianExchanges = []string{"TSX", "TSX-V", "TSXV", "CSE", "CBOE CANADA", "
 var YahooSuffix = map[string]string{"TSX": ".TO", "TSX-V": ".V", "TSXV": ".V", "CSE": ".CN", "CBOE CANADA": ".NE", "NEO": ".NE"}
 var YahooForms = map[string][]string{"CAD": {".TO", ".V", ".CN", ".NE"}, "USD": {""}}
 
-// YahooVenues is what each Yahoo suffix names.
 var YahooVenues = []struct {
 	Suffix string
 	Venues []string
@@ -28,7 +27,6 @@ func in(list []string, s string) bool {
 	return false
 }
 
-// YahooSplit is `YES.V` as Yahoo writes it: the bare ticker and the venues the suffix names; (text, nil) without one.
 func YahooSplit(text string) (string, []string) {
 	s := strings.ToUpper(strings.TrimSpace(text))
 	for _, yv := range YahooVenues {
@@ -39,10 +37,8 @@ func YahooSplit(text string) (string, []string) {
 	return s, nil
 }
 
-// TMXSymbol is the bare ticker TMX Money names a listing by.
 func TMXSymbol(symbol string) string { return symbols.TMXSymbol(symbol) }
 
-// TMXForm is TMX's symbol suffix for a listing venue, or nil when TMX does not carry it.
 func TMXForm(exchange, currency string) *string {
 	ex := strings.ToUpper(strings.TrimSpace(exchange))
 	ccy := strings.ToUpper(strings.TrimSpace(currency))
@@ -68,7 +64,6 @@ func TMXForm(exchange, currency string) *string {
 	return nil
 }
 
-// TMXFormOr is TMXForm with "" for none, as `tmx_form(...) or ""` read.
 func TMXFormOr(exchange, currency string) string {
 	if f := TMXForm(exchange, currency); f != nil {
 		return *f
@@ -76,7 +71,6 @@ func TMXFormOr(exchange, currency string) string {
 	return ""
 }
 
-// TMXRecordSymbol is the TMX Money symbol for a Canadian listing's declared distribution record, "" when none.
 func TMXRecordSymbol(symbol, exchange string) string {
 	s := TMXSymbol(symbol)
 	if s == "" {
@@ -89,7 +83,6 @@ func TMXRecordSymbol(symbol, exchange string) string {
 	return s + *form
 }
 
-// TMXQuoteSymbol is the TMX Money symbol for a listing in the form its venue takes; "" when TMX does not carry it.
 func TMXQuoteSymbol(symbol, exchange, currency string) string {
 	s := TMXSymbol(symbol)
 	if s == "" || strings.Contains(s, " ") {
@@ -102,13 +95,11 @@ func TMXQuoteSymbol(symbol, exchange, currency string) string {
 	return s + *form
 }
 
-// TMXBare is the part of a TMX key before its venue form.
 func TMXBare(key string) string {
 	k, _, _ := strings.Cut(key, ":")
 	return k
 }
 
-// IsCanadianListing is whether a listing is on a Canadian venue, by its venue else its currency.
 func IsCanadianListing(exchange, currency string) bool {
 	ex := strings.ToUpper(strings.TrimSpace(exchange))
 	if ex != "" {
@@ -117,12 +108,10 @@ func IsCanadianListing(exchange, currency string) bool {
 	return strings.ToUpper(strings.TrimSpace(currency)) == "CAD"
 }
 
-// YahooRoot is the ticker as Yahoo writes it: dots to dashes.
 func YahooRoot(symbol string) string {
 	return strings.ReplaceAll(TMXSymbol(symbol), ".", "-")
 }
 
-// Rec is what a source needs to price or chart an instrument.
 type Rec struct {
 	Symbol   string `json:"symbol"`
 	Exchange string `json:"exchange"`
@@ -133,7 +122,6 @@ type Rec struct {
 	Start    string `json:"start,omitempty"`
 }
 
-// YahooFormsFor is the Yahoo symbols for a share listing, the venue's own suffix first.
 func YahooFormsFor(rec Rec) []string {
 	root := YahooRoot(rec.Symbol)
 	ccy := strings.ToUpper(strings.TrimSpace(rec.Currency))

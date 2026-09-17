@@ -7,7 +7,6 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
-// JournalEntry is a trade's or position's thesis, tags and grade.
 type JournalEntry struct {
 	Thesis string   `json:"thesis"`
 	Tags   []string `json:"tags"`
@@ -16,7 +15,6 @@ type JournalEntry struct {
 
 var grades = map[string]bool{"A": true, "B": true, "C": true, "F": true}
 
-// CleanJournalEntry validates one entry, nil when it carries nothing.
 func CleanJournalEntry(val any) *JournalEntry {
 	m, ok := val.(map[string]any)
 	if !ok {
@@ -68,7 +66,6 @@ func cleanJournal(raw any) map[string]JournalEntry {
 	return out
 }
 
-// Journal is the v2 journal: trade or position id -> entry.
 func (s *Store) Journal() map[string]JournalEntry {
 	raw := s.GetMeta(JournalMeta)
 	if raw == "" {
@@ -93,7 +90,6 @@ func journalToAny(entries map[string]JournalEntry) map[string]any {
 	return out
 }
 
-// SaveJournal cleans and saves the whole journal.
 func (s *Store) SaveJournal(entries map[string]JournalEntry) map[string]JournalEntry {
 	clean := cleanJournal(journalToAny(entries))
 	b, _ := json.Marshal(clean)
@@ -101,7 +97,6 @@ func (s *Store) SaveJournal(entries map[string]JournalEntry) map[string]JournalE
 	return clean
 }
 
-// SaveJournalEntry merges one entry; an entry with no thesis, grade or tags deletes the key.
 func (s *Store) SaveJournalEntry(key string, entry any) map[string]JournalEntry {
 	kid := strings.TrimSpace(key)
 	if kid == "" {

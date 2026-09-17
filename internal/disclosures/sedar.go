@@ -31,7 +31,9 @@ type ProfileNotFound struct{ Msg string }
 
 func (e *ProfileNotFound) Error() string { return e.Msg }
 
-func notFound(format string, args ...any) error { return &ProfileNotFound{fmt.Sprintf(format, args...)} }
+func notFound(format string, args ...any) error {
+	return &ProfileNotFound{fmt.Sprintf(format, args...)}
+}
 
 func IsProfileNotFound(err error) bool {
 	_, ok := err.(*ProfileNotFound)
@@ -44,12 +46,12 @@ type scopeHit struct {
 }
 
 type Sedar struct {
-	mu       sync.Mutex
-	session  *browserhttp.Session
-	last     time.Time
-	scope    map[string]scopeHit
-	scopeMu  sync.Mutex
-	docSess  *browserhttp.Session
+	mu      sync.Mutex
+	session *browserhttp.Session
+	last    time.Time
+	scope   map[string]scopeHit
+	scopeMu sync.Mutex
+	docSess *browserhttp.Session
 }
 
 func NewSedar() *Sedar { return &Sedar{scope: map[string]scopeHit{}} }

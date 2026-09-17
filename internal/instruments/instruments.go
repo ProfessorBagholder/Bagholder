@@ -1,6 +1,3 @@
-// Package instruments is the directory of market instruments the watchlist can
-// follow beside listings: the indices, futures, rates and currency pairs people
-// watch, each with the code Yahoo's chart endpoint quotes it under.
 package instruments
 
 import (
@@ -10,10 +7,8 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
-// KindLabel is the heading each kind sits under on the heatmap.
 var KindLabel = map[string]string{"Index": "Indices", "Future": "Futures", "Commodity": "Commodities", "Rate": "Rates", "Currency": "Currencies"}
 
-// Instrument is one directory row.
 type Instrument struct {
 	Symbol   string   `json:"symbol"`
 	Name     string   `json:"name"`
@@ -24,7 +19,6 @@ type Instrument struct {
 	Aliases  []string `json:"aliases"`
 }
 
-// Instruments is the directory: symbol, name, kind, venue shown, currency, Yahoo code, aliases.
 var Instruments = []Instrument{
 	{"SPX", "S&P 500", "Index", "Index", "USD", "^GSPC", []string{"S&P", "S&P500", "SP500", "GSPC"}},
 	{"NDX", "Nasdaq 100", "Index", "Index", "USD", "^NDX", []string{"NASDAQ100", "NASDAQ 100"}},
@@ -62,14 +56,11 @@ var Instruments = []Instrument{
 	{"BTCUSD", "Bitcoin / US Dollar", "Currency", "FX", "USD", "BTC-USD", []string{"BITCOIN", "BTC"}},
 }
 
-// Labels is what a market tile calls the instrument: the symbol unless people know it by a name.
 var Labels = map[string]string{"ZQ": "FED FUNDS", "SR3": "SOFR", "CL": "WTI", "BZ": "BRENT", "NG": "NATGAS", "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "PL": "PLATINUM", "ZC": "CORN", "ZW": "WHEAT",
 	"TNX": "10Y", "USDCAD": "USD/CAD", "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY", "BTCUSD": "BITCOIN"}
 
-// RateFromPrice names the contracts quoted as 100 minus the rate they settle against.
 var RateFromPrice = map[string]string{"ZQ": "Implied rate", "SR3": "Implied rate"}
 
-// ImpliedRate is the rate a contract quoted as `100 minus the rate` is pricing, nil for everything else.
 func ImpliedRate(symbol string, price *float64) *float64 {
 	if _, ok := RateFromPrice[strings.ToUpper(strings.TrimSpace(symbol))]; !ok || price == nil {
 		return nil
@@ -77,7 +68,6 @@ func ImpliedRate(symbol string, price *float64) *float64 {
 	return py.Ptr(py.Round(100.0-*price, 4))
 }
 
-// Label is the tile's name for a symbol.
 func Label(symbol string) string {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if l, ok := Labels[sym]; ok {
@@ -86,7 +76,6 @@ func Label(symbol string) string {
 	return sym
 }
 
-// Rows is the directory as rows.
 func Rows() []Instrument {
 	out := make([]Instrument, len(Instruments))
 	for i, r := range Instruments {
@@ -96,7 +85,6 @@ func Rows() []Instrument {
 	return out
 }
 
-// Find is the instrument a watched row is, by its symbol and venue, or nil for a listing.
 func Find(symbol, exchange string) *Instrument {
 	sym, ex := strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange))
 	for i := range Instruments {
@@ -110,7 +98,6 @@ func Find(symbol, exchange string) *Instrument {
 	return nil
 }
 
-// Match is one search result: a directory row with its rank.
 type Match struct {
 	Symbol   string `json:"symbol"`
 	Name     string `json:"name"`
@@ -120,9 +107,6 @@ type Match struct {
 	Rank     int    `json:"rank"`
 }
 
-// Search is the instruments matching the text: an exact symbol or alias first, then a
-// symbol, name or alias starting with it, then one with a word starting with it. A
-// single letter matches only an exact symbol.
 func Search(text string) []Match {
 	q := strings.ToUpper(strings.TrimSpace(text))
 	if q == "" {

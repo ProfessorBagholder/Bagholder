@@ -22,7 +22,7 @@ func pick(body map[string]any, keys ...string) any {
 
 func firstS(body map[string]any, keys ...string) string {
 	for _, k := range keys {
-		if v := py.S(body[k]); v != "" {
+		if v := py.JSONStr(body[k]); v != "" {
 			return v
 		}
 	}
@@ -78,12 +78,12 @@ func manualFromFields(body map[string]any) store.Activity {
 }
 
 func activityFromMap(m map[string]any) store.Activity {
-	a := store.Activity{ID: py.S(m["id"]), CanonicalID: firstS(m, "canonicalId", "canonical_id"), OccurredAt: py.S(m["occurredAt"]), TransactionDate: py.S(m["transactionDate"]),
-		SettlementDate: py.S(m["settlementDate"]), AccountID: py.S(m["accountId"]), BookID: py.S(m["bookId"]), FifoID: py.S(m["fifoId"]), AccountType: py.S(m["accountType"]),
-		ActivityType: py.S(m["activityType"]), ActivitySubType: py.S(m["activitySubType"]), Description: py.S(m["description"]), Direction: py.S(m["direction"]),
-		Symbol: py.S(m["symbol"]), Name: py.S(m["name"]), Currency: py.S(m["currency"]), Quantity: py.Num(m["quantity"], 0), UnitPrice: py.Num(m["unitPrice"], 0),
-		Commission: py.Num(m["commission"], 0), NetCashAmount: py.Num(m["netCashAmount"], 0), Category: py.S(m["category"]), Source: py.S(m["source"]),
-		RawType: py.S(m["rawType"]), AftType: py.S(m["aftType"]), CounterSymbol: py.S(m["counterSymbol"]), SecurityID: py.S(m["securityId"])}
+	a := store.Activity{ID: py.JSONStr(m["id"]), CanonicalID: firstS(m, "canonicalId", "canonical_id"), OccurredAt: py.JSONStr(m["occurredAt"]), TransactionDate: py.JSONStr(m["transactionDate"]),
+		SettlementDate: py.JSONStr(m["settlementDate"]), AccountID: py.JSONStr(m["accountId"]), BookID: py.JSONStr(m["bookId"]), FifoID: py.JSONStr(m["fifoId"]), AccountType: py.JSONStr(m["accountType"]),
+		ActivityType: py.JSONStr(m["activityType"]), ActivitySubType: py.JSONStr(m["activitySubType"]), Description: py.JSONStr(m["description"]), Direction: py.JSONStr(m["direction"]),
+		Symbol: py.JSONStr(m["symbol"]), Name: py.JSONStr(m["name"]), Currency: py.JSONStr(m["currency"]), Quantity: py.Num(m["quantity"], 0), UnitPrice: py.Num(m["unitPrice"], 0),
+		Commission: py.Num(m["commission"], 0), NetCashAmount: py.Num(m["netCashAmount"], 0), Category: py.JSONStr(m["category"]), Source: py.JSONStr(m["source"]),
+		RawType: py.JSONStr(m["rawType"]), AftType: py.JSONStr(m["aftType"]), CounterSymbol: py.JSONStr(m["counterSymbol"]), SecurityID: py.JSONStr(m["securityId"])}
 	if v, ok := py.NumOK(m["balance"]); ok {
 		a.Balance = &v
 	}

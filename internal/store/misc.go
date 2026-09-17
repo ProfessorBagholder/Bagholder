@@ -9,7 +9,6 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
-// Exposure is one sector and country record: {name: fraction}, the share covered, its source.
 type Exposure struct {
 	Sectors   map[string]float64 `json:"sectors"`
 	Countries map[string]float64 `json:"countries"`
@@ -40,7 +39,6 @@ func exposureFromRow(r map[string]any) Exposure {
 	return Exposure{Sectors: jsonMap(str(r["sectors"])), Countries: jsonMap(str(r["countries"])), Coverage: py.Deref(fnum(r["coverage"]), 0), Source: str(r["source"]), AsOf: str(r["as_of"]), Industry: str(r["industry"]), Error: str(r["error"]), FetchedAt: str(r["fetched_at"])}
 }
 
-// ReplaceExposure writes one exposure record.
 func (s *Store) ReplaceExposure(key string, rec Exposure) {
 	s.must()
 	sectors, _ := json.Marshal(nonNilMap(rec.Sectors))
@@ -56,7 +54,6 @@ func nonNilMap(m map[string]float64) map[string]float64 {
 	return m
 }
 
-// ExposureRecord is one record by key, nil when absent.
 func (s *Store) ExposureRecord(key string) *Exposure {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM exposures WHERE key = ?", key)
@@ -67,7 +64,6 @@ func (s *Store) ExposureRecord(key string) *Exposure {
 	return &e
 }
 
-// ExposuresMap is every record keyed by what it is for.
 func (s *Store) ExposuresMap() map[string]Exposure {
 	s.must()
 	out := map[string]Exposure{}
@@ -77,7 +73,6 @@ func (s *Store) ExposuresMap() map[string]Exposure {
 	return out
 }
 
-// Watch is one watched listing.
 type Watch struct {
 	Symbol     string `json:"symbol"`
 	Exchange   string `json:"exchange"`
@@ -91,7 +86,6 @@ func watchFromRow(r map[string]any) Watch {
 	return Watch{Symbol: str(r["symbol"]), Exchange: str(r["exchange"]), Name: str(r["name"]), Currency: str(r["currency"]), SecurityID: str(r["security_id"]), AddedAt: str(r["added_at"])}
 }
 
-// ListWatchlist is every watched listing, oldest first.
 func (s *Store) ListWatchlist() []Watch {
 	s.must()
 	out := []Watch{}
@@ -101,7 +95,6 @@ func (s *Store) ListWatchlist() []Watch {
 	return out
 }
 
-// AddWatch follows a listing; adding one already followed keeps its place and fills in what was blank.
 func (s *Store) AddWatch(symbol, exchange, name, currency, securityID, now string) *Watch {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	ex := strings.ToUpper(strings.TrimSpace(exchange))
@@ -140,7 +133,6 @@ func (s *Store) AddWatch(symbol, exchange, name, currency, securityID, now strin
 	return out
 }
 
-// RemoveWatch stops following a listing; true when a row went.
 func (s *Store) RemoveWatch(symbol, exchange string) bool {
 	s.must()
 	res, err := s.exec("DELETE FROM watchlist WHERE symbol = ? AND exchange = ?", strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange)))
@@ -151,12 +143,10 @@ func (s *Store) RemoveWatch(symbol, exchange string) bool {
 	return n > 0
 }
 
-// NewsKey is where a listing's news is stamped: SYMBOL@VENUE.
 func NewsKey(symbol, exchange string) string {
 	return strings.ToUpper(strings.TrimSpace(symbol)) + "@" + strings.ToUpper(strings.TrimSpace(exchange))
 }
 
-// NewsItem is one stored headline.
 type NewsItem struct {
 	ID          string `json:"id"`
 	Symbol      string `json:"symbol"`
@@ -178,7 +168,6 @@ func newsFromRow(r map[string]any) NewsItem {
 	return NewsItem{ID: str(r["id"]), Symbol: str(r["symbol"]), Exchange: str(r["exchange"]), Source: str(r["source"]), Headline: str(r["headline"]), Wire: str(r["wire"]), URL: str(r["url"]), PublishedAt: str(r["published_at"]), FetchedAt: str(r["fetched_at"]), Kind: kind}
 }
 
-// WireItem is what a wire answers for a listing, before it is stored.
 type WireItem struct {
 	ID          string `json:"id"`
 	Headline    string `json:"headline"`
@@ -188,7 +177,6 @@ type WireItem struct {
 	Kind        string `json:"kind"`
 }
 
-// ReplaceNews stores the wire's latest items for one listing, in place of what it had.
 func (s *Store) ReplaceNews(symbol, exchange, source string, rows []WireItem, now string) {
 	sym, ex := strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange))
 	when := now
@@ -217,7 +205,6 @@ func (s *Store) ReplaceNews(symbol, exchange, source string, rows []WireItem, no
 	})
 }
 
-// NewsIDs is the ids a listing's stored items carry.
 func (s *Store) NewsIDs(symbol, exchange string) map[string]bool {
 	s.must()
 	out := map[string]bool{}
@@ -227,7 +214,6 @@ func (s *Store) NewsIDs(symbol, exchange string) map[string]bool {
 	return out
 }
 
-// HasWireRelease is whether a wire has carried a release for this ticker under any venue and any form the book writes it.
 func (s *Store) HasWireRelease(symbol string) bool {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 	if sym == "" {
@@ -239,7 +225,6 @@ func (s *Store) HasWireRelease(symbol string) bool {
 	return err == nil
 }
 
-// NewsFetchedAt is symbol@venue -> when its wire was last read.
 func (s *Store) NewsFetchedAt() map[string]string {
 	return stripPrefix(s.MetaLike("news_fetched:"), "news_fetched:")
 }
@@ -252,7 +237,6 @@ func stripPrefix(rows map[string]string, prefix string) map[string]string {
 	return out
 }
 
-// ForgetNews drops a listing's items and its stamp.
 func (s *Store) ForgetNews(symbol, exchange string) {
 	s.must()
 	_ = s.tx(func(tx *sql.Tx) error {
@@ -264,16 +248,13 @@ func (s *Store) ForgetNews(symbol, exchange string) {
 	})
 }
 
-// TrimNews keeps the newest `keep` items over every symbol.
 func (s *Store) TrimNews(keep int) {
 	s.must()
 	_, _ = s.exec("DELETE FROM news WHERE rowid NOT IN (SELECT rowid FROM news ORDER BY published_at DESC, id LIMIT ?)", keep)
 }
 
-// FilingKey is the symbol a filing is stored under.
 func FilingKey(symbol string) string { return strings.ToUpper(strings.TrimSpace(symbol)) }
 
-// Filing is one stored disclosure row.
 type Filing struct {
 	ID            string `json:"id"`
 	Source        string `json:"source"`
@@ -296,7 +277,6 @@ type Filing struct {
 	Exchange      string `json:"exchange,omitempty"`
 }
 
-// MarshalJSON writes enrichVersion as the Python row did: "" when the column is NULL, else the number.
 func (f Filing) MarshalJSON() ([]byte, error) {
 	type plain Filing
 	type out struct {
@@ -336,7 +316,6 @@ func filingFromRow(r map[string]any) Filing {
 		EnrichVersion: int(inum(r["enrich_version"])), EnrichFinal: inum(r["enrich_final"]) != 0, FetchedAt: get("fetched_at")}
 }
 
-// Filings is a symbol's disclosures newest first.
 func (s *Store) Filings(symbol string) []Filing {
 	s.must()
 	out := []Filing{}
@@ -346,7 +325,6 @@ func (s *Store) Filings(symbol string) []Filing {
 	return out
 }
 
-// AllFilings is every symbol's disclosures, newest first.
 func (s *Store) AllFilings() map[string][]Filing {
 	s.must()
 	out := map[string][]Filing{}
@@ -357,7 +335,6 @@ func (s *Store) AllFilings() map[string][]Filing {
 	return out
 }
 
-// Filing is one disclosure row by id, nil when absent.
 func (s *Store) Filing(symbol, docID string) *Filing {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM filings WHERE symbol = ? AND id = ?", FilingKey(symbol), docID)
@@ -368,7 +345,6 @@ func (s *Store) Filing(symbol, docID string) *Filing {
 	return &f
 }
 
-// SetFilingEnrichment persists a document's read subject and/or summary; a nil pointer leaves a value as it was.
 func (s *Store) SetFilingEnrichment(symbol, docID string, subject, summary *string, version *int, final *bool) {
 	sets := []string{"enriched_at = ?"}
 	args := []any{nowISO()}
@@ -397,7 +373,6 @@ func (s *Store) SetFilingEnrichment(symbol, docID string, subject, summary *stri
 	_, _ = s.exec("UPDATE filings SET "+strings.Join(sets, ", ")+" WHERE symbol = ? AND id = ?", args...)
 }
 
-// FilingItem is what a provider answers, before it is stored.
 type FilingItem struct {
 	ID        string `json:"id"`
 	Source    string `json:"source"`
@@ -412,8 +387,6 @@ type FilingItem struct {
 	ProfileNo string `json:"profileNo,omitempty"`
 }
 
-// ReplaceFilings stores one source's disclosures for a symbol in place of what that source had,
-// keeping what was read from the documents of rows the source still lists.
 func (s *Store) ReplaceFilings(symbol, source string, items []FilingItem, now string) int {
 	sym := FilingKey(symbol)
 	when := now
@@ -484,7 +457,6 @@ func (s *Store) ReplaceFilings(symbol, source string, items []FilingItem, now st
 	return len(clean)
 }
 
-// MarkFilingsFetched stamps when a symbol's disclosures were last refreshed, and remembers its SEDAR+ profile.
 func (s *Store) MarkFilingsFetched(symbol, profileNo, now string) {
 	sym := FilingKey(symbol)
 	when := now
@@ -505,22 +477,18 @@ func (s *Store) MarkFilingsFetched(symbol, profileNo, now string) {
 	})
 }
 
-// FilingsFetchedAt is when a symbol's filings were last read.
 func (s *Store) FilingsFetchedAt(symbol string) string {
 	return s.GetMeta("filings_fetched:" + FilingKey(symbol))
 }
 
-// AllFilingsFetchedAt is symbol -> when.
 func (s *Store) AllFilingsFetchedAt() map[string]string {
 	return stripPrefix(s.MetaLike("filings_fetched:"), "filings_fetched:")
 }
 
-// SedarProfile is the SEDAR+ profile number remembered for a symbol, or "".
 func (s *Store) SedarProfile(symbol string) string {
 	return s.GetMeta("sedar_profile:" + FilingKey(symbol))
 }
 
-// ForgetFilings drops a symbol's rows and stamps.
 func (s *Store) ForgetFilings(symbol string) {
 	sym := FilingKey(symbol)
 	s.must()
@@ -533,13 +501,11 @@ func (s *Store) ForgetFilings(symbol string) {
 	})
 }
 
-// ShortPoint is one report in a listing's run of short positions.
 type ShortPoint struct {
 	Date   string   `json:"date"`
 	Shares *float64 `json:"shares"`
 }
 
-// Short is one listing's short selling as stored and as the page reads it.
 type Short struct {
 	Symbol        string       `json:"symbol"`
 	Exchange      string       `json:"exchange"`
@@ -568,7 +534,6 @@ type Short struct {
 	Watched       *bool        `json:"watched,omitempty"`
 }
 
-// MarshalJSON writes the text figures as the Python row did: NULL as null, never "".
 func (sh Short) MarshalJSON() ([]byte, error) {
 	type plain Short
 	type out struct {
@@ -608,7 +573,6 @@ func shortFromRow(r map[string]any) Short {
 	return sh
 }
 
-// SaveShorts keeps one listing's short selling; a run of reports already stored is not dropped by a read that did not ask for one.
 func (s *Store) SaveShorts(symbol, exchange string, rec Short, now string, version int, hasSeries bool) {
 	sym, ex := strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange))
 	when := now
@@ -636,7 +600,6 @@ func (s *Store) SaveShorts(symbol, exchange string, rec Short, now string, versi
 	})
 }
 
-// ShortsFor is what is stored for one listing, nil when nothing.
 func (s *Store) ShortsFor(symbol, exchange string) *Short {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM shorts WHERE symbol = ? AND exchange = ?", strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange)))
@@ -647,7 +610,6 @@ func (s *Store) ShortsFor(symbol, exchange string) *Short {
 	return &sh
 }
 
-// AllShorts is every listing's stored short selling.
 func (s *Store) AllShorts() []Short {
 	s.must()
 	out := []Short{}
@@ -657,7 +619,6 @@ func (s *Store) AllShorts() []Short {
 	return out
 }
 
-// Gauge is one published index's reading as stored; everything beyond the score travels in Rest.
 type Gauge struct {
 	Index       string         `json:"index"`
 	Source      string         `json:"source"`
@@ -669,7 +630,6 @@ type Gauge struct {
 	Rest        map[string]any `json:"-"`
 }
 
-// MarshalJSON flattens the payload into the record, as the Python store did.
 func (g Gauge) MarshalJSON() ([]byte, error) {
 	out := map[string]any{"index": g.Index, "source": nullStr(g.Source), "score": nullable(g.Score), "rating": nullStr(g.Rating), "asOf": nullStr(g.AsOf), "fetchedAt": nullStr(g.FetchedAt), "readVersion": g.ReadVersion}
 	for k, v := range g.Rest {
@@ -678,7 +638,6 @@ func (g Gauge) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SaveGauge keeps one index's reading.
 func (s *Store) SaveGauge(name string, rec map[string]any, now string, version int) {
 	key := strings.ToLower(strings.TrimSpace(name))
 	when := now
@@ -702,7 +661,6 @@ func (s *Store) SaveGauge(name string, rec map[string]any, now string, version i
 	_, _ = s.exec("INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", key, py.S(rec["source"]), score, py.S(rec["rating"]), py.S(rec["asOf"]), string(payload), version, when)
 }
 
-// Gauge is what is stored for one index, nil when nothing.
 func (s *Store) Gauge(name string) *Gauge {
 	s.must()
 	r, _ := s.queryOne("SELECT * FROM gauges WHERE name = ?", strings.ToLower(strings.TrimSpace(name)))
@@ -716,7 +674,6 @@ func (s *Store) Gauge(name string) *Gauge {
 	return &g
 }
 
-// Universe is one heatmap tile of a market universe.
 type Universe struct {
 	Symbol        string   `json:"symbol"`
 	Name          string   `json:"name"`
@@ -736,13 +693,11 @@ func (s *Store) universes() map[string][]Universe {
 	return out
 }
 
-// Universes is every universe's tiles by key.
 func (s *Store) Universes() map[string][]Universe {
 	s.must()
 	return s.universes()
 }
 
-// ReplaceUniverse writes one universe's tiles in place of what it had.
 func (s *Store) ReplaceUniverse(key string, rows []Universe, now string) {
 	when := now
 	if when == "" {
@@ -765,7 +720,6 @@ func (s *Store) ReplaceUniverse(key string, rows []Universe, now string) {
 	})
 }
 
-// Notification is one row the page tells the person about.
 type Notification struct {
 	ID     int64          `json:"id"`
 	At     string         `json:"at"`
@@ -789,7 +743,6 @@ func notificationFromRow(r map[string]any) Notification {
 	return n
 }
 
-// AddNotification stores one row, keyed so the same event is never stored twice; nil when the key is already there.
 func (s *Store) AddNotification(kind, key, title, body string, extra map[string]any, seen bool) *Notification {
 	now := nowISO()
 	if extra == nil {
@@ -832,7 +785,6 @@ func (s *Store) AddNotification(kind, key, title, body string, extra map[string]
 	return out
 }
 
-// ListNotifications is the rows after an id (and from a time when given), oldest first, or newest first for the history.
 func (s *Store) ListNotifications(afterID int64, since string, unseen bool, limit int, newest bool) []Notification {
 	q := "SELECT * FROM notifications WHERE id > ?"
 	args := []any{afterID}
@@ -870,7 +822,6 @@ func idList(ids []int64) (string, []any) {
 	return strings.Join(marks, ","), args
 }
 
-// MarkNotificationsSeen records that a page has shown these; how many were marked.
 func (s *Store) MarkNotificationsSeen(ids []int64) int64 {
 	if len(ids) == 0 {
 		return 0
@@ -885,7 +836,6 @@ func (s *Store) MarkNotificationsSeen(ids []int64) int64 {
 	return n
 }
 
-// LatestNotificationID is the newest row's id, 0 with none.
 func (s *Store) LatestNotificationID() int64 {
 	s.must()
 	var m sql.NullInt64
@@ -893,7 +843,6 @@ func (s *Store) LatestNotificationID() int64 {
 	return m.Int64
 }
 
-// UnreadNotifications is how many the person has not looked at in the history.
 func (s *Store) UnreadNotifications() int {
 	s.must()
 	var n int
@@ -901,7 +850,6 @@ func (s *Store) UnreadNotifications() int {
 	return n
 }
 
-// MarkNotificationsRead records the person has looked at these (every unread one when ids is nil).
 func (s *Store) MarkNotificationsRead(ids []int64, all bool) int64 {
 	s.must()
 	now := nowISO()
@@ -923,7 +871,6 @@ func (s *Store) MarkNotificationsRead(ids []int64, all bool) int64 {
 	return n
 }
 
-// ClearNotifications empties the history; how many went.
 func (s *Store) ClearNotifications() int64 {
 	s.must()
 	res, err := s.exec("DELETE FROM notifications")

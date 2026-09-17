@@ -170,17 +170,17 @@ func (a *App) newsLoop() {
 }
 
 const (
-	FilingsStaleHours   = 24
+	FilingsStaleHours    = 24
 	FilingsSweepEverySec = 300
-	FilingsHoldMaxMin   = 120
-	FilingsHoldKey      = "filings:held-since"
-	FilingsSweepAgeMin  = 30
-	FearStaleMin        = 15
-	FearVersion         = 1
-	FearSweepEverySec   = 900
-	ShortsStaleHours    = 6
-	ShortsVersion       = 5
-	ShortsSweepEverySec = 1800
+	FilingsHoldMaxMin    = 120
+	FilingsHoldKey       = "filings:held-since"
+	FilingsSweepAgeMin   = 30
+	FearStaleMin         = 15
+	FearVersion          = 1
+	FearSweepEverySec    = 900
+	ShortsStaleHours     = 6
+	ShortsVersion        = 5
+	ShortsSweepEverySec  = 1800
 )
 
 var FeedScopes = map[string][]string{"holdings": {"held"}, "watchlist": {"watched"}, "all": {"all"}}

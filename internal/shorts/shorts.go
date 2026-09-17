@@ -23,20 +23,20 @@ import (
 )
 
 const (
-	USPositionURL  = "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest"
-	USVolumeURL    = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol%s.txt"
-	CAPositionURL  = "https://www.ciro.ca/sites/default/files/epubs/CSPR/%s_CSPR_Report.xls"
-	CAVolumeURL    = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_ShortSaleTradingSummaryReport.csv"
-	CACboeURL      = "https://www-api.cboe.com/ca/equities/listing-directory-data/"
-	FileHours      = 6
-	Tries          = 6
-	Series         = 8
-	FloatHours     = 12
-	FloatMissMin   = 20
-	YahooQuoteURL  = "https://finance.yahoo.com/quote/%s/"
-	YahooCrumbURL  = "https://query1.finance.yahoo.com/v1/test/getcrumb"
-	YahooStatsURL  = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
-	TMXUnitsQuery  = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol shareOutStanding } }"
+	USPositionURL = "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest"
+	USVolumeURL   = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol%s.txt"
+	CAPositionURL = "https://www.ciro.ca/sites/default/files/epubs/CSPR/%s_CSPR_Report.xls"
+	CAVolumeURL   = "https://www.ciro.ca/sites/default/files/epubs/SSALE/%s-%s_ShortSaleTradingSummaryReport.csv"
+	CACboeURL     = "https://www-api.cboe.com/ca/equities/listing-directory-data/"
+	FileHours     = 6
+	Tries         = 6
+	Series        = 8
+	FloatHours    = 12
+	FloatMissMin  = 20
+	YahooQuoteURL = "https://finance.yahoo.com/quote/%s/"
+	YahooCrumbURL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+	YahooStatsURL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
+	TMXUnitsQuery = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol shareOutStanding } }"
 )
 
 var CboeFunds = []string{"etf", "cef"}
@@ -56,13 +56,13 @@ type floatHit struct {
 }
 
 type Client struct {
-	Market *market.Client
-	Store  *store.Store
-	mu     sync.Mutex
-	files  map[string]*fileTable
-	shares map[string]floatHit
-	yahoo  *browserhttp.Session
-	crumb  string
+	Market     *market.Client
+	Store      *store.Store
+	mu         sync.Mutex
+	files      map[string]*fileTable
+	shares     map[string]floatHit
+	yahoo      *browserhttp.Session
+	crumb      string
 	yahooTried bool
 }
 

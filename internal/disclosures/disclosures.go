@@ -173,7 +173,7 @@ func (p *Pipeline) Fetch(symbol, name, exchange, currency string, limit int, pro
 		if pr == p.Sedar {
 			hint = profileNo
 		}
-		got, err := pr.Fetch(symbol, name, exchange, currency, limit, hint)
+		got, err := pr.Fetch(symbol, name, exchange, currency, 0, hint)
 		if err != nil {
 			if IsUnavailable(err) {
 				sources[pr.Source()] = SourceStatus{Error: err.Error()}

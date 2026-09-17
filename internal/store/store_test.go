@@ -405,7 +405,7 @@ func TestFilingsReplaceKeepsWhatWasRead(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
-func intPtr(n int) *int        { return &n }
+func intPtr(n int) *int       { return &n }
 
 func TestWatchlistNewsShorts(t *testing.T) {
 	s := temp(t)

@@ -22,6 +22,7 @@ const (
 	ArchiveURL       = "https://www.sec.gov/Archives/edgar/data/%d/%s/%s"
 	EdgarTimeout     = 30
 	EdgarPaceSeconds = 0.3
+	EdgarFetchLimit  = 200
 )
 
 var EdgarUS = map[string]bool{"NASDAQ": true, "NYSE": true, "NYSEARCA": true, "NYSEAMERICAN": true, "AMEX": true, "ARCA": true, "BATS": true, "US": true, "OTC": true, "OTCMKTS": true, "CBOE": true}
@@ -93,8 +94,20 @@ func (e *Edgar) tickerMap() (map[string]cikTitle, error) {
 		return nil, err
 	}
 	out := map[string]cikTitle{}
-	for _, raw := range data {
-		row, ok := raw.(map[string]any)
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, ea := strconv.Atoi(keys[i])
+		b, eb := strconv.Atoi(keys[j])
+		if ea == nil && eb == nil {
+			return a < b
+		}
+		return keys[i] < keys[j]
+	})
+	for _, k := range keys {
+		row, ok := data[k].(map[string]any)
 		if !ok {
 			continue
 		}
@@ -190,6 +203,9 @@ func strList(v any) []string {
 }
 
 func (e *Edgar) Fetch(symbol, name, exchange, currency string, limit int, profileNo string) ([]Item, error) {
+	if limit <= 0 {
+		limit = EdgarFetchLimit
+	}
 	ticker := EdgarBare(symbol)
 	m, err := e.tickerMap()
 	if err != nil {
