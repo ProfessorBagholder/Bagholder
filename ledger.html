@@ -80,6 +80,10 @@ textarea.input{resize:none;line-height:1.5}
 .pos{color:var(--pos)}
 .neg{color:var(--neg)}
 .lbl{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink55)}
+.mseg-n{display:inline-block;min-width:16px;height:16px;margin:-2px 0 -2px 6px;padding:0 4px;border-radius:8px;background:var(--accent);color:var(--bg);font:600 10.5px/16px var(--font);text-align:center;vertical-align:1px}
+.sbox-x{flex:none;width:18px;height:18px;margin:-1px -4px -1px 0;padding:0;border:0;border-radius:4px;background:transparent;color:var(--ink55);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.sbox-x:hover{color:var(--ink);background:rgba(var(--ink-rgb),.08)}
+.sbox-x svg{width:11px;height:11px}
 .mseg{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)}
 .mseg-opt{padding:4px 10px;border-radius:5px;border:0;background:transparent;font:500 12px var(--font);color:var(--ink55);cursor:pointer;white-space:nowrap}
 .mseg-opt:hover{color:var(--ink)}
@@ -3496,17 +3500,30 @@ function newsCardHtml(items) {
   // All is the market's own feed; Holdings and Watchlist are the stories read for those listings. Releases are the
   // companies' own, told by the wire they came on; the market feed carries none, so All there is every listing held or watched.
   const releases = state.newsKind === "releases";
-  let rows = (items || []).filter((n) => (releases ? n.kind === "release" : n.kind !== "release") &&
-    (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
-  // the issuer's own releases as it filed them, beside the wires': a wire carries what it is sent, and a
-  // release it never carried is still on the regulator's record, so both are shown and the same release once
-  if (releases) rows = rows.concat(filedReleases(only, scope, rows));
-  if (q) {
-    const tokens = q.split(/\s+/);
-    const bySym = tokens.length === 1 && q.length <= 5 ? rows.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : [];
-    const text = (n) => (n.headline + " " + n.source).toUpperCase();
-    rows = bySym.length ? bySym : rows.filter((n) => { const h = text(n); return tokens.every((t) => h.indexOf(t) >= 0); });
-  }
+  const listOf = (rel, sc, load) => {
+    let out = (items || []).filter((n) => (rel ? n.kind === "release" : n.kind !== "release") &&
+      (only ? n.tags.some(isOnly) : sc === "all" ? (rel ? n.tags.length > 0 : n.market) : n.tags.some((t) => sc === "holdings" ? t.held : t.watched)));
+    // the issuer's own releases as it filed them, beside the wires': a wire carries what it is sent, and a
+    // release it never carried is still on the regulator's record, so both are shown and the same release once
+    if (rel) out = out.concat(filedReleases(only, sc, out, load));
+    if (q) {
+      const tokens = q.split(/\s+/);
+      const bySym = tokens.length === 1 && q.length <= 5 ? out.filter((n) => n.tags.some((t) => bareSymbol(t.symbol).startsWith(q))) : [];
+      const text = (n) => (n.headline + " " + n.source).toUpperCase();
+      out = bySym.length ? bySym : out.filter((n) => { const h = text(n); return tokens.every((t) => h.indexOf(t) >= 0); });
+    }
+    return out;
+  };
+  let rows = listOf(releases, scope, true);
+  // Another tab that holds what this one does not carries its count, as the short interest list's do. A
+  // Canadian listing's wire carries only the company's own releases, so a book of Canadian holdings read
+  // `No news.` under Stories with every item it has one tab over and nothing saying so. A kind is counted
+  // while the list on show is empty; a scope while a search is typed, the chip having no scope of its own.
+  // Disclosures is read on demand, so it is neither counted nor counted against.
+  const wireKind = state.newsKind === "stories" || state.newsKind === "releases";
+  const kindCount = (k) => (wireKind && k !== state.newsKind && (k === "stories" || k === "releases") && !rows.length ? listOf(k === "releases", scope, false).length : 0);
+  const scopeCount = (sc) => (wireKind && q && !only && sc !== scope ? listOf(releases, sc, false).length : 0);
+  const badged = (key, label, n) => [key, label + (n ? '<span class="mseg-n">' + n + "</span>" : "")];
   const first = (n) => n.tags[0] || {};
   // the market's feed names no listing: no Symbol or Change column, and a sort on either reads newest first
   const bare = scope === "all" && !only && !releases;
@@ -3522,10 +3539,10 @@ function newsCardHtml(items) {
     (bare ? "" : '<div style="text-align:right">' + (n.tags.length ? sym(first(n)) : "") + "</div>" +
       '<div style="text-align:right">' + (n.tags.length ? chg(first(n)) : "") + "</div>") + "</div>";
   return '<div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0"><div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>News</h5>' +
-    msegHtml("newsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
-    msegHtml("newsKind", "kind", [["stories", "Stories"], ["releases", "Releases"], ["disc", "Disclosures"]], state.newsKind) +
+    msegHtml("newsScope", "scope", [badged("all", "All", scopeCount("all")), badged("holdings", "Holdings", scopeCount("holdings")), badged("watchlist", "Watchlist", scopeCount("watchlist"))], scope) +
+    msegHtml("newsKind", "kind", [badged("stories", "Stories", kindCount("stories")), badged("releases", "Releases", kindCount("releases")), ["disc", "Disclosures"]], state.newsKind) +
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
-    '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)">' + searchClearHtml("newsQuery", state.newsQuery) + "</div></div>" +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
@@ -3535,18 +3552,21 @@ function newsCardHtml(items) {
 // carried both ways shown once. The rows are the ones the Disclosures view already reads, and their titles
 // fill in the same way; until one is read the document's kind stands in for it.
 const FILED_RELEASE = /news release|press release/i;   // a current report (8-K, 6-K) is a filing, not a release
-function filedReleases(only, scope, wire) {
+function filedReleases(only, scope, wire, load) {
+  // `load` false is a count for a tab not on show: it may read the stored feed, which is local and
+  // makes the count exact, but never asks a regulator for a listing or starts reading documents
+  const fetching = load !== false;
   let rows;
   if (only) {
     const rec = _disc[only.symbol];
-    if (!rec) { ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || "", name: only.name || "", currency: only.currency || "" }); return []; }
+    if (!rec) { if (fetching) ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || "", name: only.name || "", currency: only.currency || "" }); return []; }
     if (!rec.payload) return [];
     rows = (rec.payload.filings || []).map((f) => Object.assign({}, f, { symbol: only.symbol, exchange: only.exchange || "" }));
-    sweepDiscEnrich(only.symbol, rec.payload.filings || []);
+    if (fetching) sweepDiscEnrich(only.symbol, rec.payload.filings || []);
   } else {
-    loadDiscFeed(scope);
+    loadDiscFeed(scope);                      // stored rows only: the feed fetches nothing from a regulator
     rows = ((_discFeed[scope] || {}).rows) || [];
-    sweepFeedEnrich(scope, rows);
+    if (fetching) sweepFeedEnrich(scope, rows);
   }
   const said = new Set((wire || []).map((n) => news_text_key(n.headline)));
   const tagOf = (sym, ex) => {
@@ -3572,7 +3592,7 @@ function loadDiscFeed(scope) {
   _discFeed[scope] = { rows: f ? f.rows : null, at: f ? f.at : 0, loading: true };
   api("GET", "/api/filings/feed?scope=" + encodeURIComponent(scope)).then((r) => {
     _discFeed[scope] = { rows: r && r.ok ? r.filings || [] : (f ? f.rows : []), at: Date.now(), loading: false };
-    if (state.page === "markets" && state.newsKind === "disc" && !state.newsSymbol) render();
+    if (state.page === "markets" && !state.newsSymbol) render();
   });
 }
 function newsDiscBodyHtml(scope, only, q) {
@@ -3828,18 +3848,38 @@ function shortsLookup(text) {
     });
   }, 450);
 }
+// A search box's clear: an × inside the box while it holds text, and Escape in the box doing the
+// same. Clearing keeps the keyboard in the box for the next search.
+const SEARCH_BOXES = { shortsQuery: "shortsQuery", newsQuery: "newsQuery" };
+function searchClearHtml(id, value) {
+  return value ? '<button class="sbox-x" data-act="searchClear" data-arg=\'' + attr({ id }) + '\' aria-label="Clear the search">' + tkIconSvg(ICONS.x) + "</button>" : "";
+}
+function searchClear(id) {
+  if (!SEARCH_BOXES[id]) return;
+  state[SEARCH_BOXES[id]] = "";
+  render();
+  const box = document.getElementById(id);
+  if (box) box.focus();
+}
 function shortsListCardHtml() {
   const scope = state.shortsScope;
   ensureShortsFeed();
   const held = _shortsFeed;
   const q = state.shortsQuery.trim().toUpperCase();
   const s = state.sort.shorts;
-  let pool = (held.rows || []).filter((r) => scope === "all" || (scope === "holdings" ? r.held : r.watched));
+  const inScope = (r, sc) => sc === "all" || (sc === "holdings" ? r.held : r.watched);
+  const matches = (r) => String(r.symbol).toUpperCase().indexOf(q) === 0 || String(r.name || "").toUpperCase().indexOf(q) >= 0;
+  let pool = (held.rows || []).filter((r) => inScope(r, scope));
   if (q) {
-    pool = pool.filter((r) => String(r.symbol).toUpperCase().indexOf(q) === 0 || String(r.name || "").toUpperCase().indexOf(q) >= 0);
+    pool = pool.filter(matches);
     const found = _shortsFound[q];
     if (!pool.length && found && found.row) pool = [found.row];
   }
+  // While a search is typed, each other tab it would find something under carries the count: a
+  // watched listing searched for under Holdings is rightly not there, and an empty list alone
+  // did not say that the Watchlist tab holds it.
+  const elsewhere = (sc) => (q && sc !== scope ? (held.rows || []).filter((r) => inScope(r, sc) && matches(r)).length : 0);
+  const tab = (sc, label) => [sc, label + (elsewhere(sc) ? '<span class="mseg-n">' + elsewhere(sc) + "</span>" : "")];
   const rows = sortRows(pool, s.key, s.dir, (r, k) =>
     k === "symbol" ? String(r.symbol || "").toLowerCase() : k === "exchange" ? String(r.exchange || "").toLowerCase() :
     k === "asOf" ? String(r.asOf || "") : (r[k] == null ? -Infinity : r[k]));
@@ -3854,14 +3894,17 @@ function shortsListCardHtml() {
     '<div class="tab" style="text-align:right;font-size:13px;color:var(--ink55)">' + (r.volumePct == null ? "—" : n2(r.volumePct, 1) + "%") + "</div>" +
     '<div class="tab" style="text-align:right;font-size:11.5px;color:var(--ink55)">' + esc(shortDay(r.asOf)) + "</div></div>";
   const found = q ? _shortsFound[q] : null;
+  // the empty list says what is empty: nothing held matches, nothing watched matches, or no listing at all
+  const none = scope === "holdings" ? "No holding matches " + esc(q) + "." : scope === "watchlist" ? "No watched listing matches " + esc(q) + "." : "No listing by that name.";
   const empty = held.loading ? "Reading…"
-    : q ? (found && found.loading ? "Reading " + esc(q) + "…" : found && found.missing ? "No short interest is reported for " + esc(q) + "." : "No listing by that name.")
+    : q ? (found && found.loading ? "Reading " + esc(q) + "…" : found && found.missing ? "No short interest is reported for " + esc(q) + "." : none)
     : "Nothing reported yet.";
   return '<div class="card elev-sm" style="padding:14px 16px 12px">' +
     '<div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px"><h5>Short interest</h5>' +
-    msegHtml("shortsScope", "scope", [["all", "All"], ["holdings", "Holdings"], ["watchlist", "Watchlist"]], scope) +
+    msegHtml("shortsScope", "scope", [tab("all", "All"), tab("holdings", "Holdings"), tab("watchlist", "Watchlist")], scope) +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">' +
-    '<input id="shortsQuery" value="' + esc(state.shortsQuery) + '" placeholder="Search any symbol" aria-label="Search short interest" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
+    '<input id="shortsQuery" value="' + esc(state.shortsQuery) + '" placeholder="Search any symbol" aria-label="Search short interest" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)">' +
+    searchClearHtml("shortsQuery", state.shortsQuery) + "</div></div>" +
     (rows.length ? '<div class="si-head">' + gridTh("shorts", SHORTS_COLS) + "</div>" +
       '<div class="scroll si-list" style="max-height:340px">' + rows.map(row).join("") + "</div>"
       : '<div class="muted" style="font-size:12px">' + empty + "</div>") + "</div>";
@@ -4735,6 +4778,7 @@ function act(name, arg, ev) {
     case "noop": break;
     case "heatOpen": openHolding(arg.id); break;
     case "listingOpen": openListing(arg); break;
+    case "searchClear": searchClear(arg.id); break;
     case "newsSym": newsChip({ symbol: arg.symbol, exchange: arg.exchange }); render(); break;
     case "newsSymClear": newsChip(null); render(); break;
     case "discCat": state.discCat = arg.cat; render(); break;
@@ -4932,6 +4976,11 @@ function bind() {
       const pages = PAGES;
       const j = pages.indexOf(state.page) + (e.key === "ArrowRight" ? 1 : -1);
       if (j >= 0 && j < pages.length) { e.preventDefault(); go(pages[j]); }
+      return;
+    }
+    if (e.key === "Escape" && e.target && SEARCH_BOXES[e.target.id]) {
+      e.preventDefault();
+      if (e.target.value) searchClear(e.target.id); else e.target.blur();
       return;
     }
     if (e.key === "Escape" && state.page === "heatmap" && !state.confirmOpen && !state.modal) { location.hash = "#markets"; return; }
