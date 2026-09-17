@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
 	"github.com/ProfessorBagholder/Bagholder/internal/symbols"
@@ -448,21 +447,16 @@ func ParseYahooChart(text string) []MinuteBar {
 }
 
 func (c *Client) yahooGet(rawURL string) (string, error) {
-	c.yahooMu.Lock()
-	defer c.yahooMu.Unlock()
-	now := time.Now()
-	if now.Before(c.yahooBackoffUntil) {
+	c.Yahoo.turn.Lock()
+	defer c.Yahoo.turn.Unlock()
+	if !c.Yahoo.take() {
 		c.NoteSource("yahoo", false, ErrBackingOff)
 		return "", ErrBackingOff
 	}
-	if wait := c.yahooNextAt.Sub(now); wait > 0 {
-		time.Sleep(wait)
-	}
-	c.yahooNextAt = time.Now().Add(time.Duration(YahooMinIntervalSec * float64(time.Second)))
 	text, err := c.GetText(rawURL, YahooHeaders)
 	if err != nil {
 		if StatusOf(err) == 429 {
-			c.yahooBackoffUntil = time.Now().Add(YahooBackoffSec * time.Second)
+			c.Yahoo.refused()
 		}
 		return "", err
 	}
@@ -470,9 +464,7 @@ func (c *Client) yahooGet(rawURL string) (string, error) {
 }
 
 func (c *Client) SetYahooBackoff(until time.Time) {
-	c.yahooMu.Lock()
-	c.yahooBackoffUntil = until
-	c.yahooMu.Unlock()
+	c.Yahoo.SetBackoff(until)
 }
 
 func (c *Client) FetchYahoo(symbol string, startTs, endTs int64, interval string) ([]MinuteBar, error) {
@@ -1325,25 +1317,4 @@ func (c *Client) EnsureBars(rec Rec, tf, start, end string, now time.Time) ([]Da
 
 func (c *Client) TMXLookupDaily(key string, fn func(form string) ([]Daily, error)) ([]Daily, error) {
 	return c.tmxLookupDaily(key, fn)
-}
-
-func (c *Client) YahooPaced(call func() (*browserhttp.Response, error)) (*browserhttp.Response, bool) {
-	c.yahooMu.Lock()
-	defer c.yahooMu.Unlock()
-	if time.Now().Before(c.yahooBackoffUntil) {
-		return nil, false
-	}
-	if wait := c.yahooNextAt.Sub(time.Now()); wait > 0 {
-		time.Sleep(wait)
-	}
-	c.yahooNextAt = time.Now().Add(time.Duration(YahooMinIntervalSec * float64(time.Second)))
-	resp, err := call()
-	if err != nil {
-		return nil, false
-	}
-	if resp.Status == 429 {
-		c.yahooBackoffUntil = time.Now().Add(YahooBackoffSec * time.Second)
-		return nil, false
-	}
-	return resp, true
 }

@@ -3,6 +3,7 @@ package shorts
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
 	"github.com/ProfessorBagholder/Bagholder/internal/exposure"
 	"github.com/ProfessorBagholder/Bagholder/internal/instruments"
 	"github.com/ProfessorBagholder/Bagholder/internal/market"
@@ -33,9 +33,7 @@ const (
 	Series        = 8
 	FloatHours    = 12
 	FloatMissMin  = 20
-	YahooQuoteURL = "https://finance.yahoo.com/quote/%s/"
-	YahooCrumbURL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
-	YahooStatsURL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics&crumb=%s"
+	YahooModule   = "defaultKeyStatistics"
 	TMXUnitsQuery = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol shareOutStanding } }"
 )
 
@@ -61,8 +59,6 @@ type Client struct {
 	mu      sync.Mutex
 	files   map[string]*fileTable
 	shares  map[string]floatHit
-	yahoo   *browserhttp.Session
-	crumb   string
 	NoYahoo bool
 }
 
@@ -394,39 +390,15 @@ func (c *Client) CASeries(symbol, exchange, asof string, now time.Time, back int
 	return out
 }
 
-func (c *Client) yahooSession() (*browserhttp.Session, string) {
+func (c *Client) yahooSession() (market.YahooDoer, string, error) {
 	if c.NoYahoo {
-		return nil, ""
+		return nil, "", errors.New("yahoo: off")
 	}
-	c.mu.Lock()
-	if c.yahoo != nil {
-		s, crumb := c.yahoo, c.crumb
-		c.mu.Unlock()
-		return s, crumb
-	}
-	c.mu.Unlock()
-	session, err := browserhttp.New(market.TimeoutSec, true)
-	if err != nil {
+	session, crumb, err := c.Market.Yahoo.Session()
+	if err != nil && !errors.Is(err, market.ErrYahooCrumb) {
 		fmt.Fprintf(os.Stderr, "bagholder shorts: yahoo would not open: %s\n", err)
-		return nil, ""
 	}
-	if _, err := session.Get(fmt.Sprintf(YahooQuoteURL, "AAPL"), nil); err != nil {
-		fmt.Fprintf(os.Stderr, "bagholder shorts: yahoo would not open: %s\n", err)
-		return nil, ""
-	}
-	resp, err := session.Get(YahooCrumbURL, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bagholder shorts: yahoo would not open: %s\n", err)
-		return nil, ""
-	}
-	crumb := strings.TrimSpace(string(resp.Body))
-	if crumb == "" || len(crumb) > 32 {
-		return nil, ""
-	}
-	c.mu.Lock()
-	c.yahoo, c.crumb = session, crumb
-	c.mu.Unlock()
-	return session, crumb
+	return session, crumb, err
 }
 
 func (c *Client) cboeUnits(symbol string, now time.Time) *float64 {
@@ -538,17 +510,14 @@ func (c *Client) FloatShares(symbol, exchange, currency, name string) *float64 {
 			ccy = "USD"
 		}
 	}
-	session, crumb := c.yahooSession()
-	if session != nil {
+	if _, _, err := c.yahooSession(); err == nil {
 		forms := market.YahooFormsFor(market.Rec{Symbol: sym, Exchange: exchange, Currency: ccy})
 		if len(forms) == 0 {
 			forms = []string{market.TMXSymbol(sym)}
 		}
 		for _, form := range forms {
-			resp, ok := c.Market.YahooPaced(func() (*browserhttp.Response, error) {
-				return session.Get(fmt.Sprintf(YahooStatsURL, form, crumb), nil)
-			})
-			if !ok || resp == nil {
+			resp, err := c.Market.Yahoo.Summary(form, YahooModule)
+			if err != nil {
 				continue
 			}
 			if resp.Status != 200 {

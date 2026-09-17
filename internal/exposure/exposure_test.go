@@ -3,6 +3,7 @@ package exposure
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
 	"github.com/ProfessorBagholder/Bagholder/internal/market"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
@@ -157,7 +159,29 @@ func harvestPage(rows [][3]string) string {
 }
 
 func yahooURL(symbol, exchange, crumb string) string {
-	return strings.Replace(strings.Replace(YahooSummary, "%s", YahooSymbol(symbol, exchange), 1), "%s", crumb, 1)
+	return fmt.Sprintf(market.YahooSummaryURL, YahooSymbol(symbol, exchange), YahooHoldingsModule, crumb)
+}
+
+type yahooStub struct {
+	mu    sync.Mutex
+	urls  []string
+	pages map[string]string
+}
+
+func (y *yahooStub) Get(rawURL string, headers map[string]string) (*browserhttp.Response, error) {
+	y.mu.Lock()
+	y.urls = append(y.urls, rawURL)
+	y.mu.Unlock()
+	if rawURL == market.YahooWarmURL {
+		return &browserhttp.Response{Status: 200, URL: rawURL}, nil
+	}
+	if rawURL == market.YahooCrumbURL {
+		return &browserhttp.Response{Status: 200, Body: []byte("crumb"), URL: rawURL}, nil
+	}
+	if text, ok := y.pages[rawURL]; ok {
+		return &browserhttp.Response{Status: 200, Body: []byte(text), URL: rawURL}, nil
+	}
+	return &browserhttp.Response{Status: 404, URL: rawURL}, nil
 }
 
 func TestHoldingsAreSpreadByWeightAndTheRestIsUnclassified(t *testing.T) {
@@ -232,12 +256,10 @@ func TestABareTickerAnsweredWithADepositaryReceiptIsRetriedAsTheUSListing(t *tes
 
 func TestAFamilyWithoutAnAdapterFallsBackToYahoo(t *testing.T) {
 	summary := `{"quoteSummary":{"result":[{"topHoldings":{"holdings":[{"symbol":"RY.TO","holdingName":"Royal Bank of Canada","holdingPercent":{"raw":1.0}}],"sectorWeightings":[{"financial_services":{"raw":1.0}}]}}]}}`
-	s := &stub{tmx: classified(), pages: map[string]page{
-		"https://fc.yahoo.com":          {header: http.Header{"Set-Cookie": {"A1=abc; Path=/"}}},
-		YahooCrumb:                      {text: "crumb"},
-		yahooURL("ZZZ", "TSX", "crumb"): {text: summary},
-	}}
+	s := &stub{tmx: classified()}
 	c := newClient(t, s)
+	y := &yahooStub{pages: map[string]string{yahooURL("ZZZ", "TSX", "crumb"): summary}}
+	c.Market.Yahoo.Open = func() (market.YahooDoer, error) { return y, nil }
 	rec := c.FundExposure("ZZZ", "Someone Else Global Equity ETF", "TSX", 0, nil)
 	if rec == nil {
 		t.Fatal("no record from the fallback")
