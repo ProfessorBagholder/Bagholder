@@ -1594,6 +1594,14 @@ def quote_fits(quote, kind):
     return source not in ("coinbase", "cboe_options")
 
 
+def under_ticker(mapping, symbol, default=None):
+    mapping = mapping or {}
+    sym = _s(symbol)
+    if sym in mapping:
+        return mapping[sym]
+    return mapping.get(market.tmx_symbol(sym), default)
+
+
 def build_positions(open_lots, last_prices, balances, accounts, securities, journal, today, quotes=None, acts_by_id=None):
     quotes = quotes or {}
     acts_by_id = acts_by_id or {}
@@ -1629,7 +1637,7 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
         last_px = last["price"] if last else (cost / (qty * mult) if qty else 0.0)
         last_at = last["date"] if last else ""
         price_source = "fill"
-        quote = quotes.get(symbol)
+        quote = under_ticker(quotes, symbol)
         if quote and not quote_fits(quote, lots[0]["kind"]):
             quote = None
         if quote and _num(quote.get("price"), None):
@@ -2847,11 +2855,11 @@ def cashflow_view(base, f, positions_all, margin_used=0.0, has_margin=True):
         # Preferred: the fund's own declared record (TMX Money): the latest
         # distribution that has gone ex, and payments per year from the gaps
         # between its recent ex-dates, so a schedule change shows at once.
-        declared = [d for d in public.get(sym, []) if d["exDate"] <= today]
+        declared = [d for d in under_ticker(public, sym, []) if d["exDate"] <= today]
         if declared:
             declared.sort(key=lambda d: d["exDate"], reverse=True)
             per = declared[0]["amount"]
-            freq = payments_per_year([d["exDate"] for d in public.get(sym, [])])
+            freq = payments_per_year([d["exDate"] for d in under_ticker(public, sym, [])])
             if per and freq:
                 return {"per": per, "freq": freq, "annual": per * freq, "verified": True, "source": "declared"}
         # Otherwise this holding's own payment rows.
@@ -2873,20 +2881,20 @@ def cashflow_view(base, f, positions_all, margin_used=0.0, has_margin=True):
         fund's declared record first; failing that the ex-date TMX reports on the
         quote and the last payment received. A date is 'passed' once it is
         before today."""
-        recs_ = sorted(public.get(sym, []), key=lambda d: (_s(d.get("payDate"))[:10] or d["exDate"], d["exDate"]))
+        recs_ = sorted(under_ticker(public, sym, []), key=lambda d: (_s(d.get("payDate"))[:10] or d["exDate"], d["exDate"]))
         unpaid = [d for d in recs_ if (_s(d.get("payDate"))[:10] or d["exDate"]) >= today]
         pick = unpaid[0] if unpaid else (recs_[-1] if recs_ else None)
         if pick:
             ex, pay = pick["exDate"], _s(pick.get("payDate"))[:10]
         else:
-            q = quotes.get(sym) or {}
+            q = under_ticker(quotes, sym) or {}
             ex = _s(q.get("exDividendDate"))[:10]
             paid = sorted(r["date"] for r in for_yoc if r["symbol"] == sym)
             pay = paid[-1] if paid else ""
         return ex, pay, bool(ex and ex < today), bool(pay and pay < today)
 
     def last_price(p):
-        q = quotes.get(p["symbol"]) or {}
+        q = under_ticker(quotes, p["symbol"]) or {}
         if not quote_fits(q, p.get("kind")):
             q = {}
         px = _num(q.get("price"), None)

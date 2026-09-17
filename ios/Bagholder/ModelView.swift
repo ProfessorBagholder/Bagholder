@@ -586,11 +586,11 @@ extension BHModel {
             // Preferred: the fund's own declared record (TMX Money): the latest
             // distribution that has gone ex, and payments per year from the gaps
             // between its recent ex-dates, so a schedule change shows at once.
-            var declared = (pub[sym] ?? []).filter { $0.exDate <= today }
+            var declared = (BHModel.bySymbol(pub, sym) ?? []).filter { $0.exDate <= today }
             if !declared.isEmpty {
                 declared.sort { $0.exDate > $1.exDate }
                 let per = declared[0].amount
-                let freq = paymentsPerYear((pub[sym] ?? []).map { $0.exDate })
+                let freq = paymentsPerYear((BHModel.bySymbol(pub, sym) ?? []).map { $0.exDate })
                 if per != 0, let freq = freq {
                     return Rate(per: per, freq: freq, annual: per * Double(freq), verified: true, source: "declared")
                 }
@@ -608,7 +608,7 @@ extension BHModel {
         /// to be paid, whether or not it has gone ex, else the last known one.
         func distributionDates(_ sym: String) -> (String, String, Bool, Bool) {
             func payOf(_ d: BHDistribution) -> String { let p = String(d.payDate.prefix(10)); return p.isEmpty ? d.exDate : p }
-            let recs_ = (pub[sym] ?? []).sorted { (payOf($0), $0.exDate) < (payOf($1), $1.exDate) }
+            let recs_ = (BHModel.bySymbol(pub, sym) ?? []).sorted { (payOf($0), $0.exDate) < (payOf($1), $1.exDate) }
             let unpaid = recs_.filter { payOf($0) >= today }
             let pick = unpaid.first ?? recs_.last
             var ex = "", pay = ""
@@ -616,7 +616,7 @@ extension BHModel {
                 ex = p.exDate
                 pay = String(p.payDate.prefix(10))
             } else {
-                ex = String((quotes[sym]?.exDividendDate ?? "").prefix(10))
+                ex = String((BHModel.bySymbol(quotes, sym)?.exDividendDate ?? "").prefix(10))
                 let paid = forYoc.filter { $0.symbol == sym }.map { $0.date }.sorted()
                 pay = paid.last ?? ""
             }
@@ -624,7 +624,7 @@ extension BHModel {
         }
 
         func lastPrice(_ p: BHPosition) -> (Double, String) {
-            if let px = quotes[p.symbol]?.price, px > 0 { return (px, "close") }
+            if let px = BHModel.bySymbol(quotes, p.symbol)?.price, px > 0 { return (px, "close") }
             return (p.last, "fill")
         }
 

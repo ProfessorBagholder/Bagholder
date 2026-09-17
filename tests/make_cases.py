@@ -498,6 +498,19 @@ CASES = {
         ],
         "market": {"fx": {}, "benchmark": {}, "distributions": {}, "quotes": {"QQQQ": {"exDividendDate": "2026-09-15"}}},
     },
+    # the book writes a Canadian listing as Wealthsimple does (QNC.TO); its quote and its
+    # declared record are kept under the bare ticker the market sources name it by
+    "shares_quoted_under_bare_ticker": {
+        "today": "2026-09-07",
+        "activities": [
+            buy("b1", "QNC.TO", 100, 10.0, "2026-01-05", accountType="Cashflow"),
+            dividend("d1", "QNC.TO", 100, 0.05, "2026-06-15"),
+        ],
+        "market": {"fx": {}, "benchmark": {},
+                   "distributions": {"QNC": [{"exDate": "2026-06-01", "payDate": "2026-06-15", "amount": 0.05, "currency": "CAD"},
+                                             {"exDate": "2026-09-01", "payDate": "2026-09-15", "amount": 0.05, "currency": "CAD"}]},
+                   "quotes": {"QNC": {"price": 12.5, "priceChange": 0.5, "percentChange": 4.1667, "fetchedAt": "2026-09-07T14:00:00Z", "exDividendDate": "2026-09-01"}}},
+    },
 }
 
 

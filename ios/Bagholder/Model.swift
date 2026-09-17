@@ -1833,7 +1833,7 @@ enum BHModel {
             var lastPx = last?.price ?? (qty != 0 ? cost / (qty * mult) : 0)
             var lastAt = last?.date ?? ""
             var priceSource = "fill"
-            let quote = quotes[symbol]
+            let quote = bySymbol(quotes, symbol)
             if let q = quote, let px = q.price, px != 0 {
                 lastPx = px
                 lastAt = q.fetchedAt
@@ -2014,6 +2014,16 @@ enum BHModel {
     /// Verified payment frequency from actual payment dates (any order).
     /// Only the most recent gaps count (the last three), so a fund that changes
     /// its schedule is re-read after two payments at the new cadence.
+    static func bareTicker(_ symbol: String) -> String {
+        var s = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        for suffix in [".TO", ".V", ".CN", ".NE"] where s.hasSuffix(suffix) { s = String(s.dropLast(suffix.count)) }
+        return s
+    }
+
+    static func bySymbol<T>(_ mapping: [String: T], _ symbol: String) -> T? {
+        return mapping[symbol] ?? mapping[bareTicker(symbol)]
+    }
+
     static func paymentsPerYear(_ dates: [String]) -> Int? {
         let days = Array(Set(dates.map { String($0.prefix(10)) }.filter { !$0.isEmpty })).sorted()
         if days.count < 2 { return nil }
