@@ -369,6 +369,11 @@ func wsConnect(wsURL string, timeout time.Duration) (*miniWS, error) {
 }
 
 func cdpCall(w *miniWS, method string, params map[string]any, timeout time.Duration) map[string]any {
+	msg, _ := cdpExchange(w, method, params, timeout)
+	return msg
+}
+
+func cdpExchange(w *miniWS, method string, params map[string]any, timeout time.Duration) (map[string]any, bool) {
 	w.mu.Lock()
 	msgID := w.nextID
 	w.nextID++
@@ -379,7 +384,7 @@ func cdpCall(w *miniWS, method string, params map[string]any, timeout time.Durat
 	}
 	raw, _ := json.Marshal(payload)
 	if err := w.sendText(string(raw)); err != nil {
-		return nil
+		return nil, false
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -390,7 +395,7 @@ func cdpCall(w *miniWS, method string, params map[string]any, timeout time.Durat
 		opcode, data, err := w.recvMessage(remain)
 		if err != nil {
 			if errors.Is(err, errWSClosed) {
-				return nil
+				return nil, false
 			}
 			continue
 		}
@@ -402,10 +407,10 @@ func cdpCall(w *miniWS, method string, params map[string]any, timeout time.Durat
 			continue
 		}
 		if id, ok := py.NumOK(msg["id"]); ok && int(id) == msgID {
-			return msg
+			return msg, true
 		}
 	}
-	return nil
+	return nil, true
 }
 
 func jsonWithAccessToken(raw string) map[string]any {
@@ -1065,7 +1070,7 @@ func (a *App) loginInput(ev map[string]any) map[string]any {
 	x, y := py.Num(ev["x"], 0), py.Num(ev["y"], 0)
 	failed := false
 	call := func(method string, params map[string]any) {
-		if cdpCall(w, method, params, secs(captureCallSec)) == nil {
+		if _, live := cdpExchange(w, method, params, secs(captureCallSec)); !live {
 			failed = true
 		}
 	}
