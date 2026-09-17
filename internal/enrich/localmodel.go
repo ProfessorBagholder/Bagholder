@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -244,8 +245,12 @@ func (l *LocalModel) download(path string) bool {
 		return false
 	}
 	tmp := strings.TrimSuffix(path, filepath.Ext(path)) + ".part"
-	client := &http.Client{Timeout: DownloadTimeout * time.Second}
-	req, err := http.NewRequest(http.MethodGet, l.llamafileURL(), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	idle := time.AfterFunc(DownloadTimeout*time.Second, cancel)
+	defer idle.Stop()
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: DownloadTimeout * time.Second}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.llamafileURL(), nil)
 	if err != nil {
 		return false
 	}
@@ -259,10 +264,23 @@ func (l *LocalModel) download(path string) bool {
 	if err != nil {
 		return false
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return false
+	buf := make([]byte, 1<<20)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			idle.Reset(DownloadTimeout * time.Second)
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				rerr = werr
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			out.Close()
+			os.Remove(tmp)
+			return false
+		}
 	}
 	out.Close()
 	if err := os.Rename(tmp, path); err != nil {
