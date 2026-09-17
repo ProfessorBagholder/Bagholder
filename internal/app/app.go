@@ -32,6 +32,7 @@ const (
 	UpdateHealthySec      = 20
 	UpdateMaxBytes        = 50 * 1024 * 1024
 	UpdateDownloadMinutes = 30
+	InvalidateCoalesceSec = 3
 	UpdateCheckHours      = 1
 	UpdatesOffMessage     = "This copy is updated with docker compose pull; a new release is a new image."
 	ImagePage             = RepoURL + "/pkgs/container/bagholder"
@@ -200,6 +201,9 @@ type App struct {
 	staticMu    sync.Mutex
 	staticCache map[string]*staticEntry
 	bracketKick chan struct{}
+
+	invalidateMu    sync.Mutex
+	invalidateTimer *time.Timer
 }
 
 var cooldown = map[string]float64{"quotes": 60.0, "market": 300.0}
@@ -399,6 +403,20 @@ func (a *App) connectedIdle() bool {
 }
 
 func (a *App) invalidate(book bool) { a.model.Invalidate(book) }
+
+func (a *App) invalidateSoon() {
+	a.invalidateMu.Lock()
+	defer a.invalidateMu.Unlock()
+	if a.invalidateTimer != nil {
+		return
+	}
+	a.invalidateTimer = time.AfterFunc(InvalidateCoalesceSec*time.Second, func() {
+		a.invalidateMu.Lock()
+		a.invalidateTimer = nil
+		a.invalidateMu.Unlock()
+		a.invalidate(false)
+	})
+}
 
 func nowStamp() string { return py.NowStamp() }
 

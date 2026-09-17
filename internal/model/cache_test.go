@@ -329,3 +329,50 @@ func TestAGradeWrittenSurvivesTheNextPriceTick(t *testing.T) {
 		t.Errorf("tags: %v", again.Tags)
 	}
 }
+
+func TestAViewIsServedFromTheCacheUntilTheDataMoves(t *testing.T) {
+	st := tempStore(t)
+	m := New(st)
+	fixClock(t, "2026-12-31")
+	first := m.View(nil, "")
+	second := m.View(nil, "")
+	var a, b map[string]any
+	if err := json.Unmarshal(first, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second, &b); err != nil {
+		t.Fatal(err)
+	}
+	if a["generated"] == "" || b["generated"] == "" {
+		t.Fatal("no generated stamp")
+	}
+	delete(a, "generated")
+	delete(b, "generated")
+	if !reflect.DeepEqual(a, b) {
+		t.Error("the same base and filters give a different view")
+	}
+	m.viewMu.Lock()
+	cached := len(m.views)
+	m.viewMu.Unlock()
+	if cached != 1 {
+		t.Errorf("cached views = %d, want 1", cached)
+	}
+	st.AddWatch("QNC", "TSX-V", "Quantum eMotion Corp", "CAD", "", "")
+	third := m.View(nil, "")
+	var c map[string]any
+	if err := json.Unmarshal(third, &c); err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(c["markets"], a["markets"]) {
+		t.Error("a store write did not refresh the view")
+	}
+	if m.View(map[string]any{"search": "x"}, "") == nil {
+		t.Error("a filtered view")
+	}
+	m.viewMu.Lock()
+	cached = len(m.views)
+	m.viewMu.Unlock()
+	if cached != 2 {
+		t.Errorf("cached views after a write and a new filter = %d, want 2", cached)
+	}
+}

@@ -1,9 +1,11 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync"
 
+	"github.com/ProfessorBagholder/Bagholder/internal/py"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
 )
 
@@ -24,6 +26,10 @@ type Model struct {
 	inputs  *inputs
 	bookKey string
 	book    *Book
+
+	viewMu   sync.Mutex
+	viewBase *Base
+	views    map[string]viewEntry
 }
 
 func New(st *store.Store) *Model {
@@ -110,11 +116,45 @@ func (m *Model) remark(base *Base, in *inputs, today, version, coreKey string) *
 
 func (m *Model) Base() *Base { return m.BaseModel(false) }
 
+const ViewCacheMax = 16
+
+type viewEntry struct {
+	data  []byte
+	stamp int
+}
+
 func (m *Model) View(filters any, detail string) []byte {
 	m.rw.RLock()
 	defer m.rw.RUnlock()
-	v := BuildView(m.BaseModel(false), filters)
-	return marshalView(v, detail)
+	base := m.BaseModel(false)
+	f := CleanFilters(filters)
+	keyRaw, _ := json.Marshal(f)
+	key := string(keyRaw) + "\x00" + detail
+	m.viewMu.Lock()
+	if m.viewBase == base {
+		if e, ok := m.views[key]; ok {
+			m.viewMu.Unlock()
+			out := append([]byte{}, e.data...)
+			if e.stamp >= 0 {
+				copy(out[e.stamp:], py.NowStamp())
+			}
+			return out
+		}
+	}
+	m.viewMu.Unlock()
+	out := marshalView(BuildView(base, filters), detail)
+	stamp := -1
+	if i := bytes.Index(out, []byte(`"generated":"`)); i >= 0 && i+len(`"generated":"`)+20 <= len(out) {
+		stamp = i + len(`"generated":"`)
+	}
+	m.viewMu.Lock()
+	if m.viewBase != base || m.views == nil || len(m.views) >= ViewCacheMax {
+		m.viewBase = base
+		m.views = map[string]viewEntry{}
+	}
+	m.views[key] = viewEntry{data: out, stamp: stamp}
+	m.viewMu.Unlock()
+	return append([]byte{}, out...)
 }
 
 func marshalView(v *View, detail string) []byte {
@@ -292,6 +332,9 @@ func (m *Model) ApplyJournal(entries map[string]store.JournalEntry) {
 	full, core := m.st.Versions()
 	m.version = full
 	m.core = core + "|" + base.Today
+	m.viewMu.Lock()
+	m.views = nil
+	m.viewMu.Unlock()
 }
 
 func (m *Model) Invalidate(book bool) {

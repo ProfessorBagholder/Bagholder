@@ -479,52 +479,92 @@ func differs(a, b any) bool {
 	return str(a) != str(b)
 }
 
-func (s *Store) reviseWealthsimpleRow(cid string, row *Activity) bool {
+func reviseWealthsimpleRow(tx *sql.Tx, cid string, row *Activity) (bool, error) {
 	params := insertParams(row, "", cid)
 	incoming := map[string]any{}
 	for i, c := range insertColumnList {
 		incoming[c] = params[i]
 	}
-	changed := false
-	_ = s.tx(func(tx *sql.Tx) error {
-		rows, err := tx.Query("SELECT * FROM activities WHERE canonical_id = ?", cid)
+	rows, err := tx.Query("SELECT * FROM activities WHERE canonical_id = ?", cid)
+	if err != nil {
+		return false, err
+	}
+	var stored map[string]any
+	if rows.Next() {
+		stored, err = scanRow(rows)
+	}
+	rows.Close()
+	if err != nil || stored == nil {
+		return false, err
+	}
+	var cols []string
+	for _, c := range revisableColumns {
+		if differs(incoming[c], stored[c]) {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) == 0 {
+		return false, nil
+	}
+	if incoming["security_id"] != nil && str(stored["security_id"]) == "" {
+		cols = append(cols, "security_id")
+	}
+	sets := make([]string, 0, len(cols))
+	args := make([]any, 0, len(cols)+1)
+	for _, c := range cols {
+		sets = append(sets, c+" = ?")
+		args = append(args, incoming[c])
+	}
+	args = append(args, cid)
+	if _, err := tx.Exec("UPDATE activities SET "+strings.Join(sets, ", ")+" WHERE canonical_id = ?", args...); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+type linkPool struct {
+	byKey map[LinkMatchKey][]*Activity
+}
+
+func loadLinkPool(tx *sql.Tx) (*linkPool, error) {
+	pool := &linkPool{byKey: map[LinkMatchKey][]*Activity{}}
+	rows, err := tx.Query(selectActivities + " WHERE canonical_id IS NULL OR canonical_id = ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		a, err := scanActivity(rows)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		var stored map[string]any
-		if rows.Next() {
-			stored, err = scanRow(rows)
+		p := &a
+		for _, withAccount := range []bool{true, false} {
+			k := LinkKey(p, withAccount)
+			pool.byKey[k] = append(pool.byKey[k], p)
 		}
-		rows.Close()
-		if err != nil || stored == nil {
-			return err
-		}
-		var cols []string
-		for _, c := range revisableColumns {
-			if differs(incoming[c], stored[c]) {
-				cols = append(cols, c)
+	}
+	return pool, rows.Err()
+}
+
+func (p *linkPool) candidates(a *Activity) []*Activity {
+	return p.byKey[LinkKey(a, IsRealAccount(a.AccountID))]
+}
+
+func (p *linkPool) remove(id string) {
+	for k, list := range p.byKey {
+		kept := list[:0]
+		for _, c := range list {
+			if c.ID != id {
+				kept = append(kept, c)
 			}
 		}
-		if len(cols) == 0 {
-			return nil
+		if len(kept) == 0 {
+			delete(p.byKey, k)
+		} else {
+			p.byKey[k] = kept
 		}
-		if incoming["security_id"] != nil && str(stored["security_id"]) == "" {
-			cols = append(cols, "security_id")
-		}
-		sets := make([]string, 0, len(cols))
-		args := make([]any, 0, len(cols)+1)
-		for _, c := range cols {
-			sets = append(sets, c+" = ?")
-			args = append(args, incoming[c])
-		}
-		args = append(args, cid)
-		if _, err := tx.Exec("UPDATE activities SET "+strings.Join(sets, ", ")+" WHERE canonical_id = ?", args...); err != nil {
-			return err
-		}
-		changed = true
-		return nil
-	})
-	return changed
+	}
 }
 
 type ApplyResult struct {
@@ -534,36 +574,67 @@ type ApplyResult struct {
 func (s *Store) ApplyWealthsimpleMapped(rows []Activity) ApplyResult {
 	s.must()
 	var out ApplyResult
+	if len(rows) == 0 {
+		return out
+	}
 	known := s.CanonicalIDs()
-	for i := range rows {
-		row := rows[i].Clone()
-		row.Source = "wealthsimple"
-		cid := strings.TrimSpace(row.CanonicalID)
-		if cid == "" || LooksLikeHomemadeID(cid) {
-			continue
-		}
-		if known[cid] {
-			if s.reviseWealthsimpleRow(cid, &row) {
-				out.Revised++
+	_ = s.tx(func(tx *sql.Tx) error {
+		var pool *linkPool
+		for i := range rows {
+			row := rows[i].Clone()
+			row.Source = "wealthsimple"
+			cid := strings.TrimSpace(row.CanonicalID)
+			if cid == "" || LooksLikeHomemadeID(cid) {
 				continue
 			}
-			if sid := strings.TrimSpace(row.SecurityID); sid != "" {
-				_, _ = s.exec("UPDATE activities SET security_id = ? WHERE canonical_id = ? AND (security_id IS NULL OR security_id = '')", sid, cid)
+			if known[cid] {
+				revised, err := reviseWealthsimpleRow(tx, cid, &row)
+				if err != nil {
+					return err
+				}
+				if revised {
+					out.Revised++
+					continue
+				}
+				if sid := strings.TrimSpace(row.SecurityID); sid != "" {
+					if _, err := tx.Exec("UPDATE activities SET security_id = ? WHERE canonical_id = ? AND (security_id IS NULL OR security_id = '')", sid, cid); err != nil {
+						return err
+					}
+				}
+				out.Skipped++
+				continue
 			}
-			out.Skipped++
-			continue
-		}
-		matches := s.FindLinkCandidates(&row)
-		if len(matches) == 1 && s.StampCanonicalID(matches[0].ID, cid) {
-			known[cid] = true
-			out.Linked++
-			continue
-		}
-		if _, err := s.InsertActivity(row, cid, ""); err == nil {
+			if pool == nil {
+				p, err := loadLinkPool(tx)
+				if err != nil {
+					return err
+				}
+				pool = p
+			}
+			if matches := pool.candidates(&row); len(matches) == 1 {
+				res, err := tx.Exec("UPDATE activities SET canonical_id = ? WHERE id = ? AND (canonical_id IS NULL OR canonical_id = '')", cid, matches[0].ID)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n > 0 {
+					pool.remove(matches[0].ID)
+					known[cid] = true
+					out.Linked++
+					continue
+				}
+			}
+			aid := strings.TrimSpace(row.ID)
+			if aid == "" || LooksLikeHomemadeID(aid) {
+				aid = py.UUID4()
+			}
+			if _, err := tx.Exec(insertSQL, insertParams(&row, aid, nullStr(cid))...); err != nil {
+				return err
+			}
 			known[cid] = true
 			out.Inserted++
 		}
-	}
+		return nil
+	})
 	return out
 }
 

@@ -173,14 +173,18 @@ func (a *App) refreshNews() int {
 		a.newsMu.Lock()
 		delete(a.newsLeft, key(l))
 		a.newsMu.Unlock()
-		a.invalidate(false)
+		a.invalidateSoon()
 	}
 	defer func() {
 		a.newsMu.Lock()
 		a.newsLeft = map[string]bool{}
 		a.newsMu.Unlock()
 	}()
-	return news.Refresh(a.mk, a.newsListings(), a.mk.Clock(), a.noteWireReleases, start, done)
+	n := news.Refresh(a.mk, a.newsListings(), a.mk.Clock(), a.noteWireReleases, start, done)
+	if n > 0 {
+		a.invalidate(false)
+	}
+	return n
 }
 
 func (a *App) newsReading() []string {

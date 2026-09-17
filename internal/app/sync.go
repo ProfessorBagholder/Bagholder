@@ -282,8 +282,11 @@ func (a *App) refreshExposures() map[string]any {
 			if line != "" {
 				done++
 				a.logf("%s\n", line)
-				a.invalidate(false)
+				a.invalidateSoon()
 			}
+		}
+		if done > 0 {
+			a.invalidate(false)
 		}
 	}
 	return map[string]any{"ok": true, "held": len(held), "refreshed": done}
