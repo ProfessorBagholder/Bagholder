@@ -124,18 +124,38 @@ fn send_json(req: Request, code: u16, body: &Value) {
 }
 
 /// A body written as it is made: the headers, then each chunk flushed as soon
-/// as the producer hands it over, until the producer is done or the client goes.
+/// as the producer hands it over, until the producer is done or the client
+/// goes. Chunked, so the response ends when the producer does: the server keeps
+/// the connection for the next request, and a browser that waited on an
+/// unterminated response would hold one of its few connections to this host.
 fn stream<F: FnOnce(&mut dyn FnMut(&[u8]) -> bool) + Send + 'static>(req: Request, content_type: &str, produce: F) {
     let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nTransfer-Encoding: chunked\r\n\r\n",
         content_type
     );
     let mut w = req.into_writer();
     if w.write_all(head.as_bytes()).and_then(|_| w.flush()).is_err() {
         return;
     }
-    let mut write = |chunk: &[u8]| w.write_all(chunk).and_then(|_| w.flush()).is_ok();
-    produce(&mut write);
+    let mut alive = true;
+    {
+        let mut write = |chunk: &[u8]| {
+            if chunk.is_empty() {
+                return true;
+            }
+            alive = w
+                .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                .and_then(|_| w.write_all(chunk))
+                .and_then(|_| w.write_all(b"\r\n"))
+                .and_then(|_| w.flush())
+                .is_ok();
+            alive
+        };
+        produce(&mut write);
+    }
+    if alive {
+        let _ = w.write_all(b"0\r\n\r\n").and_then(|_| w.flush());
+    }
 }
 
 fn query_of(url: &str) -> &str {

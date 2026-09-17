@@ -359,10 +359,11 @@ impl Ws {
     }
 
     /// Send a call without waiting for its answer.
-    pub fn fire(&mut self, method: &str, params: Value) {
+    /// Send a call without waiting for its answer; false only when the socket is gone.
+    pub fn fire(&mut self, method: &str, params: Value) -> bool {
         let id = self.next_id;
         self.next_id += 1;
-        let _ = self.send_text(&json!({"id": id, "method": method, "params": params}).to_string());
+        self.send_text(&json!({"id": id, "method": method, "params": params}).to_string()).is_ok()
     }
 
     pub fn close(mut self) {
@@ -703,31 +704,66 @@ pub fn login_frame() -> Option<Vec<u8>> {
 struct Cast {
     frame: Option<Vec<u8>>,
     seq: u64,
+    at: Option<Instant>,
 }
 
 fn cast() -> &'static (Mutex<Cast>, Condvar) {
     static C: OnceLock<(Mutex<Cast>, Condvar)> = OnceLock::new();
-    C.get_or_init(|| (Mutex::new(Cast { frame: None, seq: 0 }), Condvar::new()))
+    C.get_or_init(|| (Mutex::new(Cast { frame: None, seq: 0, at: None }), Condvar::new()))
 }
 
 fn screencast_params() -> Value {
     json!({"format": "jpeg", "quality": 60, "maxWidth": LOGIN_VIEW_SIZE.0, "maxHeight": LOGIN_VIEW_SIZE.1, "everyNthFrame": 1})
 }
 
-/// Passkey requests refused the moment they are made.
+/// A passkey sign-in refused the moment it is asked for, as Cancel in the
+/// browser's dialog would; the page's autofill request and everything else
+/// pass through untouched.
 const NO_PASSKEYS: &str = r#"(() => {
   const c = navigator.credentials;
   if (!c || c.__bagholderNoPasskeys) return;
-  const refuse = () => Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"));
-  const get = c.get.bind(c), create = c.create.bind(c);
-  c.get = (o) => (o && o.publicKey ? refuse() : get(o));
-  c.create = (o) => (o && o.publicKey ? refuse() : create(o));
-  if (window.PublicKeyCredential) {
-    PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
-    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);
-  }
+  const get = c.get.bind(c);
+  c.get = (o) => (o && o.publicKey && o.mediation !== "conditional"
+    ? Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"))
+    : get(o));
   Object.defineProperty(c, "__bagholderNoPasskeys", { value: true });
 })();"#;
+
+fn publish_frame(frame: Vec<u8>) {
+    let (m, c) = cast();
+    let mut g = m.lock().unwrap();
+    g.frame = Some(frame);
+    g.seq += 1;
+    g.at = Some(Instant::now());
+    c.notify_all();
+}
+
+/// The screencast sends a frame only when the page changes, and in a container
+/// it can send none at all: whenever no frame has come for a moment, a
+/// screenshot taken over a socket of its own stands in for one.
+fn screenshot_loop(attempt: i64) {
+    let mut ws: Option<Ws> = None;
+    while attempt_is(attempt) && capturing() {
+        std::thread::sleep(Duration::from_millis(250));
+        let stale = { let (m, _) = cast(); m.lock().unwrap().at.map(|t| t.elapsed() > Duration::from_millis(700)).unwrap_or(true) };
+        if !stale {
+            continue;
+        }
+        if ws.is_none() {
+            ws = cdp_pages(DEBUG_PORT).first().and_then(|p| Ws::connect(&f(p, "webSocketDebuggerUrl"), CAPTURE_CALL).ok());
+        }
+        let shot = ws.as_mut().and_then(|w| w.call("Page.captureScreenshot", Some(json!({"format": "jpeg", "quality": 60})), CAPTURE_CALL));
+        match shot.as_ref().and_then(|r| r.pointer("/result/data")).and_then(|d| d.as_str()) {
+            Some(data) => {
+                let frame = unb64(data);
+                if !frame.is_empty() {
+                    publish_frame(frame);
+                }
+            }
+            None => ws = None,
+        }
+    }
+}
 
 fn screencast_loop(attempt: i64) {
     while attempt_is(attempt) {
@@ -737,20 +773,15 @@ fn screencast_loop(attempt: i64) {
         let pages = cdp_pages(DEBUG_PORT);
         let page = match pages.first() { Some(p) => p.clone(), None => { std::thread::sleep(Duration::from_millis(500)); continue } };
         let mut ws = match Ws::connect(&f(&page, "webSocketDebuggerUrl"), CAPTURE_CALL) { Ok(w) => w, Err(_) => { std::thread::sleep(Duration::from_millis(500)); continue } };
-        // A passkey request opens Chromium's own security-key dialog, which is
-        // drawn outside the page: the stream never shows it and the page's
-        // clicks never reach it, so the window would wait on it for good. In
-        // every document the tab loads while this socket is open, a passkey
-        // request is refused at once instead, the way a browser with no
-        // authenticator refuses it, and the site carries on without it.
+        // A passkey sign-in opens Chromium's own passkey dialog, which is drawn
+        // outside the page: the stream never shows it and the page's clicks
+        // never reach it, so the page would wait on it for good. In every
+        // document the tab shows while this socket is open, such a request is
+        // refused at once instead, and the page offers another way to sign in.
         ws.call("Page.enable", None, CAPTURE_CALL);
         ws.call("Page.addScriptToEvaluateOnNewDocument", Some(json!({"source": NO_PASSKEYS, "runImmediately": true})), CAPTURE_CALL);
         ws.call("Runtime.evaluate", Some(json!({"expression": NO_PASSKEYS})), CAPTURE_CALL);
-        if f(&page, "url").starts_with("about:blank") {
-            ws.call("Page.navigate", Some(json!({"url": LOGIN_URL})), CAPTURE_CALL);
-        } else {
-            ws.call("Page.startScreencast", Some(screencast_params()), CAPTURE_CALL);
-        }
+        ws.call("Page.startScreencast", Some(screencast_params()), CAPTURE_CALL);
         loop {
             if !attempt_is(attempt) || !capturing() {
                 ws.close();
@@ -765,24 +796,13 @@ fn screencast_loop(attempt: i64) {
                 continue;
             }
             let msg: Value = match serde_json::from_slice(&data) { Ok(m) => m, Err(_) => break };
-            let method = f(&msg, "method");
-            if method == "Page.loadEventFired" {
-                // a navigation ends the screencast: it starts again on each load
-                ws.fire("Page.stopScreencast", json!({}));
-                ws.fire("Page.startScreencast", screencast_params());
-                continue;
-            }
-            if method != "Page.screencastFrame" {
+            if f(&msg, "method") != "Page.screencastFrame" {
                 continue;
             }
             let p = msg.get("params").cloned().unwrap_or(json!({}));
             let frame = unb64(&f(&p, "data"));
             if !frame.is_empty() {
-                let (m, c) = cast();
-                let mut g = m.lock().unwrap();
-                g.frame = Some(frame);
-                g.seq += 1;
-                c.notify_all();
+                publish_frame(frame);
             }
             // acknowledged without waiting for the answer
             ws.fire("Page.screencastFrameAck", json!({"sessionId": p.get("sessionId").cloned().unwrap_or(Value::Null)}));
@@ -794,9 +814,20 @@ fn screencast_loop(attempt: i64) {
 /// The window as a multipart JPEG stream, each frame
 /// as Chromium pushes it.
 pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
+    // The latest frame goes out at once, then every new one, and the latest
+    // again after a second without one: a page that is redrawn opens a new
+    // stream and drops the old one, and only a write finds out that the reader
+    // is gone. Without it every dropped stream stays open, and the browser,
+    // which keeps six connections to a host, stops loading anything from here.
+    // Only the newest reader is served: the page opens a new stream on every
+    // redraw and the image it replaced may keep reading, so each older stream
+    // is ended here and its connection freed.
+    static READER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let me = READER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    cast().1.notify_all();
     let mut last = u64::MAX;
     loop {
-        if !capturing() {
+        if !capturing() || READER.load(std::sync::atomic::Ordering::SeqCst) != me {
             return;
         }
         let frame = {
@@ -805,11 +836,16 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
             if g.seq == last {
                 g = c.wait_timeout(g, Duration::from_secs(1)).unwrap().0;
             }
-            if g.seq == last || g.frame.is_none() {
-                continue;
+            if READER.load(std::sync::atomic::Ordering::SeqCst) != me {
+                return;
             }
-            last = g.seq;
-            g.frame.clone().unwrap()
+            match g.frame.clone() {
+                Some(f) => {
+                    last = g.seq;
+                    f
+                }
+                None => continue,
+            }
         };
         let mut chunk = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", frame.len()).into_bytes();
         chunk.extend_from_slice(&frame);
@@ -849,7 +885,10 @@ pub fn login_input(ev: &Value) -> Value {
     let y = crate::app::num(ev.get("y"), Some(0.0)).unwrap_or(0.0);
     let mut unknown: Option<&str> = None;
     let r = with_view(|ws| {
-        let mut call = |m: &str, p: Value| ws.call(m, Some(p), CAPTURE_CALL);
+        // sent without waiting on the answers: a slow reply is not a failure,
+        // only a socket that is gone is
+        let mut sent = true;
+        let mut call = |m: &str, p: Value| sent &= ws.fire(m, p);
         match kind.as_str() {
             "click" => {
                 call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y}));
@@ -893,7 +932,9 @@ pub fn login_input(ev: &Value) -> Value {
                 unknown = Some("unknown input");
             }
         }
-        Some(())
+        // the answers are read and dropped, so they never pile up on the socket
+        while ws.recv_message(Duration::from_millis(1)).is_ok() {}
+        if sent { Some(()) } else { None }
     });
     if let Some(u) = unknown {
         return json!({"ok": false, "error": u});
@@ -981,13 +1022,10 @@ pub fn start_login_browser() -> Value {
     ];
     if login_view() {
         // a container: a real window on its virtual display, sized for the page
-        args.extend(["--no-sandbox".into(), "--disable-gpu".into(), "--disable-dev-shm-usage".into(), "--window-position=0,0".into(),
+        args.extend(["--no-sandbox".into(), "--disable-gpu".into(), "--disable-dev-shm-usage".into(), "--window-position=0,0".into(), "--hide-crash-restore-bubble".into(),
                      format!("--window-size={},{}", LOGIN_VIEW_SIZE.0, LOGIN_VIEW_SIZE.1)]);
     }
-    // in the page's own view the tab opens blank, and the stream's socket
-    // sends it to the sign-in page once passkey requests are refused there,
-    // so the page never gets to ask before that is in place
-    args.push(if login_view() { "about:blank".into() } else { LOGIN_URL.into() });
+    args.push(LOGIN_URL.into());
     let mut cmd = Command::new(&chrome);
     cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
@@ -1014,8 +1052,10 @@ pub fn start_login_browser() -> Value {
             let mut g = m.lock().unwrap();
             g.frame = None;
             g.seq = 0;
+            g.at = None;
         }
         spawn("bagholder-screencast", move || screencast_loop(attempt));
+        spawn("bagholder-screenshots", move || screenshot_loop(attempt));
     }
     json!({"ok": true})
 }
