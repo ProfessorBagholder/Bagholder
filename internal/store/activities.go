@@ -187,29 +187,36 @@ func canonicalFromRow(a *Activity, source string) string {
 
 func CanonicalFromRow(a *Activity, source string) string { return canonicalFromRow(a, source) }
 
-func rowToActivity(r map[string]any) Activity {
-	settle := str(r["settlement_date"])
+func scanActivity(rows *sql.Rows) (Activity, error) {
+	var id, canonicalID, occurredAt, transactionDate, settlementDate, accountID, bookID, fifoID, accountType, activityType, activitySubType, description, direction, symbol, name, currency, category, source, rawType, aftType, counterSymbol, securityID sql.NullString
+	var quantity, unitPrice, commission, netCashAmount, balance sql.NullFloat64
+	if err := rows.Scan(&id, &canonicalID, &occurredAt, &transactionDate, &settlementDate, &accountID, &bookID, &fifoID, &accountType, &activityType, &activitySubType, &description, &direction, &symbol, &name, &currency, &quantity, &unitPrice, &commission, &netCashAmount, &category, &balance, &source, &rawType, &aftType, &counterSymbol, &securityID); err != nil {
+		return Activity{}, err
+	}
+	settle := settlementDate.String
 	if settle == "" {
-		settle = str(r["transaction_date"])
+		settle = transactionDate.String
 	}
-	book := str(r["book_id"])
+	book := bookID.String
 	if book == "" {
-		book = str(r["account_id"])
+		book = accountID.String
 	}
-	fifo := str(r["fifo_id"])
+	fifo := fifoID.String
 	if fifo == "" {
-		fifo = str(r["account_id"])
+		fifo = accountID.String
 	}
 	return Activity{
-		ID: str(r["id"]), CanonicalID: str(r["canonical_id"]), OccurredAt: str(r["occurred_at"]), TransactionDate: str(r["transaction_date"]),
-		SettlementDate: settle, AccountID: str(r["account_id"]), BookID: book, FifoID: fifo, AccountType: str(r["account_type"]),
-		ActivityType: str(r["activity_type"]), ActivitySubType: str(r["activity_sub_type"]), Description: str(r["description"]),
-		Direction: str(r["direction"]), Symbol: str(r["symbol"]), Name: str(r["name"]), Currency: str(r["currency"]),
-		Quantity: py.Deref(fnum(r["quantity"]), 0), UnitPrice: py.Deref(fnum(r["unit_price"]), 0), Commission: py.Deref(fnum(r["commission"]), 0),
-		NetCashAmount: py.Deref(fnum(r["net_cash_amount"]), 0), Category: str(r["category"]), Balance: fnum(r["balance"]), Source: str(r["source"]),
-		RawType: str(r["raw_type"]), AftType: str(r["aft_type"]), CounterSymbol: str(r["counter_symbol"]), SecurityID: str(r["security_id"]),
-	}
+		ID: id.String, CanonicalID: canonicalID.String, OccurredAt: occurredAt.String, TransactionDate: transactionDate.String,
+		SettlementDate: settle, AccountID: accountID.String, BookID: book, FifoID: fifo, AccountType: accountType.String,
+		ActivityType: activityType.String, ActivitySubType: activitySubType.String, Description: description.String,
+		Direction: direction.String, Symbol: symbol.String, Name: name.String, Currency: currency.String,
+		Quantity: quantity.Float64, UnitPrice: unitPrice.Float64, Commission: commission.Float64,
+		NetCashAmount: netCashAmount.Float64, Category: category.String, Balance: nullFloat(balance), Source: source.String,
+		RawType: rawType.String, AftType: aftType.String, CounterSymbol: counterSymbol.String, SecurityID: securityID.String,
+	}, nil
 }
+
+const selectActivities = "SELECT " + insertColumns + " FROM activities"
 
 const insertColumns = "id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id"
 
@@ -274,17 +281,17 @@ func (s *Store) InsertActivity(a Activity, canonicalID string, assignedID string
 		if _, err := tx.Exec(insertSQL, insertParams(&a, aid, nullStr(canonicalID))...); err != nil {
 			return err
 		}
-		rows, err := tx.Query("SELECT * FROM activities WHERE id = ?", aid)
+		rows, err := tx.Query(selectActivities+" WHERE id = ?", aid)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		if rows.Next() {
-			m, err := scanRow(rows)
+			a, err := scanActivity(rows)
 			if err != nil {
 				return err
 			}
-			out = rowToActivity(m)
+			out = a
 		}
 		return rows.Err()
 	})
@@ -302,13 +309,20 @@ func (s *Store) InsertLocal(a Activity) (Activity, error) {
 }
 
 func (s *Store) allActivities() ([]Activity, error) {
-	rows, err := s.queryMaps("SELECT * FROM activities ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC")
+	var out []Activity
+	err := s.each(selectActivities+" ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC", nil, func(rows *sql.Rows) error {
+		a, err := scanActivity(rows)
+		if err != nil {
+			return err
+		}
+		out = append(out, a)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Activity, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, rowToActivity(r))
+	if out == nil {
+		out = []Activity{}
 	}
 	return out, nil
 }
@@ -329,13 +343,14 @@ func (s *Store) ActivityCount() int {
 func (s *Store) CanonicalIDs() map[string]bool {
 	s.must()
 	out := map[string]bool{}
-	rows, err := s.queryMaps("SELECT canonical_id FROM activities WHERE canonical_id IS NOT NULL AND canonical_id != ''")
-	if err != nil {
-		return out
-	}
-	for _, r := range rows {
-		out[str(r["canonical_id"])] = true
-	}
+	_ = s.each("SELECT canonical_id FROM activities WHERE canonical_id IS NOT NULL AND canonical_id != ''", nil, func(rows *sql.Rows) error {
+		var cid sql.NullString
+		if err := rows.Scan(&cid); err != nil {
+			return err
+		}
+		out[cid.String] = true
+		return nil
+	})
 	return out
 }
 
@@ -408,15 +423,18 @@ func (s *Store) FindLinkCandidates(a *Activity) []Activity {
 	includeAccount := IsRealAccount(a.AccountID)
 	target := LinkKey(a, includeAccount)
 	var matches []Activity
-	rows, err := s.queryMaps("SELECT * FROM activities WHERE canonical_id IS NULL OR canonical_id = ''")
-	if err != nil {
-		return nil
-	}
-	for _, r := range rows {
-		mapped := rowToActivity(r)
+	err := s.each(selectActivities+" WHERE canonical_id IS NULL OR canonical_id = ''", nil, func(rows *sql.Rows) error {
+		mapped, err := scanActivity(rows)
+		if err != nil {
+			return err
+		}
 		if LinkKey(&mapped, includeAccount) == target {
 			matches = append(matches, mapped)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil
 	}
 	return matches
 }
@@ -693,12 +711,17 @@ type NavPoint struct {
 	AccountID   string   `json:"accountId,omitempty"`
 }
 
-func navPointFromRow(r map[string]any) NavPoint {
-	ccy := str(r["currency"])
+func scanNavPoint(rows *sql.Rows) (string, NavPoint, error) {
+	var accountID, date, currency sql.NullString
+	var equity, netDeposits sql.NullFloat64
+	if err := rows.Scan(&accountID, &date, &equity, &currency, &netDeposits); err != nil {
+		return "", NavPoint{}, err
+	}
+	ccy := currency.String
 	if ccy == "" {
 		ccy = "CAD"
 	}
-	return NavPoint{Date: str(r["date"]), Equity: py.Deref(fnum(r["equity"]), 0), Currency: ccy, NetDeposits: fnum(r["net_deposits"])}
+	return accountID.String, NavPoint{Date: date.String, Equity: equity.Float64, Currency: ccy, NetDeposits: nullFloat(netDeposits)}, nil
 }
 
 func (s *Store) NavLastDates() map[string]string {
@@ -776,8 +799,30 @@ func (sec Security) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o)
 }
 
-func securityFromRow(r map[string]any) Security {
-	return Security{ID: str(r["id"]), Symbol: str(r["symbol"]), Name: str(r["name"]), PrimaryExchange: str(r["primary_exchange"]), PrimaryMic: str(r["primary_mic"]), Currency: str(r["currency"]), UnderlyingID: str(r["underlying_id"])}
+func scanSecurity(rows *sql.Rows) (Security, error) {
+	var id, symbol, name, primaryExchange, primaryMic, currency, underlyingID sql.NullString
+	if err := rows.Scan(&id, &symbol, &name, &primaryExchange, &primaryMic, &currency, &underlyingID); err != nil {
+		return Security{}, err
+	}
+	return Security{ID: id.String, Symbol: symbol.String, Name: name.String, PrimaryExchange: primaryExchange.String, PrimaryMic: primaryMic.String, Currency: currency.String, UnderlyingID: underlyingID.String}, nil
+}
+
+const selectSecurities = "SELECT id, symbol, name, primary_exchange, primary_mic, currency, underlying_id FROM securities"
+
+func (s *Store) securities() []Security {
+	var out []Security
+	err := s.each(selectSecurities+" ORDER BY id", nil, func(rows *sql.Rows) error {
+		sec, err := scanSecurity(rows)
+		if err != nil {
+			return err
+		}
+		out = append(out, sec)
+		return nil
+	})
+	if err != nil || out == nil {
+		return []Security{}
+	}
+	return out
 }
 
 func (s *Store) UpsertSecurities(rows []Security) {
@@ -804,12 +849,7 @@ func (s *Store) UpsertSecurities(rows []Security) {
 
 func (s *Store) ListSecurities() []Security {
 	s.must()
-	rows, _ := s.queryMaps("SELECT * FROM securities ORDER BY id")
-	out := make([]Security, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, securityFromRow(r))
-	}
-	return out
+	return s.securities()
 }
 
 func (s *Store) MissingSecurityIDs(ids []string) []string {
@@ -1055,34 +1095,69 @@ func (s *Store) Snapshot(withActivities bool) Snapshot {
 			snap.Activities = []Activity{}
 		}
 	}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM accounts ORDER BY id")) {
-		snap.Accounts = append(snap.Accounts, Account{ID: str(r["id"]), Nickname: str(r["nickname"]), UnifiedAccountType: str(r["unified_account_type"]), Currency: str(r["currency"]), Status: str(r["status"]), Type: str(r["type"]), NetLiquidationValue: fnum(r["net_liquidation_value"]), MarginAccountID: str(r["margin_account_id"])})
+	var accounts []Account
+	if err := s.each("SELECT id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id FROM accounts ORDER BY id", nil, func(rows *sql.Rows) error {
+		var id, nickname, unifiedAccountType, currency, status, typ, marginAccountID sql.NullString
+		var nlv sql.NullFloat64
+		if err := rows.Scan(&id, &nickname, &unifiedAccountType, &currency, &status, &typ, &nlv, &marginAccountID); err != nil {
+			return err
+		}
+		accounts = append(accounts, Account{ID: id.String, Nickname: nickname.String, UnifiedAccountType: unifiedAccountType.String, Currency: currency.String, Status: status.String, Type: typ.String, NetLiquidationValue: nullFloat(nlv), MarginAccountID: marginAccountID.String})
+		return nil
+	}); err == nil {
+		snap.Accounts = append(snap.Accounts, accounts...)
 	}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM balances")) {
-		snap.Balances = append(snap.Balances, Balance{AccountID: str(r["account_id"]), CustodianAccountID: str(r["custodian_account_id"]), SecurityID: str(r["security_id"]), Quantity: fnum(r["quantity"])})
+	var balances []Balance
+	if err := s.each("SELECT account_id, custodian_account_id, security_id, quantity FROM balances", nil, func(rows *sql.Rows) error {
+		var accountID, custodianAccountID, securityID sql.NullString
+		var quantity sql.NullFloat64
+		if err := rows.Scan(&accountID, &custodianAccountID, &securityID, &quantity); err != nil {
+			return err
+		}
+		balances = append(balances, Balance{AccountID: accountID.String, CustodianAccountID: custodianAccountID.String, SecurityID: securityID.String, Quantity: nullFloat(quantity)})
+		return nil
+	}); err == nil {
+		snap.Balances = append(snap.Balances, balances...)
 	}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM margin ORDER BY account_id")) {
-		ccy := str(r["currency"])
+	var margin []Margin
+	if err := s.each("SELECT account_id, buying_power, currency, unavailable, fetched_at FROM margin ORDER BY account_id", nil, func(rows *sql.Rows) error {
+		var accountID, currency, unavailable, fetchedAt sql.NullString
+		var buyingPower sql.NullFloat64
+		if err := rows.Scan(&accountID, &buyingPower, &currency, &unavailable, &fetchedAt); err != nil {
+			return err
+		}
+		ccy := currency.String
 		if ccy == "" {
 			ccy = "CAD"
 		}
-		snap.Margin = append(snap.Margin, Margin{AccountID: str(r["account_id"]), BuyingPower: fnum(r["buying_power"]), Currency: ccy, Unavailable: str(r["unavailable"]), FetchedAt: str(r["fetched_at"])})
+		margin = append(margin, Margin{AccountID: accountID.String, BuyingPower: nullFloat(buyingPower), Currency: ccy, Unavailable: unavailable.String, FetchedAt: fetchedAt.String})
+		return nil
+	}); err == nil {
+		snap.Margin = append(snap.Margin, margin...)
 	}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM nav_history ORDER BY account_id, date")) {
-		rec := navPointFromRow(r)
-		aid := str(r["account_id"])
+	var navHistory []NavPoint
+	navByAccount := map[string][]NavPoint{}
+	if err := s.each("SELECT account_id, date, equity, currency, net_deposits FROM nav_history ORDER BY account_id, date", nil, func(rows *sql.Rows) error {
+		aid, rec, err := scanNavPoint(rows)
+		if err != nil {
+			return err
+		}
 		if aid == "" {
-			snap.NavHistory = append(snap.NavHistory, rec)
+			navHistory = append(navHistory, rec)
 		} else {
-			snap.NavByAccount[aid] = append(snap.NavByAccount[aid], rec)
+			navByAccount[aid] = append(navByAccount[aid], rec)
+		}
+		return nil
+	}); err == nil {
+		snap.NavHistory = append(snap.NavHistory, navHistory...)
+		for aid, points := range navByAccount {
+			snap.NavByAccount[aid] = append(snap.NavByAccount[aid], points...)
 		}
 	}
 	snap.SyncedAt = s.GetMeta("synced_at")
 	snap.TradeGroups = s.TradeGroups()
 	snap.Notes = s.TradeNotes()
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM securities ORDER BY id")) {
-		snap.Securities = append(snap.Securities, securityFromRow(r))
-	}
+	snap.Securities = s.securities()
 	snap.Exposures = map[string]Exposure{}
 	for _, r := range mustRows(s.queryMaps("SELECT * FROM exposures")) {
 		snap.Exposures[str(r["key"])] = exposureFromRow(r)

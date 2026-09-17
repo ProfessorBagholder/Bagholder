@@ -219,6 +219,27 @@ func (s *Store) queryOne(q string, args ...any) (map[string]any, error) {
 	return rows[0], nil
 }
 
+func (s *Store) each(q string, args []any, fn func(*sql.Rows) error) error {
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := fn(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func nullFloat(v sql.NullFloat64) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	return py.Ptr(v.Float64)
+}
+
 func str(v any) string {
 	switch x := v.(type) {
 	case nil:

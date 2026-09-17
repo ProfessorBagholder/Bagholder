@@ -3,8 +3,6 @@ package store
 import (
 	"database/sql"
 	"strings"
-
-	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
 func cleanDateMap(raw map[string]float64) map[string]float64 {
@@ -28,9 +26,21 @@ func (s *Store) FXRates() map[string]float64 {
 
 func (s *Store) FXRatesFor(pair string) map[string]float64 {
 	s.must()
+	return s.dateSeries("SELECT date, rate FROM fx_rates WHERE pair = ? ORDER BY date", pair)
+}
+
+func (s *Store) dateSeries(q string, key string) map[string]float64 {
 	out := map[string]float64{}
-	for _, r := range mustRows(s.queryMaps("SELECT date, rate FROM fx_rates WHERE pair = ? ORDER BY date", pair)) {
-		out[str(r["date"])] = py.Deref(fnum(r["rate"]), 0)
+	if err := s.each(q, []any{key}, func(rows *sql.Rows) error {
+		var date sql.NullString
+		var value sql.NullFloat64
+		if err := rows.Scan(&date, &value); err != nil {
+			return err
+		}
+		out[date.String] = value.Float64
+		return nil
+	}); err != nil {
+		return map[string]float64{}
 	}
 	return out
 }
@@ -66,11 +76,7 @@ func (s *Store) UpsertFXRates(mapping map[string]float64) int {
 
 func (s *Store) BenchmarkPrices(symbol string) map[string]float64 {
 	s.must()
-	out := map[string]float64{}
-	for _, r := range mustRows(s.queryMaps("SELECT date, close FROM benchmark_prices WHERE symbol = ? ORDER BY date", symbol)) {
-		out[str(r["date"])] = py.Deref(fnum(r["close"]), 0)
-	}
-	return out
+	return s.dateSeries("SELECT date, close FROM benchmark_prices WHERE symbol = ? ORDER BY date", symbol)
 }
 
 func (s *Store) BenchmarkDays(symbol, start, end string) int {
@@ -125,9 +131,16 @@ type Distribution struct {
 func (s *Store) Distributions() map[string][]Distribution {
 	s.must()
 	out := map[string][]Distribution{}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM distributions ORDER BY symbol, ex_date DESC")) {
-		sym := str(r["symbol"])
-		out[sym] = append(out[sym], Distribution{ExDate: str(r["ex_date"]), PayDate: str(r["pay_date"]), Amount: py.Deref(fnum(r["amount"]), 0), Currency: str(r["currency"])})
+	if err := s.each("SELECT symbol, ex_date, pay_date, amount, currency FROM distributions ORDER BY symbol, ex_date DESC", nil, func(rows *sql.Rows) error {
+		var symbol, exDate, payDate, currency sql.NullString
+		var amount sql.NullFloat64
+		if err := rows.Scan(&symbol, &exDate, &payDate, &amount, &currency); err != nil {
+			return err
+		}
+		out[symbol.String] = append(out[symbol.String], Distribution{ExDate: exDate.String, PayDate: payDate.String, Amount: amount.Float64, Currency: currency.String})
+		return nil
+	}); err != nil {
+		return map[string][]Distribution{}
 	}
 	return out
 }
@@ -193,9 +206,17 @@ type Quote struct {
 func (s *Store) Quotes() map[string]Quote {
 	s.must()
 	out := map[string]Quote{}
-	for _, r := range mustRows(s.queryMaps("SELECT * FROM quotes")) {
-		out[str(r["symbol"])] = Quote{Price: fnum(r["price"]), PriceChange: fnum(r["price_change"]), PercentChange: fnum(r["percent_change"]), PrevClose: fnum(r["prev_close"]), DividendAmount: fnum(r["dividend_amount"]),
-			DividendFrequency: str(r["dividend_frequency"]), ExDividendDate: str(r["ex_dividend_date"]), Source: str(r["source"]), FetchedAt: str(r["fetched_at"])}
+	if err := s.each("SELECT symbol, price, price_change, percent_change, prev_close, dividend_amount, dividend_frequency, ex_dividend_date, source, fetched_at FROM quotes", nil, func(rows *sql.Rows) error {
+		var symbol, dividendFrequency, exDividendDate, source, fetchedAt sql.NullString
+		var price, priceChange, percentChange, prevClose, dividendAmount sql.NullFloat64
+		if err := rows.Scan(&symbol, &price, &priceChange, &percentChange, &prevClose, &dividendAmount, &dividendFrequency, &exDividendDate, &source, &fetchedAt); err != nil {
+			return err
+		}
+		out[symbol.String] = Quote{Price: nullFloat(price), PriceChange: nullFloat(priceChange), PercentChange: nullFloat(percentChange), PrevClose: nullFloat(prevClose), DividendAmount: nullFloat(dividendAmount),
+			DividendFrequency: dividendFrequency.String, ExDividendDate: exDividendDate.String, Source: source.String, FetchedAt: fetchedAt.String}
+		return nil
+	}); err != nil {
+		return map[string]Quote{}
 	}
 	return out
 }
@@ -224,8 +245,15 @@ func (s *Store) UpsertQuote(symbol string, rec Quote, source string) {
 func (s *Store) QuoteFetchedAt() map[string]string {
 	s.must()
 	out := map[string]string{}
-	for _, r := range mustRows(s.queryMaps("SELECT symbol, fetched_at FROM quotes")) {
-		out[str(r["symbol"])] = str(r["fetched_at"])
+	if err := s.each("SELECT symbol, fetched_at FROM quotes", nil, func(rows *sql.Rows) error {
+		var symbol, fetchedAt sql.NullString
+		if err := rows.Scan(&symbol, &fetchedAt); err != nil {
+			return err
+		}
+		out[symbol.String] = fetchedAt.String
+		return nil
+	}); err != nil {
+		return map[string]string{}
 	}
 	return out
 }
@@ -276,8 +304,16 @@ func (s *Store) PriceHistory(symbol, start, end string) []DailyBar {
 	}
 	s.must()
 	out := []DailyBar{}
-	for _, r := range mustRows(s.queryMaps("SELECT date, open, high, low, close, volume FROM price_history WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date", sym, start, end)) {
-		out = append(out, DailyBar{Date: str(r["date"]), Open: fnum(r["open"]), High: fnum(r["high"]), Low: fnum(r["low"]), Close: py.Deref(fnum(r["close"]), 0), Volume: fnum(r["volume"])})
+	if err := s.each("SELECT date, open, high, low, close, volume FROM price_history WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date", []any{sym, start, end}, func(rows *sql.Rows) error {
+		var date sql.NullString
+		var open, high, low, close, volume sql.NullFloat64
+		if err := rows.Scan(&date, &open, &high, &low, &close, &volume); err != nil {
+			return err
+		}
+		out = append(out, DailyBar{Date: date.String, Open: nullFloat(open), High: nullFloat(high), Low: nullFloat(low), Close: close.Float64, Volume: nullFloat(volume)})
+		return nil
+	}); err != nil {
+		return []DailyBar{}
 	}
 	return out
 }
@@ -365,8 +401,16 @@ type Bar struct {
 func (s *Store) PriceBars(symbol, tf string, startTs, endTs int64) []Bar {
 	s.must()
 	out := []Bar{}
-	for _, r := range mustRows(s.queryMaps("SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts", strings.ToUpper(strings.TrimSpace(symbol)), tf, startTs, endTs)) {
-		out = append(out, Bar{Time: inum(r["ts"]), Open: fnum(r["open"]), High: fnum(r["high"]), Low: fnum(r["low"]), Close: py.Deref(fnum(r["close"]), 0), Volume: fnum(r["volume"])})
+	if err := s.each("SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts", []any{strings.ToUpper(strings.TrimSpace(symbol)), tf, startTs, endTs}, func(rows *sql.Rows) error {
+		var ts sql.NullInt64
+		var open, high, low, close, volume sql.NullFloat64
+		if err := rows.Scan(&ts, &open, &high, &low, &close, &volume); err != nil {
+			return err
+		}
+		out = append(out, Bar{Time: ts.Int64, Open: nullFloat(open), High: nullFloat(high), Low: nullFloat(low), Close: close.Float64, Volume: nullFloat(volume)})
+		return nil
+	}); err != nil {
+		return []Bar{}
 	}
 	return out
 }
