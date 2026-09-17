@@ -19,6 +19,7 @@ pub mod clock;
 pub mod trades;
 pub mod positions;
 pub mod pychars;
+pub mod symbols_of;
 pub mod pytext;
 pub mod cashflow;
 pub mod nav;

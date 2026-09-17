@@ -19,6 +19,22 @@ pub const GRAPHQL_VERSION: &str = "12";
 pub const WS_CLIENT: &str = "@wealthsimple/wealthsimple";
 pub const OAUTH: &str = "https://api.production.wealthsimple.com/v1/oauth/v2";
 
+/// Where GraphQL and OAuth calls go. `BAGHOLDER_WS_BASE` points both at a
+/// stand-in server, for testing the client against recorded answers.
+pub fn graphql_url() -> String {
+    match std::env::var("BAGHOLDER_WS_BASE") {
+        Ok(b) if !b.is_empty() => format!("{}/graphql", b.trim_end_matches('/')),
+        _ => GRAPHQL.to_string(),
+    }
+}
+
+pub fn oauth_url() -> String {
+    match std::env::var("BAGHOLDER_WS_BASE") {
+        Ok(b) if !b.is_empty() => format!("{}/oauth", b.trim_end_matches('/')),
+        _ => OAUTH.to_string(),
+    }
+}
+
 pub const REFUSED_LOGIN_MESSAGE: &str = "Saved login refused. Connect Wealthsimple again.";
 
 /// `bagholder.IDENTITY_KEYS`.
@@ -78,8 +94,22 @@ impl Home {
         let _ = atomic_write(&self.client_id_path(), cid.as_bytes(), 0o600);
     }
 
+    /// `bagholder.cached_user_agent`: the session's own, else the file.
     pub fn cached_user_agent(&self) -> String {
+        if let Some(s) = self.load_session() {
+            let v = field_s(&s, "user_agent").trim().to_string();
+            if !v.is_empty() {
+                return v;
+            }
+        }
         std::fs::read_to_string(self.user_agent_path()).unwrap_or_default().trim().to_string()
+    }
+
+    /// `bagholder.save_user_agent`.
+    pub fn save_user_agent(&self, ua: &str) {
+        if !ua.is_empty() {
+            let _ = atomic_write(&self.user_agent_path(), ua.as_bytes(), 0o600);
+        }
     }
 }
 
@@ -222,14 +252,36 @@ fn headers_for(sess: &Value, extra: &[(&str, String)], ua: &str) -> Vec<(String,
 /// `bagholder._http_json`: the parsed body, with the HTTP status folded in
 /// under `_http_status` when the call failed, exactly as Python returns it.
 pub fn http_json(method: &str, url: &str, body: Option<&Value>, headers: &[(String, String)]) -> Value {
+    http_json_timeout(method, url, body, headers, 60)
+}
+
+/// The same, with the call's own timeout. An HTTP error answers with its
+/// body and `_http_status`, as Python's `HTTPError` branch does; a failure to
+/// reach the host at all is `transport`.
+pub fn http_json_timeout(method: &str, url: &str, body: Option<&Value>, headers: &[(String, String)], timeout_sec: u64) -> Value {
     let mut hdrs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let payload = body.map(|b| serde_json::to_vec(b).unwrap_or_default());
     if payload.is_some() {
+        hdrs.retain(|(k, _)| !k.eq_ignore_ascii_case("Content-Type"));
         hdrs.push(("Content-Type", "application/json"));
     }
-    match request(method, url, &hdrs, payload.as_deref(), Duration::from_secs(60)) {
+    match bagholder_market::client::request_any(method, url, &hdrs, payload.as_deref(), Duration::from_secs(timeout_sec)) {
         Ok(resp) => {
             let text = resp.text();
+            if resp.status >= 400 {
+                let mut parsed = if text.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({"error": format!("http_{}", resp.status)}))
+                };
+                if !parsed.is_object() || parsed.as_object().map(|m| m.is_empty()).unwrap_or(false) {
+                    if !parsed.is_object() {
+                        parsed = json!({});
+                    }
+                }
+                parsed["_http_status"] = json!(resp.status);
+                return parsed;
+            }
             if text.is_empty() {
                 return json!({});
             }
@@ -238,7 +290,6 @@ pub fn http_json(method: &str, url: &str, body: Option<&Value>, headers: &[(Stri
                 Err(_) => json!({"error": "invalid_json", "_http_status": resp.status}),
             }
         }
-        Err(HttpError::Status(code)) => json!({"error": format!("http_{}", code), "_http_status": code}),
         Err(e) => json!({"error": "transport", "_message": e.to_string()}),
     }
 }
@@ -317,7 +368,7 @@ impl<'a> Client<'a> {
             ],
             &self.home.cached_user_agent(),
         );
-        let data = http_json("POST", &format!("{}/token", OAUTH), Some(&body), &headers);
+        let data = http_json("POST", &format!("{}/token", oauth_url()), Some(&body), &headers);
         let access = field_s(&data, "access_token");
         if access.is_empty() {
             if oauth_error_code(&data) == "invalid_grant" {
@@ -357,7 +408,7 @@ impl<'a> Client<'a> {
             ],
             &self.home.cached_user_agent(),
         );
-        let data = http_json("GET", &format!("{}/token/info", OAUTH), None, &headers);
+        let data = http_json("GET", &format!("{}/token/info", oauth_url()), None, &headers);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => json!({}),
             _ => data,
@@ -394,13 +445,14 @@ impl<'a> Client<'a> {
             .unwrap_or_default();
         let body = json!({"operationName": operation, "query": q, "variables": Value::Object(vars)});
 
-        let data = http_json("POST", GRAPHQL, Some(&body), &headers);
+        let data = http_json_timeout("POST", &graphql_url(), Some(&body), &headers, 90);
         match get(&data, "_http_status").and_then(|v| v.as_i64()) {
             Some(401) | Some(403) => return Err(CallError::NotAuthorized),
             _ => {}
         }
         if let Some(errs) = data.get("errors") {
-            if !errs.is_null() {
+            let truthy = match errs { Value::Null => false, Value::Array(a) => !a.is_empty(), Value::Object(m) => !m.is_empty(), Value::String(s) => !s.is_empty(), Value::Bool(b) => *b, Value::Number(n) => n.as_f64() != Some(0.0) };
+            if truthy {
                 let first = errs.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| errs.clone());
                 let msg = if first.is_object() {
                     let m = field_s(&first, "message");

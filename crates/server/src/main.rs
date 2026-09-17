@@ -8,7 +8,11 @@
 //! was bound elsewhere on purpose, the Host header has to name 127.0.0.1 and
 //! the port, and a write has to come from the page itself.
 
+mod app;
+mod feeds;
+mod login;
 mod notify;
+mod session;
 mod versions;
 
 use std::io::Cursor;
@@ -791,7 +795,7 @@ fn handle_post(app: &App, mut req: Request, path: &str) {
             Ok(json!({"ok": true, "cleared": bagholder_store::feeds::clear_notifications(conn)?}))
         }),
         "/api/notifications/settings" => with_conn(app, req, move |conn| {
-            let saved = notify::save_settings(conn, &doc)?;
+            let saved = notify::set_settings(conn, &doc)?;
             Ok(json!({"ok": true, "settings": saved}))
         }),
         _ => send_json(req, 404, &json!({"ok": false, "error": "not ported"})),
