@@ -115,6 +115,7 @@ pub struct Ws {
     sock: TcpStream,
     buf: Vec<u8>,
     next_id: i64,
+    fragments: Option<(u8, Vec<u8>)>,
 }
 
 fn random_bytes(n: usize) -> Vec<u8> {
@@ -202,7 +203,7 @@ impl Ws {
         if !status.contains("101") {
             return Err(std::io::Error::other(format!("ws handshake failed: {}", status)));
         }
-        Ok(Ws { sock, buf: buf[end..].to_vec(), next_id: 1 })
+        Ok(Ws { sock, buf: buf[end..].to_vec(), next_id: 1, fragments: None })
     }
 
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
@@ -227,72 +228,104 @@ impl Ws {
         self.send_frame(0x1, text.as_bytes())
     }
 
-    fn recv_exact(&mut self, n: usize, deadline: Instant) -> std::io::Result<Vec<u8>> {
-        let mut chunk = vec![0u8; 65536];
-        while self.buf.len() < n {
-            let remain = deadline.saturating_duration_since(Instant::now());
-            if remain.is_zero() {
-                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "ws read timeout"));
-            }
-            self.sock.set_read_timeout(Some(remain.max(Duration::from_millis(50))))?;
-            let got = match self.sock.read(&mut chunk) {
-                Ok(g) => g,
-                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "ws read timeout"));
-                }
-                Err(e) => return Err(e),
-            };
-            if got == 0 {
-                return Err(std::io::Error::other("ws closed"));
-            }
-            self.buf.extend_from_slice(&chunk[..got]);
+    /// Reads more bytes into the buffer; false when the deadline passed first.
+    fn fill(&mut self, deadline: Instant) -> std::io::Result<bool> {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            return Ok(false);
         }
-        let rest = self.buf.split_off(n);
-        Ok(std::mem::replace(&mut self.buf, rest))
+        self.sock.set_read_timeout(Some(remain.max(Duration::from_millis(50))))?;
+        let mut chunk = [0u8; 65536];
+        match self.sock.read(&mut chunk) {
+            Ok(0) => Err(std::io::Error::other("ws closed")),
+            Ok(got) => {
+                self.buf.extend_from_slice(&chunk[..got]);
+                Ok(true)
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// One whole frame taken off the buffer once all of it has arrived: a read
+    /// that runs out of time leaves a partly received frame where it is, so the
+    /// next read carries on from its first byte.
+    fn take_frame(&mut self) -> Option<(bool, u8, Vec<u8>)> {
+        let b = &self.buf;
+        if b.len() < 2 {
+            return None;
+        }
+        let fin = b[0] & 0x80 != 0;
+        let opcode = b[0] & 0x0f;
+        let masked = b[1] & 0x80 != 0;
+        let mut at = 2usize;
+        let mut len = (b[1] & 0x7f) as usize;
+        if len == 126 {
+            if b.len() < at + 2 {
+                return None;
+            }
+            len = u16::from_be_bytes([b[2], b[3]]) as usize;
+            at += 2;
+        } else if len == 127 {
+            if b.len() < at + 8 {
+                return None;
+            }
+            len = u64::from_be_bytes(b[2..10].try_into().unwrap()) as usize;
+            at += 8;
+        }
+        let mask = if masked {
+            if b.len() < at + 4 {
+                return None;
+            }
+            let m = [b[at], b[at + 1], b[at + 2], b[at + 3]];
+            at += 4;
+            Some(m)
+        } else {
+            None
+        };
+        if b.len() < at + len {
+            return None;
+        }
+        let mut payload = b[at..at + len].to_vec();
+        if let Some(m) = mask {
+            for (i, x) in payload.iter_mut().enumerate() {
+                *x ^= m[i % 4];
+            }
+        }
+        self.buf.drain(..at + len);
+        Some((fin, opcode, payload))
     }
 
     /// One whole message: (opcode, payload); pings answered, pongs passed by.
+    /// A timeout loses nothing: what arrived so far stays buffered.
     pub fn recv_message(&mut self, timeout: Duration) -> std::io::Result<(u8, Vec<u8>)> {
         let deadline = Instant::now() + timeout;
-        let mut fragments: Vec<u8> = Vec::new();
-        let mut started: Option<u8> = None;
         loop {
-            let h = self.recv_exact(2, deadline)?;
-            let fin = h[0] & 0x80 != 0;
-            let opcode = h[0] & 0x0f;
-            let masked = h[1] & 0x80 != 0;
-            let mut len = (h[1] & 0x7f) as u64;
-            if len == 126 {
-                let b = self.recv_exact(2, deadline)?;
-                len = u16::from_be_bytes([b[0], b[1]]) as u64;
-            } else if len == 127 {
-                let b = self.recv_exact(8, deadline)?;
-                len = u64::from_be_bytes(b.try_into().unwrap());
-            }
-            let mask = if masked { Some(self.recv_exact(4, deadline)?) } else { None };
-            let mut payload = if len > 0 { self.recv_exact(len as usize, deadline)? } else { vec![] };
-            if let Some(m) = mask {
-                for (i, b) in payload.iter_mut().enumerate() {
-                    *b ^= m[i % 4];
+            let (fin, opcode, payload) = loop {
+                if let Some(f) = self.take_frame() {
+                    break f;
                 }
-            }
+                if !self.fill(deadline)? {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "ws read timeout"));
+                }
+            };
             match opcode {
                 0x8 => return Err(std::io::Error::other("ws closed")),
-                0x9 => {
-                    self.send_frame(0xA, &payload)?;
-                }
+                0x9 => self.send_frame(0xA, &payload)?,
                 0xA => {}
                 0x1 | 0x2 => {
-                    started = Some(opcode);
-                    fragments = payload;
                     if fin {
-                        return Ok((opcode, fragments));
+                        return Ok((opcode, payload));
                     }
+                    self.fragments = Some((opcode, payload));
                 }
                 0x0 => {
-                    fragments.extend(payload);
-                    if fin {
-                        return Ok((started.unwrap_or(0x1), fragments));
+                    if let Some((op, mut acc)) = self.fragments.take() {
+                        acc.extend(payload);
+                        if fin {
+                            return Ok((op, acc));
+                        }
+                        self.fragments = Some((op, acc));
                     }
                 }
                 _ => {}
