@@ -1585,7 +1585,8 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 
 	rateFor := func(sym string) *payRate {
 		var declared []store.Distribution
-		for _, d := range public[sym] {
+		recs, _ := UnderTicker(public, sym)
+		for _, d := range recs {
 			if d.ExDate <= today {
 				declared = append(declared, d)
 			}
@@ -1594,7 +1595,7 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 			sort.SliceStable(declared, func(i, j int) bool { return declared[i].ExDate > declared[j].ExDate })
 			per := declared[0].Amount
 			var dates []string
-			for _, d := range public[sym] {
+			for _, d := range recs {
 				dates = append(dates, d.ExDate)
 			}
 			freq := PaymentsPerYear(dates)
@@ -1632,7 +1633,8 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 	}
 
 	distributionDates := func(sym string) (string, string, bool, bool) {
-		recs_ := append([]store.Distribution{}, public[sym]...)
+		known, _ := UnderTicker(public, sym)
+		recs_ := append([]store.Distribution{}, known...)
 		payOr := func(d store.Distribution) string {
 			if p := cut(d.PayDate, 10); p != "" {
 				return p
@@ -1660,7 +1662,7 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 		if pick != nil {
 			ex, pay = pick.ExDate, cut(pick.PayDate, 10)
 		} else {
-			if q, ok := quotes[sym]; ok {
+			if q, ok := UnderTicker(quotes, sym); ok {
 				ex = cut(q.ExDividendDate, 10)
 			}
 			var paid []string
@@ -1679,7 +1681,7 @@ func cashflowView(base *Base, f *Filters, positionsAll []*Position, marginUsed f
 
 	lastPrice := func(p *Position) (float64, string) {
 		var q *store.Quote
-		if qq, ok := quotes[p.Symbol]; ok {
+		if qq, ok := UnderTicker(quotes, p.Symbol); ok {
 			q = &qq
 		}
 		if !QuoteFits(q, p.Kind) {
@@ -2111,3 +2113,5 @@ func addListing(listings map[string]*Listing, symbol, name, exchange, kind, curr
 		cur.Exchange = exchange
 	}
 }
+
+func TileRows(base *Base) []TileRow { return tileRows(base) }

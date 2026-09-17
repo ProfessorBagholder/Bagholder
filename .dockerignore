@@ -12,3 +12,5 @@ docs
 tests
 *.md
 __pycache__
+/bagholder
+/bagholder.exe

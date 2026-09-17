@@ -57,3 +57,5 @@ func ApplyFX(slices []*Slice, fx map[string]float64) {
 		t.HasFeesCad = true
 	}
 }
+
+func RateOn(fx map[string]float64, day string) float64 { return rateOn(fx, day) }

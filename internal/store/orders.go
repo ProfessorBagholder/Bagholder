@@ -52,7 +52,7 @@ type Order struct {
 	ParentID      string         `json:"parentId"`
 	Role          string         `json:"role"`
 	FillBookedQty *float64       `json:"fillBookedQty"`
-	Exchange      string         `json:"exchange,omitempty"`
+	Exchange      string         `json:"exchange"`
 }
 
 func orderFromRow(r map[string]any) Order {

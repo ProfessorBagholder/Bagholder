@@ -6,11 +6,11 @@
   "description": "An instrument's regulatory filings from every source that covers it (SEDAR+ Canada, SEC EDGAR US), merged and tagged by source and category, handed to Claude.",
   "author": { "name": "Bagholder" },
   "server": {
-    "type": "python",
-    "entry_point": "disclosures_mcp.py",
+    "type": "binary",
+    "entry_point": "bagholder",
     "mcp_config": {
-      "command": "python3",
-      "args": ["${__dirname}/disclosures_mcp.py"]
+      "command": "${__dirname}/bagholder",
+      "args": ["mcp"]
     }
   },
   "tools": [

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
+	"github.com/ProfessorBagholder/Bagholder/internal/symbols"
 )
 
 func slimSlice(s *Slice) SlimSlice {
@@ -357,6 +358,14 @@ func LastFillPrices(activities []*Act) map[string]LastPrice {
 	return out
 }
 
+func UnderTicker[T any](mapping map[string]T, symbol string) (T, bool) {
+	if v, ok := mapping[symbol]; ok {
+		return v, true
+	}
+	v, ok := mapping[symbols.TMXSymbol(symbol)]
+	return v, ok
+}
+
 func QuoteFits(quote *store.Quote, kind string) bool {
 	if quote == nil || quote.Source == "" {
 		return true
@@ -437,7 +446,7 @@ func BuildPositions(openLots []*Lot, lastPrices map[string]LastPrice, balances [
 		}
 		priceSource := "fill"
 		var quote *store.Quote
-		if q, ok := quotes[symbol]; ok {
+		if q, ok := UnderTicker(quotes, symbol); ok {
 			qc := q
 			quote = &qc
 			if !QuoteFits(quote, lots[0].Kind) {

@@ -368,3 +368,5 @@ type AccountRow struct {
 func isOption(symbol string) bool  { return symbols.IsOption(symbol) }
 func underlying(symbol string) string { return symbols.Underlying(symbol) }
 func multiplier(symbol string) float64 { return symbols.Multiplier(symbol) }
+
+func UnderlyingSymbol(symbol string) string { return symbols.Underlying(symbol) }

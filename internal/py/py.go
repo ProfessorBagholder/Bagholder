@@ -434,3 +434,25 @@ func Hex(v uint64) string { return strconv.FormatUint(v, 16) }
 func Itoa(n int) string { return strconv.Itoa(n) }
 
 const SpaceChars = " \t\n\r\x0b\x0c\x1c\x1d\x1e\x1f\x85                 　"
+
+func PtrInt64(v int64) *int64 { return &v }
+
+func CommasFixed(n float64, decimals int) string {
+	s := strconv.FormatFloat(math.Abs(n), 'f', decimals, 64)
+	whole, frac, has := strings.Cut(s, ".")
+	var b strings.Builder
+	for i, c := range whole {
+		if i > 0 && (len(whole)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	out := b.String()
+	if has {
+		out += "." + frac
+	}
+	if n < 0 {
+		out = "-" + out
+	}
+	return out
+}

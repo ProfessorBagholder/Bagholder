@@ -65,24 +65,26 @@ Futures are not supported yet.
 
 ## Requirements
 
-- Python 3.9 or newer
+- A release binary for your platform from the [releases page](https://github.com/ProfessorBagholder/Bagholder/releases), or Go 1.24 or newer to build it yourself
 - A Chromium-based browser — Google Chrome, Brave, Microsoft Edge, or Chromium — opened once so you can sign in to Wealthsimple
 
 ## Install
 
+Download `bagholder-vX.Y.Z-<os>-<arch>` (`.exe` on Windows) from the latest release, or build it from a checkout:
+
 ```
-python3 -m pip install -r requirements.txt
+go build -o bagholder ./cmd/bagholder
 ```
 
-On Windows use `py` instead of `python3` throughout. The one dependency is `tzdata`, which Windows needs for time zones; macOS and Linux already have it.
+The binary is the whole app: the page, the chart library and the time zone data are built into it, and there is nothing else to install.
 
 ## Run
 
 ```
-python3 bagholder.py
+./bagholder
 ```
 
-The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
+(`bagholder.exe` on Windows.) The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
 
 ## Docker
 
@@ -100,14 +102,14 @@ To build the image yourself instead, `docker build -t bagholder .` and point the
 
 Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in `~/.bagholder`.
 
-- **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder/previous` until the next update.
-- **Cloned with git:** the same button runs `git pull` on `master` and restarts. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
+- **A release binary:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release's binary for your platform, checks it against the release's checksum, runs it once to read its version back, swaps its own binary and restarts itself; the binary it replaced is kept under `~/.bagholder/previous` until the next update.
+- **Cloned with git:** the same button runs `git pull` on `master`, builds the binary again with the Go toolchain and restarts. A checkout with local changes, on another branch or without Go on the path gets an `Update available` link instead, and you pull and build it yourself:
 
   ```
-  git pull
+  git pull && go build -o bagholder ./cmd/bagholder
   ```
 
-  then start `python3 bagholder.py` again.
+  then start `./bagholder` again.
 - **Docker:** the container has no update button. The header shows `vX.Y.Z image available` with a link to the release, and the update is the pull above:
 
   ```
