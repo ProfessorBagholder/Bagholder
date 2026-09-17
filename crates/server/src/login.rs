@@ -710,6 +710,10 @@ fn cast() -> &'static (Mutex<Cast>, Condvar) {
     C.get_or_init(|| (Mutex::new(Cast { frame: None, seq: 0 }), Condvar::new()))
 }
 
+fn screencast_params() -> Value {
+    json!({"format": "jpeg", "quality": 60, "maxWidth": LOGIN_VIEW_SIZE.0, "maxHeight": LOGIN_VIEW_SIZE.1, "everyNthFrame": 1})
+}
+
 /// Passkey requests refused the moment they are made.
 const NO_PASSKEYS: &str = r#"(() => {
   const c = navigator.credentials;
@@ -744,8 +748,9 @@ fn screencast_loop(attempt: i64) {
         ws.call("Runtime.evaluate", Some(json!({"expression": NO_PASSKEYS})), CAPTURE_CALL);
         if f(&page, "url").starts_with("about:blank") {
             ws.call("Page.navigate", Some(json!({"url": LOGIN_URL})), CAPTURE_CALL);
+        } else {
+            ws.call("Page.startScreencast", Some(screencast_params()), CAPTURE_CALL);
         }
-        ws.call("Page.startScreencast", Some(json!({"format": "jpeg", "quality": 60, "maxWidth": LOGIN_VIEW_SIZE.0, "maxHeight": LOGIN_VIEW_SIZE.1, "everyNthFrame": 1})), CAPTURE_CALL);
         loop {
             if !attempt_is(attempt) || !capturing() {
                 ws.close();
@@ -760,7 +765,14 @@ fn screencast_loop(attempt: i64) {
                 continue;
             }
             let msg: Value = match serde_json::from_slice(&data) { Ok(m) => m, Err(_) => break };
-            if f(&msg, "method") != "Page.screencastFrame" {
+            let method = f(&msg, "method");
+            if method == "Page.loadEventFired" {
+                // a navigation ends the screencast: it starts again on each load
+                ws.fire("Page.stopScreencast", json!({}));
+                ws.fire("Page.startScreencast", screencast_params());
+                continue;
+            }
+            if method != "Page.screencastFrame" {
                 continue;
             }
             let p = msg.get("params").cloned().unwrap_or(json!({}));
