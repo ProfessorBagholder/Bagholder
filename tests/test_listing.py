@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bagholder  # noqa: E402
 import market  # noqa: E402
 import model  # noqa: E402
+import store  # noqa: E402
 
 FILL = {"when": "2026-03-02T14:31:00Z", "side": "BUY", "qty": 10, "price": 5.0}
 LATER = {"when": "2026-04-09T15:02:00Z", "side": "SELL", "qty": -10, "price": 6.5}
@@ -18,6 +20,18 @@ EARLIER = {"when": "2026-01-05T14:40:00Z", "side": "BUY", "qty": 4, "price": 4.0
 
 
 class ListingPageTest(unittest.TestCase):
+    # its own store: the listing reads the security records, which are the person's own otherwise
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
 
     def book(self, positions=(), trades=(), watchlist=()):
         return mock.patch.object(model, "base_model", return_value={"positions": list(positions), "trades": list(trades), "watchlist": list(watchlist)})

@@ -1133,6 +1133,14 @@ class QuoteTest(unittest.TestCase):
         self.assertEqual(src({"symbol": "VEQT", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}), ("tmx", "VEQT"))
         self.assertEqual(src({"symbol": "LUNR", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares"}), ("yahoo_quote", "LUNR"),
                          "a US listing is quoted where its quote is live: TMX stamps one fifteen minutes behind")
+        # a watched listing keeps no currency: the venue names the market, never a Toronto form of a Nasdaq ticker
+        for sym in ("PLTR", "LUNR", "ASTS"):
+            self.assertEqual(src({"symbol": sym, "exchange": "NASDAQ", "currency": "", "kind": "Shares"}), ("yahoo_quote", sym),
+                             "%s.TO is another security, not the Nasdaq listing" % sym)
+        self.assertEqual(market.yahoo_forms({"symbol": "PLTR", "exchange": "NASDAQ", "currency": ""}), ["PLTR"])
+        self.assertEqual(market.yahoo_forms({"symbol": "HHIS.U", "exchange": "TSX", "currency": "USD"})[0], "HHIS-U.TO", "a Toronto listing in US dollars is still Toronto's")
+        self.assertEqual(market.yahoo_forms({"symbol": "QNC", "exchange": "", "currency": ""})[0], "QNC.TO", "no venue and no currency: Canada, as before")
+        self.assertEqual(market.yahoo_forms({"symbol": "ASTS", "exchange": "", "currency": "USD"}), ["ASTS"])
         self.assertEqual(src({"symbol": "HBIX", "exchange": "Cboe Canada", "currency": "CAD", "kind": "Shares"}), ("cboe_ca", "HBIX"))
         self.assertEqual(src({"symbol": "BTC", "exchange": "Crypto", "currency": "CAD", "kind": "Crypto"}), ("coinbase", "BTC-CAD"))
         self.assertEqual(src({"symbol": "BTC", "exchange": "Crypto", "currency": "USD", "kind": "Crypto"}), ("coinbase", "BTC-USD"))
@@ -1668,6 +1676,8 @@ class MarketParseTest(unittest.TestCase):
         self.assertEqual(src({"symbol": "HBIX", "exchange": "Cboe Canada", "currency": "CAD", "kind": "Shares"}), ("tmx", "HBIX:AQL"), "history from TMX even where the quote comes from Cboe")
         self.assertEqual(src({"symbol": "ONE", "exchange": "Alpha Exchange", "currency": "CAD", "kind": "Shares"}), ("tmx", "ONE"), "an unknown venue starts from the currency's usual form")
         self.assertEqual(src({"symbol": "ASTS", "exchange": "", "currency": "USD", "kind": "Shares"}), ("tmx", "ASTS:US"))
+        self.assertEqual(market.history_candidates({"symbol": "PLTR", "exchange": "NASDAQ", "currency": "", "kind": "Shares"}), [("tmx", "PLTR:US"), ("yahoo", "PLTR")],
+                         "a watched US listing's chart falls back to the Nasdaq listing's bars, not a Toronto security's")
         self.assertEqual(src({"symbol": "BTC", "exchange": "Crypto", "currency": "CAD", "kind": "Crypto"}), ("coinbase", "BTC-CAD"))
         self.assertIsNone(src({"symbol": "QNC 20NOV26 3.00 CALL", "exchange": "NYSE", "currency": "USD", "kind": "Options"}))
 

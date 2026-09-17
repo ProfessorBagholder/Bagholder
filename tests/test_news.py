@@ -1,10 +1,10 @@
-"""News: two per-symbol wires parsed into rows, kept per listing, tagged in the model."""
+"""News: every per-symbol source parsed into rows, merged and kept per listing, tagged in the model."""
 from __future__ import annotations
 
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import bagholder
@@ -21,7 +21,7 @@ class ParseTest(unittest.TestCase):
                                   {"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}}
         rows = news.parse_tmx_news(data, "SHOP")
         self.assertEqual(rows, [{"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire",
-                                 "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release"}])
+                                 "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release", "via": "tmx"}])
 
     def test_nasdaq_items_take_their_time_from_the_age_given(self):
         now = datetime(2026, 9, 11, 15, 30, tzinfo=timezone.utc)
@@ -45,10 +45,23 @@ class ParseTest(unittest.TestCase):
 
 
 class KindTest(unittest.TestCase):
+    # its own store, as every class that reaches one has: without it this class wrote its fixtures
+    # into the person's live database and read their remembered TMX forms back as if they were its own
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
     def test_a_wires_item_is_a_release_and_a_publishers_a_story(self):
-        for wire in ("GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group"):
+        for wire in ("GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "Accesswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group", "NewMediaWire"):
             self.assertEqual(news.kind_of(wire), "release", wire)
-        for pub in ("The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", ""):
+        for pub in ("The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", "", "WIRED", "MT Newswires", "Dow Jones Newswires"):
             self.assertEqual(news.kind_of(pub), "story", pub)
         tmx = news.parse_tmx_news({"data": {"news": [{"newsid": "1", "headline": "Closing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-14T08:00:00-04:00"}]}}, "CH")
         self.assertEqual((tmx[0]["kind"], tmx[0]["source"]), ("release", "GlobeNewswire"))
@@ -68,13 +81,61 @@ class KindTest(unittest.TestCase):
         with mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(news, "_pace"):
             src, rows = news.fetch_symbol("QIMC", "CSE", "CAD")
             news.fetch_symbol("CH", "TSX-V", "CAD")
-            self.assertEqual((src, asked), ("tmx", ["QIMC:CNX", "CH"]), "each listing under the code its quote uses")
+            self.assertEqual((src, asked), ("tmx", ["QIMC:CNX", "QIMC:CNX", "CH", "CH"]),
+                             "each listing under the code its quote uses, once for each of TMX's two tabs")
             self.assertEqual((rows[0]["kind"], rows[0]["url"]), ("release", "https://money.tmx.com/en/quote/QIMC:CNX/news/7"))
             # the record names the wrong venue: the lookup resolves the form that answers, as it does for a quote
             asked.clear()
             with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"):
                 _, found = news.fetch_symbol("QIMC", "TSX-V", "CAD")
-            self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC:CNX"], ["tmx:7"]))
+            self.assertEqual((asked, [r["id"] for r in found]), (["QIMC", "QIMC", "QIMC:CNX", "QIMC:CNX"], ["tmx:7"]))
+
+    def test_tmx_names_a_listing_by_its_own_topic_codes(self):
+        topic = "[ABHI:AQL,ABHI:CA,ART00001,CCHI:AQL,CCHI:CA,DIVIDEND]"
+        self.assertTrue(news.tmx_names(topic, "CCHI"))
+        self.assertTrue(news.tmx_names("[HG:CNX,MINING01]", "HG:CNX"))
+        self.assertTrue(news.tmx_names("[ASTS,SPACE001]", "ASTS:US"), "a US listing's code is its bare ticker")
+        self.assertFalse(news.tmx_names(topic, "CCH"), "a code is a whole ticker, not a prefix of one")
+        self.assertFalse(news.tmx_names("[T,VZ,TMUS]", "T"), "AT&T's bare code is not Telus, a Canadian listing named `T:CA`")
+        self.assertTrue(news.tmx_names("[T:CA,BCE:CA]", "T"))
+        self.assertFalse(news.tmx_names("[HG,INSURE01]", "HG:CNX"), "the NYSE's HG is not the CSE's")
+        self.assertFalse(news.tmx_names("[ASTS:CA]", "ASTS:US"))
+        self.assertFalse(news.tmx_names("", "PNG"))
+
+    def test_a_publishers_story_is_kept_only_where_tmx_tags_the_listing(self):
+        data = {"data": {"news": [
+            {"newsid": "1", "headline": "Kraken Robotics: Undersea Batteries Drive Solid Revenue Growth", "source": "SeekingAlpha via QuoteMedia",
+             "datetime": "2026-09-05T10:00:00-04:00", "topic": "[PNG:CA,TECH0001]"},
+            {"newsid": "2", "headline": "Most shorted stocks on Wall Street", "source": "SeekingAlpha via QuoteMedia",
+             "datetime": "2026-09-05T11:00:00-04:00", "topic": "[ASTS,NBIS]"}]}}
+        rows = news.parse_tmx_news(data, "PNG", media=True)
+        self.assertEqual([(r["id"], r["kind"], r["source"]) for r in rows], [("tmx:1", "story", "SeekingAlpha")],
+                         "a story TMX tags with another listing is not this one's")
+        wire = news.parse_tmx_news({"data": {"news": [{"newsid": "3", "headline": "Kraken closes financing", "source": "GlobeNewswire via QuoteMedia",
+                                                       "datetime": "2026-09-05T08:00:00-04:00"}]}}, "PNG")
+        self.assertEqual(wire[0]["kind"], "release", "the press releases tab reads as it always did")
+
+    def test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(self):
+        release = {"newsid": "10", "headline": "Kraken closes financing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-05T08:00:00-04:00", "topic": "[PNG:CA]"}
+        story = {"newsid": "11", "headline": "3 Top Canadian Defence Stocks", "source": "Motley Fool Canada via QuoteMedia", "datetime": "2026-09-02T09:00:00-04:00", "topic": "[PNG:CA,DEFENCE1]"}
+        tabs = []
+        def post_json(url, body, ctx, headers=None, **kw):
+            media = body["variables"].get("companyInNews")
+            tabs.append(media)
+            return {"data": {"news": [story if media else release]}}
+        with mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(news, "_pace"), \
+             mock.patch.object(market, "tmx_quote_symbol", return_value="PNG"):
+            src, rows = news.fetch_symbol("PNG", "TSX-V", "CAD")
+        self.assertEqual((src, tabs), ("tmx", [False, True]))
+        self.assertEqual(sorted((r["id"], r["kind"]) for r in rows), [("tmx:10", "release"), ("tmx:11", "story")])
+        def failing_stories(url, body, ctx, headers=None, **kw):
+            if body["variables"].get("companyInNews"):
+                raise OSError("down")
+            return {"data": {"news": [release]}}
+        with mock.patch.object(market, "_post_json", side_effect=failing_stories), mock.patch.object(news, "_pace"), \
+             mock.patch.object(market, "tmx_quote_symbol", return_value="PNG"), mock.patch.object(news.sys, "stderr"):
+            _, rows = news.fetch_symbol("PNG", "TSX-V", "CAD")
+        self.assertEqual([r["id"] for r in rows], ["tmx:10"], "the releases still arrive when the stories tab fails")
 
     def test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked(self):
         """No directory carries every venue, so the venue comes from the app's own knowledge: the
@@ -88,7 +149,8 @@ class KindTest(unittest.TestCase):
             seen["tmx"] = body["variables"]["symbol"]
             return {"data": {"news": [{"newsid": "3", "headline": "QIMC Engages", "source": "TMX Newsfile", "datetime": "2026-09-14T09:13:00-04:00"}]}}
         with mock.patch.object(news, "_pace"), mock.patch.object(market, "_get_text", side_effect=get_text), \
-             mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(store, "list_securities", return_value=[]):
+             mock.patch.object(market, "_post_json", side_effect=post_json), mock.patch.object(store, "list_securities", return_value=[]), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(market, "tmx_listing", return_value=None):
             # a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
             with mock.patch.object(market, "tmx_resolve", return_value="QIMC:CNX"), mock.patch.object(market, "tmx_remembered", side_effect=lambda k: "QIMC:CNX"):
                 out = bagholder.news_symbol_payload("QIMC", "", "")
@@ -129,6 +191,322 @@ class KindTest(unittest.TestCase):
         self.assertEqual(len(asked), 2)
 
 
+class SourcesTest(unittest.TestCase):
+    """Yahoo's gateway, Seeking Alpha's feed and Google News beside the wire: each item kept only
+    where its source names the listing, the stories merged into one list per listing."""
+
+    def test_yahoo_keeps_what_its_ticker_tags_name(self):
+        asset = lambda uuid, title, tickers, provider="Newsfile", when="2026-09-14T13:13:00Z": {"node": {"asset": {
+            "id": uuid, "title": title, "contentAttributes": {"pubDate": when, "provider": {"displayName": provider}, "canonicalUrl": "https://finance.yahoo.com/news/" + uuid},
+            "finance": {"stockTickers": [{"symbol": t} for t in tickers]}}}}
+        data = {"data": {"lightyearList": {"main": {"edges": [
+            asset("a1", "Kraken Robotics Announces Q2 Results", ["PNG.V", "KRKNF"]),
+            asset("a2", "3 Defence Stocks To Watch", ["LMT", "RTX"], provider="Motley Fool"),
+            asset("a3", "Kraken Wins Navy Contract", ["PNG.V"], provider="The Globe and Mail", when="2026-09-15T10:00:00.000Z"),
+            asset("a4", "no date", ["PNG.V"], when="")]}}}}
+        rows = news.parse_yahoo_news(data, "PNG.V")
+        self.assertEqual([(r["id"], r["kind"], r["source"], r["publishedAt"]) for r in rows],
+                         [("yahoo:a1", "release", "Newsfile", "2026-09-14T13:13:00Z"), ("yahoo:a3", "story", "The Globe and Mail", "2026-09-15T10:00:00Z")],
+                         "an item Yahoo tags with other tickers is theirs; a wire's item is a release")
+        with mock.patch.object(market, "tmx_remembered", side_effect=lambda k: k + ":CNX" if k == "QIMC" else k):
+            self.assertEqual([news.yahoo_form(*x) for x in (("PNG", "TSX-V", "CAD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD"), ("ASTS", "NASDAQ", "USD"),
+                                                            ("LUNR", "NASDAQ", ""), ("QIMC", "", "CAD"), ("VEQT", "", "CAD"), ("F", "", ""))],
+                             ["PNG.V", "HG.CN", "HBIX.NE", "ASTS", "LUNR", "QIMC.CN", "VEQT.TO", ""],
+                             "the venue decides before the currency: a US listing with no currency is not `LUNR.TO`, another company")
+
+    def test_yahoo_keeps_a_canadian_companys_items_tagged_with_its_us_twin(self):
+        asset = lambda uuid, title, tickers: {"node": {"asset": {"id": uuid, "title": title, "finance": {"stockTickers": [{"symbol": t} for t in tickers]},
+                                                                 "contentAttributes": {"pubDate": "2026-09-14T13:13:00Z", "provider": {"displayName": "PR Newswire"}}}}}
+        data = {"data": {"lightyearList": {"main": {"edges": [
+            asset("a1", "CHARBONE Announces Closing of $1.5M Drawdown", ["CH.V", "CHHYF"]),
+            asset("a2", "Charbone Announces Its First Hydrogen Supply Hub", ["CHHYF"]),
+            asset("a3", "ESGFIRE Initiates Coverage on Charbone Corporation", ["CHHYF", "PLUG", "FCEL"]),
+            asset("a4", "Presenting on Emerging Growth Conference 90 Day 1", ["ASPI", "IBX.AX", "STLNF"]),
+            asset("a5", "CHARBONE to Present at the Hydrogen East Conference", []),
+            asset("a6", "Hydrogen prices climb", [])]}}}}
+        self.assertEqual([r["id"] for r in news.parse_yahoo_news(data, "CH.V", "CH", "Charbone Hydrogen Corp")], ["yahoo:a1", "yahoo:a2", "yahoo:a3", "yahoo:a5"],
+                         "the twin Yahoo tags beside the listing names it; an untagged item counts where its headline names the listing")
+        partner = {"data": {"lightyearList": {"main": {"edges": [
+            asset("p1", "Kraken and Saab sign sonar partnership", ["PNG.V", "KRKNF", "SAABF"]),
+            asset("p2", "Kraken Robotics orders", ["PNG.V", "KRKNF"]),
+            asset("p3", "Saab raises its outlook", ["SAABF"])]}}}}
+        self.assertEqual([r["id"] for r in news.parse_yahoo_news(partner, "PNG.V", "PNG", "Kraken Robotics Inc.")], ["yahoo:p1", "yahoo:p2"],
+                         "a partner's symbol on an item naming several is not the listing's twin")
+        us = {"data": {"lightyearList": {"main": {"edges": [asset("b1", "Palantir wins Army deal", ["PLTR"]), asset("b2", "Kraken Robotics orders", ["KRKNF"])]}}}}
+        self.assertEqual([r["id"] for r in news.parse_yahoo_news(us, "PLTR", "PLTR", "Palantir Technologies Inc")], ["yahoo:b1"], "a US listing has no twin")
+
+    def test_seeking_alpha_keeps_what_its_symbol_tags_name(self):
+        xml = """<rss><channel>
+          <item><title>Kraken Robotics: Undersea Batteries Drive Growth</title><link>https://seekingalpha.com/article/1</link>
+            <guid isPermaLink="false">Article:1</guid><pubDate>Fri, 05 Sep 2026 10:00:00 -0400</pubDate><sa:symbol>PNG:CA</sa:symbol><sa:symbol>KRKNF</sa:symbol></item>
+          <item><title>Most shorted stocks</title><link>https://seekingalpha.com/news/2</link><guid>MarketCurrent:2</guid>
+            <pubDate>Fri, 05 Sep 2026 11:00:00 -0400</pubDate><sa:symbol>ASTS</sa:symbol></item>
+        </channel></rss>"""
+        rows = news.parse_sa_news(xml, "PNG:CA")
+        self.assertEqual([(r["headline"], r["source"], r["url"], r["publishedAt"]) for r in rows],
+                         [("Kraken Robotics: Undersea Batteries Drive Growth", "Seeking Alpha", "https://seekingalpha.com/article/1", "2026-09-05T14:00:00Z")])
+        self.assertEqual([news.sa_form(*x) for x in (("PNG", "TSX-V", "CAD"), ("VEQT", "TSX", "CAD"), ("ASTS", "NASDAQ", "USD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD"))],
+                         ["PNG:CA", "VEQT:CA", "ASTS", "", ""], "Seeking Alpha has no form for the CSE or Cboe Canada")
+
+    def test_a_name_is_searched_as_the_press_writes_it(self):
+        cases = {"Harvest Reddit Enhanced High Income Shares ETF (the “ETF”)": "Harvest Reddit Enhanced High Income Shares ETF",
+                 "Harvest Diversified High Income Shares ETF - Class A": "Harvest Diversified High Income Shares ETF",
+                 "Ninepoint Partners LP - Cameco Highshares ETF": "Ninepoint Cameco Highshares ETF",
+                 "Vanguard All-Equity ETF Portfolio - ETF": "Vanguard All-Equity ETF Portfolio",
+                 "Palantir Technologies Inc (Class A)": "Palantir Technologies",
+                 "Nebius Group N.V. Class A": "Nebius",
+                 "Micron Technology, Inc.": "Micron Technology",
+                 "Charbone Hydrogen Corp": "Charbone Hydrogen",
+                 "": ""}
+        for raw, want in cases.items():
+            self.assertEqual(news.search_name(raw), want, raw)
+        self.assertEqual(news.google_queries("HG", "CSE", "CAD", "Hydrograph Clean Power Inc."), ['"Hydrograph Clean Power"', '"CSE:HG"'])
+        self.assertEqual(news.google_queries("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), ['"Charbone Hydrogen"', '"TSXV:CH"'])
+        self.assertEqual(news.google_queries("HBIX", "Cboe Canada", "CAD", ""), ['"NEO:HBIX"'], "no name: the ticker alone")
+        self.assertEqual(news.google_queries("MU", "NASDAQ", "USD", "Micron Technology, Inc."), ['"Micron Technology"', '"NASDAQ:MU"'])
+
+    def test_google_keeps_a_headline_only_where_it_names_the_listing(self):
+        # headlines Google News returned for the searches, each with what it must be
+        cases = [
+            ("PLTE", "Harvest Palantir Enhanced High Income Shares ETF - Class A", False, [
+                ("(PLTE) Equity Market Report (PLTE:CA)", True),
+                ("Canadian ETF Express | Harvest Palantir Enhanced High Income Shares ETF Was the Top Gainer, Rising 32.29%", True),
+                ("Harvest High Income Shares ETFs Announces August 2026 Distributions", True),
+                ("The Ultimate Investor Guide to High-Income TSX ETFs Generating Monthly Cash Flow", False),
+                ("Canadian ETF Express | GLOBAL X INVESTMENTS CANADA INC. BETAPRO NATURAL GAS LEVERAGED DAILY BULL Was the Top Gainer, Rising 3.65%", False)]),
+            ("CH", "Charbone Hydrogen Corp", False, [
+                ("CHARBONE Announces Change of Corporate Name and Registered Address", True),
+                ("Charbone Reports Q2 2026 Financial Results, Confirming 155% Gas Income Growth", True),
+                ("Boeing Announces Second Quarter Deliveries", False)]),
+            ("HG", "Hydrograph Clean Power Inc.", False, [
+                ("HydroGraph Announces Change of Auditor", True),
+                ("Is HydroGraph Clean Power (CNSX:HG) Fully Valued After Wider Losses And Fresh Funding?", True),
+                ("HydroGraph Clean Power (HG.C): A year ago this thing looked insane. Then it got bigger.", True),
+                ("Widespread intensification of global river hydrograph flashiness under climate change", False)]),
+            ("YES", "Char Technologies Ltd.", False, [
+                ("CHAR Tech Receives Patent Notice of Allowance for Pyrogas Treatment to Syngas", True),
+                ("CHAR Technologies Ltd. (CVE:YES): Are Analysts Optimistic?", True),
+                ("UW Works with Wyoming DEQ-AML, UR Energy on Soil Reclamation Project Using Coal Char", False),
+                ("Canada’s Energy Trade Is Alive Again — Why NG Energy International Corp (TSXV:GASX) Matters Now", False)]),
+            ("QIMC", "Quebec Innovative Materials Corp", False, [
+                ("Québec Innovative Materials Corp. Engages Echo Seismic and Strum Consulting", True),
+                ("QIMC launches 78-km natural hydrogen survey", True),
+                ("The hunt is on for natural 'white' hydrogen in Nova Scotia’s underground", False)]),
+            ("SXHI", "Ninepoint SpaceX HighShares ETF", False, [
+                ("SXHI: SpaceX High-Income ETF's 9.17% Screener Yield Puts Private-Space Exposure in the Spotlight", True),
+                ("Ninepoint Partners Announces June 2026 Cash Distributions", True),
+                ("Retail investors can now buy Canadian and US IPOs at offering price", False)]),
+            ("EASY", "Evolve All-in-One UltraYield ETF", False, [
+                ("EASY WAYS TO RETIRE EARLY", False),
+                ("Evolve Sets September 2026 Distributions Across UltraYield ETFs and Income Funds", True)]),
+            ("QNC", "Quantum Emotion Corp", False, [
+                ("Quantum eMotion Submits Quantum Entropy Source for NIST Validation", True),
+                ("$Xanadu Quantum Technologies (XNDU.US)$", False),
+                ("Why investors are watching Quantum stocks", False)]),
+            ("HG", "Hydrograph Clean Power Inc.", False, [
+                ("MDI joins HydroGraph partner network", True),
+                ("Sparc reports positive results using HydroGraph's Fractal Graphene in solvent-based coatings", True)]),
+            ("CH", "Charbone Hydrogen Corp", False, [
+                ("The Supply Gap No One Is Filling: How CHARBONE Is Building the UHP Industrial Gas Platform", True)]),
+            ("VEQT", "Vanguard All-Equity ETF Portfolio - ETF", False, [
+                ("Vanguard Investments Canada Announces Final 2025 Annual Capital Gains Distributions for the Vanguard ETFs", True),
+                ("15 cheap, but well-rated ETFs", False),
+                ("No Time to Invest? Buy Any of These 3 Vanguard ETF Portfolios to Be Set for Life", False)]),
+            ("NA", "National Bank of Canada", False, [
+                ("National Bank of Canada Reports Record Quarter", True),
+                ("National Bank Financial raises its target on Cameco", True),
+                ("National Bank of Greece posts record profit", False)]),
+            ("RY", "Royal Bank of Canada", False, [
+                ("Royal Bank of Scotland to cut jobs", False)]),
+            ("EASY", "Evolve All-in-One UltraYield ETF", False, [
+                ("How Canada's ETF Industry Continues to Evolve", False)]),
+            ("HHIS", "Harvest Diversified High Income Shares ETF - Class A", False, [
+                ("Investors Rush to Harvest Tax Losses Before Year End", False),
+                ("Harvest ETFs Announces August 2026 Distributions", True)]),
+            ("CH", "Charbone Hydrogen Corp", False, [
+                ("Why Charbone shares jumped 30%", True)]),
+            ("BMO", "Bank of Montreal", False, [
+                ("Bank of Montreal Reports Third Quarter Results", True),
+                ("Bank of Canada holds rates steady", False)]),
+            ("CNQ", "Canadian Natural Resources Limited", False, [
+                ("Canadian Natural Resources to buy oil sands assets", True),
+                ("Canadian dollar weakens as oil slides", False),
+                ("Canadian natural gas prices slump", False),
+                ("Canadian stocks close higher", False)]),
+            ("HXS", "Global X S&P 500 Index Corporate Class ETF", False, [
+                ("Global stocks slide on rate fears", False)]),
+            ("CH", "", True, [
+                ("Chile ETF (CH) hits a new high", True),
+                ("NYSE:CH moves", True),
+                ("TSXV:CH moves", False)]),
+        ]
+        for sym, name, us, heads in cases:
+            for head, want in heads:
+                self.assertEqual(news.names_listing(head, sym, name, us), want, "%s: %s" % (sym, head))
+
+    def test_google_items_lose_the_publisher_suffix_quote_pages_and_undated_pages(self):
+        item = lambda title, source, when, link: "<item><title>%s</title><link>%s</link><pubDate>%s</pubDate><source url=\"x\">%s</source></item>" % (title, link, when, source)
+        xml = "<rss><channel>%s</channel></rss>" % "".join([
+            item("HydroGraph Announces Change of Auditor - Investing News Network", "Investing News Network", "Mon, 31 Aug 2026 12:00:00 GMT", "https://news.google.com/rss/articles/a"),
+            item("HG Stock Price and Chart — CSE:HG - tradingview.com", "tradingview.com", "Thu, 01 Jan 1970 00:00:00 GMT", "https://news.google.com/rss/articles/b"),
+            item("HydroGraph Clean Power Stock Price, News, Quote &amp; History - Investing News Network", "Investing News Network", "Tue, 13 Jan 2026 00:00:00 GMT", "https://news.google.com/rss/articles/c"),
+            item("Hydrograph Clean Power Inc Revenue Breakdown – CSE:HG - tradingview.com", "tradingview.com", "Fri, 31 Jul 2026 00:00:00 GMT", "https://news.google.com/rss/articles/d"),
+            item("HG Forecast — Price Target — Prediction for 2027 - TradingView", "TradingView", "Fri, 31 Jul 2026 00:00:00 GMT", "https://news.google.com/rss/articles/e"),
+            item("What is HydroGraph Clean Power rStock | How RHG Works - MEXC", "MEXC", "Fri, 31 Jul 2026 00:00:00 GMT", "https://news.google.com/rss/articles/f"),
+            item("$HydroGraph Clean Power (HGRAF.US)$ - Moomoo", "Moomoo", "Fri, 31 Jul 2026 00:00:00 GMT", "https://news.google.com/rss/articles/g")])
+        rows = news.parse_google_news(xml, "HG", "Hydrograph Clean Power Inc.")
+        self.assertEqual([(r["headline"], r["source"], r["publishedAt"], r["kind"]) for r in rows],
+                         [("HydroGraph Announces Change of Auditor", "Investing News Network", "2026-08-31T12:00:00Z", "story")])
+        self.assertTrue(rows[0]["id"].startswith("gnews:"))
+
+
+class MergeTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["BAGHOLDER_HOME"] = self.tmp.name
+        store.set_home(self.tmp.name)
+        bagholder.set_home(self.tmp.name)
+        store.ensure()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("BAGHOLDER_HOME", None)
+
+    @staticmethod
+    def row(i, headline, when, source="Pub", kind="story"):
+        return {"id": i, "headline": headline, "source": source, "url": "u-" + i, "publishedAt": when, "kind": kind}
+
+    def test_every_source_is_merged_one_row_per_story_the_wires_copy_first(self):
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        wire = [self.row("tmx:1", "Charbone Closes Loan", "2026-09-08T12:00:00Z", "TheNewsWire", "release")]
+        answers = {"yahoo": [self.row("yahoo:u1", "CHARBONE closes loan.", "2026-09-08T12:00:00Z", "TheNewsWire", "release"),
+                             self.row("yahoo:u2", "Charbone delivers electrolyzer", "2026-09-09T12:00:00Z", "BNN Bloomberg")],
+                   "sa": [self.row("sa:1", "Charbone: a hydrogen story", "2026-09-10T12:00:00Z", "Seeking Alpha")],
+                   "gnews": [self.row("gnews:1", "Charbone delivers electrolyzer", "2026-09-09T12:05:00Z", "The Globe and Mail"),
+                             self.row("gnews:2", "Charbone Reports Q2 2026 Financial Results", "2026-08-27T12:00:00Z", "The Globe and Mail")]}
+        asked = []
+        def extra(key, symbol, exchange, currency, name, ssl_context):
+            asked.append((key, name))
+            return answers[key]
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", wire)), mock.patch.object(news, "_read_extra", side_effect=extra):
+            src, rows = news.read_listing("CH", "TSX-V", "CAD", now=now, name="Charbone Hydrogen Corp")
+        self.assertEqual(sorted(asked), [("gnews", "Charbone Hydrogen Corp"), ("sa", "Charbone Hydrogen Corp"), ("yahoo", "Charbone Hydrogen Corp")])
+        self.assertEqual((src, [r["id"] for r in rows]), ("tmx", ["sa:1", "yahoo:u2", "tmx:1", "gnews:2"]),
+                         "newest first; the same headline from a later source is the earlier source's row")
+        stored = store.news_for("CH", "TSX-V")
+        self.assertEqual([(r["id"], r["source"], r["wire"]) for r in stored],
+                         [("sa:1", "sa", "Seeking Alpha"), ("yahoo:u2", "yahoo", "BNN Bloomberg"), ("tmx:1", "tmx", "TheNewsWire"), ("gnews:2", "gnews", "The Globe and Mail")],
+                         "each row is stored under the source it was read from")
+
+    def test_a_source_that_fails_or_is_not_due_keeps_its_stored_stories(self):
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        first = {"yahoo": [self.row("yahoo:u1", "Yahoo story", "2026-09-10T12:00:00Z")],
+                 "sa": [self.row("sa:1", "SA story", "2026-09-11T12:00:00Z")],
+                 "gnews": [self.row("gnews:1", "Google story", "2026-09-12T12:00:00Z")]}
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [self.row("tmx:1", "Wire item", "2026-09-09T12:00:00Z")])), \
+             mock.patch.object(news, "_read_extra", side_effect=lambda k, *a: first[k]):
+            news.read_listing("CH", "TSX-V", "CAD", now=now)
+        asked = []
+        def later(key, *a):
+            asked.append(key)
+            if key == "yahoo":
+                raise OSError("down")
+            return []
+        # fifteen minutes on: the wire and Yahoo are due, Seeking Alpha and Google are not; Yahoo fails
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [self.row("tmx:2", "New wire item", "2026-09-16T12:10:00Z")])), \
+             mock.patch.object(news, "_read_extra", side_effect=later), mock.patch.object(news.sys, "stderr"):
+            _, rows = news.read_listing("CH", "TSX-V", "CAD", now=now + timedelta(minutes=16))
+        self.assertEqual(asked, ["yahoo"], "Seeking Alpha and Google are read every thirty minutes")
+        self.assertEqual([r["id"] for r in rows], ["tmx:2", "gnews:1", "sa:1", "yahoo:u1"],
+                         "the wire's item is replaced; the failing and the resting sources keep what they had")
+        # nothing answers at all: the stored list stands untouched
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", None)), \
+             mock.patch.object(news, "_read_extra", side_effect=OSError("down")), mock.patch.object(news.sys, "stderr"):
+            self.assertEqual(news.read_listing("CH", "TSX-V", "CAD", now=now + timedelta(minutes=45), force=True), ("tmx", None))
+        self.assertEqual([r["id"] for r in store.news_for("CH", "TSX-V")], ["tmx:2", "gnews:1", "sa:1", "yahoo:u1"])
+        # every source answers, Yahoo with nothing at all: a list it had does not vanish on one empty answer
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [self.row("tmx:2", "New wire item", "2026-09-16T12:10:00Z")])), \
+             mock.patch.object(news, "_read_extra", side_effect=lambda k, *a: [] if k == "yahoo" else first[k]):
+            _, rows = news.read_listing("CH", "TSX-V", "CAD", now=now + timedelta(minutes=60), force=True)
+        self.assertIn("yahoo:u1", [r["id"] for r in rows])
+
+    def test_a_release_is_new_once_whichever_source_carries_it_and_a_first_read_source_is_history(self):
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        told = []
+        on_new = lambda sym, ex, rows, new: told.append(sorted(new))
+        release = lambda i, when="2026-09-16T11:00:00Z": self.row(i, "Charbone Closes Loan", when, "TheNewsWire", "release")
+        # the wire is read, Yahoo for the first time: Yahoo's whole list is history
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [self.row("tmx:1", "Old wire item", "2026-09-01T12:00:00Z")])), \
+             mock.patch.object(news, "_read_extra", side_effect=lambda k, *a: [self.row("yahoo:old", "Charbone old release", "2026-09-10T12:00:00Z", "NewMediaWire", "release")] if k == "yahoo" else None):
+            news.read_listing("CH", "TSX-V", "CAD", now=now, on_new=on_new)
+        self.assertEqual(told[-1], ["tmx:1"], "a source met for the first time brings history, not news (the wire's own first read is the notifier's to judge)")
+        # TMX fails this pass and Yahoo carries a new release: it is new
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", None)), \
+             mock.patch.object(news, "_read_extra", side_effect=lambda k, *a: [release("yahoo:new")] if k == "yahoo" else None):
+            news.read_listing("CH", "TSX-V", "CAD", now=now + timedelta(minutes=16), on_new=on_new)
+        self.assertEqual(told[-1], ["yahoo:new"])
+        # TMX answers again with the same release under its own id: not new a second time
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [release("tmx:999")])), \
+             mock.patch.object(news, "_read_extra", side_effect=lambda k, *a: [release("yahoo:new")] if k == "yahoo" else None):
+            _, rows = news.read_listing("CH", "TSX-V", "CAD", now=now + timedelta(minutes=32), on_new=on_new)
+        self.assertIn("tmx:999", [r["id"] for r in rows], "the wire's copy is the row")
+        self.assertEqual(told[-1], [], "the same headline under the wire's id is the story already told")
+
+    def test_a_headline_repeated_months_later_is_a_new_release(self):
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        told = []
+        halt = lambda i, when: self.row(i, "IIROC Trading Halt - QNC", when, "TMX Newsfile", "release")
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [halt("tmx:1", "2026-06-10T14:00:00Z")])), mock.patch.object(news, "_read_extra", return_value=None):
+            news.read_listing("QNC", "TSX-V", "CAD", now=now)
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [halt("tmx:2", "2026-09-16T13:00:00Z"), halt("tmx:1", "2026-06-10T14:00:00Z")])), \
+             mock.patch.object(news, "_read_extra", return_value=None):
+            _, rows = news.read_listing("QNC", "TSX-V", "CAD", now=now + timedelta(minutes=16), on_new=lambda s, e, r, new: told.append(sorted(new)))
+        self.assertEqual(([r["id"] for r in rows], told), (["tmx:2", "tmx:1"], [["tmx:2"]]), "the same words months apart are two halts, the second one new")
+
+    def test_a_wire_feed_that_fails_keeps_its_stored_items(self):
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        release = {"newsid": "10", "headline": "Kraken closes financing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-05T08:00:00-04:00"}
+        story = {"newsid": "11", "headline": "3 Top Canadian Defence Stocks", "source": "Motley Fool Canada via QuoteMedia", "datetime": "2026-09-02T09:00:00-04:00", "topic": "[PNG:CA]"}
+        def both(url, body, ctx, headers=None, **kw):
+            return {"data": {"news": [story if body["variables"].get("companyInNews") else release]}}
+        def stories_down(url, body, ctx, headers=None, **kw):
+            if body["variables"].get("companyInNews"):
+                raise OSError("down")
+            return {"data": {"news": [release]}}
+        def read(post, minutes):
+            with mock.patch.object(market, "_post_json", side_effect=post), mock.patch.object(news, "_pace"), \
+                 mock.patch.object(market, "tmx_quote_symbol", return_value="PNG"), mock.patch.object(news, "_read_extra", return_value=None), \
+                 mock.patch.object(news.sys, "stderr"):
+                return news.read_listing("PNG", "TSX-V", "CAD", now=now + timedelta(minutes=minutes))[1]
+        read(both, 0)
+        rows = read(stories_down, 16)
+        self.assertEqual(sorted(r["id"] for r in rows), ["tmx:10", "tmx:11"], "In The Media failing leaves the stories it had")
+        self.assertEqual({r["id"]: r["source"] for r in store.news_for("PNG", "TSX-V")}, {"tmx:10": "tmx", "tmx:11": "tmx-media"})
+
+    def test_a_source_with_nothing_to_ask_does_not_count_as_an_answer(self):
+        # a CSE listing: Seeking Alpha has no feed for it; everything that can be asked fails
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", None)), mock.patch.object(news, "fetch_yahoo", side_effect=OSError("down")), \
+             mock.patch.object(news, "fetch_google", side_effect=OSError("down")), mock.patch.object(market, "_get_text") as get, mock.patch.object(news.sys, "stderr"):
+            self.assertEqual(news.read_listing("HG", "CSE", "CAD", force=True, name="Hydrograph Clean Power Inc."), ("tmx", None),
+                             "nothing answered, so the listing is asked again next pass")
+        get.assert_not_called()
+        self.assertIsNone(news.fetch_sa("HG", "CSE", "CAD"))
+
+    def test_a_listing_with_no_venue_is_left_to_the_wire(self):
+        with mock.patch.object(news, "fetch_symbol", return_value=("nasdaq", [])), mock.patch.object(news, "_read_extra") as extra:
+            news.read_listing("F", "", "")
+        extra.assert_not_called()
+
+    def test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives(self):
+        with mock.patch.object(store, "list_securities", return_value=[]), \
+             mock.patch.object(market, "tmx_listing", return_value={"symbol": "SXHI", "name": "Ninepoint SpaceX HighShares ETF", "exchange": "TSX", "currency": "CAD"}), \
+             mock.patch.object(news, "read_listing", return_value=("tmx", [])) as read, mock.patch.object(bagholder, "_ssl_context", return_value=None):
+            out = bagholder.news_symbol_payload("SXHI", "", "")
+        self.assertEqual(out["exchange"], "TSX")
+        self.assertEqual(read.call_args.args[:3], ("SXHI", "TSX", "CAD"))
+        self.assertEqual((read.call_args.kwargs["name"], read.call_args.kwargs["force"]), ("Ninepoint SpaceX HighShares ETF", True))
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -149,9 +527,13 @@ class StoreTest(unittest.TestCase):
         def fake(symbol, exchange, currency, ssl_context=None, now=None):
             calls.append(symbol)
             return ("tmx" if exchange == "TSX" else "nasdaq"), answers.get(symbol)
+        def others(key, symbol, exchange, currency, name, ssl_context):
+            if symbol == "BROKEN":
+                raise OSError("down")
+            return []
         listings = [("SHOP", "TSX", "CAD"), ("NVDA", "NASDAQ", "USD"), ("BROKEN", "TSX", "CAD")]
-        with mock.patch.object(news, "fetch_symbol", side_effect=fake):
-            self.assertEqual(news.refresh(listings, now=now), 2, "a wire that fails leaves nothing behind and is asked again next time")
+        with mock.patch.object(news, "fetch_symbol", side_effect=fake), mock.patch.object(news, "_read_extra", side_effect=others), mock.patch.object(news.sys, "stderr"):
+            self.assertEqual(news.refresh(listings, now=now), 2, "a listing no source answers for leaves nothing behind and is asked again next time")
             self.assertEqual(calls, ["SHOP", "NVDA", "BROKEN"])
             calls.clear()
             self.assertEqual(news.refresh(listings, now=now), 0)
@@ -163,7 +545,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual([(r["id"], r["symbol"], r["wire"]) for r in rows], [("tmx:2", "SHOP", "CNW"), ("nasdaq:9", "NVDA", "Zacks")], "newest first; a listing's rows are replaced by its wire's latest")
         store.forget_news("SHOP", "TSX")
         self.assertEqual([r["id"] for r in store.snapshot()["news"]], ["nasdaq:9"])
-        self.assertEqual(news.stale([("SHOP", "TSX", "CAD")], now=later), [("SHOP", "TSX", "CAD")], "forgotten means stale")
+        self.assertEqual(news.stale([("SHOP", "TSX", "CAD")], now=later), [("SHOP", "TSX", "CAD", "")], "forgotten means stale")
 
     def test_rows_keep_their_kind_and_an_old_table_is_told_by_its_wires(self):
         store.replace_news("SHOP", "NASDAQ", "nasdaq", [{"id": "nasdaq:1", "headline": "a", "source": "Zacks", "url": "u", "publishedAt": "2026-09-14T00:00:00Z", "kind": "story"},

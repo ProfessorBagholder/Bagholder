@@ -488,6 +488,7 @@ class NotifyTest(unittest.TestCase):
                          {"id": "tmx:2", "headline": "Why QNC is up", "source": "The Motley Fool", "url": "u", "publishedAt": "2026-09-15T12:00:00Z", "kind": "story"}]}
         listings = [("QNC", "TSX-V", "CAD")]
         with mock.patch.object(model, "base_model", return_value=base), mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), \
              mock.patch.object(bagholder, "news_listings", return_value=listings), mock.patch.object(bagholder, "_ssl_context", return_value=None):
             bagholder.refresh_news()                      # the listing's first read: what it already carries, not news
             self.assertEqual(store.list_notifications(), [])
