@@ -797,7 +797,12 @@ fn serve() -> i32 {
     spawn("bagholder-fear-sweep", feeds::fear_sweep_loop);
 
     let url = format!("http://127.0.0.1:{}", port);
-    println!("Bagholder  {}", url);
+    if bind_host == "127.0.0.1" {
+        println!("Bagholder  {}", url);
+    } else {
+        // bound for a container: the address outside is whatever port was published
+        println!("Bagholder  listening on {}:{} (open the port published on the host)", bind_host, port);
+    }
     // a second instance run for verification must not open anyone's browser
     if std::env::var("BAGHOLDER_NO_BROWSER").unwrap_or_default().trim().is_empty() {
         open_browser(&url);
