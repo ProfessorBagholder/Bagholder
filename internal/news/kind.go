@@ -1,17 +1,14 @@
 package news
 
-import "strings"
+import "regexp"
 
 var Market = [3]string{"*", "MARKET", ""}
 
-var wireMarks = []string{"wire", "newsfile", "cision", "cnw"}
+var wireNames = regexp.MustCompile(`(?i)newswire(?:[^s]|$)|business ?wire|accesswire|newmediawire|marketwired|newsfile|cision|\bcnw\b|prweb`)
 
 func KindOf(source string) string {
-	s := strings.ToLower(source)
-	for _, m := range wireMarks {
-		if strings.Contains(s, m) {
-			return "release"
-		}
+	if wireNames.MatchString(source) {
+		return "release"
 	}
 	return "story"
 }

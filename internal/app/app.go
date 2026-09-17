@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	AppVersion        = "1.43.2"
+	AppVersion        = "1.44.0"
 	Repo              = "ProfessorBagholder/Bagholder"
 	RepoURL           = "https://github.com/" + Repo
 	ReleaseURL        = "https://api.github.com/repos/" + Repo + "/releases/latest"
@@ -34,7 +34,7 @@ const (
 	UpdateCheckHours  = 1
 	UpdatesOffMessage = "This copy is updated with docker compose pull; a new release is a new image."
 	ImagePage         = RepoURL + "/pkgs/container/bagholder"
-	Protocol          = "2026-09-16.1"
+	Protocol          = "2026-09-17.1"
 	EnrichVersion     = 11
 	LoginURL          = "https://my.wealthsimple.com/app/login"
 
@@ -186,6 +186,8 @@ type App struct {
 	view        *miniWS
 	viewTarget  string
 	shotMu      sync.Mutex
+	newsMu      sync.Mutex
+	newsLeft    map[string]bool
 	shot        *miniWS
 	shotTarget  string
 	cast        screencast

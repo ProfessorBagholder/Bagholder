@@ -128,6 +128,12 @@ func YahooFormsFor(rec Rec) []string {
 	if ccy == "" {
 		ccy = "CAD"
 	}
+	if venue := TMXForm(rec.Exchange, ""); venue != nil {
+		ccy = "CAD"
+		if *venue == ":US" {
+			ccy = "USD"
+		}
+	}
 	forms, ok := YahooForms[ccy]
 	if root == "" || strings.Contains(root, " ") || !ok {
 		return []string{}

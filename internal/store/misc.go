@@ -175,6 +175,7 @@ type WireItem struct {
 	URL         string `json:"url"`
 	PublishedAt string `json:"publishedAt"`
 	Kind        string `json:"kind"`
+	Via         string `json:"via,omitempty"`
 }
 
 func (s *Store) ReplaceNews(symbol, exchange, source string, rows []WireItem, now string) {
@@ -196,13 +197,26 @@ func (s *Store) ReplaceNews(symbol, exchange, source string, rows []WireItem, no
 			if kind == "" {
 				kind = "story"
 			}
-			if _, err := tx.Exec("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", r.ID, sym, ex, source, r.Headline, r.Source, r.URL, r.PublishedAt, when, kind); err != nil {
+			via := r.Via
+			if via == "" {
+				via = source
+			}
+			if _, err := tx.Exec("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", r.ID, sym, ex, via, r.Headline, r.Source, r.URL, r.PublishedAt, when, kind); err != nil {
 				return err
 			}
 		}
 		_, err := tx.Exec("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", "news_fetched:"+NewsKey(sym, ex), when)
 		return err
 	})
+}
+
+func (s *Store) NewsFor(symbol, exchange string) []NewsItem {
+	s.must()
+	out := []NewsItem{}
+	for _, r := range mustRows(s.queryMaps("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id", strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange)))) {
+		out = append(out, newsFromRow(r))
+	}
+	return out
 }
 
 func (s *Store) NewsIDs(symbol, exchange string) map[string]bool {
@@ -243,7 +257,8 @@ func (s *Store) ForgetNews(symbol, exchange string) {
 		if _, err := tx.Exec("DELETE FROM news WHERE symbol = ? AND exchange = ?", strings.ToUpper(strings.TrimSpace(symbol)), strings.ToUpper(strings.TrimSpace(exchange))); err != nil {
 			return err
 		}
-		_, err := tx.Exec("DELETE FROM meta WHERE key = ?", "news_fetched:"+NewsKey(symbol, exchange))
+		tail := ":" + NewsKey(symbol, exchange)
+		_, err := tx.Exec("DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)", "news_fetched:"+NewsKey(symbol, exchange), tail, tail)
 		return err
 	})
 }

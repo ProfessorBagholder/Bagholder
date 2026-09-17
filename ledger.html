@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-16.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-17.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -850,11 +850,14 @@ function pollStatus() {
     // while the server restarts (an update) answers are not status payloads: keep asking
     if (!st || !st.protocol) { _pollTimer = setTimeout(pollStatus, 1000); return; }
     const before = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
+    const newsBefore = JSON.stringify(state.status.newsReading || []);
     applyStatus(st);
+    // a news pass landing or ending changes what the News card says even when no item changed
+    if (JSON.stringify(state.status.newsReading || []) !== newsBefore && state.page === "markets" && !state.loading) render();
     const after = JSON.stringify([state.status.lastSync, state.status.syncing, state.status.connected, state.status.syncStep, state.status.error, state.status.capturing, state.status.protocol, state.status.updateAvailable, state.status.version, state.status.openOrders, JSON.stringify(state.status.notify || null), notesUnread()]);
     if (before !== after) renderHeaderOnly();
     notifyListen();
-    const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating;
+    const fast = state.status.syncing || state.status.capturing || state.busy || state.status.updating || (state.status.newsReading || []).length;
     _pollTimer = setTimeout(pollStatus, fast ? 2500 : 30000);
   });
 }
@@ -2280,8 +2283,20 @@ function eqHover(e) {
   tip.querySelector(".tv").textContent = money0(s[i].v);
   tip.querySelector(".tl").textContent = stampDay(s[i].d);
   tip.hidden = false;
+  dimAfter(plot, i / Math.max(1, s.length - 1));
 }
-function eqLeave() { ["eqX", "eqDot", "eqTip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); }
+function eqLeave() { ["eqX", "eqDot", "eqTip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); dimAfter(document.getElementById("eqPlot"), null); }
+// Past the point being read, a line chart dims: the line and its fill keep their colour up to the day under the
+// pointer and fade after it, as the phone's charts and other finance apps do. A mask on the chart's own drawing,
+// so the card shows through in either theme and the crosshair, dot and tip above it stay at full strength.
+function dimAfter(plot, frac) {
+  const svg = plot && plot.querySelector("svg");
+  if (!svg) return;
+  const at = frac == null ? "" : (Math.max(0, Math.min(1, frac)) * 100).toFixed(2) + "%";
+  const mask = frac == null ? "" : "linear-gradient(to right, #000 " + at + ", rgba(0,0,0,.28) " + at + ")";
+  svg.style.maskImage = mask;
+  svg.style.webkitMaskImage = mask;
+}
 
 function yearsCardHtml(m) {
   const rs = (m.years || []).slice().reverse();
@@ -3148,8 +3163,9 @@ function lineHover(e, key) {
   value.textContent = read.value; value.style.color = read.color || "";
   tip.querySelector(".tl").textContent = read.label;
   tip.hidden = false;
+  dimAfter(plot, i / Math.max(1, n - 1));
 }
-function lineLeave(key) { [key + "X", key + "Dot", key + "Tip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); }
+function lineLeave(key) { [key + "X", key + "Dot", key + "Tip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); dimAfter(document.getElementById(key + "Plot"), null); }
 function donutHover(e, key) {
   const el = e.target.closest("[data-slice]"); const plot = document.getElementById(key + "Plot"); if (!plot) return;
   const i = el ? +el.dataset.slice : -1;
@@ -3528,7 +3544,20 @@ function newsCardHtml(items) {
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
       : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
-      : '<div class="muted" style="font-size:12px">' + (only && state.newsReading === only.symbol ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
+      : '<div class="muted" style="font-size:12px">' + ((only && state.newsReading === only.symbol) || newsPassReads(scope, only) ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
+}
+// whether the server's news pass has still to read a listing in the card's scope: the card says so rather than
+// `No news.` while items that are on their way have not landed
+function newsPassReads(scope, only) {
+  const left = (state.status && state.status.newsReading) || [];
+  if (!left.length) return false;
+  const has = (sym) => left.indexOf(bareSymbol(sym).toUpperCase()) >= 0;
+  if (only) return has(only.symbol);
+  const m = state.model || {};
+  const held = (m.positions || []).map((p) => p.symbol), watched = ((m.markets || {}).watchlist || []).map((w) => w.symbol);
+  if (scope === "holdings") return held.some(has);
+  if (scope === "watchlist") return watched.some(has);
+  return state.newsKind === "releases" ? held.concat(watched).some(has) : left.indexOf("*") >= 0;
 }
 // A news release the issuer filed. SEDAR+ and SEC EDGAR carry the company's own releases, including ones no
 // wire picked up, so the Releases view shows them beside the wires', in the same row grammar, a release
@@ -4936,6 +4965,11 @@ function bind() {
     }
     if (e.key === "Escape" && state.page === "heatmap" && !state.confirmOpen && !state.modal) { location.hash = "#markets"; return; }
     if (e.key === "Escape") { if (state.watchAdding) { state.watchAdding = false; state.watchQuery = ""; render(); return; } if (state.tileAdd) { state.tileAdd = false; render(); return; } if (state.confirmOpen) { state.confirmOpen = ""; render(); return; } if (state.modal) { state.modal = null; render(); return; } if (state.picker || state.menuOpen) { state.picker = null; state.menuOpen = false; render(); } else if (state.sel && state.page === "trades" && document.activeElement && document.activeElement.tagName !== "TEXTAREA" && document.activeElement.id !== "tagInput") { history.back(); }
+      // on Markets, Escape clears what narrows a card: the words typed in the News box first, then its symbol chip;
+      // the words in the Short interest box. The News box keeps the focus, so a second press clears the chip
+      else if (state.page === "markets" && document.activeElement && document.activeElement.id === "newsQuery" && state.newsQuery) { state.newsQuery = ""; render(); }
+      else if (state.page === "markets" && document.activeElement && document.activeElement.id === "shortsQuery" && state.shortsQuery) { state.shortsQuery = ""; render(); }
+      else if (state.page === "markets" && state.newsSymbol) { newsChip(null); render(); }
       // nothing open, nothing being typed: Escape clears the filters
       else if (filtersActive() && !(document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA"))) { act("clearAll"); }
       return; }

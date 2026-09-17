@@ -135,14 +135,14 @@ func (a *App) newsListings() []news.Listing {
 		key := [2]string{market.TMXSymbol(p.Symbol), strings.ToUpper(p.Exchange)}
 		if key[0] != "" && !seen[key] {
 			seen[key] = true
-			out = append(out, news.Listing{Symbol: key[0], Exchange: p.Exchange, Currency: p.Currency})
+			out = append(out, news.Listing{Symbol: key[0], Exchange: p.Exchange, Currency: p.Currency, Name: p.Name})
 		}
 	}
 	for _, w := range base.Watchlist {
 		key := [2]string{market.TMXSymbol(w.Symbol), strings.ToUpper(w.Exchange)}
 		if key[0] != "" && !seen[key] && instruments.Find(w.Symbol, w.Exchange) == nil && key[1] != "CRYPTO" {
 			seen[key] = true
-			out = append(out, news.Listing{Symbol: key[0], Exchange: w.Exchange, Currency: w.Currency})
+			out = append(out, news.Listing{Symbol: key[0], Exchange: w.Exchange, Currency: w.Currency, Name: w.Name})
 		}
 	}
 	return out
@@ -153,11 +153,44 @@ func (a *App) refreshNews() int {
 		return 0
 	}
 	defer a.singleFlightEnd("news")
-	n := news.Refresh(a.mk, a.newsListings(), a.mk.Clock(), a.noteWireReleases)
-	if n > 0 {
+	key := func(l news.Listing) string {
+		k := market.TMXSymbol(l.Symbol)
+		if k == "" {
+			k = l.Symbol
+		}
+		return strings.ToUpper(k)
+	}
+	start := func(due []news.Listing) {
+		a.newsMu.Lock()
+		a.newsLeft = map[string]bool{}
+		for _, l := range due {
+			a.newsLeft[key(l)] = true
+		}
+		a.newsMu.Unlock()
+	}
+	done := func(l news.Listing, answered bool) {
+		a.newsMu.Lock()
+		delete(a.newsLeft, key(l))
+		a.newsMu.Unlock()
 		a.invalidate(false)
 	}
-	return n
+	defer func() {
+		a.newsMu.Lock()
+		a.newsLeft = map[string]bool{}
+		a.newsMu.Unlock()
+	}()
+	return news.Refresh(a.mk, a.newsListings(), a.mk.Clock(), a.noteWireReleases, start, done)
+}
+
+func (a *App) newsReading() []string {
+	a.newsMu.Lock()
+	defer a.newsMu.Unlock()
+	out := make([]string, 0, len(a.newsLeft))
+	for k := range a.newsLeft {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (a *App) newsLoop() {
@@ -750,31 +783,44 @@ func (a *App) newsSymbolPayload(symbol, exchange, currency string) map[string]an
 		return map[string]any{"ok": false, "error": "symbol required"}
 	}
 	ex, ccy := py.Strip(exchange), py.Strip(currency)
+	known, knownEx, knownCcy := a.instrumentMeta(sym)
+	name := ""
+	if known != sym {
+		name = known
+	}
 	if ex == "" {
-		var metaCcy string
-		_, ex, metaCcy = a.instrumentMeta(sym)
-		if metaCcy != "" {
-			ccy = metaCcy
+		ex = knownEx
+		if ccy == "" {
+			ccy = knownCcy
+		}
+	}
+	var listing *market.Listing
+	form := market.TMXForm(ex, ccy)
+	if ex == "" || (name == "" && form != nil && *form != ":US") {
+		listing = a.mk.TMXListing(sym)
+	}
+	if listing != nil {
+		if name == "" && strings.ToUpper(listing.Name) != sym {
+			name = listing.Name
 		}
 		if ex == "" {
-			form := py.S(a.mk.TMXResolve(market.TMXSymbol(sym)))
-			if form != "" && !strings.HasSuffix(form, ":US") {
-				if ccy == "" {
-					ccy = "CAD"
-				}
-			} else {
-				ex, ccy = "NASDAQ", "USD"
-			}
+			ex, ccy = listing.Exchange, listing.Currency
 		}
 	}
-	src, rows, ok := news.FetchSymbol(a.mk, sym, ex, ccy, a.mk.Clock())
-	if !ok || rows == nil {
+	if ex == "" {
+		resolved := a.mk.TMXResolve(market.TMXSymbol(sym))
+		if resolved != "" && !strings.HasSuffix(resolved, ":US") {
+			if ccy == "" {
+				ccy = "CAD"
+			}
+		} else {
+			ex, ccy = "NASDAQ", "USD"
+		}
+	}
+	src, rows, ok := news.ReadListing(a.mk, sym, ex, ccy, a.mk.Clock(), name, true, nil)
+	if !ok {
 		return map[string]any{"ok": false, "error": "the wire did not answer"}
 	}
-	if src == "" {
-		return map[string]any{"ok": true, "count": 0, "source": "", "exchange": ex}
-	}
-	a.st.ReplaceNews(sym, ex, src, rows, "")
 	a.st.TrimNews(news.Keep)
 	a.invalidate(false)
 	return map[string]any{"ok": true, "count": len(rows), "source": src, "exchange": ex}

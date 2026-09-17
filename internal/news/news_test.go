@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +49,9 @@ func newClient(t *testing.T, now time.Time, handle func(*http.Request) (*http.Re
 	c := market.NewClient(tempStore(t))
 	c.HTTP.Transport = stubTransport(handle)
 	c.Now = func() time.Time { return now }
+	saved := pace
+	pace = func(string, float64) {}
+	t.Cleanup(func() { pace = saved })
 	return c
 }
 
@@ -78,8 +82,8 @@ func TestTMXItemsCarryAnExactTimeAndAPageLink(t *testing.T) {
 	data := jsonMap(t, `{"data": {"news": [{"headline": "Shopify Delivers Big: 30%+ Growth Across&#xA0;GMV", "datetime": "2026-08-05T07:00:00-04:00", "source": "GlobeNewswire via QuoteMedia", "newsid": 4883675477075330},
 		{"headline": "no id", "datetime": "2026-08-05T07:00:00-04:00"},
 		{"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}}`)
-	rows := ParseTMXNews(data, "SHOP")
-	want := []store.WireItem{{ID: "tmx:4883675477075330", Headline: "Shopify Delivers Big: 30%+ Growth Across GMV", Source: "GlobeNewswire", URL: "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", PublishedAt: "2026-08-05T11:00:00Z", Kind: "release"}}
+	rows := ParseTMXNews(data, "SHOP", false)
+	want := []store.WireItem{{ID: "tmx:4883675477075330", Headline: "Shopify Delivers Big: 30%+ Growth Across GMV", Source: "GlobeNewswire", URL: "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", PublishedAt: "2026-08-05T11:00:00Z", Kind: "release", Via: "tmx"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %+v, want %+v", rows, want)
 	}
@@ -123,17 +127,17 @@ func TestTheWireFollowsTheVenue(t *testing.T) {
 }
 
 func TestAWiresItemIsAReleaseAndAPublishersAStory(t *testing.T) {
-	for _, wire := range []string{"GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group"} {
+	for _, wire := range []string{"GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "Accesswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group", "NewMediaWire"} {
 		if got := KindOf(wire); got != "release" {
 			t.Errorf("%s: KindOf = %q, want release", wire, got)
 		}
 	}
-	for _, pub := range []string{"The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", ""} {
+	for _, pub := range []string{"The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", "", "WIRED", "MT Newswires", "Dow Jones Newswires"} {
 		if got := KindOf(pub); got != "story" {
 			t.Errorf("%q: KindOf = %q, want story", pub, got)
 		}
 	}
-	tmx := ParseTMXNews(jsonMap(t, `{"data": {"news": [{"newsid": "1", "headline": "Closing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-14T08:00:00-04:00"}]}}`), "CH")
+	tmx := ParseTMXNews(jsonMap(t, `{"data": {"news": [{"newsid": "1", "headline": "Closing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-14T08:00:00-04:00"}]}}`), "CH", false)
 	if len(tmx) != 1 || tmx[0].Kind != "release" || tmx[0].Source != "GlobeNewswire" {
 		t.Errorf("tmx = %+v, want one release from GlobeNewswire", tmx)
 	}
@@ -172,8 +176,8 @@ func TestTMXIsAskedUnderTheCodeTheQuoteUsesAndResolvesAWrongVenue(t *testing.T) 
 	})
 	src, rows, ok := FetchSymbol(c, "QIMC", "CSE", "CAD", now)
 	FetchSymbol(c, "CH", "TSX-V", "CAD", now)
-	if !ok || src != "tmx" || !reflect.DeepEqual(asked, []string{"QIMC:CNX", "CH"}) {
-		t.Errorf("each listing under the code its quote uses: src %q, asked %v", src, asked)
+	if !ok || src != "tmx" || !reflect.DeepEqual(asked, []string{"QIMC:CNX", "QIMC:CNX", "CH", "CH"}) {
+		t.Errorf("each listing under the code its quote uses, once for each of TMX's two tabs: src %q, asked %v", src, asked)
 	}
 	if len(rows) != 1 || rows[0].Kind != "release" || rows[0].URL != "https://money.tmx.com/en/quote/QIMC:CNX/news/7" {
 		t.Errorf("rows = %+v", rows)
@@ -184,8 +188,8 @@ func TestTMXIsAskedUnderTheCodeTheQuoteUsesAndResolvesAWrongVenue(t *testing.T) 
 	for _, r := range found {
 		ids = append(ids, r.ID)
 	}
-	if !reflect.DeepEqual(asked, []string{"QIMC", "QIMC:CNX"}) || !reflect.DeepEqual(ids, []string{"tmx:7"}) {
-		t.Errorf("asked %v ids %v, want [QIMC QIMC:CNX] [tmx:7]", asked, ids)
+	if !reflect.DeepEqual(asked, []string{"QIMC", "QIMC", "QIMC:CNX", "QIMC:CNX"}) || !reflect.DeepEqual(ids, []string{"tmx:7"}) {
+		t.Errorf("asked %v ids %v, want [QIMC QIMC QIMC:CNX QIMC:CNX] [tmx:7]", asked, ids)
 	}
 }
 
@@ -256,7 +260,9 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 				return reply(200, `{"data": {"getQuoteBySymbol": null}}`), nil
 			}
 			sym := q.symbol()
-			calls = append(calls, sym)
+			if media, _ := q.Variables["companyInNews"].(bool); !media {
+				calls = append(calls, sym)
+			}
 			if sym == "SHOP" {
 				return reply(200, tmxNews(shop)), nil
 			}
@@ -273,14 +279,23 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 		return reply(500, "boom"), nil
 	})
 	listings := []Listing{{Symbol: "SHOP", Exchange: "TSX", Currency: "CAD"}, {Symbol: "NVDA", Exchange: "NASDAQ", Currency: "USD"}, {Symbol: "BROKEN", Exchange: "TSX", Currency: "CAD"}}
-	if n := Refresh(c, listings, now, nil); n != 2 {
-		t.Errorf("a wire that fails leaves nothing behind and is asked again next time: refresh = %d, want 2", n)
+	saved := readExtra
+	readExtra = func(c *market.Client, key, symbol, exchange, currency, name string) ([]store.WireItem, bool, error) {
+		if symbol == "BROKEN" {
+			return nil, true, fmt.Errorf("down")
+		}
+		return []store.WireItem{}, true, nil
 	}
-	if want := []string{"SHOP", "NVDA", "BROKEN"}; !reflect.DeepEqual(calls, want) {
-		t.Errorf("calls = %v, want %v", calls, want)
+	defer func() { readExtra = saved }()
+	if n := Refresh(c, listings, now, nil, nil, nil); n != 2 {
+		t.Errorf("a listing no source answers for leaves nothing behind and is asked again next time: refresh = %d, want 2", n)
+	}
+	sort.Strings(calls)
+	if want := []string{"BROKEN", "NVDA", "SHOP"}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("listings are read side by side: calls = %v, want %v", calls, want)
 	}
 	calls = calls[:0]
-	if n := Refresh(c, listings, now, nil); n != 0 {
+	if n := Refresh(c, listings, now, nil, nil, nil); n != 0 {
 		t.Errorf("refresh = %d, want 0", n)
 	}
 	if want := []string{"BROKEN"}; !reflect.DeepEqual(calls, want) {
@@ -288,7 +303,7 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 	}
 	shop = `{"newsid": "2", "headline": "Two", "source": "CNW", "datetime": "2026-09-11T16:00:00+00:00"}`
 	later := time.Date(2026, 9, 11, 16, 0, 0, 0, time.UTC)
-	Refresh(c, listings, later, nil)
+	Refresh(c, listings, later, nil, nil, nil)
 	got := [][3]string{}
 	for _, r := range c.Store.Snapshot(false).News {
 		got = append(got, [3]string{r.ID, r.Symbol, r.Wire})
@@ -304,7 +319,7 @@ func TestRefreshReadsOnlyStaleListingsAndReplacesTheirRows(t *testing.T) {
 	if want := []string{"nasdaq:9"}; !reflect.DeepEqual(ids, want) {
 		t.Errorf("ids = %v, want %v", ids, want)
 	}
-	stale := Stale(c.Store, []Listing{{Symbol: "SHOP", Exchange: "TSX", Currency: "CAD"}}, later, FreshMinutes)
+	stale := Stale(c, []Listing{{Symbol: "SHOP", Exchange: "TSX", Currency: "CAD"}}, later, FreshMinutes)
 	if want := []Listing{{Symbol: "SHOP", Exchange: "TSX", Currency: "CAD"}}; !reflect.DeepEqual(stale, want) {
 		t.Errorf("forgotten means stale: %v, want %v", stale, want)
 	}

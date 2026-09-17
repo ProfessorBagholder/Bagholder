@@ -65,6 +65,7 @@ func (a *App) statusPayload() map[string]any {
 		"updating":        a.state.updating,
 		"updateError":     a.state.updateError,
 		"notify":          a.notify.Status(),
+		"newsReading":     a.newsReading(),
 	}
 }
 
