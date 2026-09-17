@@ -33,11 +33,11 @@ func (s *Store) dateSeries(q string, key string) map[string]float64 {
 	out := map[string]float64{}
 	if err := s.each(q, []any{key}, func(rows *sql.Rows) error {
 		var date sql.NullString
-		var value sql.NullFloat64
+		var value realCell
 		if err := rows.Scan(&date, &value); err != nil {
 			return err
 		}
-		out[date.String] = value.Float64
+		out[date.String] = value.or0()
 		return nil
 	}); err != nil {
 		return map[string]float64{}
@@ -133,11 +133,11 @@ func (s *Store) Distributions() map[string][]Distribution {
 	out := map[string][]Distribution{}
 	if err := s.each("SELECT symbol, ex_date, pay_date, amount, currency FROM distributions ORDER BY symbol, ex_date DESC", nil, func(rows *sql.Rows) error {
 		var symbol, exDate, payDate, currency sql.NullString
-		var amount sql.NullFloat64
+		var amount realCell
 		if err := rows.Scan(&symbol, &exDate, &payDate, &amount, &currency); err != nil {
 			return err
 		}
-		out[symbol.String] = append(out[symbol.String], Distribution{ExDate: exDate.String, PayDate: payDate.String, Amount: amount.Float64, Currency: currency.String})
+		out[symbol.String] = append(out[symbol.String], Distribution{ExDate: exDate.String, PayDate: payDate.String, Amount: amount.or0(), Currency: currency.String})
 		return nil
 	}); err != nil {
 		return map[string][]Distribution{}
@@ -208,11 +208,11 @@ func (s *Store) Quotes() map[string]Quote {
 	out := map[string]Quote{}
 	if err := s.each("SELECT symbol, price, price_change, percent_change, prev_close, dividend_amount, dividend_frequency, ex_dividend_date, source, fetched_at FROM quotes", nil, func(rows *sql.Rows) error {
 		var symbol, dividendFrequency, exDividendDate, source, fetchedAt sql.NullString
-		var price, priceChange, percentChange, prevClose, dividendAmount sql.NullFloat64
+		var price, priceChange, percentChange, prevClose, dividendAmount realCell
 		if err := rows.Scan(&symbol, &price, &priceChange, &percentChange, &prevClose, &dividendAmount, &dividendFrequency, &exDividendDate, &source, &fetchedAt); err != nil {
 			return err
 		}
-		out[symbol.String] = Quote{Price: nullFloat(price), PriceChange: nullFloat(priceChange), PercentChange: nullFloat(percentChange), PrevClose: nullFloat(prevClose), DividendAmount: nullFloat(dividendAmount),
+		out[symbol.String] = Quote{Price: price.v, PriceChange: priceChange.v, PercentChange: percentChange.v, PrevClose: prevClose.v, DividendAmount: dividendAmount.v,
 			DividendFrequency: dividendFrequency.String, ExDividendDate: exDividendDate.String, Source: source.String, FetchedAt: fetchedAt.String}
 		return nil
 	}); err != nil {
@@ -306,11 +306,11 @@ func (s *Store) PriceHistory(symbol, start, end string) []DailyBar {
 	out := []DailyBar{}
 	if err := s.each("SELECT date, open, high, low, close, volume FROM price_history WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date", []any{sym, start, end}, func(rows *sql.Rows) error {
 		var date sql.NullString
-		var open, high, low, close, volume sql.NullFloat64
+		var open, high, low, close, volume realCell
 		if err := rows.Scan(&date, &open, &high, &low, &close, &volume); err != nil {
 			return err
 		}
-		out = append(out, DailyBar{Date: date.String, Open: nullFloat(open), High: nullFloat(high), Low: nullFloat(low), Close: close.Float64, Volume: nullFloat(volume)})
+		out = append(out, DailyBar{Date: date.String, Open: open.v, High: high.v, Low: low.v, Close: close.or0(), Volume: volume.v})
 		return nil
 	}); err != nil {
 		return []DailyBar{}
@@ -402,12 +402,12 @@ func (s *Store) PriceBars(symbol, tf string, startTs, endTs int64) []Bar {
 	s.must()
 	out := []Bar{}
 	if err := s.each("SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts", []any{strings.ToUpper(strings.TrimSpace(symbol)), tf, startTs, endTs}, func(rows *sql.Rows) error {
-		var ts sql.NullInt64
-		var open, high, low, close, volume sql.NullFloat64
+		var ts intCell
+		var open, high, low, close, volume realCell
 		if err := rows.Scan(&ts, &open, &high, &low, &close, &volume); err != nil {
 			return err
 		}
-		out = append(out, Bar{Time: ts.Int64, Open: nullFloat(open), High: nullFloat(high), Low: nullFloat(low), Close: close.Float64, Volume: nullFloat(volume)})
+		out = append(out, Bar{Time: ts.v, Open: open.v, High: high.v, Low: low.v, Close: close.or0(), Volume: volume.v})
 		return nil
 	}); err != nil {
 		return []Bar{}

@@ -233,11 +233,20 @@ func (s *Store) each(q string, args []any, fn func(*sql.Rows) error) error {
 	return rows.Err()
 }
 
-func nullFloat(v sql.NullFloat64) *float64 {
-	if !v.Valid {
-		return nil
-	}
-	return py.Ptr(v.Float64)
+type realCell struct{ v *float64 }
+
+func (c *realCell) Scan(src any) error {
+	c.v = fnum(src)
+	return nil
+}
+
+func (c *realCell) or0() float64 { return py.Deref(c.v, 0) }
+
+type intCell struct{ v int64 }
+
+func (c *intCell) Scan(src any) error {
+	c.v = inum(src)
+	return nil
 }
 
 func str(v any) string {

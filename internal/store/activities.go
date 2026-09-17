@@ -189,7 +189,7 @@ func CanonicalFromRow(a *Activity, source string) string { return canonicalFromR
 
 func scanActivity(rows *sql.Rows) (Activity, error) {
 	var id, canonicalID, occurredAt, transactionDate, settlementDate, accountID, bookID, fifoID, accountType, activityType, activitySubType, description, direction, symbol, name, currency, category, source, rawType, aftType, counterSymbol, securityID sql.NullString
-	var quantity, unitPrice, commission, netCashAmount, balance sql.NullFloat64
+	var quantity, unitPrice, commission, netCashAmount, balance realCell
 	if err := rows.Scan(&id, &canonicalID, &occurredAt, &transactionDate, &settlementDate, &accountID, &bookID, &fifoID, &accountType, &activityType, &activitySubType, &description, &direction, &symbol, &name, &currency, &quantity, &unitPrice, &commission, &netCashAmount, &category, &balance, &source, &rawType, &aftType, &counterSymbol, &securityID); err != nil {
 		return Activity{}, err
 	}
@@ -210,8 +210,8 @@ func scanActivity(rows *sql.Rows) (Activity, error) {
 		SettlementDate: settle, AccountID: accountID.String, BookID: book, FifoID: fifo, AccountType: accountType.String,
 		ActivityType: activityType.String, ActivitySubType: activitySubType.String, Description: description.String,
 		Direction: direction.String, Symbol: symbol.String, Name: name.String, Currency: currency.String,
-		Quantity: quantity.Float64, UnitPrice: unitPrice.Float64, Commission: commission.Float64,
-		NetCashAmount: netCashAmount.Float64, Category: category.String, Balance: nullFloat(balance), Source: source.String,
+		Quantity: quantity.or0(), UnitPrice: unitPrice.or0(), Commission: commission.or0(),
+		NetCashAmount: netCashAmount.or0(), Category: category.String, Balance: balance.v, Source: source.String,
 		RawType: rawType.String, AftType: aftType.String, CounterSymbol: counterSymbol.String, SecurityID: securityID.String,
 	}, nil
 }
@@ -713,7 +713,7 @@ type NavPoint struct {
 
 func scanNavPoint(rows *sql.Rows) (string, NavPoint, error) {
 	var accountID, date, currency sql.NullString
-	var equity, netDeposits sql.NullFloat64
+	var equity, netDeposits realCell
 	if err := rows.Scan(&accountID, &date, &equity, &currency, &netDeposits); err != nil {
 		return "", NavPoint{}, err
 	}
@@ -721,7 +721,7 @@ func scanNavPoint(rows *sql.Rows) (string, NavPoint, error) {
 	if ccy == "" {
 		ccy = "CAD"
 	}
-	return accountID.String, NavPoint{Date: date.String, Equity: equity.Float64, Currency: ccy, NetDeposits: nullFloat(netDeposits)}, nil
+	return accountID.String, NavPoint{Date: date.String, Equity: equity.or0(), Currency: ccy, NetDeposits: netDeposits.v}, nil
 }
 
 func (s *Store) NavLastDates() map[string]string {
@@ -1098,11 +1098,11 @@ func (s *Store) Snapshot(withActivities bool) Snapshot {
 	var accounts []Account
 	if err := s.each("SELECT id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id FROM accounts ORDER BY id", nil, func(rows *sql.Rows) error {
 		var id, nickname, unifiedAccountType, currency, status, typ, marginAccountID sql.NullString
-		var nlv sql.NullFloat64
+		var nlv realCell
 		if err := rows.Scan(&id, &nickname, &unifiedAccountType, &currency, &status, &typ, &nlv, &marginAccountID); err != nil {
 			return err
 		}
-		accounts = append(accounts, Account{ID: id.String, Nickname: nickname.String, UnifiedAccountType: unifiedAccountType.String, Currency: currency.String, Status: status.String, Type: typ.String, NetLiquidationValue: nullFloat(nlv), MarginAccountID: marginAccountID.String})
+		accounts = append(accounts, Account{ID: id.String, Nickname: nickname.String, UnifiedAccountType: unifiedAccountType.String, Currency: currency.String, Status: status.String, Type: typ.String, NetLiquidationValue: nlv.v, MarginAccountID: marginAccountID.String})
 		return nil
 	}); err == nil {
 		snap.Accounts = append(snap.Accounts, accounts...)
@@ -1110,11 +1110,11 @@ func (s *Store) Snapshot(withActivities bool) Snapshot {
 	var balances []Balance
 	if err := s.each("SELECT account_id, custodian_account_id, security_id, quantity FROM balances", nil, func(rows *sql.Rows) error {
 		var accountID, custodianAccountID, securityID sql.NullString
-		var quantity sql.NullFloat64
+		var quantity realCell
 		if err := rows.Scan(&accountID, &custodianAccountID, &securityID, &quantity); err != nil {
 			return err
 		}
-		balances = append(balances, Balance{AccountID: accountID.String, CustodianAccountID: custodianAccountID.String, SecurityID: securityID.String, Quantity: nullFloat(quantity)})
+		balances = append(balances, Balance{AccountID: accountID.String, CustodianAccountID: custodianAccountID.String, SecurityID: securityID.String, Quantity: quantity.v})
 		return nil
 	}); err == nil {
 		snap.Balances = append(snap.Balances, balances...)
@@ -1122,7 +1122,7 @@ func (s *Store) Snapshot(withActivities bool) Snapshot {
 	var margin []Margin
 	if err := s.each("SELECT account_id, buying_power, currency, unavailable, fetched_at FROM margin ORDER BY account_id", nil, func(rows *sql.Rows) error {
 		var accountID, currency, unavailable, fetchedAt sql.NullString
-		var buyingPower sql.NullFloat64
+		var buyingPower realCell
 		if err := rows.Scan(&accountID, &buyingPower, &currency, &unavailable, &fetchedAt); err != nil {
 			return err
 		}
@@ -1130,7 +1130,7 @@ func (s *Store) Snapshot(withActivities bool) Snapshot {
 		if ccy == "" {
 			ccy = "CAD"
 		}
-		margin = append(margin, Margin{AccountID: accountID.String, BuyingPower: nullFloat(buyingPower), Currency: ccy, Unavailable: unavailable.String, FetchedAt: fetchedAt.String})
+		margin = append(margin, Margin{AccountID: accountID.String, BuyingPower: buyingPower.v, Currency: ccy, Unavailable: unavailable.String, FetchedAt: fetchedAt.String})
 		return nil
 	}); err == nil {
 		snap.Margin = append(snap.Margin, margin...)

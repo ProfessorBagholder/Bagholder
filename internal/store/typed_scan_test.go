@@ -46,7 +46,11 @@ func TestTypedScanMatchesMapPath(t *testing.T) {
 		"INSERT INTO activities (id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id) VALUES ('a-empty', '', '', '2024-01-03', '', '', '', '', '', '', '', '', '', '', '', '', 0, 0, 0, 0, '', 0, '', '', '', '', '')",
 		"INSERT INTO activities (id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id) VALUES ('a-full', 'cid-1', '2024-01-04T10:00:00Z', '2024-01-04', '2024-01-06', 'acct', 'book', 'fifo', 'Trading', 'Trade', 'BUY', 'desc', 'DEBIT', 'AAA', 'Aaa Inc', 'USD', 10.5, 1.25, 0.99, -14.115, 'trade', 1234.5678, 'wealthsimple', 'DIY_BUY', 'aft', 'BBB', 'sec-1')",
 		"INSERT INTO activities (id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id) VALUES ('a-int', 'cid-2', '2024-01-05T10:00:00Z', '2024-01-05', '2024-01-05', 'acct', 'acct', 'acct', 'Trading', 'Trade', 'SELL', 'desc', 'CREDIT', 'AAA', 'Aaa Inc', 'CAD', -3, 2, 0, 6, 'trade', 7, 'manual', '', '', '', NULL)",
+		"INSERT INTO activities (id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id) VALUES ('a-text', 'cid-3', '2024-01-06T10:00:00Z', '2024-01-06', '2024-01-06', 'acct', 'acct', 'acct', 'Trading', 'Trade', 'BUY', 'desc', 'DEBIT', 'AAA', 'Aaa Inc', 'CAD', 'n/a', ' 2.5 ', '', 'abc', 'trade', 'none', 'csv', '', '', '', NULL)",
 		"INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES ('', '2024-01-02', NULL, NULL, NULL)",
+		"INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES ('', '2024-01-03', 'bad', 'CAD', ' 12 ')",
+		"INSERT INTO price_bars (symbol, tf, ts, open, high, low, close, volume, source) VALUES ('AAA', '1d', 1700000000.75, 'x', ' 1.5 ', NULL, 2, 3, 'test')",
+		"INSERT INTO price_bars (symbol, tf, ts, open, high, low, close, volume, source) VALUES ('AAA', '1d', 1700086400, 1, 2, 0.5, 'bad', NULL, 'test')",
 		"INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES ('acct', '2024-01-02', 0, '', 0)",
 		"INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES ('acct', '2024-01-03', 1500.25, 'USD', 1000)",
 	}
@@ -67,16 +71,19 @@ func TestTypedScanMatchesMapPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 || !reflect.DeepEqual(got, want) {
+	if len(got) != 5 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("typed activities differ from map path\n got %+v\nwant %+v", got, want)
 	}
 	byID := map[string]Activity{}
 	for _, a := range got {
 		byID[a.ID] = a
 	}
-	nulls, empties, full := byID["a-null"], byID["a-empty"], byID["a-full"]
+	nulls, empties, full, text := byID["a-null"], byID["a-empty"], byID["a-full"], byID["a-text"]
 	if nulls.Balance != nil || empties.Balance == nil || *empties.Balance != 0 || *full.Balance != 1234.5678 || nulls.SettlementDate != "2024-01-02" || nulls.BookID != "acct" || empties.BookID != "" {
 		t.Fatalf("null and empty handling: %+v %+v", nulls, empties)
+	}
+	if text.Quantity != 0 || text.UnitPrice != 2.5 || text.Commission != 0 || text.NetCashAmount != 0 || text.Balance != nil {
+		t.Fatalf("text in REAL columns: %+v", text)
 	}
 	navMaps, err := s.queryMaps("SELECT * FROM nav_history ORDER BY account_id, date")
 	if err != nil {
@@ -96,7 +103,22 @@ func TestTypedScanMatchesMapPath(t *testing.T) {
 	if !reflect.DeepEqual(snap.NavHistory, wantHistory) || !reflect.DeepEqual(snap.NavByAccount, wantByAccount) {
 		t.Fatalf("typed nav differs from map path\n got %+v %+v\nwant %+v %+v", snap.NavHistory, snap.NavByAccount, wantHistory, wantByAccount)
 	}
-	if snap.NavHistory[0].NetDeposits != nil || snap.NavHistory[0].Currency != "CAD" || *snap.NavByAccount["acct"][0].NetDeposits != 0 {
+	if snap.NavHistory[0].NetDeposits != nil || snap.NavHistory[0].Currency != "CAD" || *snap.NavByAccount["acct"][0].NetDeposits != 0 || snap.NavHistory[1].Equity != 0 || *snap.NavHistory[1].NetDeposits != 12 {
 		t.Fatalf("nav null handling: %+v %+v", snap.NavHistory, snap.NavByAccount)
+	}
+	barMaps, err := s.queryMaps("SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts", "AAA", "1d", 0, 2000000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBars := []Bar{}
+	for _, r := range barMaps {
+		wantBars = append(wantBars, Bar{Time: inum(r["ts"]), Open: fnum(r["open"]), High: fnum(r["high"]), Low: fnum(r["low"]), Close: py.Deref(fnum(r["close"]), 0), Volume: fnum(r["volume"])})
+	}
+	bars := s.PriceBars("AAA", "1d", 0, 2000000000)
+	if len(bars) != 2 || !reflect.DeepEqual(bars, wantBars) {
+		t.Fatalf("typed bars differ from map path\n got %+v\nwant %+v", bars, wantBars)
+	}
+	if bars[0].Time != 1700000000 || bars[0].Open != nil || *bars[0].High != 1.5 || bars[0].Low != nil || bars[1].Close != 0 || bars[1].Volume != nil {
+		t.Fatalf("bar cell handling: %+v", bars)
 	}
 }
