@@ -197,7 +197,7 @@ pub fn parse_yahoo_quote(text: &str) -> Option<Value> {
     }))
 }
 
-fn percent_encode(s: &str) -> String {
+pub fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {

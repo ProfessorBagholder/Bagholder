@@ -299,6 +299,24 @@ pub fn request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Response, Error> {
+    send(method, url, headers, body, timeout, false)
+}
+
+/// The same request, answering an HTTP error with its response rather than
+/// failing -- for a caller that reads what an error page sets, such as its
+/// cookies.
+pub fn request_any(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>, timeout: Duration) -> Result<Response, Error> {
+    send(method, url, headers, body, timeout, true)
+}
+
+fn send(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+    lenient: bool,
+) -> Result<Response, Error> {
     let mut url = url.to_string();
     for _ in 0..=REDIRECT_MAX {
         let u = parse_url(&url)?;
@@ -392,7 +410,7 @@ pub fn request(
                 continue;
             }
         }
-        if head.status >= 400 {
+        if head.status >= 400 && !lenient {
             return Err(Error::Status(head.status));
         }
         return Ok(Response { status: head.status, body: gunzip(&raw), headers: head.headers.clone() });
