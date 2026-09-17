@@ -239,7 +239,7 @@ func (c *Client) fetch(rawURL string, headers map[string]string, method string, 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return nil, err
 	}

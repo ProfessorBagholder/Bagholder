@@ -116,7 +116,7 @@ func (c *Client) HTTPJSON(method, rawURL string, body any, headers map[string]st
 		return map[string]any{"error": "url_error", "_http_status": 0, "_error": err.Error()}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return map[string]any{"error": "url_error", "_http_status": 0, "_error": err.Error()}
 	}
@@ -172,7 +172,7 @@ func (c *Client) getText(rawURL string, timeout time.Duration) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return "", err
 	}
