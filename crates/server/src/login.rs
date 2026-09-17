@@ -86,7 +86,7 @@ pub fn find_chrome() -> String {
 
 fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<String> {
     let url = format!("http://127.0.0.1:{}{}", port, path);
-    bagholder_market::client::request("GET", &url, &[("Host", &format!("127.0.0.1:{}", port))], None, timeout).ok().map(|r| r.text())
+    bagholder_market::client::request("GET", &url, &[], None, timeout).ok().map(|r| r.text())
 }
 
 /// The DevTools targets.
@@ -882,6 +882,14 @@ pub fn start_login_browser() -> Value {
     }
     let profile = app().home.join("chrome");
     let _ = std::fs::create_dir_all(&profile);
+    if login_view() {
+        // a container's profile outlives the container: the lock a previous one
+        // left names a host that no longer exists, and Chromium would refuse the
+        // profile as in use elsewhere
+        for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+            let _ = std::fs::remove_file(profile.join(name));
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -933,3 +941,4 @@ pub fn start_login_browser() -> Value {
     }
     json!({"ok": true})
 }
+

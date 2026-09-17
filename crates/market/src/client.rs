@@ -320,7 +320,10 @@ fn send(
         let u = parse_url(&url)?;
         let key = format!("{}:{}", u.host, u.port);
 
-        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, u.path, u.host);
+        // the port is part of the Host whenever it is not the scheme's own: a
+        // server that builds URLs from it (DevTools does) needs it
+        let host_header = if u.port == if u.tls { 443 } else { 80 } { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
+        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, u.path, host_header);
         let mut seen: Vec<String> = Vec::new();
         for (k, v) in headers {
             req.push_str(&format!("{}: {}\r\n", k, v));

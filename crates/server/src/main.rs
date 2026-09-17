@@ -14,13 +14,12 @@ mod session;
 mod update;
 mod versions;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tiny_http::{Header, Request, Response, Server, StatusCode};
+use tiny_http::{Header, Request, Response, Server};
 
 use app::{app, f, log, s, spawn, truthy};
 
@@ -124,39 +123,19 @@ fn send_json(req: Request, code: u16, body: &Value) {
     send(req, code, serde_json::to_vec(body).unwrap_or_default(), "application/json; charset=utf-8");
 }
 
-/// A body written as it is made: the writer pushes chunks, the response reads
-/// them; a gone client ends the writer.
-struct ChanReader {
-    rx: Receiver<Vec<u8>>,
-    buf: Vec<u8>,
-    pos: usize,
-}
-
-impl Read for ChanReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        if self.pos >= self.buf.len() {
-            match self.rx.recv() {
-                Ok(b) => {
-                    self.buf = b;
-                    self.pos = 0;
-                }
-                Err(_) => return Ok(0),
-            }
-        }
-        let n = out.len().min(self.buf.len() - self.pos);
-        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
-        self.pos += n;
-        Ok(n)
+/// A body written as it is made: the headers, then each chunk flushed as soon
+/// as the producer hands it over, until the producer is done or the client goes.
+fn stream<F: FnOnce(&mut dyn FnMut(&[u8]) -> bool) + Send + 'static>(req: Request, content_type: &str, produce: F) {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        content_type
+    );
+    let mut w = req.into_writer();
+    if w.write_all(head.as_bytes()).and_then(|_| w.flush()).is_err() {
+        return;
     }
-}
-
-fn stream<F: FnOnce(SyncSender<Vec<u8>>) + Send + 'static>(req: Request, content_type: &str, produce: F) {
-    let (tx, rx) = sync_channel::<Vec<u8>>(4);
-    spawn("bagholder-stream", move || produce(tx));
-    let reader = ChanReader { rx, buf: Vec::new(), pos: 0 };
-    let headers = vec![hdr("Content-Type", content_type), hdr("Cache-Control", "no-store"), hdr("X-Content-Type-Options", "nosniff")];
-    let response = Response::new(StatusCode(200), headers, reader, None, None);
-    let _ = req.respond(response);
+    let mut write = |chunk: &[u8]| w.write_all(chunk).and_then(|_| w.flush()).is_ok();
+    produce(&mut write);
 }
 
 fn query_of(url: &str) -> &str {
@@ -305,8 +284,8 @@ fn read_json(req: &mut Request) -> Value {
 
 fn handle_get(req: Request, path: &str, query: &str) {
     match path {
-        "/api/login/stream" => stream(req, "multipart/x-mixed-replace; boundary=frame", |tx| {
-            login::login_stream(|chunk| tx.send(chunk.to_vec()).is_ok());
+        "/api/login/stream" => stream(req, "multipart/x-mixed-replace; boundary=frame", |write| {
+            login::login_stream(|chunk| write(chunk));
         }),
         "/api/login/frame" => match login::login_frame() {
             Some(data) => send(req, 200, data, "image/jpeg"),
@@ -395,8 +374,8 @@ fn handle_get(req: Request, path: &str, query: &str) {
         "/api/notifications/stream" => {
             let after = { let a = first(query, "after").trim().to_string(); if a.is_empty() { header(&req, "Last-Event-ID").trim().to_string() } else { a } };
             let after = if !after.is_empty() && after.bytes().all(|c| c.is_ascii_digit()) { after.parse::<i64>().ok() } else { None };
-            stream(req, "text/event-stream; charset=utf-8", move |tx| {
-                notify::stream(after, |chunk| tx.send(chunk.as_bytes().to_vec()).is_ok());
+            stream(req, "text/event-stream; charset=utf-8", move |write| {
+                notify::stream(after, |chunk| write(chunk.as_bytes()));
             })
         }
         "/api/status" => send_json(req, 200, &status_payload()),
