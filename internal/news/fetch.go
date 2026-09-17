@@ -45,7 +45,7 @@ func ParseTMXNews(data map[string]any, symbol string) []store.WireItem {
 	rows := []store.WireItem{}
 	for _, raw := range items {
 		it, ok := raw.(map[string]any)
-		if !ok || py.S(it["newsid"]) == "" {
+		if !ok || py.JSONStr(it["newsid"]) == "" {
 			continue
 		}
 		t, naive, ok := py.ParseISO(py.S(it["datetime"]))
@@ -56,7 +56,7 @@ func ParseTMXNews(data map[string]any, symbol string) []store.WireItem {
 			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 		}
 		source := strings.ReplaceAll(CleanText(py.S(it["source"])), " via QuoteMedia", "")
-		id := py.S(it["newsid"])
+		id := py.JSONStr(it["newsid"])
 		rows = append(rows, store.WireItem{ID: "tmx:" + id, Headline: CleanText(py.S(it["headline"])), Source: source, URL: fmt.Sprintf(TMXNewsURL, symbol, id), PublishedAt: stamp(t), Kind: KindOf(source)})
 	}
 	return rows
@@ -92,7 +92,7 @@ func ParseNasdaqNews(data map[string]any, now time.Time, symbol, kind string) []
 	rows := []store.WireItem{}
 	for _, raw := range items {
 		it, ok := raw.(map[string]any)
-		if !ok || py.S(it["id"]) == "" || py.S(it["title"]) == "" {
+		if !ok || py.JSONStr(it["id"]) == "" || py.S(it["title"]) == "" {
 			continue
 		}
 		if want != "" {
@@ -123,7 +123,7 @@ func ParseNasdaqNews(data map[string]any, now time.Time, symbol, kind string) []
 		if k == "" {
 			k = KindOf(source)
 		}
-		rows = append(rows, store.WireItem{ID: "nasdaq:" + py.S(it["id"]), Headline: CleanText(py.S(it["title"])), Source: source, URL: u, PublishedAt: when, Kind: k})
+		rows = append(rows, store.WireItem{ID: "nasdaq:" + py.JSONStr(it["id"]), Headline: CleanText(py.S(it["title"])), Source: source, URL: u, PublishedAt: when, Kind: k})
 	}
 	return rows
 }

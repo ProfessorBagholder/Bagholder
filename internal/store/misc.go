@@ -241,7 +241,15 @@ func (s *Store) HasWireRelease(symbol string) bool {
 
 // NewsFetchedAt is symbol@venue -> when its wire was last read.
 func (s *Store) NewsFetchedAt() map[string]string {
-	return s.MetaLike("news_fetched:")
+	return stripPrefix(s.MetaLike("news_fetched:"), "news_fetched:")
+}
+
+func stripPrefix(rows map[string]string, prefix string) map[string]string {
+	out := make(map[string]string, len(rows))
+	for k, v := range rows {
+		out[strings.TrimPrefix(k, prefix)] = v
+	}
+	return out
 }
 
 // ForgetNews drops a listing's items and its stamp.
@@ -504,7 +512,7 @@ func (s *Store) FilingsFetchedAt(symbol string) string {
 
 // AllFilingsFetchedAt is symbol -> when.
 func (s *Store) AllFilingsFetchedAt() map[string]string {
-	return s.MetaLike("filings_fetched:")
+	return stripPrefix(s.MetaLike("filings_fetched:"), "filings_fetched:")
 }
 
 // SedarProfile is the SEDAR+ profile number remembered for a symbol, or "".

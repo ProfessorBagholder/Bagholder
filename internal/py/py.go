@@ -47,6 +47,13 @@ func S(v any) string {
 	return fmt.Sprint(v)
 }
 
+func JSONStr(v any) string {
+	if f, ok := v.(float64); ok && !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return S(v)
+}
+
 // Repr is Python's repr of a float: the shortest round-tripping digits, laid out
 // positionally when the exponent is between -4 and 15 and with an exponent otherwise.
 func Repr(f float64) string {
