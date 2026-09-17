@@ -69,15 +69,16 @@ func (a *App) announceReached(r *http.Request, port int) {
 	if a.cfg.BindHost == "127.0.0.1" || !a.local(r) || !a.hostOK(r, port) {
 		return
 	}
+	host := strings.ToLower(strings.TrimSpace(r.Host))
+	if host == "127.0.0.1:"+strconv.Itoa(port) {
+		return
+	}
 	a.reachedOnce.Do(func() {
-		fmt.Printf("Bagholder  http://%s\n", strings.ToLower(strings.TrimSpace(r.Host)))
+		fmt.Printf("Bagholder  http://%s\n", host)
 	})
 }
 
 func startupLine(bindHost string, port int) string {
-	if bindHost != "127.0.0.1" {
-		return net.JoinHostPort(bindHost, strconv.Itoa(port))
-	}
 	return "http://127.0.0.1:" + strconv.Itoa(port)
 }
 

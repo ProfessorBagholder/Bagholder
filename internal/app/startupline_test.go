@@ -2,18 +2,10 @@ package app
 
 import "testing"
 
-func TestTheStartupLineOnLoopback(t *testing.T) {
-	if got, want := startupLine("127.0.0.1", 8765), "http://127.0.0.1:8765"; got != want {
-		t.Errorf("startupLine = %q, want %q", got, want)
-	}
-}
-
-func TestTheStartupLineDoesNotPromiseAPortItCannotKnow(t *testing.T) {
-	got := startupLine("0.0.0.0", 8765)
-	if got == "http://127.0.0.1:8765" {
-		t.Error("a container published under another port was told to open 127.0.0.1:8765, which is not where it answers")
-	}
-	if want := "0.0.0.0:8765"; got != want {
-		t.Errorf("startupLine = %q, want %q", got, want)
+func TestTheStartupLineIsAClickableURL(t *testing.T) {
+	for _, bind := range []string{"127.0.0.1", "0.0.0.0"} {
+		if got, want := startupLine(bind, 8799), "http://127.0.0.1:8799"; got != want {
+			t.Errorf("startupLine(%q) = %q, want %q", bind, got, want)
+		}
 	}
 }
