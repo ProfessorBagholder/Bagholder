@@ -418,13 +418,46 @@ func jsonWithAccessToken(raw string) map[string]any {
 				return obj
 			}
 		}
-		nxt, err := url.PathUnescape(strings.ReplaceAll(cur, "+", "%2B"))
-		if err != nil || nxt == cur {
+		nxt := pyUnquote(cur)
+		if nxt == cur {
 			break
 		}
 		cur = nxt
 	}
 	return nil
+}
+
+func pyUnquote(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '%' && i+2 < len(s) {
+			hi, ok1 := unhex(s[i+1])
+			lo, ok2 := unhex(s[i+2])
+			if ok1 && ok2 {
+				out = append(out, hi<<4|lo)
+				i += 3
+				continue
+			}
+		}
+		out = append(out, s[i])
+		i++
+	}
+	return string(out)
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 func truthy(v any) bool {
