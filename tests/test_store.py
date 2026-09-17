@@ -3988,3 +3988,26 @@ class ShortsColumnTest(unittest.TestCase):
         row = store.shorts_for("QNC", "TSX-V")
         self.assertEqual(row["shares"], 2667164.0)
         self.assertEqual(row["readVersion"], 0)      # unmarked, so it is read again once
+
+
+class LiveDataGuardTest(unittest.TestCase):
+    """A test run never touches the person's own data folder. One test class once reached
+    ~/.bagholder without a temporary home and wrote a made-up headline into the live database."""
+
+    def test_the_real_folder_is_refused_to_a_test_run_and_a_temporary_one_is_not(self):
+        from pathlib import Path
+        with self.assertRaises(RuntimeError):
+            store.guard_home(Path.home() / ".bagholder")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(store.guard_home(tmp), Path(tmp))
+
+    def test_a_test_that_forgets_its_home_fails_instead_of_opening_the_live_database(self):
+        saved_home, saved_env = store._home, os.environ.pop("BAGHOLDER_HOME", None)
+        store.set_home(None)
+        try:
+            with self.assertRaises(RuntimeError):
+                store.list_watchlist()
+        finally:
+            store._home = saved_home
+            if saved_env is not None:
+                os.environ["BAGHOLDER_HOME"] = saved_env

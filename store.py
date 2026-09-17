@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import sqlite3
 import threading
 import uuid
@@ -38,6 +39,32 @@ def set_home(path):
     _home = Path(path) if path else None
 
 
+def _running_tests():
+    """Whether the program running is a test run: unittest's own runner, or a file under tests/.
+    Not merely whether unittest is loaded, which a library inside the live app could do."""
+    main = sys.modules.get("__main__")
+    started = os.path.abspath(getattr(main, "__file__", "") or "")
+    return "unittest" in sys.modules and (started.endswith(os.sep + os.path.join("unittest", "__main__.py"))
+                                          or (os.sep + "tests" + os.sep) in started)
+
+
+def guard_home(path):
+    """The person's own data folder, refused to a test run. A test that reaches ~/.bagholder
+    without a temporary home writes its fixtures into the live database: a suite did exactly
+    that, leaving a made-up QIMC headline in the person's news. The app itself never imports
+    unittest, so its presence is a test run, and the real folder is an error there, not a
+    default."""
+    real = Path.home() / ".bagholder"
+    try:
+        same = Path(path).expanduser().resolve() == real.resolve()
+    except OSError:
+        same = False
+    if same and _running_tests():
+        raise RuntimeError("a test reached the real ~/.bagholder: give it a temporary home "
+                           "(store.set_home, bagholder.set_home, or BAGHOLDER_HOME)")
+    return Path(path)
+
+
 def home():
     if _home is not None:
         return Path(_home)
@@ -56,7 +83,7 @@ def _now_iso():
 
 
 def _ensure_home():
-    path = home()
+    path = guard_home(home())            # every connection passes here: a test never opens the live database
     path.mkdir(mode=0o700, exist_ok=True)
     try:
         os.chmod(path, 0o700)
@@ -3021,7 +3048,8 @@ def _news_from_row(r):
 
 
 def replace_news(symbol, exchange, source, rows, now=None):
-    """The wire's latest items for one listing, in place of what it had."""
+    """A listing's latest items, in place of what it had. Each row is stored under the source it
+    was read from (`via`: tmx, nasdaq, yahoo, sa, gnews), `source` when it names none."""
     sym, ex = _s(symbol).strip().upper(), _s(exchange).strip().upper()
     when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
@@ -3030,9 +3058,21 @@ def replace_news(symbol, exchange, source, rows, now=None):
             _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (sym, ex))
             conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             [(_s(r.get("id")), sym, ex, _s(source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when, _s(r.get("kind")) or "story") for r in rows or [] if r.get("id")])
+                             [(_s(r.get("id")), sym, ex, _s(r.get("via") or source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when, _s(r.get("kind")) or "story") for r in rows or [] if r.get("id")])
             conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("news_fetched:" + news_key(sym, ex), when))
             conn.commit()
+        finally:
+            conn.close()
+
+
+def news_for(symbol, exchange):
+    """A listing's stored items, newest first."""
+    sym, ex = _s(symbol).strip().upper(), _s(exchange).strip().upper()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            return [_news_from_row(r) for r in conn.execute("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id", (sym, ex)).fetchall()]
         finally:
             conn.close()
 
@@ -3082,7 +3122,8 @@ def forget_news(symbol, exchange):
         try:
             _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (_s(symbol).strip().upper(), _s(exchange).strip().upper()))
-            conn.execute("DELETE FROM meta WHERE key = ?", ("news_fetched:" + news_key(symbol, exchange),))
+            conn.execute("DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
+                         ("news_fetched:" + news_key(symbol, exchange), ":" + news_key(symbol, exchange), ":" + news_key(symbol, exchange)))
             conn.commit()
         finally:
             conn.close()

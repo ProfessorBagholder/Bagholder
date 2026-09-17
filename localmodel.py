@@ -64,6 +64,8 @@ def _home():
 
 
 def _models_dir():
+    import store                         # a test never makes or fills the person's model folder
+    store.guard_home(_home())
     d = _home() / "models"
     d.mkdir(parents=True, exist_ok=True)
     return d

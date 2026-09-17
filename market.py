@@ -1205,9 +1205,15 @@ def yahoo_root(symbol):
 
 def yahoo_forms(rec):
     """Yahoo symbols for a share listing, the venue's own suffix first, then the
-    other venues of the listing's currency (a wrong or missing venue still finds it)."""
+    other venues of its market (a wrong or missing venue still finds it). The venue
+    names the market before the currency does: a watched listing keeps no currency,
+    and read by currency alone a Nasdaq listing was asked for as a Toronto one, which
+    is another security (`PLTR.TO` is Palantir's Canadian depositary receipt, not the
+    stock) or nothing at all; a TSX listing that trades in US dollars is still a
+    Toronto one. Only a venue the app does not name leaves the currency to decide."""
     root = yahoo_root(rec.get("symbol"))
-    ccy = str(rec.get("currency") or "CAD").strip().upper()
+    venue = tmx_form(rec.get("exchange"), "")
+    ccy = "USD" if venue == ":US" else "CAD" if venue is not None else str(rec.get("currency") or "CAD").strip().upper()
     if not root or " " in root or ccy not in YAHOO_FORMS:
         return []
     first = YAHOO_SUFFIX.get(str(rec.get("exchange") or "").strip().upper())

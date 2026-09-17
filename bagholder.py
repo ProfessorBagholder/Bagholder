@@ -693,7 +693,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.43.2"
+APP_VERSION = "1.44.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -724,7 +724,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-16.1"
+PROTOCOL = "2026-09-17.1"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1434,6 +1434,7 @@ _exit_code = [0]
 
 
 def _ensure_home():
+    store.guard_home(HOME)               # the session, client id and user agent: never a test's to write
     HOME.mkdir(mode=0o700, exist_ok=True)
     try:
         os.chmod(HOME, 0o700)
@@ -3742,6 +3743,7 @@ def start_login_browser():
     the only place the app opens a browser window: a window the app's Chrome
     still has up is brought forward instead; anything else (no window, a
     lingering windowless Chrome) is closed and one fresh window is launched."""
+    store.guard_home(HOME)
     sys.stderr.write("bagholder login: connect requested\n")
     if _login_browser_alive():
         try:
@@ -5747,33 +5749,53 @@ def news_listings():
     """Every listing whose news is wanted: the market feed, the shares and funds held, and the watched ones."""
     base = model.base_model()
     seen, out = set(), [news.MARKET]
-    # one listing, one read, under its bare ticker: the book's QNC.TO and the watchlist's QNC are the same wire
+    # one listing, one read, under its bare ticker: the book's QNC.TO and the watchlist's QNC are the same wire.
+    # The name the book records for it is what Google is searched for.
     for p in base.get("positions") or []:
         if p.get("kind") != "Shares":
             continue
         key = (market.tmx_symbol(p["symbol"]), _s(p.get("exchange")).upper())
         if key[0] and key not in seen:
             seen.add(key)
-            out.append((key[0], p.get("exchange") or "", p.get("currency") or ""))
+            out.append((key[0], p.get("exchange") or "", p.get("currency") or "", _s(p.get("name"))))
     for w in base.get("watchlist") or []:
         key = (market.tmx_symbol(w["symbol"]), _s(w.get("exchange")).upper())
         if key[0] and key not in seen and not instruments.find(w["symbol"], w.get("exchange")) and key[1] != "CRYPTO":
             seen.add(key)
-            out.append((key[0], w.get("exchange") or "", w.get("currency") or ""))
+            out.append((key[0], w.get("exchange") or "", w.get("currency") or "", _s(w.get("name"))))
     return out
+
+
+_news_pass = {"left": set()}      # bare symbols the running news pass has still to read ("*" the market feed)
+_news_pass_lock = threading.Lock()
+
+
+def news_reading():
+    with _news_pass_lock:
+        return sorted(_news_pass["left"])
 
 
 @single_flight("news")
 def refresh_news():
-    """The wires for every listing whose news is older than fifteen minutes. Never raises."""
+    """Every source for every listing with one due. Never raises. Each listing's items reach the
+    model as it lands, and the listings still to read are in the status, so the News card says a read
+    is under way instead of `No news.` while a pass runs."""
+    key = lambda listing: (market.tmx_symbol(listing[0]) or _s(listing[0])).upper()
+    def start(due):
+        with _news_pass_lock:
+            _news_pass["left"] = {key(l) for l in due}
+    def done(listing, answered):
+        with _news_pass_lock:
+            _news_pass["left"].discard(key(listing))
+        model.invalidate()
     try:
-        n = news.refresh(news_listings(), _ssl_context(), on_new=note_wire_releases)
-        if n:
-            model.invalidate()
-        return n
+        return news.refresh(news_listings(), _ssl_context(), on_new=note_wire_releases, on_start=start, on_done=done)
     except Exception as e:
         sys.stderr.write("bagholder news: refresh failed: %s\n" % e)
         return 0
+    finally:
+        with _news_pass_lock:
+            _news_pass["left"] = set()
 
 
 def news_loop():
@@ -6231,31 +6253,41 @@ def shorts_sweep_loop():
 
 
 def news_symbol_payload(symbol, exchange, currency):
-    """One listing's wire read now, for the News card's search: a ticker neither held nor
-    watched has no rows until asked for. The rows are stored under the listing (tagged as
+    """One listing's news read now from every source, for the News card's search: a ticker neither
+    held nor watched has no rows until asked for. The rows are stored under the listing (tagged as
     neither held nor watched, so they show only under its chip) and the model reloads."""
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
     ex, ccy = _s(exchange).strip(), _s(currency).strip()
+    # the name is what Google is searched for: the security record's, else the one TMX's quote gives
+    known, known_ex, known_ccy = _instrument_meta(sym)
+    name = known if known != sym else ""
     if not ex:
         # the venue from what the app already knows: the security records the sync brought, then
         # TMX's own resolver, which names the venue it verified by the quote and so covers the
         # venues no public directory carries (the CSE, Cboe Canada). Nothing is guessed: a ticker
         # TMX cannot place is a US one, and Nasdaq keeps only the items that name it.
-        _, ex, ccy = (lambda n, e, c: (n, e, c or ccy))(*_instrument_meta(sym))
+        ex, ccy = known_ex, known_ccy or ccy
+    listing = None
+    if not ex or (not name and market.tmx_form(ex, ccy) not in (None, ":US")):
+        try:
+            listing = market.tmx_listing(sym, _ssl_context())
+        except Exception as e:
+            sys.stderr.write("bagholder news: %s not placed by TMX: %s\n" % (sym, str(e) or e.__class__.__name__))
+    if listing:
+        name = name or ("" if _s(listing.get("name")).upper() == sym else _s(listing.get("name")))
         if not ex:
-            form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
-            if form and not form.endswith(":US"):
-                ccy = ccy or "CAD"          # TMX, under the form its resolver just remembered
-            else:
-                ex, ccy = "NASDAQ", "USD"
-    src, rows = news.fetch_symbol(sym, ex, ccy, _ssl_context())
+            ex, ccy = listing["exchange"], listing["currency"]
+    if not ex:
+        form = _s(market.tmx_resolve(market.tmx_symbol(sym), _ssl_context()))
+        if form and not form.endswith(":US"):
+            ccy = ccy or "CAD"          # TMX, under the form its resolver just remembered
+        else:
+            ex, ccy = "NASDAQ", "USD"
+    src, rows = news.read_listing(sym, ex, ccy, _ssl_context(), name=name, force=True)
     if rows is None:
         return {"ok": False, "error": "the wire did not answer"}
-    if not src:
-        return {"ok": True, "count": 0, "source": "", "exchange": ex}
-    store.replace_news(sym, ex, src, rows)
     store.trim_news(news.KEEP)
     model.invalidate()
     return {"ok": True, "count": len(rows), "source": src, "exchange": ex}
@@ -6662,6 +6694,7 @@ def status_payload():
             "updating": str(_state.get("updating") or ""),
             "updateError": str(_state.get("updateError") or ""),
             "notify": notify.status(),
+            "newsReading": news_reading(),
         }
 
 
@@ -6948,6 +6981,7 @@ def _check_python(staging, names):
 def _install_files(staging, names, tag):
     """Keep the current copies under HOME/previous, then put the new files in
     place, and leave the marker the supervisor watches for."""
+    store.guard_home(HOME)
     previous = HOME / "previous"
     if previous.exists():
         shutil.rmtree(previous)
@@ -6970,6 +7004,7 @@ def _install_files(staging, names, tag):
 
 def _rollback():
     """Put the previous copies back (a restarted server that died at once)."""
+    store.guard_home(HOME)
     previous = HOME / "previous"
     if not previous.exists():
         return False
@@ -7000,6 +7035,7 @@ def perform_update(tag, rec):
     """Bring this copy to `tag`: a git checkout pulls, anything else downloads the
     release, checks it, swaps the files. Then a restart. Never raises; failures
     land in _state['updateError'] and nothing is changed."""
+    store.guard_home(HOME)
     try:
         if update_mode() == "git":
             with _lock:
