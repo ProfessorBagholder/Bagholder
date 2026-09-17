@@ -974,6 +974,102 @@ func safeURL(raw string) string {
 	return u.Scheme + "://" + u.Host + u.Path
 }
 
+const webauthnWrap = `(() => {
+	if (window.__bhWrapped) return;
+	window.__bhWrapped = true;
+	const log = (...a) => console.log("bagholder:", ...a);
+	const P = window.PublicKeyCredential;
+	log("ua", navigator.userAgent, "PublicKeyCredential", !!P);
+	if (P) {
+		for (const m of ["isUserVerifyingPlatformAuthenticatorAvailable", "isConditionalMediationAvailable", "getClientCapabilities"]) {
+			if (typeof P[m] !== "function") continue;
+			const o = P[m].bind(P);
+			P[m] = function(...args) {
+				const r = o(...args);
+				Promise.resolve(r).then(v => log(m, "->", JSON.stringify(v)), e => log(m, "error", String(e)));
+				return r;
+			};
+		}
+	}
+	const cs = navigator.credentials;
+	if (cs) {
+		for (const m of ["get", "create"]) {
+			const o = cs[m].bind(cs);
+			cs[m] = function(opts) {
+				const pk = opts && opts.publicKey;
+				const sel = pk && pk.authenticatorSelection;
+				log("credentials." + m, JSON.stringify({mediation: opts && opts.mediation, rpId: pk && pk.rpId, userVerification: pk && pk.userVerification, allowCredentials: pk && pk.allowCredentials ? pk.allowCredentials.length : undefined, transports: pk && pk.allowCredentials ? pk.allowCredentials.map(c => c.transports) : undefined, hints: pk && pk.hints, attachment: sel && sel.authenticatorAttachment, residentKey: sel && sel.residentKey}));
+				const r = o(opts);
+				Promise.resolve(r).then(v => log("credentials." + m, "resolved", v && v.type), e => log("credentials." + m, "rejected", e && e.name, e && e.message));
+				return r;
+			};
+		}
+	}
+})();`
+
+const webauthnProbe = `(async () => {
+	const P = window.PublicKeyCredential;
+	if (!P) return "no PublicKeyCredential";
+	const out = {};
+	try { out.uvpa = await P.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) { out.uvpa = String(e); }
+	try { out.conditional = P.isConditionalMediationAvailable ? await P.isConditionalMediationAvailable() : "n/a"; } catch (e) { out.conditional = String(e); }
+	try { out.capabilities = P.getClientCapabilities ? await P.getClientCapabilities() : "n/a"; } catch (e) { out.capabilities = String(e); }
+	return JSON.stringify(out);
+})()`
+
+const noPasskey = `(() => {
+	const rej = () => Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
+	if (navigator.credentials) {
+		navigator.credentials.get = rej;
+		navigator.credentials.create = rej;
+	}
+	if (window.PublicKeyCredential) {
+		for (const m of ["isUserVerifyingPlatformAuthenticatorAvailable", "isConditionalMediationAvailable"]) PublicKeyCredential[m] = () => Promise.resolve(false);
+		if (PublicKeyCredential.getClientCapabilities) PublicKeyCredential.getClientCapabilities = () => Promise.resolve({});
+	}
+})();`
+
+func (a *App) passkeyGuardLoop(attempt int) {
+	armed := false
+	for a.attemptIs(attempt) {
+		if !a.capturing() {
+			return
+		}
+		pages := cdpPages(DebugPorts[0])
+		if len(pages) == 0 {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		w, err := wsConnect(py.S(pages[0]["webSocketDebuggerUrl"]), secs(captureCallSec))
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if cdpCall(w, "Page.enable", nil, secs(captureCallSec)) == nil || cdpCall(w, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": noPasskey}, secs(captureCallSec)) == nil {
+			w.close()
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		cdpCall(w, "Runtime.evaluate", map[string]any{"expression": noPasskey}, secs(captureCallSec))
+		if !armed {
+			cdpCall(w, "Page.reload", nil, secs(captureCallSec))
+			a.logf("bagholder login: this window has no passkey; a passkey step is refused at once so the page offers its other methods\n")
+			armed = true
+		}
+		for a.attemptIs(attempt) {
+			if !a.capturing() {
+				w.close()
+				return
+			}
+			if _, _, err := w.recvMessage(2 * time.Second); err != nil && !errors.Is(err, errWSTimeout) {
+				break
+			}
+		}
+		w.close()
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (a *App) loginTraceLoop(attempt int) {
 	if !flag(os.Getenv("BAGHOLDER_LOGIN_DEBUG")) {
 		return
@@ -996,6 +1092,13 @@ func (a *App) loginTraceLoop(attempt int) {
 		cdpCall(w, "Network.enable", nil, secs(captureCallSec))
 		cdpCall(w, "Log.enable", nil, secs(captureCallSec))
 		cdpCall(w, "Runtime.enable", nil, secs(captureCallSec))
+		cdpCall(w, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": webauthnWrap}, secs(captureCallSec))
+		cdpCall(w, "Runtime.evaluate", map[string]any{"expression": webauthnWrap}, secs(captureCallSec))
+		if r := cdpCall(w, "Runtime.evaluate", map[string]any{"expression": webauthnProbe, "awaitPromise": true, "returnByValue": true}, 5*time.Second); r != nil {
+			outer, _ := r["result"].(map[string]any)
+			inner, _ := outer["result"].(map[string]any)
+			a.logf("bagholder login: webauthn %s\n", py.S(inner["value"]))
+		}
 		sent := map[string]string{}
 		for a.attemptIs(attempt) {
 			if !a.capturing() {
@@ -1035,6 +1138,20 @@ func (a *App) loginTraceLoop(attempt int) {
 				id := py.S(p["requestId"])
 				a.logf("bagholder login: request failed (%s) %s %s\n", py.S(p["type"]), py.S(p["errorText"]), sent[id])
 				delete(sent, id)
+			case "Runtime.consoleAPICalled":
+				args, _ := p["args"].([]any)
+				parts := make([]string, 0, len(args))
+				for _, x := range args {
+					m, _ := x.(map[string]any)
+					if v, ok := m["value"]; ok {
+						parts = append(parts, py.JSONStr(v))
+					} else {
+						parts = append(parts, py.S(m["description"]))
+					}
+				}
+				if len(parts) > 0 && parts[0] == "bagholder:" {
+					a.logf("bagholder login: page %s\n", strings.Join(parts[1:], " "))
+				}
 			case "Log.entryAdded":
 				e, _ := p["entry"].(map[string]any)
 				if py.S(e["level"]) == "error" {
@@ -1308,6 +1425,7 @@ func (a *App) startLoginBrowser() map[string]any {
 		a.cast.mu.Unlock()
 		go a.screencastLoop(attempt)
 		go a.shotLoop(attempt)
+		go a.passkeyGuardLoop(attempt)
 		go a.loginTraceLoop(attempt)
 	}
 	return map[string]any{"ok": true}

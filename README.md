@@ -94,7 +94,7 @@ For a copy that runs in the background on a machine you keep on. Nothing is need
 docker compose up -d
 ```
 
-Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
+Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code; if your account has a passkey, choose "Try another way" when the page offers it, since the window in the container cannot use one. The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
 
 To build the image yourself instead, `docker build -t bagholder .` and point the compose file's `image` at `bagholder`.
 
