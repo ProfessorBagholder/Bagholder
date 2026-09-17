@@ -465,18 +465,6 @@ def tmx_symbol(symbol):
     return s
 
 
-def tmx_record_symbol(symbol, exchange):
-    """TMX Money symbol for a listing's declared distribution record: bare for
-    TSX, TSX-V and CSE listings, ':AQL' for Cboe Canada (the former NEO) ones,
-    which TMX carries only under that suffix."""
-    s = tmx_symbol(symbol)
-    if not s:
-        return None
-    if str(exchange or "").strip().upper() in CBOE_CANADA_EXCHANGES:
-        return s + ":AQL"
-    return s
-
-
 def tmx_quote_symbol(symbol, exchange, currency):
     """TMX Money symbol for a listing, in the form its venue takes (tmx_form).
     None when TMX does not carry it (crypto, options, unknown venues)."""
