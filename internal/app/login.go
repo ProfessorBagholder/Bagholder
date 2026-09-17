@@ -1018,10 +1018,24 @@ const webauthnProbe = `(async () => {
 })()`
 
 const noPasskey = `(() => {
-	const rej = () => Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
-	if (navigator.credentials) {
-		navigator.credentials.get = rej;
-		navigator.credentials.create = rej;
+	if (window.__bhNoPasskey) return;
+	window.__bhNoPasskey = true;
+	const say = (...a) => console.log("bagholder:", ...a);
+	const cs = navigator.credentials;
+	if (cs) {
+		const get = cs.get.bind(cs);
+		cs.get = function(opts) {
+			if (!opts || !opts.publicKey) return get(opts);
+			const mediation = opts.mediation || "optional";
+			say("passkey request", mediation);
+			if (mediation === "conditional") return new Promise((resolve, reject) => { if (opts.signal) opts.signal.addEventListener("abort", () => reject(new DOMException("Aborted.", "AbortError"))); });
+			return Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
+		};
+		cs.create = function(opts) {
+			if (!opts || !opts.publicKey) return cs.create(opts);
+			say("passkey creation refused");
+			return Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
+		};
 	}
 	if (window.PublicKeyCredential) {
 		for (const m of ["isUserVerifyingPlatformAuthenticatorAvailable", "isConditionalMediationAvailable"]) PublicKeyCredential[m] = () => Promise.resolve(false);
@@ -1030,6 +1044,10 @@ const noPasskey = `(() => {
 })();`
 
 func (a *App) passkeyGuardLoop(attempt int) {
+	if flag(os.Getenv("BAGHOLDER_LOGIN_PASSKEY")) {
+		a.logf("bagholder login: passkeys left to the window\n")
+		return
+	}
 	armed := false
 	for a.attemptIs(attempt) {
 		if !a.capturing() {
@@ -1052,7 +1070,6 @@ func (a *App) passkeyGuardLoop(attempt int) {
 		}
 		cdpCall(w, "Runtime.evaluate", map[string]any{"expression": noPasskey}, secs(captureCallSec))
 		if !armed {
-			cdpCall(w, "Page.reload", nil, secs(captureCallSec))
 			a.logf("bagholder login: this window has no passkey; a passkey step is refused at once so the page offers its other methods\n")
 			armed = true
 		}
