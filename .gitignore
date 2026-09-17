@@ -30,3 +30,7 @@ __MACOSX/
 
 # the compose data folder: the database and the login
 data/
+
+# Python bytecode from the reference sources, while they are still in the tree
+__pycache__/
+*.pyc
