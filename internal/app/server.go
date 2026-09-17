@@ -65,6 +65,13 @@ func writeOK(r *http.Request) bool {
 	return strings.TrimSpace(r.Header.Get("X-Bagholder")) != ""
 }
 
+func startupLine(bindHost string, port int) string {
+	if bindHost != "127.0.0.1" {
+		return net.JoinHostPort(bindHost, strconv.Itoa(port))
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port)
+}
+
 func (a *App) gate(r *http.Request, port int, write bool) bool {
 	if !a.local(r) || !a.hostOK(r, port) {
 		return false
@@ -741,7 +748,7 @@ func (a *App) Run() int {
 	go a.shortsSweepLoop()
 	go a.fearSweepLoop()
 	url := "http://127.0.0.1:" + strconv.Itoa(h.port)
-	fmt.Printf("Bagholder  %s\n", url)
+	fmt.Printf("Bagholder  %s\n", startupLine(a.cfg.BindHost, h.port))
 	if !a.cfg.NoBrowser {
 		openBrowser(url)
 	}
