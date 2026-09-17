@@ -865,17 +865,52 @@ func (a *App) loginViewWS() *miniWS {
 	return w
 }
 
+func (a *App) shotDrop() {
+	a.shotMu.Lock()
+	w := a.shot
+	a.shot, a.shotTarget = nil, ""
+	a.shotMu.Unlock()
+	if w != nil {
+		w.close()
+	}
+}
+
+func (a *App) shotWS() *miniWS {
+	pages := cdpPages(DebugPorts[0])
+	if len(pages) == 0 {
+		a.shotDrop()
+		return nil
+	}
+	page := pages[0]
+	a.shotMu.Lock()
+	if a.shot != nil && a.shotTarget == py.S(page["id"]) {
+		w := a.shot
+		a.shotMu.Unlock()
+		return w
+	}
+	a.shotMu.Unlock()
+	a.shotDrop()
+	w, err := wsConnect(py.S(page["webSocketDebuggerUrl"]), secs(captureCallSec))
+	if err != nil {
+		return nil
+	}
+	a.shotMu.Lock()
+	a.shot, a.shotTarget = w, py.S(page["id"])
+	a.shotMu.Unlock()
+	return w
+}
+
 func (a *App) loginFrame() []byte {
 	if !a.capturing() {
 		return nil
 	}
-	w := a.loginViewWS()
+	w := a.shotWS()
 	if w == nil {
 		return nil
 	}
 	r := cdpCall(w, "Page.captureScreenshot", map[string]any{"format": "jpeg", "quality": 60}, secs(captureCallSec))
 	if r == nil {
-		a.loginViewDrop()
+		a.shotDrop()
 		return nil
 	}
 	res, _ := r["result"].(map[string]any)
@@ -885,7 +920,7 @@ func (a *App) loginFrame() []byte {
 	}
 	raw, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		a.loginViewDrop()
+		a.shotDrop()
 		return nil
 	}
 	return raw

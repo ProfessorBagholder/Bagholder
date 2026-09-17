@@ -185,6 +185,9 @@ type App struct {
 	viewMu      sync.Mutex
 	view        *miniWS
 	viewTarget  string
+	shotMu      sync.Mutex
+	shot        *miniWS
+	shotTarget  string
 	cast        screencast
 	reachedOnce sync.Once
 
