@@ -235,20 +235,23 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return out.Close()
 }
 
-func (a *App) checkBinary(path string, tag string) error {
+func (a *App) checkBinary(path, tag, what string) error {
 	_ = os.Chmod(path, 0o755)
 	cmd := exec.Command(path, "--version")
 	out, err := cmd.Output()
 	if err != nil {
-		return errors.New("the downloaded release did not run")
+		return errors.New("the " + what + " did not run")
 	}
 	got := strings.TrimSpace(string(out))
 	if got == "" {
-		return errors.New("the downloaded release did not run")
+		return errors.New("the " + what + " did not run")
+	}
+	if tag == "" {
+		return nil
 	}
 	want := strings.TrimPrefix(tag, "v")
 	if !strings.HasSuffix(got, want) {
-		return errors.New("the downloaded release reports version " + got + ", not " + want)
+		return errors.New("the " + what + " reports version " + got + ", not " + want)
 	}
 	return nil
 }
@@ -324,7 +327,11 @@ func (a *App) performUpdate(tag string, rec map[string]any) {
 		}
 		defer os.RemoveAll(staging)
 		staged := filepath.Join(staging, filepath.Base(a.cfg.Exe))
+		check, what := tag, "downloaded release"
 		if a.updateMode() == "git" {
+			check, what = "", "build"
+		}
+		if check == "" {
 			a.setUpdating("Updating to " + tag + "…")
 			ok, why := a.gitUpdateReady()
 			if !ok {
@@ -375,7 +382,7 @@ func (a *App) performUpdate(tag string, rec map[string]any) {
 			}
 		}
 		a.setUpdating("Installing " + tag + "…")
-		if err := a.checkBinary(staged, tag); err != nil {
+		if err := a.checkBinary(staged, check, what); err != nil {
 			return err
 		}
 		return a.installBinary(staged, tag)
