@@ -7,7 +7,12 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bagholder ./cmd/bagholder
 
-FROM debian:bookworm-slim
+# The runtime base is the one the Python image used, not a bare debian:bookworm-slim.
+# Two independent rewrites (this one and a Rust one) replaced that base and both hit a
+# sign-in that stalls where the Python image's does not, so the base is held to the
+# known-good one until the difference is understood. It costs an interpreter this
+# binary never runs.
+FROM python:3.12-slim-bookworm
 
 # Chromium for the Wealthsimple sign-in, on a virtual display (Xvfb): the app's page shows
 # its window and passes your clicks and keys to it, so nothing is needed on the host but
