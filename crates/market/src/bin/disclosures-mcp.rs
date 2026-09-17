@@ -102,7 +102,7 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
             let row = result.get("items").and_then(|i| i.as_array()).and_then(|items| items.iter().find(|i| i.get("id").and_then(|v| v.as_str()) == Some(id.as_str())).cloned());
             let row = match row {
                 Some(r) => r,
-                None => return Ok(json!({"error": format!("no item {} for {}", disclosures::py_repr(&id), symbol)})),
+                None => return Ok(json!({"error": format!("no item {} for {}", disclosures::repr_quoted(&id), symbol)})),
             };
             let (data, ct) = disclosures::document(&row)?;
             let mut dest = arg(args, "dest");
@@ -124,11 +124,11 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
                 sedar::Lookup::Found(rows) => Ok(json!({"profiles": rows})),
                 sedar::Lookup::NotFound => {
                     let q = query.trim();
-                    Err(Fail::Other(if q.is_empty() { "ProfileNotFound: empty query".into() } else { format!("ProfileNotFound: no SEDAR+ profile matched {}", disclosures::py_repr(q)) }))
+                    Err(Fail::Other(if q.is_empty() { "ProfileNotFound: empty query".into() } else { format!("ProfileNotFound: no SEDAR+ profile matched {}", disclosures::repr_quoted(q)) }))
                 }
             }
         }
-        _ => Err(Fail::Other(format!("ValueError: unknown tool {}", disclosures::py_repr(name)))),
+        _ => Err(Fail::Other(format!("ValueError: unknown tool {}", disclosures::repr_quoted(name)))),
     }
 }
 

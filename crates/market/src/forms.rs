@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
-use bagholder_model::pytext::{py_float, py_int};
+use bagholder_model::textrules::{parse_float, parse_int};
 
 fn marks() -> &'static [Regex; 8] {
     static M: OnceLock<[Regex; 8]> = OnceLock::new();
@@ -39,7 +39,7 @@ pub fn is_form(text: &str) -> bool {
 }
 
 fn num(s: &str) -> Option<f64> {
-    py_float(&s.replace(',', ""))
+    parse_float(&s.replace(',', ""))
 }
 
 /// `"{:,.Nf}".format(n)`: fixed decimals, thousands separated.
@@ -69,7 +69,7 @@ fn money(n: Option<f64>) -> String {
 fn date(text: &str, label: &str) -> String {
     let r = Regex::new(&format!(r"(?i){}\s*(\d{{4}})\s*YYYY\s*(\d{{1,2}})\s*(\d{{1,2}})\s*MM", label)).unwrap();
     match r.captures(text) {
-        Some(m) => format!("{}-{:02}-{:02}", &m[1], py_int(&m[2]).unwrap_or(0), py_int(&m[3]).unwrap_or(0)),
+        Some(m) => format!("{}-{:02}-{:02}", &m[1], parse_int(&m[2]).unwrap_or(0), parse_int(&m[3]).unwrap_or(0)),
         None => String::new(),
     }
 }
@@ -79,7 +79,7 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 /// `forms._day`: `2026-09-08` as `8 September 2026`. A month of 0 reads as
 /// December, since Python's `months[-1]` is the last one.
 fn day(iso: &str) -> String {
-    let parts: Vec<Option<i64>> = iso.split('-').map(py_int).collect();
+    let parts: Vec<Option<i64>> = iso.split('-').map(parse_int).collect();
     if parts.len() != 3 || parts.iter().any(|p| p.is_none()) {
         return String::new();
     }
@@ -107,7 +107,7 @@ pub fn read_45_106f1(text: &str) -> Value {
     let exemption = EXEMPTION
         .get_or_init(|| Regex::new(r"NI\s*45-106\s*([\d.]+)\s*\[([^\]]{3,60})\]").unwrap())
         .captures(text)
-        .map(|m| format!("NI 45-106 {} ({})", &m[1], bagholder_model::pytext::py_strip(&m[2]).to_lowercase()))
+        .map(|m| format!("NI 45-106 {} ({})", &m[1], bagholder_model::textrules::trim_space(&m[2]).to_lowercase()))
         .unwrap_or_default();
     if amount.is_none() && buyers.is_none() {
         return json!({});

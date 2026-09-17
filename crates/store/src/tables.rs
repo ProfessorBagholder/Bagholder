@@ -386,7 +386,7 @@ pub fn trade_groups(conn: &Connection) -> Result<Vec<Value>> {
 
 pub fn save_trade_groups(conn: &Connection, groups: Option<&Value>) -> Result<Vec<Value>> {
     let clean = clean_trade_groups(groups);
-    set_meta(conn, "trade_groups", &py_json(&Value::Array(clean.clone())))?;
+    set_meta(conn, "trade_groups", &json_text(&Value::Array(clean.clone())))?;
     Ok(clean)
 }
 
@@ -427,7 +427,7 @@ pub fn trade_notes(conn: &Connection) -> Result<Map<String, Value>> {
 
 pub fn save_trade_notes(conn: &Connection, notes: Option<&Value>) -> Result<Map<String, Value>> {
     let clean = clean_trade_notes(notes.filter(|v| v.is_object()));
-    set_meta(conn, "trade_notes", &py_json(&Value::Object(clean.clone())))?;
+    set_meta(conn, "trade_notes", &json_text(&Value::Object(clean.clone())))?;
     Ok(clean)
 }
 
@@ -507,7 +507,7 @@ pub fn field_either(row: &Value, camel: &str, snake: &str) -> Option<Value> {
 /// is running, so writing them the other way would rewrite the user's database
 /// on the first save for no reason and make the two byte-different for the
 /// same content.
-pub fn py_json(v: &Value) -> String {
+pub fn json_text(v: &Value) -> String {
     let mut out = String::new();
     write_py_json(v, &mut out);
     out
@@ -576,8 +576,8 @@ fn write_py_str(s: &str, out: &mut String) {
 /// `json.dumps(..., sort_keys=True)`: the same formatting, with every object's
 /// keys in order. A ticket's stored request uses it so the same order is the
 /// same text whichever way it was built.
-pub fn py_json_sorted(v: &Value) -> String {
-    py_json(&sorted(v))
+pub fn json_text_sorted(v: &Value) -> String {
+    json_text(&sorted(v))
 }
 
 fn sorted(v: &Value) -> Value {

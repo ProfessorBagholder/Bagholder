@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use crate::browser::Session;
 use crate::disclosures::{self as d, Fetched, SourceError};
 use crate::news::unescape;
-use bagholder_model::pytext::{py_int, py_strip};
+use bagholder_model::textrules::{parse_int, trim_space};
 
 pub const SOURCE: &str = "SEDAR+";
 pub const BASE: &str = "https://www.sedarplus.ca";
@@ -397,7 +397,7 @@ re!(re_ws, r"\s+");
 pub fn text(s: &str) -> String {
     let t = re_tags().replace_all(s, " ");
     let t = unescape(&t);
-    py_strip(&re_ws().replace_all(&t, " ")).to_string()
+    trim_space(&re_ws().replace_all(&t, " ")).to_string()
 }
 
 /// `sedar.filing_id`: the document's drmKey when the row carries one,
@@ -433,7 +433,7 @@ pub fn parse_filings(html: &str) -> Vec<Value> {
         let size = re_size().captures(after);
         let profile_no = issuer.as_ref().map(|c| c[2].to_string()).unwrap_or_default();
         let file = text(&m[2]);
-        let submitted = sub.map(|c| py_strip(&c[1]).to_string()).unwrap_or_default();
+        let submitted = sub.map(|c| trim_space(&c[1]).to_string()).unwrap_or_default();
         out.push(json!({
             "id": filing_id(&url, &profile_no, &file, &submitted),
             "issuer": issuer.as_ref().map(|c| text(&c[1])).unwrap_or_default(),
@@ -457,7 +457,7 @@ pub fn iso(submitted: &str) -> String {
     let r = R.get_or_init(|| Regex::new(r"^(\d{1,2}) (\w{3}) (\d{4})(?:\s+(\d{1,2}):(\d{2}))?").unwrap());
     let m = match r.captures(submitted) { Some(m) => m, None => return String::new() };
     let mon = match MONTHS.iter().position(|x| *x == &m[2]) { Some(i) => i + 1, None => return String::new() };
-    let n = |i: usize| m.get(i).and_then(|g| py_int(g.as_str())).unwrap_or(0);
+    let n = |i: usize| m.get(i).and_then(|g| parse_int(g.as_str())).unwrap_or(0);
     format!("{:04}-{:02}-{:02}T{:02}:{:02}", n(3), mon, n(1), n(4), n(5))
 }
 
@@ -495,7 +495,7 @@ pub enum Lookup {
 /// `sedar.resolve_profile`: every reporting-issuer profile matching a name or
 /// number, best first.
 pub fn resolve_profile(query: &str) -> Fetched<Lookup> {
-    let q = py_strip(query).to_string();
+    let q = trim_space(query).to_string();
     if q.is_empty() {
         return Ok(Lookup::NotFound);
     }
@@ -710,7 +710,7 @@ pub fn split_type_title(file: &str) -> (String, String) {
     static TAIL: OnceLock<Regex> = OnceLock::new();
     static PAREN: OnceLock<Regex> = OnceLock::new();
     let no_pdf = PDF.get_or_init(|| Regex::new(r"(?i)\.pdf$").unwrap()).replace_all(file, "");
-    let name = py_strip(&no_pdf).to_string();
+    let name = trim_space(&no_pdf).to_string();
     for rx in [
         TAIL.get_or_init(|| Regex::new(r"(?i)[-–]\s*(English|French)\s*$").unwrap()),
         PAREN.get_or_init(|| Regex::new(r"(?i)\((English|French)\)\s*$").unwrap()),
@@ -765,6 +765,6 @@ pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
     let issuer = g("issuer");
     match download_bytes(&g("profileNo"), &g("id"), if issuer.is_empty() { None } else { Some(&issuer) })? {
         Some(x) => Ok(x),
-        None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::py_repr(&g("id")), g("profileNo")))),
+        None => Err(SourceError::Other(format!("ProfileNotFound: no document {} in profile {}", d::repr_quoted(&g("id")), g("profileNo")))),
     }
 }

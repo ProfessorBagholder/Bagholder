@@ -108,6 +108,6 @@ pub fn num_repr(v: f64) -> String {
 
 /// Python's `sum` over floats: the integer 0 when there is nothing to add,
 /// else the float total from +0.0 (never -0.0).
-pub fn py_sum(empty: bool, total: f64) -> serde_json::Value {
+pub fn sum_of(empty: bool, total: f64) -> serde_json::Value {
     if empty { serde_json::json!(0) } else { serde_json::json!(total + 0.0) }
 }

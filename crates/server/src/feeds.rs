@@ -15,7 +15,7 @@ use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::feeds as sf;
-use bagholder_store::tables::{get_meta, py_json, set_meta};
+use bagholder_store::tables::{get_meta, json_text, set_meta};
 
 use crate::app::{app, f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, ENRICH_VERSION};
 use crate::notify;
@@ -784,7 +784,7 @@ pub fn refresh_filings_in(c: &Connection, sym: &str, name: Option<&str>, exchang
             }
         }
         let _ = sf::mark_filings_fetched(c, &sym, &profile_no, &now);
-        let _ = set_meta(c, &format!("filings_sources:{}", sym), &py_json(&Value::Object(sources)));
+        let _ = set_meta(c, &format!("filings_sources:{}", sym), &json_text(&Value::Object(sources)));
         if any_reached { total } else { -1 }
     }
 }

@@ -1,4 +1,4 @@
-// The GraphQL documents the Wealthsimple web app sends, as bagholder.py and
+// The GraphQL documents the Wealthsimple web app sends, as crates/ws/src/queries.rs and
 // the iOS app carry them. Generated from WSPull.swift; keep the three the same.
 package com.bagholder.app
 

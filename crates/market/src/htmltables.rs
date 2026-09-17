@@ -149,7 +149,7 @@ pub fn html_tables(html: &str) -> Vec<Vec<Vec<String>>> {
                 "td" | "th" if cell.is_some() && row.is_some() => {
                     let text = cell.take().unwrap();
                     let collapsed = ws.replace_all(&text, " ");
-                    row.as_mut().unwrap().push(bagholder_model::pytext::py_strip(&collapsed).to_string());
+                    row.as_mut().unwrap().push(bagholder_model::textrules::trim_space(&collapsed).to_string());
                 }
                 "tr" if row.is_some() && table.is_some() => {
                     let r = row.take().unwrap();

@@ -1,4 +1,4 @@
-// The view half of the model, a port of model.py's filters, NAV analytics and
+// The view half of the model, a port of crates/model/src/view.rs filters, NAV analytics and
 // build_view: one filter set applied to the base, and everything a page shows
 // computed from the same filtered lists.
 import Foundation
@@ -779,7 +779,7 @@ extension BHModel {
         return v
     }
 
-    /// model.py portfolio_view: CAD aggregates over the accounts the filter has on, every account when it has none.
+    /// crates/model/src/view.rs portfolio_view: CAD aggregates over the accounts the filter has on, every account when it has none.
     static func portfolioView(_ base: BHBase, _ f: BHFilters, _ positions: [BHPosition]) -> BHPortfolio {
         let fx = base.fx, today = base.today
         func cad(_ amount: Double, _ currency: String) -> Double { toCad(fx, amount, currency, today) }

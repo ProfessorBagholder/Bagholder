@@ -1,4 +1,4 @@
-// Market data on the phone: what the desktop's market.py fetches server-side,
+// Market data on the phone: what the desktop's crates/market fetches server-side,
 // fetched here from the same sources with the same rules, and kept in the
 // app's files. Every request records its outcome, and that is what a chart's
 // empty state reports. Nothing is hand-mapped per ticker.

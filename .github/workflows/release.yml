@@ -1,0 +1,70 @@
+# Builds the archive the in-app updater installs, one per platform, and attaches
+# each with its .sha256 to the release the tag belongs to:
+# bagholder-vX.Y.Z-<target>.tar.gz (.zip on Windows), holding the server, its
+# browser helper, the disclosures MCP server, the SEDAR+ command, the page and its assets.
+name: Release archives
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v1.43.2"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-13, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: The app's version is the tag's
+        shell: bash
+        run: |
+          have="$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' crates/server/src/app.rs)"
+          test "$have" = "${TAG#v}" || { echo "the app says $have, the tag says $TAG"; exit 1; }
+      - name: Build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      - name: Build tools (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install -y nasm && vcpkg install openssl:x64-windows-static-md && echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+      - name: Package
+        shell: bash
+        run: |
+          name="bagholder-${TAG}-${{ matrix.target }}"
+          mkdir -p dist/pkg
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          for b in bagholder bagholder-browser disclosures-mcp sedar; do cp "target/release/$b$ext" dist/pkg/; done
+          cp ledger.html lightweight-charts.js favicon.png dist/pkg/
+          cd dist/pkg
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "../$name.zip" . >/dev/null; cd .. && sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "../$name.tar.gz" *; cd .. && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/bagholder-* --clobber

@@ -177,7 +177,7 @@ pub fn build_positions(
             "mv": mv,
             "unreal": unreal,
             "unrealPct": if cost != 0.0 { json!(unreal / cost) } else { Value::Null },
-            "held": if qty != 0.0 { py_round(held / qty) } else { 0 },
+            "held": if qty != 0.0 { round_half_even(held / qty) } else { 0 },
             "opened": lots[0].date,
             "wsQty": ws_qty,
             "rt": lots[0].rt,
@@ -215,7 +215,7 @@ pub fn build_positions(
 }
 
 /// Python's `round`: half to even, returning an integer.
-fn py_round(v: f64) -> i64 {
+fn round_half_even(v: f64) -> i64 {
     let r = v.round();
     if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
         (r - v.signum()) as i64

@@ -1,27 +1,27 @@
 # Desktop API dump
 
-Source of truth: `master` (`bagholder.py`, `store.py`, `ledger.html`). Facts only from those files.
+Source of truth: `master` (`crates/server`, `crates/store`, `ledger.html`). Facts only from those files.
 
-Routing: `do_GET` / `do_POST` use `path = self.path.split("?", 1)[0]` (query string ignored). JSON bodies are sent with `Content-Type: application/json; charset=utf-8` unless noted.
+Routing: the GET and POST handlers in `crates/server/src/main.rs` match the path without its query string. JSON bodies are sent with `Content-Type: application/json; charset=utf-8` unless noted.
 
-`_gate()` (GET): false unless client IP is `127.0.0.1` or `::1` and `Host` is `127.0.0.1:<bound-port>`.
-`_gate(write=True)` (POST): same, plus `Sec-Fetch-Site` is `same-origin` or header `X-Bagholder` is non-empty.
+`gate(req, false)` (GET): false unless client IP is `127.0.0.1` or `::1` and `Host` is `127.0.0.1:<bound-port>`.
+`gate(req, true)` (POST): same, plus `Sec-Fetch-Site` is `same-origin` or header `X-Bagholder` is non-empty.
 
 ---
 
-## 1. HTTP paths (`bagholder.py` `do_GET` / `do_POST`)
+## 1. HTTP paths (`crates/server/src/main.rs`)
 
 ### GET
 
 **GET `/` and GET `/ledger.html`**
 
-- 403 `{"ok": false}` if `_gate()` is false.
+- 403 `{"ok": false}` if `gate(req, false)` is false.
 - 404 `{"ok": false, "error": "ledger.html missing"}` if `ledger.html` cannot be read (`OSError`).
 - 200 file bytes of `ledger.html`, `Content-Type: text/html; charset=utf-8`.
 
 **GET `/api/status`**
 
-- 403 `{"ok": false}` if `_gate()` is false.
+- 403 `{"ok": false}` if `gate(req, false)` is false.
 - 200 from `status_payload()`:
 
 ```json
@@ -42,13 +42,13 @@ Routing: `do_GET` / `do_POST` use `path = self.path.split("?", 1)[0]` (query str
 
 **GET `/favicon.png` and GET `/favicon.ico`**
 
-- 403 `{"ok": false}` if `_gate()` is false.
+- 403 `{"ok": false}` if `gate(req, false)` is false.
 - 404 `{"ok": false, "error": "favicon missing"}` if `favicon.png` cannot be read (`OSError`).
 - 200 file bytes of `favicon.png`, `Content-Type: image/png`.
 
 **GET `/api/book`**
 
-- 403 `{"ok": false}` if `_gate()` is false.
+- 403 `{"ok": false}` if `gate(req, false)` is false.
 - 200:
 
 ```json
@@ -70,11 +70,11 @@ Empty arrays/objects/`""` are the defaults when the corresponding `load_book()` 
 
 **GET any other path**
 
-- 404 `{"ok": false, "error": "not found"}` (no `_gate()` check).
+- 404 `{"ok": false, "error": "not found"}` (no `gate(req, false)` check).
 
 ### POST
 
-`do_POST` runs `_gate(write=True)` before matching the path. If that fails: 403 `{"ok": false}` for every POST path below (and for unknown POST paths).
+The POST handler runs `gate(req, true)` before matching the path. If that fails: 403 `{"ok": false}` for every POST path below (and for unknown POST paths).
 
 **POST `/api/login/start`**
 
@@ -136,7 +136,7 @@ Empty arrays/objects/`""` are the defaults when the corresponding `load_book()` 
 
 ---
 
-## 2. sqlite (`store.py`, `SCHEMA_VERSION = 3`)
+## 2. sqlite (`crates/store/src/schema.rs`, `SCHEMA_VERSION = 3`)
 
 `_init_schema` creates the tables below, then runs `_migrate_nav_history` and `_ensure_activity_security_id`, then writes `meta.schema_version` = `"3"`.
 
@@ -251,7 +251,7 @@ const HAS_LOCAL_API = (location.hostname === "127.0.0.1" || location.hostname ==
 
 ---
 
-## 4. Constants (`bagholder.py`)
+## 4. Constants (`crates/ws/src/session.rs`, `crates/server/src/login.rs`)
 
 ```
 OAUTH = "https://api.production.wealthsimple.com/v1/oauth/v2"

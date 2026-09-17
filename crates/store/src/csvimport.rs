@@ -18,7 +18,7 @@ use rusqlite::{Connection, Result};
 use serde_json::{json, Map, Value};
 use std::sync::OnceLock;
 
-use bagholder_model::pytext::{csv_rows, py_float, py_int, py_strip, splitlines, uuid4};
+use bagholder_model::textrules::{csv_rows, parse_float, parse_int, trim_space, splitlines, uuid4};
 
 pub const WATCH_META: &str = "watch_folder";
 pub const WATCH_FILES_META: &str = "watch_files";
@@ -84,8 +84,8 @@ fn caps<'a>(r: &Regex, s: &'a str) -> Option<regex::Captures<'a>> {
 /// `csvimport.normalize_header`.
 pub fn normalize_header(h: &str) -> String {
     let s = h.replace('\u{feff}', "");
-    let s = py_strip(&s).trim_matches(['"', '\'']);
-    let s = py_strip(s).to_lowercase();
+    let s = trim_space(&s).trim_matches(['"', '\'']);
+    let s = trim_space(s).to_lowercase();
     re_header_space().replace_all(&s, "_").into_owned()
 }
 
@@ -98,7 +98,7 @@ pub fn normalize_header(h: &str) -> String {
 /// and a NaN that empties every total it reaches. Here they are unreadable,
 /// and read as 0 like any other unreadable cell.
 pub fn parse_number(raw: &str) -> f64 {
-    let s = py_strip(raw);
+    let s = trim_space(raw);
     if s.is_empty() || s == "-" || s == "—" || s.to_lowercase() == "n/a" {
         return 0.0;
     }
@@ -108,19 +108,19 @@ pub fn parse_number(raw: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
     }
-    match py_float(&s) {
+    match parse_float(&s) {
         Some(n) if n.is_finite() => if paren { -n.abs() } else { n },
         _ => 0.0,
     }
 }
 
 fn d2(text: &str) -> String {
-    format!("{:02}", py_int(text).unwrap_or(0))
+    format!("{:02}", parse_int(text).unwrap_or(0))
 }
 
 /// `csvimport.parse_date`: the dates the exports write, as YYYY-MM-DD, or "".
 pub fn parse_date(raw: &str) -> String {
-    let s = py_strip(raw);
+    let s = trim_space(raw);
     if s.is_empty() {
         return String::new();
     }
@@ -141,8 +141,8 @@ pub fn parse_date(raw: &str) -> String {
         }
     }
     if let Some(m) = caps(re_dmy(), s) {
-        let a = py_int(&m[1]).unwrap_or(0);
-        let b = py_int(&m[2]).unwrap_or(0);
+        let a = parse_int(&m[1]).unwrap_or(0);
+        let b = parse_int(&m[2]).unwrap_or(0);
         let y = &m[3];
         if a > 12 && b <= 12 {
             return format!("{}-{:02}-{:02}", y, b, a);
@@ -150,7 +150,7 @@ pub fn parse_date(raw: &str) -> String {
         return format!("{}-{:02}-{:02}", y, a, b);
     }
     if re_serial().is_match(s) {
-        if let Some(serial) = py_float(s) {
+        if let Some(serial) = parse_float(s) {
             if 20000.0 < serial && serial < 80000.0 {
                 // a spreadsheet's day count from 1899-12-30
                 let days = serial.round_ties_even() as i64;
@@ -195,7 +195,7 @@ pub fn detect_format(headers: &[String]) -> &'static str {
 }
 
 fn compact_lower(s: &str) -> String {
-    re_compact().replace_all(&py_strip(s).to_lowercase(), "").into_owned()
+    re_compact().replace_all(&trim_space(s).to_lowercase(), "").into_owned()
 }
 
 /// `csvimport.categorize`.
@@ -224,22 +224,22 @@ pub fn categorize(activity_type: &str, activity_sub_type: &str) -> &'static str 
 /// `csvimport.extract_instrument`: (symbol, name) from a statement
 /// description.
 pub fn extract_instrument(description: &str) -> (String, String) {
-    let text = py_strip(description);
+    let text = trim_space(description);
     if text.is_empty() {
         return (String::new(), String::new());
     }
     let colon = match text.find(':') {
         None => {
             return match caps(re_dash(), text) {
-                Some(m) => (m[1].to_uppercase(), py_strip(&m[2]).to_string()),
+                Some(m) => (m[1].to_uppercase(), trim_space(&m[2]).to_string()),
                 None => (String::new(), String::new()),
             };
         }
         Some(c) => c,
     };
-    let left = py_strip(&text[..colon]);
+    let left = trim_space(&text[..colon]);
     if let Some(m) = caps(re_dash(), left) {
-        return (m[1].to_uppercase(), py_strip(&m[2]).to_string());
+        return (m[1].to_uppercase(), trim_space(&m[2]).to_string());
     }
     if re_space().is_match(left) {
         let sym = re_spaces().replace_all(left, " ").to_uppercase();
@@ -300,7 +300,7 @@ impl Parsed {
 /// `csvimport.map_statement_type`: (activity type, sub-type, category) for a
 /// statement's transaction code and description.
 pub fn map_statement_type(code: &str, description: &str) -> (String, String, String) {
-    let raw = py_strip(code).to_string();
+    let raw = trim_space(code).to_string();
     let c = re_compact().replace_all(&raw.to_uppercase(), "").into_owned();
     let blob = format!("{} {}", c, description).to_lowercase();
     let or = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { a.to_string() };
@@ -393,7 +393,7 @@ type Row = Map<String, Value>;
 fn pick(row: &Row, keys: &[&str]) -> String {
     for k in keys {
         if let Some(Value::String(v)) = row.get(*k) {
-            let t = py_strip(v);
+            let t = trim_space(v);
             if !t.is_empty() {
                 return t.to_string();
             }
@@ -473,7 +473,7 @@ pub fn map_statement(row: &Row, book_id: &str) -> (Option<Value>, Option<String>
         "transactionDate": transaction_date,
         "settlementDate": settlement,
         "accountId": "",
-        "bookId": py_strip(book_id),
+        "bookId": trim_space(book_id),
         "accountType": "",
         "activityType": activity_type,
         "activitySubType": sub,
@@ -599,7 +599,7 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
         lines.push(line);
     }
     let mut table = csv_rows(&lines.join("\n"))?;
-    while table.last().map(|r| r.iter().all(|c| py_strip(c).is_empty())).unwrap_or(false) {
+    while table.last().map(|r| r.iter().all(|c| trim_space(c).is_empty())).unwrap_or(false) {
         table.pop();
     }
     if table.is_empty() {
@@ -608,7 +608,7 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
             "footerStripped": footer, "countsByType": {}, "rowCount": 0,
         }));
     }
-    let headers: Vec<String> = table[0].iter().map(|h| py_strip(&h.replace('\u{feff}', "")).to_string()).collect();
+    let headers: Vec<String> = table[0].iter().map(|h| trim_space(&h.replace('\u{feff}', "")).to_string()).collect();
     let fmt = detect_format(&headers);
     let norms: Vec<String> = headers.iter().map(|h| normalize_header(h)).collect();
     let mut skipped: Vec<Value> = Vec::new();
@@ -629,14 +629,14 @@ pub fn parse_csv(text: &str, name: &str) -> std::result::Result<Value, String> {
             row.insert(n.clone(), json!(cells.get(j).cloned().unwrap_or_default()));
         }
         let values: Vec<&str> = row.values().map(|v| v.as_str().unwrap_or("")).collect();
-        if values.iter().all(|v| py_strip(v).is_empty()) {
+        if values.iter().all(|v| trim_space(v).is_empty()) {
             continue;
         }
         if is_footer_line(&values.join(" ")) {
             footer = true;
             continue;
         }
-        let raw = crate::tables::py_json(&Value::Object(row.clone()));
+        let raw = crate::tables::json_text(&Value::Object(row.clone()));
         let (activity, issue) = match fmt {
             "statement" => map_statement(&row, &book),
             "legacy" => (map_legacy(&row), None),
@@ -746,7 +746,7 @@ pub fn watch_folder(conn: &Connection) -> Result<String> {
 
 /// `csvimport.set_watch_folder`.
 pub fn set_watch_folder(conn: &Connection, path: &str) -> Result<Value> {
-    let p = expanduser(py_strip(path));
+    let p = expanduser(trim_space(path));
     if p.is_empty() {
         return Ok(json!({"ok": false, "error": "Folder path required"}));
     }
@@ -791,7 +791,7 @@ fn os_error(e: &std::io::Error, path: &str) -> String {
 /// unchanged files are skipped unless forced.
 pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Result<Value> {
     let given = match folder { Some(f) if !f.is_empty() => f.to_string(), _ => watch_folder(conn)? };
-    let path = expanduser(py_strip(&given));
+    let path = expanduser(trim_space(&given));
     if path.is_empty() {
         return Ok(json!({"ok": false, "error": "No folder is being watched"}));
     }
@@ -842,7 +842,7 @@ pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Resu
     }
     let now = stamp();
     let kept: Map<String, Value> = seen.into_iter().filter(|(k, _)| std::path::Path::new(k).exists()).collect();
-    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::py_json(&Value::Object(kept)))?;
+    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::json_text(&Value::Object(kept)))?;
     crate::tables::set_meta(conn, WATCH_LAST_META, &now)?;
     Ok(json!({"ok": true, "path": path, "added": added, "duplicates": duplicates, "files": files, "scannedAt": now}))
 }

@@ -1,7 +1,7 @@
-// The derived model, a port of model.py (the reference), function for
+// The derived model, a port of crates/model (the reference), function for
 // function. Everything a screen shows comes from here so that one list of
 // trades feeds every tile, table and chart, and so the numbers can be tested:
-// ModelCasesTests runs tests/cases through it and compares with the Python.
+// ModelCasesTests runs tests/cases through it and compares with the Rust model.
 //
 // Pipeline
 //     activities  -> normalizeActivities  (crypto, options, stock-dividend notices)
@@ -21,7 +21,7 @@ import Foundation
 
 // MARK: - rows
 
-/// A normalized activity. A class, as in the Python where fills, lots and the
+/// A normalized activity. A class, as in the Rust model where fills, lots and the
 /// trade's fill list all see the row the matcher amended (a multileg's
 /// inferred quantity and side, for one).
 final class BHAct {
@@ -187,7 +187,7 @@ struct BHAllocationRow {
     var value = 0.0, share = 0.0
 }
 
-/// The Portfolio tiles: CAD aggregates over the accounts in scope (model.py portfolio_view).
+/// The Portfolio tiles: CAD aggregates over the accounts in scope (crates/model/src/view.rs portfolio_view).
 struct BHPortfolio {
     var allocation: [BHAllocationRow] = []
     var marketValue = 0.0, costBasis = 0.0, unrealized = 0.0
@@ -325,7 +325,7 @@ enum BHModel {
 
     static let spacePattern = "[\\s\\u00a0\\u2000-\\u200b\\u202f\\u205f\\u3000]+"
 
-    /// The unicode spaces the page's regex collapses (`_SPACE_RE` in model.py).
+    /// The unicode spaces the page's regex collapses (`crates/model/src/value.rs`).
     static func isSpaceLike(_ c: Character) -> Bool {
         if c.isWhitespace || c.isNewline { return true }
         guard let v = c.unicodeScalars.first?.value else { return false }
@@ -1380,7 +1380,7 @@ enum BHModel {
 
         // the covers are visited in an order fixed now, but each is read as it is
         // when its turn comes: a fold into a row that is itself a later cover
-        // changes that cover's basis, P&L and id (as the Python's shared rows do)
+        // changes that cover's basis, P&L and id (as the Rust model's shared rows do)
         let shortOption = closed.map { $0.openDirection == "SHORT" && isOptionSymbol($0.symbol) }
         let books = closed.map(rollBook)
         var coverIdx = closed.indices.filter { shortOption[$0] }

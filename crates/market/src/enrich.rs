@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 use crate::news::unescape;
-use bagholder_model::pychars::{is_alpha, is_digit, is_space, is_upper};
-use bagholder_model::pytext::py_strip;
+use bagholder_model::unichars::{is_alpha, is_digit, is_space, is_upper};
+use bagholder_model::textrules::trim_space;
 
 /// Characters of the filing fed to the model.
 pub const MAX_TEXT: usize = 8000;
@@ -39,7 +39,7 @@ re!(re_ws, r"\s+");
 re!(re_tags, r"<[^>]+>");
 
 /// `str.split()`: runs of Python whitespace.
-fn py_split(s: &str) -> Vec<&str> {
+fn split_space(s: &str) -> Vec<&str> {
     s.split(is_space).filter(|w| !w.is_empty()).collect()
 }
 
@@ -91,7 +91,7 @@ pub fn extract_pdf_subject(data: &[u8]) -> String {
 /// merely decoded into characters. A title is letters, digits and ordinary
 /// punctuation, and mostly letters.
 pub fn readable(s: &str) -> bool {
-    let text = py_strip(s);
+    let text = trim_space(s);
     let ctrl = |c: char| matches!(c as u32, 0x00..=0x08 | 0x0b | 0x0c | 0x0e..=0x1f | 0x7f | 0xfffd);
     if text.is_empty() || text.chars().any(ctrl) {
         return false;
@@ -143,7 +143,7 @@ re!(re_script, r"(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>|<head[^>
 fn strip_sec_header(text: &str) -> String {
     let t = re_sec_header().replacen(text, 1, "").into_owned();
     let t = re_sec_exlabel().replacen(&t, 1, "").into_owned();
-    py_strip(&t).to_string()
+    trim_space(&t).to_string()
 }
 
 /// `enrich.html_text`: readable text from a SEC filing's HTML.
@@ -153,12 +153,12 @@ pub fn html_text(data: &[u8]) -> String {
     // references, and the three spelled out match the same
     let s = re_script().replace_all(&s, " ").into_owned();
     let s = re_tags().replace_all(&s, " ").into_owned();
-    strip_sec_header(py_strip(&ws_collapse(&unescape(&s))))
+    strip_sec_header(trim_space(&ws_collapse(&unescape(&s))))
 }
 
 /// `enrich.pdf_text`.
 pub fn pdf_text(data: &[u8]) -> String {
-    py_strip(&ws_collapse(&crate::pdftext::text(data))).to_string()
+    trim_space(&ws_collapse(&crate::pdftext::text(data))).to_string()
 }
 
 /// `enrich.document_text`.
@@ -222,7 +222,7 @@ fn is_initial(word: &str) -> bool {
 /// the word before it is not an abbreviation or an initial and what follows
 /// begins a new one.
 pub fn first_sentence(out: &str) -> String {
-    let out = py_strip(out);
+    let out = trim_space(out);
     let chars: Vec<(usize, char)> = out.char_indices().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -259,7 +259,7 @@ pub fn first_sentence(out: &str) -> String {
                 continue;
             }
         }
-        return py_strip(&out[..end]).to_string();
+        return trim_space(&out[..end]).to_string();
     }
     out.to_string()
 }
@@ -276,7 +276,7 @@ pub fn hedged(out: &str) -> bool {
 /// bare name, a guess or no statement at all.
 pub fn summary_from(answer: &str) -> String {
     let out = first_sentence(&strip_preamble(answer));
-    if py_split(&out).len() < 4 || !re_lower_word().is_match(&out) {
+    if split_space(&out).len() < 4 || !re_lower_word().is_match(&out) {
         return String::new();
     }
     if hedged(&out) {
@@ -287,7 +287,7 @@ pub fn summary_from(answer: &str) -> String {
 
 /// `enrich.summarize`: one-sentence summary of a filing's text, or "".
 pub fn summarize(text: &str) -> String {
-    let text = py_strip(text);
+    let text = trim_space(text);
     if text.is_empty() {
         return String::new();
     }
@@ -303,14 +303,14 @@ re!(re_label, r"(?i)^\s*(title|summary|answer)\s*[:\-]\s*");
 /// `enrich._strip_preamble`: drop the chatty preamble a small model prepends.
 pub fn strip_preamble(out: &str) -> String {
     let out = re_special_tokens().replace_all(out, " ").into_owned();
-    let out = py_strip(&ws_collapse(&out)).to_string();
+    let out = trim_space(&ws_collapse(&out)).to_string();
     let mut out = re_bullets().replacen(&out, 1, "").into_owned();
     for _ in 0..2 {
         out = re_preamble().replacen(&out, 1, "").into_owned();
         out = re_label().replacen(&out, 1, "").into_owned();
         out = re_bullets().replacen(&out, 1, "").into_owned();
     }
-    py_strip(py_strip(&out).trim_matches('"').trim_matches('*')).to_string()
+    trim_space(trim_space(&out).trim_matches('"').trim_matches('*')).to_string()
 }
 
 re!(re_ex_digit, r"\bex-?\d");
@@ -332,10 +332,10 @@ pub fn is_junk_title(s: &str) -> bool {
 /// `enrich.title_from_model`'s reading of an answer.
 pub fn title_from(answer: &str) -> String {
     let out = strip_preamble(answer);
-    let out = py_strip(out.trim_end_matches(['.', ':'])).to_string();
-    let out = py_split(&out).into_iter().take(9).collect::<Vec<_>>().join(" ");
+    let out = trim_space(out.trim_end_matches(['.', ':'])).to_string();
+    let out = split_space(&out).into_iter().take(9).collect::<Vec<_>>().join(" ");
     let low = out.to_lowercase();
-    if py_split(&out).len() < 3 || low.contains("title") || low.starts_with("here") || is_junk_title(&out) || hedged(&out) {
+    if split_space(&out).len() < 3 || low.contains("title") || low.starts_with("here") || is_junk_title(&out) || hedged(&out) {
         // a preamble echo, a form or file header, a bare form code, or a guess
         return String::new();
     }
@@ -345,7 +345,7 @@ pub fn title_from(answer: &str) -> String {
 /// `enrich.title_from_model`: a short title for a filing from the local
 /// model, or "".
 pub fn title_from_model(text: &str) -> String {
-    let text = py_strip(text);
+    let text = trim_space(text);
     if text.is_empty() {
         return String::new();
     }

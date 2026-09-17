@@ -636,7 +636,7 @@ pub const SHORT_DAILY_SOURCES: [&str; 0] = [];
 pub fn minute_stamp(text: &str) -> Option<(i64, String, i64, i64)> {
     let b = text.as_bytes();
     if b.len() == 25 && b[4] == b'-' && b[10] == b'T' && b[13] == b':' && b[22] == b':' && (b[19] == b'+' || b[19] == b'-') {
-        let int = |s: &str| bagholder_model::pytext::py_int(s);
+        let int = |s: &str| bagholder_model::textrules::parse_int(s);
         if let (Some(hh), Some(mm), Some(ss), Some(oh), Some(om)) = (int(&text[11..13]), int(&text[14..16]), int(&text[17..19]), int(&text[20..22]), int(&text[23..25])) {
             let day = &text[..10];
             if let Some((y, m, d)) = bagholder_model::dates::parse_iso(day) {
@@ -691,7 +691,7 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
         None | Some(Value::Null) => None,
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) if s.is_empty() => None,
-        Some(Value::String(s)) => bagholder_model::pytext::py_float(s),
+        Some(Value::String(s)) => bagholder_model::textrules::parse_float(s),
         Some(Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
         _ => None,
     }
@@ -764,7 +764,7 @@ pub fn aggregate_session(minutes: &[Value], bucket_minutes: i64) -> Vec<Value> {
                 }
                 let have = b.get("volume").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let add = opt_num(m.get("volume")).unwrap_or(0.0);
-                b.insert("volume".into(), py_sum(b.get("volume"), m.get("volume"), have + add));
+                b.insert("volume".into(), sum_of(b.get("volume"), m.get("volume"), have + add));
             }
         }
     }
@@ -774,7 +774,7 @@ pub fn aggregate_session(minutes: &[Value], bucket_minutes: i64) -> Vec<Value> {
 }
 
 /// `(a or 0) + (b or 0)` kept an integer where both are.
-fn py_sum(a: Option<&Value>, b: Option<&Value>, float_sum: f64) -> Value {
+fn sum_of(a: Option<&Value>, b: Option<&Value>, float_sum: f64) -> Value {
     let int = |v: Option<&Value>| match v { None | Some(Value::Null) => Some(0i64), Some(Value::Number(n)) => n.as_i64(), _ => None };
     match (int(a), int(b)) {
         (Some(x), Some(y)) => json!(x + y),
@@ -838,7 +838,7 @@ pub fn aggregate_hourly(bars: &[Value], seconds: i64) -> Vec<Value> {
                 cur.insert("close".into(), close);
                 let have = cur["volume"].as_f64().unwrap_or(0.0);
                 let add = opt_num(b.get("volume")).unwrap_or(0.0);
-                let sum = py_sum(cur.get("volume"), b.get("volume"), have + add);
+                let sum = sum_of(cur.get("volume"), b.get("volume"), have + add);
                 cur.insert("volume".into(), sum);
             }
         }

@@ -93,7 +93,7 @@ pub fn set_settings(conn: &Connection, patch: &Value) -> Result<Map<String, Valu
             }
         }
     }
-    bagholder_store::tables::set_meta(conn, SETTINGS_KEY, &bagholder_store::tables::py_json(&Value::Object(cur.clone())))?;
+    bagholder_store::tables::set_meta(conn, SETTINGS_KEY, &bagholder_store::tables::json_text(&Value::Object(cur.clone())))?;
     Ok(cur)
 }
 
@@ -527,7 +527,7 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
             for r in rows {
                 let id = r["id"].as_i64().unwrap_or(0);
                 last = last.max(id);
-                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::py_json(&r))) {
+                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
                     return;
                 }
             }
@@ -536,7 +536,7 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
         for r in rows {
             let id = r["id"].as_i64().unwrap_or(0);
             last = last.max(id);
-            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::py_json(&r))) {
+            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
                 return;
             }
         }

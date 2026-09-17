@@ -411,8 +411,8 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         .and_then(|c| c.get("message"))
         .and_then(|m| m.get("content"));
     match content {
-        Some(Value::String(s)) => bagholder_model::pytext::py_strip(s).to_string(),
+        Some(Value::String(s)) => bagholder_model::textrules::trim_space(s).to_string(),
         Some(Value::Null) | None => String::new(),
-        Some(other) => bagholder_model::pytext::py_strip(&bagholder_model::value::s(Some(other))).to_string(),
+        Some(other) => bagholder_model::textrules::trim_space(&bagholder_model::value::s(Some(other))).to_string(),
     }
 }

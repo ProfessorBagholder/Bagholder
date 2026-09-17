@@ -753,7 +753,7 @@ const VIEW_KEYS: [(&str, i64); 11] = [("Enter", 13), ("Tab", 9), ("Backspace", 8
 
 fn key_event(ch: char, typ: &str) -> Value {
     let up = ch.to_uppercase().collect::<String>();
-    let (code, vk) = if bagholder_model::pychars::is_digit(ch) {
+    let (code, vk) = if bagholder_model::unichars::is_digit(ch) {
         (format!("Digit{}", ch), ch as i64)
     } else if ch.is_ascii() && up.len() == 1 && ("A"..="Z").contains(&up.as_str()) {
         (format!("Key{}", up), up.chars().next().unwrap() as i64)

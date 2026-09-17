@@ -159,22 +159,22 @@ pub fn portfolio_view(base: &Base, f: &Filters, positions: &[Value]) -> Value {
         "allocation": alloc,
         "sectors": sectors,
         "regions": regions,
-        "marketValue": crate::value::py_sum(positions.is_empty(), mv),
-        "costBasis": crate::value::py_sum(positions.is_empty(), cost),
-        "unrealized": crate::value::py_sum(positions.is_empty(), unreal),
+        "marketValue": crate::value::sum_of(positions.is_empty(), mv),
+        "costBasis": crate::value::sum_of(positions.is_empty(), cost),
+        "unrealized": crate::value::sum_of(positions.is_empty(), unreal),
         "unrealizedPct": if cost != 0.0 { json!(unreal / cost) } else { Value::Null },
         "positionCount": positions.len(),
         "accountCount": account_count.len(),
         "nav": if navs.is_empty() { Value::Null } else { json!(nav_sum) },
         "navAccounts": navs.len(),
-        "marginUsed": crate::value::py_sum(used.is_empty(), margin_used),
+        "marginUsed": crate::value::sum_of(used.is_empty(), margin_used),
         "marginUsedBy": used.iter().map(|(c, v)| (c.clone(), json!(round2(*v)))).collect::<Map<String, Value>>(),
         "marginUsedPct": if mv != 0.0 { json!(margin_used / mv) } else { Value::Null },
         "availableMargin": if avail.is_empty() { Value::Null } else { json!(avail.iter().fold(0.0, |a, b| a + b)) },
         "availableMarginUnavailable": unavailable,
         // the tiles a book without a margin account shows in the margin tiles' places
         "hasMargin": !margin_ids.is_empty(),
-        "cash": crate::value::py_sum(cash_by.is_empty(), cash),
+        "cash": crate::value::sum_of(cash_by.is_empty(), cash),
         "cashPct": if !navs.is_empty() && nav_sum != 0.0 { json!(cash / nav_sum) } else { Value::Null },
         "dayChange": day_change,
         "dayChangePct": match day_change {
@@ -312,7 +312,7 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
 
     let sum_for = |sym: &str, pred: &dyn Fn(&Value) -> bool| -> Value {
         let v: Vec<f64> = for_yoc.iter().filter(|r| field_s(r, "symbol") == sym && pred(r)).map(|r| b(r, "amountCad")).collect();
-        crate::value::py_sum(v.is_empty(), v.iter().fold(0.0, |a, b| a + b))
+        crate::value::sum_of(v.is_empty(), v.iter().fold(0.0, |a, b| a + b))
     };
 
     // The fund's own declared record first: the latest distribution that has
@@ -453,13 +453,13 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
         let paid = keys.iter().filter(|k| k.starts_with(&ys) && bucket[*k].1 > 0).count().max(1);
         tiles.push(json!({
             "label": if y == this_yr { format!("{} YTD", y) } else { ys.clone() },
-            "total": crate::value::py_sum(rs.is_empty(), sm),
+            "total": crate::value::sum_of(rs.is_empty(), sm),
             "perMonth": sm / paid as f64,
             "count": rs.len(),
         }));
     }
     let months_in_scope = keys.iter().filter(|k| bucket[*k].1 > 0).count().max(1);
-    tiles.push(json!({"label": "All time", "total": crate::value::py_sum(recs.is_empty(), total), "perMonth": total / months_in_scope as f64, "count": recs.len()}));
+    tiles.push(json!({"label": "All time", "total": crate::value::sum_of(recs.is_empty(), total), "perMonth": total / months_in_scope as f64, "count": recs.len()}));
 
     if has_margin {
         // margin used is the Portfolio tab's figure; under it the average
@@ -485,14 +485,14 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
         let sm: f64 = window.iter().map(|r| b(r, "amountCad")).fold(0.0, |a, b| a + b);
         let paid: BTreeSet<String> = window.iter().map(|r| field_s(r, "date").chars().take(7).collect()).collect();
         let paid = paid.len().max(1);
-        tiles.push(json!({"label": "Last 12 months", "total": crate::value::py_sum(window.is_empty(), sm), "perMonth": sm / paid as f64, "count": window.len()}));
+        tiles.push(json!({"label": "Last 12 months", "total": crate::value::sum_of(window.is_empty(), sm), "perMonth": sm / paid as f64, "count": window.len()}));
     }
     tiles.push(json!({
         "label": "Yield on cost",
         "yield": if basis_all != 0.0 { json!(annual_all / basis_all) } else { Value::Null },
         "projected": annual_all / 12.0,
-        "earned": crate::value::py_sum(verified.is_empty(), earned_all),
-        "book": crate::value::py_sum(verified.is_empty(), basis_all),
+        "earned": crate::value::sum_of(verified.is_empty(), earned_all),
+        "book": crate::value::sum_of(verified.is_empty(), basis_all),
     }));
 
     let other: Vec<&&Value> = everything.iter().filter(|r| field_s(r, "kind") != "Dividend").collect();
@@ -502,7 +502,7 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
         "holdings": holdings,
         "rows": recs,
         "other": other,
-        "total": crate::value::py_sum(recs.is_empty(), total),
+        "total": crate::value::sum_of(recs.is_empty(), total),
         "count": recs.len(),
         "skippedFilters": skipped,
         "interest": other.iter().filter(|r| field_s(r, "kind") == "Interest").map(|r| b(r, "amountCad")).fold(0.0, |a, b| a + b),
@@ -700,7 +700,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
         "tradeCount": trades.len(),
         "tradeTotal": base.trades.len(),
         "positions": positions,
-        "positionsSummary": {"count": positions.len(), "book": crate::value::py_sum(positions.is_empty(), book), "mv": crate::value::py_sum(positions.is_empty(), mv), "unreal": crate::value::py_sum(positions.is_empty(), unreal)},
+        "positionsSummary": {"count": positions.len(), "book": crate::value::sum_of(positions.is_empty(), book), "mv": crate::value::sum_of(positions.is_empty(), mv), "unreal": crate::value::sum_of(positions.is_empty(), unreal)},
         "portfolio": portfolio,
         "markets": crate::markets::markets_view(base, &positions),
         "cashflow": cashflow,

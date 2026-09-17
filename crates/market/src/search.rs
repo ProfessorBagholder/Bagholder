@@ -72,7 +72,7 @@ pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<Value> {
 /// text, then the rest, each group in the order the sources gave; duplicates
 /// dropped; at most twelve.
 pub fn rank_search(text: &str, rows: Vec<Value>) -> Vec<Value> {
-    let key = bagholder_model::pytext::py_strip(text).to_uppercase();
+    let key = bagholder_model::textrules::trim_space(text).to_uppercase();
     let mut seen: Vec<(String, String)> = Vec::new();
     let mut out: Vec<Value> = Vec::new();
     for r in rows {
@@ -107,7 +107,7 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<Value>>> {
 /// remembered for the process. A source that fails leaves the others' answer;
 /// nothing is remembered when one failed.
 pub fn symbol_search(conn_path: &std::path::Path, text: &str) -> Value {
-    let text = bagholder_model::pytext::py_strip(text).to_string();
+    let text = bagholder_model::textrules::trim_space(text).to_string();
     if text.is_empty() {
         return json!({"ok": true, "matches": []});
     }

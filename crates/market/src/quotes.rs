@@ -374,7 +374,7 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
     let meta_key = format!("coinbase_prev:{}", pair);
     let v = bagholder_store::tables::get_meta(conn, &meta_key, "").unwrap_or_default();
     if let Some(rest) = v.strip_prefix(&format!("{}@", today)) {
-        return bagholder_model::pytext::py_float(rest);
+        return bagholder_model::textrules::parse_float(rest);
     }
     let (base, ccy) = match pair.split_once('-') { Some((b, c)) => (b.to_string(), c.to_string()), None => (pair.clone(), String::new()) };
     let products = if ccy == "USD" { vec![pair.clone()] } else { vec![pair.clone(), format!("{}-USD", base)] };
@@ -402,7 +402,7 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
     }
     if let Some(p) = prev {
         if p != 0.0 {
-            let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("{}@{}", today, py_repr_float(p)));
+            let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("{}@{}", today, float_repr(p)));
         }
     }
     prev.filter(|p| *p != 0.0)
@@ -410,7 +410,7 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
 
 /// Python's `repr()` of a float, which is the shortest text that reads back as
 /// the same number.
-pub fn py_repr_float(x: f64) -> String {
+pub fn float_repr(x: f64) -> String {
     if x.fract() == 0.0 && x.abs() < 1e16 {
         return format!("{:.1}", x);
     }

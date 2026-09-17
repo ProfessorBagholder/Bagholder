@@ -115,7 +115,7 @@ pub fn ticker_map() -> Fetched<Tickers> {
         }
         let cik = match row.get("cik_str") {
             Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
-            Some(Value::String(s)) => bagholder_model::pytext::py_int(s).unwrap_or(0),
+            Some(Value::String(s)) => bagholder_model::textrules::parse_int(s).unwrap_or(0),
             _ => 0,
         };
         let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -132,7 +132,7 @@ pub fn set_ticker_map(t: Tickers) {
 
 /// `edgar._bare`: a ticker as SEC writes it -- no venue suffix, dots to dashes.
 pub fn bare(symbol: &str) -> String {
-    let mut s = bagholder_model::pytext::py_strip(symbol).to_uppercase();
+    let mut s = bagholder_model::textrules::trim_space(symbol).to_uppercase();
     for suf in [".TO", ".V", ".CN", ".NE", ".U"] {
         if s.ends_with(suf) {
             s.truncate(s.len() - suf.len());
@@ -313,7 +313,7 @@ pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
     }
     let vals = |tag: &str| -> Vec<String> {
         let r = Regex::new(&format!("<{}>([^<]+)</{}>", regex::escape(tag), regex::escape(tag))).unwrap();
-        r.captures_iter(xml).map(|c| bagholder_model::pytext::py_strip(&c[1]).to_string()).collect()
+        r.captures_iter(xml).map(|c| bagholder_model::textrules::trim_space(&c[1]).to_string()).collect()
     };
     let mut owners: Vec<String> = Vec::new();
     for n in vals("reportingPersonName") {
@@ -379,7 +379,7 @@ pub fn pick_content(items: &[Value], primary: &str) -> Option<String> {
         }
         let size = match it.get("size") {
             Some(Value::Number(x)) => x.as_i64().unwrap_or(0),
-            Some(Value::String(t)) if !t.is_empty() => bagholder_model::pytext::py_int(t)?,
+            Some(Value::String(t)) if !t.is_empty() => bagholder_model::textrules::parse_int(t)?,
             _ => 0,
         };
         cands.push((n, size));

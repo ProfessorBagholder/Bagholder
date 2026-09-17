@@ -2065,7 +2065,7 @@ query FetchAccountHistoricalFinancials(
         return (nil, "")
     }
 
-    // MARK: - Mapping (bagholder.py)
+    // MARK: - Mapping (crates/ws/src/mapping.rs)
 
     private static func num(_ v: Any?, default def: Double = 0) -> Double { J.num(v, default: def) }
     private static func s(_ v: Any?) -> String { J.str(v) }
@@ -2126,7 +2126,7 @@ query FetchAccountHistoricalFinancials(
                 return true
             }
         } else if (typ == "DIVIDEND" || typ == "INTEREST_CHARGE") && status.isEmpty {
-            // bagholder.py skip_activity: cash dividends and margin interest charges often
+            // crates/ws/src/mapping.rs skip_activity: cash dividends and margin interest charges often
             // arrive with no status at all; both have already hit the cash balance
         } else if status.isEmpty || !keepStatus.contains(status) {
             return true
@@ -2274,7 +2274,7 @@ query FetchAccountHistoricalFinancials(
         if skipActivity(item) { return nil }
         let occurred = s(item["occurredAt"]).trimmingCharacters(in: .whitespacesAndNewlines)
         // Keep Wealthsimple date and time. transactionDate stays the calendar day
-        // for FIFO / groupClosedByClose, same as bagholder.py _date_only.
+        // for FIFO / groupClosedByClose, same as crates/ws/src/mapping.rs date_only.
         let transactionDate = dateOnly(occurred)
         if transactionDate.isEmpty { return nil }
         let accountId = s(item["accountId"])

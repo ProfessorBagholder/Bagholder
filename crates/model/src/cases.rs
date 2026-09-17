@@ -36,7 +36,7 @@ pub fn neg(a: &Value) -> Value {
 }
 
 /// Python's `round(x, n)` on a float: the exact binary value rounded half-even.
-pub fn py_round(x: f64, n: usize) -> f64 {
+pub fn round_half_even(x: f64, n: usize) -> f64 {
     format!("{:.*}", n, x).parse().unwrap()
 }
 
@@ -145,7 +145,7 @@ pub fn snapshot(
 pub fn dividend(id: &str, symbol: &str, qty: impl Into<Value>, per: impl Into<Value>, day: &str, account: &str) -> Value {
     let (qty, per) = (qty.into(), per.into());
     let amount = mul(&qty, &per);
-    let amount = if is_int(&amount) { amount } else { json!(py_round(f(&amount), 2)) };
+    let amount = if is_int(&amount) { amount } else { json!(round_half_even(f(&amount), 2)) };
     act(json!({
         "id": id, "category": "dividend", "activityType": "Dividend", "rawType": "DIVIDEND", "quantity": qty,
         "unitPrice": per, "netCashAmount": amount, "transactionDate": day, "symbol": symbol, "currency": "CAD",
@@ -666,7 +666,7 @@ fn pick(d: &Value, keys: &[&str]) -> Value {
 /// Every float to six decimals; integers stay integers.
 pub fn rounded(v: &Value) -> Value {
     match v {
-        Value::Number(n) if !(n.is_i64() || n.is_u64()) => json!(py_round(n.as_f64().unwrap(), 6)),
+        Value::Number(n) if !(n.is_i64() || n.is_u64()) => json!(round_half_even(n.as_f64().unwrap(), 6)),
         Value::Object(m) => Value::Object(m.iter().map(|(k, x)| (k.clone(), rounded(x))).collect()),
         Value::Array(a) => Value::Array(a.iter().map(rounded).collect()),
         _ => v.clone(),

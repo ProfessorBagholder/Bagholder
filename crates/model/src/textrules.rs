@@ -14,7 +14,7 @@ const FIELD_LIMIT: usize = 131072;
 const DIGIT_ZEROS: [u32; 68] = [0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0];
 
 /// Python's whitespace for `str.strip()` and `float()`.
-pub fn py_space(c: char) -> bool {
+pub fn is_space_char(c: char) -> bool {
     matches!(c as u32, 0x9 | 0xa | 0xb | 0xc | 0xd | 0x1c | 0x1d | 0x1e | 0x1f | 0x20 | 0x85 | 0xa0 | 0x1680 | 0x2000 | 0x2001 | 0x2002 | 0x2003 | 0x2004 | 0x2005 | 0x2006 | 0x2007 | 0x2008 | 0x2009 | 0x200a | 0x2028 | 0x2029 | 0x202f | 0x205f | 0x3000)
 }
 
@@ -33,9 +33,9 @@ pub fn ascii_digits(text: &str) -> String {
 /// `float()` on a string, as Python reads one: surrounding whitespace, a sign,
 /// `inf`/`infinity`/`nan` in any case, underscores between digits, and any
 /// script's decimal digits.
-pub fn py_float(text: &str) -> Option<f64> {
+pub fn parse_float(text: &str) -> Option<f64> {
     let folded = ascii_digits(text);
-    let t = folded.trim_matches(py_space);
+    let t = folded.trim_matches(is_space_char);
     if t.is_empty() {
         return None;
     }
@@ -74,9 +74,9 @@ pub fn py_float(text: &str) -> Option<f64> {
 
 
 /// `float()` on a JSON value's text, None where Python raises.
-pub fn py_float_value(v: &Value) -> Option<f64> {
+pub fn float_value(v: &Value) -> Option<f64> {
     match v {
-        Value::String(t) => py_float(t),
+        Value::String(t) => parse_float(t),
         Value::Number(n) => n.as_f64(),
         _ => None,
     }
@@ -252,13 +252,13 @@ pub fn csv_records(text: &str) -> Result<Vec<Map<String, Value>>, String> {
 
 
 /// `str.strip()`: Python's whitespace from both ends.
-pub fn py_strip(text: &str) -> &str {
-    text.trim_matches(py_space)
+pub fn trim_space(text: &str) -> &str {
+    text.trim_matches(is_space_char)
 }
 
 /// `int()` on digits a pattern's `\d` matched, in whatever script they are.
-pub fn py_int(text: &str) -> Option<i64> {
-    ascii_digits(py_strip(text)).parse().ok()
+pub fn parse_int(text: &str) -> Option<i64> {
+    ascii_digits(trim_space(text)).parse().ok()
 }
 
 /// `uuid.uuid4()`, from the system's own randomness.

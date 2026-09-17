@@ -129,7 +129,7 @@ pub fn exposures_map(conn: &Connection) -> Result<Map<String, Value>> {
 /// `store.save_journal`.
 pub fn save_journal(conn: &Connection, entries: Option<&Value>) -> Result<Map<String, Value>> {
     let clean = crate::snapshot::clean_journal(entries.filter(|v| v.is_object()));
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::py_json(&Value::Object(clean.clone())))?;
+    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(clean.clone())))?;
     Ok(clean)
 }
 
@@ -158,17 +158,17 @@ pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&Value>) -
             current = kept;
         }
     }
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::py_json(&Value::Object(current.clone())))?;
+    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(current.clone())))?;
     Ok(current)
 }
 
 /// `store.save_tiles`: the Markets tile row, in order. Saving it is what the
 /// tab's plus, cross and drag do.
 pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
-    let raw = crate::tables::py_json(&Value::Array(rows.to_vec()));
+    let raw = crate::tables::json_text(&Value::Array(rows.to_vec()));
     let clean = crate::snapshot::tiles_from(&raw);
     let clean = if clean.is_null() { Value::Array(vec![]) } else { clean };
-    crate::tables::set_meta(conn, crate::snapshot::TILES_META, &crate::tables::py_json(&clean))?;
+    crate::tables::set_meta(conn, crate::snapshot::TILES_META, &crate::tables::json_text(&clean))?;
     Ok(clean)
 }
 

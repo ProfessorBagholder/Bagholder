@@ -33,20 +33,20 @@ pub fn metrics(trades: &[Value]) -> Value {
     };
 
     json!({
-        "realized": crate::value::py_sum(vals.is_empty(), total),
+        "realized": crate::value::sum_of(vals.is_empty(), total),
         "count": n,
         "wins": wins.len(),
         "losses": losses.len(),
         "breakeven": be,
         "winRate": if n > 0 { json!(wins.len() as f64 / n as f64) } else { Value::Null },
-        "grossWin": crate::value::py_sum(wins.is_empty(), gw),
-        "grossLoss": crate::value::py_sum(losses.is_empty(), gl),
+        "grossWin": crate::value::sum_of(wins.is_empty(), gw),
+        "grossLoss": crate::value::sum_of(losses.is_empty(), gl),
         "profitFactor": profit_factor,
         "profitFactorInfinite": gl == 0.0 && gw > 0.0,
         "expectancy": if n > 0 { json!(total / n as f64) } else { Value::Null },
         "avgWin": if !wins.is_empty() { gw / wins.len() as f64 } else { 0.0 },
         "avgLoss": if !losses.is_empty() { -gl / losses.len() as f64 } else { 0.0 },
-        "fees": crate::value::py_sum(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fold(0.0, |a, b| a + b)),
+        "fees": crate::value::sum_of(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fold(0.0, |a, b| a + b)),
         "avgHold": if n > 0 {
             json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).fold(0.0, |a, b| a + b) / n as f64)
         } else { Value::Null },
@@ -131,7 +131,7 @@ pub fn grade_buckets(trades: &[Value]) -> Value {
         buckets.push(json!({
             "grade": g,
             "n": rows.len(),
-            "pnl": crate::value::py_sum(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fold(0.0, |a, b| a + b)),
+            "pnl": crate::value::sum_of(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fold(0.0, |a, b| a + b)),
             "tradeIds": rows.iter().map(|t| field_s(t, "id")).collect::<Vec<_>>(),
         }));
     }

@@ -1,6 +1,6 @@
 # Bagholder iOS (M1 shell)
 
-First pass: the desktop `ledger.html` in a `WKWebView`, talking to a loopback HTTP server in the app. Same `/api/status` and empty `/api/book` as `bagholder.py`.
+First pass: the desktop `ledger.html` in a `WKWebView`, talking to a loopback HTTP server in the app. Same `/api/status` and empty `/api/book` as the desktop server (`crates/server`).
 
 Living brief: GitHub issue #14.
 

@@ -3,6 +3,7 @@
 .claude
 .env
 data
+target
 *.db
 *.db-journal
 session.json
@@ -11,4 +12,3 @@ android
 docs
 tests
 *.md
-__pycache__

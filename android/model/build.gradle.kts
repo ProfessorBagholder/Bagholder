@@ -1,5 +1,5 @@
 // The Bagholder model for Android: a plain Kotlin library the app depends on,
-// a port of model.py. Its test runs tests/cases, the same files the Python
+// a port of crates/model. Its test runs tests/cases, the same files the Rust
 // and Swift tests run.
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 

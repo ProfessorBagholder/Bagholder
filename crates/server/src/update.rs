@@ -138,7 +138,7 @@ pub fn check_for_update() -> Value {
         }
     }
     if let Ok(c) = app().open() {
-        let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::py_json(&record));
+        let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&record));
     }
     record
 }
@@ -456,10 +456,23 @@ fn pull(tag: &str) -> Result<(), String> {
     if !ok {
         return Err(why);
     }
+    let before = git(&["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     let r = git(&["pull", "--ff-only"]).map_err(|e| e.to_string())?;
     if !r.status.success() {
         let msg = { let e = String::from_utf8_lossy(&r.stderr).to_string(); if e.is_empty() { String::from_utf8_lossy(&r.stdout).to_string() } else { e } };
         return Err(format!("git pull failed: {}", msg.trim().chars().take(200).collect::<String>()));
+    }
+    // a checkout runs what it builds: the new sources are built before the restart,
+    // and a build that fails puts the previous commit back
+    set_updating(&format!("Building {}…", tag));
+    let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(&app().root).stdin(Stdio::null()).output();
+    if !built.as_ref().map(|o| o.status.success()).unwrap_or(false) {
+        if !before.is_empty() {
+            let _ = git(&["reset", "--hard", &before]);
+        }
+        let msg = built.map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_else(|e| e.to_string());
+        let last = msg.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>();
+        return Err(format!("the new version did not build: {}", last));
     }
     std::fs::write(app().home.join("update-pending"), tag).map_err(|e| e.to_string())
 }

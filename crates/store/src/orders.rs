@@ -82,9 +82,9 @@ pub fn insert_order(conn: &Connection, row: &Value, now: &str) -> Result<()> {
     let role = { let s = field_s(row, "role"); if s.is_empty() { "entry".to_string() } else { s } };
     // the request is stored with its keys sorted, so the same ticket is the
     // same text whichever order it was built in
-    let request = get(row, "request").filter(|v| truthy(v)).map(crate::tables::py_json_sorted);
-    let stop_loss = get(row, "stopLoss").filter(|v| truthy(v)).map(crate::tables::py_json);
-    let take_profit = get(row, "takeProfit").filter(|v| truthy(v)).map(crate::tables::py_json);
+    let request = get(row, "request").filter(|v| truthy(v)).map(crate::tables::json_text_sorted);
+    let stop_loss = get(row, "stopLoss").filter(|v| truthy(v)).map(crate::tables::json_text);
+    let take_profit = get(row, "takeProfit").filter(|v| truthy(v)).map(crate::tables::json_text);
 
     conn.execute(
         "INSERT INTO orders (id, created_at, account_id, account, security_id, symbol, currency, side, type, quantity, \

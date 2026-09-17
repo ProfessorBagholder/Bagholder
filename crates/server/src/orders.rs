@@ -126,7 +126,7 @@ fn set(v: &mut Value, k: &str, x: Value) {
 }
 
 /// Python's `round(x, n)`.
-fn py_round(x: f64, n: usize) -> f64 {
+fn round_half_even(x: f64, n: usize) -> f64 {
     format!("{:.*}", n, x).parse().unwrap_or(x)
 }
 
@@ -139,7 +139,7 @@ fn rp(v: Option<f64>) -> String {
 }
 
 /// Python's `"%g" % x`.
-fn py_g(x: f64) -> String {
+fn fmt_g(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() { "-0".into() } else { "0".into() };
     }
@@ -325,7 +325,7 @@ fn manual_from_fields(body: &Value) -> Value {
     let desc = format!(
         "{}{}",
         if buy { "Buy" } else { "Sell" },
-        if symbol.is_empty() { String::new() } else { format!(" {} {} @ {}", py_g(qty), symbol, py_g(px)) }
+        if symbol.is_empty() { String::new() } else { format!(" {} {} @ {}", fmt_g(qty), symbol, fmt_g(px)) }
     );
     json!({
         "id": uuid4(),
@@ -747,7 +747,7 @@ pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange:
 
 /// `bagholder.order_tick`.
 pub fn order_tick(price: Option<f64>) -> Option<f64> {
-    price.map(|p| py_round(p, if p >= 1.0 { 2 } else { 4 }))
+    price.map(|p| round_half_even(p, if p >= 1.0 { 2 } else { 4 }))
 }
 
 /// `bagholder.order_request`: (row, request) or the error.
@@ -865,7 +865,7 @@ pub fn submit_order(row: &mut Value, req: &Value) -> Value {
     if !orders_live() {
         set(row, "status", json!("dry"));
         insert_order(row);
-        log(&format!("bagholder order (dry run, not sent): {}", bagholder_store::tables::py_json_sorted(req)));
+        log(&format!("bagholder order (dry run, not sent): {}", bagholder_store::tables::json_text_sorted(req)));
         return json!({"ok": true, "id": id, "status": "dry", "order": row.clone()});
     }
     let sess = match ticket_session() {
@@ -965,7 +965,7 @@ fn qty_words(q: Option<f64>) -> String {
     if q.fract() == 0.0 {
         format!("{}", q as i64)
     } else {
-        py_g(q)
+        fmt_g(q)
     }
 }
 
@@ -973,7 +973,7 @@ fn price_words(p: Option<f64>) -> String {
     match p {
         None => "—".into(),
         Some(p) => {
-            if p.abs() < 1.0 && py_round(p, 3) != py_round(p, 2) {
+            if p.abs() < 1.0 && round_half_even(p, 3) != round_half_even(p, 2) {
                 format!("{:.3}", p)
             } else {
                 format!("{:.2}", p)
@@ -1475,7 +1475,7 @@ fn st_in(o: &Value, set: &[&str]) -> bool {
 }
 
 fn release_shares(b: &Value, sold: f64) {
-    let remaining = py_round(or0(b, "quantity") - sold, 6);
+    let remaining = round_half_even(or0(b, "quantity") - sold, 6);
     for k in ["slOrderId", "tpOrderId"] {
         let oid = f(b, k);
         let err = cancel_exit(&oid);
@@ -1579,8 +1579,8 @@ fn place_exit(b: &Value, exec_type: &str, price: Option<f64>, role: &str) -> (St
         Err(e) => return (String::new(), e),
     };
     if !orders_live() {
-        let key = format!("{}|{}|{}", f(b, "id"), role, rp(price.map(|p| py_round(p, 4))));
-        say_once(key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, exec_type, f(b, "symbol"), bagholder_store::tables::py_json_sorted(&req)));
+        let key = format!("{}|{}|{}", f(b, "id"), role, rp(price.map(|p| round_half_even(p, 4))));
+        say_once(key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, exec_type, f(b, "symbol"), bagholder_store::tables::json_text_sorted(&req)));
         return (String::new(), String::new());
     }
     let r = submit_order(&mut row, &req);
@@ -1704,7 +1704,7 @@ fn arm_step(b: &Value, entry: Option<&Value>) {
         if f(&b, "slKind") == "trail" {
             let high = or_f(or_f(on(entry, "avgFill"), on(entry, "limitPrice")), on(&b, "slPrice"));
             if let Some(high) = high.filter(|h| *h != 0.0) {
-                let sl_price = py_round(high - trail_distance(&b, high).unwrap_or(0.0), 2);
+                let sl_price = round_half_even(high - trail_distance(&b, high).unwrap_or(0.0), 2);
                 set(&mut patch, "highWater", json!(high));
                 set(&mut patch, "slPrice", json!(sl_price));
                 set(&mut b, "highWater", json!(high));
@@ -2029,7 +2029,7 @@ fn watch_step(b: &Value, quote: Option<&Value>) {
         if Some(high) != hw {
             update_bracket(&id, json!({"highWater": high}));
         }
-        let new_stop = py_round(high - trail_distance(&b, high).unwrap_or(0.0), 2);
+        let new_stop = round_half_even(high - trail_distance(&b, high).unwrap_or(0.0), 2);
         let cur = or0(&b, "slPrice");
         if new_stop > cur + f64::max(0.01, cur * TRAIL_MIN_MOVE) {
             if tr(&b, "slOrderId") {
@@ -2326,7 +2326,7 @@ pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Optio
         }
     }
     let shown: Map<String, Value> = inp_map.iter().filter(|(k, _)| *k != "externalId").map(|(k, v)| (k.clone(), v.clone())).collect();
-    log(&format!("bagholder orders: modify {} accepted: {}", id, bagholder_store::tables::py_json_sorted(&Value::Object(shown))));
+    log(&format!("bagholder orders: modify {} accepted: {}", id, bagholder_store::tables::json_text_sorted(&Value::Object(shown))));
     let rid = id.clone();
     spawn("bagholder-order-refresh", move || {
         let _ = catch_unwind(|| refresh_orders(&rid));
@@ -2392,7 +2392,7 @@ pub fn adjust_bracket(bracket_id: &str, leg: &str, price: Option<&Value>, trail:
             let high = or_f(or_f(on(&b, "highWater"), on(&b, "slPrice")), Some(0.0)).unwrap_or(0.0);
             let mut nb = b.clone();
             set(&mut nb, "slTrail", json!(t));
-            let new_price = if high != 0.0 { json!(py_round(high - trail_distance(&nb, high).unwrap_or(0.0), 2)) } else { gv(&b, "slPrice") };
+            let new_price = if high != 0.0 { json!(round_half_even(high - trail_distance(&nb, high).unwrap_or(0.0), 2)) } else { gv(&b, "slPrice") };
             patch = json!({"slTrail": t, "slPrice": new_price});
         } else {
             let p = match num(price, None) {
@@ -2439,10 +2439,10 @@ mod tests {
 
     #[test]
     fn formats() {
-        assert_eq!(py_g(5.0), "5");
-        assert_eq!(py_g(1.5), "1.5");
-        assert_eq!(py_g(1234567.0), "1.23457e+06");
-        assert_eq!(py_g(0.00001), "1e-05");
+        assert_eq!(fmt_g(5.0), "5");
+        assert_eq!(fmt_g(1.5), "1.5");
+        assert_eq!(fmt_g(1234567.0), "1.23457e+06");
+        assert_eq!(fmt_g(0.00001), "1e-05");
         assert_eq!(price_words(Some(0.625)), "0.625");
         assert_eq!(price_words(Some(0.54)), "0.54");
         assert_eq!(order_tick(Some(1.005)), Some(1.0));

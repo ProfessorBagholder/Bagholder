@@ -130,7 +130,7 @@ object Book {
         marketJob = null
     }
 
-    /** store.py activity_pull_due: America/Edmonton, Mon-Fri, at or after 14:00. */
+    /** crates/store/src/admin.rs activity_pull_due: America/Edmonton, Mon-Fri, at or after 14:00. */
     fun activityPullDue(lastSync: Long?, now: Long = System.currentTimeMillis()): Boolean {
         val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Edmonton"))
         cal.timeInMillis = now

@@ -1,4 +1,4 @@
-// The view half of the model, a port of model.py's filters, NAV analytics and
+// The view half of the model, a port of crates/model/src/view.rs filters, NAV analytics and
 // build_view: one filter set applied to the base, and everything a page shows
 // computed from the same filtered lists.
 package com.bagholder.model
@@ -642,7 +642,7 @@ object ModelView {
         )
     }
 
-    /** model.py portfolio_view: CAD aggregates over the accounts the filter has on, every account when it has none. */
+    /** crates/model/src/view.rs portfolio_view: CAD aggregates over the accounts the filter has on, every account when it has none. */
     fun portfolioView(base: Base, f: Filters, positions: List<Position>): Portfolio {
         val fx = base.fx; val today = base.today
         fun cad(amount: Double, currency: String) = Model.toCad(fx, amount, currency, today)

@@ -651,7 +651,7 @@ fn handle_post(req: Request, path: &str, body: Value) {
         }
         "/api/import" => {
             let text = match body.get("text") {
-                Some(Value::String(t)) if !bagholder_model::pytext::py_strip(t).is_empty() => t.clone(),
+                Some(Value::String(t)) if !bagholder_model::textrules::trim_space(t).is_empty() => t.clone(),
                 _ => return send_json(req, 400, &json!({"ok": false, "error": "text required"})),
             };
             let name = { let n = s(body.get("name")); if n.is_empty() { "upload.csv".to_string() } else { n } };

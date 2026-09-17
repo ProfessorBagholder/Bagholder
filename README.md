@@ -65,21 +65,29 @@ Futures are not supported yet.
 
 ## Requirements
 
-- Python 3.9 or newer
+- A release archive for your platform, or Rust (installed with [rustup](https://rustup.rs); the version is pinned in `rust-toolchain.toml` and installed on the first build) to build from source
 - A Chromium-based browser — Google Chrome, Brave, Microsoft Edge, or Chromium — opened once so you can sign in to Wealthsimple
 
 ## Install
 
-```
-python3 -m pip install -r requirements.txt
-```
+Download `bagholder-vX.Y.Z-<platform>.tar.gz` (`.zip` on Windows) from the latest release and unpack it, or build a clone of this repository:
 
-On Windows use `py` instead of `python3` throughout. The one dependency is `tzdata`, which Windows needs for time zones; macOS and Linux already have it.
+```
+cargo build --release
+```
 
 ## Run
 
+From the unpacked archive (`bagholder.exe` on Windows):
+
 ```
-python3 bagholder.py
+./bagholder
+```
+
+From a clone:
+
+```
+cargo run --release --bin bagholder
 ```
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
@@ -101,13 +109,17 @@ To build the image yourself instead, `docker build -t bagholder .` and point the
 Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in `~/.bagholder`.
 
 - **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder/previous` until the next update.
-- **Cloned with git:** the same button runs `git pull` on `master` and restarts. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
+- **Cloned with git:** the same button runs `git pull` on `master`, builds it with `cargo build --release --bins` and restarts; a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
 
   ```
   git pull
   ```
 
-  then start `python3 bagholder.py` again.
+  then build and start it again:
+
+  ```
+  cargo run --release --bin bagholder
+  ```
 - **Docker:** the container has no update button. The header shows `vX.Y.Z image available` with a link to the release, and the update is the pull above:
 
   ```

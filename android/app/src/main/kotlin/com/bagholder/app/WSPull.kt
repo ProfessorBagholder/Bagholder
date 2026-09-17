@@ -1,6 +1,6 @@
 // The Wealthsimple pull: the session from the login cookie, token refresh,
 // the GraphQL calls the web app makes, and the activity rows mapped the way
-// bagholder.py maps them. A port of the iOS app's WSPull.swift.
+// crates/ws/src/mapping.rs maps them. A port of the iOS app's WSPull.swift.
 package com.bagholder.app
 
 import com.bagholder.model.Act
@@ -928,7 +928,7 @@ object WSPull {
         return byId.values.toList()
     }
 
-    // MARK: mapping (bagholder.py)
+    // MARK: mapping (crates/ws/src/mapping.rs)
 
     private fun upper(v: Any?): String = (if (v == null || v == JSONObject.NULL) "" else v.toString()).trim().uppercase()
     private fun compact(v: Any?): String = upper(v).replace(Regex("[\\s_\\-]+"), "")
@@ -975,7 +975,7 @@ object WSPull {
         if (isCorpShareMove(item)) {
             if (status.contains("REJECT") || status.contains("CANCEL") || status.contains("FAIL") || status.contains("VOID")) return true
         } else if ((typ == "DIVIDEND" || typ == "INTEREST_CHARGE") && status.isEmpty()) {
-            // bagholder.py skip_activity: cash dividends and margin interest charges often
+            // crates/ws/src/mapping.rs skip_activity: cash dividends and margin interest charges often
             // arrive with no status at all; both have already hit the cash balance
         } else if (status.isEmpty() || !KEEP_STATUS.contains(status)) {
             return true

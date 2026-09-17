@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use crate::http::{get_text, note_source, post_json, FetchError, TIMEOUT_SEC};
 use bagholder_model::dates;
-use bagholder_model::pytext::{csv_records, py_float, splitlines};
+use bagholder_model::textrules::{csv_records, parse_float, splitlines};
 use bagholder_model::value::s as vs;
 
 pub const US_POSITION_URL: &str = "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest";
@@ -74,8 +74,8 @@ pub fn num(v: Option<&Value>) -> Option<f64> {
         None | Some(Value::Null) => None,
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::Bool(_)) => None,
-        Some(Value::String(t)) => py_float(&t.replace(',', "")),
-        Some(other) => py_float(&vs(Some(other)).replace(',', "")),
+        Some(Value::String(t)) => parse_float(&t.replace(',', "")),
+        Some(other) => parse_float(&vs(Some(other)).replace(',', "")),
     }
 }
 
@@ -270,8 +270,8 @@ pub fn parse_us_volume(text: &str) -> Map<String, Value> {
             continue;
         }
         let sym = parts[1].trim().to_uppercase();
-        let short = py_float(&parts[2].replace(',', ""));
-        let total = py_float(&parts[4].replace(',', ""));
+        let short = parse_float(&parts[2].replace(',', ""));
+        let total = parse_float(&parts[4].replace(',', ""));
         if !sym.is_empty() && short.is_some() && truthy(total) {
             rows.insert(sym, json!({"shortVolume": opt(short), "totalVolume": opt(total)}));
         }

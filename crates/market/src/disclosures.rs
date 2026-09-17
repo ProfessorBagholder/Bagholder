@@ -50,7 +50,7 @@ pub fn clean(text: &str) -> String {
     static WS: OnceLock<Regex> = OnceLock::new();
     let t = re(&TAGS, r"<[^>]+>").replace_all(text, " ");
     let t = re(&WS, r"\s+").replace_all(&t, " ");
-    bagholder_model::pytext::py_strip(&t).to_string()
+    bagholder_model::textrules::trim_space(&t).to_string()
 }
 
 fn name_tokens(name: &str) -> std::collections::HashSet<String> {
@@ -178,7 +178,7 @@ pub fn document_from(providers: &[&dyn Provider], row: &Value) -> Fetched<(Vec<u
     let src = row.get("source").and_then(|v| v.as_str()).unwrap_or("");
     match providers.iter().find(|p| p.source() == src) {
         Some(p) => p.document(row),
-        None => Err(SourceError::Unavailable(format!("no provider for source {}", py_repr(src)))),
+        None => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(src)))),
     }
 }
 
@@ -189,7 +189,7 @@ pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
     match src {
         s if s == crate::sedar::SOURCE => crate::sedar::document(row),
         s if s == crate::edgar::SOURCE => crate::edgar::content(row),
-        _ => Err(SourceError::Unavailable(format!("no provider for source {}", py_repr(src)))),
+        _ => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(src)))),
     }
 }
 
@@ -215,7 +215,7 @@ pub fn categorize(row: &Value) -> Value {
 }
 
 /// Python's `repr()` of a string, for the messages that quote one.
-pub fn py_repr(s: &str) -> String {
+pub fn repr_quoted(s: &str) -> String {
     if s.contains('\'') && !s.contains('"') {
         format!("\"{}\"", s.replace('\\', "\\\\"))
     } else {

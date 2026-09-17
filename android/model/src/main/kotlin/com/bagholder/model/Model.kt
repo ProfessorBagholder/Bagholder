@@ -1,7 +1,7 @@
-// The derived model, a port of model.py (the reference), function for
+// The derived model, a port of crates/model (the reference), function for
 // function. Everything a screen shows comes from here so that one list of
 // trades feeds every tile, table and chart, and so the numbers can be tested:
-// ModelCasesTest runs tests/cases through it and compares with the Python.
+// ModelCasesTest runs tests/cases through it and compares with the Rust model.
 //
 // Pipeline
 //     activities  -> normalizeActivities  (crypto, options, stock-dividend notices)
@@ -29,7 +29,7 @@ import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.round
 
-/** A normalized activity. Mutable, as in the Python: fills, lots and the
+/** A normalized activity. Mutable, as in the Rust model: fills, lots and the
  * trade's fill list all see the row the matcher amended (a multileg's
  * inferred quantity and side, for one). */
 class Act {
@@ -156,7 +156,7 @@ class MarginRow(val accountId: String, val buyingPower: Double?, val currency: S
 
 class AllocationRow(val id: String, val symbol: String, val account: String, val value: Double) { var share = 0.0 }
 
-/** The Portfolio tiles: CAD aggregates over the accounts in scope (model.py portfolio_view). */
+/** The Portfolio tiles: CAD aggregates over the accounts in scope (crates/model/src/view.rs portfolio_view). */
 class Portfolio {
     var allocation: List<AllocationRow> = emptyList()
     var marketValue = 0.0; var costBasis = 0.0; var unrealized = 0.0

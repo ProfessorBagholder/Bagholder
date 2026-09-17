@@ -257,7 +257,7 @@ final class Book: ObservableObject {
         }
     }
 
-    /// store.py activity_pull_due: America/Edmonton, Mon-Fri, at or after 14:00.
+    /// crates/store/src/admin.rs activity_pull_due: America/Edmonton, Mon-Fri, at or after 14:00.
     static func activityPullDue(lastSync: Date?, now: Date = Date()) -> Bool {
         guard let tz = TimeZone(identifier: "America/Edmonton") else { return false }
         var cal = Calendar(identifier: .gregorian)

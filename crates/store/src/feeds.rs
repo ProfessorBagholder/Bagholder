@@ -59,8 +59,8 @@ pub fn replace_exposure(conn: &Connection, key: &str, rec: &Value, now: &str) ->
          as_of = excluded.as_of, industry = excluded.industry, error = excluded.error, fetched_at = excluded.fetched_at",
         rusqlite::params![
             key,
-            crate::tables::py_json(&sectors),
-            crate::tables::py_json(&countries),
+            crate::tables::json_text(&sectors),
+            crate::tables::json_text(&countries),
             num(get(rec, "coverage"), 0.0),
             field_s(rec, "source"),
             field_s(rec, "asOf"),
@@ -466,7 +466,7 @@ pub fn save_shorts(conn: &Connection, symbol: &str, exchange: &str, rec: &Value,
     for (field, _) in SHORT_FIELDS {
         args.push(crate::activities::to_sql(rec.get(field).unwrap_or(&Value::Null)));
     }
-    args.push(Box::new(crate::tables::py_json(&series)));
+    args.push(Box::new(crate::tables::json_text(&series)));
     args.push(Box::new(version));
     args.push(Box::new(now.to_string()));
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
@@ -504,7 +504,7 @@ pub fn save_gauge(conn: &Connection, name: &str, rec: &Value, now: &str, version
             opt_num(get(rec, "score")),
             field_s(rec, "rating"),
             field_s(rec, "asOf"),
-            crate::tables::py_json(&Value::Object(rest)),
+            crate::tables::json_text(&Value::Object(rest)),
             version,
             now,
         ],
@@ -579,7 +579,7 @@ pub fn add_notification(
     let extra = extra.cloned().unwrap_or_else(|| json!({}));
     let n = conn.execute(
         "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![now, kind, key, title, body, crate::tables::py_json(&extra), if seen { Some(now) } else { None }],
+        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&extra), if seen { Some(now) } else { None }],
     )?;
     if n == 0 {
         return Ok(None);

@@ -238,7 +238,7 @@ pub fn parse_instant(s: &str) -> Option<f64> {
 }
 
 pub fn uuid4() -> String {
-    bagholder_model::pytext::uuid4()
+    bagholder_model::textrules::uuid4()
 }
 
 /// `str(v)` of a JSON value, "" for null.
@@ -257,7 +257,7 @@ pub fn num(v: Option<&Value>, default: Option<f64>) -> Option<f64> {
         Some(Value::String(t)) if t.is_empty() => default,
         Some(Value::Number(n)) => n.as_f64().or(default),
         Some(Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
-        Some(Value::String(t)) => bagholder_model::pytext::py_float(t).or(default),
+        Some(Value::String(t)) => bagholder_model::textrules::parse_float(t).or(default),
         _ => default,
     }
 }

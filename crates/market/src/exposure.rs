@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::http::FetchError;
 pub use bagholder_model::exposure::{is_fund, issuer_of, norm_sector};
-use bagholder_model::pytext::py_strip;
+use bagholder_model::textrules::trim_space;
 
 pub const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 /// Between two requests to the same issuer.
@@ -79,11 +79,11 @@ pub fn num(v: Option<&Value>, default: f64) -> f64 {
         Some(Value::Number(n)) => return n.as_f64().unwrap_or(default),
         Some(other) => bagholder_model::value::s(Some(other)),
     };
-    let mut t = py_strip(&raw).replace(',', "").replace('%', "");
+    let mut t = trim_space(&raw).replace(',', "").replace('%', "");
     if t.starts_with('(') && t.ends_with(')') && t.len() >= 2 {
         t = format!("-{}", &t[1..t.len() - 1]);
     }
-    bagholder_model::pytext::py_float(&t).unwrap_or(default)
+    bagholder_model::textrules::parse_float(&t).unwrap_or(default)
 }
 
 fn num_str(t: &str, default: f64) -> f64 {
@@ -167,19 +167,19 @@ fn bloomberg(code: &str) -> String {
 
 /// `exposure.norm_country`.
 pub fn norm_country(name: &str) -> String {
-    let key = py_strip(name).to_lowercase();
+    let key = trim_space(name).to_lowercase();
     if key.is_empty() {
         return String::new();
     }
     match COUNTRY_ALIAS.iter().take(31).find(|(k, _)| *k == key) {
         Some((_, v)) => v.to_string(),
-        None => py_strip(name).to_string(),
+        None => trim_space(name).to_string(),
     }
 }
 
 /// `exposure.venue_country`.
 pub fn venue_country(exchange: &str) -> String {
-    let key = py_strip(exchange).to_uppercase();
+    let key = trim_space(exchange).to_uppercase();
     VENUE_COUNTRY.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default()
 }
 
@@ -257,7 +257,7 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
         }
         if let Some(r) = rec {
             sector = norm_sector(&s(r.get("sector")));
-            industry = py_strip(&s(r.get("industry"))).to_string();
+            industry = trim_space(&s(r.get("industry"))).to_string();
             out_country = if country.is_empty() { venue_country(&s(r.get("exchangeName"))) } else { country.clone() };
             source = "TMX Money".into();
         }
@@ -395,12 +395,12 @@ fn ishares_page(symbol: &str) -> Result<String, FetchError> {
 /// header row starting with Ticker. (holdings, as of).
 pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
     let body = text.trim_start_matches('\u{feff}');
-    let lines = bagholder_model::pytext::splitlines(body);
+    let lines = bagholder_model::textrules::splitlines(body);
     let mut as_of = String::new();
     let mut start: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
         if line.starts_with("Fund Holdings as of") {
-            if let Ok(rows) = bagholder_model::pytext::csv_rows(line) {
+            if let Ok(rows) = bagholder_model::textrules::csv_rows(line) {
                 if let Some(parts) = rows.first() {
                     as_of = parts.get(1).cloned().unwrap_or_default();
                 }
@@ -414,12 +414,12 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
     let start = match start { Some(s) => s, None => return (vec![], as_of) };
     // csv.reader over the remaining lines, each its own line
     let joined = lines[start..].join("\n");
-    let rows = match bagholder_model::pytext::csv_rows(&joined) { Ok(r) => r, Err(_) => return (vec![], as_of) };
+    let rows = match bagholder_model::textrules::csv_rows(&joined) { Ok(r) => r, Err(_) => return (vec![], as_of) };
     let rows: Vec<Vec<String>> = rows;
     if rows.is_empty() {
         return (vec![], as_of);
     }
-    let header: Vec<String> = rows[0].iter().map(|h| py_strip(h).to_string()).collect();
+    let header: Vec<String> = rows[0].iter().map(|h| trim_space(h).to_string()).collect();
     let (it, iname, isec, icls, iw, iloc, iex, iccy) = (
         header_index(&header, &["ticker"]), header_index(&header, &["name"]), header_index(&header, &["sector"]), header_index(&header, &["asset class"]),
         header_index(&header, &["weight"]), header_index(&header, &["location"]), header_index(&header, &["exchange"]), header_index(&header, &["currency"]),
@@ -434,24 +434,24 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
     let mut out = Vec::new();
     for r in rows.iter().skip(1) {
         let need = it.max(iw);
-        if (r.len() as i64) <= need || py_strip(&py_index(r, it)).is_empty() {
+        if (r.len() as i64) <= need || trim_space(&index_of(r, it)).is_empty() {
             continue;
         }
-        let cls = if icls >= 0 && (icls as usize) < r.len() { py_strip(&r[icls as usize]).to_lowercase() } else { String::new() };
-        let w = if iw >= 0 { num_str(&py_index(r, iw), 0.0) } else { 0.0 };
+        let cls = if icls >= 0 && (icls as usize) < r.len() { trim_space(&r[icls as usize]).to_lowercase() } else { String::new() };
+        let w = if iw >= 0 { num_str(&index_of(r, iw), 0.0) } else { 0.0 };
         if w <= 0.0 || ["cash", "money market", "futures", "derivatives", "forwards", "fx"].contains(&cls.as_str()) {
             continue;
         }
-        let nm = if iname >= 0 { py_strip(&py_index(r, iname)).to_string() } else { String::new() };
+        let nm = if iname >= 0 { trim_space(&index_of(r, iname)).to_string() } else { String::new() };
         let _ = cell;
         out.push(json!({
-            "ticker": py_strip(&py_index(r, it)),
+            "ticker": trim_space(&index_of(r, it)),
             "name": nm,
             "weight": w,
-            "sector": if isec >= 0 { norm_sector(&py_index(r, isec)) } else { String::new() },
-            "country": if iloc >= 0 { norm_country(&py_index(r, iloc)) } else { String::new() },
-            "exchange": if iex >= 0 { py_strip(&py_index(r, iex)).to_string() } else { String::new() },
-            "currency": if iccy >= 0 { py_strip(&py_index(r, iccy)).to_string() } else { String::new() },
+            "sector": if isec >= 0 { norm_sector(&index_of(r, isec)) } else { String::new() },
+            "country": if iloc >= 0 { norm_country(&index_of(r, iloc)) } else { String::new() },
+            "exchange": if iex >= 0 { trim_space(&index_of(r, iex)).to_string() } else { String::new() },
+            "currency": if iccy >= 0 { trim_space(&index_of(r, iccy)).to_string() } else { String::new() },
             "fund": nm.to_uppercase().contains("ISHARES") || is_fund(&nm),
         }));
     }
@@ -461,7 +461,7 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
 /// `r[i]` as Python indexes a list: a negative index from the end; out of range
 /// is the IndexError Python raises, which no caller here survives, so the
 /// reader returns "" where the Python guard would have skipped the row first.
-fn py_index(r: &[String], i: i64) -> String {
+fn index_of(r: &[String], i: i64) -> String {
     let n = r.len() as i64;
     let j = if i < 0 { n + i } else { i };
     if j < 0 || j >= n { String::new() } else { r[j as usize].clone() }
@@ -503,8 +503,8 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String)
         }
         let header = &t[0];
         for row in t {
-            if row.len() >= 2 && py_strip(&row[0]).to_lowercase().starts_with("reference asset") {
-                reference = py_strip(&row[1]).to_string();
+            if row.len() >= 2 && trim_space(&row[0]).to_lowercase().starts_with("reference asset") {
+                reference = trim_space(&row[1]).to_string();
             }
         }
         let (it, iw) = (header_index(header, &["ticker"]), header_index(header, &["weight"]));
@@ -515,11 +515,11 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String)
                     continue;
                 }
                 let w = num_str(&r[iw as usize], 0.0);
-                let (nm, tk) = (py_strip(&r[iname as usize]).to_string(), py_strip(&r[it as usize]).to_string());
+                let (nm, tk) = (trim_space(&r[iname as usize]).to_string(), trim_space(&r[it as usize]).to_string());
                 if w <= 0.0 || nm.is_empty() || cash.is_match(&nm) {
                     continue;
                 }
-                let parts: Vec<&str> = tk.split(bagholder_model::pychars::is_space).filter(|x| !x.is_empty()).collect();
+                let parts: Vec<&str> = tk.split(bagholder_model::unichars::is_space).filter(|x| !x.is_empty()).collect();
                 let (sym, code) = if parts.len() >= 2 { (parts[0].to_string(), parts[1].to_string()) } else { (tk.clone(), String::new()) };
                 let sector = if isec >= 0 && (isec as usize) < r.len() { norm_sector(&r[isec as usize]) } else { String::new() };
                 let mut country = if ictry >= 0 && (ictry as usize) < r.len() { norm_country(&r[ictry as usize]) } else { String::new() };
@@ -530,12 +530,12 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String)
             }
             continue;
         }
-        if !header.is_empty() && holdings_head.is_match(py_strip(&header[0])) {
+        if !header.is_empty() && holdings_head.is_match(trim_space(&header[0])) {
             for r in t.iter().skip(1) {
                 if r.len() < 2 {
                     continue;
                 }
-                let (nm, w) = (py_strip(&r[0]).to_string(), num_str(&r[1], 0.0));
+                let (nm, w) = (trim_space(&r[0]).to_string(), num_str(&r[1], 0.0));
                 if w <= 0.0 || nm.is_empty() || cash.is_match(&nm) {
                     continue;
                 }
@@ -642,11 +642,11 @@ pub fn parse_evolve_page(html: &str) -> (Map<String, Value>, Vec<Value>) {
     if let Some(m) = HOLDINGS.get_or_init(|| Regex::new(r"(?s)var holdingsData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
         let rows = serde_json::from_str::<Value>(&m[1]).ok().and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned()).unwrap_or_default();
         for r in rows {
-            let tk = py_strip(&s(r.get("ticker"))).to_string();
-            let parts: Vec<&str> = tk.split(bagholder_model::pychars::is_space).filter(|x| !x.is_empty()).collect();
+            let tk = trim_space(&s(r.get("ticker"))).to_string();
+            let parts: Vec<&str> = tk.split(bagholder_model::unichars::is_space).filter(|x| !x.is_empty()).collect();
             let (sym, code) = if parts.len() >= 2 { (parts[0].to_string(), parts[1].to_string()) } else { (tk.clone(), String::new()) };
             let w = num(r.get("weight_percent"), 0.0);
-            let nm = py_strip(&s(r.get("security_name"))).to_string();
+            let nm = trim_space(&s(r.get("security_name"))).to_string();
             if w <= 0.0 || sym.is_empty() {
                 continue;
             }
@@ -691,14 +691,14 @@ fn yahoo_session() -> Result<(String, String), FetchError> {
         Err(_) => vec![],
     };
     let cookie = cookies.join("; ");
-    let crumb = py_strip(&get(YAHOO_CRUMB, &[("Cookie", &cookie)])?).to_string();
+    let crumb = trim_space(&get(YAHOO_CRUMB, &[("Cookie", &cookie)])?).to_string();
     *sess.lock().unwrap() = (cookie.clone(), crumb.clone());
     Ok((cookie, crumb))
 }
 
 /// `exposure.yahoo_symbol`.
 pub fn yahoo_symbol(symbol: &str, exchange: &str) -> String {
-    let ex = py_strip(exchange).to_uppercase();
+    let ex = trim_space(exchange).to_uppercase();
     format!("{}{}", bagholder_model::venues::tmx_symbol(symbol), YAHOO_SUFFIX.iter().find(|(k, _)| *k == ex).map(|(_, v)| *v).unwrap_or(""))
 }
 
@@ -727,7 +727,7 @@ pub fn parse_yahoo_summary(data: &Value) -> (Map<String, Value>, Vec<Value>) {
     }
     let mut holdings = Vec::new();
     for h in th.get("holdings").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-        let sym = py_strip(&s(h.get("symbol"))).to_string();
+        let sym = trim_space(&s(h.get("symbol"))).to_string();
         let w = match h.get("holdingPercent") { Some(Value::Object(m)) => num(m.get("raw"), 0.0), other => num(other, 0.0) };
         if !sym.is_empty() && w > 0.0 {
             let mut ex = "";
@@ -771,7 +771,7 @@ pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
         .replace_all(name, " ");
     let clean = JUNK.get_or_init(|| Regex::new(r"[^A-Za-z0-9 &.-]").unwrap()).replace_all(&clean, " ");
     let clean = WS.get_or_init(|| Regex::new(r"\s+").unwrap()).replace_all(&clean, " ");
-    let clean = py_strip(&clean).to_string();
+    let clean = trim_space(&clean).to_string();
     if clean.is_empty() {
         return None;
     }
