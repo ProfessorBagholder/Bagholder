@@ -517,26 +517,25 @@ fn handle(app: &App, req: Request) {
             }
             let inst = bagholder_market::history::chart_instrument(&rec);
             let src = bagholder_market::history::history_source(&inst);
-            let available = bagholder_market::history::offered_timeframes(&inst);
-            let today = bagholder_model::clock::today_local();
-            let now_unix = unix_now();
-            let stamp = now_iso();
+            let (today, now_unix, stamp) = bagholder_market::clock_now();
+            let db = app.db_path();
             with_conn(app, req, move |conn| {
+                use bagholder_market::history as h;
+                let available = h::offered_timeframes(conn, &inst, &start, &today, now_unix);
+                let mut pending = false;
                 let bars = if src.is_none() || !available.contains(&tf.as_str()) {
                     vec![]
+                } else if h::INTRADAY.contains(&tf.as_str()) && !h::intraday_ready(conn, &inst, &tf, &start, &today, now_unix) {
+                    // never block the chart on a minute-data fetch: hand back what
+                    // is stored, fetch the rest in the background, and let the
+                    // page ask again
+                    h::ensure_intraday_in_background(db, inst.clone(), tf.clone(), start.clone(), end.clone());
+                    pending = true;
+                    vec![]
                 } else {
-                    bagholder_market::history::ensure_bars(conn, &inst, &tf, &start, &end, &today, now_unix, &stamp)
-                        .unwrap_or_default()
+                    h::ensure_bars(conn, &inst, &tf, &start, &end, &today, now_unix, &stamp).unwrap_or_default()
                 };
-                // the minute-data chain is not ported, so an intraday request
-                // is answered with the reason rather than an empty chart
-                let reason = if !bars.is_empty() {
-                    ""
-                } else if bagholder_market::history::INTRADAY.contains(&tf.as_str()) {
-                    "intraday bars are not served from here yet"
-                } else {
-                    "no source had bars for that span"
-                };
+                let reason = if !bars.is_empty() || pending { String::new() } else { h::chart_reason(&inst, &tf) };
                 Ok(json!({
                     "ok": true,
                     "symbol": field_s(&rec, "symbol"),
@@ -545,7 +544,7 @@ fn handle(app: &App, req: Request) {
                     "tf": tf,
                     "available": available,
                     "bars": bars,
-                    "pending": false,
+                    "pending": pending,
                     "reason": reason,
                 }))
             });

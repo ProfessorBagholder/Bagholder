@@ -19,7 +19,7 @@ use std::time::Duration;
 pub const REDIRECT_MAX: usize = 5;
 const POOL_PER_HOST: usize = 2;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     Status(u16),
     Transport(String),

@@ -46,3 +46,15 @@ pub fn now_stamp() -> String {
     let (y, m, d) = bagholder_model::dates::from_days(days);
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
+
+/// (today in UTC, now as unix seconds, now stamped): the three forms of the
+/// present the market readers are handed.
+pub fn clock_now() -> (String, f64, String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let secs = now as i64;
+    let (y, m, d) = bagholder_model::dates::from_days(secs.div_euclid(86400));
+    (bagholder_model::dates::fmt(y, m, d), now, now_stamp())
+}

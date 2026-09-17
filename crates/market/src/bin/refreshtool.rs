@@ -11,7 +11,7 @@ fn main() {
         "fx" => json!({"fx": bagholder_market::refresh::refresh_fx(&conn)}),
         "benchmark" => json!({"benchmark": bagholder_market::refresh::refresh_benchmark(&conn)}),
         "tsx" => json!({"tsx": bagholder_market::refresh::refresh_tsx(&conn)}),
-        "all" => bagholder_market::refresh::refresh_all(&conn),
+        "all" => bagholder_market::refresh::refresh_all(&conn, &[]),
         "health" => json!(bagholder_market::http::source_health()),
         other => panic!("unknown mode {other}"),
     };

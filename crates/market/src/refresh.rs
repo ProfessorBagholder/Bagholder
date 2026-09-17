@@ -103,15 +103,146 @@ pub fn refresh_tsx(conn: &Connection) -> usize {
     TMX_INDICES.iter().map(|(key, _)| refresh_tmx_index(conn, key)).sum()
 }
 
-/// `market.refresh_all`, less the declared distributions, which need the payer
-/// symbols the model supplies.
-pub fn refresh_all(conn: &Connection) -> Value {
+static REFRESHING: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+struct Refreshing;
+
+impl Refreshing {
+    fn claim() -> Option<Refreshing> {
+        let mut r = REFRESHING.lock().unwrap();
+        if *r {
+            return None;
+        }
+        *r = true;
+        Some(Refreshing)
+    }
+}
+
+impl Drop for Refreshing {
+    fn drop(&mut self) {
+        *REFRESHING.lock().unwrap() = false;
+    }
+}
+
+/// `market.refresh_all`: FX, the benchmarks and the declared distributions for
+/// the payer symbols. Never fails; the row counts written.
+pub fn refresh_all(conn: &Connection, symbols: &[Value]) -> Value {
+    let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "skipped": true}) };
     let _ = bagholder_store::tables::set_meta(conn, "market_attempt_at", &crate::now_stamp());
     json!({
         "fx": refresh_fx(conn),
         "benchmark": refresh_benchmark(conn) + refresh_tsx(conn),
+        "distributions": refresh_distributions(conn, symbols, false),
         "skipped": false,
     })
+}
+
+/// `market.RECORD_STALE_HOURS`.
+pub const RECORD_STALE_HOURS: f64 = 20.0;
+/// `market.MARKET_ATTEMPT_HOURS`.
+pub const MARKET_ATTEMPT_HOURS: f64 = 6.0;
+/// `market.MARKET_CHECK_MINUTES`.
+pub const MARKET_CHECK_MINUTES: u64 = 60;
+/// `market.BOC_PUBLISH_ET`: 16:30 Eastern.
+pub const BOC_PUBLISH_MINUTE_ET: i64 = 16 * 60 + 30;
+
+/// `market.refresh_distributions`: quotes and declared distributions for the
+/// dividend payers whose record is stale, or all of them when forced.
+pub fn refresh_distributions(conn: &Connection, symbols: &[Value], force: bool) -> usize {
+    let (today, now_unix, stamp) = crate::clock_now();
+    let todo: Vec<String> = if force {
+        symbols
+            .iter()
+            .filter(|r| crate::tmx::is_canadian_listing(&bagholder_model::value::field_s(r, "exchange"), &bagholder_model::value::field_s(r, "currency")))
+            .map(|r| bagholder_model::venues::tmx_symbol(&bagholder_model::value::field_s(r, "symbol")))
+            .collect()
+    } else {
+        crate::quotes::stale_symbols(conn, symbols, now_unix, RECORD_STALE_HOURS).unwrap_or_default()
+    };
+    // the last record naming a symbol decides its exchange, as the dict does
+    let mut exchanges: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for r in symbols {
+        exchanges.insert(
+            bagholder_model::venues::tmx_symbol(&bagholder_model::value::field_s(r, "symbol")),
+            bagholder_model::value::field_s(r, "exchange"),
+        );
+    }
+    let mut done = 0;
+    for sym in todo {
+        let exchange = exchanges.get(&sym).cloned().unwrap_or_default();
+        let (quote, divs) = crate::tmx::fetch_tmx(conn, &sym, &exchange, &today);
+        // a Cboe Canada listing's price comes from Cboe's own feed every minute;
+        // TMX's delayed quote for it must not replace that, only its record is kept
+        let cboe = ["CBOE CANADA", "NEO"].contains(&exchange.trim().to_uppercase().as_str());
+        if let Some(q) = &quote {
+            if !cboe {
+                let _ = bagholder_store::market::upsert_quote(conn, &sym, q, "tmx", &stamp);
+            }
+        }
+        if !divs.is_empty() {
+            let _ = bagholder_store::market::upsert_distributions(conn, &sym, &divs, "tmx");
+        }
+        if quote.is_some() || !divs.is_empty() {
+            let _ = bagholder_store::market::mark_distributions_fetched(conn, &sym, &stamp);
+            done += 1;
+        }
+    }
+    done
+}
+
+/// `market.benchmark_stale`: any index the page can show with no closes, or
+/// none within four days.
+pub fn benchmark_stale(conn: &Connection, today: &str) -> bool {
+    let limit = shift_date(today, -STALE_DAYS);
+    bagholder_store::market::BENCHMARK_SYMBOLS.iter().any(|sym| {
+        let last = benchmark_last_date(conn, sym).unwrap_or_default();
+        last.is_empty() || last < limit
+    })
+}
+
+/// `market.is_stale`: the rates, a benchmark, or a payer's record.
+pub fn is_stale(conn: &Connection, today: &str, symbols: &[Value]) -> bool {
+    let limit = shift_date(today, -STALE_DAYS);
+    let fx = fx_last_date(conn, FX_PAIR).unwrap_or_default();
+    if fx.is_empty() || fx < limit || benchmark_stale(conn, today) {
+        return true;
+    }
+    let (_, now_unix, _) = crate::clock_now();
+    !crate::quotes::stale_symbols(conn, symbols, now_unix, RECORD_STALE_HOURS).unwrap_or_default().is_empty()
+}
+
+/// `market.fx_day_published_but_missing`: the Bank of Canada has published
+/// today's rate (16:30 Eastern on a weekday) and the table does not have it.
+pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
+    let (day, minute, _) = match crate::clockzone::local_at("America/Toronto", now_unix as i64) { Some(x) => x, None => return false };
+    let (y, m, d) = match bagholder_model::dates::parse_iso(&day) { Some(x) => x, None => return false };
+    let weekday = (bagholder_model::dates::to_days(y, m, d) + 3).rem_euclid(7);
+    if weekday > 4 || minute < BOC_PUBLISH_MINUTE_ET {
+        return false;
+    }
+    fx_last_date(conn, FX_PAIR).unwrap_or_default() < day
+}
+
+/// `market.refresh_periodic`: USD/CAD and the benchmarks at most every six
+/// hours (sooner once today's rate is out, or a benchmark is stale), and every
+/// payer's distribution record past its hours.
+pub fn refresh_periodic(conn: &Connection, symbols: &[Value]) -> Value {
+    let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
+    let (today, now_unix, stamp) = crate::clock_now();
+    let mut fx = 0;
+    let mut bench = 0;
+    let last = bagholder_store::tables::get_meta(conn, "market_attempt_at", "").unwrap_or_default();
+    let old = match crate::quotes::instant_secs_public(&last) {
+        Some(then) => now_unix - then > MARKET_ATTEMPT_HOURS * 3600.0,
+        None => true,
+    };
+    if old || fx_day_published_but_missing(conn, now_unix) || benchmark_stale(conn, &today) {
+        let _ = bagholder_store::tables::set_meta(conn, "market_attempt_at", &stamp);
+        fx = refresh_fx(conn);
+        bench = refresh_benchmark(conn) + refresh_tsx(conn);
+    }
+    let dist = refresh_distributions(conn, symbols, false);
+    json!({"fx": fx, "benchmark": bench, "distributions": dist, "skipped": false})
 }
 
 /// `market.STALE_DAYS`.

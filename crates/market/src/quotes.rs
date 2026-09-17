@@ -70,16 +70,18 @@ fn yahoo_get(url: &str) -> Option<String> {
     }
 }
 
-/// `market._yahoo_get`, for the chart path: the body, or the HTTP code when
-/// there was one, so a 404 can be remembered as a symbol Yahoo does not carry.
-pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
+/// `market._yahoo_get`, for the chart path: the body, or the failure as
+/// Python raises it -- a backoff in force reads as one, and a 404 keeps its
+/// code so the symbol can be remembered as one Yahoo does not carry.
+pub fn yahoo_get_result(url: &str) -> Result<String, crate::http::FetchError> {
     {
         let mut gate = YAHOO.lock().unwrap();
         let now = Instant::now();
         if let Some(until) = gate.backoff_until {
             if now < until {
-                crate::http::note_source("yahoo", false, Some(&crate::http::FetchError::Transport("yahoo: backing off after 429".into())));
-                return Err(None);
+                let e = crate::http::FetchError::Transport("yahoo: backing off after 429".into());
+                crate::http::note_source("yahoo", false, Some(&e));
+                return Err(e);
             }
         }
         if let Some(next) = gate.next_at {
@@ -95,13 +97,17 @@ pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
     match get_text(url, &YAHOO_HEADERS) {
         Ok(t) => Ok(t),
         Err(e) => {
-            let code = e.code();
-            if code == Some(429) {
+            if e.code() == Some(429) {
                 YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
             }
-            Err(code)
+            Err(e)
         }
     }
+}
+
+/// The same, answering only the HTTP code.
+pub fn yahoo_get_public(url: &str) -> Result<String, Option<u16>> {
+    yahoo_get_result(url).map_err(|e| e.code())
 }
 
 /// `market.instant_secs`, for callers outside this module.
@@ -359,11 +365,90 @@ pub fn fetch_cboe_option_chain(root: &str) -> Map<String, Value> {
     }
 }
 
-/// `market.fetch_coinbase_spot`, without the previous close: that needs the
-/// candle history, which the chart path carries.
-pub fn fetch_coinbase_spot(pair: &str) -> Option<Value> {
-    let url = COINBASE_URL.replace("{}", &percent_encode(pair));
-    parse_coinbase_rec(&get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]).ok()?, pair)
+/// `market.coinbase_prev_close`: the close of the last completed UTC day on the
+/// pair's Coinbase market, in the pair's currency -- the pair's own market
+/// when Coinbase has one, else the USD market converted at the day's Bank of
+/// Canada rate. Remembered per day.
+pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<f64> {
+    let pair = pair.trim().to_uppercase();
+    let meta_key = format!("coinbase_prev:{}", pair);
+    let v = bagholder_store::tables::get_meta(conn, &meta_key, "").unwrap_or_default();
+    if let Some(rest) = v.strip_prefix(&format!("{}@", today)) {
+        return bagholder_model::pytext::py_float(rest);
+    }
+    let (base, ccy) = match pair.split_once('-') { Some((b, c)) => (b.to_string(), c.to_string()), None => (pair.clone(), String::new()) };
+    let products = if ccy == "USD" { vec![pair.clone()] } else { vec![pair.clone(), format!("{}-USD", base)] };
+    let mut prev: Option<f64> = None;
+    for product in products {
+        if crate::history::coinbase_market(conn, &product, today).is_empty() {
+            continue;
+        }
+        let now = now_unix as i64;
+        let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now);
+        let quoted = product.rsplit('-').next().unwrap_or("").to_string();
+        let bars = crate::history::in_position_currency(conn, &bars, &quoted, &ccy);
+        let done: Vec<&Value> = bars
+            .iter()
+            .filter(|b| {
+                let ts = b["time"].as_i64().unwrap_or(0);
+                let (y, m, d) = bagholder_model::dates::from_days(ts.div_euclid(86400));
+                bagholder_model::dates::fmt(y, m, d).as_str() < today
+            })
+            .collect();
+        if let Some(last) = done.last() {
+            prev = last["close"].as_f64();
+            break;
+        }
+    }
+    if let Some(p) = prev {
+        if p != 0.0 {
+            let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("{}@{}", today, py_repr_float(p)));
+        }
+    }
+    prev.filter(|p| *p != 0.0)
+}
+
+/// Python's `repr()` of a float, which is the shortest text that reads back as
+/// the same number.
+pub fn py_repr_float(x: f64) -> String {
+    if x.fract() == 0.0 && x.abs() < 1e16 {
+        return format!("{:.1}", x);
+    }
+    let s = format!("{}", x);
+    if s.contains('e') {
+        return s;
+    }
+    // Rust writes 1e-7 as 0.0000001; Python switches to an exponent below 1e-4
+    if x.abs() < 1e-4 || x.abs() >= 1e16 {
+        let e = format!("{:e}", x);
+        let (mant, exp) = e.split_once('e').unwrap();
+        let exp: i32 = exp.parse().unwrap_or(0);
+        return format!("{}e{}{:02}", mant, if exp < 0 { "-" } else { "+" }, exp.abs());
+    }
+    s
+}
+
+/// `market.fetch_coinbase_spot`: the spot price, with the day's change against
+/// the previous UTC day's close when Coinbase has a market to take it from.
+pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<Value> {
+    let url = COINBASE_URL.replace("{}", pair);
+    let mut rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
+    if let Some(prev) = coinbase_prev_close(conn, pair, today, now_unix) {
+        let price = rec["price"].as_f64().unwrap_or(0.0);
+        rec["prevClose"] = json!(prev);
+        rec["priceChange"] = json!(price - prev);
+        rec["percentChange"] = json!((price - prev) / prev * 100.0);
+    }
+    Some(rec)
+}
+
+/// `market.occ_root`: the root of an OCC code, "" when it is not one.
+pub fn occ_root(code: &str) -> String {
+    static R: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    R.get_or_init(|| regex::Regex::new(r"^([A-Z][A-Z0-9.]{0,9})\d{6}[CP]\d{8}$").unwrap())
+        .captures(code)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default()
 }
 
 /// `market.fetch_for`: one quote from the named source. A chain is shared
@@ -378,14 +463,13 @@ pub fn fetch_for(
     match source {
         "tmx" => tmx::fetch_tmx_quote(conn, key, today),
         "cboe_ca" => fetch_cboe_ca_quote(key),
-        "coinbase" => fetch_coinbase_spot(key),
+        "coinbase" => {
+            let (_, now_unix, _) = crate::clock_now();
+            fetch_coinbase_spot(conn, key, today, now_unix)
+        }
         "yahoo_quote" => fetch_yahoo_quote(key),
         "cboe_options" => {
-            // the OCC code's root is everything before the six-digit date
-            let root: String = key.chars().take_while(|c| !c.is_ascii_digit()).collect();
-            if root.is_empty() {
-                return None;
-            }
+            let root = occ_root(key);
             if !chains.contains_key(&root) {
                 chains.insert(root.clone(), Value::Object(fetch_cboe_option_chain(&root)));
             }
@@ -481,4 +565,33 @@ pub fn yahoo_turn() -> bool {
 /// backoff.
 pub fn yahoo_back_off() {
     YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
+}
+
+/// `market.PEEK_SECONDS`.
+pub const PEEK_SECONDS: u64 = 60;
+
+/// `market.peek_quote`: a listing's price and day change for a glance, from
+/// the source a watched listing uses, not stored, remembered for a minute.
+pub fn peek_quote(conn: &rusqlite::Connection, rec: &Value, today: &str) -> Option<Value> {
+    static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = std::sync::OnceLock::new();
+    let (source, key) = quote_source(rec)?;
+    let k = format!("{}@{}", field_s(rec, "symbol").trim().to_uppercase(), field_s(rec, "exchange").trim().to_uppercase());
+    let cache = PEEK.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some((at, q)) = cache.lock().unwrap().get(&k) {
+        if at.elapsed() < Duration::from_secs(PEEK_SECONDS) {
+            return Some(q.clone());
+        }
+    }
+    let mut chains = Map::new();
+    let q = fetch_for(conn, &source, &key, today, &mut chains)?;
+    if get(&q, "price").is_none() {
+        return None;
+    }
+    let out = json!({
+        "price": q.get("price").cloned().unwrap_or(Value::Null),
+        "priceChange": q.get("priceChange").cloned().unwrap_or(Value::Null),
+        "percentChange": q.get("percentChange").cloned().unwrap_or(Value::Null),
+    });
+    cache.lock().unwrap().insert(k, (Instant::now(), out.clone()));
+    Some(out)
 }
