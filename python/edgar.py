@@ -26,6 +26,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import disclosures as D
+import formnames
 
 SOURCE = "SEC"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -269,7 +270,9 @@ def enrichment(row):
     read, not the CSS-laden rendered page the browser URL points at."""
     typ = str((row or {}).get("type") or "").upper()
     if not typ.startswith("SCHEDULE 13"):
-        return None
+        # every other form carries its own name, which needs no download
+        title = formnames.title_of(typ)
+        return {"subject": title, "summary": ""} if title else None
     raw_url = re.sub(r"/xsl[^/]*/", "/", (row or {}).get("url") or "")
     try:
         data, _ = document({"url": raw_url})

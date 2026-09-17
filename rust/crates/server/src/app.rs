@@ -17,7 +17,7 @@ pub const APP_VERSION: &str = "1.44.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-17.1";
 /// Bump when title/summary logic improves, so read rows are re-read once.
-pub const ENRICH_VERSION: i64 = 11;
+pub const ENRICH_VERSION: i64 = 12;
 pub const REPO: &str = "ProfessorBagholder/Bagholder";
 
 /// What the header and the loops know.

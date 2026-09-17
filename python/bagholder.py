@@ -729,7 +729,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
 PROTOCOL = "2026-09-17.1"
-ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
+ENRICH_VERSION = 12  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -6590,7 +6590,7 @@ def filings_enrich(symbol, doc_id):
         # model, so wait the few seconds it needs rather than spending this read and coming
         # back for the same document later. A model still downloading is not waited for.
         model = enrich.wait_for_summary()
-    info = enrich.enrich_document(row.get("source", ""), data, ct)
+    info = enrich.enrich_document(row.get("source", ""), data, ct, code=_s(row.get("type")))
     new_subject = info.get("subject") or ""
     got_summary = info.get("summary") or ""
     if info.get("final"):

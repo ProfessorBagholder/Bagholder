@@ -22,6 +22,7 @@ import html as _html
 import re
 
 import forms
+import formnames
 import localmodel
 import pdftext
 
@@ -279,7 +280,7 @@ def title_from_model(text):
     return out[:90]
 
 
-def enrich_document(source, data, content_type=""):
+def enrich_document(source, data, content_type="", code=""):
     """A title and a one-sentence summary for one document, both from its readable
     text. The title (`subject`) is the document's own when it exposes one — a PDF's
     metadata — else a short title from the model; the summary is one sentence from the
@@ -302,7 +303,14 @@ def enrich_document(source, data, content_type=""):
         return {"subject": exact.get("subject", "") or subject, "summary": exact.get("summary", ""), "final": True}
     if forms.is_form(text):
         return {"subject": subject, "summary": "", "final": True}
+    # the report's own items name it better than any sentence about them, and a form the
+    # regulator names needs no model for its title
+    named = formnames.items_title(code, text)
+    if named:
+        subject = named
+    elif not subject:
+        subject = formnames.any_title(code) or ""
     summary = summarize(text)
     if not subject:
-        subject = title_from_model(text)
+        subject = title_from_model(text)   # a form the regulator does not name: the model reads one
     return {"subject": subject, "summary": summary}

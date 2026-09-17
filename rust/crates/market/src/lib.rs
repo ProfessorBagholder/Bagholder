@@ -15,6 +15,7 @@ pub mod edgar;
 pub mod enrich;
 pub mod exposure;
 pub mod htmltables;
+pub mod formnames;
 pub mod forms;
 pub mod localmodel;
 pub mod pdftext;

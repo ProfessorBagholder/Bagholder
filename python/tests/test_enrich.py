@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import enrich
+import formnames
 import pdftext
 
 
@@ -187,3 +188,26 @@ class SentenceTest(unittest.TestCase):
     def test_a_bare_name_is_still_no_summary(self):
         with mock.patch.object(enrich.localmodel, "chat", return_value="Quantum eMotion Corp."):
             self.assertEqual(enrich.summarize("the filing's text"), "")
+
+
+class FormNamesTest(unittest.TestCase):
+    def test_a_form_is_named_by_its_code(self):
+        self.assertEqual(formnames.title_of("4"), "Form 4: Statement of changes in beneficial ownership")
+        self.assertEqual(formnames.title_of("144"), "Form 144: Notice of proposed sale of securities")
+        self.assertEqual(formnames.title_of("424B5"), "Form 424B5: Prospectus")
+        self.assertEqual(formnames.title_of("S-1/A"), "Form S-1: Registration statement (amended)")
+        self.assertEqual(formnames.title_of("DEF 14A"), "Form DEF 14A: Proxy statement")
+        self.assertIsNone(formnames.title_of("8-K"), "a current report is named by its items")
+        self.assertIsNone(formnames.title_of("45-106F1"), "not one of the SEC's own codes")
+
+    def test_a_current_report_is_named_by_its_items(self):
+        one = "Item 2.02 Results of Operations and Financial Condition. Item 9.01 Financial Statements and Exhibits."
+        self.assertEqual(formnames.items_title("8-K", one), "Form 8-K: Results of operations and financial condition")
+        two = "Item 5.02 Departure of Directors. Item 7.01 Regulation FD Disclosure. Item 9.01 Exhibits."
+        self.assertEqual(formnames.items_title("8-K", two),
+                         "Form 8-K: Departure or election of directors or officers and Regulation FD disclosure")
+        many = "Item 1.01. Item 2.01. Item 3.02. Item 8.01."
+        self.assertEqual(formnames.items_title("8-K", many), "Form 8-K: Entry into a material agreement and 3 other items")
+        self.assertIsNone(formnames.items_title("8-K", "no items here"))
+        self.assertIsNone(formnames.items_title("8-K", "Item 9.01 Financial Statements and Exhibits"),
+                          "every report has exhibits")
