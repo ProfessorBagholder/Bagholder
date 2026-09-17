@@ -7,9 +7,9 @@
     "bySymbol": [
       {
         "avgHold": 31.0,
-        "legs": 2,
+        "legs": 1,
         "n": 1,
-        "pnl": 80.0,
+        "pnl": 50.0,
         "symbol": "ETH",
         "winRate": 1.0
       }
@@ -104,15 +104,15 @@
     "kpi": {
       "avgHold": 31.0,
       "avgLoss": 0.0,
-      "avgWin": 80.0,
+      "avgWin": 50.0,
       "breakeven": 0,
       "count": 1,
-      "expectancy": 80.0,
+      "expectancy": 50.0,
       "grossLoss": 0,
-      "grossWin": 80.0,
+      "grossWin": 50.0,
       "losses": 0,
       "profitFactor": null,
-      "realized": 80.0,
+      "realized": 50.0,
       "winRate": 1.0,
       "wins": 1
     },
@@ -121,7 +121,7 @@
         "count": 1,
         "key": "2026-02",
         "label": "Feb '26",
-        "value": 80.0
+        "value": 50.0
       }
     ],
     "options": {
@@ -175,7 +175,7 @@
         "date": "2026-02-01",
         "id": "rt:cb",
         "missing": "no grade or thesis",
-        "pnl": 80.0,
+        "pnl": 50.0,
         "symbol": "ETH"
       }
     ],
@@ -183,14 +183,13 @@
       {
         "account": "Crypto",
         "currency": "CAD",
-        "entry": 110.0,
+        "entry": 100.0,
         "entryDate": "2026-01-01",
         "exchange": "Crypto",
         "exit": 150.0,
         "exitDate": "2026-02-01",
         "fees": 0.0,
         "fills": [
-          "BUY",
           "BUY",
           "SELL"
         ],
@@ -199,10 +198,37 @@
         "id": "rt:cb",
         "kind": "Crypto",
         "mult": 1,
-        "pnl": 80.0,
-        "pnlCad": 80.0,
-        "pnlPct": 0.363636,
-        "qty": 2.0,
+        "pnl": 50.0,
+        "pnlCad": 50.0,
+        "pnlPct": 0.5,
+        "qty": 1.0,
+        "side": "SELL",
+        "status": "closed",
+        "symbol": "ETH",
+        "tags": []
+      },
+      {
+        "account": "Crypto",
+        "currency": "CAD",
+        "entry": null,
+        "entryDate": "2026-01-05",
+        "exchange": "Crypto",
+        "exit": 150.0,
+        "exitDate": "2026-02-01",
+        "fees": 0.0,
+        "fills": [
+          "BUY",
+          "SELL"
+        ],
+        "grade": "",
+        "holdDays": 27,
+        "id": "rt:ti",
+        "kind": "Crypto",
+        "mult": 1,
+        "pnl": null,
+        "pnlCad": null,
+        "pnlPct": null,
+        "qty": 1.0,
         "side": "SELL",
         "status": "closed",
         "symbol": "ETH",

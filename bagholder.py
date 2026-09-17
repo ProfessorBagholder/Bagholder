@@ -54,6 +54,7 @@ import sedar
 import universes
 import model
 import store
+import sync_details
 
 # --- constants (tradesimple WealthsimpleAPIBase) ---
 OAUTH = "https://api.production.wealthsimple.com/v1/oauth/v2"
@@ -2592,6 +2593,7 @@ def fill_listings(sess, from_sync=False):
         _state["listingsFilling"] = True
         _state["syncStep"] = "Attaching listing ids…"
     try:
+        store.fill_crypto_detail_security_ids()
         if store.needs_security_id_backfill():
             walk_ok = True
             known = store.canonical_ids()
@@ -2776,15 +2778,15 @@ def ensure_fresh_token(sess=None):
 
 
 def activity_sync_bounds():
-    """Full history only when the activity table has no rows yet."""
-    if store.activity_count() == 0:
+    """Backfill execution details once, and retry unresolved historical orders."""
+    if store.activity_count() == 0 or store.get_meta(sync_details.VERSION_KEY) != sync_details.VERSION:
         return {"start_date": None, "full_history": True}
     start = store.incremental_start_date() or None
     return {"start_date": start, "full_history": False}
 
 
 def run_sync(allow_refresh=True, force_activity=True):
-    """GraphQL pull. Inserts new Wealthsimple rows only. Never rebuilds the table."""
+    """Pull the feed and its execution details, preserving stored row identities."""
     store.ensure()
     with _lock:
         if _state["syncing"]:
@@ -2832,6 +2834,12 @@ def run_sync(allow_refresh=True, force_activity=True):
         start_date = bounds["start_date"]
         known = store.canonical_ids() if not bounds["full_history"] else set()
         mapped = []
+        detail_groups = []
+        pending_details = 0
+        try:
+            detail_cache = json.loads(store.get_meta(sync_details.CACHE_KEY) or "{}")
+        except (ValueError, TypeError):
+            detail_cache = {}
         with_ids = [a for a in accounts if a.get("id")]
         _set_sync_step("Syncing transactions")
         for acc in with_ids:
@@ -2842,10 +2850,15 @@ def run_sync(allow_refresh=True, force_activity=True):
                 start_date=start_date,
                 known_canonical_ids=known,
             )
-            for it in raw_items:
-                mapped.extend(map_activity_rows(it, acc_by_id))
+            ordinary, groups, pending = sync_details.enrich(
+                raw_items, acc_by_id, map_activity_rows,
+                lambda op, variables, query: graphql(sess, op, variables, query),
+                detail_cache, _set_sync_step)
+            mapped.extend(ordinary)
+            detail_groups.extend(groups)
+            pending_details += pending
         pools = fifo_pool_ids(accounts)
-        for row in mapped:
+        for row in mapped + [row for parent, legs in detail_groups for row in [parent] + legs]:
             aid = row.get("accountId") or ""
             row["fifoId"] = pools.get(aid, aid)
         _set_sync_step("Fetching balances…")
@@ -2864,7 +2877,11 @@ def run_sync(allow_refresh=True, force_activity=True):
             combined.append(tagged)
         nickname_pts, nav_errors = fetch_nickname_nav_history(sess, accounts)
         combined.extend(nickname_pts)
+        _set_sync_step("Saving transactions…")
         store.apply_wealthsimple_mapped(mapped)
+        store.apply_wealthsimple_detail_groups(detail_groups)
+        store.set_meta(sync_details.CACHE_KEY, json.dumps(detail_cache))
+        store.set_meta(sync_details.VERSION_KEY, sync_details.VERSION if not pending_details else "")
         synced = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _set_sync_step("Saving…")
         save_accounts_snapshot(
@@ -7736,8 +7753,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(text, str) or not text.strip():
                 self._send(400, {"ok": False, "error": "text required"})
                 return
-            report = csvimport.import_text(_s(body.get("name")) or "upload.csv", text)
-            if report.get("added"):
+            report = csvimport.import_text(_s(body.get("name")) or "upload.csv", text,
+                reconcile=body.get("reconcile") is True, account_map=body.get("accountMap"))
+            if report.get("added") or report.get("reconciled"):
                 model.invalidate(book=True)
             self._send(200, report)
             return

@@ -6,8 +6,8 @@
     },
     "bySymbol": [
       {
-        "avgHold": 17.0,
-        "legs": 2,
+        "avgHold": 226.0,
+        "legs": 4,
         "n": 1,
         "pnl": 1545.75,
         "symbol": "BBAI",
@@ -102,7 +102,7 @@
       "ungraded": 1
     },
     "kpi": {
-      "avgHold": 17.0,
+      "avgHold": 226.0,
       "avgLoss": 0.0,
       "avgWin": 1545.75,
       "breakeven": 0,
@@ -133,7 +133,7 @@
         "Options"
       ],
       "symbols": [
-        "BBAI 21JAN28 12.00 CALL"
+        "BBAI 21JAN28 10.00 CALL"
       ],
       "tags": [],
       "years": [
@@ -174,36 +174,37 @@
         "id": "rt:sto",
         "missing": "no grade or thesis",
         "pnl": 1545.75,
-        "symbol": "BBAI 21JAN28 12.00 CALL"
+        "symbol": "BBAI 21JAN28 10.00 CALL"
       }
     ],
     "trades": [
       {
         "account": "Trading",
         "currency": "USD",
-        "entry": 3.14,
-        "entryDate": "2026-06-09",
+        "entry": 1.57,
+        "entryDate": "2025-11-12",
         "exchange": "",
-        "exit": 0.85,
+        "exit": 0.425,
         "exitDate": "2026-06-26",
         "fees": 0.0,
         "fills": [
-          "BUY TO OPEN",
-          "BUY TO OPEN",
+          "SELL TO OPEN",
+          "BUY (close + open)",
+          "BUY (close + open)",
           "BUY TO CLOSE"
         ],
         "grade": "",
-        "holdDays": 17,
+        "holdDays": 226,
         "id": "rt:sto",
         "kind": "Options",
         "mult": 100,
         "pnl": 1145.0,
         "pnlCad": 1545.75,
         "pnlPct": 0.729299,
-        "qty": 5.0,
+        "qty": 10.0,
         "side": "COVER",
         "status": "closed",
-        "symbol": "BBAI 21JAN28 12.00 CALL",
+        "symbol": "BBAI 21JAN28 10.00 CALL",
         "tags": []
       }
     ],

@@ -6,9 +6,9 @@
     },
     "bySymbol": [
       {
-        "avgHold": 206.0,
-        "legs": 6,
-        "n": 1,
+        "avgHold": 106.0,
+        "legs": 8,
+        "n": 2,
         "pnl": -8148.6,
         "symbol": "BBAI",
         "winRate": 0.0
@@ -99,18 +99,18 @@
         }
       ],
       "graded": 0,
-      "ungraded": 1
+      "ungraded": 2
     },
     "kpi": {
-      "avgHold": 206.0,
-      "avgLoss": -8148.6,
+      "avgHold": 106.0,
+      "avgLoss": -4074.3,
       "avgWin": 0.0,
       "breakeven": 0,
-      "count": 1,
-      "expectancy": -8148.6,
+      "count": 2,
+      "expectancy": -4074.3,
       "grossLoss": 8148.6,
       "grossWin": 0,
-      "losses": 1,
+      "losses": 2,
       "profitFactor": 0.0,
       "realized": -8148.6,
       "winRate": 0.0,
@@ -119,9 +119,15 @@
     "monthly": [
       {
         "count": 1,
+        "key": "2025-12",
+        "label": "Dec '25",
+        "value": -2332.8
+      },
+      {
+        "count": 1,
         "key": "2026-06",
         "label": "Jun '26",
-        "value": -8148.6
+        "value": -5815.8
       }
     ],
     "options": {
@@ -133,11 +139,13 @@
         "Options"
       ],
       "symbols": [
+        "BBAI 19DEC25 6.00 PUT",
         "BBAI 21JAN28 5.00 PUT"
       ],
       "tags": [],
       "years": [
-        "2026"
+        "2026",
+        "2025"
       ]
     },
     "portfolio": {
@@ -173,15 +181,22 @@
         "date": "2026-06-29",
         "id": "rt:s5",
         "missing": "no grade or thesis",
-        "pnl": -8148.6,
+        "pnl": -5815.8,
         "symbol": "BBAI 21JAN28 5.00 PUT"
+      },
+      {
+        "date": "2025-12-18",
+        "id": "rt:s4",
+        "missing": "no grade or thesis",
+        "pnl": -2332.8,
+        "symbol": "BBAI 19DEC25 6.00 PUT"
       }
     ],
     "trades": [
       {
         "account": "Trading",
         "currency": "USD",
-        "entry": 0.418462,
+        "entry": 1.083077,
         "entryDate": "2025-12-05",
         "exchange": "",
         "exit": 2.74,
@@ -201,13 +216,41 @@
         "id": "rt:s5",
         "kind": "Options",
         "mult": 100,
-        "pnl": -6036.0,
-        "pnlCad": -8148.6,
-        "pnlPct": -5.547794,
+        "pnl": -4308.0,
+        "pnlCad": -5815.8,
+        "pnlPct": -1.52983,
         "qty": 26.0,
         "side": "COVER",
         "status": "closed",
         "symbol": "BBAI 21JAN28 5.00 PUT",
+        "tags": []
+      },
+      {
+        "account": "Trading",
+        "currency": "USD",
+        "entry": 0.171429,
+        "entryDate": "2025-12-12",
+        "exchange": "",
+        "exit": 2.64,
+        "exitDate": "2025-12-18",
+        "fees": 0.0,
+        "fills": [
+          "SELL TO OPEN",
+          "BUY (close + open)",
+          "BUY TO CLOSE"
+        ],
+        "grade": "",
+        "holdDays": 6,
+        "id": "rt:s4",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": -1728.0,
+        "pnlCad": -2332.8,
+        "pnlPct": -14.4,
+        "qty": 7.0,
+        "side": "COVER",
+        "status": "closed",
+        "symbol": "BBAI 19DEC25 6.00 PUT",
         "tags": []
       }
     ],

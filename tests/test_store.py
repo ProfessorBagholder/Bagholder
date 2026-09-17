@@ -767,6 +767,7 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(store.activity_pull_due(now=tuesday_1400))
 
     def test_daily_path_does_not_page_whole_history_when_rows_exist(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
         bounds = bagholder.activity_sync_bounds()
         self.assertFalse(bounds["full_history"])
@@ -806,6 +807,7 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(str(cond["startDate"]).startswith("2024-06-01"))
 
     def test_daily_window_reaches_back_past_rows_filed_under_a_later_day(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
         """2026-09-08: a card purchase from the evening of the 8th was stored under the 9th (UTC),
         so a window starting at the newest stored day skipped the dividend paid on the 8th."""
         late = _ws_item()
@@ -827,6 +829,7 @@ class StoreTest(unittest.TestCase):
         self.assertNotIn("startDate", cond)
 
     def test_existing_rows_make_daily_sync_incremental(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
         store.insert_local(
             {

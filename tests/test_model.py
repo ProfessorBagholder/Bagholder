@@ -274,7 +274,7 @@ class FifoPortTest(unittest.TestCase):
         self.assertEqual(r["closed"][0]["exitPrice"], 0)
         self.assertAlmostEqual(r["closed"][0]["pnl"], 474.75)
 
-    def test_same_day_roll_folds_into_far_contract(self):
+    def test_same_day_contracts_keep_separate_execution_basis(self):
         r = model.match_fifo([
             act(id="aug-sto", category="trade", activityType="OPTIONS_SELL", activitySubType="SELLTOOPEN",
                 rawType="OPTIONS_SELL", quantity=-1, unitPrice=3, netCashAmount=300, transactionDate="2026-01-01",
@@ -291,11 +291,50 @@ class FifoPortTest(unittest.TestCase):
         ])
         self.assertEqual(r["unmatched"], [])
         self.assertEqual(r["open"], [])
-        self.assertEqual(len(r["closed"]), 1)
-        self.assertEqual(r["closed"][0]["symbol"], "ZZZ 15JAN27 12.00 CALL")
-        self.assertAlmostEqual(r["closed"][0]["entryPrice"], 4)
-        self.assertAlmostEqual(r["closed"][0]["pnl"], 350)
-        self.assertIn("rolled", r["closed"][0]["flags"])
+        self.assertEqual(len(r["closed"]), 2)
+        self.assertEqual([t["entryPrice"] for t in r["closed"]], [3, 2])
+        self.assertEqual([t["pnl"] for t in r["closed"]], [200, 150])
+        self.assertTrue(all("rolled" not in t["flags"] for t in r["closed"]))
+
+    def test_intraday_option_execution_order_and_cash_conservation(self):
+        rows = []
+        for ident, clock, qty, price in [("a", "14:26", 5, .70),
+                ("b", "14:33", -5, .84), ("c", "14:40", 5, .87),
+                ("d", "15:11", -10, .27)]:
+            rows.append(act(id=ident, category="trade", source="wealthsimple",
+                activityType="OPTIONS_BUY" if qty > 0 else "OPTIONS_SELL",
+                activitySubType="BUYTOOPEN" if qty > 0 else "SELLTOOPEN",
+                rawType="OPTIONS_BUY" if qty > 0 else "OPTIONS_SELL",
+                quantity=qty, unitPrice=price, netCashAmount=-qty*price*100,
+                transactionDate="2026-09-09", occurredAt="2026-09-09T"+clock+":00Z",
+                symbol="XYZ 09SEP26 764.00 CALL"))
+        result = model.match_fifo(list(reversed(rows)))
+        self.assertEqual([t["openDirection"] for t in result["closed"]], ["LONG", "LONG"])
+        self.assertEqual([round(t["pnl"], 2) for t in result["closed"]], [70, -300])
+        self.assertEqual([(p["direction"], p["qty"], p["price"]) for p in result["open"]], [("SHORT", 5, .27)])
+        expiries = model.synthesize_expiries(rows, result["open"], "2026-09-10")
+        settled = model.match_fifo(rows + expiries)
+        self.assertFalse(settled["open"])
+        self.assertAlmostEqual(sum(t["pnl"] for t in settled["closed"]), -95)
+        self.assertAlmostEqual(sum(t["pnl"] for t in settled["closed"]), sum(r["netCashAmount"] for r in rows))
+
+    def test_complete_intraday_option_history_matches_cash_loss(self):
+        rows = []
+        for ident, clock, qty, price in [("a", "09:46", 5, 1.0),
+                ("b", "10:26", 5, .70), ("c", "10:33", -5, .84),
+                ("d", "10:40", 5, .87), ("e", "11:11", -10, .27)]:
+            rows.append(act(id=ident, category="trade", source="ws-export",
+                activityType="Trade", activitySubType="BUYTOOPEN" if qty > 0 else "SELLTOCLOSE",
+                quantity=qty, unitPrice=price, netCashAmount=-qty*price*100,
+                transactionDate="2026-09-09", occurredAt="2026-09-09T"+clock+":00Z",
+                symbol="XYZ 09SEP26 764.00 CALL"))
+        result = model.match_fifo(list(reversed(rows)))
+        self.assertFalse(result["open"])
+        self.assertFalse(result["unmatched"])
+        self.assertTrue(all(t["openDirection"] == "LONG" for t in result["closed"]))
+        self.assertEqual(sorted(round(t["pnl"], 2) for t in result["closed"]), [-300, -215, -80])
+        self.assertAlmostEqual(sum(t["pnl"] for t in result["closed"]), -595)
+        self.assertAlmostEqual(sum(t["pnl"] for t in result["closed"]), sum(r["netCashAmount"] for r in rows))
 
     def test_stkdis_name_change_nets_to_zero(self):
         r = model.match_fifo([
@@ -574,17 +613,23 @@ class CryptoTest(unittest.TestCase):
                 quantity=2, unitPrice=150, netCashAmount=300, transactionDate="2026-02-01", symbol="ETH", currency="CAD", accountType="Ponzi"),
         ]
         fifo = model.match_fifo(acts)
-        self.assertEqual(fifo["unmatched"], [])
+        self.assertEqual([u["activityId"] for u in fifo["unmatched"]], ["ti"])
         self.assertEqual(fifo["open"], [])
-        self.assertEqual([(round(s["pnl"], 6), s["quantity"], s["entryPrice"]) for s in fifo["closed"]], [(50.0, 1.0, 100.0), (30.0, 1.0, 120.0)],
-                         "the coin sent out came off the first lot at cost; the sale closed one at 100 and one at 120")
+        self.assertEqual([(s["quantity"], s["entryPrice"]) for s in fifo["closed"]], [(1.0, 100.0), (1.0, 0.0)])
+        self.assertIn("missing-transfer-basis", fifo["closed"][1]["flags"])
         trades = model.build_trades(fifo["closed"], fifo["open"], [], {a["id"]: model.normalize_activity(a) for a in acts}, model.Securities([]), {})
-        self.assertEqual(len(trades), 1)
-        self.assertEqual((round(trades[0]["pnl"], 6), trades[0]["qty"]), (80.0, 2.0))
-        self.assertNotIn("to", {f["id"] for f in trades[0]["fills"]}, "the transfer out is not a fill of the trade")
-        # nothing held: nothing to take off, nothing unmatched, no trade
+        self.assertTrue(any(model.public_trade(t)["pnl"] is None for t in trades), "an inbound custody valuation is not original basis")
+        self.assertFalse(any(f["id"] == "to" for t in trades for f in t["fills"]))
         fifo = model.match_fifo([transfer("to2", 1, 200, "2026-01-10", True)])
-        self.assertEqual((fifo["closed"], fifo["open"], fifo["unmatched"]), ([], [], []))
+        self.assertEqual((fifo["closed"], fifo["open"]), ([], []))
+
+    def test_crypto_transfer_does_not_create_a_trade_fill(self):
+        transfer = act(id="x", activityType="CRYPTO_TRANSFER", rawType="CRYPTO_TRANSFER",
+                       activitySubType="OUT", quantity=2, unitPrice=50, netCashAmount=-100,
+                       transactionDate="2026-01-01", symbol="BTC", currency="CAD")
+        normalized = model.normalize_activity(transfer)
+        self.assertEqual((normalized["category"], normalized["kind"]), ("transfer", "Crypto"))
+        self.assertEqual(model.match_fifo([normalized])["closed"], [])
 
     def test_crypto_buy_sell_and_reward(self):
         acts = [
@@ -1220,6 +1265,49 @@ class QuoteTest(unittest.TestCase):
         self.assertEqual((by[("BTC", "Shares")]["priceSource"], by[("BTC", "Shares")]["last"], round(by[("BTC", "Shares")]["mv"], 2)), ("fill", 1.75, 8142.75), "the share keeps its fill price rather than the coin's")
         self.assertTrue(model.quote_fits({"price": 1.0}, "Shares"), "a quote with no source stated is the kind's own")
         self.assertFalse(model.quote_fits({"price": 1.0, "source": "tmx"}, "Crypto"))
+
+    def test_crypto_position_uses_broker_balance_when_activity_precision_is_wrong(self):
+        acts = [
+            act(id="c1", category="trade", activityType="CRYPTO_BUY", rawType="CRYPTO_BUY", quantity=5000,
+                unitPrice=2, netCashAmount=-10000, transactionDate="2026-01-05", symbol="BTC", currency="CAD",
+                accountType="Crypto", securityId="sec-btc"),
+        ]
+        snapshot = {
+            "activities": acts,
+            "accounts": [{"id": "crypto-1", "nickname": "Crypto", "unifiedAccountType": "Crypto"}],
+            "balances": [{"accountId": "crypto-1", "securityId": "sec-btc", "quantity": 0.2}],
+            "navHistory": [], "navByAccount": {}, "syncedAt": "", "tradeGroups": [], "notes": {},
+            "securities": [{"id": "sec-btc", "symbol": "BTC", "currency": "CAD"}],
+        }
+        base = model.build_base(snapshot, {"fx": {}, "benchmark": {}, "quotes": {"BTC": {"price": 100000}}}, {}, today="2026-09-06")
+        btc = next(p for p in base["positions"] if p["symbol"] == "BTC")
+        self.assertEqual((btc["qty"], btc["rawQty"], btc["balanceReconciled"], btc["mv"]), (0.2, 5000, True, 20000))
+
+    def test_share_position_uses_broker_balance_when_activity_feed_is_stale(self):
+        acts = [buy("s1", "AAA", 100, 10, "2026-01-05", accountType="TFSA", securityId="sec-aaa")]
+        snapshot = {
+            "activities": acts,
+            "accounts": [{"id": "tfsa-1", "nickname": "TFSA", "unifiedAccountType": "TFSA"}],
+            "balances": [{"accountId": "tfsa-1", "securityId": "sec-aaa", "quantity": 80}],
+            "navHistory": [], "navByAccount": {}, "syncedAt": "", "tradeGroups": [], "notes": {},
+            "securities": [{"id": "sec-aaa", "symbol": "AAA", "currency": "CAD"}],
+        }
+        base = model.build_base(snapshot, {"fx": {}, "benchmark": {}, "quotes": {"AAA": {"price": 15}}}, {}, today="2026-09-06")
+        aaa = next(p for p in base["positions"] if p["symbol"] == "AAA")
+        self.assertEqual((aaa["qty"], aaa["rawQty"], aaa["balanceReconciled"], aaa["mv"]), (80, 100, True, 1200))
+
+    def test_broker_inventory_hides_a_closed_activity_position(self):
+        acts = [buy("s1", "AAA", 100, 10, "2026-01-05", accountType="TFSA", securityId="sec-old-aaa")]
+        snapshot = {
+            "activities": acts,
+            "accounts": [{"id": "tfsa-1", "nickname": "TFSA", "unifiedAccountType": "TFSA"}],
+            "balances": [],
+            "balancesReadAt": "2026-09-06T12:00:00Z",
+            "navHistory": [], "navByAccount": {}, "syncedAt": "", "tradeGroups": [], "notes": {},
+            "securities": [{"id": "sec-old-aaa", "symbol": "AAA", "currency": "CAD"}],
+        }
+        base = model.build_base(snapshot, {"fx": {}, "benchmark": {}, "quotes": {"AAA": {"price": 15}}}, {}, today="2026-09-06")
+        self.assertFalse(any(p["symbol"] == "AAA" for p in base["positions"]))
 
     def test_refresh_quotes_respects_the_interval(self):
         with tempfile.TemporaryDirectory() as tmp:
