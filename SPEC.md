@@ -4,6 +4,23 @@ This file is the authority on what the app shows and how each figure is computed
 
 The model is defined by `model.py`, the reference implementation; the iOS and Android apps carry their own implementations of it (`ios/Bagholder/Model.swift` + `ModelView.swift`, `android/model`), and the shared cases in `tests/cases` hold all three to the same answers. On the desktop the model is served as JSON by `GET /api/model` and the page, `ledger.html`, only renders that JSON: no matching, no aggregation and no currency conversion of its own, the one exception being dividing an annual figure by twelve to show it per month. On a phone the same figures are computed on the device from the same rows. Sections 2 and 3 define the figures for every platform; sections 4 to 7 describe the web page; section 8 describes the phone.
 
+## Python data-correction integration
+
+The Python server in this change interprets exact option order legs separately,
+orders executions by timestamp before side, and never folds unrelated same-day
+contracts into a roll. It reads verified multileg and crypto-swap order details
+at sync time; incomplete orders remain excluded and retryable. Custody transfers
+and corporate/listing movements preserve known FIFO basis; missing acquisition
+basis is unknown, never the transfer's market valuation. DLR/DLR.U movements
+carry cost through historical FX. Complete-account imports explicitly replace
+mapped date windows without deleting raw synced history. Incomplete-basis
+trades are excluded from performance statistics and their public P&L is null.
+
+These Python corrections supersede the older heuristic descriptions below for
+the desktop server. See `docs/account-export-reconciliation.md` for the API,
+edge cases and integration scope. Native Swift/Kotlin parity remains pending;
+shared fixture changes record the corrected expectations for that review.
+
 ## 1. Principles
 
 - **Accuracy over convenience.** A number on the page is either exactly what this file defines or it is not shown. A blank is rendered as an em dash.

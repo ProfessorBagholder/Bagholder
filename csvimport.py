@@ -331,32 +331,52 @@ def map_statement(row, book_id):
 
 
 def map_canonical(row):
-    transaction_date = parse_date(_pick(row, "transaction_date", "date", "trade_date", "activity_date"))
+    transaction_date = parse_date(_pick(row, "effective_date", "transaction_date", "date", "trade_date", "activity_date"))
     if not transaction_date:
         return None
     activity_type = _pick(row, "activity_type", "type")
     sub = _pick(row, "activity_sub_type", "activity_subtype", "sub_type", "subtype")
-    return {
+    exported = bool(row.get("effective_date"))
+    symbol = _pick(row, "symbol", "ticker")
+    occ = re.fullmatch(r"(\S+)\s*(\d{6})([CP])(\d{8})", symbol)
+    if occ:
+        root, day, right, strike = occ.groups()
+        symbol = "%s %s %.2f %s" % (root, datetime.strptime(day, "%y%m%d").strftime("%d%b%y").upper(), int(strike) / 1000, "CALL" if right == "C" else "PUT")
+    quantity = parse_number(_pick(row, "quantity", "qty"))
+    price = parse_number(_pick(row, "unit_price", "price", "fill_price"))
+    cash = parse_number(_pick(row, "net_cash_amount", "amount", "net_amount", "net_cash"))
+    commission = abs(parse_number(_pick(row, "commission", "fee", "fees")))
+    if exported and model.is_option_symbol(symbol):
+        price /= 100.0
+        if activity_type == "Trade":
+            short = _pick(row, "direction").upper() == "SHORT"
+            sub = ("SELLTOOPEN" if short else "SELLTOCLOSE") if quantity < 0 else ("BUYTOCLOSE" if short else "BUYTOOPEN")
+    aid = _pick(row, "account_id", "account")
+    account_type = _pick(row, "account_type")
+    result = {
         "id": str(uuid.uuid4()),
-        "occurredAt": transaction_date,
+        "occurredAt": transaction_date + "T" + row["effective_time"] if exported and row.get("effective_time") else transaction_date,
         "transactionDate": transaction_date,
         "settlementDate": parse_date(_pick(row, "settlement_date", "settle_date")) or transaction_date,
-        "accountId": _pick(row, "account_id", "account"),
-        "accountType": _pick(row, "account_type"),
+        "accountId": aid,
+        "accountType": (account_type + " (" + aid + ")") if exported else account_type,
         "activityType": activity_type or "Unknown",
         "activitySubType": sub,
         "description": _pick(row, "description", "memo", "details"),
         "direction": _pick(row, "direction").upper(),
-        "symbol": _pick(row, "symbol", "ticker"),
+        "symbol": symbol,
         "name": _pick(row, "name", "security_name", "instrument"),
-        "currency": (_pick(row, "currency", "ccy") or "CAD").upper(),
-        "quantity": parse_number(_pick(row, "quantity", "qty")),
-        "unitPrice": parse_number(_pick(row, "unit_price", "price", "fill_price")),
-        "commission": abs(parse_number(_pick(row, "commission", "fee", "fees"))),
-        "netCashAmount": parse_number(_pick(row, "net_cash_amount", "amount", "net_amount", "net_cash")),
+        "currency": (_pick(row, "currency", "ccy") or ("" if exported else "CAD")).upper(),
+        "quantity": quantity,
+        "unitPrice": price,
+        "commission": commission,
+        "netCashAmount": cash,
         "category": categorize(activity_type, sub),
-        "source": "canonical",
+        "source": "ws-export" if exported else "canonical",
     }
+    if exported and account_type == "Crypto":
+        result["rawType"] = "CRYPTO_EXPORT"
+    return result
 
 
 def map_legacy(row):
@@ -462,14 +482,39 @@ def parse_csv(text, name=""):
         activities.append(activity)
         key = activity.get("activityType") or activity.get("category")
         counts[key] = counts.get(key, 0) + 1
+    # Empty currencies on expiry / corporate actions refer to the instrument,
+    # not CAD by default. Keep ambiguous cases blank for the model to flag.
+    currencies = {}
+    for a in activities:
+        if a["symbol"] and a["currency"]:
+            currencies.setdefault((a["accountId"], a["symbol"]), set()).add(a["currency"])
+    for a in activities:
+        if a["source"] == "ws-export" and not a["currency"]:
+            known = currencies.get((a["accountId"], a["symbol"]), set())
+            if len(known) == 1:
+                a["currency"] = next(iter(known))
+            elif a["symbol"] in ("DLR", "DLR.U"):
+                a["currency"] = "USD" if a["symbol"] == "DLR.U" else "CAD"
     return {"format": fmt, "activities": activities, "skipped": skipped, "footerStripped": footer, "countsByType": counts, "rowCount": len(table) - 1}
 
 
-def import_text(name, text):
+def import_text(name, text, reconcile=False, account_map=None):
     """Parse one CSV and merge it into the store. Returns the report."""
     report = parse_csv(text, name)
     rows = report["activities"]
-    merged = store.merge_local_rows(rows) if rows else {"added": 0, "duplicates": 0}
+    if rows and any(a.get("source") == "ws-export" for a in rows):
+        if not reconcile:
+            return {"ok": False, "error": "This account activity export requires reconciliation. Submit a complete account export with reconcile=true to replace overlapping dates without duplicating synced trades.", "requiresReconciliation": True}
+        if report["skipped"]:
+            return {"ok": False, "error": "Export has unparsed rows; no reconciliation was applied", "skipped": report["skipped"][:20]}
+        import export_history
+        try:
+            rows, windows = export_history.prepare(rows, store.snapshot(), account_map)
+            merged = store.reconcile_export(rows, windows)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+    else:
+        merged = store.merge_local_rows(rows) if rows else {"added": 0, "duplicates": 0}
     return {
         "ok": True,
         "file": _s(name).split("/")[-1],
@@ -481,6 +526,8 @@ def import_text(name, text):
         "skippedCount": len(report["skipped"]),
         "footerStripped": report["footerStripped"],
         "countsByType": report["countsByType"],
+        "reconciled": merged.get("reconciled", False),
+        "windows": merged.get("windows", []),
     }
 
 
