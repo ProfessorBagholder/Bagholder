@@ -7,6 +7,16 @@ import (
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
+var (
+	compactMemo    py.Memo[string]
+	accountMemo    py.Memo[string]
+	foldedMemo     py.Memo[string]
+	isOptionMemo   py.Memo[bool]
+	underlyingMemo py.Memo[string]
+	rightMemo      py.Memo[string]
+	expiryMemo     py.Memo[string]
+)
+
 var SpaceRE = regexp.MustCompile("[" + py.SpaceClass + `\x{200b}]+`)
 
 var (
@@ -24,18 +34,22 @@ var (
 )
 
 func Compact(s string) string {
-	return compactRE.ReplaceAllString(strings.ToUpper(py.Strip(s)), "")
+	return compactMemo.Get(s, func(s string) string { return compactRE.ReplaceAllString(strings.ToUpper(py.Strip(s)), "") })
 }
 
 func NormAccountName(s string) string {
-	return py.Strip(SpaceRE.ReplaceAllString(s, " "))
+	return accountMemo.Get(s, func(s string) string { return py.Strip(SpaceRE.ReplaceAllString(s, " ")) })
 }
 
 func folded(symbol string) string {
-	return SpaceRE.ReplaceAllString(strings.ToUpper(py.Strip(symbol)), " ")
+	return foldedMemo.Get(symbol, func(s string) string { return SpaceRE.ReplaceAllString(strings.ToUpper(py.Strip(s)), " ") })
 }
 
 func IsOption(symbol string) bool {
+	return isOptionMemo.Get(symbol, isOptionOf)
+}
+
+func isOptionOf(symbol string) bool {
 	u := folded(symbol)
 	if u == "" {
 		return false
@@ -47,6 +61,10 @@ func IsOption(symbol string) bool {
 }
 
 func Underlying(symbol string) string {
+	return underlyingMemo.Get(symbol, underlyingOf)
+}
+
+func underlyingOf(symbol string) string {
 	s := py.Strip(symbol)
 	if s == "" {
 		return "—"
@@ -76,6 +94,10 @@ func Multiplier(symbol string) float64 {
 }
 
 func Right(symbol string) string {
+	return rightMemo.Get(symbol, rightOf)
+}
+
+func rightOf(symbol string) string {
 	u := folded(symbol)
 	if strings.HasSuffix(u, " PUT") || strings.HasSuffix(u, " P") || sixPutRE.MatchString(u) {
 		return "PUT"
@@ -84,6 +106,10 @@ func Right(symbol string) string {
 }
 
 func Expiry(symbol string) string {
+	return expiryMemo.Get(symbol, expiryOf)
+}
+
+func expiryOf(symbol string) string {
 	m := expiryRE.FindStringSubmatch(folded(symbol))
 	if m == nil {
 		return ""

@@ -146,9 +146,11 @@ func collapseTrade(gid string, members []*Slice, locked bool, status string, act
 		}
 	}
 	var ids []string
+	seenID := map[string]bool{}
 	for _, s := range members_ {
 		for _, k := range []string{s.BuyActivityID, s.SellActivityID} {
-			if k != "" && !slices.Contains(ids, k) {
+			if k != "" && !seenID[k] {
+				seenID[k] = true
 				ids = append(ids, k)
 			}
 		}

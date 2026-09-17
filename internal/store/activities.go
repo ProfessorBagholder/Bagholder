@@ -94,9 +94,10 @@ func IsRealAccount(accountID string) bool {
 	return !invented[strings.ToLower(s)]
 }
 
+var compactReplacer = strings.NewReplacer(" ", "", "_", "", "-", "")
+
 func compactUpper(s string) string {
-	r := strings.NewReplacer(" ", "", "_", "", "-", "")
-	return r.Replace(strings.ToUpper(s))
+	return compactReplacer.Replace(strings.ToUpper(s))
 }
 
 func TradeSide(a *Activity) string {
@@ -187,34 +188,46 @@ func canonicalFromRow(a *Activity, source string) string {
 
 func CanonicalFromRow(a *Activity, source string) string { return canonicalFromRow(a, source) }
 
-func scanActivity(rows *sql.Rows) (Activity, error) {
-	var id, canonicalID, occurredAt, transactionDate, settlementDate, accountID, bookID, fifoID, accountType, activityType, activitySubType, description, direction, symbol, name, currency, category, source, rawType, aftType, counterSymbol, securityID sql.NullString
-	var quantity, unitPrice, commission, netCashAmount, balance realCell
-	if err := rows.Scan(&id, &canonicalID, &occurredAt, &transactionDate, &settlementDate, &accountID, &bookID, &fifoID, &accountType, &activityType, &activitySubType, &description, &direction, &symbol, &name, &currency, &quantity, &unitPrice, &commission, &netCashAmount, &category, &balance, &source, &rawType, &aftType, &counterSymbol, &securityID); err != nil {
+type activityScanner struct {
+	id, canonicalID, occurredAt, transactionDate, settlementDate, accountID, bookID, fifoID, accountType, activityType, activitySubType, description, direction, symbol, name, currency, category, source, rawType, aftType, counterSymbol, securityID sql.NullString
+	quantity, unitPrice, commission, netCashAmount, balance                                                                                                                                                                                            realCell
+	dest                                                                                                                                                                                                                                               []any
+}
+
+func newActivityScanner() *activityScanner {
+	c := &activityScanner{}
+	c.dest = []any{&c.id, &c.canonicalID, &c.occurredAt, &c.transactionDate, &c.settlementDate, &c.accountID, &c.bookID, &c.fifoID, &c.accountType, &c.activityType, &c.activitySubType, &c.description, &c.direction, &c.symbol, &c.name, &c.currency, &c.quantity, &c.unitPrice, &c.commission, &c.netCashAmount, &c.category, &c.balance, &c.source, &c.rawType, &c.aftType, &c.counterSymbol, &c.securityID}
+	return c
+}
+
+func (c *activityScanner) scan(rows *sql.Rows) (Activity, error) {
+	if err := rows.Scan(c.dest...); err != nil {
 		return Activity{}, err
 	}
-	settle := settlementDate.String
+	settle := c.settlementDate.String
 	if settle == "" {
-		settle = transactionDate.String
+		settle = c.transactionDate.String
 	}
-	book := bookID.String
+	book := c.bookID.String
 	if book == "" {
-		book = accountID.String
+		book = c.accountID.String
 	}
-	fifo := fifoID.String
+	fifo := c.fifoID.String
 	if fifo == "" {
-		fifo = accountID.String
+		fifo = c.accountID.String
 	}
 	return Activity{
-		ID: id.String, CanonicalID: canonicalID.String, OccurredAt: occurredAt.String, TransactionDate: transactionDate.String,
-		SettlementDate: settle, AccountID: accountID.String, BookID: book, FifoID: fifo, AccountType: accountType.String,
-		ActivityType: activityType.String, ActivitySubType: activitySubType.String, Description: description.String,
-		Direction: direction.String, Symbol: symbol.String, Name: name.String, Currency: currency.String,
-		Quantity: quantity.or0(), UnitPrice: unitPrice.or0(), Commission: commission.or0(),
-		NetCashAmount: netCashAmount.or0(), Category: category.String, Balance: balance.v, Source: source.String,
-		RawType: rawType.String, AftType: aftType.String, CounterSymbol: counterSymbol.String, SecurityID: securityID.String,
+		ID: c.id.String, CanonicalID: c.canonicalID.String, OccurredAt: c.occurredAt.String, TransactionDate: c.transactionDate.String,
+		SettlementDate: settle, AccountID: c.accountID.String, BookID: book, FifoID: fifo, AccountType: c.accountType.String,
+		ActivityType: c.activityType.String, ActivitySubType: c.activitySubType.String, Description: c.description.String,
+		Direction: c.direction.String, Symbol: c.symbol.String, Name: c.name.String, Currency: c.currency.String,
+		Quantity: c.quantity.or0(), UnitPrice: c.unitPrice.or0(), Commission: c.commission.or0(),
+		NetCashAmount: c.netCashAmount.or0(), Category: c.category.String, Balance: c.balance.v, Source: c.source.String,
+		RawType: c.rawType.String, AftType: c.aftType.String, CounterSymbol: c.counterSymbol.String, SecurityID: c.securityID.String,
 	}, nil
 }
+
+func scanActivity(rows *sql.Rows) (Activity, error) { return newActivityScanner().scan(rows) }
 
 const selectActivities = "SELECT " + insertColumns + " FROM activities"
 
@@ -310,8 +323,9 @@ func (s *Store) InsertLocal(a Activity) (Activity, error) {
 
 func (s *Store) allActivities() ([]Activity, error) {
 	var out []Activity
+	sc := newActivityScanner()
 	err := s.each(selectActivities+" ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC", nil, func(rows *sql.Rows) error {
-		a, err := scanActivity(rows)
+		a, err := sc.scan(rows)
 		if err != nil {
 			return err
 		}

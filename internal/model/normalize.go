@@ -53,7 +53,17 @@ func shiftDate(iso string, days int) string {
 	return py.DateStr(t.AddDate(0, 0, days))
 }
 
+var whenMemo py.Memo[[2]string]
+
 func whenParts(occurred string) (string, string) {
+	p := whenMemo.Get(occurred, func(s string) [2]string {
+		d, c := whenPartsOf(s)
+		return [2]string{d, c}
+	})
+	return p[0], p[1]
+}
+
+func whenPartsOf(occurred string) (string, string) {
 	s := py.Strip(occurred)
 	if s == "" {
 		return "", ""
