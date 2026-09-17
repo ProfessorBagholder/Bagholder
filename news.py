@@ -17,6 +17,7 @@ import html
 import json
 import re
 import sys
+import threading
 import time
 import unicodedata
 import urllib.parse
@@ -54,11 +55,19 @@ KEEP = 4000           # items kept in the database, newest first: every listing'
 _last_call = {}
 
 
+_pace_lock = threading.Lock()
+LISTINGS_AT_ONCE = 4     # listings read side by side in a pass; each host stays paced across all of them
+
+
 def _pace(host, seconds=0.6):
-    wait = _last_call.get(host, 0) + seconds - time.time()
-    if wait > 0:
-        time.sleep(wait)
-    _last_call[host] = time.time()
+    """Wait for this host's next turn. Turns are handed out under a lock, so listings read side by
+    side still ask each host one at a time, `seconds` apart."""
+    with _pace_lock:
+        now = time.time()
+        turn = max(now, _last_call.get(host, 0) + seconds)
+        _last_call[host] = turn
+    if turn > now:
+        time.sleep(turn - now)
 
 
 def _s(v):
@@ -509,6 +518,16 @@ EXTRA_SOURCES = ("yahoo", "sa", "gnews")
 SOURCE_MINUTES = {"yahoo": FRESH_MINUTES, "sa": 30, "gnews": 30}
 
 
+def sources_for(symbol, exchange, currency, name=""):
+    """The sources beside the wire that have something to ask for a listing: Yahoo a ticker form,
+    Seeking Alpha a feed, Google a search. A listing with no venue and no currency is left to the wire."""
+    if symbol == MARKET[0] or market.tmx_form(exchange, currency) is None:
+        return []
+    have = {"yahoo": bool(yahoo_form(symbol, exchange, currency)), "sa": bool(sa_form(symbol, exchange, currency)),
+            "gnews": bool(google_queries(symbol, exchange, currency, name))}
+    return [k for k in EXTRA_SOURCES if have[k]]
+
+
 def _read_extra(key, symbol, exchange, currency, name, ssl_context):
     if key == "yahoo":
         return fetch_yahoo(symbol, exchange, currency, name, ssl_context)
@@ -555,7 +574,7 @@ def _due(source, symbol, exchange, now):
 
 
 def fetch_listing(symbol, exchange, currency, ssl_context=None, now=None, name="", force=False):
-    """Every source's items for one listing, merged newest first: (wire, rows, sources that answered).
+    """Every source's items for one listing, merged newest first: (wire, rows, sources asked).
 
     The wire and every source that is due are read at once. A source that fails, answers with
     nothing, or is not due this pass keeps the items it had stored, so its stories stay on the list
@@ -567,9 +586,7 @@ def fetch_listing(symbol, exchange, currency, ssl_context=None, now=None, name="
     if symbol == MARKET[0]:
         src, rows = fetch_symbol(symbol, exchange, currency, ssl_context, now)
         return src, rows, ({src} if rows is not None else set())
-    # an ambiguous ticker with no venue and no currency is left to the wire, which keeps only what names it
-    placed = market.tmx_form(exchange, currency) is not None
-    extras = [k for k in EXTRA_SOURCES if placed and (force or _due(k, symbol, exchange, now))]
+    extras = [k for k in sources_for(symbol, exchange, currency, name) if force or _due(k, symbol, exchange, now)]
     results = {}
     with ThreadPoolExecutor(max_workers=1 + len(extras)) as pool:
         wire = pool.submit(fetch_symbol, symbol, exchange, currency, ssl_context, now)
@@ -585,6 +602,7 @@ def fetch_listing(symbol, exchange, currency, ssl_context=None, now=None, name="
     answered = set(results) | ({src} if primary is not None else set())
     if not answered:
         return src, None, answered
+    answered |= set(extras)      # every source asked this pass waits its turn again, a failing one too
     stored, stored_feed = {}, {}
     for r in store.news_for(symbol, exchange):
         row = {"id": r["id"], "headline": r["headline"], "source": r["wire"], "url": r["url"], "publishedAt": r["publishedAt"],
@@ -740,35 +758,55 @@ def fetch_symbol(symbol, exchange, currency, ssl_context=None, now=None):
 
 
 def stale(listings, now=None, minutes=FRESH_MINUTES):
-    """The listings whose news is older than `minutes`, as (symbol, exchange, currency, name); a
-    listing given without a name has none."""
+    """The listings with a source to read, as (symbol, exchange, currency, name): the wire older than
+    `minutes`, or any source beside it that has something to ask and is due. Freshness is each
+    source's own: a listing whose wire was just read by a copy of the app that did not ask the other
+    sources, or by a pass where one of them was not yet due, still has them to read."""
     now = now or datetime.now(timezone.utc)
     fetched = store.news_fetched_at()
     out = []
     for listing in listings:
         symbol, exchange, currency, name = (tuple(listing) + ("",))[:4]
-        key = store.news_key(symbol, exchange)
-        last = fetched.get(key) or ""
+        last = fetched.get(store.news_key(symbol, exchange)) or ""
         try:
             age = now - datetime.fromisoformat(last.replace("Z", "+00:00")) if last else None
         except ValueError:
             age = None
-        if age is None or age > timedelta(minutes=minutes):
+        if age is None or age > timedelta(minutes=minutes) or any(_due(k, symbol, exchange, now) for k in sources_for(symbol, exchange, currency, name)):
             out.append((symbol, exchange, currency, name))
     return out
 
 
-def refresh(listings, ssl_context=None, now=None, on_new=None):
-    """Read every source for every stale listing; each answer replaces that listing's rows. Returns
-    how many answered. `on_new(symbol, exchange, rows, new_ids)` is handed everything the listing's
-    sources answered with and the ids it did not have before; what is worth telling about is the
-    notifier's to decide."""
-    done = 0
-    for listing in stale(listings, now=now):
+def refresh(listings, ssl_context=None, now=None, on_new=None, on_start=None, on_done=None, at_once=LISTINGS_AT_ONCE):
+    """Read every source for every stale listing, a few listings side by side; each answer replaces
+    that listing's rows. Returns how many answered. `on_new(symbol, exchange, rows, new_ids)` is handed
+    everything the listing's sources answered with and the ids it did not have before; what is worth
+    telling about is the notifier's to decide. `on_start(listings)` is told what the pass will read and
+    `on_done(listing, answered)` each listing as it lands, so a page can say a read is under way and
+    show each listing's items as they arrive rather than at the end of the pass."""
+    due = stale(listings, now=now)
+    if on_start:
+        on_start(due)
+
+    def one(listing):
         symbol, exchange, currency, name = (tuple(listing) + ("",))[:4]
-        src, rows = read_listing(symbol, exchange, currency, ssl_context, now, name=name, on_new=on_new)
-        if rows is not None:
-            done += 1
+        rows = None
+        try:
+            _, rows = read_listing(symbol, exchange, currency, ssl_context, now, name=name, on_new=on_new)
+        except Exception as e:
+            sys.stderr.write("bagholder news: %s read failed: %s\n" % (symbol, str(e) or e.__class__.__name__))
+        finally:
+            if on_done:
+                try:
+                    on_done(listing, rows is not None)
+                except Exception:
+                    pass
+        return rows is not None
+
+    if not due:
+        return 0
+    with ThreadPoolExecutor(max_workers=max(1, min(at_once, len(due)))) as pool:
+        done = sum(1 for ok in pool.map(one, due) if ok)
     if done:
         store.trim_news(KEEP)
     return done

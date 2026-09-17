@@ -724,7 +724,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-16.1"
+PROTOCOL = "2026-09-17.1"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5766,17 +5766,36 @@ def news_listings():
     return out
 
 
+_news_pass = {"left": set()}      # bare symbols the running news pass has still to read ("*" the market feed)
+_news_pass_lock = threading.Lock()
+
+
+def news_reading():
+    with _news_pass_lock:
+        return sorted(_news_pass["left"])
+
+
 @single_flight("news")
 def refresh_news():
-    """The wires for every listing whose news is older than fifteen minutes. Never raises."""
+    """Every source for every listing with one due. Never raises. Each listing's items reach the
+    model as it lands, and the listings still to read are in the status, so the News card says a read
+    is under way instead of `No news.` while a pass runs."""
+    key = lambda listing: (market.tmx_symbol(listing[0]) or _s(listing[0])).upper()
+    def start(due):
+        with _news_pass_lock:
+            _news_pass["left"] = {key(l) for l in due}
+    def done(listing, answered):
+        with _news_pass_lock:
+            _news_pass["left"].discard(key(listing))
+        model.invalidate()
     try:
-        n = news.refresh(news_listings(), _ssl_context(), on_new=note_wire_releases)
-        if n:
-            model.invalidate()
-        return n
+        return news.refresh(news_listings(), _ssl_context(), on_new=note_wire_releases, on_start=start, on_done=done)
     except Exception as e:
         sys.stderr.write("bagholder news: refresh failed: %s\n" % e)
         return 0
+    finally:
+        with _news_pass_lock:
+            _news_pass["left"] = set()
 
 
 def news_loop():
@@ -6675,6 +6694,7 @@ def status_payload():
             "updating": str(_state.get("updating") or ""),
             "updateError": str(_state.get("updateError") or ""),
             "notify": notify.status(),
+            "newsReading": news_reading(),
         }
 
 

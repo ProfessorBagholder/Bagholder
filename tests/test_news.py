@@ -492,6 +492,23 @@ class MergeTest(unittest.TestCase):
         get.assert_not_called()
         self.assertIsNone(news.fetch_sa("HG", "CSE", "CAD"))
 
+    def test_a_listing_is_due_while_any_of_its_sources_is(self):
+        """Freshness is each source's own: a wire read moments ago by a copy of the app that asked
+        nothing else leaves the other sources to read, and a source with nothing to ask keeps nothing due."""
+        now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+        store.replace_news("CH", "TSX-V", "tmx", [self.row("tmx:1", "Wire item", "2026-09-16T11:00:00Z")], now=now)
+        store.replace_news("HG", "CSE", "tmx", [self.row("tmx:2", "Wire item", "2026-09-16T11:00:00Z")], now=now)
+        listings = [("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), ("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")]
+        self.assertEqual([l[0] for l in news.stale(listings, now=now + timedelta(minutes=1))], ["CH", "HG"], "the wire is fresh, the other sources never read")
+        self.assertNotIn("sa", news.sources_for("HG", "CSE", "CAD", "Hydrograph Clean Power Inc."), "Seeking Alpha has no CSE feed")
+        started, landed = [], []
+        with mock.patch.object(news, "fetch_symbol", return_value=("tmx", [])), mock.patch.object(news, "_read_extra", return_value=[]):
+            self.assertEqual(news.refresh(listings, now=now + timedelta(minutes=1), on_start=lambda due: started.extend(l[0] for l in due),
+                                          on_done=lambda l, ok: landed.append((l[0], ok))), 2)
+        self.assertEqual((sorted(started), sorted(landed)), (["CH", "HG"], [("CH", True), ("HG", True)]))
+        self.assertEqual(news.stale(listings, now=now + timedelta(minutes=2)), [], "every source read: nothing due, a source with nothing to ask included")
+        self.assertEqual([l[0] for l in news.stale(listings, now=now + timedelta(minutes=17))], ["CH", "HG"])
+
     def test_a_listing_with_no_venue_is_left_to_the_wire(self):
         with mock.patch.object(news, "fetch_symbol", return_value=("nasdaq", [])), mock.patch.object(news, "_read_extra") as extra:
             news.read_listing("F", "", "")
@@ -534,7 +551,7 @@ class StoreTest(unittest.TestCase):
         listings = [("SHOP", "TSX", "CAD"), ("NVDA", "NASDAQ", "USD"), ("BROKEN", "TSX", "CAD")]
         with mock.patch.object(news, "fetch_symbol", side_effect=fake), mock.patch.object(news, "_read_extra", side_effect=others), mock.patch.object(news.sys, "stderr"):
             self.assertEqual(news.refresh(listings, now=now), 2, "a listing no source answers for leaves nothing behind and is asked again next time")
-            self.assertEqual(calls, ["SHOP", "NVDA", "BROKEN"])
+            self.assertEqual(sorted(calls), ["BROKEN", "NVDA", "SHOP"], "listings are read side by side")
             calls.clear()
             self.assertEqual(news.refresh(listings, now=now), 0)
             self.assertEqual(calls, ["BROKEN"], "fresh listings are not asked again within fifteen minutes")
