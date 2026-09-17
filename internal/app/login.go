@@ -100,7 +100,7 @@ func cdpGet(port int, path string, timeout time.Duration) ([]byte, error) {
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return io.ReadAll(resp.Body)
 }
 
 func cdpList(port int, timeout time.Duration) []map[string]any {
