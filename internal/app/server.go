@@ -65,6 +65,15 @@ func writeOK(r *http.Request) bool {
 	return strings.TrimSpace(r.Header.Get("X-Bagholder")) != ""
 }
 
+func (a *App) announceReached(r *http.Request, port int) {
+	if a.cfg.BindHost == "127.0.0.1" || !a.local(r) || !a.hostOK(r, port) {
+		return
+	}
+	a.reachedOnce.Do(func() {
+		fmt.Printf("Bagholder  http://%s\n", strings.ToLower(strings.TrimSpace(r.Host)))
+	})
+}
+
 func startupLine(bindHost string, port int) string {
 	if bindHost != "127.0.0.1" {
 		return net.JoinHostPort(bindHost, strconv.Itoa(port))
@@ -186,6 +195,7 @@ func flag(v string) bool { return v == "1" || v == "true" || v == "yes" }
 func (a *App) handle(port int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rs := &responder{w: w, r: r, code: 200}
+		a.announceReached(r, port)
 		defer func() {
 			if rec := recover(); rec != nil {
 				a.logf("bagholder %s - request failed: %v\n", clientIP(r), rec)

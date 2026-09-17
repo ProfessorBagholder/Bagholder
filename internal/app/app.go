@@ -182,10 +182,11 @@ type App struct {
 	shortsMu     sync.Mutex
 	universeKick chan struct{}
 
-	viewMu     sync.Mutex
-	view       *miniWS
-	viewTarget string
-	cast       screencast
+	viewMu      sync.Mutex
+	view        *miniWS
+	viewTarget  string
+	cast        screencast
+	reachedOnce sync.Once
 
 	serverMu sync.Mutex
 	server   *serverHandle
