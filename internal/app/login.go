@@ -924,6 +924,79 @@ func (a *App) shotLoop(attempt int) {
 	}
 }
 
+func safeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		if i := strings.IndexAny(raw, "?#"); i >= 0 {
+			return raw[:i]
+		}
+		return raw
+	}
+	return u.Scheme + "://" + u.Host + u.Path
+}
+
+func (a *App) loginTraceLoop(attempt int) {
+	if !flag(os.Getenv("BAGHOLDER_LOGIN_DEBUG")) {
+		return
+	}
+	for a.attemptIs(attempt) {
+		if !a.capturing() {
+			return
+		}
+		pages := cdpPages(DebugPorts[0])
+		if len(pages) == 0 {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		w, err := wsConnect(py.S(pages[0]["webSocketDebuggerUrl"]), secs(captureCallSec))
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		cdpCall(w, "Page.enable", nil, secs(captureCallSec))
+		cdpCall(w, "Network.enable", nil, secs(captureCallSec))
+		cdpCall(w, "Log.enable", nil, secs(captureCallSec))
+		cdpCall(w, "Runtime.enable", nil, secs(captureCallSec))
+		for a.attemptIs(attempt) {
+			if !a.capturing() {
+				w.close()
+				return
+			}
+			opcode, data, err := w.recvMessage(2 * time.Second)
+			if err != nil {
+				if errors.Is(err, errWSTimeout) {
+					continue
+				}
+				break
+			}
+			if opcode != 0x1 && opcode != 0x2 {
+				continue
+			}
+			var msg map[string]any
+			if json.Unmarshal(data, &msg) != nil {
+				break
+			}
+			p, _ := msg["params"].(map[string]any)
+			switch py.S(msg["method"]) {
+			case "Page.frameNavigated":
+				fr, _ := p["frame"].(map[string]any)
+				if py.S(fr["parentId"]) == "" {
+					a.logf("bagholder login: page %s\n", safeURL(py.S(fr["url"])))
+				}
+			case "Network.loadingFailed":
+				a.logf("bagholder login: request failed (%s) %s\n", py.S(p["type"]), py.S(p["errorText"]))
+			case "Log.entryAdded":
+				e, _ := p["entry"].(map[string]any)
+				if py.S(e["level"]) == "error" {
+					a.logf("bagholder login: page error %s\n", py.S(e["text"]))
+				}
+			}
+		}
+		w.close()
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (a *App) screencastLoop(attempt int) {
 	for a.attemptIs(attempt) {
 		if !a.capturing() {
@@ -1185,6 +1258,7 @@ func (a *App) startLoginBrowser() map[string]any {
 		a.cast.mu.Unlock()
 		go a.screencastLoop(attempt)
 		go a.shotLoop(attempt)
+		go a.loginTraceLoop(attempt)
 	}
 	return map[string]any{"ok": true}
 }
