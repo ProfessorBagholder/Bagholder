@@ -710,6 +710,21 @@ fn cast() -> &'static (Mutex<Cast>, Condvar) {
     C.get_or_init(|| (Mutex::new(Cast { frame: None, seq: 0 }), Condvar::new()))
 }
 
+/// Passkey requests refused the moment they are made.
+const NO_PASSKEYS: &str = r#"(() => {
+  const c = navigator.credentials;
+  if (!c || c.__bagholderNoPasskeys) return;
+  const refuse = () => Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"));
+  const get = c.get.bind(c), create = c.create.bind(c);
+  c.get = (o) => (o && o.publicKey ? refuse() : get(o));
+  c.create = (o) => (o && o.publicKey ? refuse() : create(o));
+  if (window.PublicKeyCredential) {
+    PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
+    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);
+  }
+  Object.defineProperty(c, "__bagholderNoPasskeys", { value: true });
+})();"#;
+
 fn screencast_loop(attempt: i64) {
     while attempt_is(attempt) {
         if !capturing() {
@@ -718,6 +733,18 @@ fn screencast_loop(attempt: i64) {
         let pages = cdp_pages(DEBUG_PORT);
         let page = match pages.first() { Some(p) => p.clone(), None => { std::thread::sleep(Duration::from_millis(500)); continue } };
         let mut ws = match Ws::connect(&f(&page, "webSocketDebuggerUrl"), CAPTURE_CALL) { Ok(w) => w, Err(_) => { std::thread::sleep(Duration::from_millis(500)); continue } };
+        // A passkey request opens Chromium's own security-key dialog, which is
+        // drawn outside the page: the stream never shows it and the page's
+        // clicks never reach it, so the window would wait on it for good. In
+        // every document the tab loads while this socket is open, a passkey
+        // request is refused at once instead, the way a browser with no
+        // authenticator refuses it, and the site carries on without it.
+        ws.call("Page.enable", None, CAPTURE_CALL);
+        ws.call("Page.addScriptToEvaluateOnNewDocument", Some(json!({"source": NO_PASSKEYS, "runImmediately": true})), CAPTURE_CALL);
+        ws.call("Runtime.evaluate", Some(json!({"expression": NO_PASSKEYS})), CAPTURE_CALL);
+        if f(&page, "url").starts_with("about:blank") {
+            ws.call("Page.navigate", Some(json!({"url": LOGIN_URL})), CAPTURE_CALL);
+        }
         ws.call("Page.startScreencast", Some(json!({"format": "jpeg", "quality": 60, "maxWidth": LOGIN_VIEW_SIZE.0, "maxHeight": LOGIN_VIEW_SIZE.1, "everyNthFrame": 1})), CAPTURE_CALL);
         loop {
             if !attempt_is(attempt) || !capturing() {
@@ -945,7 +972,10 @@ pub fn start_login_browser() -> Value {
         args.extend(["--no-sandbox".into(), "--disable-gpu".into(), "--disable-dev-shm-usage".into(), "--window-position=0,0".into(),
                      format!("--window-size={},{}", LOGIN_VIEW_SIZE.0, LOGIN_VIEW_SIZE.1)]);
     }
-    args.push(LOGIN_URL.into());
+    // in the page's own view the tab opens blank, and the stream's socket
+    // sends it to the sign-in page once passkey requests are refused there,
+    // so the page never gets to ask before that is in place
+    args.push(if login_view() { "about:blank".into() } else { LOGIN_URL.into() });
     let mut cmd = Command::new(&chrome);
     cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
