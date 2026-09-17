@@ -3594,6 +3594,72 @@ def login_frame():
 _cast = {"frame": None, "seq": 0, "cond": threading.Condition()}
 
 
+_shot = {"ws": None, "target": None}
+_shot_lock = threading.Lock()
+SHOT_EVERY_SEC = 0.7
+
+
+def _shot_drop():
+    with _shot_lock:
+        ws, _shot["ws"], _shot["target"] = _shot["ws"], None, None
+    if ws is not None:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
+def _shot_ws():
+    pages = _cdp_pages(DEBUG_PORTS[0])
+    if not pages:
+        _shot_drop()
+        return None
+    page = pages[0]
+    with _shot_lock:
+        if _shot["ws"] is not None and _shot["target"] == page.get("id"):
+            return _shot["ws"]
+    _shot_drop()
+    ws = _ws_connect(page["webSocketDebuggerUrl"], timeout=CAPTURE_CALL_SEC)
+    with _shot_lock:
+        _shot["ws"], _shot["target"] = ws, page.get("id")
+    return ws
+
+
+def _shot_frame():
+    try:
+        ws = _shot_ws()
+        if ws is None:
+            return None
+        r = _cdp_call(ws, "Page.captureScreenshot", {"format": "jpeg", "quality": 60}, timeout=CAPTURE_CALL_SEC)
+        data = ((r or {}).get("result") or {}).get("data")
+        return base64.b64decode(data) if data else None
+    except Exception:
+        _shot_drop()
+        return None
+
+
+def _shot_loop(attempt):
+    """A screenshot whenever no screencast frame arrived in the last interval, so a
+    window Chromium pushes no frames for is still drawn."""
+    last = -1
+    while _attempt_is(attempt):
+        with _lock:
+            if not _state.get("capturing"):
+                return
+        with _cast["cond"]:
+            seq = _cast["seq"]
+        if seq == last:
+            frame = _shot_frame()
+            if frame:
+                with _cast["cond"]:
+                    _cast["frame"] = frame
+                    _cast["seq"] += 1
+                    _cast["cond"].notify_all()
+        with _cast["cond"]:
+            last = _cast["seq"]
+        time.sleep(SHOT_EVERY_SEC)
+
+
 def _screencast_loop(attempt):
     """Chromium pushes the login window's frames as they change (Page.startScreencast)
     on a socket of its own; the latest frame waits for the page's stream. Runs while
@@ -3820,6 +3886,7 @@ def start_login_browser():
             with _cast["cond"]:
                 _cast["frame"], _cast["seq"] = None, 0
             threading.Thread(target=_screencast_loop, args=(attempt,), name="bagholder-screencast", daemon=True).start()
+            threading.Thread(target=_shot_loop, args=(attempt,), name="bagholder-shot", daemon=True).start()
         return {"ok": True}
     except Exception:
         return {
