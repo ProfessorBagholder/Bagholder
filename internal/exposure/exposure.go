@@ -4,9 +4,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
-	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,8 +81,6 @@ type Client struct {
 	vanguardMap  map[string]string
 	isharesMap   map[string]string
 	ninepoint    map[string]string
-	yahooCookie  string
-	yahooCrumb   string
 }
 
 func NewClient(m *market.Client) *Client {
@@ -814,43 +812,9 @@ func (c *Client) Evolve(symbol, name, exchange string) (*Breakdown, error) {
 	return &Breakdown{Sectors: sectors, Countries: map[string]float64{}, Holdings: holdings, Source: "Evolve ETFs"}, nil
 }
 
-const (
-	YahooCrumb   = "https://query2.finance.yahoo.com/v1/test/getcrumb"
-	YahooSummary = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=topHoldings&crumb=%s"
-)
+const YahooHoldingsModule = "topHoldings"
 
 var YahooSuffix = map[string]string{"TSX": ".TO", "TSX-V": ".V", "TSXV": ".V", "CSE": ".CN", "CBOE CANADA": ".NE", "NEO": ".NE"}
-
-func (c *Client) yahooSession() (string, string, error) {
-	c.mu.Lock()
-	if c.yahooCrumb != "" {
-		cookie, crumb := c.yahooCookie, c.yahooCrumb
-		c.mu.Unlock()
-		return cookie, crumb, nil
-	}
-	c.mu.Unlock()
-	c.pacer.Pace("fc.yahoo.com", PaceSec)
-	var cookies []string
-	req, _ := http.NewRequest(http.MethodGet, "https://fc.yahoo.com", nil)
-	req.Header.Set("User-Agent", UA)
-	client := &http.Client{Transport: c.Market.HTTP.Transport, Timeout: market.TimeoutSec * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	if resp, err := client.Do(req); err == nil {
-		for _, v := range resp.Header.Values("Set-Cookie") {
-			cookies = append(cookies, strings.Split(v, ";")[0])
-		}
-		resp.Body.Close()
-	}
-	cookie := strings.Join(cookies, "; ")
-	crumb, err := c.get(YahooCrumb, map[string]string{"Cookie": cookie})
-	if err != nil {
-		return "", "", err
-	}
-	crumb = strings.TrimSpace(crumb)
-	c.mu.Lock()
-	c.yahooCookie, c.yahooCrumb = cookie, crumb
-	c.mu.Unlock()
-	return cookie, crumb, nil
-}
 
 func YahooSymbol(symbol, exchange string) string {
 	return market.TMXSymbol(symbol) + YahooSuffix[strings.ToUpper(strings.TrimSpace(exchange))]
@@ -940,12 +904,15 @@ func sortedKeys(m map[string]rawNum) []string {
 }
 
 func (c *Client) YahooFund(symbol, name, exchange string) (*Breakdown, error) {
-	cookie, crumb, err := c.yahooSession()
+	resp, err := c.Market.Yahoo.Summary(YahooSymbol(symbol, exchange), YahooHoldingsModule)
 	if err != nil {
 		return nil, err
 	}
+	if resp.Status >= 300 {
+		return nil, &market.HTTPError{URL: resp.URL, Code: resp.Status, Msg: "HTTP " + strconv.Itoa(resp.Status)}
+	}
 	var d YahooSummaryData
-	if err := c.getJSON(strings.Replace(strings.Replace(YahooSummary, "%s", YahooSymbol(symbol, exchange), 1), "%s", crumb, 1), map[string]string{"Cookie": cookie, "Accept": "application/json"}, &d); err != nil {
+	if err := json.Unmarshal(resp.Body, &d); err != nil {
 		return nil, err
 	}
 	sectors, holdings := ParseYahooSummary(d)

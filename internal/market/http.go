@@ -110,9 +110,7 @@ type Client struct {
 	health map[string]Health
 	hmu    sync.Mutex
 
-	yahooMu           sync.Mutex
-	yahooNextAt       time.Time
-	yahooBackoffUntil time.Time
+	Yahoo *Yahoo
 
 	peekMu sync.Mutex
 	peek   map[string]peekHit
@@ -132,7 +130,7 @@ type peekHit struct {
 }
 
 func NewClient(st *store.Store) *Client {
-	return &Client{Store: st, HTTP: NewHTTPClient(), Now: func() time.Time { return time.Now().UTC() }, health: map[string]Health{}, peek: map[string]peekHit{}, notes: map[noteKey][]chainNote{}, pending: map[string]bool{}}
+	return &Client{Store: st, HTTP: NewHTTPClient(), Yahoo: NewYahoo(), Now: func() time.Time { return time.Now().UTC() }, health: map[string]Health{}, peek: map[string]peekHit{}, notes: map[noteKey][]chainNote{}, pending: map[string]bool{}}
 }
 
 func caBundle() *x509.CertPool {

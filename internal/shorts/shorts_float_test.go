@@ -5,9 +5,76 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
+	"github.com/ProfessorBagholder/Bagholder/internal/exposure"
+	"github.com/ProfessorBagholder/Bagholder/internal/market"
 )
+
+type yahooStub struct {
+	mu    sync.Mutex
+	urls  []string
+	pages map[string]string
+}
+
+func (y *yahooStub) Get(rawURL string, headers map[string]string) (*browserhttp.Response, error) {
+	y.mu.Lock()
+	y.urls = append(y.urls, rawURL)
+	y.mu.Unlock()
+	if rawURL == market.YahooWarmURL {
+		return &browserhttp.Response{Status: 200, URL: rawURL}, nil
+	}
+	if rawURL == market.YahooCrumbURL {
+		return &browserhttp.Response{Status: 200, Body: []byte("crumb"), URL: rawURL}, nil
+	}
+	if text, ok := y.pages[rawURL]; ok {
+		return &browserhttp.Response{Status: 200, Body: []byte(text), URL: rawURL}, nil
+	}
+	return &browserhttp.Response{Status: 404, URL: rawURL}, nil
+}
+
+func (y *yahooStub) count(needle string) int {
+	y.mu.Lock()
+	defer y.mu.Unlock()
+	n := 0
+	for _, u := range y.urls {
+		if strings.Contains(u, needle) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestShortsAndExposureShareOneYahooSession(t *testing.T) {
+	summary := `{"quoteSummary":{"result":[{"topHoldings":{"holdings":[{"symbol":"RY.TO","holdingName":"Royal Bank of Canada","holdingPercent":{"raw":1.0}}],"sectorWeightings":[{"financial_services":{"raw":1.0}}]}}]}}`
+	stats := `{"quoteSummary":{"result":[{"defaultKeyStatistics":{"floatShares":{"raw":400}}}]}}`
+	c, _ := newClient(t)
+	c.NoYahoo = false
+	y := &yahooStub{pages: map[string]string{
+		fmt.Sprintf(market.YahooSummaryURL, "GME", YahooModule, "crumb"):                                               stats,
+		fmt.Sprintf(market.YahooSummaryURL, exposure.YahooSymbol("ZZZ", "TSX"), exposure.YahooHoldingsModule, "crumb"): summary,
+	}}
+	c.Market.Yahoo.Open = func() (market.YahooDoer, error) { return y, nil }
+	if got := c.FloatShares("GME", "NYSE", "USD", ""); got == nil || *got != 400 {
+		t.Fatalf("float = %v", show(got))
+	}
+	rec, err := exposure.NewClient(c.Market).YahooFund("ZZZ", "Someone Else Global Equity ETF", "TSX")
+	if err != nil || rec == nil {
+		t.Fatalf("fund = %v, %v", rec, err)
+	}
+	if n := y.count(market.YahooWarmURL); n != 1 {
+		t.Errorf("warm-ups = %d", n)
+	}
+	if n := y.count(market.YahooCrumbURL); n != 1 {
+		t.Errorf("crumbs = %d", n)
+	}
+	if n := y.count("crumb=crumb"); n != 2 {
+		t.Errorf("asks under the one crumb = %d", n)
+	}
+}
 
 func finraPosition(rows []map[string]any) func(method, url, body string) (int, string, error) {
 	return func(method, url, body string) (int, string, error) {

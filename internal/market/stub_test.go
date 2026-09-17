@@ -45,7 +45,9 @@ func (s *stub) RoundTrip(req *http.Request) (*http.Response, error) {
 	answer := s.answer
 	s.mu.Unlock()
 	if strings.Contains(req.URL.Host, "yahoo.com") {
-		s.c.yahooNextAt = time.Time{}
+		s.c.Yahoo.mu.Lock()
+		s.c.Yahoo.nextAt = time.Time{}
+		s.c.Yahoo.mu.Unlock()
 	}
 	if answer == nil {
 		return nil, errNoRoute
