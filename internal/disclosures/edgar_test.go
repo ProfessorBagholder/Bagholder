@@ -399,3 +399,34 @@ func TestOfferingFormsAndAdministrativeFForms(t *testing.T) {
 		}
 	}
 }
+
+func TestTheTickerFileIsReadInKeyOrderWithTheLastEntryWinning(t *testing.T) {
+	tickers := `{"10": {"cik_str": "1045810", "ticker": "NVDA", "title": "NVIDIA CORP"}, ` +
+		`"9": {"cik_str": 999, "ticker": "nvda", "title": "OLD NVIDIA"}, ` +
+		`"2": {"cik_str": 1594805.0, "ticker": "SHOP", "title": "SHOPIFY INC."}, ` +
+		`"3": "not a row", "4": {"cik_str": 5, "ticker": "", "title": "blank"}}`
+	e, _ := newStubbedEdgar(t, func(u string) stubReply {
+		if u == TickersURL {
+			return stubReply{status: 200, ct: "application/json", body: tickers}
+		}
+		return stubReply{status: 404}
+	})
+	m, err := e.tickerMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]cikTitle{"NVDA": {1045810, "NVIDIA CORP"}, "SHOP": {1594805, "SHOPIFY INC."}}
+	if len(m) != len(want) || m["NVDA"] != want["NVDA"] || m["SHOP"] != want["SHOP"] {
+		t.Errorf("tickers = %v, want %v", m, want)
+	}
+	e2, _ := newStubbedEdgar(t, func(u string) stubReply {
+		return stubReply{status: 200, ct: "application/json", body: `[{"cik_str": 1, "ticker": "A", "title": "A Inc"}, {"cik_str": 2, "ticker": "A", "title": "A Corp"}]`}
+	})
+	m, err = e2.tickerMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m["A"]; got != (cikTitle{2, "A Corp"}) {
+		t.Errorf("a list reads in order: %v", got)
+	}
+}

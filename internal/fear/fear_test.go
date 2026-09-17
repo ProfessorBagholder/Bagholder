@@ -30,9 +30,9 @@ const cnnJSON = `{
 const cryptoJSON = `{"data": [{"value": "51", "value_classification": "Neutral", "timestamp": "1789516800"},
 	{"value": "69", "value_classification": "Greed", "timestamp": "1789430400"}]}`
 
-func jsonMap(t *testing.T, text string) map[string]any {
+func decode[T any](t *testing.T, text string) T {
 	t.Helper()
-	var out map[string]any
+	var out T
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestThePublishersOwnWordIsKeptWhereItGivesOne(t *testing.T) {
 }
 
 func TestTheReadingItsComparisonsItsSevenIndicatorsAndItsHistory(t *testing.T) {
-	rec := ParseStocks(jsonMap(t, cnnJSON))
+	rec := ParseStocks(decode[Stocks](t, cnnJSON))
 	if want := [4]any{"stocks", "CNN", 28.7, "Fear"}; headline(rec) != want {
 		t.Errorf("reading = %v, want %v", headline(rec), want)
 	}
@@ -102,16 +102,16 @@ func TestTheReadingItsComparisonsItsSevenIndicatorsAndItsHistory(t *testing.T) {
 }
 
 func TestAnAnswerWithNoScoreIsNoReading(t *testing.T) {
-	if got := ParseStocks(map[string]any{"fear_and_greed": map[string]any{}}); len(got) != 0 {
+	if got := ParseStocks(decode[Stocks](t, `{"fear_and_greed": {}}`)); len(got) != 0 {
 		t.Errorf("ParseStocks(no score) = %v, want empty", got)
 	}
-	if got := ParseStocks(nil); len(got) != 0 {
+	if got := ParseStocks(Stocks{}); len(got) != 0 {
 		t.Errorf("ParseStocks(nil) = %v, want empty", got)
 	}
 }
 
 func TestTheDaysOwnReadingAndTheDaysBehindIt(t *testing.T) {
-	rec := ParseCrypto(jsonMap(t, cryptoJSON))
+	rec := ParseCrypto(decode[Crypto](t, cryptoJSON))
 	if want := [4]any{"crypto", "Alternative.me", 51.0, "Neutral"}; headline(rec) != want {
 		t.Errorf("reading = %v, want %v", headline(rec), want)
 	}
@@ -138,7 +138,7 @@ func TestTheDaysOwnReadingAndTheDaysBehindIt(t *testing.T) {
 }
 
 func TestAnEmptyAnswerIsNoReading(t *testing.T) {
-	if got := ParseCrypto(jsonMap(t, `{"data": []}`)); len(got) != 0 {
+	if got := ParseCrypto(decode[Crypto](t, `{"data": []}`)); len(got) != 0 {
 		t.Errorf("ParseCrypto(empty) = %v, want empty", got)
 	}
 }
@@ -149,7 +149,7 @@ func TestAReadingIsStoredWholeAndReadBackWhole(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	rec := ParseStocks(jsonMap(t, cnnJSON))
+	rec := ParseStocks(decode[Stocks](t, cnnJSON))
 	st.SaveGauge("stocks", rec, "", fearVersion)
 	back := st.Gauge("stocks")
 	if back == nil {

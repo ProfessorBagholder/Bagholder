@@ -1,6 +1,7 @@
 package disclosures
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -63,24 +64,24 @@ func (e *Edgar) get(url string) ([]byte, string, error) {
 	return raw, ct, nil
 }
 
-func (e *Edgar) getJSON(url string) (map[string]any, error) {
+func (e *Edgar) getJSON(url string, v any) error {
 	raw, _, err := e.get(url)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		var list []any
-		if err2 := json.Unmarshal(raw, &list); err2 == nil {
-			out = map[string]any{}
-			for i, v := range list {
-				out[strconv.Itoa(i)] = v
-			}
-			return out, nil
+	if err := json.Unmarshal(raw, v); err != nil {
+		if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '[' && json.Valid(t) {
+			return nil
 		}
-		return nil, Unavailable("EDGAR returned unreadable data: %s", err)
+		return Unavailable("EDGAR returned unreadable data: %s", err)
 	}
-	return out, nil
+	return nil
+}
+
+type tickerRow struct {
+	CIK    py.JSONNum  `json:"cik_str"`
+	Ticker py.JSONText `json:"ticker"`
+	Title  py.JSONText `json:"title"`
 }
 
 func (e *Edgar) tickerMap() (map[string]cikTitle, error) {
@@ -89,32 +90,42 @@ func (e *Edgar) tickerMap() (map[string]cikTitle, error) {
 	if e.tickers != nil {
 		return e.tickers, nil
 	}
-	data, err := e.getJSON(TickersURL)
+	raw, _, err := e.get(TickersURL)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]cikTitle{}
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
+	var rows []tickerRow
+	var byKey map[string]py.JSONLoose[tickerRow]
+	if err := json.Unmarshal(raw, &byKey); err != nil {
+		var list []py.JSONLoose[tickerRow]
+		if err2 := json.Unmarshal(raw, &list); err2 != nil {
+			return nil, Unavailable("EDGAR returned unreadable data: %s", err)
+		}
+		for _, r := range list {
+			rows = append(rows, r.V)
+		}
+	} else {
+		keys := make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			a, ea := strconv.Atoi(keys[i])
+			b, eb := strconv.Atoi(keys[j])
+			if ea == nil && eb == nil {
+				return a < b
+			}
+			return keys[i] < keys[j]
+		})
+		for _, k := range keys {
+			rows = append(rows, byKey[k].V)
+		}
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, ea := strconv.Atoi(keys[i])
-		b, eb := strconv.Atoi(keys[j])
-		if ea == nil && eb == nil {
-			return a < b
-		}
-		return keys[i] < keys[j]
-	})
-	for _, k := range keys {
-		row, ok := data[k].(map[string]any)
-		if !ok {
-			continue
-		}
-		t := strings.ToUpper(py.S(row["ticker"]))
+	out := map[string]cikTitle{}
+	for _, row := range rows {
+		t := strings.ToUpper(string(row.Ticker))
 		if t != "" {
-			cik, _ := py.NumOK(row["cik_str"])
-			out[t] = cikTitle{int(cik), py.S(row["title"])}
+			out[t] = cikTitle{int(row.CIK.F), string(row.Title)}
 		}
 	}
 	e.tickers = out
@@ -193,11 +204,22 @@ func edgarTitle(form, description string) string {
 	return edgarTitles[f]
 }
 
-func strList(v any) []string {
-	raw, _ := v.([]any)
-	out := make([]string, len(raw))
-	for i, x := range raw {
-		out[i] = py.S(x)
+type submissions struct {
+	Filings struct {
+		Recent struct {
+			Form                  []py.JSONText `json:"form"`
+			FilingDate            []py.JSONText `json:"filingDate"`
+			PrimaryDocument       []py.JSONText `json:"primaryDocument"`
+			AccessionNumber       []py.JSONText `json:"accessionNumber"`
+			PrimaryDocDescription []py.JSONText `json:"primaryDocDescription"`
+		} `json:"recent"`
+	} `json:"filings"`
+}
+
+func strList(list []py.JSONText) []string {
+	out := make([]string, len(list))
+	for i, x := range list {
+		out[i] = string(x)
 	}
 	return out
 }
@@ -219,14 +241,13 @@ func (e *Edgar) Fetch(symbol, name, exchange, currency string, limit int, profil
 	if !usListed && name != "" && !NamesMatch(name, ct.title) {
 		return []Item{}, nil
 	}
-	sub, err := e.getJSON(fmt.Sprintf(SubmissionsURL, fmt.Sprintf("%010d", ct.cik)))
-	if err != nil {
+	var sub submissions
+	if err := e.getJSON(fmt.Sprintf(SubmissionsURL, fmt.Sprintf("%010d", ct.cik)), &sub); err != nil {
 		return nil, err
 	}
-	filings, _ := sub["filings"].(map[string]any)
-	recent, _ := filings["recent"].(map[string]any)
-	forms, dates, docs, accns := strList(recent["form"]), strList(recent["filingDate"]), strList(recent["primaryDocument"]), strList(recent["accessionNumber"])
-	descs := strList(recent["primaryDocDescription"])
+	recent := sub.Filings.Recent
+	forms, dates, docs, accns := strList(recent.Form), strList(recent.FilingDate), strList(recent.PrimaryDocument), strList(recent.AccessionNumber)
+	descs := strList(recent.PrimaryDocDescription)
 	n := len(forms)
 	if len(dates) < n {
 		n = len(dates)
@@ -369,20 +390,25 @@ func (e *Edgar) Content(row Row) ([]byte, string, error) {
 	}
 	idx := strings.LastIndex(url, "/")
 	base, primary := url[:idx], url[idx+1:]
-	listing, err := e.getJSON(base + "/index.json")
-	if err != nil {
+	var listing struct {
+		Directory struct {
+			Item []py.JSONLoose[struct {
+				Name py.JSONText `json:"name"`
+				Size py.JSONNum  `json:"size"`
+			}] `json:"item"`
+		} `json:"directory"`
+	}
+	if err := e.getJSON(base+"/index.json", &listing); err != nil {
 		return e.Document(row)
 	}
-	dir, _ := listing["directory"].(map[string]any)
-	items, _ := dir["item"].([]any)
 	type cand struct {
 		name string
 		size int
 	}
 	var cands []cand
-	for _, raw := range items {
-		it, _ := raw.(map[string]any)
-		n := py.S(it["name"])
+	for _, raw := range listing.Directory.Item {
+		it := raw.V
+		n := string(it.Name)
 		low := strings.ToLower(n)
 		if !(strings.HasSuffix(low, ".htm") || strings.HasSuffix(low, ".html") || strings.HasSuffix(low, ".txt") || strings.HasSuffix(low, ".xml")) {
 			continue
@@ -390,8 +416,7 @@ func (e *Edgar) Content(row Row) ([]byte, string, error) {
 		if strings.Contains(low, "index") || skipDocRE.MatchString(low) {
 			continue
 		}
-		size, _ := py.NumOK(it["size"])
-		cands = append(cands, cand{n, int(size)})
+		cands = append(cands, cand{n, int(it.Size.F)})
 	}
 	if len(cands) == 0 {
 		return e.Document(row)

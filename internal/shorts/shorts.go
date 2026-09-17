@@ -431,29 +431,30 @@ func (c *Client) yahooSession() (*browserhttp.Session, string) {
 
 func (c *Client) cboeUnits(symbol string, now time.Time) *float64 {
 	build := func(when time.Time) (string, map[string]map[string]any, bool) {
-		text, err := c.Market.GetText(CACboeURL, Headers)
-		if err != nil {
-			return "", nil, false
-		}
 		var d struct {
-			Data []map[string]any `json:"data"`
+			Data []struct {
+				Symbol    py.JSONText `json:"symbol"`
+				Security  py.JSONText `json:"security"`
+				MarketCap py.JSONText `json:"marketcap"`
+				Last      py.JSONText `json:"last"`
+			} `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(text), &d); err != nil {
+		if err := c.Market.GetJSON(CACboeURL, Headers, &d); err != nil {
 			return "", nil, false
 		}
 		rows := map[string]map[string]any{}
 		for _, r := range d.Data {
-			kind := strings.ToLower(strings.TrimSpace(py.S(r["security"])))
+			kind := strings.ToLower(strings.TrimSpace(string(r.Security)))
 			if kind != "etf" && kind != "cef" {
 				continue
 			}
-			cap, last := num(r["marketcap"]), num(r["last"])
+			cap, last := num(string(r.MarketCap)), num(string(r.Last))
 			if cap == nil || last == nil || *cap == 0 || *last == 0 {
 				continue
 			}
 			count := *cap / *last
 			if math.Abs(count-math.RoundToEven(count)) < 1e-6 {
-				rows[strings.ToUpper(strings.TrimSpace(py.S(r["symbol"])))] = map[string]any{"count": math.RoundToEven(count)}
+				rows[strings.ToUpper(strings.TrimSpace(string(r.Symbol)))] = map[string]any{"count": math.RoundToEven(count)}
 			}
 		}
 		return "cboe", rows, true

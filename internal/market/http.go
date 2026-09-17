@@ -270,7 +270,7 @@ func gunzipIfNeeded(raw []byte) []byte {
 
 var defaultGetHeaders = map[string]string{"User-Agent": UA, "Accept": "text/csv,application/json,*/*;q=0.8"}
 
-func (c *Client) GetText(rawURL string, headers map[string]string) (string, error) {
+func (c *Client) get(rawURL string, headers map[string]string) ([]byte, error) {
 	if headers == nil {
 		headers = defaultGetHeaders
 	}
@@ -279,13 +279,29 @@ func (c *Client) GetText(rawURL string, headers map[string]string) (string, erro
 		if StatusOf(err) != 404 {
 			c.NoteSource(SourceOfURL(rawURL), false, err)
 		}
-		return "", err
+		return nil, err
 	}
 	c.NoteSource(SourceOfURL(rawURL), true, nil)
+	return raw, nil
+}
+
+func (c *Client) GetText(rawURL string, headers map[string]string) (string, error) {
+	raw, err := c.get(rawURL, headers)
+	if err != nil {
+		return "", err
+	}
 	return string(raw), nil
 }
 
-func (c *Client) PostJSON(rawURL string, payload any, headers map[string]string) (map[string]any, error) {
+func (c *Client) GetJSON(rawURL string, headers map[string]string, v any) error {
+	raw, err := c.get(rawURL, headers)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(bytes.TrimPrefix(raw, []byte("\ufeff")), v)
+}
+
+func (c *Client) post(rawURL string, payload any, headers map[string]string) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -301,6 +317,22 @@ func (c *Client) PostJSON(rawURL string, payload any, headers map[string]string)
 		return nil, err
 	}
 	c.NoteSource(SourceOfURL(rawURL), true, nil)
+	return raw, nil
+}
+
+func (c *Client) PostJSONInto(rawURL string, payload any, headers map[string]string, v any) error {
+	raw, err := c.post(rawURL, payload, headers)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, v)
+}
+
+func (c *Client) PostJSON(rawURL string, payload any, headers map[string]string) (map[string]any, error) {
+	raw, err := c.post(rawURL, payload, headers)
+	if err != nil {
+		return nil, err
+	}
 	var out map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		var anyv any
@@ -347,21 +379,10 @@ func (c *Client) FetchRaw(rawURL string, headers map[string]string) ([]byte, err
 }
 
 func (c *Client) PostJSONList(rawURL string, payload any, headers map[string]string) ([]map[string]any, error) {
-	body, err := json.Marshal(payload)
+	raw, err := c.post(rawURL, payload, headers)
 	if err != nil {
 		return nil, err
 	}
-	hdrs := map[string]string{"User-Agent": UA, "Content-Type": "application/json", "Accept": "*/*"}
-	for k, v := range headers {
-		hdrs[k] = v
-	}
-	hdrs["Content-Length"] = strconv.Itoa(len(body))
-	raw, err := c.fetch(rawURL, hdrs, http.MethodPost, body)
-	if err != nil {
-		c.NoteSource(SourceOfURL(rawURL), false, err)
-		return nil, err
-	}
-	c.NoteSource(SourceOfURL(rawURL), true, nil)
 	var items []any
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, err
