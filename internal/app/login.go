@@ -30,6 +30,8 @@ const (
 	captureEverySec = 1.5
 )
 
+var shotEverySec = 700 * time.Millisecond
+
 func secs(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
 
 var macBrowsers = []string{
@@ -888,6 +890,36 @@ type screencast struct {
 	seq   int
 }
 
+func (a *App) publishFrame(frame []byte) {
+	if len(frame) == 0 {
+		return
+	}
+	a.cast.mu.Lock()
+	a.cast.frame = frame
+	a.cast.seq++
+	a.cast.cond.Broadcast()
+	a.cast.mu.Unlock()
+}
+
+func (a *App) shotLoop(attempt int) {
+	last := -1
+	for a.attemptIs(attempt) {
+		if !a.capturing() {
+			return
+		}
+		a.cast.mu.Lock()
+		seq := a.cast.seq
+		a.cast.mu.Unlock()
+		if seq == last {
+			a.publishFrame(a.loginFrame())
+		}
+		a.cast.mu.Lock()
+		last = a.cast.seq
+		a.cast.mu.Unlock()
+		time.Sleep(shotEverySec)
+	}
+}
+
 func (a *App) screencastLoop(attempt int) {
 	for a.attemptIs(attempt) {
 		if !a.capturing() {
@@ -931,13 +963,7 @@ func (a *App) screencastLoop(attempt int) {
 			}
 			p, _ := msg["params"].(map[string]any)
 			frame, _ := base64.StdEncoding.DecodeString(py.S(p["data"]))
-			if len(frame) > 0 {
-				a.cast.mu.Lock()
-				a.cast.frame = frame
-				a.cast.seq++
-				a.cast.cond.Broadcast()
-				a.cast.mu.Unlock()
-			}
+			a.publishFrame(frame)
 			w.mu.Lock()
 			id := w.nextID
 			w.nextID++
@@ -1154,6 +1180,7 @@ func (a *App) startLoginBrowser() map[string]any {
 		a.cast.frame, a.cast.seq = nil, 0
 		a.cast.mu.Unlock()
 		go a.screencastLoop(attempt)
+		go a.shotLoop(attempt)
 	}
 	return map[string]any{"ok": true}
 }
