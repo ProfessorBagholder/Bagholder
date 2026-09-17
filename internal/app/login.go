@@ -1407,6 +1407,9 @@ func (a *App) startLoginBrowser() map[string]any {
 	profile := filepath.Join(a.cfg.Home, "chrome")
 	_ = ensureHome(a.cfg.Home)
 	_ = os.MkdirAll(profile, 0o700)
+	for _, stale := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+		_ = os.Remove(filepath.Join(profile, stale))
+	}
 	debugPort := DebugPorts[0]
 	args := []string{chrome, "--user-data-dir=" + profile, "--remote-debugging-port=" + strconv.Itoa(debugPort), "--remote-debugging-address=127.0.0.1", "--remote-allow-origins=http://127.0.0.1", "--no-first-run", "--no-default-browser-check", "--new-window"}
 	if a.cfg.LoginView {
