@@ -849,5 +849,10 @@ func (a *App) autoSyncLoop() {
 func (a *App) syncThenMarket() bool {
 	ok := a.runSync(true, true)
 	a.refreshMarketData()
+	if ok {
+		a.kick("exposures:after-sync", func() { a.refreshExposures() })
+		a.kick("shorts:after-sync", func() { a.sweepShorts(time.Now().UTC()) })
+		a.kick("filings:after-sync", func() { a.sweepFilings(time.Now().UTC()) })
+	}
 	return ok
 }
