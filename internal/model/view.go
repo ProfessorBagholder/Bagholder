@@ -375,7 +375,7 @@ func WatchQuoteKey(symbol, exchange string) string {
 	return strings.ToUpper(py.Strip(symbol)) + "@" + strings.ToUpper(py.Strip(exchange))
 }
 
-var DefaultTiles = []store.Tile{{"SPX", "INDEX"}, {"NDX", "INDEX"}, {"DJI", "INDEX"}, {"VIX", "INDEX"}, {"GC", "COMEX"}, {"BTCUSD", "FX"}}
+var DefaultTiles = []store.Tile{{Symbol: "SPX", Exchange: "INDEX"}, {Symbol: "NDX", Exchange: "INDEX"}, {Symbol: "DJI", Exchange: "INDEX"}, {Symbol: "VIX", Exchange: "INDEX"}, {Symbol: "GC", Exchange: "COMEX"}, {Symbol: "BTCUSD", Exchange: "FX"}}
 
 const TilesMax = 12
 
