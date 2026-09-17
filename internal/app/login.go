@@ -1018,29 +1018,15 @@ const webauthnProbe = `(async () => {
 })()`
 
 const noPasskey = `(() => {
-	if (window.__bhNoPasskey) return;
+	if (window.__bhNoPasskey || !navigator.credentials) return;
 	window.__bhNoPasskey = true;
-	const say = (...a) => console.log("bagholder:", ...a);
 	const cs = navigator.credentials;
-	if (cs) {
-		const get = cs.get.bind(cs);
-		cs.get = function(opts) {
-			if (!opts || !opts.publicKey) return get(opts);
-			const mediation = opts.mediation || "optional";
-			say("passkey request", mediation);
-			if (mediation === "conditional") return new Promise((resolve, reject) => { if (opts.signal) opts.signal.addEventListener("abort", () => reject(new DOMException("Aborted.", "AbortError"))); });
-			return Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
-		};
-		cs.create = function(opts) {
-			if (!opts || !opts.publicKey) return cs.create(opts);
-			say("passkey creation refused");
-			return Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
-		};
-	}
-	if (window.PublicKeyCredential) {
-		for (const m of ["isUserVerifyingPlatformAuthenticatorAvailable", "isConditionalMediationAvailable"]) PublicKeyCredential[m] = () => Promise.resolve(false);
-		if (PublicKeyCredential.getClientCapabilities) PublicKeyCredential.getClientCapabilities = () => Promise.resolve({});
-	}
+	const get = cs.get.bind(cs);
+	cs.get = function(opts) {
+		if (!opts || !opts.publicKey || opts.mediation === "conditional") return get(opts);
+		console.log("bagholder:", "passkey request refused", opts.mediation || "optional");
+		return Promise.reject(new DOMException("No passkey in this window.", "NotAllowedError"));
+	};
 })();`
 
 func (a *App) passkeyGuardLoop(attempt int) {
