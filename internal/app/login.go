@@ -957,6 +957,7 @@ func (a *App) loginTraceLoop(attempt int) {
 		cdpCall(w, "Network.enable", nil, secs(captureCallSec))
 		cdpCall(w, "Log.enable", nil, secs(captureCallSec))
 		cdpCall(w, "Runtime.enable", nil, secs(captureCallSec))
+		sent := map[string]string{}
 		for a.attemptIs(attempt) {
 			if !a.capturing() {
 				w.close()
@@ -983,8 +984,18 @@ func (a *App) loginTraceLoop(attempt int) {
 				if py.S(fr["parentId"]) == "" {
 					a.logf("bagholder login: page %s\n", safeURL(py.S(fr["url"])))
 				}
+			case "Network.requestWillBeSent":
+				req, _ := p["request"].(map[string]any)
+				if id := py.S(p["requestId"]); id != "" {
+					if len(sent) > 256 {
+						sent = map[string]string{}
+					}
+					sent[id] = safeURL(py.S(req["url"]))
+				}
 			case "Network.loadingFailed":
-				a.logf("bagholder login: request failed (%s) %s\n", py.S(p["type"]), py.S(p["errorText"]))
+				id := py.S(p["requestId"])
+				a.logf("bagholder login: request failed (%s) %s %s\n", py.S(p["type"]), py.S(p["errorText"]), sent[id])
+				delete(sent, id)
 			case "Log.entryAdded":
 				e, _ := p["entry"].(map[string]any)
 				if py.S(e["level"]) == "error" {
