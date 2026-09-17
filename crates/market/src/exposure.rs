@@ -39,6 +39,35 @@ pub struct Ctx<'a> {
     pub today: String,
 }
 
+
+/// Stand-ins for the network sources, per thread, so the look-through can be
+/// exercised on inline data (the Python tests patch the same functions).
+pub mod hooks {
+    use serde_json::Value;
+    use std::cell::RefCell;
+    pub type Classify = Box<dyn Fn(&str, &str, &str) -> Value>;
+    pub type Resolve = Box<dyn Fn(&str) -> Option<Value>>;
+    /// (family, symbol, name, exchange) -> breakdown
+    pub type Adapter = Box<dyn Fn(&str, &str, &str, &str) -> Option<Value>>;
+    /// (symbol, name, exchange) -> breakdown, or Err for a source that failed
+    pub type Fallback = Box<dyn Fn(&str, &str, &str) -> Result<Option<Value>, String>>;
+    pub type TmxRecord = Box<dyn Fn(&str) -> Option<Value>>;
+    thread_local! {
+        pub static CLASSIFY: RefCell<Option<Classify>> = RefCell::new(None);
+        pub static RESOLVE: RefCell<Option<Resolve>> = RefCell::new(None);
+        pub static ADAPTER: RefCell<Option<Adapter>> = RefCell::new(None);
+        pub static FALLBACK: RefCell<Option<Fallback>> = RefCell::new(None);
+        pub static TMX_RECORD: RefCell<Option<TmxRecord>> = RefCell::new(None);
+    }
+    pub fn clear() {
+        CLASSIFY.with(|h| *h.borrow_mut() = None);
+        RESOLVE.with(|h| *h.borrow_mut() = None);
+        ADAPTER.with(|h| *h.borrow_mut() = None);
+        FALLBACK.with(|h| *h.borrow_mut() = None);
+        TMX_RECORD.with(|h| *h.borrow_mut() = None);
+    }
+}
+
 fn s(v: Option<&Value>) -> String {
     bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
@@ -160,6 +189,9 @@ pub const TMX_SECTOR_QUERY: &str = "query getQuoteBySymbol($symbol: String, $loc
 pub const NASDAQ_SUMMARY_URL: &str = "https://api.nasdaq.com/api/quote/{}/summary?assetclass=stocks";
 
 fn tmx_record(key: &str) -> Option<Value> {
+    if let Some(r) = hooks::TMX_RECORD.with(|h| h.borrow().as_ref().map(|f| f(key))) {
+        return r;
+    }
     if key.is_empty() {
         return None;
     }
@@ -198,6 +230,9 @@ fn nasdaq_summary(symbol: &str) -> (String, String) {
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
 pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Value {
+    if let Some(v) = hooks::CLASSIFY.with(|h| h.borrow().as_ref().map(|f| f(symbol, exchange, currency))) {
+        return v;
+    }
     let sym = bagholder_model::venues::tmx_symbol(symbol);
     let country = venue_country(exchange);
     let mut sector = String::new();
@@ -725,6 +760,9 @@ fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchEr
 /// `exposure.resolve_name`: a holding named without a ticker, the directories'
 /// first match on the name.
 pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
+    if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
+        return v;
+    }
     static SUFFIX: OnceLock<Regex> = OnceLock::new();
     static JUNK: OnceLock<Regex> = OnceLock::new();
     static WS: OnceLock<Regex> = OnceLock::new();
@@ -888,7 +926,10 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         _ => None,
     };
     let mut data: Option<Value> = None;
-    if let Some(f) = adapter {
+    let hooked = hooks::ADAPTER.with(|h| h.borrow().as_ref().map(|f| f(family, symbol, name, exchange)));
+    if let Some(d) = hooked {
+        data = d;
+    } else if let Some(f) = adapter {
         match f(symbol) {
             Ok(d) => data = d,
             Err(e) => crate::http::note_source(family, false, Some(&e)),
@@ -896,9 +937,13 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     }
     if data.is_none() {
         // a family with no adapter, or one whose page answered nothing
-        match yahoo_fund(symbol, exchange) {
-            Ok(d) => data = d,
-            Err(e) => crate::http::note_source("yahoo", false, Some(&e)),
+        match hooks::FALLBACK.with(|h| h.borrow().as_ref().map(|f| f(symbol, name, exchange))) {
+            Some(Ok(d)) => data = d,
+            Some(Err(_)) => {}
+            None => match yahoo_fund(symbol, exchange) {
+                Ok(d) => data = d,
+                Err(e) => crate::http::note_source("yahoo", false, Some(&e)),
+            },
         }
     }
     let data = data?;

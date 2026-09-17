@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, "/Users/md/dev/Bagholder")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 import csvimport  # noqa: E402
 import store  # noqa: E402
 

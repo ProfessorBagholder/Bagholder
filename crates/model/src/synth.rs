@@ -142,7 +142,7 @@ pub fn synthesize_expiries(open_lots: &[Lot], today: &str) -> Vec<Value> {
                 (l.account_type.clone(), l.symbol.clone(), l.currency.clone()) == key && l.direction == lot.direction
             })
             .map(|l| l.qty)
-            .sum();
+            .fold(0.0, |a, b| a + b);
         if qty <= EPS {
             continue;
         }

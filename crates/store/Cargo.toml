@@ -12,3 +12,6 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # the CSV importer's patterns; Python's `re` for the same ones
 regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

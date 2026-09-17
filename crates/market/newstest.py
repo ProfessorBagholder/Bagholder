@@ -11,8 +11,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "..", "..", "Users", "md", "dev", "Bagholder"))
-sys.path.insert(0, "/Users/md/dev/Bagholder")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 import news  # noqa: E402
 
 TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "target", "release", "newstool")

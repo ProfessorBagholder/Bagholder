@@ -112,21 +112,51 @@ fn which(name: &str) -> Option<PathBuf> {
 
 /// `notify.native_channel`.
 pub fn native_channel() -> String {
-    let mode = std::env::var(MODE_ENV).unwrap_or_default().trim().to_lowercase();
+    #[cfg(test)]
+    if let Some(c) = test_hooks::CHANNEL.lock().unwrap().clone() {
+        return c;
+    }
+    let mode = std::env::var(MODE_ENV).unwrap_or_default();
+    let display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
+    channel_for(&mode, std::env::consts::OS, &|n| which(n).is_some(), display)
+}
+
+/// The channel a system offers: its mode, its kind, the tools it has and
+/// whether it has a desktop.
+pub(crate) fn channel_for(mode: &str, os: &str, has: &dyn Fn(&str) -> bool, display: bool) -> String {
+    let mode = mode.trim().to_lowercase();
     if ["browser", "off", "0", "none"].contains(&mode.as_str()) {
         return String::new();
     }
-    if cfg!(target_os = "macos") {
-        return if which("osascript").is_some() { "mac".into() } else { String::new() };
+    if os == "macos" {
+        return if has("osascript") { "mac".into() } else { String::new() };
     }
-    if cfg!(target_os = "windows") {
-        return if which("powershell.exe").is_some() || which("pwsh.exe").is_some() || which("powershell").is_some() { "windows".into() } else { String::new() };
+    if os == "windows" {
+        return if has("powershell.exe") || has("pwsh.exe") || has("powershell") { "windows".into() } else { String::new() };
     }
-    let display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false) || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
-    if which("notify-send").is_some() && display {
+    if has("notify-send") && display {
         return "linux".into();
     }
     String::new()
+}
+
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::sync::Mutex;
+    /// A channel standing in for the system's.
+    pub static CHANNEL: Mutex<Option<String>> = Mutex::new(None);
+    /// While set, deliveries are recorded here and never reach the system.
+    pub static DELIVERED: Mutex<Option<Vec<(String, String, String)>>> = Mutex::new(None);
+    /// The heartbeat, in milliseconds, when set.
+    pub static HEARTBEAT_MS: Mutex<Option<u64>> = Mutex::new(None);
+}
+
+fn heartbeat() -> Duration {
+    #[cfg(test)]
+    if let Some(ms) = *test_hooks::HEARTBEAT_MS.lock().unwrap() {
+        return Duration::from_millis(ms);
+    }
+    HEARTBEAT
 }
 
 /// `notify.fresh_since`: what a stream has that it has not shown before, and
@@ -237,6 +267,16 @@ fn enqueue(title: String, body: String, chan: String) {
 
 /// `notify.deliver`: post one notification through the system.
 pub fn deliver(channel: &str, title: &str, body: &str) -> bool {
+    #[cfg(test)]
+    {
+        if let Some(v) = test_hooks::DELIVERED.lock().unwrap().as_mut() {
+            v.push((channel.to_string(), title.to_string(), body.to_string()));
+            return true;
+        }
+        if !channel.is_empty() {
+            panic!("a test reached the system's notifications");
+        }
+    }
     match channel {
         "mac" => mac_deliver(title, body),
         "windows" => windows_deliver(title, body),
@@ -370,10 +410,7 @@ fn mac_icon(work: &Path) -> Option<PathBuf> {
 
 fn mac_deliver(title: &str, body: &str) -> bool {
     if let Some(appdir) = mac_app() {
-        let out = Command::new("open")
-            .args(["-n", "-W", "--env", &format!("BAGHOLDER_TITLE={}", title), "--env", &format!("BAGHOLDER_BODY={}", body)])
-            .arg(&appdir)
-            .output();
+        let out = mac_open_command(&appdir, title, body).output();
         match out {
             Ok(o) if o.status.success() => return true,
             Ok(o) => log(&format!("bagholder notify: the notifier app refused: {}", String::from_utf8_lossy(&o.stderr).trim())),
@@ -381,13 +418,24 @@ fn mac_deliver(title: &str, body: &str) -> bool {
         }
     }
     // without the app: the system's plain notification, under Script Editor's name
-    Command::new("osascript")
-        .args(["-e", "display notification (system attribute \"BAGHOLDER_BODY\") with title (system attribute \"BAGHOLDER_TITLE\")"])
-        .env("BAGHOLDER_TITLE", title)
-        .env("BAGHOLDER_BODY", body)
+    mac_plain_command(title, body)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+fn mac_open_command(appdir: &Path, title: &str, body: &str) -> Command {
+    let mut c = Command::new("open");
+    c.args(["-n", "-W", "--env", &format!("BAGHOLDER_TITLE={}", title), "--env", &format!("BAGHOLDER_BODY={}", body)]).arg(appdir);
+    c
+}
+
+fn mac_plain_command(title: &str, body: &str) -> Command {
+    let mut c = Command::new("osascript");
+    c.args(["-e", "display notification (system attribute \"BAGHOLDER_BODY\") with title (system attribute \"BAGHOLDER_TITLE\")"])
+        .env("BAGHOLDER_TITLE", title)
+        .env("BAGHOLDER_BODY", body);
+    c
 }
 
 // --- Windows: a toast under an app id registered as Bagholder --------------------
@@ -420,24 +468,34 @@ fn windows_deliver(title: &str, body: &str) -> bool {
         }
     });
     let shell = if which("powershell.exe").is_some() || which("powershell").is_some() { "powershell" } else { "pwsh" };
-    Command::new(shell)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &windows_script()])
-        .env("BAGHOLDER_TITLE", title)
-        .env("BAGHOLDER_BODY", body)
+    windows_command(shell, title, body)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
+fn windows_command(shell: &str, title: &str, body: &str) -> Command {
+    let mut c = Command::new(shell);
+    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &windows_script()])
+        .env("BAGHOLDER_TITLE", title)
+        .env("BAGHOLDER_BODY", body);
+    c
+}
+
 // --- Linux ------------------------------------------------------------------------
 
 fn linux_deliver(title: &str, body: &str) -> bool {
+    linux_command(title, body).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+fn linux_command(title: &str, body: &str) -> Command {
     let mut cmd = Command::new("notify-send");
     cmd.arg(format!("--app-name={}", APP_NAME));
     if icon().exists() {
         cmd.arg(format!("--icon={}", icon().to_string_lossy()));
     }
-    cmd.args([title, body]).output().map(|o| o.status.success()).unwrap_or(false)
+    cmd.args([title, body]);
+    cmd
 }
 
 // --- the page's channel -------------------------------------------------------------
@@ -458,7 +516,7 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
         if rows.is_empty() {
             let (m, c) = wake();
             let g = m.lock().unwrap();
-            let _ = c.wait_timeout(g, HEARTBEAT);
+            let _ = c.wait_timeout(g, heartbeat());
             let rows = app().open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
             if rows.is_empty() {
                 if !write(": ping\n\n") {
@@ -481,6 +539,350 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
             if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::py_json(&r))) {
                 return;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Ported from tests/test_notify.py.
+    use super::*;
+    use crate::app::f;
+    use bagholder_store::feeds as st;
+    use std::ffi::OsStr;
+    use std::sync::MutexGuard;
+
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// One store for the whole test binary; each test starts it empty, with
+    /// every kind off, nothing posted on this machine.
+    fn setup() -> (MutexGuard<'static, ()>, Connection) {
+        let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(MODE_ENV, "browser");
+        let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        crate::app::init(home, root, "127.0.0.1".into());
+        let conn = app().open().unwrap();
+        bagholder_store::relabel::ensure(&conn).unwrap();
+        conn.execute("DELETE FROM notifications", []).unwrap();
+        conn.execute("DELETE FROM meta WHERE key = ? OR key LIKE 'notify_seen:%'", [SETTINGS_KEY]).unwrap();
+        *test_hooks::CHANNEL.lock().unwrap() = Some(String::new());
+        *test_hooks::DELIVERED.lock().unwrap() = None;
+        *test_hooks::HEARTBEAT_MS.lock().unwrap() = None;
+        {
+            let mut s = app().state.lock().unwrap();
+            s.connected = false;
+            s.error.clear();
+            s.sync_fails = 0;
+            s.sync_first_fail.clear();
+        }
+        (g, conn)
+    }
+
+    fn set(conn: &Connection, v: Value) -> Map<String, Value> {
+        set_settings(conn, &v).unwrap()
+    }
+
+    fn off() -> Map<String, Value> {
+        setting_keys().into_iter().map(|k| (k.to_string(), json!(false))).collect()
+    }
+
+    fn list(conn: &Connection) -> Vec<Value> {
+        st::list_notifications(conn, 0, "", false, 1000, false).unwrap()
+    }
+
+    fn id(v: &Value) -> i64 {
+        v["id"].as_i64().unwrap()
+    }
+
+    fn argv(c: &Command) -> Vec<String> {
+        std::iter::once(c.get_program()).chain(c.get_args()).map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    fn env_of(c: &Command, k: &str) -> String {
+        c.get_envs().find(|(n, _)| *n == OsStr::new(k)).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    #[test]
+    fn test_every_kind_is_off_until_turned_on_and_the_settings_round_trip() {
+        let (_g, conn) = setup();
+        assert_eq!(settings(&conn).unwrap(), off());
+        let out = set(&conn, json!({"fills": true, "bogus": true, "updates": "yes"}));
+        let mut want = off();
+        want.insert("fills".into(), json!(true));
+        assert_eq!(out, want, "unknown keys and non-booleans are ignored");
+        assert_eq!(settings(&conn).unwrap(), out);
+        let mut st_want = out.clone();
+        st_want.insert("native".into(), json!(""));
+        st_want.insert("unread".into(), json!(0));
+        assert_eq!(status(&conn).unwrap(), Value::Object(st_want), "the kinds, the channel and the unread count");
+        assert_eq!(channel_for("", "macos", &|_| true, false), "mac");
+        assert_eq!(channel_for("", "windows", &|n| n == "powershell", false), "windows");
+        assert_eq!(channel_for("", "linux", &|n| n == "notify-send", true), "linux");
+        assert_eq!(channel_for("", "linux", &|_| false, false), "", "no desktop: the page is the channel");
+        assert_eq!(channel_for("browser", "macos", &|_| true, true), "", "told to stand aside");
+    }
+
+    #[test]
+    fn test_a_kind_that_is_off_is_not_told_and_a_key_is_told_once() {
+        let (_g, conn) = setup();
+        assert!(emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).is_none());
+        set(&conn, json!({"fills": true}));
+        let row = emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        assert_eq!((f(&row, "kind"), f(&row, "title"), f(&row, "body"), f(&row, "seenAt"), f(&row, "readAt")), ("fills".into(), "Order filled · QNC".into(), "Bought 5 at 1.75".into(), String::new(), String::new()));
+        assert!(emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "again", None).is_none(), "the same event is never told twice");
+        assert!(emit(&conn, "bogus", "x", "t", "b", None).is_none(), "an unknown kind is nothing");
+        assert!(emit(&conn, "disclosures", "f1", "t", "b", None).is_none(), "no set of tickers chosen");
+        set(&conn, json!({"disclosuresWatched": true}));
+        assert_eq!(disclosure_scopes(&conn), vec!["watched".to_string()]);
+        assert!(emit(&conn, "disclosures", "f1", "t", "b", None).is_some(), "any set on: the kind is told");
+        assert!(id(&test_notification(&conn).unwrap()) > id(&row), "the test goes out whatever the kinds say");
+        assert_eq!(list(&conn).len(), 3);
+    }
+
+    #[test]
+    fn test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"fills": true}));
+        let ids: Vec<i64> = (0..3).map(|i| id(&emit(&conn, "fills", &format!("k{}", i), "t", "b", None).unwrap())).collect();
+        assert_eq!(st::mark_notifications_seen(&conn, &[ids[0]], &now_iso()).unwrap(), 1);
+        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[1..]);
+        assert_eq!(st::list_notifications(&conn, ids[1], "", false, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[2..]);
+        // NOTIFICATIONS_KEPT is a constant of the store crate and cannot be lowered here: four rows stay
+        emit(&conn, "fills", "k9", "t", "b", None);
+        let newest: Vec<String> = st::list_notifications(&conn, 0, "", false, 1000, true).unwrap().iter().map(|r| f(r, "key")).collect();
+        assert_eq!(newest, ["k9", "k2", "k1", "k0"], "the history reads newest first");
+        assert_eq!(st::unread_notifications(&conn).unwrap(), 4);
+        assert_eq!(st::mark_notifications_read(&conn, Some(&[ids[2]]), &now_iso()).unwrap(), 1);
+        assert_eq!(st::unread_notifications(&conn).unwrap(), 3);
+        assert_eq!(st::mark_notifications_read(&conn, None, &now_iso()).unwrap(), 3, "no ids: every unread one");
+        assert_eq!((st::unread_notifications(&conn).unwrap(), st::mark_notifications_read(&conn, None, &now_iso()).unwrap()), (0, 0));
+        assert!(list(&conn).iter().all(|r| !f(r, "readAt").is_empty()));
+        assert_eq!(st::clear_notifications(&conn).unwrap(), 4);
+        assert_eq!((list(&conn), st::latest_notification_id(&conn).unwrap()), (vec![], 0));
+    }
+
+    /// Runs the stream on a thread; its chunks arrive on the channel, and it
+    /// ends once `stop_after` data chunks have gone out.
+    fn open_stream(after: Option<i64>, stop_after: usize) -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut rows = 0;
+            stream(after, |chunk| {
+                if chunk.starts_with("id: ") {
+                    rows += 1;
+                }
+                let _ = tx.send(chunk.to_string());
+                rows < stop_after
+            });
+        });
+        rx
+    }
+
+    fn next(rx: &std::sync::mpsc::Receiver<String>) -> String {
+        rx.recv_timeout(Duration::from_secs(5)).expect("the stream said something")
+    }
+
+    fn next_row(rx: &std::sync::mpsc::Receiver<String>) -> String {
+        loop {
+            let c = next(rx);
+            if c != ": ping\n\n" {
+                return c;
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_stream_sends_every_row_after_the_id_the_page_brings_with_pings_between() {
+        let (_g, conn) = setup();
+        *test_hooks::HEARTBEAT_MS.lock().unwrap() = Some(50);
+        set(&conn, json!({"fills": true}));
+        let old = emit(&conn, "fills", "old", "Old", "b", None).unwrap();
+        st::mark_notifications_seen(&conn, &[id(&old)], &now_iso()).unwrap();
+        let first = emit(&conn, "fills", "first", "First", "b", None).unwrap();
+        let rx = open_stream(Some(id(&old)), 2);
+        let (hello, row1, ping) = (next(&rx), next(&rx), next(&rx));
+        let second = emit(&conn, "fills", "second", "Second", "b", None).unwrap();
+        let row2 = next_row(&rx);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the reader gone: the stream ends");
+        assert_eq!(hello, ": bagholder\n\n");
+        assert!(row1.starts_with(&format!("id: {}\ndata: ", id(&first))) && row1.contains("\"title\": \"First\""), "{}", row1);
+        assert_eq!(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection");
+        assert!(row2.starts_with(&format!("id: {}\ndata: ", id(&second))), "{}", row2);
+
+        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
+        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
+        let rx = open_stream(None, 1);
+        assert_eq!((next(&rx), next(&rx)), (": bagholder\n\n".to_string(), ": ping\n\n".to_string()), "no id: only what is made after the stream opens");
+        let third = emit(&conn, "fills", "third", "Third", "b", None).unwrap();
+        let chunk = next_row(&rx);
+        assert!(chunk.starts_with(&format!("id: {}\n", id(&third))) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
+    }
+
+    fn order() -> Value {
+        json!({"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", "type": "LIMIT", "quantity": 5.0, "limitPrice": 1.75, "status": "pending", "role": "entry", "source": "bagholder", "securityId": "sec-1"})
+    }
+
+    fn with(base: &Value, patch: Value) -> Value {
+        let mut o = base.as_object().unwrap().clone();
+        o.extend(patch.as_object().unwrap().clone());
+        Value::Object(o)
+    }
+
+    fn t4(a: &str, b: &str, c: &str, d: &str) -> Option<(String, String, String, String)> {
+        Some((a.into(), b.into(), c.into(), d.into()))
+    }
+
+    #[test]
+    fn test_a_fill_read_back_is_told_by_its_role() {
+        use crate::orders::order_notice;
+        let o = order();
+        assert_eq!(order_notice(&o, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), t4("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"));
+        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
+        assert_eq!(order_notice(&stop, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.6374})), t4("fills", "order:o2:filled", "Stopped out · QNC", "Sold 5 at 1.64 · 🚀 Trading"));
+        let target = with(&o, json!({"id": "o3", "side": "SELL", "limitPrice": 1.93, "role": "target"}));
+        assert_eq!(order_notice(&target, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.93})).unwrap().2, "Target hit · QNC");
+        assert_eq!(order_notice(&with(&o, json!({"status": "filled"})), &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), None, "read back filled again: nothing new");
+        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), t4("fills", "order:o1:partial:40", "Partly filled · QNC", "40 of 100 at 64.50 · 🚀 Trading"));
+        assert_eq!(order_notice(&with(&o, json!({"quantity": 100.0, "filledQty": 40.0})), &json!({"status": "pending", "filledQty": 40.0, "avgFill": 64.5})), None, "the same partial fill again");
+    }
+
+    #[test]
+    fn test_problems_are_told_but_not_the_persons_own_cancel_nor_a_legs_expiry() {
+        use crate::orders::order_notice;
+        let o = order();
+        assert_eq!(order_notice(&o, &json!({"status": "rejected", "error": "Limit price has too many decimal places. Max allowed: 2"})),
+            t4("problems", "order:o1:rejected", "Order rejected · QNC", "Buy 5 at 1.75 limit · Limit price has too many decimal places. Max allowed: 2"));
+        assert_eq!(order_notice(&o, &json!({"status": "failed"})).unwrap().2, "Order not sent · QNC");
+        assert_eq!(order_notice(&o, &json!({"status": "expired"})), t4("problems", "order:o1:expired", "Order expired · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
+        assert_eq!(order_notice(&o, &json!({"status": "cancelled"})), t4("problems", "order:o1:cancelled", "Order cancelled · QNC", "Buy 5 at 1.75 limit · 🚀 Trading"));
+        assert_eq!(order_notice(&with(&o, json!({"status": "cancelling"})), &json!({"status": "cancelled"})), None, "a cancel asked for here is not told");
+        let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
+        assert_eq!(order_notice(&stop, &json!({"status": "expired"})), None, "a leg's expiry is the engine's to place again");
+        assert_eq!(order_notice(&stop, &json!({"status": "cancelled"})), None);
+        assert_eq!(order_notice(&stop, &json!({"status": "rejected", "error": "no shares"})).unwrap().3, "Sell 5 stop 1.66 · no shares");
+        // `_order_words` and `_price_words` are private to orders.rs: read through a rejection's body
+        let words = |ord: Value| order_notice(&ord, &json!({"status": "rejected", "error": "e"})).unwrap().3;
+        assert_eq!(words(with(&o, json!({"type": "MARKET"}))), "Buy 5 at market · e");
+        assert_eq!(words(with(&o, json!({"type": "STOP_LIMIT", "stopPrice": 1.6, "limitPrice": 1.55, "side": "SELL", "quantity": 2.5}))), "Sell 2.5 stop 1.60 · limit 1.55 · e");
+        let prices: Vec<String> = [json!(1.6374), json!(0.625), json!(0.54), json!(12), Value::Null]
+            .into_iter()
+            .map(|p| words(with(&o, json!({"limitPrice": p}))).trim_start_matches("Buy 5 at ").trim_end_matches(" limit · e").to_string())
+            .collect();
+        assert_eq!(prices, ["1.64", "0.625", "0.54", "12.00", "—"]);
+    }
+
+    #[test]
+    fn test_the_session_expiring_is_told_on_the_transition_and_a_failing_sync_on_the_third_time() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"connection": true}));
+        crate::session::note_session_expired();
+        assert_eq!(list(&conn), Vec::<Value>::new(), "not connected: nothing expired");
+        app().state.lock().unwrap().connected = true;
+        crate::session::note_session_expired();
+        crate::session::note_session_expired();
+        assert!(!app().state.lock().unwrap().connected);
+        for _ in 0..4 {
+            crate::session::note_sync_failed("Wealthsimple did not answer");
+        }
+        let got: Vec<(String, String)> = list(&conn).iter().map(|r| (f(r, "title"), f(r, "body"))).collect();
+        assert_eq!(got, [("Sign in needed".to_string(), "The Wealthsimple session expired. Connect again from the menu.".to_string()), ("Sync failing".to_string(), "Wealthsimple did not answer".to_string())]);
+    }
+
+    #[test]
+    fn test_posted_by_the_server_a_row_is_stored_seen_and_handed_to_the_system() {
+        let (_g, conn) = setup();
+        set(&conn, json!({"fills": true}));
+        *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
+        *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
+        let row = emit(&conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && test_hooks::DELIVERED.lock().unwrap().as_ref().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_ne!(f(&row, "seenAt"), "", "the server shows it: no page shows it too");
+        assert_eq!(test_hooks::DELIVERED.lock().unwrap().clone().unwrap(), vec![("mac".to_string(), "Order filled · QNC".to_string(), "Bought 5 at 1.75".to_string())]);
+        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap(), Vec::<Value>::new(), "nothing left for a page");
+    }
+
+    #[test]
+    fn test_each_system_is_asked_in_its_own_words() {
+        let (_g, _conn) = setup();
+        *app().port.lock().unwrap() = 8799;
+        let c = mac_open_command(Path::new("/x/Bagholder.app"), "Stopped out · QNC", "Sold 5 at 1.64");
+        assert_eq!(argv(&c), ["open", "-n", "-W", "--env", "BAGHOLDER_TITLE=Stopped out · QNC", "--env", "BAGHOLDER_BODY=Sold 5 at 1.64", "/x/Bagholder.app"]);
+        assert!(mac_script().contains("open location \"http://127.0.0.1:8799/\""));
+        let c = mac_plain_command("T", "B");
+        assert_eq!((argv(&c)[0].as_str(), env_of(&c, "BAGHOLDER_TITLE").as_str(), env_of(&c, "BAGHOLDER_BODY").as_str()), ("osascript", "T", "B"), "without the applet, the system's plain notification");
+        let c = windows_command("powershell.exe", "T", "B");
+        let a = argv(&c);
+        assert_eq!((a[0].as_str(), &a[1..7], env_of(&c, "BAGHOLDER_TITLE").as_str()), ("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden"].map(String::from)[..], "T"));
+        assert!(a.last().unwrap().contains("CreateToastNotifier('Bagholder')"));
+        assert!(a.last().unwrap().contains("launch=\"http://127.0.0.1:8799/\""), "a click on the toast opens the app");
+        let a = argv(&linux_command("T", "B"));
+        assert_eq!([&a[..2], &a[a.len() - 2..]].concat(), ["notify-send", "--app-name=Bagholder", "T", "B"]);
+        assert!(a[2].starts_with("--icon="));
+        assert!(!deliver("", "T", "B"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_the_mac_applet_is_built_once_under_bagholders_name_and_icon() {
+        if !Path::new("/usr/bin/osacompile").exists() {
+            return; // the applet is built with macOS's own tools
+        }
+        let (_g, _conn) = setup();
+        *app().port.lock().unwrap() = 8799;
+        let appdir = mac_app().expect("built");
+        assert_eq!(appdir, app().home.join("Bagholder.app"));
+        let plist = Command::new("plutil").args(["-p"]).arg(appdir.join("Contents/Info.plist")).output().unwrap();
+        let plist = String::from_utf8_lossy(&plist.stdout);
+        assert!(plist.contains("\"CFBundleName\" => \"Bagholder\""), "{}", plist);
+        assert!(plist.contains("\"CFBundleIdentifier\" => \"com.bagholder.notifier\""));
+        assert!(!plist.contains("CFBundleIconName"), "the app's own icon file");
+        assert!(std::fs::metadata(appdir.join("Contents/Resources/applet.icns")).unwrap().len() > 10000, "the icon built from the favicon");
+        assert!(!appdir.join("Contents/Resources/Assets.car").exists());
+        assert!(appdir.join("Contents/Resources/Scripts").exists() && mac_script().contains("open location \"http://127.0.0.1:8799/\""));
+        let stamp = std::fs::read_to_string(appdir.join("Contents/Resources/bagholder.stamp")).unwrap();
+        let mtime = std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap();
+        assert_eq!(mac_app(), Some(appdir.clone()));
+        assert_eq!(std::fs::metadata(appdir.join("Contents/Resources/bagholder.stamp")).unwrap().modified().unwrap(), mtime, "already built: not built again");
+        *app().port.lock().unwrap() = 8800;
+        assert_ne!(mac_stamp(), stamp, "a new address means a new applet");
+    }
+
+    #[test]
+    fn test_a_disclosure_is_told_by_the_documents_own_title_and_the_form_code_stands_in() {
+        use crate::feeds::filings_notice;
+        let rows = [json!({"id": "sec:1", "source": "SEC", "type": "144", "subject": "Proposed sale of 40,000 shares by an officer"})];
+        assert_eq!(filings_notice("NBIS", &rows), ("New disclosure · NBIS".to_string(), "Proposed sale of 40,000 shares by an officer · SEC EDGAR".to_string()));
+        // a row without a title is read over the network for one: not exercised here
+        let many: Vec<Value> = (0..4).map(|i| json!({"id": format!("sec:{}", i), "source": "SEC", "type": "4", "subject": format!("Insider report {}", i)})).collect();
+        assert_eq!(filings_notice("NBIS", &many), ("4 new disclosures · NBIS".to_string(), "Insider report 0, Insider report 1, Insider report 2 and more · SEC EDGAR".to_string()));
+    }
+
+    #[test]
+    fn test_a_stream_met_for_the_first_time_shows_nothing_and_never_shows_its_past() {
+        let (_g, conn) = setup();
+        let at = |i: &Value| f(i, "at");
+        let fresh = |s: &str, items: &[Value]| -> Vec<String> { fresh_since(&conn, s, items, at, default_ident, |_| false).iter().map(|i| f(i, "id")).collect() };
+        let held = vec![json!({"id": "a", "at": "2026-05-01"}), json!({"id": "b", "at": "2026-06-01"})];
+        assert!(fresh("s1", &held).is_empty(), "met for the first time: nothing");
+        assert_eq!(bagholder_store::tables::get_meta(&conn, "notify_seen:s1", "").unwrap(), "2026-06-01|b");
+        assert!(fresh("s1", &held).is_empty(), "the same again: still nothing");
+        let mut later = held.clone();
+        later.push(json!({"id": "c", "at": "2026-07-01"}));
+        assert_eq!(fresh("s1", &later), ["c"], "what comes after the mark");
+        assert!(fresh("s1", &later).is_empty(), "and never again");
+        let mut both = later.clone();
+        both.push(json!({"id": "d", "at": "2026-07-01"}));
+        both.push(json!({"id": "old", "at": "2026-02-01"}));
+        assert_eq!(fresh("s1", &both), ["d"]);
+        assert!(fresh("s1", &both).is_empty());
+        assert!(fresh("s2", &held).is_empty());
+        for k in ["notify_seen:s1", "notify_seen:s2"] {
+            assert!(!bagholder_store::tables::get_meta(&conn, k, "").unwrap().is_empty());
         }
     }
 }

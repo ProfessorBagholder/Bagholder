@@ -17,10 +17,10 @@ pub fn metrics(trades: &[Value]) -> Value {
     let wins: Vec<f64> = vals.iter().copied().filter(|v| *v > 0.0).collect();
     let losses: Vec<f64> = vals.iter().copied().filter(|v| *v < 0.0).collect();
     let be = vals.iter().filter(|v| **v == 0.0).count();
-    let gw: f64 = wins.iter().sum();
-    let gl: f64 = losses.iter().sum::<f64>().abs();
+    let gw: f64 = wins.iter().fold(0.0, |a, b| a + b);
+    let gl: f64 = losses.iter().fold(0.0, |a, b| a + b).abs();
     let n = vals.len();
-    let total: f64 = vals.iter().sum();
+    let total: f64 = vals.iter().fold(0.0, |a, b| a + b);
 
     // A book with wins and no losses has no finite profit factor; the page is
     // told so rather than being handed a division by zero.
@@ -33,22 +33,22 @@ pub fn metrics(trades: &[Value]) -> Value {
     };
 
     json!({
-        "realized": total,
+        "realized": crate::value::py_sum(vals.is_empty(), total),
         "count": n,
         "wins": wins.len(),
         "losses": losses.len(),
         "breakeven": be,
         "winRate": if n > 0 { json!(wins.len() as f64 / n as f64) } else { Value::Null },
-        "grossWin": gw,
-        "grossLoss": gl,
+        "grossWin": crate::value::py_sum(wins.is_empty(), gw),
+        "grossLoss": crate::value::py_sum(losses.is_empty(), gl),
         "profitFactor": profit_factor,
         "profitFactorInfinite": gl == 0.0 && gw > 0.0,
         "expectancy": if n > 0 { json!(total / n as f64) } else { Value::Null },
         "avgWin": if !wins.is_empty() { gw / wins.len() as f64 } else { 0.0 },
         "avgLoss": if !losses.is_empty() { -gl / losses.len() as f64 } else { 0.0 },
-        "fees": trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).sum::<f64>(),
+        "fees": crate::value::py_sum(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fold(0.0, |a, b| a + b)),
         "avgHold": if n > 0 {
-            json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).sum::<f64>() / n as f64)
+            json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).fold(0.0, |a, b| a + b) / n as f64)
         } else { Value::Null },
         "openCount": trades.iter().filter(|t| field_s(t, "status") == "open").count(),
     })
@@ -57,20 +57,20 @@ pub fn metrics(trades: &[Value]) -> Value {
 /// `model.by_symbol`: grouped by the underlying, so a chain of contracts sits
 /// under the name it is written on.
 pub fn by_symbol(trades: &[Value]) -> Vec<Value> {
-    struct G { pnl: f64, n: usize, wins: usize, hold: f64, legs: f64, ids: Vec<String> }
+    struct G { pnl: f64, n: usize, wins: usize, hold: f64, legs: i64, ids: Vec<String> }
     let mut by: HashMap<String, G> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     for t in trades {
         let k = field_s(t, "underlying");
         if !by.contains_key(&k) {
-            by.insert(k.clone(), G { pnl: 0.0, n: 0, wins: 0, hold: 0.0, legs: 0.0, ids: vec![] });
+            by.insert(k.clone(), G { pnl: 0.0, n: 0, wins: 0, hold: 0.0, legs: 0, ids: vec![] });
             order.push(k.clone());
         }
         let g = by.get_mut(&k).unwrap();
         let p = num(get(t, "pnlCad"), 0.0);
         g.pnl += p;
         g.n += 1;
-        g.legs += num(get(t, "legCount"), 0.0);
+        g.legs += num(get(t, "legCount"), 0.0) as i64;
         g.hold += num(get(t, "holdDays"), 0.0);
         g.ids.push(field_s(t, "id"));
         if p > 0.0 {
@@ -131,7 +131,7 @@ pub fn grade_buckets(trades: &[Value]) -> Value {
         buckets.push(json!({
             "grade": g,
             "n": rows.len(),
-            "pnl": rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).sum::<f64>(),
+            "pnl": crate::value::py_sum(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fold(0.0, |a, b| a + b)),
             "tradeIds": rows.iter().map(|t| field_s(t, "id")).collect::<Vec<_>>(),
         }));
     }

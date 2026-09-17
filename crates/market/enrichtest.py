@@ -15,7 +15,7 @@ import random
 import subprocess
 import sys
 
-sys.path.insert(0, "/Users/md/dev/Bagholder")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 import enrich  # noqa: E402
 import forms  # noqa: E402
 import localmodel  # noqa: E402
@@ -23,7 +23,7 @@ import localmodel  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(HERE, "..", "..", "target", "release", "enrichtool")
 DOCS = os.path.join(os.environ.get("FILINGS_DIR") or "/tmp/filings", "docs")
-sys.path.insert(0, "/Users/md/dev/Bagholder/tests")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tests")))
 
 
 def diff(label, want, got, bad):

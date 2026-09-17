@@ -1,6 +1,6 @@
 # Shared model cases
 
-One file per case in `cases/`. Every implementation of the Bagholder model (Python here, Swift in `ios/Bagholder/Model.swift`, Kotlin in `android/model`) reads these files in its own test suite, runs the rows through its own model, and compares with `expect`. A change to a rule that is not made in every implementation fails that implementation's tests.
+One file per case in `cases/`. Every implementation of the Bagholder model (Rust in `crates/model`, Swift in `ios/Bagholder/Model.swift`, Kotlin in `android/model`) reads these files in its own test suite, runs the rows through its own model, and compares with `expect`. A change to a rule that is not made in every implementation fails that implementation's tests.
 
 ```
 {
@@ -12,6 +12,6 @@ One file per case in `cases/`. Every implementation of the Bagholder model (Pyth
 }
 ```
 
-`expect` holds only the fields listed in `make_cases.py` (`TRADE_KEYS`, `KPI_KEYS`, `POSITION_KEYS`, `HOLDING_KEYS`, `TILE_KEYS`; the cashflow lists appear when the case has a dividend row), floats rounded to six places, lists sorted as the generator sorts them. The meaning of every field is in `SPEC.md`.
+`expect` holds only the fields listed in `crates/model/src/cases.rs` (`TRADE_KEYS`, `KPI_KEYS`, `POSITION_KEYS`, `HOLDING_KEYS`, `TILE_KEYS`; the cashflow lists appear when the case has a dividend row), floats rounded to six places, lists sorted as the generator sorts them. The meaning of every field is in `SPEC.md`.
 
-The Python model is the reference. After an intended model change: `python3 tests/make_cases.py`, review the diff of `cases/`, commit both. `test_cases.py` fails until that is done, on purpose. To add a case, add it to `CASES` in `make_cases.py` and regenerate.
+The Rust model is the reference. After an intended model change: `cargo run -p bagholder-model --bin make-cases`, review the diff of `cases/`, commit both. `cargo test -p bagholder-model --test cases` fails until that is done, on purpose: it runs every file through the model and also checks that each file is exactly what the generator writes. To add a case, add it to `cases()` in `crates/model/src/cases.rs` and regenerate.

@@ -84,47 +84,76 @@ pub fn available() -> bool {
     crate::sedar::available() || crate::edgar::available()
 }
 
+/// A filing source, as `disclosures.PROVIDERS` lists them.
+pub trait Provider {
+    fn source(&self) -> &str;
+    fn available(&self) -> bool;
+    fn covers(&self, symbol: &str, exchange: &str, currency: &str) -> bool;
+    fn fetch(&self, symbol: &str, name: &str, exchange: &str, currency: &str, profile_no: &str) -> Fetched<Vec<Value>>;
+    /// Whether the source knows a filer even when it listed nothing.
+    fn has_filer(&self, _symbol: &str, _name: &str, _exchange: &str, _currency: &str) -> bool {
+        false
+    }
+    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)>;
+}
+
+struct Sedar;
+impl Provider for Sedar {
+    fn source(&self) -> &str { crate::sedar::SOURCE }
+    fn available(&self) -> bool { crate::sedar::available() }
+    fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::sedar::covers(s, e, c) }
+    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, p: &str) -> Fetched<Vec<Value>> {
+        crate::sedar::fetch(s, n, e, c, crate::sedar::SEARCH_LIMIT, p)
+    }
+    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)> { crate::sedar::document(row) }
+}
+
+struct Edgar;
+impl Provider for Edgar {
+    fn source(&self) -> &str { crate::edgar::SOURCE }
+    fn available(&self) -> bool { crate::edgar::available() }
+    fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::edgar::covers(s, e, c) }
+    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, _p: &str) -> Fetched<Vec<Value>> {
+        crate::edgar::fetch(s, n, e, c, 200)
+    }
+    fn has_filer(&self, s: &str, n: &str, e: &str, c: &str) -> bool { crate::edgar::has_filer(s, n, e, c) }
+    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)> { crate::edgar::document(row) }
+}
+
+/// SEDAR+ first, then EDGAR.
+pub fn providers() -> [&'static dyn Provider; 2] {
+    [&Sedar, &Edgar]
+}
+
 /// `disclosures.fetch`: every covering source's filings for one instrument,
 /// merged newest first, with each source's outcome beside them. A source that
 /// fails is recorded and skipped; the others still return.
 pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Value {
+    fetch_from(&providers(), symbol, name, exchange, currency, limit, profile_no)
+}
+
+/// `fetch` over the providers given.
+pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Value {
     let mut items: Vec<Value> = Vec::new();
     let mut sources = Map::new();
-
-    // SEDAR+ first, then EDGAR, as PROVIDERS lists them
-    let sedar_covered = crate::sedar::available() && crate::sedar::covers(symbol, exchange, currency);
-    if !sedar_covered {
-        sources.insert(crate::sedar::SOURCE.into(), json!({"available": crate::sedar::available(), "matched": false, "filer": false, "count": 0, "error": ""}));
-    } else {
-        match crate::sedar::fetch(symbol, name, exchange, currency, crate::sedar::SEARCH_LIMIT, profile_no) {
+    for p in providers {
+        let avail = p.available();
+        if !(avail && p.covers(symbol, exchange, currency)) {
+            sources.insert(p.source().into(), json!({"available": avail, "matched": false, "filer": false, "count": 0, "error": ""}));
+            continue;
+        }
+        match p.fetch(symbol, name, exchange, currency, profile_no) {
             Ok(got) => {
                 let n = got.len();
                 items.extend(got);
-                sources.insert(crate::sedar::SOURCE.into(), json!({"available": true, "matched": n > 0, "filer": n > 0, "count": n, "error": ""}));
+                let filer = n > 0 || p.has_filer(symbol, name, exchange, currency);
+                sources.insert(p.source().into(), json!({"available": true, "matched": n > 0, "filer": filer, "count": n, "error": ""}));
             }
             Err(e) => {
-                sources.insert(crate::sedar::SOURCE.into(), outcome_of(&e));
+                sources.insert(p.source().into(), outcome_of(&e));
             }
         }
     }
-
-    let edgar_covered = crate::edgar::covers(symbol, exchange, currency);
-    if !edgar_covered {
-        sources.insert(crate::edgar::SOURCE.into(), json!({"available": true, "matched": false, "filer": false, "count": 0, "error": ""}));
-    } else {
-        match crate::edgar::fetch(symbol, name, exchange, currency, 200) {
-            Ok(got) => {
-                let n = got.len();
-                items.extend(got);
-                let filer = n > 0 || crate::edgar::has_filer(symbol, name, exchange, currency);
-                sources.insert(crate::edgar::SOURCE.into(), json!({"available": true, "matched": n > 0, "filer": filer, "count": n, "error": ""}));
-            }
-            Err(e) => {
-                sources.insert(crate::edgar::SOURCE.into(), outcome_of(&e));
-            }
-        }
-    }
-
     // `sort(key=..., reverse=True)` is stable: equal keys keep their order
     items.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
     items.truncate(limit.max(1));
@@ -141,11 +170,15 @@ fn outcome_of(e: &SourceError) -> Value {
 /// `disclosures.document`: the document a stored row points at, from its
 /// source. (bytes, content type).
 pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
+    document_from(&providers(), row)
+}
+
+/// `document` over the providers given.
+pub fn document_from(providers: &[&dyn Provider], row: &Value) -> Fetched<(Vec<u8>, String)> {
     let src = row.get("source").and_then(|v| v.as_str()).unwrap_or("");
-    match src {
-        s if s == crate::sedar::SOURCE => crate::sedar::document(row),
-        s if s == crate::edgar::SOURCE => crate::edgar::document(row),
-        _ => Err(SourceError::Unavailable(format!("no provider for source {}", py_repr(src)))),
+    match providers.iter().find(|p| p.source() == src) {
+        Some(p) => p.document(row),
+        None => Err(SourceError::Unavailable(format!("no provider for source {}", py_repr(src)))),
     }
 }
 

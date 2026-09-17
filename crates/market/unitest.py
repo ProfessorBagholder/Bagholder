@@ -12,7 +12,7 @@ import random
 import subprocess
 import sys
 
-sys.path.insert(0, "/Users/md/dev/Bagholder")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 import universes  # noqa: E402
 
 TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "target", "release", "unitool")

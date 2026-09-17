@@ -75,12 +75,12 @@ pub fn build_positions(
         lots.sort_by(|a, b| (a.date.clone(), a.when.clone()).cmp(&(b.date.clone(), b.when.clone())));
         let (symbol, account, currency, direction) = k.clone();
         let mult = option_multiplier(&symbol);
-        let qty: f64 = lots.iter().map(|l| l.qty).sum();
+        let qty: f64 = lots.iter().map(|l| l.qty).fold(0.0, |a, b| a + b);
         if qty <= 1e-9 {
             continue;
         }
-        let cost: f64 = lots.iter().map(|l| l.qty * l.price * mult).sum();
-        let fees: f64 = lots.iter().map(|l| l.commission).sum();
+        let cost: f64 = lots.iter().map(|l| l.qty * l.price * mult).fold(0.0, |a, b| a + b);
+        let fees: f64 = lots.iter().map(|l| l.commission).fold(0.0, |a, b| a + b);
         let sec_id = lots.iter().map(|l| l.security_id.clone()).find(|s| !s.is_empty()).unwrap_or_default();
 
         let last = last_prices.get(&symbol);
@@ -109,7 +109,7 @@ pub fn build_positions(
 
         let mv = qty * last_px * mult;
         let unreal = if direction == "LONG" { mv - cost } else { cost - mv };
-        let held: f64 = lots.iter().map(|l| l.qty * days_between(&l.date, today) as f64).sum();
+        let held: f64 = lots.iter().map(|l| l.qty * days_between(&l.date, today) as f64).fold(0.0, |a, b| a + b);
 
         let mut ws_qty: Option<f64> = None;
         if !sec_id.is_empty() {
@@ -163,7 +163,7 @@ pub fn build_positions(
             "securityId": sec_id,
             "short": direction == "SHORT",
             "qty": qty,
-            "mult": mult,
+            "mult": mult as i64,
             "avg": if qty != 0.0 { cost / (qty * mult) } else { 0.0 },
             "cost": cost,
             "fees": fees,
@@ -197,7 +197,7 @@ pub fn build_positions(
         }));
     }
 
-    let book: f64 = rows.iter().map(|r| num(get(r, "cost"), 0.0).abs()).sum();
+    let book: f64 = rows.iter().map(|r| num(get(r, "cost"), 0.0).abs()).fold(0.0, |a, b| a + b);
     for r in rows.iter_mut() {
         let alloc = if book != 0.0 { num(get(r, "cost"), 0.0).abs() / book } else { 0.0 };
         if let Value::Object(m) = r {

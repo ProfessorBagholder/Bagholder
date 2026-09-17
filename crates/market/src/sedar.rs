@@ -70,12 +70,48 @@ fn fwd_chars(s: &str, at: usize, n: usize) -> usize {
 struct State {
     session: Option<Session>,
     last: Option<Instant>,
-    scope: HashMap<String, (Instant, String)>,
+    scope: ScopeCache,
+}
+
+/// The issuer document pages walked recently, by profile number.
+#[derive(Default)]
+pub struct ScopeCache(HashMap<String, (Instant, String)>);
+
+impl ScopeCache {
+    /// A page still inside its window.
+    pub fn fresh(&self, profile_no: &str) -> Option<String> {
+        self.0.get(profile_no).filter(|(expiry, _)| *expiry > Instant::now()).map(|(_, h)| h.clone())
+    }
+
+    /// Keep a walked page; a failed walk is never kept.
+    pub fn keep(&mut self, profile_no: &str, html: &Option<String>) {
+        if let Some(h) = html {
+            self.0.insert(profile_no.to_string(), (Instant::now() + SCOPE_TTL, h.clone()));
+        }
+    }
+
+    pub fn remove(&mut self, profile_no: &str) {
+        self.0.remove(profile_no);
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The cached page, else the walk's, kept when it succeeded.
+    pub fn get_or_walk(&mut self, profile_no: &str, walk: impl FnOnce() -> Option<String>) -> Option<String> {
+        if let Some(h) = self.fresh(profile_no) {
+            return Some(h);
+        }
+        let html = walk();
+        self.keep(profile_no, &html);
+        html
+    }
 }
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { session: None, last: None, scope: HashMap::new() }))
+    S.get_or_init(|| Mutex::new(State { session: None, last: None, scope: ScopeCache::default() }))
 }
 
 fn pace(st: &mut State) {
@@ -229,13 +265,13 @@ pub fn urlencode(pairs: &[(String, String)]) -> String {
 }
 
 /// One opened service instance: its page, ids and session headers.
-struct View {
-    app: String,
-    inst: String,
-    key: String,
-    sid: String,
-    page: String,
-    reference: String,
+pub struct View {
+    pub app: String,
+    pub inst: String,
+    pub key: String,
+    pub sid: String,
+    pub page: String,
+    pub reference: String,
 }
 
 re!(re_inst_url, r"viewInstance/view\.html\?id=([0-9a-f]+)");
@@ -335,7 +371,7 @@ impl View {
 
     /// `_View.refresh_identity`: adopt the new view instance after a
     /// navigation that pushed one.
-    fn refresh_identity(&mut self, html: &str) -> bool {
+    pub fn refresh_identity(&mut self, html: &str) -> bool {
         let inst = re_inst_url().captures(html).or_else(|| re_inst_page().captures(html)).map(|c| c[1].to_string());
         let key = re_key().captures(html).map(|c| c[1].to_string());
         if let (Some(inst), Some(key)) = (inst, key) {
@@ -543,15 +579,11 @@ pub fn list_filings(query: Option<&str>, profile_no: Option<&str>, limit: usize)
 /// `sedar._scoped_documents`: the issuer's document page, reused for a short
 /// window so a run of its documents walks the chain once.
 fn scoped_documents(st: &mut State, profile_no: &str, name: Option<&str>) -> Option<String> {
-    if let Some((expiry, html)) = st.scope.get(profile_no) {
-        if *expiry > Instant::now() {
-            return Some(html.clone());
-        }
+    if let Some(h) = st.scope.fresh(profile_no) {
+        return Some(h);
     }
     let html = scoped_documents_uncached(st, profile_no, name).ok().flatten();
-    if let Some(h) = &html {
-        st.scope.insert(profile_no.to_string(), (Instant::now() + SCOPE_TTL, h.clone()));
-    }
+    st.scope.keep(profile_no, &html);
     html
 }
 

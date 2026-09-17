@@ -97,13 +97,13 @@ pub fn collapse_trade(
     });
     let t0 = slices[0].clone();
 
-    let qty: f64 = slices.iter().map(|s| s.quantity).sum();
-    let entry_notional: f64 = slices.iter().map(|s| s.entry_price * s.quantity).sum();
-    let exit_notional: f64 = slices.iter().map(|s| s.exit_price * s.quantity).sum();
-    let pnl: f64 = slices.iter().map(|s| s.pnl).sum();
-    let pnl_cad: f64 = slices.iter().map(|s| s.pnl_cad).sum();
-    let fees: f64 = slices.iter().map(|s| s.commission).sum();
-    let fees_cad: f64 = slices.iter().map(|s| s.fees_cad.unwrap_or(s.commission)).sum();
+    let qty: f64 = slices.iter().map(|s| s.quantity).fold(0.0, |a, b| a + b);
+    let entry_notional: f64 = slices.iter().map(|s| s.entry_price * s.quantity).fold(0.0, |a, b| a + b);
+    let exit_notional: f64 = slices.iter().map(|s| s.exit_price * s.quantity).fold(0.0, |a, b| a + b);
+    let pnl: f64 = slices.iter().map(|s| s.pnl).fold(0.0, |a, b| a + b);
+    let pnl_cad: f64 = slices.iter().map(|s| s.pnl_cad).fold(0.0, |a, b| a + b);
+    let fees: f64 = slices.iter().map(|s| s.commission).fold(0.0, |a, b| a + b);
+    let fees_cad: f64 = slices.iter().map(|s| s.fees_cad.unwrap_or(s.commission)).fold(0.0, |a, b| a + b);
     let entry_date = slices.iter().map(|s| s.entry_date.clone()).min().unwrap_or_default();
     let exit_date = slices.iter().map(|s| s.exit_date.clone()).max().unwrap_or_default();
     let entry_when = slices
@@ -188,7 +188,7 @@ pub fn collapse_trade(
         "side": if t0.open_direction == "LONG" { "SELL" } else { "COVER" },
         "openDirection": t0.open_direction,
         "qty": qty,
-        "mult": mult,
+        "mult": mult as i64,
         "entry": entry,
         "exit": exit_px,
         "entryDate": entry_date,

@@ -14,3 +14,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 tz-rs = "0.7"
 
 [dev-dependencies]
+
+[[bin]]
+name = "make-cases"
+path = "src/bin/make_cases.rs"

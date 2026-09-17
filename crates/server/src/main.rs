@@ -865,3 +865,109 @@ fn main() {
     }
     std::process::exit(update::supervise(&home_dir(), update::UPDATE_HEALTHY_SEC));
 }
+
+#[cfg(test)]
+mod tests {
+    //! Ported from tests/test_page.py, tests/test_package.py and the protocol
+    //! check in tests/test_store.py.
+    use std::path::PathBuf;
+
+    fn root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn page() -> String {
+        std::fs::read_to_string(root().join("ledger.html")).unwrap()
+    }
+
+    const SHIPPED: [&str; 3] = ["ledger.html", "lightweight-charts.js", "favicon.png"];
+
+    #[test]
+    fn test_every_script_on_the_page_parses() {
+        let node = std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("node")).find(|p| p.is_file()));
+        let Some(node) = node else {
+            eprintln!("skipped: node is needed to parse the page's script");
+            return;
+        };
+        let html = page();
+        let scripts: Vec<&str> = regex::Regex::new(r"(?s)<script>(.*?)</script>").unwrap().captures_iter(&html).map(|c| c.get(1).unwrap().as_str()).collect();
+        assert!(!scripts.is_empty(), "the page carries its script inline");
+        for (i, js) in scripts.iter().enumerate() {
+            let path = std::env::temp_dir().join(format!("bagholder-page-{}-{}.js", std::process::id(), i));
+            std::fs::write(&path, js).unwrap();
+            let r = std::process::Command::new(&node).arg("--check").arg(&path).output().unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert!(r.status.success(), "script {} does not parse:\n{}", i, String::from_utf8_lossy(&r.stderr).chars().take(2000).collect::<String>());
+        }
+    }
+
+    #[test]
+    fn test_no_title_attribute_anywhere_on_the_page() {
+        let found: Vec<String> = regex::Regex::new(r#" title=\\?["']"#).unwrap().find_iter(&page()).map(|m| m.as_str().to_string()).collect();
+        assert_eq!(found, Vec::<String>::new(), "nothing on the page gets a browser tooltip");
+    }
+
+    #[test]
+    fn test_protocol_matches_page() {
+        let html = page();
+        let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&html).expect("the page names its protocol");
+        assert_eq!(&m[1], crate::app::PROTOCOL);
+        // status_payload()["protocol"] is app::PROTOCOL by construction (see status_payload)
+    }
+
+    #[test]
+    fn test_the_image_carries_the_page_and_its_chart_library() {
+        let docker = std::fs::read_to_string(root().join("Dockerfile")).unwrap();
+        let copy = regex::Regex::new(r"^COPY\s+(.*?)\s+\./\s*$").unwrap();
+        let copied: Vec<String> = docker.lines().filter_map(|l| copy.captures(l.trim()).map(|c| c[1].to_string())).flat_map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
+        assert!(!copied.is_empty(), "the Dockerfile copies the app in");
+        for needed in SHIPPED {
+            assert!(copied.iter().any(|c| c == needed), "{} is served by the app", needed);
+        }
+    }
+
+    #[test]
+    fn test_nothing_the_image_needs_is_kept_out_of_it() {
+        let ignored: Vec<String> = std::fs::read_to_string(root().join(".dockerignore")).unwrap().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+        for needed in SHIPPED {
+            assert!(!ignored.iter().any(|i| i == needed), "{} kept out of the image", needed);
+        }
+    }
+
+    #[test]
+    fn test_the_release_archive_carries_the_page_and_its_assets() {
+        let out = match std::process::Command::new("git").arg("-C").arg(root()).arg("ls-files").output() {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+            _ => {
+                eprintln!("skipped: not a git checkout");
+                return;
+            }
+        };
+        let tracked: Vec<&str> = out.lines().collect();
+        for needed in SHIPPED {
+            assert!(tracked.contains(&needed), "{} untracked: the release archive would not carry it", needed);
+        }
+    }
+
+    #[test]
+    fn test_the_server_serves_what_ships_from_its_root() {
+        // the Rust server reads these from its root at request time rather than embedding them
+        let src = include_str!("main.rs");
+        for needed in SHIPPED {
+            assert!(root().join(needed).is_file(), "{} beside the workspace", needed);
+        }
+        assert!(src.contains("static_file(\"lightweight-charts.js\")") && src.contains("static_file(\"favicon.png\")") && src.contains("feeds::ledger_path()"));
+    }
+}
+
+#[cfg(test)]
+mod tests_common;
+
+#[cfg(test)]
+mod tests_misc;
+
+#[cfg(test)]
+mod tests_brackets;
+
+#[cfg(test)]
+mod tests_orders;

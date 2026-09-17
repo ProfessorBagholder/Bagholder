@@ -113,7 +113,7 @@ re!(re_lang_tail, r"(?i)[_\-\s]*(FINAL|DRAFT|REVISED|v\d+|EN|FR|ENG?|FRE?|Englis
 re!(re_markers, r"(?i)\b(PR|FINAL|NR|DRAFT|REVISED|v\d+)\b");
 re!(re_three_letters, r"[A-Za-z]{3,}");
 
-fn clean_subject(s: &str) -> String {
+pub fn clean_subject(s: &str) -> String {
     let s = re_tooling().replacen(s, 1, "").into_owned();
     let s = re_extension().replacen(&s, 1, "").into_owned();
     // underscores first, so the word boundaries below actually fire
@@ -162,7 +162,19 @@ pub fn pdf_text(data: &[u8]) -> String {
 }
 
 /// `enrich.document_text`.
+pub mod hooks {
+    use std::cell::RefCell;
+    pub type DocumentText = Box<dyn Fn(&[u8], &str) -> String>;
+    thread_local! {
+        /// A stand-in for reading a document's text, per thread.
+        pub static DOCUMENT_TEXT: RefCell<Option<DocumentText>> = RefCell::new(None);
+    }
+}
+
 pub fn document_text(data: &[u8], content_type: &str) -> String {
+    if let Some(r) = hooks::DOCUMENT_TEXT.with(|h| h.borrow().as_ref().map(|f| f(data, content_type))) {
+        return r;
+    }
     if content_type.to_lowercase().contains("pdf") || data.starts_with(b"%PDF-") {
         return pdf_text(data);
     }

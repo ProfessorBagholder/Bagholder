@@ -105,3 +105,9 @@ pub fn fmt8(v: f64) -> String { format!("{:.8}", v) }
 pub fn num_repr(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e16 { format!("{:.1}", v) } else { v.to_string() }
 }
+
+/// Python's `sum` over floats: the integer 0 when there is nothing to add,
+/// else the float total from +0.0 (never -0.0).
+pub fn py_sum(empty: bool, total: f64) -> serde_json::Value {
+    if empty { serde_json::json!(0) } else { serde_json::json!(total + 0.0) }
+}

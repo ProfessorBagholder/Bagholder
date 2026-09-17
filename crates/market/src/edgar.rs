@@ -87,7 +87,7 @@ fn get_json(url: &str) -> Fetched<Value> {
     serde_json::from_str(&resp.text()).map_err(|e| SourceError::Unavailable(format!("EDGAR returned unreadable data: {}", e)))
 }
 
-type Tickers = HashMap<String, (i64, String)>;
+pub type Tickers = HashMap<String, (i64, String)>;
 
 fn tickers() -> &'static Mutex<Option<Tickers>> {
     static T: OnceLock<Mutex<Option<Tickers>>> = OnceLock::new();
@@ -123,6 +123,11 @@ pub fn ticker_map() -> Fetched<Tickers> {
     }
     *slot = Some(out.clone());
     Ok(out)
+}
+
+/// Prime the ticker map, as the tests stand in for SEC's published list.
+pub fn set_ticker_map(t: Tickers) {
+    *tickers().lock().unwrap() = Some(t);
 }
 
 /// `edgar._bare`: a ticker as SEC writes it -- no venue suffix, dots to dashes.
@@ -274,6 +279,11 @@ pub fn parse_submissions(sub: &Value, cik: i64, limit: usize) -> Fetched<Vec<Val
 /// `edgar.fetch`: the issuer's recent filings, newest first, or nothing when
 /// SEC does not know the ticker or the name guard rejects a collision.
 pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize) -> Fetched<Vec<Value>> {
+    fetch_with(symbol, name, exchange, currency, limit, &get_json)
+}
+
+/// `fetch` with the submissions request given.
+pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, get_json: &dyn Fn(&str) -> Fetched<Value>) -> Fetched<Vec<Value>> {
     let map = ticker_map()?;
     let (cik, sec_title) = match map.get(&bare(symbol)) { Some(t) => t.clone(), None => return Ok(vec![]) };
     let us_listed = us_exchange(exchange) || currency.to_uppercase() == "USD";
@@ -336,6 +346,11 @@ pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
 /// `edgar.enrichment`: a deterministic title and summary for a Schedule 13G or
 /// 13D, read from its raw XML rather than the rendered page.
 pub fn enrichment(row: &Value) -> Option<Value> {
+    enrichment_with(row, &document)
+}
+
+/// `enrichment` with the download given.
+pub fn enrichment_with(row: &Value, document: &dyn Fn(&Value) -> Fetched<(Vec<u8>, String)>) -> Option<Value> {
     let typ = s(row.get("type")).to_uppercase();
     if !typ.starts_with("SCHEDULE 13") {
         return None;
@@ -379,6 +394,15 @@ pub fn pick_content(items: &[Value], primary: &str) -> Option<String> {
 
 /// `edgar.content`: the filing's substance rather than its cover form.
 pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
+    content_with(row, &get_json, &document)
+}
+
+/// `content` with the index request and the download given.
+pub fn content_with(
+    row: &Value,
+    get_json: &dyn Fn(&str) -> Fetched<Value>,
+    document: &dyn Fn(&Value) -> Fetched<(Vec<u8>, String)>,
+) -> Fetched<(Vec<u8>, String)> {
     let url = s(row.get("url"));
     if !url.starts_with("https://www.sec.gov/") {
         return document(row);

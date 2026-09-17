@@ -19,7 +19,40 @@ use serde_json::{json, Map, Value};
 use bagholder_store::orders as so;
 use bagholder_ws::session::{identity_from, CallError, Client};
 
-use crate::app::{app, f, log, now_iso, now_unix, num, qty_text, s, spawn, truthy, uuid4};
+use crate::app::{app, f, log, now_iso, now_unix, num, qty_text, s, truthy, uuid4};
+
+/// Test seams: a fake Wealthsimple, the live switch, the session, and threads.
+/// Under `cfg(test)` nothing reaches the network: without a fake every call fails.
+#[cfg(test)]
+pub mod seam {
+    use super::*;
+    use std::sync::Arc;
+    pub type Gql = Arc<dyn Fn(&str, &Value) -> Result<Value, CallError> + Send + Sync>;
+    pub static GQL: Mutex<Option<Gql>> = Mutex::new(None);
+    pub static LIVE: Mutex<Option<bool>> = Mutex::new(None);
+    pub static SESSION: Mutex<Option<Option<Value>>> = Mutex::new(None);
+    /// 0: a spawned thread never runs (Python's patched `threading.Thread`); 1: it runs inline.
+    pub static SPAWN_INLINE: AtomicBool = AtomicBool::new(false);
+    pub fn reset() {
+        *GQL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *LIVE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        SPAWN_INLINE.store(false, Ordering::SeqCst);
+    }
+}
+
+fn spawn<F: FnOnce() + Send + 'static>(name: &str, f: F) {
+    #[cfg(test)]
+    {
+        let _ = name;
+        if seam::SPAWN_INLINE.load(Ordering::SeqCst) {
+            f();
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    crate::app::spawn(name, f)
+}
 use crate::notify;
 use crate::session::{ensure_fresh_token, load_session};
 
@@ -29,6 +62,10 @@ use crate::session::{ensure_fresh_token, load_session};
 
 /// `bagholder.ORDERS_LIVE`.
 pub fn orders_live() -> bool {
+    #[cfg(test)]
+    if let Some(v) = *seam::LIVE.lock().unwrap_or_else(|e| e.into_inner()) {
+        return v;
+    }
     static LIVE: OnceLock<bool> = OnceLock::new();
     *LIVE.get_or_init(|| std::env::var("BAGHOLDER_DRY_ORDERS").map(|v| v.trim() != "1").unwrap_or(true))
 }
@@ -179,8 +216,20 @@ fn gql(sess: &Value, op: &str, vars: Value) -> Result<Value, CallError> {
     if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
         return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
     }
-    let home = app().ws_home();
-    Client { home: &home }.graphql(sess, op, &vars, None)
+    #[cfg(test)]
+    {
+        let _ = sess;
+        let g = seam::GQL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        return match g {
+            Some(g) => g(op, &vars),
+            None => Err(CallError::Failed(format!("{}: no network in tests", op))),
+        };
+    }
+    #[cfg(not(test))]
+    {
+        let home = app().ws_home();
+        Client { home: &home }.graphql(sess, op, &vars, None)
+    }
 }
 
 fn err_text(e: &CallError) -> String {
@@ -384,6 +433,11 @@ const ORDER_TRADABLE_TYPES: [&str; 1] = ["SELF_DIRECTED"];
 const ORDER_UNTRADABLE_MARKERS: [&str; 3] = ["CRYPTO", "PREDICTIONS", "MANAGED"];
 
 fn ticket_session() -> Option<Value> {
+    #[cfg(test)]
+    {
+        return seam::SESSION.lock().unwrap_or_else(|e| e.into_inner()).clone().flatten();
+    }
+    #[allow(unreachable_code)]
     let sess = load_session()?;
     if f(&sess, "access_token").is_empty() {
         return None;
@@ -887,7 +941,7 @@ pub fn place_order(body: &Value) -> Value {
 // --- reading orders back ---
 
 const ORDER_BRANCH: &str = "TR";
-const WS_PENDING: [&str; 8] = ["NEW", "PENDING_SUBMISSION", "PENDING_REVIEW", "PENDING_FUND_TRANSFER", "SUBMITTED", "PLACED", "PARTIALLY_FILLED", "CONTINGENT"];
+pub const WS_PENDING: [&str; 8] = ["NEW", "PENDING_SUBMISSION", "PENDING_REVIEW", "PENDING_FUND_TRANSFER", "SUBMITTED", "PLACED", "PARTIALLY_FILLED", "CONTINGENT"];
 const WS_CANCELLING: [&str; 1] = ["CANCEL_PENDING"];
 pub const LIVE_STATUSES: [&str; 3] = ["sent", "pending", "cancelling"];
 pub const ORDERS_REFRESH_SEC: u64 = 30;
@@ -1098,7 +1152,7 @@ fn feed_order_row(node: &Value) -> Value {
     })
 }
 
-static REFRESHED_AT: Mutex<String> = Mutex::new(String::new());
+pub static REFRESHED_AT: Mutex<String> = Mutex::new(String::new());
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 fn refreshed_at() -> String {
@@ -1325,6 +1379,10 @@ pub fn orders_loop() {
 
 /// `bagholder.cancel_order`.
 pub fn cancel_order(order_id: &str) -> Value {
+    #[cfg(test)]
+    if let Some(v) = bracket_seam::CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return v;
+    }
     let row = match get_order(order_id) {
         Some(r) => r,
         None => return json!({"ok": false, "error": "No such order."}),
@@ -1402,12 +1460,12 @@ const BRACKET_ENDED_QUIETLY: [&str; 5] = ["stopped", "target", "cancelled by the
 
 static BRACKET_LOCK: AtomicBool = AtomicBool::new(false);
 
-fn bracket_said() -> &'static Mutex<HashSet<String>> {
+pub fn bracket_said() -> &'static Mutex<HashSet<String>> {
     static SAID: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     SAID.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn stop_allowed_cache() -> &'static Mutex<HashMap<String, bool>> {
+pub fn stop_allowed_cache() -> &'static Mutex<HashMap<String, bool>> {
     static C: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -1444,6 +1502,7 @@ fn await_cancels(b: &Value, seconds: u32) {
         for o in &open {
             refresh_orders(&f(o, "id"));
         }
+        #[cfg(not(test))]
         std::thread::sleep(Duration::from_secs(1));
     }
 }
@@ -1465,10 +1524,28 @@ pub fn create_bracket(order_row: &Value) -> Value {
     get_bracket(&id).unwrap_or(b)
 }
 
+/// Bracket test seams: `_stop_allowed`, `cancel_order`, the said lines and the caches.
+#[cfg(test)]
+pub mod bracket_seam {
+    use super::*;
+    pub static STOP_ALLOWED: Mutex<Option<bool>> = Mutex::new(None);
+    pub static CANCEL_ORDER: Mutex<Option<Value>> = Mutex::new(None);
+    pub static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    pub fn reset() {
+        *STOP_ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        SAID.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        bracket_said().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        stop_allowed_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
 fn say_once(key: String, line: &str) {
     if !bracket_said().lock().unwrap().insert(key) {
         return;
     }
+    #[cfg(test)]
+    bracket_seam::SAID.lock().unwrap_or_else(|e| e.into_inner()).push(line.to_string());
     log(line);
 }
 
@@ -1664,6 +1741,10 @@ fn arm_step(b: &Value, entry: Option<&Value>) {
 }
 
 fn stop_allowed(security_id: &str) -> bool {
+    #[cfg(test)]
+    if let Some(v) = *bracket_seam::STOP_ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) {
+        return v;
+    }
     if let Some(v) = stop_allowed_cache().lock().unwrap().get(security_id) {
         return *v;
     }

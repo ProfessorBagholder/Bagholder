@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, "/Users/md/dev/Bagholder")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 import market  # noqa: E402
 import shorts  # noqa: E402
 import xls  # noqa: E402

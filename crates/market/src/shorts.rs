@@ -217,10 +217,27 @@ fn files() -> &'static Mutex<HashMap<String, Held>> {
     F.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Forget every whole-market file (`shorts._files.clear()`).
+pub fn clear_files() {
+    files().lock().unwrap().clear();
+}
+
+/// Make a held file look `secs` older, as a test setting its `at` back does.
+pub fn age_file(name: &str, secs: u64) {
+    if let Some(h) = files().lock().unwrap().get_mut(name) {
+        h.at = h.at.checked_sub(Duration::from_secs(secs)).unwrap_or(h.at);
+    }
+}
+
+/// Put a file in place as though it had just been read.
+pub fn warm_file(name: &str, key: &str, rows: Map<String, Value>) {
+    files().lock().unwrap().insert(name.to_string(), Held { key: key.to_string(), rows, at: Instant::now() });
+}
+
 /// `shorts._table`: a file every listing is looked up in, fetched at most once
 /// every FILE_HOURS. A fetch that fails keeps what was already read rather
 /// than emptying it.
-fn table<F>(name: &str, build: F) -> Held
+pub fn table<F>(name: &str, build: F) -> Held
 where
     F: FnOnce() -> Option<(String, Map<String, Value>)>,
 {
@@ -263,9 +280,14 @@ pub fn parse_us_volume(text: &str) -> Map<String, Value> {
 }
 
 fn us_volume_file(today: &str) -> Option<(String, Map<String, Value>)> {
+    us_volume_file_with(today, |url| get_text(url, &headers()).map_err(|e| e.to_string()))
+}
+
+/// `us_volume_file` with the fetch handed in.
+pub fn us_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str, mut get: G) -> Option<(String, Map<String, Value>)> {
     for d in trading_days(today, TRIES) {
         let url = US_VOLUME_URL.replace("{}", &compact(&d));
-        let rows = match get_text(&url, &headers()) {
+        let rows = match get(&url) {
             Ok(t) => parse_us_volume(&t),
             Err(_) => continue,
         };
@@ -304,12 +326,14 @@ fn get_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
 }
 
 fn ca_position_file(today: &str) -> Option<(String, Map<String, Value>)> {
+    ca_position_file_with(today, |url| get_bytes(url).map_err(|e| e.to_string()).and_then(|raw| crate::xls::table(&raw)))
+}
+
+/// `ca_position_file` with the fetch and the spreadsheet reading handed in.
+pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(today: &str, mut grid_of: G) -> Option<(String, Map<String, Value>)> {
     for d in position_dates(today, TRIES) {
         let url = CA_POSITION_URL.replace("{}", &compact(&d));
-        let rows = get_bytes(&url)
-            .map_err(|e| e.to_string())
-            .and_then(|raw| crate::xls::table(&raw))
-            .map(|grid| parse_ca_positions(&grid));
+        let rows = grid_of(&url).map(|grid| parse_ca_positions(&grid));
         match rows {
             Err(_) => {
                 note_source("ciro", false, Some(&FetchError::Transport(format!("no report for {}", d))));
@@ -377,9 +401,14 @@ pub fn parse_ca_volume(text: &str) -> Result<Map<String, Value>, String> {
 }
 
 fn ca_volume_file(today: &str) -> Option<(String, Map<String, Value>)> {
+    ca_volume_file_with(today, |url| get_text(url, &headers()).map_err(|e| e.to_string()))
+}
+
+/// `ca_volume_file` with the fetch handed in.
+pub fn ca_volume_file_with<G: FnMut(&str) -> Result<String, String>>(today: &str, mut get: G) -> Option<(String, Map<String, Value>)> {
     for (start, end) in volume_periods(today, TRIES) {
         let url = CA_VOLUME_URL.replacen("{}", &compact(&start), 1).replacen("{}", &compact(&end), 1);
-        let rows = match get_text(&url, &headers()) {
+        let rows = match get(&url) {
             Ok(t) => match parse_ca_volume(&t) { Ok(r) => r, Err(_) => continue },
             Err(_) => continue,
         };
@@ -410,6 +439,11 @@ fn ca_positions_on(day: &str) -> Map<String, Value> {
 /// first. Canada publishes one file per reporting date, so each is read on its
 /// own and kept.
 pub fn ca_series(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize) -> Vec<Value> {
+    ca_series_with(symbol, exchange, asof, today, back, ca_positions_on)
+}
+
+/// `ca_series` with each dated report's rows handed in.
+pub fn ca_series_with<R: FnMut(&str) -> Map<String, Value>>(symbol: &str, exchange: &str, asof: &str, today: &str, back: usize, mut ca_positions_on: R) -> Vec<Value> {
     let sym = symbol.trim().to_uppercase();
     let mut out: Vec<Value> = Vec::new();
     for day in position_dates(today, back) {
@@ -472,9 +506,20 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> bool {
 /// last price, which gives back the count the exchange put in, whole for every
 /// listing it carries.
 fn cboe_units(symbol: &str) -> Option<f64> {
-    let held = table("cboe_listings", || {
-        let text = get_text(CA_CBOE_URL, &headers()).ok()?;
-        let doc: Value = serde_json::from_str(&text).ok()?;
+    cboe_units_with(symbol, || get_text(CA_CBOE_URL, &headers()).ok())
+}
+
+/// `cboe_units` with the directory's fetch handed in; the directory is kept as
+/// a whole-market file.
+pub fn cboe_units_with<G: FnOnce() -> Option<String>>(symbol: &str, get: G) -> Option<f64> {
+    let held = table("cboe_listings", || Some(("cboe".to_string(), parse_cboe_directory(&get()?)?)));
+    held.rows.get(&symbol.trim().to_uppercase()).and_then(|v| v.as_f64())
+}
+
+/// The fund counts in Cboe Canada's listing directory.
+pub fn parse_cboe_directory(text: &str) -> Option<Map<String, Value>> {
+    {
+        let doc: Value = serde_json::from_str(text).ok()?;
         let mut rows = Map::new();
         for r in doc.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default() {
             if !CBOE_FUNDS.contains(&field(&r, "security").trim().to_lowercase().as_str()) {
@@ -490,35 +535,28 @@ fn cboe_units(symbol: &str) -> Option<f64> {
                 rows.insert(field(&r, "symbol").trim().to_uppercase(), json!(count.round_ties_even()));
             }
         }
-        Some(("cboe".to_string(), rows))
-    });
-    held.rows.get(&symbol.trim().to_uppercase()).and_then(|v| v.as_f64())
+        Some(rows)
+    }
 }
 
 /// `shorts._fund_units`: the units an exchange-traded fund has in issue, from
 /// the market's own source. For a fund this is the float, not a stand-in.
 fn fund_units(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, today: &str) -> Option<f64> {
+    fund_units_with(symbol, exchange, currency, |code| tmx_units(conn, code, today), cboe_units)
+}
+
+/// `fund_units` with TMX's count and the venue's directory handed in.
+pub fn fund_units_with<T, C>(symbol: &str, exchange: &str, currency: &str, tmx: T, cboe: C) -> Option<f64>
+where
+    T: FnOnce(&str) -> Option<f64>,
+    C: FnOnce(&str) -> Option<f64>,
+{
     let sym = symbol.trim().to_uppercase();
     if market_of(&sym, exchange, currency) == "us" {
         // the US count comes from Yahoo with the float
         return None;
     }
-    let mut count: Option<f64> = None;
-    if let Some(code) = crate::quotes::tmx_quote_symbol(&sym, exchange, currency) {
-        let ask = |form: &str| -> Result<Option<Value>, FetchError> {
-            let answered = post_json(crate::tmx::TMX_URL, &json!({
-                "operationName": "getQuoteBySymbol",
-                "variables": {"symbol": form, "locale": "en"},
-                "query": TMX_UNITS_QUERY,
-            }), &crate::http::TMX_HEADERS)?;
-            let q = answered.get("data").and_then(|d| d.get("getQuoteBySymbol")).cloned().unwrap_or(Value::Null);
-            Ok(match &q { Value::Object(m) if !m.is_empty() => Some(q), _ => None })
-        };
-        match crate::tmx::tmx_lookup_try(conn, &code, today, ask) {
-            Ok((q, _)) => count = q.and_then(|q| num(q.get("shareOutStanding"))).filter(|c| *c != 0.0),
-            Err(e) => eprintln!("bagholder shorts: {} units failed: {}", sym, e),
-        }
-    }
+    let count = crate::quotes::tmx_quote_symbol(&sym, exchange, currency).and_then(|code| tmx(&code)).filter(|c| *c != 0.0);
     if truthy(count) {
         return count;
     }
@@ -528,7 +566,28 @@ fn fund_units(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currenc
     if !CA_VENUES[3].1.contains(&ex.as_str()) {
         return None;
     }
-    cboe_units(&sym)
+    cboe(&sym)
+}
+
+fn tmx_units(conn: &rusqlite::Connection, code: &str, today: &str) -> Option<f64> {
+    let mut count: Option<f64> = None;
+    let sym = code;
+    {
+        let ask = |form: &str| -> Result<Option<Value>, FetchError> {
+            let answered = post_json(crate::tmx::TMX_URL, &json!({
+                "operationName": "getQuoteBySymbol",
+                "variables": {"symbol": form, "locale": "en"},
+                "query": TMX_UNITS_QUERY,
+            }), &crate::http::TMX_HEADERS)?;
+            let q = answered.get("data").and_then(|d| d.get("getQuoteBySymbol")).cloned().unwrap_or(Value::Null);
+            Ok(match &q { Value::Object(m) if !m.is_empty() => Some(q), _ => None })
+        };
+        match crate::tmx::tmx_lookup_try(conn, code, today, ask) {
+            Ok((q, _)) => count = q.and_then(|q| num(q.get("shareOutStanding"))).filter(|c| *c != 0.0),
+            Err(e) => eprintln!("bagholder shorts: {} units failed: {}", sym, e),
+        }
+    }
+    count
 }
 
 struct Float {
@@ -546,6 +605,47 @@ fn floats() -> &'static Mutex<HashMap<String, Float>> {
 /// Yahoo publishes, never swapped for the shares in issue; a fund's units in
 /// issue are its float, and stand in where no float is published for one.
 pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, currency: &str, name: &str, today: &str) -> Option<f64> {
+    let mut slot = yahoo().lock().unwrap();
+    let opened = yahoo_open(&mut slot);
+    let ask = |form: &str| -> Option<(u16, String)> {
+        let y = slot.as_mut()?;
+        let url = YAHOO_STATS_URL.replacen("{}", form, 1).replacen("{}", &y.crumb, 1);
+        match y.session.get(&url, Duration::from_secs(TIMEOUT_SEC)) {
+            Ok(a) => Some((a.status, a.text())),
+            Err(e) => {
+                eprintln!("bagholder shorts: {} float from yahoo failed: {}", form, e);
+                None
+            }
+        }
+    };
+    float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_turn, crate::quotes::yahoo_back_off, |sym, ccy| {
+        fund_units(conn, sym, exchange, ccy, today)
+    })
+}
+
+/// Forget every float (`shorts._shares.clear()`).
+pub fn clear_floats() {
+    floats().lock().unwrap().clear();
+}
+
+/// Make a kept float look `secs` older.
+pub fn age_float(key: &str, secs: u64) {
+    if let Some(h) = floats().lock().unwrap().get_mut(key) {
+        h.at = h.at.checked_sub(Duration::from_secs(secs)).unwrap_or(h.at);
+    }
+}
+
+/// `float_shares` with Yahoo and the fund count handed in: `ask` answers a
+/// symbol form with a status and a body, `session` says whether there is a
+/// client to ask with at all.
+#[allow(clippy::too_many_arguments)]
+pub fn float_shares_with<A, T, B, U>(symbol: &str, exchange: &str, currency: &str, name: &str, session: bool, mut ask: A, mut turn: T, mut back_off: B, units: U) -> Option<f64>
+where
+    A: FnMut(&str) -> Option<(u16, String)>,
+    T: FnMut() -> bool,
+    B: FnMut(),
+    U: FnOnce(&str, &str) -> Option<f64>,
+{
     let sym = symbol.trim().to_uppercase();
     let key = format!("{}|{}", sym, exchange.trim().to_uppercase());
     if let Some(held) = floats().lock().unwrap().get(&key) {
@@ -560,62 +660,51 @@ pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, c
     let where_ = market_of(&sym, exchange, currency);
     let ccy = if currency.trim().is_empty() { if where_ == "us" { "USD".to_string() } else { "CAD".to_string() } } else { currency.trim().to_string() };
     let mut count: Option<f64> = None;
-    {
-        let mut slot = yahoo().lock().unwrap();
-        if yahoo_open(&mut slot) {
-            let y = slot.as_mut().unwrap();
-            let mut forms = crate::quotes::yahoo_forms(&json!({"symbol": sym, "exchange": exchange, "currency": ccy}));
-            if forms.is_empty() {
-                forms = vec![bagholder_model::venues::tmx_symbol(&sym)];
+    if session {
+        let mut forms = crate::quotes::yahoo_forms(&json!({"symbol": sym, "exchange": exchange, "currency": ccy}));
+        if forms.is_empty() {
+            forms = vec![bagholder_model::venues::tmx_symbol(&sym)];
+        }
+        for form in forms {
+            if !turn() {
+                continue;
             }
-            for form in forms {
-                if !crate::quotes::yahoo_turn() {
+            let (status, text) = match ask(&form) { Some(a) => a, None => continue };
+            if status == 429 {
+                back_off();
+                continue;
+            }
+            if status != 200 {
+                continue;
+            }
+            let doc: Value = match serde_json::from_str(&text) {
+                Ok(Value::Object(m)) => Value::Object(m),
+                _ => {
+                    eprintln!("bagholder shorts: {} float from yahoo failed: not a statistics answer", form);
                     continue;
                 }
-                let url = YAHOO_STATS_URL.replacen("{}", &form, 1).replacen("{}", &y.crumb, 1);
-                let answered = match y.session.get(&url, Duration::from_secs(TIMEOUT_SEC)) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("bagholder shorts: {} float from yahoo failed: {}", form, e);
-                        continue;
-                    }
-                };
-                if answered.status == 429 {
-                    crate::quotes::yahoo_back_off();
-                    continue;
+            };
+            let result = doc.get("quoteSummary").filter(|v| truthy_json(v)).and_then(|q| q.get("result")).filter(|v| truthy_json(v));
+            let first = match result.and_then(|r| r.as_array()).and_then(|a| a.first()) {
+                Some(v) if truthy_json(v) => v.clone(),
+                _ => json!({}),
+            };
+            let stats = first.get("defaultKeyStatistics").filter(|v| truthy_json(v)).cloned().unwrap_or_else(|| json!({}));
+            let pick = |f: &str| -> Option<f64> {
+                match stats.get(f) {
+                    Some(Value::Object(m)) => num(m.get("raw")),
+                    other => num(other),
                 }
-                if answered.status != 200 {
-                    continue;
-                }
-                let doc: Value = match serde_json::from_str(&answered.text()) {
-                    Ok(Value::Object(m)) => Value::Object(m),
-                    _ => {
-                        eprintln!("bagholder shorts: {} float from yahoo failed: not a statistics answer", form);
-                        continue;
-                    }
-                };
-                let result = doc.get("quoteSummary").filter(|v| truthy_json(v)).and_then(|q| q.get("result")).filter(|v| truthy_json(v));
-                let first = match result.and_then(|r| r.as_array()).and_then(|a| a.first()) {
-                    Some(v) if truthy_json(v) => v.clone(),
-                    _ => json!({}),
-                };
-                let stats = first.get("defaultKeyStatistics").filter(|v| truthy_json(v)).cloned().unwrap_or_else(|| json!({}));
-                let pick = |f: &str| -> Option<f64> {
-                    match stats.get(f) {
-                        Some(Value::Object(m)) => num(m.get("raw")),
-                        other => num(other),
-                    }
-                };
-                let floated = pick("floatShares");
-                count = if truthy(floated) { floated } else if fund { pick("sharesOutstanding") } else { None };
-                if truthy(count) {
-                    break;
-                }
+            };
+            let floated = pick("floatShares");
+            count = if truthy(floated) { floated } else if fund { pick("sharesOutstanding") } else { None };
+            if truthy(count) {
+                break;
             }
         }
     }
     if !truthy(count) && fund {
-        count = fund_units(conn, &sym, exchange, &ccy, today);
+        count = units(&sym, &ccy);
     }
     let count = count.filter(|c| *c != 0.0);
     floats().lock().unwrap().insert(key, Float { value: count, at: Instant::now() });
@@ -702,6 +791,33 @@ pub fn us_position(symbol: &str, today: &str) -> Value {
 pub fn us_volume(symbol: &str, today: &str) -> Value {
     let held = table("us_volume", || us_volume_file(today));
     us_volume_from(&held.key, &held.rows, symbol)
+}
+
+/// `us_volume` with the file's reading handed in.
+pub fn us_volume_with<G: FnOnce() -> Option<(String, Map<String, Value>)>>(symbol: &str, read: G) -> Value {
+    let held = table("us_volume", read);
+    us_volume_from(&held.key, &held.rows, symbol)
+}
+
+/// `ca_position` with the file's reading handed in.
+pub fn ca_position_with<G: FnOnce() -> Option<(String, Map<String, Value>)>>(symbol: &str, exchange: &str, today: &str, read: G) -> Value {
+    let held = table("ca_position", read);
+    ca_position_from(&held.key, &held.rows, symbol, exchange, today)
+}
+
+/// `ca_volume` with the file's reading and the exchange's traded volume
+/// (given the report's period) handed in.
+pub fn ca_volume_with<G, F>(symbol: &str, exchange: &str, read: G, traded: F) -> Value
+where
+    G: FnOnce() -> Option<(String, Map<String, Value>)>,
+    F: FnOnce(&str) -> Option<f64>,
+{
+    let held = table("ca_volume", read);
+    if held.key.is_empty() {
+        return json!({});
+    }
+    let row = held.rows.get(&symbol.trim().to_uppercase()).filter(|r| truthy_json(r));
+    ca_volume_from(&held.key, row, exchange, || traded(&held.key))
 }
 
 pub fn us_volume_from(key: &str, rows: &Map<String, Value>, symbol: &str) -> Value {

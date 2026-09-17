@@ -78,19 +78,39 @@ pub fn parse_version(tag: &str) -> Option<(u64, u64, u64)> {
     Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
 }
 
+/// Tests stand in for GitHub here: `(calls, answer)`, `None` answering as offline.
+#[cfg(test)]
+pub static FAKE_RELEASE: std::sync::Mutex<Option<(usize, Option<Value>)>> = std::sync::Mutex::new(None);
+
+/// The latest release as GitHub describes it, `None` when it cannot be read.
+fn fetch_release() -> Option<Value> {
+    #[cfg(test)]
+    {
+        if let Some((calls, answer)) = FAKE_RELEASE.lock().unwrap().as_mut() {
+            *calls += 1;
+            return answer.clone();
+        }
+        return None;
+    }
+    #[allow(unreachable_code)]
+    {
+        let ua = format!("Bagholder/{}", APP_VERSION);
+        let got = bagholder_market::client::request(
+            "GET",
+            &release_url(),
+            &[("Accept", "application/vnd.github+json"), ("User-Agent", &ua)],
+            None,
+            Duration::from_secs(30),
+        );
+        got.ok().and_then(|r| serde_json::from_slice(&r.body).ok())
+    }
+}
+
 /// `bagholder.check_for_update`: the latest release against APP_VERSION, the
 /// record stored in meta. Never fails.
 pub fn check_for_update() -> Value {
     let mut record = json!({"checkedAt": now_iso(), "ok": false, "latest": "", "url": format!("{}/releases/latest", repo_url()), "updateAvailable": false});
-    let ua = format!("Bagholder/{}", APP_VERSION);
-    let got = bagholder_market::client::request(
-        "GET",
-        &release_url(),
-        &[("Accept", "application/vnd.github+json"), ("User-Agent", &ua)],
-        None,
-        Duration::from_secs(30),
-    );
-    let rel: Option<Value> = got.ok().and_then(|r| serde_json::from_slice(&r.body).ok());
+    let rel = fetch_release();
     if let Some(rel) = rel {
         if let Some(latest) = parse_version(&f(&rel, "tag_name")) {
             let tag = f(&rel, "tag_name");

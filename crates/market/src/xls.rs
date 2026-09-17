@@ -9,13 +9,13 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-const LABEL: u16 = 0x0204;
-const NUMBER: u16 = 0x0203;
-const RK: u16 = 0x027E;
-const MULRK: u16 = 0x00BD;
-const SST: u16 = 0x00FC;
+pub const LABEL: u16 = 0x0204;
+pub const NUMBER: u16 = 0x0203;
+pub const RK: u16 = 0x027E;
+pub const MULRK: u16 = 0x00BD;
+pub const SST: u16 = 0x00FC;
 const CONTINUE: u16 = 0x003C;
-const LABELSST: u16 = 0x00FD;
+pub const LABELSST: u16 = 0x00FD;
 
 const MAGIC: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 

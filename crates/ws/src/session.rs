@@ -320,6 +320,7 @@ impl<'a> Client<'a> {
     pub fn client_id_for(&self, sess: &Value) -> String {
         let cid = field_s(sess, "client_id").trim().to_string();
         if !cid.is_empty() {
+            self.home.save_client_id(&cid);
             return cid;
         }
         self.home.cached_client_id()

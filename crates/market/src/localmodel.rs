@@ -20,6 +20,50 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+/// Stand-ins, per thread, for what reaches outside the process: the running
+/// endpoint probe, provisioning, the chat request and the wait's sleep.
+pub mod hooks {
+    use std::cell::RefCell;
+    pub type Detect = Box<dyn Fn() -> Option<(String, String)>>;
+    pub type Ensure = Box<dyn Fn()>;
+    pub type Endpoint = Box<dyn Fn() -> String>;
+    pub type Chat = Box<dyn Fn(&str, i64) -> String>;
+    /// (url, body) -> response text, or Err for a backend error
+    pub type Post = Box<dyn Fn(&str, &str) -> Result<String, String>>;
+    pub type Available = Box<dyn Fn() -> bool>;
+    pub type Status = Box<dyn Fn() -> &'static str>;
+    thread_local! {
+        pub static DETECT: RefCell<Option<Detect>> = RefCell::new(None);
+        pub static ENSURE: RefCell<Option<Ensure>> = RefCell::new(None);
+        pub static ENDPOINT: RefCell<Option<Endpoint>> = RefCell::new(None);
+        pub static CHAT: RefCell<Option<Chat>> = RefCell::new(None);
+        pub static POST: RefCell<Option<Post>> = RefCell::new(None);
+        pub static AVAILABLE: RefCell<Option<Available>> = RefCell::new(None);
+        pub static STATUS: RefCell<Option<Status>> = RefCell::new(None);
+        pub static NO_SLEEP: RefCell<bool> = RefCell::new(false);
+    }
+    pub fn clear() {
+        DETECT.with(|h| *h.borrow_mut() = None);
+        ENSURE.with(|h| *h.borrow_mut() = None);
+        ENDPOINT.with(|h| *h.borrow_mut() = None);
+        CHAT.with(|h| *h.borrow_mut() = None);
+        POST.with(|h| *h.borrow_mut() = None);
+        AVAILABLE.with(|h| *h.borrow_mut() = None);
+        STATUS.with(|h| *h.borrow_mut() = None);
+        NO_SLEEP.with(|h| *h.borrow_mut() = false);
+    }
+}
+
+/// Back to the state a fresh process starts in (nothing detected, off).
+pub fn reset_state() {
+    let mut st = state().lock().unwrap();
+    st.phase = "off";
+    st.detail.clear();
+    st.proc = None;
+    st.endpoint.clear();
+    st.model.clear();
+}
+
 fn env(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
@@ -96,6 +140,9 @@ fn get_ok(url: &str, timeout: Duration) -> bool {
 
 /// `localmodel._detect_running`: a user-run endpoint, if one answers now.
 fn detect_running() -> Option<(String, String)> {
+    if let Some(r) = hooks::DETECT.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
     let user = user_llm_url();
     if !user.is_empty() && get_ok(&format!("{}/v1/models", user), Duration::from_secs(2)) {
         return Some((user, env("BAGHOLDER_LLM_MODEL", "local")));
@@ -109,11 +156,17 @@ fn detect_running() -> Option<(String, String)> {
 
 /// `localmodel.status`: off, detecting, downloading, starting, ready, failed.
 pub fn status() -> &'static str {
+    if let Some(r) = hooks::STATUS.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
     let st = state().lock().unwrap();
     if !st.endpoint.is_empty() { "ready" } else { st.phase }
 }
 
 pub fn available() -> bool {
+    if let Some(r) = hooks::AVAILABLE.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
     !endpoint().is_empty()
 }
 
@@ -129,7 +182,9 @@ pub fn wait_ready(seconds: f64) -> bool {
         if !COMING_UP.contains(&status()) {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        if !hooks::NO_SLEEP.with(|h| *h.borrow()) {
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
     available()
 }
@@ -137,6 +192,9 @@ pub fn wait_ready(seconds: f64) -> bool {
 /// `localmodel.endpoint`: the base URL of a working local model, or "" if none
 /// is up yet. Never blocks on a download.
 pub fn endpoint() -> String {
+    if let Some(r) = hooks::ENDPOINT.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
     {
         let st = state().lock().unwrap();
         if !st.endpoint.is_empty() {
@@ -156,6 +214,9 @@ pub fn endpoint() -> String {
 
 /// `localmodel.ensure`: start provisioning if it is not already under way.
 pub fn ensure() {
+    if hooks::ENSURE.with(|h| h.borrow().as_ref().map(|f| f()).is_some()) {
+        return;
+    }
     {
         let mut st = state().lock().unwrap();
         if ["detecting", "downloading", "starting"].contains(&st.phase) || !st.endpoint.is_empty() {
@@ -204,7 +265,7 @@ fn provision() {
     }
 }
 
-fn verified(path: &PathBuf) -> bool {
+pub fn verified(path: &PathBuf) -> bool {
     let pin = llamafile_sha256();
     if !path.exists() || pin.is_empty() {
         return false;
@@ -223,7 +284,7 @@ fn verified(path: &PathBuf) -> bool {
     hex == pin.to_lowercase()
 }
 
-fn download(path: &PathBuf) -> bool {
+pub fn download(path: &PathBuf) -> bool {
     let url = llamafile_url();
     let host = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("").split(':').next().unwrap_or("").to_string();
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
@@ -315,6 +376,9 @@ pub fn shutdown() {
 /// `localmodel.chat`: one completion from the local model over the
 /// OpenAI-compatible API both Ollama and llamafile speak, or "".
 pub fn chat(prompt: &str, max_tokens: i64) -> String {
+    if let Some(r) = hooks::CHAT.with(|h| h.borrow().as_ref().map(|f| f(prompt, max_tokens))) {
+        return r;
+    }
     let base = endpoint();
     if base.is_empty() {
         return String::new();
@@ -328,17 +392,18 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         "stream": false,
     });
     let text = serde_json::to_string(&body).unwrap_or_default();
-    let resp = match crate::client::request(
-        "POST",
-        &format!("{}/v1/chat/completions", base),
-        &[("Content-Type", "application/json")],
-        Some(text.as_bytes()),
-        chat_timeout(),
-    ) {
-        Ok(r) => r,
+    let url = format!("{}/v1/chat/completions", base);
+    let got = match hooks::POST.with(|h| h.borrow().as_ref().map(|f| f(&url, &text))) {
+        Some(r) => r,
+        None => crate::client::request("POST", &url, &[("Content-Type", "application/json")], Some(text.as_bytes()), chat_timeout())
+            .map(|r| r.text())
+            .map_err(|e| e.to_string()),
+    };
+    let body = match got {
+        Ok(b) => b,
         Err(_) => return String::new(),
     };
-    let v: Value = match serde_json::from_str(&resp.text()) { Ok(v) => v, Err(_) => return String::new() };
+    let v: Value = match serde_json::from_str(&body) { Ok(v) => v, Err(_) => return String::new() };
     let content = v
         .get("choices")
         .and_then(|c| c.as_array())
