@@ -4952,6 +4952,11 @@ function bind() {
     }
     if (e.key === "Escape" && state.page === "heatmap" && !state.confirmOpen && !state.modal) { location.hash = "#markets"; return; }
     if (e.key === "Escape") { if (state.watchAdding) { state.watchAdding = false; state.watchQuery = ""; render(); return; } if (state.tileAdd) { state.tileAdd = false; render(); return; } if (state.confirmOpen) { state.confirmOpen = ""; render(); return; } if (state.modal) { state.modal = null; render(); return; } if (state.picker || state.menuOpen) { state.picker = null; state.menuOpen = false; render(); } else if (state.sel && state.page === "trades" && document.activeElement && document.activeElement.tagName !== "TEXTAREA" && document.activeElement.id !== "tagInput") { history.back(); }
+      // on Markets, Escape clears what narrows a card: the words typed in the News box first, then its symbol chip;
+      // the words in the Short interest box. The News box keeps the focus, so a second press clears the chip
+      else if (state.page === "markets" && document.activeElement && document.activeElement.id === "newsQuery" && state.newsQuery) { state.newsQuery = ""; render(); }
+      else if (state.page === "markets" && document.activeElement && document.activeElement.id === "shortsQuery" && state.shortsQuery) { state.shortsQuery = ""; render(); }
+      else if (state.page === "markets" && state.newsSymbol) { newsChip(null); render(); }
       // nothing open, nothing being typed: Escape clears the filters
       else if (filtersActive() && !(document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA"))) { act("clearAll"); }
       return; }
