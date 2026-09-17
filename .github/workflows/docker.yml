@@ -1,14 +1,20 @@
 # Publishes the web app's image to GitHub's container registry on every release tag,
 # as ghcr.io/professorbagholder/bagholder:<version> and :latest, so a Docker user
-# updates with `docker compose pull && docker compose up -d`. A tag named test-<name>
-# publishes a pre-release image under that name only, never :latest, so a branch can
-# be handed to testers as `docker pull ghcr.io/professorbagholder/bagholder:test-<name>`.
+# updates with `docker compose pull && docker compose up -d`. A tag named test-<name>,
+# or a manual run of the workflow on a branch with a name given, publishes a pre-release
+# image under that name only, never :latest, so a branch can be handed to testers as
+# `docker pull ghcr.io/professorbagholder/bagholder:<name>`.
 name: Docker image
 
 on:
   push:
     tags: ["v*.*.*", "test-*"]
   workflow_dispatch:
+    inputs:
+      name:
+        description: "Image tag for a pre-release build of this ref (test-<name>)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +46,7 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v') }}
             type=ref,event=tag,enable=${{ startsWith(github.ref_name, 'test-') }}
+            type=raw,value=${{ inputs.name }},enable=${{ github.event_name == 'workflow_dispatch' }}
       - uses: docker/build-push-action@v6
         with:
           context: .
