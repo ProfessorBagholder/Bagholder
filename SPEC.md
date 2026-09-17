@@ -193,7 +193,7 @@ Six KPI tiles in one row, all in CAD over the trades in scope:
 
 Cards:
 
-- **Equity curve.** The equity series in scope with a `$` axis and six date labels; hover shows the value and day.
+- **Equity curve.** The equity series in scope with a `$` axis and six date labels; hover shows the value and day, and the chart past the day read dims (the line and its fill keep their colour up to the pointer and fade after it), as the phone's does. Every line chart the page draws itself hovers this way.
 - **Annualized returns.** Title `Annualized returns` with a switch at the right, `S&P 500`, `S&P/TSX` or `TSX 60`, choosing the index the years are compared against; the choice is remembered on this machine and is not a filter. Subtitle `Vs <index>`. Every year, newest first, each with the account's return and the index's return and two equal-height bars; the list scrolls inside the card, which takes its height from the equity curve beside it and never grows past it. Footer, fixed below the list: `Outperformed <index> in N of M years.`
 - **Monthly P&L.** One bar per calendar month of close date, CAD, six axis labels; hover shows the month and trade count; click opens the trade or filters to that month. The value axis labels the top, the midpoint, zero and the bottom; a label that would touch the one above it is not shown, so the bottom label goes when the losing months are small next to the winning ones.
 - **Grade vs P&L.** Four bars, A B C F, CAD sum per grade with the count under each.

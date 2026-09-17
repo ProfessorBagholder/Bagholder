@@ -2280,8 +2280,20 @@ function eqHover(e) {
   tip.querySelector(".tv").textContent = money0(s[i].v);
   tip.querySelector(".tl").textContent = stampDay(s[i].d);
   tip.hidden = false;
+  dimAfter(plot, i / Math.max(1, s.length - 1));
 }
-function eqLeave() { ["eqX", "eqDot", "eqTip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); }
+function eqLeave() { ["eqX", "eqDot", "eqTip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); dimAfter(document.getElementById("eqPlot"), null); }
+// Past the point being read, a line chart dims: the line and its fill keep their colour up to the day under the
+// pointer and fade after it, as the phone's charts and other finance apps do. A mask on the chart's own drawing,
+// so the card shows through in either theme and the crosshair, dot and tip above it stay at full strength.
+function dimAfter(plot, frac) {
+  const svg = plot && plot.querySelector("svg");
+  if (!svg) return;
+  const at = frac == null ? "" : (Math.max(0, Math.min(1, frac)) * 100).toFixed(2) + "%";
+  const mask = frac == null ? "" : "linear-gradient(to right, #000 " + at + ", rgba(0,0,0,.28) " + at + ")";
+  svg.style.maskImage = mask;
+  svg.style.webkitMaskImage = mask;
+}
 
 function yearsCardHtml(m) {
   const rs = (m.years || []).slice().reverse();
@@ -3148,8 +3160,9 @@ function lineHover(e, key) {
   value.textContent = read.value; value.style.color = read.color || "";
   tip.querySelector(".tl").textContent = read.label;
   tip.hidden = false;
+  dimAfter(plot, i / Math.max(1, n - 1));
 }
-function lineLeave(key) { [key + "X", key + "Dot", key + "Tip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); }
+function lineLeave(key) { [key + "X", key + "Dot", key + "Tip"].forEach((id) => { const el = document.getElementById(id); if (el) el.hidden = true; }); dimAfter(document.getElementById(key + "Plot"), null); }
 function donutHover(e, key) {
   const el = e.target.closest("[data-slice]"); const plot = document.getElementById(key + "Plot"); if (!plot) return;
   const i = el ? +el.dataset.slice : -1;
