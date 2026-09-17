@@ -604,7 +604,41 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function attr(o) { return esc(JSON.stringify(o)); }
-function n2(v, dp) { return Number(v).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }); }
+// A long table draws only the rows its scroll box can show, plus a margin above and
+// below, with empty rows standing in for the rest so the scrollbar keeps its length.
+// Scrolling redraws the body alone; nothing else on the page is touched.
+const _vrows = {}, _rowH = {}, VROWS_MARGIN = 12;
+function vrows(key, rows, rowHtml) {
+  _vrows[key] = { rows, rowHtml };
+  const h = _rowH[key] || 31;
+  const k = _keptScroll[key] || {};
+  const top = k.top || 0, seen = k.height || 620;
+  const start = Math.max(0, Math.floor(top / h) - VROWS_MARGIN);
+  const end = Math.min(rows.length, Math.ceil((top + seen) / h) + VROWS_MARGIN);
+  const pad = (n) => n > 0 ? '<tr class="vpad"><td colspan="99" style="padding:0;border:0;height:' + (n * h) + 'px"></td></tr>' : "";
+  return pad(start) + rows.slice(start, end).map(rowHtml).join("") + pad(rows.length - end);
+}
+function vrowsMeasure() {
+  document.querySelectorAll("[data-vrows]").forEach((el) => {
+    const row = el.querySelector("tbody tr:not(.vpad)");
+    if (row && row.offsetHeight) _rowH[el.dataset.vrows] = row.offsetHeight;
+  });
+}
+document.addEventListener("scroll", (e) => {
+  const el = e.target;
+  if (!el || !el.dataset || !el.dataset.vrows) return;
+  const key = el.dataset.vrows, v = _vrows[key];
+  if (!v) return;
+  const k = _keptScroll[key] || (_keptScroll[key] = {});
+  const h = _rowH[key] || 31;
+  const before = Math.floor((k.top || 0) / h);
+  k.top = el.scrollTop; k.left = el.scrollLeft; k.height = el.clientHeight;
+  if (Math.abs(Math.floor(k.top / h) - before) < VROWS_MARGIN / 2) return;
+  const body = el.querySelector("tbody");
+  if (body) body.innerHTML = vrows(key, v.rows, v.rowHtml);
+}, true);
+const _nf = {};
+function n2(v, dp) { return (_nf[dp] || (_nf[dp] = new Intl.NumberFormat("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }))).format(Number(v)); }
 function money(v, ccy, dp) {
   if (v == null || !isFinite(v)) return "—";
   dp = dp == null ? 2 : dp;
@@ -632,7 +666,7 @@ function px(v) {
   const dp = a === 0 ? 2 : a < 0.01 ? 5 : a < 1 ? (Math.round(a * 1000) % 10 === 0 ? 2 : 3) : 2;
   return n2(v, dp);
 }
-function hold(d) { return d == null ? "—" : Math.round(d).toLocaleString("en-US") + "d"; }
+function hold(d) { return d == null ? "—" : n2(Math.round(d), 0) + "d"; }
 function stamp(iso) { return iso ? MON[+iso.slice(5, 7) - 1] + " '" + iso.slice(2, 4) : ""; }
 function stampDay(iso) { return iso ? +iso.slice(8, 10) + " " + MON[+iso.slice(5, 7) - 1] + " '" + iso.slice(2, 4) : ""; }
 function shortMoney(v) {
@@ -2441,15 +2475,15 @@ function tradesTableHtml(m) {
   const s = state.sort.trades;
   const rows = sortRows(m.trades || [], s.key, s.dir, tradeSortValue);
   return '<div class="card elev-sm" style="min-width:0;padding:14px 16px 8px;display:flex;flex-direction:column;min-height:0;max-height:620px"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px"><h5>Trades</h5></div>' +
-    '<div class="scroll-xy" data-keep-scroll="trades" style="flex:1;min-height:0"><table class="table" style="min-width:1150px;table-layout:fixed"><thead><tr>' + th("trades", cols) + "</tr></thead><tbody>" +
-    rows.map((t) => '<tr class="tab" style="cursor:pointer" data-act="selectTrade" data-arg=\'' + attr({ id: t.id }) + "'>" +
+    '<div class="scroll-xy" data-keep-scroll="trades" data-vrows="trades" style="flex:1;min-height:0"><table class="table" style="min-width:1150px;table-layout:fixed"><thead><tr>' + th("trades", cols) + "</tr></thead><tbody>" +
+    vrows("trades", rows, (t) => '<tr class="tab" style="cursor:pointer" data-act="selectTrade" data-arg=\'' + attr({ id: t.id }) + "'>" +
       '<td class="dim" style="white-space:nowrap;padding-right:12px">' + esc(t.entryDate) + '</td><td class="dim" style="white-space:nowrap">' + esc(t.exitDate) + "</td>" +
       '<td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(symText(t.symbol)) + "</td>" +
       '<td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.exchange || "—") + "</td>" +
       '<td style="text-align:right">' + qty(t.qty) + '</td><td style="text-align:right">' + px(t.entry) + '</td><td style="text-align:right">' + px(t.exit) + '</td><td class="dim" style="font-variant-numeric:normal;text-align:center">' + esc(t.currency) + "</td>" +
       '<td style="text-align:right;font-weight:500;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</td><td style="text-align:right;color:' + color(t.pnl) + '">' + pct(t.pnlPct) + "</td>" +
       '<td style="text-align:right" class="dim">' + hold(t.holdDays) + '</td><td style="white-space:nowrap;padding-left:50px">' + gradeChip(t) + "</td>" +
-      '<td style="font-variant-numeric:normal">' + (t.tags && t.tags.length ? '<span class="tagchip">' + esc(t.tags[0]) + "</span>" + (t.tags.length > 1 ? '<span class="muted" style="font-size:10.5px;margin-left:4px">+' + (t.tags.length - 1) + "</span>" : "") : '<span style="color:rgba(var(--ink-rgb),.5)">—</span>') + "</td></tr>").join("") +
+      '<td style="font-variant-numeric:normal">' + (t.tags && t.tags.length ? '<span class="tagchip">' + esc(t.tags[0]) + "</span>" + (t.tags.length > 1 ? '<span class="muted" style="font-size:10.5px;margin-left:4px">+' + (t.tags.length - 1) + "</span>" : "") : '<span style="color:rgba(var(--ink-rgb),.5)">—</span>') + "</td></tr>") +
     "</tbody></table>" + (rows.length ? "" : '<div class="muted" style="padding:26px 4px;font-size:12px">No trades match these filters. <a href="#" data-act="clearAll">Reset all</a></div>') + "</div></div>";
 }
 // The trade chart: real daily bars for the trade's span with every execution
@@ -4107,14 +4141,14 @@ function portfolioHtml(m) {
   return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + portfolioTilesHtml(pf) +
     '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 2 + 14px) minmax(0,1fr);gap:14px;align-items:stretch">' + portfolioPieHtml(pf) +
     '<div class="card elev-sm" style="padding:14px 16px 8px;display:flex;flex-direction:column;min-height:0"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px"><h5>Holdings</h5></div>' +
-    '<div class="scroll-xy" data-keep-scroll="positions" style="flex:1;min-height:0;max-height:362px"><table class="table" style="min-width:640px"><thead><tr>' + th("positions", cols) + "</tr></thead><tbody>" +
-    rows.map((r) => '<tr class="tab" style="cursor:pointer" data-act="openHolding" data-arg=\'' + attr({ id: r.id }) + "'>" +
+    '<div class="scroll-xy" data-keep-scroll="positions" data-vrows="positions" style="flex:1;min-height:0;max-height:362px"><table class="table" style="min-width:640px"><thead><tr>' + th("positions", cols) + "</tr></thead><tbody>" +
+    vrows("positions", rows, (r) => '<tr class="tab" style="cursor:pointer" data-act="openHolding" data-arg=\'' + attr({ id: r.id }) + "'>" +
       '<td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">' + esc(symText(r.symbol)) + (r.short ? ' <span class="muted" style="font-size:10px">SHORT</span>' : "") + "</td>" +
       '<td style="text-align:right">' + px(r.avg) + '</td><td style="text-align:right">' + px(r.last) + "</td>" +
       '<td style="text-align:right">' + money0(r.cost, r.currency) + '</td><td style="text-align:right">' + money0(r.mv, r.currency) + "</td>" +
       '<td style="text-align:right;white-space:nowrap;color:' + (r.dayChange == null ? "var(--ink55)" : color(r.dayChange)) + '">' + (r.dayChange == null ? "—" : signedMoney(r.dayChange, r.currency)) + "</td>" +
       '<td style="text-align:right;color:' + (r.percentChange == null ? "var(--ink55)" : color(r.percentChange)) + '">' + (r.percentChange == null ? "—" : pct(r.percentChange / 100, 2)) + "</td>" +
-      '<td style="text-align:right;padding-right:0;white-space:nowrap;font-weight:500;color:' + color(r.unreal) + '">' + signedMoney(r.unreal, r.currency) + " (" + pct(r.unrealPct) + ")</td></tr>").join("") +
+      '<td style="text-align:right;padding-right:0;white-space:nowrap;font-weight:500;color:' + color(r.unreal) + '">' + signedMoney(r.unreal, r.currency) + " (" + pct(r.unrealPct) + ")</td></tr>") +
     "</tbody></table>" + (rows.length ? "" : '<div class="muted" style="padding:26px 4px;font-size:12px">No open positions match these filters.</div>') + "</div></div></div>" +
     exposureCardsHtml(pf) + "</div>";
 }
@@ -4173,8 +4207,8 @@ function cashflowHtml(m) {
     (holdings.length ? holdings.map((h) => '<tr class="tab"><td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">' + esc(symText(h.symbol)) + '</td><td style="text-align:right;color:var(--ink75)">' + qty(h.qty) + '</td><td style="text-align:right;color:var(--ink75)">' + px(h.avg) + '</td><td style="text-align:right;color:var(--ink75)">' + money0(h.cost) + '</td><td style="text-align:right;color:var(--ink75)">' + (h.mv == null ? "—" : money0(h.mv)) + '</td><td style="text-align:right;color:var(--ink75)">' + (h.per == null ? "—" : "$" + h.per.toFixed(h.per < 1 ? 4 : 2)) + '</td><td style="text-align:right">' + money0(h.ytd) + '</td><td style="text-align:right">' + money0(h.all) + '</td><td style="text-align:right;color:' + (h.exPast ? "var(--ink55)" : "var(--ink)") + '">' + esc(h.nextExDate || "—") + '</td><td style="text-align:right;color:' + (h.payPast ? "var(--ink55)" : "var(--ink)") + '">' + esc(h.nextPayDate || "—") + '</td><td style="text-align:right">' + (h.annual == null ? "—" : money0(h.annual / 12)) + '</td><td style="text-align:right;font-weight:500;color:var(--accent-300)">' + (h.yoc == null ? "—" : pctPlain(h.yoc, 2)) + '</td><td style="text-align:right;padding-right:0;color:var(--ink75)">' + (h.currentYield == null ? "—" : pctPlain(h.currentYield, 2)) + "</td></tr>").join("") : '<tr><td colspan="13" class="muted" style="padding:22px 0">No income holdings in scope.</td></tr>') +
     "</tbody></table></div></div>" +
     '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 3 + 28px) minmax(0,1fr);gap:14px;height:380px">' + pieCardHtml(holdingRows) +
-    '<div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0"><h5 style="margin-bottom:4px">Distribution history</h5><div class="scroll-xy" style="flex:1;min-height:0"><table class="table" style="min-width:560px;width:100%;table-layout:fixed;font-size:12px"><thead><tr>' + th("cash", dcols) + "</tr></thead><tbody>" +
-    (rows.length ? rows.map((r) => '<tr class="tab"><td style="color:var(--ink75);white-space:nowrap">' + esc(r.date) + '</td><td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">' + esc(symText(r.symbol)) + '</td><td style="font-variant-numeric:normal;color:var(--ink75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(r.account) + '</td><td style="text-align:right;color:var(--ink75)">' + (r.qty ? qty(r.qty) : "—") + '</td><td style="text-align:right;color:var(--ink75)">' + (r.per ? "$" + r.per.toFixed(4) : "—") + '</td><td style="text-align:right;font-weight:500">' + money(r.amount, r.currency) + "</td></tr>").join("") : '<tr><td colspan="6" class="dim" style="padding:22px 0;font-variant-numeric:normal">No distributions match these filters.</td></tr>') +
+    '<div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0"><h5 style="margin-bottom:4px">Distribution history</h5><div class="scroll-xy" data-keep-scroll="dist" data-vrows="dist" style="flex:1;min-height:0"><table class="table" style="min-width:560px;width:100%;table-layout:fixed;font-size:12px"><thead><tr>' + th("cash", dcols) + "</tr></thead><tbody>" +
+    (rows.length ? vrows("dist", rows, (r) => '<tr class="tab"><td style="color:var(--ink75);white-space:nowrap">' + esc(r.date) + '</td><td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">' + esc(symText(r.symbol)) + '</td><td style="font-variant-numeric:normal;color:var(--ink75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(r.account) + '</td><td style="text-align:right;color:var(--ink75)">' + (r.qty ? qty(r.qty) : "—") + '</td><td style="text-align:right;color:var(--ink75)">' + (r.per ? "$" + r.per.toFixed(4) : "—") + '</td><td style="text-align:right;font-weight:500">' + money(r.amount, r.currency) + "</td></tr>") : '<tr><td colspan="6" class="dim" style="padding:22px 0;font-variant-numeric:normal">No distributions match these filters.</td></tr>') +
     "</tbody></table></div></div></div></div>";
 }
 // The pie: each income holding's share of the whole by projected monthly income.
@@ -4463,7 +4497,7 @@ const _keptScroll = {};
 function render() {
   const root = document.getElementById("app");
   const scrollY = window.scrollY;
-  root.querySelectorAll("[data-keep-scroll]").forEach((el) => { _keptScroll[el.dataset.keepScroll] = { top: el.scrollTop, left: el.scrollLeft }; });
+  root.querySelectorAll("[data-keep-scroll]").forEach((el) => { _keptScroll[el.dataset.keepScroll] = { top: el.scrollTop, left: el.scrollLeft, height: el.clientHeight }; });
   // Every other scrolling box (tables, lists, the filter popover) keeps its place
   // across a redraw too, matched by position in the page.
   const boxes = [...root.querySelectorAll(".scroll, .scroll-xy")].map((el) => ({ top: el.scrollTop, left: el.scrollLeft }));
@@ -4512,6 +4546,7 @@ function render() {
   mountHeatmap();
   mountReels();
   spaceAxisLabels();
+  vrowsMeasure();
 }
 // The 2px bar under the active tab slides and resizes rather than jumping. It is
 // driven by the active button's own measurements, taken after a redraw and again
