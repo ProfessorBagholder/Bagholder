@@ -826,6 +826,7 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
     let me = READER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     cast().1.notify_all();
     let mut last = u64::MAX;
+    let mut last_sent: Option<()> = None;
     loop {
         if !capturing() || READER.load(std::sync::atomic::Ordering::SeqCst) != me {
             return;
@@ -847,9 +848,17 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
                 None => continue,
             }
         };
-        let mut chunk = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", frame.len()).into_bytes();
+        // each part is closed by the next boundary as soon as it is sent: a
+        // browser shows a part only once that boundary has arrived, so a part
+        // left open would stay blank until the page next changed
+        let mut chunk = Vec::new();
+        if last_sent.is_none() {
+            chunk.extend_from_slice(b"--frame\r\n");
+        }
+        chunk.extend_from_slice(format!("Content-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", frame.len()).as_bytes());
         chunk.extend_from_slice(&frame);
-        chunk.extend_from_slice(b"\r\n");
+        chunk.extend_from_slice(b"\r\n--frame\r\n");
+        last_sent = Some(());
         if !write(&chunk) {
             return;
         }
