@@ -920,14 +920,12 @@ func ensureFilingsColumns(tx *sql.Tx) error {
 }
 
 func relabelWhenRowsChanged(tx *sql.Tx) (bool, error) {
-	var n int64
-	var m sql.NullString
-	if err := tx.QueryRow("SELECT COUNT(*) AS n, MAX(COALESCE(occurred_at, transaction_date)) AS m FROM activities").Scan(&n, &m); err != nil {
+	key, err := relabelKey(tx)
+	if err != nil {
 		return false, err
 	}
-	key := fmt.Sprintf("%d|%s", n, pyNone(m))
 	var stamped sql.NullString
-	err := tx.QueryRow("SELECT value FROM meta WHERE key = ?", OptionRelabelMeta).Scan(&stamped)
+	err = tx.QueryRow("SELECT value FROM meta WHERE key = ?", OptionRelabelMeta).Scan(&stamped)
 	if err == nil && stamped.Valid && stamped.String == key {
 		return false, nil
 	}
@@ -1087,6 +1085,16 @@ func (s *Store) EnsureChanged() error {
 }
 
 func (s *Store) migrate() error {
+	key, err := relabelKey(s.db)
+	if err != nil {
+		return err
+	}
+	var stamped, scaled sql.NullString
+	_ = s.db.QueryRow("SELECT value FROM meta WHERE key = ?", OptionRelabelMeta).Scan(&stamped)
+	scaleErr := s.db.QueryRow("SELECT value FROM meta WHERE key = ?", OptionUnitPriceScaleMeta).Scan(&scaled)
+	if stamped.Valid && stamped.String == key && scaleErr == nil {
+		return nil
+	}
 	return s.tx(func(tx *sql.Tx) error {
 		if _, err := relabelWhenRowsChanged(tx); err != nil {
 			return err
@@ -1101,6 +1109,19 @@ func (s *Store) migrate() error {
 		}
 		return err
 	})
+}
+
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func relabelKey(q rowQuerier) (string, error) {
+	var n int64
+	var m sql.NullString
+	if err := q.QueryRow("SELECT COUNT(*) AS n, MAX(COALESCE(occurred_at, transaction_date)) AS m FROM activities").Scan(&n, &m); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d|%s", n, pyNone(m)), nil
 }
 
 func (s *Store) GetMeta(key string) string {

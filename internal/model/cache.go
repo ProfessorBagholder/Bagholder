@@ -157,32 +157,33 @@ func (m *Model) View(filters any, detail string) []byte {
 	return append([]byte{}, out...)
 }
 
+type viewOut struct {
+	*View
+	Trades    []any `json:"trades"`
+	Positions []any `json:"positions"`
+}
+
 func marshalView(v *View, detail string) []byte {
-	if detail != "" {
-		w := *v
-		for i, t := range v.Trades {
-			if t.ID == detail {
-				w.Trades = append([]*Trade{}, v.Trades...)
-				c := *t
-				c.Detail = true
-				w.Trades[i] = &c
-			}
+	out := viewOut{View: v, Trades: make([]any, len(v.Trades)), Positions: make([]any, len(v.Positions))}
+	for i, t := range v.Trades {
+		if detail != "" && t.ID == detail {
+			out.Trades[i] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
+		} else {
+			out.Trades[i] = &t.TradeCore
 		}
-		for i, p := range v.Positions {
-			if p.ID == detail {
-				w.Positions = append([]*Position{}, v.Positions...)
-				c := *p
-				c.Detail = true
-				w.Positions[i] = &c
-			}
-		}
-		v = &w
 	}
-	out, err := json.Marshal(v)
+	for i, p := range v.Positions {
+		if detail != "" && p.ID == detail {
+			out.Positions[i] = &positionFull{p.PositionCore, nonNilFills(p.Fills)}
+		} else {
+			out.Positions[i] = &p.PositionCore
+		}
+	}
+	raw, err := json.Marshal(out)
 	if err != nil {
 		panic(err)
 	}
-	return out
+	return raw
 }
 
 type Detail struct {
