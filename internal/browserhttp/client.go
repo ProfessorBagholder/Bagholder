@@ -110,7 +110,7 @@ func (s *Session) do(method, rawURL string, headers map[string]string, body []by
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

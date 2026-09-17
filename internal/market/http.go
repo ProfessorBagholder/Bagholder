@@ -239,7 +239,7 @@ func (c *Client) fetch(rawURL string, headers map[string]string, method string, 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func (c *Client) FetchRawWithType(rawURL string, headers map[string]string) ([]b
 		return nil, "", err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, "", err
 	}
