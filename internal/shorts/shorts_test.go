@@ -101,7 +101,7 @@ func newClient(t *testing.T) (*Client, *stub) {
 	s := &stub{t: t}
 	m.HTTP = &http.Client{Transport: s}
 	c := NewClient(m)
-	c.yahooTried = true
+	c.NoYahoo = true
 	return c, s
 }
 

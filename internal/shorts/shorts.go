@@ -56,14 +56,14 @@ type floatHit struct {
 }
 
 type Client struct {
-	Market     *market.Client
-	Store      *store.Store
-	mu         sync.Mutex
-	files      map[string]*fileTable
-	shares     map[string]floatHit
-	yahoo      *browserhttp.Session
-	crumb      string
-	yahooTried bool
+	Market  *market.Client
+	Store   *store.Store
+	mu      sync.Mutex
+	files   map[string]*fileTable
+	shares  map[string]floatHit
+	yahoo   *browserhttp.Session
+	crumb   string
+	NoYahoo bool
 }
 
 func NewClient(m *market.Client) *Client {
@@ -395,17 +395,15 @@ func (c *Client) CASeries(symbol, exchange, asof string, now time.Time, back int
 }
 
 func (c *Client) yahooSession() (*browserhttp.Session, string) {
+	if c.NoYahoo {
+		return nil, ""
+	}
 	c.mu.Lock()
 	if c.yahoo != nil {
 		s, crumb := c.yahoo, c.crumb
 		c.mu.Unlock()
 		return s, crumb
 	}
-	if c.yahooTried {
-		c.mu.Unlock()
-		return nil, ""
-	}
-	c.yahooTried = true
 	c.mu.Unlock()
 	session, err := browserhttp.New(market.TimeoutSec, true)
 	if err != nil {
