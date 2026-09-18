@@ -34,3 +34,8 @@ rust/target/
 
 # the compose data folder: the database and the login
 data/
+
+# brought in from the root by `go generate ./...`; the tracked copy is the root one
+go/ledger.html
+go/lightweight-charts.js
+go/favicon.png

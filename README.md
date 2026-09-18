@@ -65,7 +65,7 @@ Futures are not supported yet.
 
 ## Two desktop apps
 
-The desktop app comes in two implementations that serve the same page and show the same figures: the Python app in `python/`, and a Rust port in `rust/`. Use either one. Each keeps its own data folder: `~/.bagholder` for the Python app, `~/.bagholder-rust` for the Rust port.
+The desktop app comes in three implementations that serve the same page and show the same figures: the Python app in `python/`, a Rust port in `rust/`, and a Go port in `go/`. Use any one of them. Each keeps its own data folder — `~/.bagholder` for the Python app, `~/.bagholder-rust` for the Rust port, `~/.bagholder-go` for the Go port — and no two ever share one.
 
 ## Requirements
 
@@ -121,7 +121,7 @@ docker compose up -d
 
 Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
 
-The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release); set the compose file's `image` to `ghcr.io/professorbagholder/bagholder:rust` and its volume to `./data-rust:/data` to run it instead. Both images keep their data in `/data`, on a host folder of their own.
+The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release), the Go port `:go` (and `:go-X.Y.Z`); set the compose file's `image` to the one you want and its volume to a folder of its own, `./data-rust:/data` or `./data-go:/data`, to run it instead. Every image keeps its data in `/data`, on a host folder of its own.
 
 To build an image yourself, from the root of a clone, `docker build -f python/Dockerfile -t bagholder .` or `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
 
