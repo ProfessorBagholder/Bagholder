@@ -366,6 +366,12 @@ fn handle_get(req: Request, path: &str, query: &str) {
             };
             match feeds::filings_document(&symbol, &id) {
                 Ok((data, ct)) => send(req, 200, data, if ct.is_empty() { "application/pdf" } else { &ct }),
+                // this route is opened in a tab of its own, so a browser asking for a page is
+                // answered with one: a raw JSON error is the app failing in front of the person
+                Err(e) if header(&req, "Accept").contains("text/html") => {
+                    let page = feeds::document_error_page(&symbol, &id, &e);
+                    send(req, 502, page.into_bytes(), "text/html; charset=utf-8")
+                }
                 Err(e) => send_json(req, 502, &json!({"ok": false, "error": e})),
             }
         }
@@ -987,6 +993,7 @@ mod tests_common;
 
 #[cfg(test)]
 mod tests_misc;
+
 
 #[cfg(test)]
 mod tests_brackets;

@@ -403,7 +403,9 @@ class StoredTest(unittest.TestCase):
         self.assertIsNone(store.shorts_for("NOSUCH", "TSX"))
 
     def test_what_is_stored_is_answered_without_reading_again(self):
-        store.save_shorts("QNC", "TSX-V", self.record())
+        # stamped with this version's number, so it is not the "written by older logic" case the
+        # next test covers: nothing is read, in the answer or behind it
+        store.save_shorts("QNC", "TSX-V", self.record(), version=bagholder.SHORTS_VERSION)
         with mock.patch.object(bagholder.shorts, "for_listing", side_effect=AssertionError("read anyway")):
             out = bagholder.shorts_payload("QNC", "TSX-V", "CAD", trend=True)
         self.assertTrue(out["covered"])

@@ -439,6 +439,14 @@ def _init_schema(conn):
             PRIMARY KEY (symbol, exchange)
         );
 
+        CREATE TABLE IF NOT EXISTS told (
+            scope TEXT NOT NULL,          -- the stream: news:RDDY@TSX, filings:QNC:SEDAR+
+            event TEXT NOT NULL,          -- what the thing is, independent of the id a source gave it
+            at TEXT NOT NULL,             -- when the app first met it
+            PRIMARY KEY (scope, event)
+        );
+        CREATE INDEX IF NOT EXISTS told_at ON told (at);
+
         CREATE TABLE IF NOT EXISTS news (
             id TEXT NOT NULL,
             symbol TEXT NOT NULL,
@@ -450,6 +458,7 @@ def _init_schema(conn):
             published_at TEXT,
             fetched_at TEXT,
             kind TEXT,
+            summary TEXT,
             PRIMARY KEY (id, symbol, exchange)
         );
         CREATE INDEX IF NOT EXISTS news_published ON news (published_at);
@@ -3044,7 +3053,7 @@ def _news_from_row(r):
     keys = r.keys() if hasattr(r, "keys") else []
     return {"id": r["id"], "symbol": r["symbol"], "exchange": r["exchange"] or "", "source": r["source"] or "", "headline": r["headline"] or "",
             "wire": r["wire"] or "", "url": r["url"] or "", "publishedAt": r["published_at"] or "", "fetchedAt": r["fetched_at"] or "",
-            "kind": (r["kind"] if "kind" in keys else "") or "story"}
+            "kind": (r["kind"] if "kind" in keys else "") or "story", "summary": (r["summary"] if "summary" in keys else "") or ""}
 
 
 def replace_news(symbol, exchange, source, rows, now=None):
@@ -3057,8 +3066,8 @@ def replace_news(symbol, exchange, source, rows, now=None):
         try:
             _ready(conn)
             conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", (sym, ex))
-            conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             [(_s(r.get("id")), sym, ex, _s(r.get("via") or source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when, _s(r.get("kind")) or "story") for r in rows or [] if r.get("id")])
+            conn.executemany("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(_s(r.get("id")), sym, ex, _s(r.get("via") or source), _s(r.get("headline")), _s(r.get("source")), _s(r.get("url")), _s(r.get("publishedAt")), when, _s(r.get("kind")) or "story", _s(r.get("summary"))) for r in rows or [] if r.get("id")])
             conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("news_fetched:" + news_key(sym, ex), when))
             conn.commit()
         finally:
@@ -3519,6 +3528,9 @@ def _ensure_news_columns(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(news)").fetchall()}
     if "kind" not in cols:
         conn.execute("ALTER TABLE news ADD COLUMN kind TEXT")
+    if "summary" not in cols:
+        # what the source said beneath the headline; a row read before this is simply without one
+        conn.execute("ALTER TABLE news ADD COLUMN summary TEXT")
     conn.execute("UPDATE news SET kind = CASE WHEN LOWER(COALESCE(wire, '')) LIKE '%wire%' OR LOWER(COALESCE(wire, '')) LIKE '%newsfile%' OR LOWER(COALESCE(wire, '')) LIKE '%cision%' OR LOWER(COALESCE(wire, '')) LIKE '%cnw%' THEN 'release' ELSE 'story' END WHERE kind IS NULL OR kind = ''")
 
 
@@ -3540,6 +3552,49 @@ def _notification(r):
         extra = {}
     return {"id": r["id"], "at": r["at"], "kind": r["kind"], "key": r["key"], "title": r["title"], "body": r["body"] or "", "extra": extra,
             "seenAt": r["seen_at"] or "", "readAt": r["read_at"] or ""}
+
+
+TOLD_KEPT_DAYS = 400          # a year and a bit: long enough that nothing recurs, small enough to stay tidy
+
+
+def events_told(scope, events):
+    """Which of these the stream has already met — told or absorbed as history. An event is what the
+    thing is (a release's headline, a filing's own marks), never the id a source gave it, so the same
+    event from another source, under another id, on another date, is still the same event."""
+    want = [_s(e) for e in events if _s(e)]
+    if not want:
+        return set()
+    out = set()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            for i in range(0, len(want), 400):
+                chunk = want[i:i + 400]
+                rows = conn.execute("SELECT event FROM told WHERE scope = ? AND event IN (%s)" % ",".join("?" * len(chunk)),
+                                    [_s(scope)] + chunk).fetchall()
+                out |= {r["event"] for r in rows}
+            return out
+        finally:
+            conn.close()
+
+
+def mark_told(scope, events, now=None):
+    """Record that the stream has met these, whether or not they were worth telling about."""
+    when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or _now_iso()
+    rows = [(_s(scope), _s(e), when) for e in events if _s(e)]
+    if not rows:
+        return 0
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.executemany("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rows)
+            conn.execute("DELETE FROM told WHERE at < ?", ((datetime.now(timezone.utc) - timedelta(days=TOLD_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ"),))
+            conn.commit()
+            return len(rows)
+        finally:
+            conn.close()
 
 
 def add_notification(kind, key, title, body, extra=None, seen=False):

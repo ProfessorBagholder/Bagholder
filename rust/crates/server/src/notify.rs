@@ -562,6 +562,8 @@ mod tests {
         bagholder_store::relabel::ensure(&conn).unwrap();
         conn.execute("DELETE FROM notifications", []).unwrap();
         conn.execute("DELETE FROM meta WHERE key = ? OR key LIKE 'notify_seen:%'", [SETTINGS_KEY]).unwrap();
+        // the streams' own memory too, so one test's releases are never another's history
+        conn.execute_batch("DELETE FROM told; DELETE FROM news; DELETE FROM distributions; DELETE FROM watchlist").unwrap();
         *test_hooks::CHANNEL.lock().unwrap() = Some(String::new());
         *test_hooks::DELIVERED.lock().unwrap() = None;
         *test_hooks::HEARTBEAT_MS.lock().unwrap() = None;
@@ -850,9 +852,16 @@ mod tests {
     #[test]
     fn test_a_disclosure_is_told_by_the_documents_own_title_and_the_form_code_stands_in() {
         use crate::feeds::filings_notice;
+        let (_g, _c) = setup();
         let rows = [json!({"id": "sec:1", "source": "SEC", "type": "144", "subject": "Proposed sale of 40,000 shares by an officer"})];
         assert_eq!(filings_notice("NBIS", &rows), ("New disclosure · NBIS".to_string(), "Proposed sale of 40,000 shares by an officer · SEC EDGAR".to_string()));
-        // a row without a title is read over the network for one: not exercised here
+        // nothing could be read from it: the form stands in, in words where the app knows the form,
+        // since "6-K" alone names the paperwork and not what happened. A row carrying an id would
+        // be read over the network for a title first, which is not exercised here.
+        assert_eq!(filings_notice("NBIS", &[json!({"source": "SEC", "type": "6-K"})]).1, "Foreign issuer report (6-K) · SEC EDGAR");
+        assert_eq!(filings_notice("NBIS", &[json!({"source": "SEC", "type": "144"})]).1, "Notice of proposed sale (144) · SEC EDGAR");
+        assert_eq!(filings_notice("NBIS", &[json!({"source": "SEC", "type": "40-F"})]).1, "40-F · SEC EDGAR",
+                   "a form the app has no words for keeps its code");
         let many: Vec<Value> = (0..4).map(|i| json!({"id": format!("sec:{}", i), "source": "SEC", "type": "4", "subject": format!("Insider report {}", i)})).collect();
         assert_eq!(filings_notice("NBIS", &many), ("4 new disclosures · NBIS".to_string(), "Insider report 0, Insider report 1, Insider report 2 and more · SEC EDGAR".to_string()));
     }
@@ -880,4 +889,226 @@ mod tests {
             assert!(!bagholder_store::tables::get_meta(&conn, k, "").unwrap().is_empty());
         }
     }
+
+        // -----------------------------------------------------------------------
+        // what a notice carries, and one event as one notification
+        // -----------------------------------------------------------------------
+
+        /// The rows the store holds, newest first.
+        fn posted() -> Vec<Value> {
+            st::list_notifications(&app().open().unwrap(), 0, "", false, 50, true).unwrap()
+        }
+
+        /// A release as a wire hands it over.
+        fn wire_release(id: &str, head: &str, url: &str, when: &str) -> Value {
+            json!({"id": id, "headline": head, "source": "Business Wire", "url": url, "publishedAt": when, "kind": "release"})
+        }
+
+    // ---------------------------------------------------------------------------
+    // what a notice carries
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_a_distribution_release_carries_the_figures_and_a_way_to_read_it() {
+        // A headline that says only "Announces August 2026 Distributions" tells a holder nothing they
+        // can act on: the notice carries the amount, when it goes ex and is paid, and the one it
+        // replaces, from the issuer's own declared record, and it opens the release itself.
+        let (_g, c) = setup();
+        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        bagholder_store::market::upsert_distributions(
+            &c,
+            "RDDY",
+            &[json!({"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"}),
+              json!({"exDate": "2026-07-31", "payDate": "2026-08-06", "amount": 0.20, "currency": "CAD"})],
+            "test",
+        )
+        .unwrap();
+        bagholder_store::market::upsert_quote(&c, "RDDY", &json!({"price": 4.87, "dividendAmount": 0.15, "dividendFrequency": "Monthly", "exDividendDate": "2026-08-31"}), "tmx", "2026-09-15T14:00:00Z").unwrap();
+        let first = json!({"id": "tmx:7", "headline": "Harvest High Income Shares ETFs Announces August 2026 Distributions",
+                           "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7",
+                           "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"});
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &[first.clone()], &["tmx:7".to_string()]);   // the first read is history
+        let second = json!({"id": "tmx:8", "headline": "Harvest ETFs Announces September 2026 Distributions",
+                            "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7",
+                            "publishedAt": "2026-09-15T14:00:00Z", "kind": "release"});
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &[first, second], &["tmx:8".to_string()]);
+        let rows = posted();
+        assert_eq!(rows.len(), 1);
+        let body = f(&rows[0], "body");
+        let lines: Vec<&str> = body.split('\n').collect();
+        assert_eq!(f(&rows[0], "title"), "Press release · RDDY");
+        assert_eq!(lines[0], "Harvest ETFs Announces September 2026 Distributions");
+        assert_eq!(lines[1], "$0.15 a share, monthly · ex Aug 31, paid Sep 4 · was $0.20");
+        assert_eq!(f(&rows[0]["extra"], "url"), "https://money.tmx.com/en/quote/RDDY/news/7");
+        assert_eq!(f(&rows[0]["extra"], "symbol"), "RDDY");
+        assert!(crate::feeds::RECORD_READS.load(std::sync::atomic::Ordering::SeqCst) > 0,
+                "the record is read again so the notice is not a day behind the release");
+    }
+
+    #[test]
+    fn test_a_release_that_announces_nothing_of_the_kind_carries_the_headline_alone() {
+        let (_g, c) = setup();
+        bagholder_store::market::upsert_distributions(&c, "QNC", &[json!({"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"})], "test").unwrap();
+        assert_eq!(
+            crate::feeds::release_notice("QNC", &[json!({"id": "tmx:1", "headline": "Quantum eMotion Wins Certification", "publishedAt": "2026-09-15T13:00:00Z"})]),
+            ("Press release · QNC".to_string(), "Quantum eMotion Wins Certification".to_string())
+        );
+        assert_eq!(
+            crate::feeds::release_notice("NOSUCH", &[json!({"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"})]).1,
+            "Announces Monthly Distribution",
+            "no record for the listing: the headline stands alone"
+        );
+    }
+
+    #[test]
+    fn test_a_release_with_no_figures_carries_what_the_source_said() {
+        let (_g, _c) = setup();
+        let notice = crate::feeds::release_notice("QNC", &[json!({"id": "tmx:1", "headline": "Quantum eMotion Wins Certification",
+            "summary": "The certification covers its entropy module, which NIST listed this week.",
+            "publishedAt": "2026-09-15T13:00:00Z"})]);
+        assert_eq!(notice.1, "Quantum eMotion Wins Certification\nThe certification covers its entropy module, which NIST listed this week.");
+    }
+
+    #[test]
+    fn test_a_disclosure_notice_carries_the_sentence_the_document_yielded() {
+        let (_g, _c) = setup();
+        let rows = vec![json!({"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
+                               "subject": "GAB0590 Avis Acceptation WKSI",
+                               "summary": "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."})];
+        let (title, body) = crate::feeds::filings_notice("QNC", &rows);
+        assert_eq!(title, "New disclosure · QNC");
+        assert_eq!(
+            body.split('\n').collect::<Vec<_>>(),
+            vec!["GAB0590 Avis Acceptation WKSI · SEDAR+",
+                 "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."]
+        );
+        let same = vec![json!({"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
+                               "subject": "GAB0590 Avis Acceptation WKSI", "summary": "GAB0590 Avis Acceptation WKSI"})];
+        assert_eq!(crate::feeds::filings_notice("QNC", &same).1, "GAB0590 Avis Acceptation WKSI · SEDAR+",
+                   "a summary that only repeats the line above it is not a second line");
+    }
+
+    #[test]
+    fn test_a_form_with_no_document_read_is_named_in_words() {
+        // nothing could be read from it: the form stands in, in words where the app knows the form,
+        // since "6-K" alone names the paperwork and not what happened
+        let (_g, _c) = setup();
+        assert_eq!(crate::feeds::filings_notice("NBIS", &[json!({"source": "SEC", "type": "6-K"})]).1, "Foreign issuer report (6-K) · SEC EDGAR");
+        assert_eq!(crate::feeds::filings_notice("NBIS", &[json!({"source": "SEC", "type": "144"})]).1, "Notice of proposed sale (144) · SEC EDGAR");
+        assert_eq!(crate::feeds::filings_notice("NBIS", &[json!({"source": "SEC", "type": "40-F"})]).1, "40-F · SEC EDGAR",
+                   "a form the app has no words for keeps its code");
+    }
+
+    #[test]
+    fn test_a_notice_carries_when_the_thing_happened() {
+        // A release found today can have been published weeks ago: the notice carries the item's own
+        // moment, so the panel can say when it happened rather than when it was told.
+        let (_g, _c) = setup();
+        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "tmx:1", "publishedAt": "2026-08-24T11:00:00Z"}),
+                                          json!({"id": "tmx:2", "publishedAt": "2026-08-31T07:00:00Z"})]),
+                   json!({"at": "2026-08-31T07:00:00Z"}), "the newest of them");
+        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "sedar:1", "date": "2026-09-08T16:22"})]), json!({"at": "2026-09-08T16:22"}));
+        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "x"})]), json!({"at": ""}));
+    }
+
+    #[test]
+    fn test_a_disclosure_notice_opens_the_document_it_is_about() {
+        let (_g, _c) = setup();
+        assert_eq!(crate::feeds::notice_link(&[json!({"id": "sedar:9", "source": "SEDAR+", "url": "https://www.sedarplus.ca/x?drmKey=9", "date": "2026-09-15T09:00"})]),
+                   json!({"url": "https://www.sedarplus.ca/x?drmKey=9", "doc": "sedar:9", "source": "SEDAR+"}));
+        assert_eq!(crate::feeds::notice_link(&[json!({"id": "sec:4", "source": "SEC", "url": "https://www.sec.gov/x/4.htm", "date": "2026-09-15T09:00"})]),
+                   json!({"url": "https://www.sec.gov/x/4.htm", "doc": "sec:4", "source": "SEC"}), "the SEC serves its own documents");
+        assert_eq!(crate::feeds::notice_link(&[json!({"id": "tmx:1", "url": "https://money.tmx.com/en/quote/QNC/news/1", "publishedAt": "2026-09-15T13:00:00Z"})]),
+                   json!({"url": "https://money.tmx.com/en/quote/QNC/news/1"}));
+        assert_eq!(crate::feeds::notice_link(&[json!({"id": "x", "publishedAt": "2026-09-15T13:00:00Z"})]), json!({}), "nothing to open, nothing claimed");
+    }
+
+    #[test]
+    fn test_a_document_a_regulator_refuses_is_a_page_not_a_json_error() {
+        // The document route opens in a tab of its own: a refusal has to read as words.
+        let (_g, _c) = setup();
+        let page = crate::feeds::document_error_page("QNC", "sedar:drm:x", "could not open the profile's documents to download from");
+        assert!(page.contains("<!doctype html>"));
+        assert!(page.contains("would not serve this document just now"));
+        assert!(page.contains("could not open the profile&#x27;s documents to download from"));
+        assert!(page.contains("/api/filings/doc?symbol=QNC&amp;id=sedar%3Adrm%3Ax"), "the retry goes back through the app");
+    }
+
+    // ---------------------------------------------------------------------------
+    // one event is one notification
+    // ---------------------------------------------------------------------------
+
+
+    #[test]
+    fn test_one_event_is_one_notification_whatever_id_it_arrives_under() {
+        // The same release reaches the app from several sources, each with its own id and its own
+        // date. It is one event and is told once, and meeting it again -- a week later, under another
+        // id, from a source whose results dropped it and brought it back -- tells nothing.
+        let (_g, c) = setup();
+        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        let head = "Harvest ETFs Announces September 2026 Distributions";
+        let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
+        let first = wire_release("tmx:1", head, "u1", "2026-09-14T11:30:00Z");
+        let note = |rows: &[Value], new: &[&str]| {
+            crate::feeds::note_wire_releases(&c, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>())
+        };
+        note(&[older.clone()], &["tmx:0"]);                       // the listing's first read: history
+        note(&[older.clone(), first.clone()], &["tmx:1"]);
+        assert_eq!(posted().iter().map(|r| f(r, "title")).collect::<Vec<_>>(), vec!["Press release · RDDY"], "told once, when it appeared");
+        // Google's copy of the same release: its own id, a week's difference in its date
+        let g2 = wire_release("gnews:2", head, "u2", "2026-09-21T07:00:00Z");
+        note(&[older.clone(), first.clone(), g2.clone()], &["gnews:2"]);
+        // and the wire's own copy drops out of the results and comes back under a new id
+        note(&[older.clone(), g2.clone()], &[]);
+        note(&[older, g2, wire_release("tmx:9", head, "u1", "2026-09-14T11:30:00Z")], &["tmx:9"]);
+        assert_eq!(posted().len(), 1, "one event, one notification");
+    }
+
+    #[test]
+    fn test_the_back_catalogue_a_first_read_brings_can_never_ring_later() {
+        // A source read for the first time brings history. That history is recorded as met, so the
+        // same releases returning under other ids on later passes are recognised rather than rung.
+        let (_g, c) = setup();
+        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        let old: Vec<Value> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &old, &old.iter().map(|r| f(r, "id")).collect::<Vec<_>>());
+        // every one of them comes back under another source's ids, dated later, as a search's results shift
+        let again: Vec<Value> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &again, &again.iter().map(|r| f(r, "id")).collect::<Vec<_>>());
+        assert!(posted().is_empty(), "history stays history, whatever id it returns under");
+    }
+
+    #[test]
+    fn test_a_month_old_release_is_never_told_however_it_reaches_the_app() {
+        // What happened in the person's own app: a listing's wire carried a release dated 24 August;
+        // weeks later a second source returned its own copy, dated 31 August, which was newer than the
+        // stream's mark and had an id the listing had never held -- so the bell rang for an August
+        // event. The stream now records what it has met, so the second copy is recognised; and
+        // something that just happened is still told, through the same mark.
+        let (_g, c) = setup();
+        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        let head = "Harvest ETFs Announces August 2026 Distributions";
+        let a = wire_release("tmx:1", head, "u1", "2026-08-24T11:30:00Z");
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &[a.clone()], &["tmx:1".to_string()]);   // the first read: history
+        let b = wire_release("gnews:2", head, "u2", "2026-08-31T07:00:00Z");
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &[a.clone(), b.clone()], &["gnews:2".to_string()]);
+        assert!(posted().is_empty(), "the same release under another id: history, not news");
+        let fresh = wire_release("tmx:3", "Harvest ETFs Announces September 2026 Distributions", "u3", "2026-09-15T11:30:00Z");
+        crate::feeds::note_wire_releases(&c, "RDDY", "TSX", &[a, b, fresh], &["tmx:3".to_string()]);
+        assert_eq!(posted().iter().map(|r| f(r, "title")).collect::<Vec<_>>(), vec!["Press release · RDDY"]);
+        assert_eq!(f(&posted()[0]["extra"], "at"), "2026-09-15T11:30:00Z");
+    }
+
+    #[test]
+    fn test_what_a_stream_has_met_is_kept_by_what_the_thing_is() {
+        // `store.events_told` / `store.mark_told`: the stream's memory, keyed by the event.
+        let (_g, c) = setup();
+        let events = vec!["a".to_string(), "b".to_string()];
+        assert!(st::events_told(&c, "news:X@TSX", &events).unwrap().is_empty());
+        assert_eq!(st::mark_told(&c, "news:X@TSX", &events, "2026-09-15T14:00:00Z").unwrap(), 2);
+        assert_eq!(st::events_told(&c, "news:X@TSX", &events).unwrap().len(), 2);
+        assert!(st::events_told(&c, "news:Y@TSX", &events).unwrap().is_empty(), "each stream keeps its own");
+        assert!(st::events_told(&c, "news:X@TSX", &[String::new()]).unwrap().is_empty(), "nothing is not an event");
+    }
+
 }

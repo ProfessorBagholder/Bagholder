@@ -219,6 +219,14 @@ CREATE TABLE IF NOT EXISTS watchlist (
     PRIMARY KEY (symbol, exchange)
 );
 
+CREATE TABLE IF NOT EXISTS told (
+    scope TEXT NOT NULL,          -- the stream: news:RDDY@TSX, filings:QNC:SEDAR+
+    event TEXT NOT NULL,          -- what the thing is, independent of the id a source gave it
+    at TEXT NOT NULL,             -- when the app first met it
+    PRIMARY KEY (scope, event)
+);
+CREATE INDEX IF NOT EXISTS told_at ON told (at);
+
 CREATE TABLE IF NOT EXISTS news (
     id TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -230,6 +238,7 @@ CREATE TABLE IF NOT EXISTS news (
     published_at TEXT,
     fetched_at TEXT,
     kind TEXT,
+    summary TEXT,
     PRIMARY KEY (id, symbol, exchange)
 );
 CREATE INDEX IF NOT EXISTS news_published ON news (published_at);

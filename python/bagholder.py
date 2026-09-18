@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from html import escape as html_escape
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
@@ -693,7 +694,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.44.0"
+APP_VERSION = "1.45.0"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -728,7 +729,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-17.1"
+PROTOCOL = "2026-09-18.1"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5967,8 +5968,12 @@ def sweep_filings(now=None):
             by_source.setdefault(_s(r.get("source")), []).append(r)
         new = []
         for src, rows in by_source.items():
-            new.extend(notify.fresh_since("filings:%s:%s" % (sym, src), rows,
-                                          at=lambda r: _s(r.get("date")), seen=lambda r: filing_mark(r) in before))
+            scope = "filings:%s:%s" % (sym, src)
+            event = lambda r: "|".join(filing_mark(r))
+            met = store.events_told(scope, [event(r) for r in rows])
+            new.extend(notify.fresh_since(scope, rows, at=lambda r: _s(r.get("date")), ident=event,
+                                          seen=lambda r: filing_mark(r) in before or event(r) in met))
+            store.mark_told(scope, [event(r) for r in rows])
         if not new:
             continue
         # a filed news release is a release, not another filing: it is the Releases kind's to tell, and
@@ -5978,11 +5983,12 @@ def sweep_filings(now=None):
         said = False
         if rel and in_release_scope(sym, rel_scopes) and not store.has_wire_release(sym):
             t, b = release_notice(sym, rel)
-            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, {"symbol": sym})) or said
+            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, dict({"symbol": sym}, **dict(notice_moment(rel), **notice_link(rel))))) or said
         if rest and sym in disc_syms:
             notice = filings_notice(sym, rest)
             digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in rest)).encode("utf-8")).hexdigest()[:12]
-            said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1], {"symbol": sym})) or said
+            said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1],
+                                    dict({"symbol": sym}, **dict(notice_moment(rest), **notice_link(rest))))) or said
         if said:
             told += 1
     return told
@@ -6344,16 +6350,110 @@ def in_release_scope(sym, scopes=None):
     return False
 
 
+DISTRIBUTION_RELEASE = re.compile(r"\b(distribution|distributions|dividend|dividends)\b", re.I)
+
+
+def money_per_share(amount, currency=""):
+    """A per-share amount as a release states it: `$0.1489`, trailing zeros gone below four places."""
+    if amount is None:
+        return ""
+    text = ("%.4f" % float(amount)).rstrip("0")
+    whole, _, cents = text.partition(".")
+    text = whole + "." + (cents + "00")[:max(2, len(cents))]     # never fewer than cents, never more than the record states
+    sign = "US$" if _s(currency).upper() == "USD" else "$"
+    return sign + text
+
+
+def distribution_detail(sym):
+    """What a distribution release means for this listing, from the issuer's own declared record:
+    the amount just announced, when it goes ex and when it is paid, and the one it replaces. A
+    release headline says only that distributions were announced; the figure is what the holder
+    wants, and reading it from the record rather than the release's prose keeps it the same figure
+    the Cashflow tab pays from."""
+    rows = (store.distributions() or {}).get(_s(sym).strip().upper()) or []
+    if not rows:
+        return ""
+    rows = sorted(rows, key=lambda r: _s(r.get("exDate")), reverse=True)
+    latest = rows[0]
+    amount = money_per_share(latest.get("amount"), latest.get("currency"))
+    if not amount:
+        return ""
+    when = stamp_day(_s(latest.get("exDate")))
+    paid = stamp_day(_s(latest.get("payDate")))
+    freq = _s(((store.quotes() or {}).get(_s(sym).strip().upper()) or {}).get("dividendFrequency")).strip().lower()
+    out = amount + " a share"
+    if freq:
+        out += ", " + freq
+    if when:
+        out += " · ex " + when
+    if paid:
+        out += ", paid " + paid
+    was = next((r for r in rows[1:] if r.get("amount") is not None), None)
+    if was is not None and float(was["amount"]) != float(latest["amount"]):
+        out += " · was " + money_per_share(was.get("amount"), was.get("currency"))
+    return out
+
+
+def stamp_day(iso):
+    """`2026-08-31` as `Aug 31`, and a year that is not this one carries it."""
+    day = _s(iso)[:10]
+    try:
+        when = datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    text = when.strftime("%b %-d") if os.name != "nt" else when.strftime("%b %d")
+    return text if when.year == datetime.now(timezone.utc).year else text + " " + str(when.year)
+
+
 def release_notice(sym, rows):
-    """`Press release · QNC` and the headline; several, `3 press releases · QNC` and the newest."""
+    """`Press release · QNC` and the headline; several, `3 press releases · QNC` and the newest. A
+    release announcing distributions carries the figures beneath the headline, since the headline
+    alone ("Announces August 2026 Distributions") says nothing a holder can act on."""
     newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)
     head = _s(newest[0].get("headline") or newest[0].get("subject") or newest[0].get("type")) or "A new release."
     title = ("Press release · " if len(rows) == 1 else "%d press releases · " % len(rows)) + sym
+    detail = distribution_detail(sym) if DISTRIBUTION_RELEASE.search(head) else ""
+    if not detail:
+        # what the source said beneath its own headline, where it said anything
+        detail = _s(newest[0].get("summary")).strip()
+    if detail:
+        head += "\n" + detail
     return (title, head)
 
 
+def _now():
+    """The moment the app is at. One place, so a test can hold the clock still."""
+    return datetime.now(timezone.utc)
+
+
+def notice_moment(rows):
+    """When the newest of these happened, as its source dates it. A release found today can have
+    been published weeks ago — the app reads a listing's back catalogue the first time it sees it —
+    and a notice that shows only when it was told reads as news that is not new."""
+    newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)[0]
+    return {"at": _s(newest.get("publishedAt") or newest.get("date"))}
+
+
+def notice_link(rows):
+    """Where a notification's rows can be read: the newest one's own page. A filed document is
+    opened through the app, which is what the Disclosures table does, so it opens the same way
+    from here; anything else carries the source's own link."""
+    newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)[0]
+    url = _s(newest.get("url"))
+    if _s(newest.get("id")) and _s(newest.get("source")) in ("SEDAR+", "SEC", "SEC EDGAR"):
+        return {"url": url, "doc": _s(newest.get("id")), "source": _s(newest.get("source"))}
+    return {"url": url} if url else {}
+
+
+def release_event(row):
+    """What a release *is*, independent of the id, the source and the date each carries: the story
+    its headline tells. TMX, Yahoo, Seeking Alpha and Google all carry the same release under their
+    own ids, a week apart in their own timestamps; keyed by id, one release is four events."""
+    return model.news_text_key(_s(row.get("headline") or row.get("subject") or row.get("type")))
+
+
 def _release_key(sym, rows):
-    return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(_s(r.get("id")) for r in rows)).encode("utf-8")).hexdigest()[:12])
+    return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(release_event(r) for r in rows)).encode("utf-8")).hexdigest()[:12])
 
 
 def note_wire_releases(symbol, exchange, rows, new_ids):
@@ -6364,12 +6464,41 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
     if not scopes or not in_release_scope(sym, scopes):
         return
     rel = [r for r in rows if _s(r.get("kind")) == "release"]
-    fresh = notify.fresh_since("news:" + store.news_key(symbol, exchange), rel,
-                               at=lambda r: _s(r.get("publishedAt")), seen=lambda r: _s(r.get("id")) not in new_ids)
+    # An event is told once. The stream keeps what it has met, by what the thing is rather than by the
+    # id a source gave it, so the same release reaching the app again — from another source, under
+    # another id, dated a week apart, or simply returning to a search's results after dropping out of
+    # them — is recognised and passed over. Everything met is recorded, told or not, so the back
+    # catalogue a first read brings can never ring later.
+    scope = "news:" + store.news_key(symbol, exchange)
+    met = store.events_told(scope, [release_event(r) for r in rel])
+    fresh = notify.fresh_since(scope, rel, at=lambda r: _s(r.get("publishedAt")), ident=release_event,
+                               seen=lambda r: _s(r.get("id")) not in new_ids or release_event(r) in met)
+    store.mark_told(scope, [release_event(r) for r in rel])
     if not fresh:
         return
+    if any(DISTRIBUTION_RELEASE.search(_s(r.get("headline"))) for r in fresh):
+        # the release is the announcement; the record it comes from is what carries the figures, and
+        # it is read now rather than at its own twenty-hour clock so the notice is not a day behind
+        try:
+            market.refresh_distributions([{"symbol": sym, "exchange": exchange, "currency": ""}], _ssl_context(), force=True)
+        except Exception as e:
+            sys.stderr.write("bagholder releases: %s record not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
     title, body = release_notice(sym, fresh)
-    notify.emit("releases", _release_key(sym, fresh), title, body, {"symbol": sym})
+    notify.emit("releases", _release_key(sym, fresh), title, body, dict({"symbol": sym, "exchange": exchange}, **dict(notice_moment(fresh), **notice_link(fresh))))
+
+
+# What a form is, for the forms whose code is all a row carries until a document has been read. A
+# code names the form and not what happened, and "4" alone tells a holder nothing at all.
+FORM_NAMES = {"3": "Insider's first report (Form 3)", "4": "Insider transaction (Form 4)", "5": "Insider's annual report (Form 5)",
+              "8-K": "Material event (8-K)", "6-K": "Foreign issuer report (6-K)", "10-K": "Annual report (10-K)",
+              "10-Q": "Quarterly report (10-Q)", "144": "Notice of proposed sale (144)", "S-1": "Registration (S-1)",
+              "SC 13D": "Beneficial ownership (13D)", "SC 13G": "Beneficial ownership (13G)", "DEF 14A": "Proxy statement (DEF 14A)",
+              "424B5": "Prospectus supplement (424B5)", "FWP": "Free writing prospectus (FWP)"}
+
+
+def form_name(code):
+    """A form's code as words where the app knows the form, the code itself otherwise."""
+    return FORM_NAMES.get(_s(code).strip().upper(), _s(code).strip())
 
 
 def filings_notice(sym, new):
@@ -6379,17 +6508,20 @@ def filings_notice(sym, new):
     and not what happened. A document with no title yet is read here for one, at most the few
     the notice names, and the read is kept on the row, so the table shows what the
     notification said. A form whose document could not be read is named by its code."""
-    named = []
+    named, said = [], ""
     for r in new[:3]:
-        title = _s(r.get("subject")).strip()
-        if not title and _s(r.get("id")):
+        title, summary = _s(r.get("subject")).strip(), _s(r.get("summary")).strip()
+        if (not title or not summary) and _s(r.get("id")):
             try:
-                title = _s((filings_enrich(sym, _s(r.get("id"))) or {}).get("subject")).strip()
+                read = filings_enrich(sym, _s(r.get("id"))) or {}
+                title = title or _s(read.get("subject")).strip()
+                summary = summary or _s(read.get("summary")).strip()
             except Exception as e:
                 sys.stderr.write("bagholder disclosures: %s not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
-        title = title or _s(r.get("type")).strip()
+        title = title or form_name(r.get("type"))
         if title and title not in named:
             named.append(title)
+        said = said or summary
     sources = []
     for r in new:
         src = _s(r.get("source")).strip()
@@ -6400,6 +6532,10 @@ def filings_notice(sym, new):
     tail = ", ".join(names.get(x.lower(), x) for x in sources)
     head = ", ".join(named) + (" and more" if len(new) > 3 else "")
     body = (head + (" · " if head and tail else "") + tail) or "A new filing."
+    # the sentence the document itself yielded, under the line that names it: a form code and a
+    # regulator say what arrived, never what it says
+    if said and model.news_text_key(said) != model.news_text_key(head):
+        body += "\n" + said
     title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
     return (title, body)
 
@@ -6600,6 +6736,29 @@ def filings_document(symbol, doc_id):
     if not data:
         return None, "empty document"
     return data, ct or "application/octet-stream"
+
+
+def document_error_page(symbol, doc_id, why):
+    """What a tab shows when a regulator would not serve a document. SEDAR+ mints a document's
+    address inside a live session and puts a bot gate in front of it, so a refusal is ordinary and
+    a retry often works; the page says that in words, names the document, and retries on a click."""
+    row = store.filing(_s(symbol).strip().upper(), doc_id) or {}
+    name = _s(row.get("subject")) or _s(row.get("title")) or _s(row.get("type")) or "This document"
+    source = _s(row.get("source")) or "the regulator"
+    when = _s(row.get("dateText")) or _s(row.get("date"))[:10]
+    again = "/api/filings/doc?symbol=%s&id=%s" % (quote(_s(symbol)), quote(_s(doc_id)))
+    return ("<!doctype html><meta charset=utf-8><title>%s</title>"
+            "<style>:root{color-scheme:dark light}body{margin:0;min-height:100vh;display:grid;place-items:center;"
+            "background:#0e1118;color:#e8ecf3;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+            "main{max-width:34rem;padding:2rem}h1{font:600 16px/1.4 inherit;margin:0 0 .75rem}p{margin:0 0 .75rem;color:#aab3c2}"
+            "b{color:#e8ecf3;font-weight:500}a{color:#7aa2f7}</style>"
+            "<main><h1>%s would not serve this document just now</h1>"
+            "<p><b>%s</b>%s</p>"
+            "<p>%s</p>"
+            "<p>SEDAR+ builds a document&rsquo;s address inside a live session and puts a bot gate in front of it, so a "
+            "refusal is ordinary rather than a sign the document is gone. <a href=\"%s\">Try again</a>.</p></main>") % (
+        html_escape(name), html_escape(source), html_escape(name), html_escape(" · " + when if when else ""),
+        html_escape(_s(why) or "The source did not answer."), html_escape(again))
 
 
 def filings_enrich(symbol, doc_id):
@@ -7513,7 +7672,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data, info = filings_document(symbol, doc_id)
             if data is None:
-                self._send(502, {"ok": False, "error": info})
+                # this route is opened in a tab of its own, so a browser asking for a page is
+                # answered with one: a raw JSON error is the app failing in front of the person
+                if "text/html" in _s(self.headers.get("Accept")):
+                    self._send(502, document_error_page(symbol, doc_id, info), "text/html; charset=utf-8")
+                else:
+                    self._send(502, {"ok": False, "error": info})
                 return
             self._send(200, data, info or "application/pdf")
             return
