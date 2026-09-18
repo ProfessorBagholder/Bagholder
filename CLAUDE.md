@@ -76,6 +76,14 @@ To release: bump the version, merge, then tag and let the workflows build the as
   ```
   with notes listing the merged PRs. `.github/workflows/release.yml` builds the desktop binary for linux, darwin and windows on amd64 and arm64 and attaches each as `bagholder-vX.Y.Z-<os>-<arch>` (`.exe` on Windows) with its `.sha256` beside it; those are the exact names the in-app updater looks for, or running copies fall back to an "Update available" link. `docker.yml` publishes the image from the same tag. The Android build goes on the same page as `bagholder-vX.Y.Z-android.apk`, built from the same tag (`cd android && ./gradlew :app:assembleDebug`, then rename `app/build/outputs/apk/debug/app-debug.apk`). Master may carry unreleased features between releases; a release collects everything merged since the last tag, so the bump is decided by the biggest change in that set, not by the last PR alone. Running copies check the latest release at start and hourly, and show an "Update to vX.Y.Z" button when it is newer.
 
+**Releasing the port.** The port is not master's implementation and is never released as `vX.Y.Z`. It goes out on its own tag, `go-vX.Y.Z`, carrying the version the port is level with, cut from the port branch rather than from master:
+
+  ```
+  gh release create go-vX.Y.Z --target claude/pensive-hamilton-7l4erc --prerelease --title "Go port X.Y.Z" --notes "..."
+  ```
+
+`docker.yml` fires on that tag and publishes `:go-vX.Y.Z` and `:go`, the moving tag a user follows, and leaves `:latest` alone. `AppVersion` must equal the tag's version or the workflow fails, as it does for a release. The tag is outside the `vX.Y.Z` scheme on purpose, so the in-app updater never offers a port build to a copy of the app; the release is a pre-release for the same reason. README's "The Go port" section is what a user reads, and its one command uses `:go`.
+
 ## Mobile
 
 `MOBILE.md`: why the apps are native and local-first, how each is built, run, seeded and tested, and the platform limits that cannot be worked around. Their screens are specified in `SPEC.md` §8; the working rules are in "How changes land" above.

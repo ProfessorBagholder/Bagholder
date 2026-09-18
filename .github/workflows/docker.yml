@@ -1,14 +1,21 @@
-# Publishes the web app's image to GitHub's container registry on every release tag,
-# as ghcr.io/professorbagholder/bagholder:<version> and :latest, so a Docker user
-# updates with `docker compose pull && docker compose up -d`. A manual run of the
-# workflow on a branch takes an image tag and publishes the branch under that tag only,
-# never :latest, so a branch can be handed to testers as
-# `docker pull ghcr.io/professorbagholder/bagholder:<tag>`.
+# Publishes the web app's image to GitHub's container registry.
+#
+# A release tag `vX.Y.Z` publishes `:X.Y.Z` and moves `:latest`, which is what a Docker user
+# running the app follows: `docker compose pull && docker compose up -d`.
+#
+# A Go port tag `go-vX.Y.Z` publishes `:go-vX.Y.Z` and moves `:go`, and never touches `:latest`.
+# The port is a second implementation of the same spec, run beside the app rather than in place
+# of it, so `:go` is the one line a user changes to try it and the one that carries them forward.
+# The tag is outside the `vX.Y.Z` scheme on purpose: the in-app updater only reads that scheme,
+# so a port release never offers itself to a copy of the app.
+#
+# A manual run on a branch takes an image tag and publishes that tag only, for a build that is
+# not a release of either.
 name: Docker image
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v*.*.*", "go-v*.*.*"]
   workflow_dispatch:
     inputs:
       name:
@@ -29,7 +36,8 @@ jobs:
       - name: The app's version is the tag's
         if: github.ref_type == 'tag'
         run: |
-          want="${GITHUB_REF_NAME#v}"
+          want="${GITHUB_REF_NAME#go-}"
+          want="${want#v}"
           have="$(sed -n 's/^\tAppVersion *= "\(.*\)"$/\1/p' internal/app/app.go)"
           test "$have" = "$want" || { echo "internal/app/app.go says $have, the tag says $want"; exit 1; }
       - uses: docker/setup-buildx-action@v3
@@ -43,8 +51,10 @@ jobs:
         with:
           images: ghcr.io/professorbagholder/bagholder
           tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ github.ref_name }},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{version}},enable=${{ github.ref_type == 'tag' && !startsWith(github.ref_name, 'go-') }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !startsWith(github.ref_name, 'go-') }}
+            type=raw,value=go,enable=${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'go-') }}
             type=raw,value=${{ inputs.name }},enable=${{ github.event_name == 'workflow_dispatch' }}
       - uses: docker/build-push-action@v6
         with:

@@ -98,6 +98,21 @@ Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page o
 
 To build the image yourself instead, `docker build -t bagholder .` and point the compose file's `image` at `bagholder`.
 
+## The Go port
+
+A second implementation of the same spec, in Go, published as its own image. It reads the same database, draws the same page and is held to the same model cases; it is a port under test, not a replacement, so it runs beside a copy of the app rather than over it.
+
+```
+docker run -d --name bagholder-go -p 127.0.0.1:8799:8799 \
+  -e BAGHOLDER_PORT=8799 -e BAGHOLDER_DRY_ORDERS=1 \
+  -v "$HOME/.bagholder-go:/data" \
+  ghcr.io/professorbagholder/bagholder:go
+```
+
+Open `http://127.0.0.1:8799` and connect the same way. Its own port and its own directory, so nothing it does reaches an existing copy, and `BAGHOLDER_DRY_ORDERS=1` keeps its order path away from the broker while it is being tried. With compose, the same thing is a second service beside the first, its `image` set to `...:go` and its `volumes` to a directory of its own.
+
+`:go` is the newest port build and moves with each one, so `docker pull ghcr.io/professorbagholder/bagholder:go` carries you forward; `:go-vX.Y.Z` pins one. `:latest` is the app's own image and the port never moves it, and no port build offers itself to the updater below.
+
 ## Keeping up to date
 
 Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in `~/.bagholder`.
