@@ -501,6 +501,53 @@ class NotifyTest(unittest.TestCase):
                          [("releases", "Press release · QNC", "Quantum eMotion Wins Certification")], "the wire's release, not the story beside it")
         self.assertEqual(len(store.list_notifications()), 1)
 
+    def test_a_distribution_release_carries_the_figures_and_a_way_to_read_it(self):
+        """A headline that says only "Announces August 2026 Distributions" tells a holder nothing
+        they can act on: the notice carries the amount, when it goes ex and is paid, and the one it
+        replaces, from the issuer's own declared record, and it opens the release itself."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        store.upsert_distributions("RDDY", [{"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"},
+                                            {"exDate": "2026-07-31", "payDate": "2026-08-06", "amount": 0.20, "currency": "CAD"}])
+        store.upsert_quote("RDDY", {"price": 4.87, "dividendAmount": 0.15, "dividendFrequency": "Monthly", "exDividendDate": "2026-08-31"})
+        rel = [{"id": "tmx:7", "headline": "Harvest High Income Shares ETFs Announces August 2026 Distributions",
+                "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7", "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"}]
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(rel))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), \
+             mock.patch.object(bagholder.market, "refresh_distributions", return_value=1) as record, \
+             mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                       # the first read is history
+            rel.append(dict(rel[0], id="tmx:8", headline="Harvest ETFs Announces September 2026 Distributions", publishedAt="2026-09-15T14:00:00Z"))
+            bagholder.refresh_news()
+        rows = store.list_notifications()
+        self.assertEqual(len(rows), 1)
+        title, body = rows[0]["title"], rows[0]["body"]
+        self.assertEqual(title, "Press release · RDDY")
+        self.assertEqual(body.split("\n")[0], "Harvest ETFs Announces September 2026 Distributions")
+        self.assertEqual(body.split("\n")[1], "$0.15 a share, monthly · ex Aug 31, paid Sep 4 · was $0.20")
+        self.assertEqual(rows[0]["extra"].get("url"), "https://money.tmx.com/en/quote/RDDY/news/7")
+        self.assertEqual(rows[0]["extra"].get("symbol"), "RDDY")
+        self.assertTrue(record.called, "the record is read again so the notice is not a day behind the release")
+
+    def test_a_release_that_announces_nothing_of_the_kind_carries_the_headline_alone(self):
+        store.upsert_distributions("QNC", [{"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"}])
+        self.assertEqual(bagholder.release_notice("QNC", [{"id": "tmx:1", "headline": "Quantum eMotion Wins Certification", "publishedAt": "2026-09-15T13:00:00Z"}]),
+                         ("Press release · QNC", "Quantum eMotion Wins Certification"))
+        self.assertEqual(bagholder.release_notice("NOSUCH", [{"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"}])[1],
+                         "Announces Monthly Distribution", "no record for the listing: the headline stands alone")
+
+    def test_a_disclosure_notice_opens_the_document_it_is_about(self):
+        self.assertEqual(bagholder.notice_link([{"id": "sedar:9", "source": "SEDAR+", "url": "https://www.sedarplus.ca/x?drmKey=9", "date": "2026-09-15T09:00"}]),
+                         {"url": "https://www.sedarplus.ca/x?drmKey=9", "doc": "sedar:9", "source": "SEDAR+"})
+        self.assertEqual(bagholder.notice_link([{"id": "sec:4", "source": "SEC", "url": "https://www.sec.gov/x/4.htm", "date": "2026-09-15T09:00"}]),
+                         {"url": "https://www.sec.gov/x/4.htm", "doc": "sec:4", "source": "SEC"}, "the SEC serves its own documents")
+        self.assertEqual(bagholder.notice_link([{"id": "tmx:1", "url": "https://money.tmx.com/en/quote/QNC/news/1", "publishedAt": "2026-09-15T13:00:00Z"}]),
+                         {"url": "https://money.tmx.com/en/quote/QNC/news/1"})
+        self.assertEqual(bagholder.notice_link([{"id": "x", "publishedAt": "2026-09-15T13:00:00Z"}]), {}, "nothing to open, nothing claimed")
+
     def test_a_release_outside_the_chosen_sets_is_not_told(self):
         notify.set_settings({"releasesWatched": True})
         base = {"today": "2026-09-15", "positions": [{"symbol": "QNC", "exchange": "TSX-V", "currency": "CAD", "kind": "Shares"}], "trades": []}

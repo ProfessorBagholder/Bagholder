@@ -724,7 +724,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-17.1"
+PROTOCOL = "2026-09-18.1"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -5974,11 +5974,12 @@ def sweep_filings(now=None):
         said = False
         if rel and in_release_scope(sym, rel_scopes) and not store.has_wire_release(sym):
             t, b = release_notice(sym, rel)
-            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, {"symbol": sym})) or said
+            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, dict({"symbol": sym}, **notice_link(rel)))) or said
         if rest and sym in disc_syms:
             notice = filings_notice(sym, rest)
             digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in rest)).encode("utf-8")).hexdigest()[:12]
-            said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1], {"symbol": sym})) or said
+            said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1],
+                                    dict({"symbol": sym}, **notice_link(rest)))) or said
         if said:
             told += 1
     return told
@@ -6340,12 +6341,84 @@ def in_release_scope(sym, scopes=None):
     return False
 
 
+DISTRIBUTION_RELEASE = re.compile(r"\b(distribution|distributions|dividend|dividends)\b", re.I)
+
+
+def money_per_share(amount, currency=""):
+    """A per-share amount as a release states it: `$0.1489`, trailing zeros gone below four places."""
+    if amount is None:
+        return ""
+    text = ("%.4f" % float(amount)).rstrip("0")
+    whole, _, cents = text.partition(".")
+    text = whole + "." + (cents + "00")[:max(2, len(cents))]     # never fewer than cents, never more than the record states
+    sign = "US$" if _s(currency).upper() == "USD" else "$"
+    return sign + text
+
+
+def distribution_detail(sym):
+    """What a distribution release means for this listing, from the issuer's own declared record:
+    the amount just announced, when it goes ex and when it is paid, and the one it replaces. A
+    release headline says only that distributions were announced; the figure is what the holder
+    wants, and reading it from the record rather than the release's prose keeps it the same figure
+    the Cashflow tab pays from."""
+    rows = (store.distributions() or {}).get(_s(sym).strip().upper()) or []
+    if not rows:
+        return ""
+    rows = sorted(rows, key=lambda r: _s(r.get("exDate")), reverse=True)
+    latest = rows[0]
+    amount = money_per_share(latest.get("amount"), latest.get("currency"))
+    if not amount:
+        return ""
+    when = stamp_day(_s(latest.get("exDate")))
+    paid = stamp_day(_s(latest.get("payDate")))
+    freq = _s(((store.quotes() or {}).get(_s(sym).strip().upper()) or {}).get("dividendFrequency")).strip().lower()
+    out = amount + " a share"
+    if freq:
+        out += ", " + freq
+    if when:
+        out += " · ex " + when
+    if paid:
+        out += ", paid " + paid
+    was = next((r for r in rows[1:] if r.get("amount") is not None), None)
+    if was is not None and float(was["amount"]) != float(latest["amount"]):
+        out += " · was " + money_per_share(was.get("amount"), was.get("currency"))
+    return out
+
+
+def stamp_day(iso):
+    """`2026-08-31` as `Aug 31`, and a year that is not this one carries it."""
+    day = _s(iso)[:10]
+    try:
+        when = datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    text = when.strftime("%b %-d") if os.name != "nt" else when.strftime("%b %d")
+    return text if when.year == datetime.now(timezone.utc).year else text + " " + str(when.year)
+
+
 def release_notice(sym, rows):
-    """`Press release · QNC` and the headline; several, `3 press releases · QNC` and the newest."""
+    """`Press release · QNC` and the headline; several, `3 press releases · QNC` and the newest. A
+    release announcing distributions carries the figures beneath the headline, since the headline
+    alone ("Announces August 2026 Distributions") says nothing a holder can act on."""
     newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)
     head = _s(newest[0].get("headline") or newest[0].get("subject") or newest[0].get("type")) or "A new release."
     title = ("Press release · " if len(rows) == 1 else "%d press releases · " % len(rows)) + sym
+    if DISTRIBUTION_RELEASE.search(head):
+        detail = distribution_detail(sym)
+        if detail:
+            head += "\n" + detail
     return (title, head)
+
+
+def notice_link(rows):
+    """Where a notification's rows can be read: the newest one's own page. A filed document is
+    opened through the app, which is what the Disclosures table does, so it opens the same way
+    from here; anything else carries the source's own link."""
+    newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)[0]
+    url = _s(newest.get("url"))
+    if _s(newest.get("id")) and _s(newest.get("source")) in ("SEDAR+", "SEC", "SEC EDGAR"):
+        return {"url": url, "doc": _s(newest.get("id")), "source": _s(newest.get("source"))}
+    return {"url": url} if url else {}
 
 
 def _release_key(sym, rows):
@@ -6364,8 +6437,15 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
                                at=lambda r: _s(r.get("publishedAt")), seen=lambda r: _s(r.get("id")) not in new_ids)
     if not fresh:
         return
+    if any(DISTRIBUTION_RELEASE.search(_s(r.get("headline"))) for r in fresh):
+        # the release is the announcement; the record it comes from is what carries the figures, and
+        # it is read now rather than at its own twenty-hour clock so the notice is not a day behind
+        try:
+            market.refresh_distributions([{"symbol": sym, "exchange": exchange, "currency": ""}], _ssl_context(), force=True)
+        except Exception as e:
+            sys.stderr.write("bagholder releases: %s record not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
     title, body = release_notice(sym, fresh)
-    notify.emit("releases", _release_key(sym, fresh), title, body, {"symbol": sym})
+    notify.emit("releases", _release_key(sym, fresh), title, body, dict({"symbol": sym}, **notice_link(fresh)))
 
 
 def filings_notice(sym, new):
