@@ -900,6 +900,14 @@ fn fresh_filings(c: &Connection, sym: &str) -> Vec<Value> {
         }
         let cat = disclosures::categorize(r);
         r["category"] = cat;
+        // the list arrives named: a form and a named document say what they are
+        // without being fetched, so only the rest wait on a reading
+        if f(r, "subject").is_empty() {
+            if let Some(t) = disclosures::quick_title(r) {
+                let _ = sf::set_filing_enrichment(c, sym, &f(r, "id"), Some(&t), None, None, None, &now_iso());
+                r["subject"] = json!(t);
+            }
+        }
     }
     rows
 }

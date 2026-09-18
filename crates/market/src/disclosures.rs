@@ -194,6 +194,20 @@ pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
 
 /// A provider's deterministic title and summary for
 /// a structured filing it can parse exactly, or None.
+/// The title a row carries without anything being fetched: the name of the
+/// form it is, or of the document it is. None when only a reading can say.
+pub fn quick_title(row: &Value) -> Option<String> {
+    match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
+        s if s == crate::edgar::SOURCE => crate::formnames::title_of(row.get("type").and_then(|v| v.as_str()).unwrap_or("")),
+        s if s == crate::sedar::SOURCE => crate::sedar::enrichment(row)
+            .as_ref()
+            .and_then(|e| e.get("subject"))
+            .and_then(|v| v.as_str())
+            .map(|t| t.to_string()),
+        _ => None,
+    }
+}
+
 pub fn enrichment(row: &Value) -> Option<Value> {
     match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
         s if s == crate::edgar::SOURCE => crate::edgar::enrichment(row),
