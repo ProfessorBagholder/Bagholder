@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-use crate::value::{field_s, get, num};
+use crate::value::{FSum, field_s, get, num};
 
 pub const UNCLASSIFIED: &str = "Not classified";
 
@@ -124,8 +124,8 @@ pub fn exposure_slices(
             (weight_map(rec.get("sectors")), weight_map(rec.get("countries")))
         };
 
-        let s_sum: f64 = s_map.iter().map(|(_, w)| *w).fold(0.0, |a, b| a + b);
-        let c_sum: f64 = c_map.iter().map(|(_, w)| *w).fold(0.0, |a, b| a + b);
+        let s_sum: f64 = s_map.iter().map(|(_, w)| *w).fsum();
+        let c_sum: f64 = c_map.iter().map(|(_, w)| *w).fsum();
         for (n, w) in &s_map {
             // a record read before an alias was known folds here
             let name = { let x = norm_sector(n); if x.is_empty() { n.clone() } else { x } };

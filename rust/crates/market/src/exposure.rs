@@ -961,7 +961,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         let agg_cov = agg["coverage"].as_f64().unwrap_or(0.0);
         coverage = if !sectors.is_empty() && !countries.is_empty() { coverage.max(agg_cov) } else { agg_cov };
     }
-    let tot = |m: &Map<String, Value>| m.values().map(|v| v.as_f64().unwrap_or(0.0)).sum::<f64>();
+    let tot = |m: &Map<String, Value>| bagholder_model::value::FSum::fsum(m.values().map(|v| v.as_f64().unwrap_or(0.0)));
     let (tot_s, tot_c) = (tot(&sectors), tot(&countries));
     if tot_s > 1.0001 {
         sectors = sectors.into_iter().map(|(n, w)| (n, json!(w.as_f64().unwrap_or(0.0) / tot_s))).collect();

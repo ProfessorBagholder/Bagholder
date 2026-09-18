@@ -12,7 +12,7 @@ use crate::dates::days_between;
 use crate::fifo::{trade_side, Slice};
 use crate::securities::Securities;
 use crate::symbols::{option_multiplier, underlying_symbol};
-use crate::value::{field_num, field_s, fmt8, num_repr};
+use crate::value::{FSum, field_num, field_s, fmt8, num_repr};
 
 pub type Journal = Map<String, Value>;
 
@@ -97,13 +97,13 @@ pub fn collapse_trade(
     });
     let t0 = slices[0].clone();
 
-    let qty: f64 = slices.iter().map(|s| s.quantity).fold(0.0, |a, b| a + b);
-    let entry_notional: f64 = slices.iter().map(|s| s.entry_price * s.quantity).fold(0.0, |a, b| a + b);
-    let exit_notional: f64 = slices.iter().map(|s| s.exit_price * s.quantity).fold(0.0, |a, b| a + b);
-    let pnl: f64 = slices.iter().map(|s| s.pnl).fold(0.0, |a, b| a + b);
-    let pnl_cad: f64 = slices.iter().map(|s| s.pnl_cad).fold(0.0, |a, b| a + b);
-    let fees: f64 = slices.iter().map(|s| s.commission).fold(0.0, |a, b| a + b);
-    let fees_cad: f64 = slices.iter().map(|s| s.fees_cad.unwrap_or(s.commission)).fold(0.0, |a, b| a + b);
+    let qty: f64 = slices.iter().map(|s| s.quantity).fsum();
+    let entry_notional: f64 = slices.iter().map(|s| s.entry_price * s.quantity).fsum();
+    let exit_notional: f64 = slices.iter().map(|s| s.exit_price * s.quantity).fsum();
+    let pnl: f64 = slices.iter().map(|s| s.pnl).fsum();
+    let pnl_cad: f64 = slices.iter().map(|s| s.pnl_cad).fsum();
+    let fees: f64 = slices.iter().map(|s| s.commission).fsum();
+    let fees_cad: f64 = slices.iter().map(|s| s.fees_cad.unwrap_or(s.commission)).fsum();
     let entry_date = slices.iter().map(|s| s.entry_date.clone()).min().unwrap_or_default();
     let exit_date = slices.iter().map(|s| s.exit_date.clone()).max().unwrap_or_default();
     let entry_when = slices
