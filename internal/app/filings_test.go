@@ -714,3 +714,27 @@ func TestAnotherSourcesRowsAreUntouched(t *testing.T) {
 		t.Errorf("subject = %q", row.Subject)
 	}
 }
+
+func TestAReadNoSourceAnsweredIsNotStamped(t *testing.T) {
+	sedar := &fakeProvider{source: disclosures.SedarSource, available: false, covers: true}
+	sec := &fakeProvider{source: secSource, available: false, covers: true}
+	a := payloadApp(t, sedar, sec)
+	out := a.filingsPayload("CH", true, "", nil, nil)
+	if out["sourceUnavailable"] != true {
+		t.Fatalf("sourceUnavailable = %v", out["sourceUnavailable"])
+	}
+	if got := a.st.FilingsFetchedAt("CH"); got != "" {
+		t.Errorf("fetched stamp = %q after a read no source answered, want none", got)
+	}
+	if !a.filingsStale("CH", time.Now().UTC(), FilingsStaleHours) {
+		t.Error("a symbol whose read no source answered is fresh")
+	}
+	sedar.available = true
+	out = a.filingsPayload("CH", false, "", nil, nil)
+	if out["sourceUnavailable"] == true {
+		t.Error("the next ask did not read again")
+	}
+	if a.st.FilingsFetchedAt("CH") == "" {
+		t.Error("a read a source answered is not stamped")
+	}
+}

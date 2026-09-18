@@ -1112,12 +1112,12 @@ func (a *App) refreshFilings(symbol, name string, exchange, currency *string) in
 			total += a.st.ReplaceFilings(sym, src, rows, "")
 		}
 	}
-	a.st.MarkFilingsFetched(sym, profileNo, "")
 	raw, _ := json.Marshal(result.Sources)
 	a.st.SetMeta("filings_sources:"+sym, string(raw))
 	if !anyReached {
 		return -1
 	}
+	a.st.MarkFilingsFetched(sym, profileNo, "")
 	return total
 }
 

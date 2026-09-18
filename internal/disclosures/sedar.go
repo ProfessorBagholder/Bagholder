@@ -50,6 +50,7 @@ type scopeHit struct {
 type Sedar struct {
 	mu      sync.Mutex
 	session *browserhttp.Session
+	get     func(rawURL string) (*browserhttp.Response, error)
 	last    time.Time
 	scope   map[string]scopeHit
 	scopeMu sync.Mutex
@@ -290,24 +291,44 @@ type view struct {
 	ref     string
 }
 
-func (s *Sedar) openView(service string) (*view, error) {
+func gateBounced(resp *browserhttp.Response) bool {
+	head := string(resp.Body)
+	if len(head) > 2000 {
+		head = head[:2000]
+	}
+	return strings.Contains(resp.URL, "validate.perfdrive.com") || strings.Contains(head, "validate.perfdrive.com")
+}
+
+func (s *Sedar) fetch(rawURL string) (*browserhttp.Response, error) {
+	if s.get != nil {
+		return s.get(rawURL)
+	}
 	sess, err := s.getSession()
 	if err != nil {
 		return nil, err
 	}
 	s.pace()
-	resp, err := sess.Get(SedarBase+"/csa-party/service/create.html?targetAppCode=csa-party&service="+service, nil)
-	if err != nil {
-		return nil, Unavailable("could not open %s: %s", service, err)
+	return sess.Get(rawURL, nil)
+}
+
+func (s *Sedar) openView(service string) (*view, error) {
+	rawURL := SedarBase + "/csa-party/service/create.html?targetAppCode=csa-party&service=" + service
+	var resp *browserhttp.Response
+	for attempt := 0; resp == nil; attempt++ {
+		r, err := s.fetch(rawURL)
+		if err != nil {
+			return nil, Unavailable("could not open %s: %s", service, err)
+		}
+		if !gateBounced(r) {
+			resp = r
+			break
+		}
+		if attempt > 0 {
+			return nil, Unavailable("the SEDAR+ bot gate turned the request away")
+		}
+		s.session = nil
 	}
 	page := string(resp.Body)
-	head := page
-	if len(head) > 2000 {
-		head = head[:2000]
-	}
-	if strings.Contains(resp.URL, "validate.perfdrive.com") || strings.Contains(head, "validate.perfdrive.com") {
-		return nil, Unavailable("the SEDAR+ bot gate turned the request away")
-	}
 	mInst := instRE.FindStringSubmatch(resp.URL)
 	if mInst == nil {
 		mInst = instUpdRE.FindStringSubmatch(page)

@@ -1,6 +1,7 @@
 package disclosures
 
 import (
+	"github.com/ProfessorBagholder/Bagholder/internal/browserhttp"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -249,5 +250,40 @@ func TestScopeCacheAFailedWalkIsNotCached(t *testing.T) {
 	}
 	if _, cached := s.scope["000099999"]; cached {
 		t.Error("a None result is retried, never cached: the failure was cached")
+	}
+}
+
+func TestAGateBounceIsAskedAgainOnAFreshSession(t *testing.T) {
+	form := "<html>viewInstanceKey:'k1' sessionId:'s1'</html>"
+	answers := []*browserhttp.Response{
+		{Status: 200, URL: "https://validate.perfdrive.com/abc", Body: []byte("<html>gate</html>")},
+		{Status: 200, URL: SedarBase + "/csa-party/viewInstance/view.html?id=0a1b", Body: []byte(form)},
+	}
+	calls := 0
+	s := NewSedar()
+	s.get = func(string) (*browserhttp.Response, error) {
+		r := answers[calls]
+		calls++
+		return r, nil
+	}
+	v, err := s.openView("searchReportingIssuers")
+	if err != nil {
+		t.Fatalf("openView: %v", err)
+	}
+	if calls != 2 || v.inst != "0a1b" || v.key != "k1" {
+		t.Errorf("calls=%d inst=%q key=%q", calls, v.inst, v.key)
+	}
+}
+
+func TestASecondGateBounceIsUnavailable(t *testing.T) {
+	calls := 0
+	s := NewSedar()
+	s.get = func(string) (*browserhttp.Response, error) {
+		calls++
+		return &browserhttp.Response{Status: 200, URL: "https://validate.perfdrive.com/abc", Body: []byte("gate")}, nil
+	}
+	_, err := s.openView("searchReportingIssuers")
+	if err == nil || !IsUnavailable(err) || calls != 2 {
+		t.Errorf("err=%v calls=%d", err, calls)
 	}
 }
