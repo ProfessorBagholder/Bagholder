@@ -233,3 +233,18 @@ fn test_a_failed_walk_is_not_cached() {
     assert_eq!(cache.get_or_walk("000099999", || { calls += 1; None }), None);
     assert_eq!(calls, 2, "a None result is retried, never cached");
 }
+
+#[test]
+fn test_a_named_document_is_titled_by_its_name() {
+    use bagholder_market::sedar::enrichment;
+    use serde_json::json;
+    let named = enrichment(&json!({"type": "Auditors' consent letter"})).unwrap();
+    assert_eq!(named["subject"], "Auditors' consent letter");
+    assert_eq!(named["final"], true);
+    assert_eq!(enrichment(&json!({"type": "Qualification certificate"})).unwrap()["subject"], "Qualification certificate");
+    // what the document says is the point: these are read
+    assert!(enrichment(&json!({"type": "News release"})).is_none());
+    assert!(enrichment(&json!({"type": "Material change report"})).is_none());
+    assert!(enrichment(&json!({"type": "Final short form prospectus"})).is_none());
+    assert!(enrichment(&json!({"type": ""})).is_none());
+}

@@ -237,5 +237,22 @@ class ScopeCacheTest(unittest.TestCase):
         self.assertEqual(len(calls), 2, "a None result is retried, never cached")
 
 
+class NamedDocumentTitle(unittest.TestCase):
+    """A filing whose point is what it is, not what it says, is titled by its own name
+    and never downloaded for a title it already has."""
+
+    def test_a_named_document_is_titled_by_its_name(self):
+        named = sedar.enrichment({"type": "Auditors' consent letter"})
+        self.assertEqual(named["subject"], "Auditors' consent letter")
+        self.assertTrue(named["final"])
+        self.assertEqual(sedar.enrichment({"type": "Qualification certificate"})["subject"],
+                         "Qualification certificate")
+        # what the document says is the point: these are read
+        self.assertIsNone(sedar.enrichment({"type": "News release"}))
+        self.assertIsNone(sedar.enrichment({"type": "Material change report"}))
+        self.assertIsNone(sedar.enrichment({"type": "Final short form prospectus"}))
+        self.assertIsNone(sedar.enrichment({"type": ""}))
+
+
 if __name__ == "__main__":
     unittest.main()

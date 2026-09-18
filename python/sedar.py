@@ -591,6 +591,29 @@ CA_EXCHANGES = {"TSX", "TSXV", "TSX-V", "TSXV", "CSE", "CNSX", "NEO", "NEO EXCHA
                 "CBOE CANADA", "AQL", "TSX VENTURE", "CANADIAN SECURITIES EXCHANGE"}
 
 
+# The kinds whose point is what the document says rather than what it is: a release
+# carries a headline, a report a change, a prospectus an offering. Everything else on
+# SEDAR+ is a named document — a consent letter, a certificate, a submission — and its
+# own name is the best title it has.
+_WORTH_READING = ("news release", "press release", "material change report", "prospectus",
+                  "circular", "take-over bid", "annual report", "annual information form")
+
+
+def _worth_reading(typ):
+    t = (typ or "").lower()
+    return any(k in t for k in _WORTH_READING)
+
+
+def enrichment(row):
+    """A filing that is a named document is titled by that name, read for good, so it is
+    never downloaded for a title it already has. Returns {subject, summary, final} or
+    None to fall back to reading the document."""
+    typ = _text(D.clean((row or {}).get("type") or ""))
+    if not typ or _worth_reading(typ):
+        return None
+    return {"subject": typ[:90], "summary": "", "final": True}
+
+
 def covers(symbol, exchange="", currency=""):
     """SEDAR+ applies to Canadian listings. A US listing (currency USD) is left to
     EDGAR; anything Canadian, or of unknown venue in CAD, is ours."""

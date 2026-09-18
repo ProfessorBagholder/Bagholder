@@ -662,6 +662,28 @@ pub fn download_bytes(profile_no: &str, doc_id: &str, name: Option<&str>) -> Fet
 // --- the provider interface ------------------------------------------------------
 
 /// Canadian listings; a US listing is EDGAR's.
+/// The kinds whose point is what the document says rather than what it is: a
+/// release carries a headline, a report a change, a prospectus an offering.
+/// Everything else on SEDAR+ is a named document -- a consent letter, a
+/// certificate, a submission -- and its own name is the best title it has.
+fn worth_reading(typ: &str) -> bool {
+    let t = typ.to_lowercase();
+    ["news release", "press release", "material change report", "prospectus", "circular", "take-over bid", "annual report", "annual information form"]
+        .iter()
+        .any(|k| t.contains(k))
+}
+
+/// `enrichment`: a filing that is a named document is titled by that name,
+/// read for good, so it is never downloaded for a title it already has.
+pub fn enrichment(row: &Value) -> Option<Value> {
+    let typ = text(&crate::disclosures::clean(row.get("type").and_then(|v| v.as_str()).unwrap_or("")));
+    if typ.is_empty() || worth_reading(&typ) {
+        return None;
+    }
+    let title: String = typ.chars().take(90).collect();
+    Some(json!({"subject": title, "summary": "", "final": true}))
+}
+
 pub fn covers(_symbol: &str, exchange: &str, currency: &str) -> bool {
     let ex = exchange.to_uppercase();
     let cur = currency.to_uppercase();

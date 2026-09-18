@@ -729,7 +729,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
 PROTOCOL = "2026-09-17.1"
-ENRICH_VERSION = 13  # bump when title/summary logic improves, so read rows are re-read once
+ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -6585,6 +6585,11 @@ def filings_enrich(symbol, doc_id):
         if sm:
             store.set_filing_enrichment(sym, doc_id, subject=sj, summary=sm, version=ENRICH_VERSION)
             return {"ok": True, "id": doc_id, "subject": sj, "summary": sm,
+                    "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+        if exact.get("final"):
+            # a named document: nothing a reading would add
+            store.set_filing_enrichment(sym, doc_id, subject=subject, summary="", version=ENRICH_VERSION, final=True)
+            return {"ok": True, "id": doc_id, "subject": subject, "summary": "",
                     "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
         if not model:
             return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,

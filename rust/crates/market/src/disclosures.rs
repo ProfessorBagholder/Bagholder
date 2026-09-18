@@ -197,6 +197,7 @@ pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
 pub fn enrichment(row: &Value) -> Option<Value> {
     match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
         s if s == crate::edgar::SOURCE => crate::edgar::enrichment(row),
+        s if s == crate::sedar::SOURCE => crate::sedar::enrichment(row),
         _ => None,
     }
 }
