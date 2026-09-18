@@ -3,6 +3,7 @@ package market
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ProfessorBagholder/Bagholder/internal/netio"
 	"github.com/ProfessorBagholder/Bagholder/internal/store"
 )
 
@@ -161,7 +163,6 @@ func NewHTTPClient() *http.Client {
 	}
 	return &http.Client{
 		Transport: transport,
-		Timeout:   TimeoutSec * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.Method != http.MethodGet || via[0].Method != http.MethodGet {
 				return http.ErrUseLastResponse
@@ -215,6 +216,17 @@ func (c *Client) ResetHealth() {
 	c.hmu.Unlock()
 }
 
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	ctx, g := netio.NewGuard(context.Background(), TimeoutSec*time.Second)
+	resp, err := c.HTTP.Do(req.WithContext(ctx))
+	if err != nil {
+		g.Stop()
+		return nil, g.Err(err)
+	}
+	resp.Body = g.Body(resp.Body)
+	return resp, nil
+}
+
 func (c *Client) fetch(rawURL string, headers map[string]string, method string, body []byte) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
@@ -230,7 +242,7 @@ func (c *Client) fetch(rawURL string, headers map[string]string, method string, 
 	if body != nil {
 		req.ContentLength = int64(len(body))
 	}
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		var he *HTTPError
 		if errors.As(err, &he) {
@@ -402,7 +414,7 @@ func (c *Client) FetchRawWithType(rawURL string, headers map[string]string) ([]b
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, "", err
 	}

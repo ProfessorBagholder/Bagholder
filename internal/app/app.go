@@ -31,7 +31,6 @@ const (
 	RestartCode           = 3
 	UpdateHealthySec      = 20
 	UpdateMaxBytes        = 50 * 1024 * 1024
-	UpdateDownloadMinutes = 30
 	InvalidateCoalesceSec = 3
 	UpdateCheckHours      = 1
 	UpdatesOffMessage     = "This copy is updated with docker compose pull; a new release is a new image."

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ProfessorBagholder/Bagholder/internal/netio"
 	"io"
 	"net/http"
 	"net/url"
@@ -241,11 +242,9 @@ func (l *LocalModel) download(path string) bool {
 		return false
 	}
 	tmp := strings.TrimSuffix(path, filepath.Ext(path)) + ".part"
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	idle := time.AfterFunc(DownloadTimeout*time.Second, cancel)
-	defer idle.Stop()
-	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: DownloadTimeout * time.Second}}
+	ctx, g := netio.NewGuard(context.Background(), DownloadTimeout*time.Second)
+	defer g.Stop()
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.llamafileURL(), nil)
 	if err != nil {
 		return false
@@ -255,16 +254,16 @@ func (l *LocalModel) download(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	body := g.Body(resp.Body)
+	defer body.Close()
 	out, err := os.Create(tmp)
 	if err != nil {
 		return false
 	}
 	buf := make([]byte, 1<<20)
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
-			idle.Reset(DownloadTimeout * time.Second)
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				rerr = werr
 			}

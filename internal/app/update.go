@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -183,17 +182,13 @@ func (a *App) canUpdate(rec map[string]any) bool {
 }
 
 func (a *App) download(rawURL, dest string, maxBytes int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), UpdateDownloadMinutes*time.Minute)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", "Bagholder/"+AppVersion)
 	req.Header.Set("Accept", "application/octet-stream")
-	client := *a.ws.HTTP
-	client.Timeout = 0
-	resp, err := client.Do(req)
+	resp, err := a.ws.Do(req, 0)
 	if err != nil {
 		return err
 	}

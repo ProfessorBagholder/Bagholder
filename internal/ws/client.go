@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/market"
+	"github.com/ProfessorBagholder/Bagholder/internal/netio"
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
 
@@ -58,7 +60,7 @@ type Client struct {
 
 func NewClient(home string) *Client {
 	transport := market.NewHTTPClient().Transport
-	return &Client{Files: &Files{Home: home}, HTTP: &http.Client{Transport: transport, Timeout: 120 * time.Second}}
+	return &Client{Files: &Files{Home: home}, HTTP: &http.Client{Transport: transport}}
 }
 
 func (c *Client) setError(msg string) {
@@ -81,6 +83,22 @@ func bodyText(raw []byte) string {
 		raw = market.GunzipIfNeeded(raw)
 	}
 	return strings.ToValidUTF8(string(raw), "�")
+}
+
+const DefaultIdle = 120 * time.Second
+
+func (c *Client) Do(req *http.Request, idle time.Duration) (*http.Response, error) {
+	if idle <= 0 {
+		idle = DefaultIdle
+	}
+	ctx, g := netio.NewGuard(context.Background(), idle)
+	resp, err := c.HTTP.Do(req.WithContext(ctx))
+	if err != nil {
+		g.Stop()
+		return nil, g.Err(err)
+	}
+	resp.Body = g.Body(resp.Body)
+	return resp, nil
 }
 
 func (c *Client) HTTPJSON(method, rawURL string, body any, headers map[string]string, timeout time.Duration) map[string]any {
@@ -107,11 +125,7 @@ func (c *Client) HTTPJSON(method, rawURL string, body any, headers map[string]st
 	for k, v := range hdrs {
 		req.Header.Set(k, v)
 	}
-	client := *c.HTTP
-	if timeout > 0 {
-		client.Timeout = timeout
-	}
-	resp, err := client.Do(req)
+	resp, err := c.Do(req, timeout)
 	if err != nil {
 		return map[string]any{"error": "url_error", "_http_status": 0, "_error": err.Error()}
 	}
@@ -165,9 +179,7 @@ func (c *Client) getText(rawURL string, timeout time.Duration) (string, error) {
 	if ua := c.Files.CachedUserAgent(); ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
-	client := *c.HTTP
-	client.Timeout = timeout
-	resp, err := client.Do(req)
+	resp, err := c.Do(req, timeout)
 	if err != nil {
 		return "", err
 	}

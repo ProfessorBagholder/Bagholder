@@ -2,14 +2,19 @@ package browserhttp
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/ProfessorBagholder/Bagholder/internal/netio"
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
+	"golang.org/x/net/proxy"
 )
 
 type Response struct {
@@ -21,6 +26,7 @@ type Response struct {
 
 type Session struct {
 	client tls_client.HttpClient
+	idle   time.Duration
 }
 
 const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
@@ -51,24 +57,36 @@ func proxyFromEnv() string {
 	return ""
 }
 
-func New(timeoutSec int, followRedirects bool) (*Session, error) {
+func New(idleSec int, followRedirects bool) (*Session, error) {
+	handshakeOptions := []tls_client.HttpClientOption{
+		tls_client.WithTimeoutSeconds(idleSec),
+		tls_client.WithClientProfile(profiles.Chrome_150),
+	}
+	if p := proxyFromEnv(); p != "" {
+		handshakeOptions = append(handshakeOptions, tls_client.WithProxyUrl(p))
+	}
+	handshake, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), handshakeOptions...)
+	if err != nil {
+		return nil, err
+	}
+	dialer := handshake.GetDialer()
 	jar := tls_client.NewCookieJar()
 	options := []tls_client.HttpClientOption{
-		tls_client.WithTimeoutSeconds(timeoutSec),
+		tls_client.WithTimeoutSeconds(0),
 		tls_client.WithClientProfile(profiles.Chrome_150),
 		tls_client.WithCookieJar(jar),
+		tls_client.WithProxyDialerFactory(func(string, time.Duration, *net.TCPAddr, fhttp.Header, tls_client.Logger) (proxy.ContextDialer, error) {
+			return dialer, nil
+		}),
 	}
 	if !followRedirects {
 		options = append(options, tls_client.WithNotFollowRedirects())
-	}
-	if p := proxyFromEnv(); p != "" {
-		options = append(options, tls_client.WithProxyUrl(p))
 	}
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
 	if err != nil {
 		return nil, err
 	}
-	return &Session{client: client}, nil
+	return &Session{client: client, idle: time.Duration(idleSec) * time.Second}, nil
 }
 
 func (s *Session) do(method, rawURL string, headers map[string]string, body []byte) (*Response, error) {
@@ -76,7 +94,9 @@ func (s *Session) do(method, rawURL string, headers map[string]string, body []by
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := fhttp.NewRequest(method, rawURL, reader)
+	ctx, g := netio.NewGuard(context.Background(), s.idle)
+	defer g.Stop()
+	req, err := fhttp.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -107,10 +127,11 @@ func (s *Session) do(method, rawURL string, headers map[string]string, body []by
 	req.Header[fhttp.HeaderOrderKey] = order
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, g.Err(err)
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	rc := g.Body(resp.Body)
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, err
 	}
