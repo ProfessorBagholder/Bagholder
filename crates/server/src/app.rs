@@ -16,8 +16,10 @@ use bagholder_model::base::Base;
 pub const APP_VERSION: &str = "1.44.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-17.1";
-/// Bump when title/summary logic improves, so read rows are re-read once.
-pub const ENRICH_VERSION: i64 = 13;
+/// Bump when title/summary logic improves, so a row that is missing a half is
+/// read again. A row that has both keeps them: a re-read of everything costs a
+/// download and a reading each, which is minutes of a list standing still.
+pub const ENRICH_VERSION: i64 = 11;
 pub const REPO: &str = "ProfessorBagholder/Bagholder";
 
 /// What the header and the loops know.

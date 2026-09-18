@@ -975,6 +975,11 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
             let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now);
             return answer(&sj, &sm, model);
         }
+        if is_true(&exact, "final") {
+            // a named document: nothing a reading would add
+            let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(""), Some(ENRICH_VERSION), Some(true), &now);
+            return answer(&subject, "", model);
+        }
         if !model {
             return answer(&subject, &summary, model);
         }
