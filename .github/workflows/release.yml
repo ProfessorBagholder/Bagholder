@@ -137,7 +137,12 @@ jobs:
         run: |
           ext=""; [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
           name="bagholder-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
-          cd dist && shasum -a 256 "$name" > "$name.sha256"
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            sha256sum "$name" > "$name.sha256"
+          else
+            shasum -a 256 "$name" > "$name.sha256"
+          fi
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
