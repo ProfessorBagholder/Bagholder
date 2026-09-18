@@ -963,10 +963,20 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
     }
     let now = now_iso();
     if let Some(exact) = r.enrichment(&row) {
-        if truthy(exact.get("subject")) || truthy(exact.get("summary")) {
-            let (sj, sm) = (f(&exact, "subject"), f(&exact, "summary"));
+        // What the source can say exactly: the form's own name, and for the
+        // forms it can read in full, the sentence too. A name on its own is
+        // kept and the document still read, so the sentence follows it.
+        let (sj, sm) = (f(&exact, "subject"), f(&exact, "summary"));
+        if !sj.is_empty() && subject.is_empty() {
+            subject = sj.clone();
+            let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), None, None, None, &now);
+        }
+        if !sm.is_empty() {
             let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now);
             return answer(&sj, &sm, model);
+        }
+        if !model {
+            return answer(&subject, &summary, model);
         }
     }
     let (data, ct) = match r.content(&row) {

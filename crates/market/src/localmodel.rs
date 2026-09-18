@@ -69,11 +69,11 @@ fn env(name: &str, default: &str) -> String {
 }
 
 pub fn llamafile_url() -> String {
-    env("BAGHOLDER_LLAMAFILE_URL", "https://huggingface.co/Mozilla/Llama-3.2-1B-Instruct-llamafile/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.llamafile")
+    env("BAGHOLDER_LLAMAFILE_URL", "https://huggingface.co/mozilla-ai/gemma-2-2b-it-llamafile/resolve/main/gemma-2-2b-it.Q4_K_M.llamafile")
 }
 
 pub fn llamafile_sha256() -> String {
-    env("BAGHOLDER_LLAMAFILE_SHA256", "ac1c2864000bad7f62ee56ee908d3f55dd051a267d015b15fa6e831e69767b55")
+    env("BAGHOLDER_LLAMAFILE_SHA256", "5eae1115b231c9115b260cc2442263db9e84dec99be8610cfe19fac137284217")
 }
 
 fn user_llm_url() -> String {
@@ -390,6 +390,9 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
         "max_tokens": max_tokens,
+        // a model that ends its turn with a marker of its own: cut there, so no
+        // marker reaches a title, which has no sentence for the trim to find
+        "stop": ["<end_of_turn>", "<|eot_id|>", "</s>"],
         "stream": false,
     });
     let text = serde_json::to_string(&body).unwrap_or_default();
