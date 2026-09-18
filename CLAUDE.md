@@ -1,6 +1,6 @@
 # Working on Bagholder
 
-Read this first, then `SPEC.md`. Bagholder is a local-first trading journal for Wealthsimple users. On the desktop, two implementations of one app that serve the same page and read the same data folder:
+Read this first, then `SPEC.md`. Bagholder is a local-first trading journal for Wealthsimple users. On the desktop, two implementations of one app that serve the same page, each with its own data folder:
 
 - `python/`, the reference: a Python standard-library server (`bagholder.py`), the derived model (`model.py`), market data (`market.py`), the SQLite store (`store.py`), CSV import (`csvimport.py`), its tests (`python/tests`), its `Dockerfile`, `requirements.txt`, MCP manifest (`mcp/`) and the web-archive builder (`tools/web_archive.py`). A root-level `bagholder.py` runs `python/bagholder.py`, so `python3 bagholder.py` from the root keeps working for existing checkouts and for the supervisor that respawns it after an in-app update.
 - `rust/`, the Rust port: a Cargo workspace (toolchain pinned in `rust/rust-toolchain.toml`) with the server, `bagholder` (`crates/server`: HTTP, session and login, orders and brackets, feeds and sweeps, notifications, the updater), the derived model (`crates/model`), market data, news and filings (`crates/market`), the Wealthsimple client and sync (`crates/ws`), the SQLite store and CSV import (`crates/store`), the `bagholder-browser` helper that presents a browser TLS handshake for Yahoo statistics and SEDAR+ (`crates/browser`, installed beside `bagholder`), its `Dockerfile` and MCP manifest (`mcp/`).
@@ -33,10 +33,11 @@ Each language keeps to its own folder; another port (a future `go/`) sits beside
   ```
   and for the Rust port, from `rust/`:
   ```
+  mkdir -p /tmp/bh-scratch-rust && cp ~/.bagholder/bagholder.db /tmp/bh-scratch-rust/
   cargo build --release --bins
-  BAGHOLDER_NO_BROWSER=1 BAGHOLDER_DRY_ORDERS=1 BAGHOLDER_HOME=/tmp/bh-scratch BAGHOLDER_PORT=8798 target/release/bagholder
+  BAGHOLDER_NO_BROWSER=1 BAGHOLDER_DRY_ORDERS=1 BAGHOLDER_HOME=/tmp/bh-scratch-rust BAGHOLDER_PORT=8798 target/release/bagholder
   ```
-  (the binary finds the page by looking up from its own folder to the repository root).
+  (the binary finds the page by looking up from its own folder to the repository root). Each build gets a scratch home of its own: a data folder belongs to the build that made it, marked by a `build` file, and the other build refuses to open it.
   `BAGHOLDER_DRY_ORDERS=1` is not optional either: orders are live by default, and a scratch copy that ever carries a login must never place one. `BAGHOLDER_NO_BROWSER=1` is not optional: the app opens a browser tab at start, and without it every scratch start puts the scratch data in the user's own browser, where it reads as their app being disconnected. Open `http://127.0.0.1:8799/` yourself (`localhost` is refused by design). The user's own instance runs on 8765; do not restart or write to it.
 - What to check is listed in `SPEC.md` §7: every displayed figure traced to its model field and meaning; every page at 1200, 1340, 1440 and 1680 px with no table overflowing or clipping at 1340 and above; headers level; lookups by id, exercised with a synthetic duplicate symbol in a second account. Take screenshots; measure with JavaScript rather than eyeballing. Hash-only navigation does not reload the page; use `location.reload()` after editing `ledger.html`.
 - Server-side changes need the user to restart their app; say so. When the page and the server change together, bump `PROTOCOL` in `python/bagholder.py`, `rust/crates/server/src/app.rs` and `ledger.html` (tests on both sides keep the three equal) so the page shows "Restart Bagholder to finish the update" rather than degrading quietly.

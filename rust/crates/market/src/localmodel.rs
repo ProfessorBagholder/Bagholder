@@ -124,13 +124,13 @@ fn state() -> &'static Mutex<State> {
 fn home() -> PathBuf {
     match std::env::var("BAGHOLDER_HOME") {
         Ok(h) if !h.is_empty() => PathBuf::from(h),
-        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".bagholder"),
+        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".bagholder-rust"),
     }
 }
 
 fn llamafile_path() -> PathBuf {
     // a test never makes or fills the person's model folder
-    let d = bagholder_store::guard_home(&home()).expect("a test reached the real ~/.bagholder").join("models");
+    let d = bagholder_store::guard_home(&home()).expect("a test reached the real data folder").join("models");
     let _ = std::fs::create_dir_all(&d);
     d.join("summarizer.llamafile")
 }
