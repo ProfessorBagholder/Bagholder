@@ -6672,6 +6672,13 @@ def filings_enrich(symbol, doc_id):
         store.set_filing_enrichment(sym, doc_id, subject=new_subject, summary=got_summary, version=ENRICH_VERSION, final=True)
         return {"ok": True, "id": doc_id, "subject": new_subject, "summary": got_summary,
                 "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+    if model and not new_subject and not got_summary and not subject and not summary:
+        # a document with no text in it — a release filed as a picture — has nothing for a
+        # reading to find, now or later: it is named by what it is and never read again
+        named = (disclosures.quick_title(row) or _s(row.get("type")))[:90]
+        store.set_filing_enrichment(sym, doc_id, subject=named, summary="", version=ENRICH_VERSION, final=True)
+        return {"ok": True, "id": doc_id, "subject": named, "summary": "",
+                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     if model:
         if fresh:
             # reading again a row this logic already wrote, to fill the half it lacks: what

@@ -1070,6 +1070,15 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&new_subject), Some(&got_summary), Some(ENRICH_VERSION), Some(true), &now);
         return answer(&new_subject, &got_summary, model);
     }
+    if model && new_subject.is_empty() && got_summary.is_empty() && subject.is_empty() && summary.is_empty() {
+        // a document with no text in it -- a release filed as a picture -- has
+        // nothing for a reading to find, now or later: it is named by what it
+        // is and never read again
+        let named = disclosures::quick_title(&row).unwrap_or_else(|| f(&row, "type"));
+        let named: String = named.chars().take(90).collect();
+        let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now);
+        return answer(&named, "", model);
+    }
     if model {
         if fresh {
             if !new_subject.is_empty() {
