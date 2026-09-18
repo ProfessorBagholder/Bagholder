@@ -1,0 +1,173 @@
+{
+  "issuer_menu.html": {
+    "filings": [],
+    "profiles": [],
+    "menuNodes": {
+      "": "W1118",
+      "Franco-Nevada Corporation": "W1118",
+      "Shopify Inc. / Shopify Inc.": "W1118",
+      "no such issuer": "W1118"
+    },
+    "docsNode": "",
+    "action": null,
+    "fields": [],
+    "params": []
+  },
+  "issuer_profile.html": {
+    "filings": [],
+    "profiles": [],
+    "menuNodes": {
+      "": "W733",
+      "Franco-Nevada Corporation": "W733",
+      "Shopify Inc. / Shopify Inc.": "W733",
+      "no such issuer": "W733"
+    },
+    "docsNode": "W733",
+    "action": null,
+    "fields": [],
+    "params": []
+  },
+  "reporting_issuers.html": {
+    "filings": [],
+    "profiles": [
+      {
+        "name": "01 Quantum Inc. / 01 Quantum Inc.",
+        "profileNo": "000010658",
+        "provinces": "AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT",
+        "jurisdiction": "ON",
+        "type": "Company"
+      },
+      {
+        "name": "01 Test / 01 Test",
+        "profileNo": "000102806",
+        "provinces": "ON",
+        "jurisdiction": "ON",
+        "type": "Company"
+      },
+      {
+        "name": "0180791 B.C. Ltd. / 0180791 B.C. Ltd.",
+        "profileNo": "000008237",
+        "provinces": "AB, BC",
+        "jurisdiction": "BC",
+        "type": "Company"
+      },
+      {
+        "name": "0187279 B.C. Ltd. / 0187279 B.C. Ltd.",
+        "profileNo": "000004523",
+        "provinces": "AB, BC",
+        "jurisdiction": "BC",
+        "type": "Company"
+      },
+      {
+        "name": "0730004 B.C. Ltd. ,formerly, Diamond Hawk Mining Corp. / 0730004 B.C. Ltd. ,formerly, Diamond Hawk Mining Corp.",
+        "profileNo": "000021787",
+        "provinces": "AB, BC",
+        "jurisdiction": "BC",
+        "type": "Company"
+      },
+      {
+        "name": "0913693 B.C. Ltd. / 0913693 B.C. Ltd.",
+        "profileNo": "000008892",
+        "provinces": "AB, BC, ON",
+        "jurisdiction": "BC",
+        "type": "Company"
+      }
+    ],
+    "menuNodes": {
+      "": "W596",
+      "Franco-Nevada Corporation": "W596",
+      "Shopify Inc. / Shopify Inc.": "W596",
+      "no such issuer": "W596"
+    },
+    "docsNode": "",
+    "action": null,
+    "fields": [],
+    "params": []
+  },
+  "search_documents.html": {
+    "filings": [
+      {
+        "id": "drm:7a91874c962cf58b",
+        "issuer": "Franco-Nevada Corporation (000026091)",
+        "profileNo": "000026091",
+        "file": "News release - English.pdf",
+        "submitted": "13 Sep 2026 20:42 EDT",
+        "submittedAt": "2026-09-13T20:42",
+        "size": "",
+        "url": "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W828\u0026drmKey=7a91874c962cf58b\u0026drr=ss49a885b4ef95c9f9c0dfde85bab6a4c9f34c8d3912b86fe0ce72fb7eb760177791b98f63f550cc7f4f027d48f4f48daaux\u0026id=0c11f8b7998bcd96e63568684bdf0c3cc5a56c3afcf0b6f2"
+      },
+      {
+        "id": "drm:a4ed95a46a63741e",
+        "issuer": "Atomic Eagle Ltd. (000109981)",
+        "profileNo": "000109981",
+        "file": "News release - English.pdf",
+        "submitted": "13 Sep 2026 20:35 EDT",
+        "submittedAt": "2026-09-13T20:35",
+        "size": "",
+        "url": "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W899\u0026drmKey=a4ed95a46a63741e\u0026drr=ss49a885b4ef95c9f9c0dfde85bab6a4c9f34c8d3912b86fe0ce72fb7eb760177791b98f63f550cc7f4f027d48f4f48daaux\u0026id=0c11f8b7998bcd96e63568684bdf0c3cc5a56c3afcf0b6f2"
+      },
+      {
+        "id": "drm:762a5f69e21092bc",
+        "issuer": "NFI Group Inc. / NFI Group Inc. (000022397)",
+        "profileNo": "000022397",
+        "file": "Notice Form 45-102F1.pdf",
+        "submitted": "13 Sep 2026 18:00 EDT",
+        "submittedAt": "2026-09-13T18:00",
+        "size": "",
+        "url": "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W970\u0026drmKey=762a5f69e21092bc\u0026drr=ss49a885b4ef95c9f9c0dfde85bab6a4c9f34c8d3912b86fe0ce72fb7eb760177791b98f63f550cc7f4f027d48f4f48daaux\u0026id=0c11f8b7998bcd96e63568684bdf0c3cc5a56c3afcf0b6f2"
+      },
+      {
+        "id": "drm:1dd456088a88c267",
+        "issuer": "NSJ Gold Corp. / NSJ Gold Corp. (000051464)",
+        "profileNo": "000051464",
+        "file": "News release - English.pdf",
+        "submitted": "13 Sep 2026 08:19 EDT",
+        "submittedAt": "2026-09-13T08:19",
+        "size": "",
+        "url": "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W1041\u0026drmKey=1dd456088a88c267\u0026drr=ss49a885b4ef95c9f9c0dfde85bab6a4c9f34c8d3912b86fe0ce72fb7eb760177791b98f63f550cc7f4f027d48f4f48daaux\u0026id=0c11f8b7998bcd96e63568684bdf0c3cc5a56c3afcf0b6f2"
+      },
+      {
+        "id": "drm:a206065c6c3728e5",
+        "issuer": "Vulcan Resources Corp. (000109600)",
+        "profileNo": "000109600",
+        "file": "Report of exempt distribution (45-106F1).pdf",
+        "submitted": "12 Sep 2026 14:13 EDT",
+        "submittedAt": "2026-09-12T14:13",
+        "size": "",
+        "url": "https://www.sedarplus.ca/csa-party/viewInstance/resource.html?node=W1112\u0026drmKey=a206065c6c3728e5\u0026drr=ss49a885b4ef95c9f9c0dfde85bab6a4c9f34c8d3912b86fe0ce72fb7eb760177791b98f63f550cc7f4f027d48f4f48daaux\u0026id=0c11f8b7998bcd96e63568684bdf0c3cc5a56c3afcf0b6f2"
+      }
+    ],
+    "profiles": [],
+    "menuNodes": {
+      "": "W800",
+      "Franco-Nevada Corporation": "W800",
+      "Shopify Inc. / Shopify Inc.": "W800",
+      "no such issuer": "W800"
+    },
+    "docsNode": "",
+    "action": null,
+    "fields": [
+      [
+        "nodeW792-DownloadDocumentYn",
+        ""
+      ],
+      [
+        "nodeW863-DownloadDocumentYn",
+        ""
+      ],
+      [
+        "nodeW934-DownloadDocumentYn",
+        ""
+      ],
+      [
+        "nodeW1005-DownloadDocumentYn",
+        ""
+      ],
+      [
+        "nodeW1076-DownloadDocumentYn",
+        ""
+      ]
+    ],
+    "params": []
+  }
+}
