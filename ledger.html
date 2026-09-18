@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-18.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-18.2"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -793,6 +793,30 @@ function loadModel() {
     })
     .catch((e) => { if (seq !== _loadSeq) return; state.loading = false; state.loadError = String(e); render(); });
 }
+// A quote tick moved prices and nothing else. Rather than refetch the whole book,
+// pull only the sections a price can change — the open positions and what is priced
+// off them — merge them into the model in hand, and redraw (which now patches only
+// the cells that moved). The closed trades, equity curve, KPIs and options lists are
+// left exactly as the last full load returned them.
+let _liveSeq = 0;
+const MODEL_LIVE_KEYS = ["market", "positions", "positionsSummary", "portfolio"];
+function loadLive() {
+  if (!state.model) { loadModel(); return; }
+  const seq = ++_liveSeq;
+  const q = encodeURIComponent(JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })));
+  // the heatmap/markets view is large and priced live only while it is on screen;
+  // every other page reads its live figures off the positions, so it asks for those alone
+  const wantsMarkets = state.page === "markets" || state.page === "heatmap";
+  fetch("/api/model?only=live" + (wantsMarkets ? "&markets=1" : "") + "&filters=" + q, { headers: { "X-Bagholder": "1" } })
+    .then((r) => r.json())
+    .then((m) => {
+      if (seq !== _liveSeq || !state.model || !m || !m.ok) return;   // a full load overtook this tick
+      MODEL_LIVE_KEYS.forEach((k) => { if (k in m) state.model[k] = m[k]; });
+      if ("markets" in m) state.model.markets = m.markets;
+      render();
+    })
+    .catch(() => {});
+}
 // A trade opened from a list has no legs or fills yet: fetch them once and
 // put them on the row, so the chart and the executions draw from the same
 // object the lists hold.
@@ -831,16 +855,27 @@ function applyStatus(st) {
   const prev = state.status.lastSync;
   const prevCount = state.status.activityCount;
   const prevVersion = state.status.dataVersion;
+  const prevCore = state.status.coreVersion;
   state.status = Object.assign({}, state.status, st);
   discSummaryReady(st.summaryReady);
-  const changed = (st.lastSync && st.lastSync !== prev && prev !== undefined) || (st.activityCount !== prevCount && prevCount) ||
+  const lastSyncChanged = (st.lastSync && st.lastSync !== prev && prev !== undefined);
+  const changed = lastSyncChanged || (st.activityCount !== prevCount && prevCount) ||
     (st.dataVersion && prevVersion && st.dataVersion !== prevVersion);
+  // Everything the model reads except the quotes is the core version. When the
+  // data version moved but the core did not, only prices ticked: fetch just the
+  // live figures and let the redraw patch the cells that moved. Anything else —
+  // new activity, FX, a distribution, a sync, the first load — is a full reload.
+  const structural = !prevCore || lastSyncChanged || (st.activityCount !== prevCount && prevCount) ||
+    (st.coreVersion && prevCore && st.coreVersion !== prevCore);
   if (changed && !state.status.syncing) {
-    // Quotes, distributions, FX and new activity all change the version. Reload
-    // now, unless a trade is open or a note is being typed: then on the next page change.
-    const el = document.activeElement;
-    const typing = !!(el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT"));
-    if (typing || state.sel) state.derivedStale = true; else loadModel();
+    if (structural) {
+      // Reload now, unless a trade is open or a note is being typed: then on the next page change.
+      const el = document.activeElement;
+      const typing = !!(el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT"));
+      if (typing || state.sel) state.derivedStale = true; else loadModel();
+    } else {
+      loadLive();   // a quote tick: safe to apply under an open trade or a typed note, the redraw touches only moved cells
+    }
   }
 }
 let _pollTimer = 0;
@@ -4485,6 +4520,47 @@ function mountReels() {
   });
 }
 const _keptScroll = {};
+// A quote tick moves a handful of cells, but the page used to answer it by
+// throwing away the whole DOM (root.innerHTML = …) and building it again —
+// reparsing, relaying out and, on a modest machine, stalling. morph() applies
+// the freshly-built markup by updating only the nodes that actually differ,
+// leaving everything else — and its scroll, focus, canvas and heatmap — in
+// place. Event handling is delegated (data-act), so nothing loses a listener.
+// Nodes that own content the page mounts outside the HTML string (the chart
+// canvas, the heatmap, the login frame, the tab bar) are matched by id and
+// their subtrees are left untouched.
+const MORPH_SKIP = new Set(["tradeChart", "chartTf", "heatBox", "loginFrame", "tabInd"]);
+function morph(root, html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  morphChildren(root, tmp);
+}
+function _sameType(a, b) {
+  if (a.nodeType !== b.nodeType) return false;
+  return a.nodeType === 1 ? a.nodeName === b.nodeName : true;
+}
+function morphChildren(oldParent, newParent) {
+  let o = oldParent.firstChild, n = newParent.firstChild;
+  while (n) {
+    const nextNew = n.nextSibling;
+    if (!o) { oldParent.appendChild(n); n = nextNew; continue; }
+    const nextOld = o.nextSibling;
+    if (_sameType(o, n)) morphNode(o, n);
+    else oldParent.replaceChild(n, o);   // takes n out of newParent; nextNew already held
+    o = nextOld; n = nextNew;
+  }
+  while (o) { const next = o.nextSibling; oldParent.removeChild(o); o = next; }
+}
+function morphNode(oldN, newN) {
+  if (oldN.nodeType !== 1) { if (oldN.nodeValue !== newN.nodeValue) oldN.nodeValue = newN.nodeValue; return; }
+  const oldA = oldN.attributes;
+  for (let i = oldA.length - 1; i >= 0; i--) { if (!newN.hasAttribute(oldA[i].name)) oldN.removeAttribute(oldA[i].name); }
+  const newA = newN.attributes;
+  for (let i = 0; i < newA.length; i++) { if (oldN.getAttribute(newA[i].name) !== newA[i].value) oldN.setAttribute(newA[i].name, newA[i].value); }
+  if (oldN.id && MORPH_SKIP.has(oldN.id)) return;   // owns externally-mounted content: leave its children alone
+  if (oldN === document.activeElement && (oldN.tagName === "INPUT" || oldN.tagName === "TEXTAREA")) return;
+  morphChildren(oldN, newN);
+}
 function render() {
   const root = document.getElementById("app");
   const scrollY = window.scrollY;
@@ -4510,10 +4586,14 @@ function render() {
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
   const standing = ["tkWrap", "odWrap", "ntWrap", "confirmDlg"].filter((id) => document.getElementById(id));
-  const leavingSkeleton = document.getElementById("pageSkel");
+  // The cross-fade fades a detached copy of the skeleton over the new content.
+  // With the reconciler the skeleton's own node is reused as that content, so
+  // fading the live node would remove the page — clone it, and fade the clone.
+  const leavingSkeletonNode = document.getElementById("pageSkel");
+  const leavingSkeleton = leavingSkeletonNode ? leavingSkeletonNode.cloneNode(true) : null;
   const alone = state.page === "heatmap";   // the heatmap on its own: no header, no tabs, no frame
   document.documentElement.classList.toggle("display-heat", alone);
-  root.innerHTML = (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
+  morph(root, (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : ""));
   if (keepLogin && keepLogin.getAttribute("src")) { const fresh = document.getElementById("loginFrame"); if (fresh) fresh.replaceWith(keepLogin); }
   if (state.loginView) loginFrameLoop();   // a first draw (or one without a stream yet) attaches the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }

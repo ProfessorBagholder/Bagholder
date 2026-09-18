@@ -86,6 +86,13 @@ pub fn data_version(conn: &Connection) -> Result<String> {
     Ok(versions(conn)?.0)
 }
 
+/// Everything the model reads except the quotes. Unchanged across a pure price
+/// tick, which is how the page tells a quote tick from a structural change and
+/// fetches just the live figures instead of the whole book.
+pub fn core_version(conn: &Connection) -> Result<String> {
+    Ok(versions(conn)?.1)
+}
+
 /// The rows the FIFO match itself depends on.
 pub fn book_version(conn: &Connection) -> Result<String> {
     let acts = format!(
