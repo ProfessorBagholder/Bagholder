@@ -90,3 +90,17 @@ func TestARefusedDocumentReadsAsWords(t *testing.T) {
 		}
 	}
 }
+
+func TestAReleaseCarriesWhatItsSourceSaidBeneathTheHeadline(t *testing.T) {
+	a := releaseApp(t)
+	row := wire("tmx:1", "Aegis names a new director", "2026-09-18T12:00:00Z")
+	row.Summary = "The board appointed Jane Roe, formerly of the exchange, effective immediately."
+	_, body := a.releaseNoticeWire("QNC", []store.WireItem{row})
+	if !strings.Contains(body, "Jane Roe") {
+		t.Errorf("the notice dropped what the source said: %q", body)
+	}
+	bare := wire("tmx:2", "Aegis names a new director", "2026-09-18T12:00:00Z")
+	if _, plain := a.releaseNoticeWire("QNC", []store.WireItem{bare}); strings.Contains(plain, "\n") {
+		t.Errorf("a release with no summary carried a second line: %q", plain)
+	}
+}

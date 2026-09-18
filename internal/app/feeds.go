@@ -970,11 +970,17 @@ func (a *App) releaseNoticeWire(sym string, rows []store.WireItem) (string, stri
 		head = "A new release."
 	}
 	// a release announcing distributions carries the figures beneath the headline, since the
-	// headline alone ("Announces August 2026 Distributions") says nothing a holder can act on
+	// headline alone ("Announces August 2026 Distributions") says nothing a holder can act on;
+	// anything else carries what the source said beneath its own headline, where it said anything
+	detail := ""
 	if distributionReleaseRE.MatchString(head) {
-		if d := a.distributionDetail(sym); d != "" {
-			head += "\n" + d
-		}
+		detail = a.distributionDetail(sym)
+	}
+	if detail == "" {
+		detail = py.Strip(newest[0].Summary)
+	}
+	if detail != "" {
+		head += "\n" + detail
 	}
 	title := "Press release · "
 	if len(rows) != 1 {

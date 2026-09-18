@@ -564,6 +564,7 @@ const schemaSQL = `
             published_at TEXT,
             fetched_at TEXT,
             kind TEXT,
+            summary TEXT,
             PRIMARY KEY (id, symbol, exchange)
         );
         CREATE INDEX IF NOT EXISTS news_published ON news (published_at);
@@ -904,7 +905,8 @@ func ensureNewsColumns(tx *sql.Tx) error {
 	if err != nil || !ok {
 		return err
 	}
-	if err := addColumns(tx, "news", [][2]string{{"kind", "TEXT"}}); err != nil {
+	// what the source said beneath the headline; a row read before this is simply without one
+	if err := addColumns(tx, "news", [][2]string{{"kind", "TEXT"}, {"summary", "TEXT"}}); err != nil {
 		return err
 	}
 	_, err = tx.Exec("UPDATE news SET kind = CASE WHEN LOWER(COALESCE(wire, '')) LIKE '%wire%' OR LOWER(COALESCE(wire, '')) LIKE '%newsfile%' OR LOWER(COALESCE(wire, '')) LIKE '%cision%' OR LOWER(COALESCE(wire, '')) LIKE '%cnw%' THEN 'release' ELSE 'story' END WHERE kind IS NULL OR kind = ''")

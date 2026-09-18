@@ -108,7 +108,7 @@ func ParseTMXNews(data map[string]any, symbol string, media bool) []store.WireIt
 		if media {
 			kind, via = "story", "tmx-media"
 		}
-		rows = append(rows, store.WireItem{ID: "tmx:" + id, Headline: CleanText(py.S(it["headline"])), Source: source, URL: fmt.Sprintf(TMXNewsURL, symbol, id), PublishedAt: stamp(t), Kind: kind, Via: via})
+		rows = append(rows, store.WireItem{ID: "tmx:" + id, Headline: CleanText(py.S(it["headline"])), Source: source, URL: fmt.Sprintf(TMXNewsURL, symbol, id), PublishedAt: stamp(t), Summary: SummaryText(py.S(it["summary"]), py.S(it["headline"])), Kind: kind, Via: via})
 	}
 	return rows
 }
@@ -335,7 +335,11 @@ func ParseYahooNews(data map[string]any, form, symbol, name string) []store.Wire
 		if u == "" {
 			u = py.S(attrs["clickthroughUrl"])
 		}
-		rows = append(rows, store.WireItem{ID: "yahoo:" + py.S(a.item["id"]), Headline: title, Source: source, URL: u, PublishedAt: when, Kind: KindOf(source), Via: "yahoo"})
+		summary := py.S(attrs["summary"])
+		if summary == "" {
+			summary = py.S(attrs["description"])
+		}
+		rows = append(rows, store.WireItem{ID: "yahoo:" + py.S(a.item["id"]), Headline: title, Source: source, URL: u, PublishedAt: when, Summary: SummaryText(summary, title), Kind: KindOf(source), Via: "yahoo"})
 	}
 	return rows
 }
@@ -401,7 +405,7 @@ func ParseSANews(xml, form string) []store.WireItem {
 		if u == "" {
 			u = guid
 		}
-		rows = append(rows, store.WireItem{ID: "sa:" + shortHash(guid), Headline: title, Source: "Seeking Alpha", URL: u, PublishedAt: when, Kind: "story", Via: "sa"})
+		rows = append(rows, store.WireItem{ID: "sa:" + shortHash(guid), Headline: title, Source: "Seeking Alpha", URL: u, PublishedAt: when, Summary: SummaryText(tag(item, "description"), title), Kind: "story", Via: "sa"})
 	}
 	return rows
 }

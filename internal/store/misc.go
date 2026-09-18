@@ -158,6 +158,7 @@ type NewsItem struct {
 	PublishedAt string `json:"publishedAt"`
 	FetchedAt   string `json:"fetchedAt"`
 	Kind        string `json:"kind"`
+	Summary     string `json:"summary,omitempty"`
 }
 
 func newsFromRow(r map[string]any) NewsItem {
@@ -165,7 +166,7 @@ func newsFromRow(r map[string]any) NewsItem {
 	if kind == "" {
 		kind = "story"
 	}
-	return NewsItem{ID: str(r["id"]), Symbol: str(r["symbol"]), Exchange: str(r["exchange"]), Source: str(r["source"]), Headline: str(r["headline"]), Wire: str(r["wire"]), URL: str(r["url"]), PublishedAt: str(r["published_at"]), FetchedAt: str(r["fetched_at"]), Kind: kind}
+	return NewsItem{ID: str(r["id"]), Symbol: str(r["symbol"]), Exchange: str(r["exchange"]), Source: str(r["source"]), Headline: str(r["headline"]), Wire: str(r["wire"]), URL: str(r["url"]), PublishedAt: str(r["published_at"]), FetchedAt: str(r["fetched_at"]), Kind: kind, Summary: str(r["summary"])}
 }
 
 type WireItem struct {
@@ -175,6 +176,7 @@ type WireItem struct {
 	URL         string `json:"url"`
 	PublishedAt string `json:"publishedAt"`
 	Kind        string `json:"kind"`
+	Summary     string `json:"summary,omitempty"`
 	Via         string `json:"via,omitempty"`
 }
 
@@ -201,7 +203,7 @@ func (s *Store) ReplaceNews(symbol, exchange, source string, rows []WireItem, no
 			if via == "" {
 				via = source
 			}
-			if _, err := tx.Exec("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", r.ID, sym, ex, via, r.Headline, r.Source, r.URL, r.PublishedAt, when, kind); err != nil {
+			if _, err := tx.Exec("INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", r.ID, sym, ex, via, r.Headline, r.Source, r.URL, r.PublishedAt, when, kind, r.Summary); err != nil {
 				return err
 			}
 		}
