@@ -224,6 +224,7 @@ fn status_payload() -> Value {
     let conn = app().open().ok();
     let (acts, accounts, synced) = conn.as_ref().and_then(|c| versions::status_counts(c).ok()).unwrap_or((0, 0, String::new()));
     let data_version = conn.as_ref().and_then(|c| versions::data_version(c).ok()).unwrap_or_default();
+    let core_version = conn.as_ref().and_then(|c| versions::core_version(c).ok()).unwrap_or_default();
     let upd = update::update_status();
     let sess = session::load_session();
     let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or(json!({}));
@@ -246,6 +247,9 @@ fn status_payload() -> Value {
         "syncStep": st.sync_step,
         "error": st.error,
         "dataVersion": format!("{}|{}", data_version, bagholder_model::clock::today_local()),
+        // everything the model reads except the quotes: when this is unchanged but the
+        // data version moved, only prices ticked, and the page fetches just the live figures
+        "coreVersion": format!("{}|{}", core_version, bagholder_model::clock::today_local()),
         "summaryReady": bagholder_market::enrich::summary_status() == "ready",
         "protocol": app::PROTOCOL,
         "startedAt": app().started_at,
@@ -455,6 +459,29 @@ fn handle_get(req: Request, path: &str, query: &str) {
             });
             match built {
                 Ok(Ok(mut payload)) => {
+                    if qp(query, "only").as_deref() == Some("live") {
+                        // a quote tick moves only what is priced off the open positions; the
+                        // closed trades, equity curve, KPIs and options lists are unchanged, so
+                        // the page fetches just these sections instead of the whole book
+                        let mut keys = vec!["ok", "today", "currency", "market", "positions", "positionsSummary", "portfolio"];
+                        if qp(query, "markets").filter(|v| !v.is_empty()).is_some() {
+                            keys.push("markets"); // the heatmap view is on screen and wants live tiles
+                        }
+                        let lean = if let Value::Object(full) = &payload {
+                            let mut m = serde_json::Map::new();
+                            for k in &keys {
+                                if let Some(v) = full.get(*k) {
+                                    m.insert((*k).to_string(), v.clone());
+                                }
+                            }
+                            Some(Value::Object(m))
+                        } else {
+                            None
+                        };
+                        if let Some(l) = lean {
+                            payload = l;
+                        }
+                    }
                     payload["status"] = status_payload();
                     send_json(req, 200, &payload)
                 }
