@@ -14,7 +14,7 @@ fn test_tmx_items_carry_an_exact_time_and_a_page_link() {
                                         {"headline": "no id", "datetime": "2026-08-05T07:00:00-04:00"},
                                         {"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}});
     let rows = news::parse_tmx_news(&data, "SHOP", false);
-    assert_eq!(rows, vec![json!({"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire",
+    assert_eq!(rows, vec![json!({"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire", "summary": "",
                                   "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release", "via": "tmx"})]);
 }
 
@@ -674,4 +674,28 @@ fn test_a_us_listing_reads_its_releases_beside_its_news_each_once() {
     assert_eq!(got, vec![["nasdaq:1", "story", "Zacks"], ["nasdaq:2", "release", "GlobeNewswire"], ["nasdaq:3", "release", "Nasdaq"]],
                "the news feed's own wire item is a release; the press feed adds what the news feed lacks, each once");
     assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+/// The line under a headline in a notice: the source's own summary, without the
+/// wire's dateline, without a repeat of the headline, and nothing at all where
+/// there is nothing.
+#[test]
+fn test_a_summary_is_what_the_source_said_beneath_its_headline() {
+    let head = "CHARBONE Announces Closing of $1.5M Drawdown";
+    assert_eq!(news::summary_text("<p>TORONTO, Sept. 08, 2026 (GLOBE NEWSWIRE) -- Charbone drew $1.5M on its loan.</p>", head),
+               "Charbone drew $1.5M on its loan.");
+    assert_eq!(news::summary_text("(TheNewswire) Varennes, Quebec \u{2013} TheNewswire - le 8 septembre 2026 \u{2013} CHARBONE annonce la cl\u{f4}ture du tirage.", head),
+               "CHARBONE annonce la cl\u{f4}ture du tirage.");
+    assert_eq!(news::summary_text("VANCOUVER, BC / ACCESSWIRE / September 8, 2026 / CHAR Tech reported results.", head),
+               "CHAR Tech reported results.");
+    assert_eq!(news::summary_text("...", head), "", "a placeholder is not a summary");
+    assert_eq!(news::summary_text(head, head), "", "a summary that only repeats the headline is not one");
+    assert_eq!(news::summary_text("", head), "");
+    let long = format!("A. {}", "word ".repeat(200));
+    let out = news::summary_text(&long, head);
+    assert!(out.chars().count() <= news::SUMMARY_CHARS + 1);
+    assert!(out.ends_with('\u{2026}'), "cut where no sentence ends");
+    let sentences = format!("{}and it ends here. {}.", "filler words ".repeat(25), "more words ".repeat(30));
+    let cut = news::summary_text(&sentences, head);
+    assert!(cut.ends_with("ends here."), "cut at the last sentence end before the limit");
 }

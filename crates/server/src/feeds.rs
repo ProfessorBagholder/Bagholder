@@ -15,6 +15,7 @@ use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::feeds as sf;
+use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, json_text, set_meta};
 
 use crate::app::{app, f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, ENRICH_VERSION};
@@ -592,7 +593,13 @@ pub fn sweep_filings() -> usize {
         }
         let mut new: Vec<Value> = Vec::new();
         for (src, rows) in &by_source {
-            new.extend(notify::fresh_since(&c, &format!("filings:{}:{}", sym, src), rows, |r| f(r, "date"), notify::default_ident, |r| before.contains(&filing_mark(r))));
+            let scope = format!("filings:{}:{}", sym, src);
+            let events: Vec<String> = rows.iter().map(|r| filing_mark(r).join("|")).collect();
+            let met = sf::events_told(&c, &scope, &events).unwrap_or_default();
+            new.extend(notify::fresh_since(&c, &scope, rows, |r| f(r, "date"), |r| filing_mark(r).join("|"), |r| {
+                before.contains(&filing_mark(r)) || met.contains(&filing_mark(r).join("|"))
+            }));
+            let _ = sf::mark_told(&c, &scope, &events, &now_iso());
         }
         if new.is_empty() {
             continue;
@@ -602,14 +609,14 @@ pub fn sweep_filings() -> usize {
         let mut said = false;
         if !rel.is_empty() && in_release_scope(&c, &sym, Some(&rel_scopes)) && !sf::has_wire_release(&c, &sym).unwrap_or(false) {
             let (t, bd) = release_notice(&sym, &rel);
-            said = notify::emit(&c, "releases", &release_key(&sym, &rel), &t, &bd, Some(json!({"symbol": sym}))).is_some() || said;
+            said = notify::emit(&c, "releases", &release_key(&sym, &rel), &t, &bd, Some(notice_extra(&sym, None, &rel))).is_some() || said;
         }
         if !rest.is_empty() && disc_syms.contains(&sym) {
             let (t, bd) = filings_notice(&sym, &rest);
             let mut marks: Vec<String> = rest.iter().map(|r| filing_mark(r).join("/")).collect();
             marks.sort();
             let digest = sha1_hex12(&marks.join("|"));
-            said = notify::emit(&c, "disclosures", &format!("filings:{}:{}", sym, digest), &t, &bd, Some(json!({"symbol": sym}))).is_some() || said;
+            said = notify::emit(&c, "disclosures", &format!("filings:{}:{}", sym, digest), &t, &bd, Some(notice_extra(&sym, None, &rest))).is_some() || said;
         }
         if said {
             told += 1;
@@ -702,11 +709,192 @@ pub fn release_notice(sym: &str, rows: &[Value]) -> (String, String) {
         head = "A new release.".into();
     }
     let title = if rows.len() == 1 { "Press release · ".to_string() } else { format!("{} press releases · ", rows.len()) } + sym;
+    // A release announcing distributions carries the figures beneath the headline, since the
+    // headline alone ("Announces August 2026 Distributions") says nothing a holder can act on.
+    let mut detail = if is_distribution_release(&head) { distribution_detail(sym) } else { String::new() };
+    if detail.is_empty() {
+        // what the source said beneath its own headline, where it said anything
+        detail = f(first, "summary").trim().to_string();
+    }
+    if !detail.is_empty() {
+        head = format!("{}\n{}", head, detail);
+    }
     (title, head)
 }
 
+/// How many times a notice has sent for the issuer's record. A test counts the
+/// reads rather than reaching the source.
+#[cfg(test)]
+pub static RECORD_READS: AtomicI64 = AtomicI64::new(0);
+
+/// The issuer's declared record, read again because a release just announced a
+/// distribution.
+fn read_record_for_notice(_c: &Connection, _sym: &str, _exchange: &str) {
+    #[cfg(test)]
+    {
+        RECORD_READS.fetch_add(1, Ordering::SeqCst);
+    }
+    #[cfg(not(test))]
+    {
+        bagholder_market::refresh::refresh_distributions(_c, &[json!({"symbol": _sym, "exchange": _exchange, "currency": ""})], true);
+    }
+}
+
+/// A release whose subject is a distribution or a dividend.
+pub fn is_distribution_release(headline: &str) -> bool {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)\b(distribution|distributions|dividend|dividends)\b").unwrap()).is_match(headline)
+}
+
+/// A per-share amount as a release states it: `$0.1489`, trailing zeros gone
+/// below four places.
+pub fn money_per_share(amount: Option<f64>, currency: &str) -> String {
+    let amount = match amount { Some(a) => a, None => return String::new() };
+    let text = format!("{:.4}", amount);
+    let text = text.trim_end_matches('0');
+    let (whole, cents) = match text.split_once('.') { Some((a, b)) => (a, b), None => (text, "") };
+    // never fewer than cents, never more than the record states
+    let keep = cents.len().max(2);
+    let padded = format!("{}00", cents);
+    let sign = if currency.to_uppercase() == "USD" { "US$" } else { "$" };
+    format!("{}{}.{}", sign, whole, &padded[..keep])
+}
+
+/// `2026-08-31` as `Aug 31`, and a year that is not this one carries it.
+pub fn stamp_day(iso: &str) -> String {
+    let day = bagholder_model::dates::head10(iso);
+    let (y, m, d) = match bagholder_model::dates::parse_iso(&day) { Some(x) => x, None => return String::new() };
+    if !(1..=12).contains(&m) || d == 0 || d > bagholder_model::dates::days_in_month(y, m) {
+        return String::new();
+    }
+    let text = format!("{} {}", bagholder_model::dates::MONTHS[(m - 1) as usize], d);
+    let this_year: i64 = bagholder_model::clock::now_utc_stamp()[..4].parse().unwrap_or(0);
+    if y == this_year { text } else { format!("{} {}", text, y) }
+}
+
+/// What a distribution release means for this listing, from the issuer's own
+/// declared record: the amount just announced, when it goes ex and when it is
+/// paid, and the one it replaces.
+///
+/// A release headline says only that distributions were announced; the figure
+/// is what the holder wants, and reading it from the record rather than the
+/// release's prose keeps it the same figure the Cashflow tab pays from.
+pub fn distribution_detail(sym: &str) -> String {
+    let c = match conn() { Some(c) => c, None => return String::new() };
+    distribution_detail_in(&c, sym)
+}
+
+pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
+    let key = sym.trim().to_uppercase();
+    let all = sf_market::distributions(c).unwrap_or_default();
+    let mut rows: Vec<Value> = all.get(&key).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    if rows.is_empty() {
+        return String::new();
+    }
+    rows.sort_by(|a, b| f(b, "exDate").cmp(&f(a, "exDate")));
+    let latest = rows[0].clone();
+    let amount = money_per_share(latest.get("amount").and_then(|v| v.as_f64()), &f(&latest, "currency"));
+    if amount.is_empty() {
+        return String::new();
+    }
+    let when = stamp_day(&f(&latest, "exDate"));
+    let paid = stamp_day(&f(&latest, "payDate"));
+    let freq = sf_market::quotes(c)
+        .unwrap_or_default()
+        .get(&key)
+        .map(|q| f(q, "dividendFrequency"))
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let mut out = format!("{} a share", amount);
+    if !freq.is_empty() {
+        out += &format!(", {}", freq);
+    }
+    if !when.is_empty() {
+        out += &format!(" · ex {}", when);
+    }
+    if !paid.is_empty() {
+        out += &format!(", paid {}", paid);
+    }
+    if let Some(was) = rows[1..].iter().find(|r| r.get("amount").and_then(|v| v.as_f64()).is_some()) {
+        let (a, b) = (was.get("amount").and_then(|v| v.as_f64()), latest.get("amount").and_then(|v| v.as_f64()));
+        if a != b {
+            out += &format!(" · was {}", money_per_share(a, &f(was, "currency")));
+        }
+    }
+    out
+}
+
+/// When the newest of these happened, as its source dates it.
+///
+/// A release found today can have been published weeks ago -- the app reads a
+/// listing's back catalogue the first time it sees it -- and a notice that
+/// shows only when it was told reads as news that is not new.
+pub fn notice_moment(rows: &[Value]) -> Value {
+    json!({"at": f(&newest_of(rows), "publishedAt_or_date")})
+}
+
+/// Where a notification's rows can be read: the newest one's own page.
+///
+/// A filed document is opened through the app, which is what the Disclosures
+/// table does, so it opens the same way from here; anything else carries the
+/// source's own link.
+pub fn notice_link(rows: &[Value]) -> Value {
+    let newest = newest_of(rows);
+    let url = f(&newest, "url");
+    let (id, source) = (f(&newest, "id"), f(&newest, "source"));
+    if !id.is_empty() && matches!(source.as_str(), "SEDAR+" | "SEC" | "SEC EDGAR") {
+        return json!({"url": url, "doc": id, "source": source});
+    }
+    if url.is_empty() { json!({}) } else { json!({"url": url}) }
+}
+
+/// The newest row by its own moment, with `publishedAt_or_date` set to it.
+fn newest_of(rows: &[Value]) -> Value {
+    let when = |r: &Value| { let p = f(r, "publishedAt"); if p.is_empty() { f(r, "date") } else { p } };
+    let mut sorted: Vec<&Value> = rows.iter().collect();
+    sorted.sort_by(|a, b| when(b).cmp(&when(a)));
+    let mut out = sorted[0].clone();
+    out["publishedAt_or_date"] = json!(when(sorted[0]));
+    out
+}
+
+/// A notification's extra: the symbol, the moment and the link, in one map.
+fn notice_extra(sym: &str, exchange: Option<&str>, rows: &[Value]) -> Value {
+    let mut out = Map::new();
+    out.insert("symbol".into(), json!(sym));
+    if let Some(ex) = exchange {
+        out.insert("exchange".into(), json!(ex));
+    }
+    for part in [notice_moment(rows), notice_link(rows)] {
+        if let Some(m) = part.as_object() {
+            for (k, v) in m {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// What a release *is*, independent of the id, the source and the date each
+/// carries: the story its headline tells.
+///
+/// TMX, Yahoo, Seeking Alpha and Google all carry the same release under their
+/// own ids, a week apart in their own timestamps; keyed by id, one release is
+/// four events.
+pub fn release_event(row: &Value) -> String {
+    let mut head = f(row, "headline");
+    if head.is_empty() {
+        head = f(row, "subject");
+    }
+    if head.is_empty() {
+        head = f(row, "type");
+    }
+    news::news_text(&head)
+}
+
 fn release_key(sym: &str, rows: &[Value]) -> String {
-    let mut ids: Vec<String> = rows.iter().map(|r| f(r, "id")).collect();
+    let mut ids: Vec<String> = rows.iter().map(release_event).collect();
     ids.sort();
     format!("release:{}:{}", sym, sha1_hex12(&ids.join("|")))
 }
@@ -721,27 +909,54 @@ pub fn note_wire_releases(c: &Connection, symbol: &str, exchange: &str, rows: &[
         return;
     }
     let rel: Vec<Value> = rows.iter().filter(|r| f(r, "kind") == "release").cloned().collect();
-    let fresh = notify::fresh_since(c, &format!("news:{}", sf::news_key(symbol, exchange)), &rel, |r| f(r, "publishedAt"), notify::default_ident, |r| !new_ids.contains(&f(r, "id")));
+    // An event is told once. The stream keeps what it has met, by what the thing is rather than by
+    // the id a source gave it, so the same release reaching the app again -- from another source,
+    // under another id, dated a week apart, or simply returning to a search's results after
+    // dropping out of them -- is recognised and passed over. Everything met is recorded, told or
+    // not, so the back catalogue a first read brings can never ring later.
+    let scope = format!("news:{}", sf::news_key(symbol, exchange));
+    let events: Vec<String> = rel.iter().map(release_event).collect();
+    let met = sf::events_told(c, &scope, &events).unwrap_or_default();
+    let fresh = notify::fresh_since(c, &scope, &rel, |r| f(r, "publishedAt"), notify::default_ident, |r| {
+        !new_ids.contains(&f(r, "id")) || met.contains(&release_event(r))
+    });
+    let _ = sf::mark_told(c, &scope, &events, &now_iso());
     if fresh.is_empty() {
         return;
     }
+    if fresh.iter().any(|r| is_distribution_release(&f(r, "headline"))) {
+        // the release is the announcement; the record it comes from is what carries the figures,
+        // and it is read now rather than at its own twenty-hour clock so the notice is not a day
+        // behind it
+        read_record_for_notice(c, &sym, exchange);
+    }
     let (title, body) = release_notice(&sym, &fresh);
-    notify::emit(c, "releases", &release_key(&sym, &fresh), &title, &body, Some(json!({"symbol": sym})));
+    notify::emit(c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));
 }
 
 /// `New disclosure · QNC` and what was filed.
 pub fn filings_notice(sym: &str, new: &[Value]) -> (String, String) {
-    let mut named: Vec<String> = Vec::new();
+    let (mut named, mut said): (Vec<String>, String) = (Vec::new(), String::new());
     for r in new.iter().take(3) {
         let mut title = f(r, "subject").trim().to_string();
-        if title.is_empty() && !f(r, "id").is_empty() {
-            title = f(&filings_enrich(sym, &f(r, "id")), "subject").trim().to_string();
+        let mut summary = f(r, "summary").trim().to_string();
+        if (title.is_empty() || summary.is_empty()) && !f(r, "id").is_empty() {
+            let read = filings_enrich(sym, &f(r, "id"));
+            if title.is_empty() {
+                title = f(&read, "subject").trim().to_string();
+            }
+            if summary.is_empty() {
+                summary = f(&read, "summary").trim().to_string();
+            }
         }
         if title.is_empty() {
-            title = f(r, "type").trim().to_string();
+            title = form_name(&f(r, "type"));
         }
         if !title.is_empty() && !named.contains(&title) {
             named.push(title);
+        }
+        if said.is_empty() {
+            said = summary;
         }
     }
     let mut sources: Vec<String> = Vec::new();
@@ -762,8 +977,93 @@ pub fn filings_notice(sym: &str, new: &[Value]) -> (String, String) {
     if body.is_empty() {
         body = "A new filing.".into();
     }
+    // the sentence the document itself yielded, under the line that names it: a form code and a
+    // regulator say what arrived, never what it says
+    if !said.is_empty() && news::news_text(&said) != news::news_text(&head) {
+        body = format!("{}\n{}", body, said);
+    }
     let title = if new.len() == 1 { "New disclosure · ".to_string() } else { format!("{} new disclosures · ", new.len()) } + sym;
     (title, body)
+}
+
+/// What a form is, for the forms whose code is all a row carries until a
+/// document has been read.
+///
+/// A code names the form and not what happened, and "4" alone tells a holder
+/// nothing at all.
+pub const FORM_NAMES: &[(&str, &str)] = &[
+    ("3", "Insider's first report (Form 3)"),
+    ("4", "Insider transaction (Form 4)"),
+    ("5", "Insider's annual report (Form 5)"),
+    ("8-K", "Material event (8-K)"),
+    ("6-K", "Foreign issuer report (6-K)"),
+    ("10-K", "Annual report (10-K)"),
+    ("10-Q", "Quarterly report (10-Q)"),
+    ("144", "Notice of proposed sale (144)"),
+    ("S-1", "Registration (S-1)"),
+    ("SC 13D", "Beneficial ownership (13D)"),
+    ("SC 13G", "Beneficial ownership (13G)"),
+    ("DEF 14A", "Proxy statement (DEF 14A)"),
+    ("424B5", "Prospectus supplement (424B5)"),
+    ("FWP", "Free writing prospectus (FWP)"),
+];
+
+/// A form's code as words where the app knows the form, the code itself
+/// otherwise.
+pub fn form_name(code: &str) -> String {
+    let key = code.trim().to_uppercase();
+    FORM_NAMES.iter().find(|(c, _)| *c == key).map(|(_, n)| n.to_string()).unwrap_or_else(|| code.trim().to_string())
+}
+
+/// What a tab shows when a regulator would not serve a document.
+///
+/// SEDAR+ mints a document's address inside a live session and puts a bot gate
+/// in front of it, so a refusal is ordinary and a retry often works; the page
+/// says that in words, names the document, and retries on a click.
+pub fn document_error_page(symbol: &str, doc_id: &str, why: &str) -> String {
+    let row = conn().and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten()).unwrap_or_else(|| json!({}));
+    let pick = |ks: &[&str], fallback: &str| {
+        ks.iter().map(|k| f(&row, k)).find(|v| !v.is_empty()).unwrap_or_else(|| fallback.to_string())
+    };
+    let name = pick(&["subject", "title", "type"], "This document");
+    let source = pick(&["source"], "the regulator");
+    let when = { let t = f(&row, "dateText"); if t.is_empty() { f(&row, "date").chars().take(10).collect() } else { t } };
+    let again = format!("/api/filings/doc?symbol={}&id={}", url_quote(symbol), url_quote(doc_id));
+    format!(
+        "<!doctype html><meta charset=utf-8><title>{name}</title>\
+<style>:root{{color-scheme:dark light}}body{{margin:0;min-height:100vh;display:grid;place-items:center;\
+background:#0e1118;color:#e8ecf3;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}\
+main{{max-width:34rem;padding:2rem}}h1{{font:600 16px/1.4 inherit;margin:0 0 .75rem}}p{{margin:0 0 .75rem;color:#aab3c2}}\
+b{{color:#e8ecf3;font-weight:500}}a{{color:#7aa2f7}}</style>\
+<main><h1>{source} would not serve this document just now</h1>\
+<p><b>{name}</b>{when}</p>\
+<p>{why}</p>\
+<p>SEDAR+ builds a document&rsquo;s address inside a live session and puts a bot gate in front of it, so a \
+refusal is ordinary rather than a sign the document is gone. <a href=\"{again}\">Try again</a>.</p></main>",
+        name = html_escape(&name),
+        source = html_escape(&source),
+        when = html_escape(&if when.is_empty() { String::new() } else { format!(" · {}", when) }),
+        why = html_escape(if why.is_empty() { "The source did not answer." } else { why }),
+        again = html_escape(&again),
+    )
+}
+
+/// `html.escape`: the five characters that must not read as markup.
+fn html_escape(t: &str) -> String {
+    t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
+}
+
+/// `urllib.parse.quote`: everything but the unreserved characters and `/`.
+fn url_quote(t: &str) -> String {
+    let mut out = String::new();
+    for b in t.bytes() {
+        if b.is_ascii_alphanumeric() || b"_.-~/".contains(&b) {
+            out.push(b as char);
+        } else {
+            out += &format!("%{:02X}", b);
+        }
+    }
+    out
 }
 
 pub fn filings_sweep_loop() {

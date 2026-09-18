@@ -212,6 +212,66 @@ pub fn clean_text(t: &str) -> String {
     unescape(t).split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
+/// `SUMMARY_CHARS`: a sentence or two of what a source said beneath its
+/// headline.
+pub const SUMMARY_CHARS: usize = 400;
+
+// What a wire puts before its first sentence: it names the wire and the day, which the row already
+// carries, so it is taken off rather than shown as the summary's opening.
+const WIRES: &str = r"globe ?newswire|business ?wire|cnw(?: group)?|newsfile(?: corp)?|accesswire|the ?news ?wire|pr ?newswire|newmediawire|marketwired|cision";
+
+/// A wire's dateline off the front of its own summary, however many times it
+/// prints one, and the bare date some leave behind (`le 8 septembre 2026 – `).
+pub fn strip_dateline(text: &str) -> String {
+    static A: OnceLock<Regex> = OnceLock::new();
+    static B: OnceLock<Regex> = OnceLock::new();
+    static D: OnceLock<Regex> = OnceLock::new();
+    let a = re(&A, &format!(r"(?i)^.{{0,80}}?(?:\((?:{w})[^)]*\)|(?:{w}))[^.]{{0,60}}?[-–—]{{1,2}}\s+", w = WIRES));
+    let b = re(&B, &format!(r"(?i)^[^./]{{0,60}}/\s*(?:{w})\s*/[^./]{{0,40}}/\s*", w = WIRES));
+    let d = re(&D, r"(?i)^(?:le\s+)?\d{1,2}(?:er)?\s+[a-zéû]{3,10}\.?\s+\d{4}\s*[-–—,]?\s+|^[A-Za-zéû]{3,10}\.?\s+\d{1,2},?\s+\d{4}\s*[-–—,]?\s+");
+    let trim = |x: &str| x.trim_start_matches([' ', '-', '–', '—', ',', '/']).to_string();
+    let mut text = text.to_string();
+    for _ in 0..3 {
+        let mut cut = a.replacen(&text, 1, "").to_string();
+        cut = b.replacen(&cut, 1, "").to_string();
+        cut = trim(&d.replacen(&trim(&cut), 1, ""));
+        if cut == text {
+            return text;
+        }
+        text = cut;
+    }
+    text
+}
+
+/// What a source said under the headline, as plain text: tags out, one space
+/// between words, cut at a sentence end rather than mid-word.
+///
+/// A summary that only repeats the headline is not one, and neither is a
+/// feed's markup (Google's `description` is an anchor and a publisher).
+pub fn summary_text(raw: &str, headline: &str) -> String {
+    static TAGS: OnceLock<Regex> = OnceLock::new();
+    let text = strip_dateline(&clean_text(&re(&TAGS, r"<[^>]+>").replace_all(raw, " ")));
+    // a source that carries a placeholder instead of a summary ("...", "-", "N/A") has none
+    if text.chars().filter(|c| c.is_alphanumeric()).count() < 12 {
+        return String::new();
+    }
+    let (tk, hk) = (news_text(&text), news_text(headline));
+    if text.is_empty() || tk == hk || (tk.starts_with(&hk) && text.chars().count() < headline.chars().count() + 12) {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= SUMMARY_CHARS {
+        return text;
+    }
+    let cut: String = chars[..SUMMARY_CHARS].iter().collect();
+    let stop = [". ", "? ", "! "].iter().filter_map(|p| cut.rfind(p)).max();
+    match stop {
+        // rfind is a byte offset; the sentence end has to sit past the halfway mark of the cut
+        Some(i) if cut[..i].chars().count() > SUMMARY_CHARS / 2 => cut[..i + 1].trim().to_string(),
+        _ => format!("{}…", cut.trim_end()),
+    }
+}
+
 /// HTML5 character references resolved by the WHATWG rules, semicolon optional,
 /// longest known prefix, since a headline carries whatever the wire put in it.
 ///
@@ -582,6 +642,7 @@ pub fn parse_tmx_news(data: &Value, symbol: &str, media: bool) -> Vec<Value> {
             "source": source,
             "url": TMX_NEWS_URL.replacen("{}", symbol, 1).replacen("{}", &newsid, 1),
             "publishedAt": ts,
+            "summary": summary_text(&field_s(&it, "summary"), &field_s(&it, "headline")),
             "kind": if media { "story" } else { kind_of(&source) },
             "via": if media { "tmx-media" } else { "tmx" },
         }));
@@ -820,6 +881,7 @@ pub fn parse_yahoo_news(data: &Value, form: &str, symbol: &str, name: &str) -> V
             "source": source.clone(),
             "url": url,
             "publishedAt": when,
+            "summary": summary_text(&{ let x = py_s(attrs.get("summary")); if x.is_empty() { py_s(attrs.get("description")) } else { x } }, &title),
             "kind": kind_of(&source),
             "via": "yahoo",
         }));
@@ -895,6 +957,7 @@ pub fn parse_sa_news(xml: &str, form: &str) -> Vec<Value> {
             "source": "Seeking Alpha",
             "url": if link.is_empty() { guid.clone() } else { link },
             "publishedAt": when,
+            "summary": summary_text(&tag(&item, "description"), &title),
             "kind": "story",
             "via": "sa",
         }));

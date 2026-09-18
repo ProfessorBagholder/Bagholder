@@ -168,7 +168,9 @@ fn ensure_news_columns(conn: &Connection) -> Result<()> {
     if !table_exists(conn, "news")? {
         return Ok(());
     }
-    add_missing(conn, "news", &[("kind", "TEXT")])?;
+    // `summary` is what the source said beneath the headline; a row read before this is simply
+    // without one
+    add_missing(conn, "news", &[("kind", "TEXT"), ("summary", "TEXT")])?;
     conn.execute_batch(
         "UPDATE news SET kind = CASE WHEN LOWER(COALESCE(wire, '')) LIKE '%wire%' OR LOWER(COALESCE(wire, '')) LIKE '%newsfile%' OR LOWER(COALESCE(wire, '')) LIKE '%cision%' OR LOWER(COALESCE(wire, '')) LIKE '%cnw%' THEN 'release' ELSE 'story' END WHERE kind IS NULL OR kind = ''",
     )?;

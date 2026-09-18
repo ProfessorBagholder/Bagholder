@@ -1,0 +1,35 @@
+# The suite, on every pull request and every push to master. Nothing ran on a pull request before
+# this: a branch was only ever as tested as whoever remembered to run it.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the packaging test reads the tracked file list
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      - name: The suite
+        env:
+          CI: "true"              # a missing tool is a failure here, never a skip
+        run: cargo test --workspace

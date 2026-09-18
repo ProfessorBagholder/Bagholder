@@ -70,3 +70,8 @@ pub fn today_local() -> String {
 pub fn now_utc_stamp() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
+
+/// The same stamp, `days` back: what a prune keeps above.
+pub fn stamp_days_ago(days: i64) -> String {
+    (Utc::now() - chrono::Duration::days(days)).format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}

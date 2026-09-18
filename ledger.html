@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-17.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-18.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -985,12 +985,22 @@ function notesUnread() { return state.notesLoaded ? state.notes.filter((n) => !n
 function notesPanelHtml() {
   const card = (n) => '<div class="od-card nt-card" data-act="noteOpen" data-arg=\'' + attr({ id: n.id }) + "'>" +
     '<div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">' + (n.readAt ? "" : '<span class="nt-dot"></span>') + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(n.title) + "</span></span></div>" +
-    (n.body ? '<div class="od-row2"><span class="od-line">' + esc(n.body) + "</span></div>" : "") +
-    '<div class="od-foot"><span class="od-when">' + esc(orderWhenWord(n.at)) + "</span></div></div>";
+    (n.body ? String(n.body).split("\n").map((line) => '<div class="od-row2"><span class="od-line">' + esc(line) + "</span></div>").join("") : "") +
+    '<div class="od-foot"><span class="od-when">' + esc(noteWhenWord(n)) + "</span></div></div>";
   return '<div id="ntWrap"><div class="tk-scrim" data-act="notesClose"></div><div class="tk" role="dialog" aria-label="Notifications">' +
     '<div class="tk-hd"><span class="tk-title">Notifications</span><button class="tk-x" aria-label="Close" data-act="notesClose"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button></div>' +
     '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
     '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
+}
+// When the thing happened, which is what a reader wants from a notification: the release's own
+// moment, the filing's own day. The app is told at some later moment, and that is its business.
+function noteWhenWord(n) {
+  const at = (n.extra || {}).at;
+  if (!at) return orderWhenWord(n.at);
+  const day = at.length === 10;
+  const when = orderWhenWord(day ? at + "T12:00:00" : at);
+  if (when === "—") return orderWhenWord(n.at);
+  return day ? when.replace(/,? \d{1,2}:\d{2} (AM|PM)$/, "").replace(/^Today$/, "Today") : when;
 }
 function renderNotes() {
   const old = document.getElementById("ntWrap");
@@ -1005,10 +1015,16 @@ function closeNotes() {
   render();
 }
 function notesClear() { state.notes = []; api("POST", "/api/notifications/clear", {}); render(); }
+// Every row leads to the thing it is about: a release or a filed document opens where it is published,
+// in a new tab, the way the News card's rows do; an order notice opens the Orders panel at the tab it
+// belongs to; a row that carries only a ticker opens that listing's page, held or merely watched.
 function noteOpen(id) {
   const n = state.notes.find((x) => x.id === id); if (!n) return;
-  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); }
-  else if (n.kind === "disclosures" && n.extra && n.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === n.extra.symbol); if (p) { closeNotes(); openHolding(p.id); } }
+  const x = n.extra || {};
+  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); return; }
+  if (x.doc && x.source !== "SEC") { window.open("/api/filings/doc?symbol=" + encodeURIComponent(x.symbol || "") + "&id=" + encodeURIComponent(x.doc), "_blank", "noopener"); return; }
+  if (x.url) { window.open(x.url, "_blank", "noopener"); return; }
+  if (x.symbol) { closeNotes(); openListing({ symbol: x.symbol, exchange: x.exchange || "", name: "", currency: "" }); }
 }
 function notifyLoad() {
   api("GET", "/api/notifications").then((r) => {

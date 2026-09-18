@@ -7,6 +7,7 @@
 //! of a document survives a refresh of the list it came from.
 
 use rusqlite::{Connection, Result, Row};
+use std::collections::HashSet;
 use serde_json::{json, Map, Value};
 
 use bagholder_model::value::{field_s, get, num};
@@ -159,10 +160,10 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
         }
         let kind = { let k = field_s(r, "kind"); if k.is_empty() { "story".to_string() } else { k } };
         conn.execute(
-            "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
-                field_s(r, "url"), field_s(r, "publishedAt"), now, kind,
+                field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
             ],
         )?;
     }
@@ -548,6 +549,57 @@ pub fn gauge(conn: &Connection, name: &str) -> Result<Option<Value>> {
         }
     }
     Ok(Some(Value::Object(out)))
+}
+
+// --------------------------------------------------------------------------
+// told: the streams' memory of what they have met
+// --------------------------------------------------------------------------
+
+/// `TOLD_KEPT_DAYS`: a year and a bit -- long enough that nothing recurs,
+/// small enough to stay tidy.
+pub const TOLD_KEPT_DAYS: i64 = 400;
+
+/// `events_told`: which of these the stream has already met -- told or
+/// absorbed as history.
+///
+/// An event is what the thing is (a release's headline, a filing's own
+/// marks), never the id a source gave it, so the same event from another
+/// source, under another id, on another date, is still the same event.
+pub fn events_told(conn: &Connection, scope: &str, events: &[String]) -> Result<HashSet<String>> {
+    let want: Vec<String> = events.iter().filter(|e| !e.is_empty()).cloned().collect();
+    let mut out: HashSet<String> = HashSet::new();
+    if want.is_empty() {
+        return Ok(out);
+    }
+    for chunk in want.chunks(400) {
+        let holes = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT event FROM told WHERE scope = ? AND event IN ({})", holes);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&scope];
+        for e in chunk {
+            args.push(e);
+        }
+        let rows = stmt.query_map(args.as_slice(), |r| r.get::<_, String>(0))?;
+        for r in rows {
+            out.insert(r?);
+        }
+    }
+    Ok(out)
+}
+
+/// `mark_told`: record that the stream has met these, whether or not they
+/// were worth telling about.
+pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -> Result<usize> {
+    let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    for e in &rows {
+        conn.execute("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rusqlite::params![scope, e, now])?;
+    }
+    let cutoff = bagholder_model::clock::stamp_days_ago(TOLD_KEPT_DAYS);
+    conn.execute("DELETE FROM told WHERE at < ?", [cutoff])?;
+    Ok(rows.len())
 }
 
 // --------------------------------------------------------------------------

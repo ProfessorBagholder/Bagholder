@@ -87,6 +87,7 @@ pub fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
         "publishedAt": text(r, "published_at")?,
         "fetchedAt": text(r, "fetched_at")?,
         "kind": kind,
+        "summary": text(r, "summary")?,
     }))
 }
 
