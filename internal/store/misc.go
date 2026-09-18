@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/ProfessorBagholder/Bagholder/internal/py"
 )
@@ -893,4 +894,70 @@ func (s *Store) ClearNotifications() int64 {
 	}
 	n, _ := res.RowsAffected()
 	return n
+}
+
+const ToldKeptDays = 400
+
+func (s *Store) EventsTold(scope string, events []string) map[string]bool {
+	out := map[string]bool{}
+	want := make([]string, 0, len(events))
+	for _, e := range events {
+		if py.Strip(e) != "" {
+			want = append(want, e)
+		}
+	}
+	if len(want) == 0 {
+		return out
+	}
+	s.must()
+	for i := 0; i < len(want); i += 400 {
+		end := i + 400
+		if end > len(want) {
+			end = len(want)
+		}
+		chunk := want[i:end]
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, scope)
+		marks := make([]string, len(chunk))
+		for j, e := range chunk {
+			marks[j] = "?"
+			args = append(args, e)
+		}
+		rows, err := s.queryMaps("SELECT event FROM told WHERE scope = ? AND event IN ("+strings.Join(marks, ",")+")", args...)
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			out[str(r["event"])] = true
+		}
+	}
+	return out
+}
+
+func (s *Store) MarkTold(scope string, events []string, now string) int {
+	when := py.Strip(now)
+	if when == "" {
+		when = nowISO()
+	}
+	rows := make([]string, 0, len(events))
+	for _, e := range events {
+		if py.Strip(e) != "" {
+			rows = append(rows, e)
+		}
+	}
+	if len(rows) == 0 {
+		return 0
+	}
+	cut := time.Now().UTC().Add(-ToldKeptDays * 24 * time.Hour).Format("2006-01-02T15:04:05Z")
+	s.must()
+	_ = s.tx(func(tx *sql.Tx) error {
+		for _, e := range rows {
+			if _, err := tx.Exec("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", scope, e, when); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec("DELETE FROM told WHERE at < ?", cut)
+		return err
+	})
+	return len(rows)
 }

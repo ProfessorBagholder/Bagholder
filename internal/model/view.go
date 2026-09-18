@@ -648,6 +648,10 @@ func heatmapItems(positions []*Position, exposures map[string]store.Exposure, ca
 
 var nonAlnumRE = regexp.MustCompile(`[^a-z0-9]+`)
 
+// What a release *is*, independent of the id, source and date each carries: the story its
+// headline tells. Several sources carry one release under their own ids and timestamps.
+func NewsTextKey(headline string) string { return newsTextKey(headline) }
+
 func newsTextKey(headline string) string {
 	return strings.Join(py.Fields(nonAlnumRE.ReplaceAllString(strings.ToLower(headline), " ")), " ")
 }

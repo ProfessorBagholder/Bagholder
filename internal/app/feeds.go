@@ -404,7 +404,14 @@ func (a *App) sweepFilings(now time.Time) int {
 		}
 		var fresh []store.Filing
 		for _, src := range order {
-			fresh = append(fresh, notify.FreshSince(a.st, "filings:"+sym+":"+src, bySource[src], func(r store.Filing) string { return r.Date }, func(r store.Filing) string { return r.ID }, func(r store.Filing) bool { return before[filingMark(r)] })...)
+			scope := "filings:" + sym + ":" + src
+			events := make([]string, len(bySource[src]))
+			for i, r := range bySource[src] {
+				events[i] = filingMark(r)
+			}
+			met := a.st.EventsTold(scope, events)
+			fresh = append(fresh, notify.FreshSince(a.st, scope, bySource[src], func(r store.Filing) string { return r.Date }, filingMark, func(r store.Filing) bool { return before[filingMark(r)] || met[filingMark(r)] })...)
+			a.st.MarkTold(scope, events, "")
 		}
 		if len(fresh) == 0 {
 			continue
@@ -963,9 +970,10 @@ func releaseNoticeWire(sym string, rows []store.WireItem) (string, string) {
 }
 
 func releaseKeyWire(sym string, rows []store.WireItem) string {
+	// keyed by what the releases are, so the same event arriving under other ids is one key
 	ids := make([]string, 0, len(rows))
 	for _, r := range rows {
-		ids = append(ids, r.ID)
+		ids = append(ids, releaseEvent(r))
 	}
 	sort.Strings(ids)
 	return "release:" + sym + ":" + sha1Short(strings.Join(ids, "|"), 12)
@@ -987,13 +995,28 @@ func (a *App) noteWireReleases(symbol, exchange string, rows []store.WireItem, n
 			rel = append(rel, r)
 		}
 	}
-	fresh := notify.FreshSince(a.st, "news:"+store.NewsKey(symbol, exchange), rel, func(r store.WireItem) string { return r.PublishedAt }, func(r store.WireItem) string { return r.ID }, func(r store.WireItem) bool { return !newIDs[r.ID] })
+	// An event is told once. The stream keeps what it has met, by what the thing is rather than by
+	// the id a source gave it, so the same release reaching the app again — from another source,
+	// under another id, dated a week apart, or simply returning to a search's results after
+	// dropping out of them — is recognised and passed over. Everything met is recorded, told or
+	// not, so the back catalogue a first read brings can never ring later.
+	scope := "news:" + store.NewsKey(symbol, exchange)
+	events := make([]string, len(rel))
+	for i, r := range rel {
+		events[i] = releaseEvent(r)
+	}
+	met := a.st.EventsTold(scope, events)
+	fresh := notify.FreshSince(a.st, scope, rel, func(r store.WireItem) string { return r.PublishedAt }, releaseEvent, func(r store.WireItem) bool { return !newIDs[r.ID] || met[releaseEvent(r)] })
+	a.st.MarkTold(scope, events, "")
 	if len(fresh) == 0 {
 		return
 	}
 	title, body := releaseNoticeWire(sym, fresh)
 	a.notify.Emit("releases", releaseKeyWire(sym, fresh), title, body, map[string]any{"symbol": sym})
 }
+
+// What a release is, independent of the id, source and date each carries.
+func releaseEvent(r store.WireItem) string { return model.NewsTextKey(r.Headline) }
 
 func (a *App) filingsNotice(sym string, fresh []store.Filing) (string, string) {
 	var named []string

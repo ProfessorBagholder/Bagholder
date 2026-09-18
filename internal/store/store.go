@@ -545,6 +545,14 @@ const schemaSQL = `
             PRIMARY KEY (symbol, exchange)
         );
 
+        CREATE TABLE IF NOT EXISTS told (
+            scope TEXT NOT NULL,
+            event TEXT NOT NULL,
+            at TEXT NOT NULL,
+            PRIMARY KEY (scope, event)
+        );
+        CREATE INDEX IF NOT EXISTS told_at ON told (at);
+
         CREATE TABLE IF NOT EXISTS news (
             id TEXT NOT NULL,
             symbol TEXT NOT NULL,
