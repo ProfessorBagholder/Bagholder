@@ -51,6 +51,9 @@ func (a *App) statusPayload() map[string]any {
 		"syncStep":        a.state.syncStep,
 		"error":           a.state.err,
 		"dataVersion":     a.st.DataVersion() + "|" + model.TodayLocal(),
+		// everything the model reads except the quotes: where this is unmoved and the data
+		// version is not, only prices ticked, and the page fetches just the live figures
+		"coreVersion":     a.st.CoreVersion() + "|" + model.TodayLocal(),
 		"summaryReady":    a.enricher.SummaryStatus() == "ready",
 		"protocol":        Protocol,
 		"startedAt":       StartedAt,

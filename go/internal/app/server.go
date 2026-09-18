@@ -420,7 +420,7 @@ func (a *App) doGet(rs *responder, port int) {
 				a.kick("quotes", func() { a.refreshQuotes() })
 			}
 		}
-		payload, err := a.viewJSON(a.modelFilters(q), queryParam(q, "trade"), queryParam(q, "page"))
+		payload, err := a.viewJSON(a.modelFilters(q), queryParam(q, "trade"), queryParam(q, "page"), queryParam(q, "only") == "live", queryParam(q, "markets") != "")
 		if err != nil {
 			a.logf("model failed: %v\n", err)
 			rs.send(500, map[string]any{"ok": false, "error": "model failed: " + err.Error()}, "")
@@ -453,13 +453,45 @@ func (a *App) doGet(rs *responder, port int) {
 	rs.send(404, map[string]any{"ok": false, "error": "not found"}, "")
 }
 
-func (a *App) viewJSON(filters any, detail, page string) (payload []byte, err error) {
+// The sections a quote tick can change: the open positions and the small aggregates priced
+// off them. Everything else is carried from the page's last full load, so `only=live` returns
+// just these. The cashflow page's market-value column is derived from the positions on the
+// page, so cashflow itself need not travel; the markets view is large and only priced live
+// when it is the one on screen, so it is added only when the page asks for it (markets=1).
+var modelLiveKeys = []string{"ok", "today", "currency", "market", "positions", "positionsSummary", "portfolio"}
+
+func liveOnly(view []byte, markets bool) ([]byte, error) {
+	whole := map[string]json.RawMessage{}
+	if err := json.Unmarshal(view, &whole); err != nil {
+		return nil, err
+	}
+	keys := append([]string{}, modelLiveKeys...)
+	if markets {
+		keys = append(keys, "markets")
+	}
+	kept := map[string]json.RawMessage{}
+	for _, k := range keys {
+		if v, ok := whole[k]; ok {
+			kept[k] = v
+		}
+	}
+	return json.Marshal(kept)
+}
+
+func (a *App) viewJSON(filters any, detail, page string, live, markets bool) (payload []byte, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			err = fmt.Errorf("%v", rec)
 		}
 	}()
 	view := a.model.View(filters, detail, page)
+	if live {
+		cut, cutErr := liveOnly(view, markets)
+		if cutErr != nil {
+			return nil, cutErr
+		}
+		view = cut
+	}
 	status, marshalErr := json.Marshal(a.statusPayload())
 	if marshalErr != nil {
 		return nil, marshalErr
