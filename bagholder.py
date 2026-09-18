@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from html import escape as html_escape
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
@@ -5974,12 +5975,12 @@ def sweep_filings(now=None):
         said = False
         if rel and in_release_scope(sym, rel_scopes) and not store.has_wire_release(sym):
             t, b = release_notice(sym, rel)
-            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, dict({"symbol": sym}, **notice_link(rel)))) or said
+            said = bool(notify.emit("releases", _release_key(sym, rel), t, b, dict({"symbol": sym}, **dict(notice_moment(rel), **notice_link(rel))))) or said
         if rest and sym in disc_syms:
             notice = filings_notice(sym, rest)
             digest = hashlib.sha1("|".join(sorted("/".join(filing_mark(r)) for r in rest)).encode("utf-8")).hexdigest()[:12]
             said = bool(notify.emit("disclosures", "filings:%s:%s" % (sym, digest), notice[0], notice[1],
-                                    dict({"symbol": sym}, **notice_link(rest)))) or said
+                                    dict({"symbol": sym}, **dict(notice_moment(rest), **notice_link(rest))))) or said
         if said:
             told += 1
     return told
@@ -6403,11 +6404,21 @@ def release_notice(sym, rows):
     newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)
     head = _s(newest[0].get("headline") or newest[0].get("subject") or newest[0].get("type")) or "A new release."
     title = ("Press release · " if len(rows) == 1 else "%d press releases · " % len(rows)) + sym
-    if DISTRIBUTION_RELEASE.search(head):
-        detail = distribution_detail(sym)
-        if detail:
-            head += "\n" + detail
+    detail = distribution_detail(sym) if DISTRIBUTION_RELEASE.search(head) else ""
+    if not detail:
+        # what the source said beneath its own headline, where it said anything
+        detail = _s(newest[0].get("summary")).strip()
+    if detail:
+        head += "\n" + detail
     return (title, head)
+
+
+def notice_moment(rows):
+    """When the newest of these happened, as its source dates it. A release found today can have
+    been published weeks ago — the app reads a listing's back catalogue the first time it sees it —
+    and a notice that shows only when it was told reads as news that is not new."""
+    newest = sorted(rows, key=lambda r: _s(r.get("publishedAt") or r.get("date")), reverse=True)[0]
+    return {"at": _s(newest.get("publishedAt") or newest.get("date"))}
 
 
 def notice_link(rows):
@@ -6445,7 +6456,21 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
         except Exception as e:
             sys.stderr.write("bagholder releases: %s record not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
     title, body = release_notice(sym, fresh)
-    notify.emit("releases", _release_key(sym, fresh), title, body, dict({"symbol": sym}, **notice_link(fresh)))
+    notify.emit("releases", _release_key(sym, fresh), title, body, dict({"symbol": sym, "exchange": exchange}, **dict(notice_moment(fresh), **notice_link(fresh))))
+
+
+# What a form is, for the forms whose code is all a row carries until a document has been read. A
+# code names the form and not what happened, and "4" alone tells a holder nothing at all.
+FORM_NAMES = {"3": "Insider's first report (Form 3)", "4": "Insider transaction (Form 4)", "5": "Insider's annual report (Form 5)",
+              "8-K": "Material event (8-K)", "6-K": "Foreign issuer report (6-K)", "10-K": "Annual report (10-K)",
+              "10-Q": "Quarterly report (10-Q)", "144": "Notice of proposed sale (144)", "S-1": "Registration (S-1)",
+              "SC 13D": "Beneficial ownership (13D)", "SC 13G": "Beneficial ownership (13G)", "DEF 14A": "Proxy statement (DEF 14A)",
+              "424B5": "Prospectus supplement (424B5)", "FWP": "Free writing prospectus (FWP)"}
+
+
+def form_name(code):
+    """A form's code as words where the app knows the form, the code itself otherwise."""
+    return FORM_NAMES.get(_s(code).strip().upper(), _s(code).strip())
 
 
 def filings_notice(sym, new):
@@ -6455,17 +6480,20 @@ def filings_notice(sym, new):
     and not what happened. A document with no title yet is read here for one, at most the few
     the notice names, and the read is kept on the row, so the table shows what the
     notification said. A form whose document could not be read is named by its code."""
-    named = []
+    named, said = [], ""
     for r in new[:3]:
-        title = _s(r.get("subject")).strip()
-        if not title and _s(r.get("id")):
+        title, summary = _s(r.get("subject")).strip(), _s(r.get("summary")).strip()
+        if (not title or not summary) and _s(r.get("id")):
             try:
-                title = _s((filings_enrich(sym, _s(r.get("id"))) or {}).get("subject")).strip()
+                read = filings_enrich(sym, _s(r.get("id"))) or {}
+                title = title or _s(read.get("subject")).strip()
+                summary = summary or _s(read.get("summary")).strip()
             except Exception as e:
                 sys.stderr.write("bagholder disclosures: %s not read for its notice: %s\n" % (sym, str(e) or e.__class__.__name__))
-        title = title or _s(r.get("type")).strip()
+        title = title or form_name(r.get("type"))
         if title and title not in named:
             named.append(title)
+        said = said or summary
     sources = []
     for r in new:
         src = _s(r.get("source")).strip()
@@ -6476,6 +6504,10 @@ def filings_notice(sym, new):
     tail = ", ".join(names.get(x.lower(), x) for x in sources)
     head = ", ".join(named) + (" and more" if len(new) > 3 else "")
     body = (head + (" · " if head and tail else "") + tail) or "A new filing."
+    # the sentence the document itself yielded, under the line that names it: a form code and a
+    # regulator say what arrived, never what it says
+    if said and model.news_text_key(said) != model.news_text_key(head):
+        body += "\n" + said
     title = ("New disclosure · " if len(new) == 1 else "%d new disclosures · " % len(new)) + sym
     return (title, body)
 
@@ -6618,6 +6650,29 @@ def filings_document(symbol, doc_id):
     if not data:
         return None, "empty document"
     return data, ct or "application/octet-stream"
+
+
+def document_error_page(symbol, doc_id, why):
+    """What a tab shows when a regulator would not serve a document. SEDAR+ mints a document's
+    address inside a live session and puts a bot gate in front of it, so a refusal is ordinary and
+    a retry often works; the page says that in words, names the document, and retries on a click."""
+    row = store.filing(_s(symbol).strip().upper(), doc_id) or {}
+    name = _s(row.get("subject")) or _s(row.get("title")) or _s(row.get("type")) or "This document"
+    source = _s(row.get("source")) or "the regulator"
+    when = _s(row.get("dateText")) or _s(row.get("date"))[:10]
+    again = "/api/filings/doc?symbol=%s&id=%s" % (quote(_s(symbol)), quote(_s(doc_id)))
+    return ("<!doctype html><meta charset=utf-8><title>%s</title>"
+            "<style>:root{color-scheme:dark light}body{margin:0;min-height:100vh;display:grid;place-items:center;"
+            "background:#0e1118;color:#e8ecf3;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+            "main{max-width:34rem;padding:2rem}h1{font:600 16px/1.4 inherit;margin:0 0 .75rem}p{margin:0 0 .75rem;color:#aab3c2}"
+            "b{color:#e8ecf3;font-weight:500}a{color:#7aa2f7}</style>"
+            "<main><h1>%s would not serve this document just now</h1>"
+            "<p><b>%s</b>%s</p>"
+            "<p>%s</p>"
+            "<p>SEDAR+ builds a document&rsquo;s address inside a live session and puts a bot gate in front of it, so a "
+            "refusal is ordinary rather than a sign the document is gone. <a href=\"%s\">Try again</a>.</p></main>") % (
+        html_escape(name), html_escape(source), html_escape(name), html_escape(" · " + when if when else ""),
+        html_escape(_s(why) or "The source did not answer."), html_escape(again))
 
 
 def filings_enrich(symbol, doc_id):
@@ -7509,7 +7564,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data, info = filings_document(symbol, doc_id)
             if data is None:
-                self._send(502, {"ok": False, "error": info})
+                # this route is opened in a tab of its own, so a browser asking for a page is
+                # answered with one: a raw JSON error is the app failing in front of the person
+                if "text/html" in _s(self.headers.get("Accept")):
+                    self._send(502, document_error_page(symbol, doc_id, info), "text/html; charset=utf-8")
+                else:
+                    self._send(502, {"ok": False, "error": info})
                 return
             self._send(200, data, info or "application/pdf")
             return

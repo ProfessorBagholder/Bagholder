@@ -341,8 +341,9 @@ class NotifyTest(unittest.TestCase):
             later = datetime.now(timezone.utc) + timedelta(minutes=31)
             self.assertEqual(bagholder.sweep_filings(now=later), 2)
             self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
-        self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
-            ("disclosures", "New disclosure · QNC", "8-K · SEC EDGAR", {"symbol": "QNC"}),
+        # the extra carries when the filing itself is dated, which is not when it was told
+        self.assertEqual([(r["kind"], r["title"], r["body"], {k: v for k, v in r["extra"].items() if k != "at"}) for r in store.list_notifications()], [
+            ("disclosures", "New disclosure · QNC", "Material event (8-K) · SEC EDGAR", {"symbol": "QNC"}),
             ("disclosures", "New disclosure · SHOP", "Material change report · SEDAR+", {"symbol": "SHOP"}),
         ], "a filed news release is the Releases kind's to tell, and that kind is off here")
         notify.set_settings({"disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False})
@@ -427,10 +428,13 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:2", "source": "SEC", "type": "144"}]),
                              ("New disclosure \u00b7 NBIS", "Notice of intent to sell \u00b7 SEC EDGAR"))
         self.assertEqual(read, [("NBIS", "sec:2")], "read once, for the notice it is naming")
-        # nothing could be read from it: the form's code stands in rather than nothing at all
+        # nothing could be read from it: the form stands in, in words where the app knows the form,
+        # since "6-K" alone names the paperwork and not what happened
         with mock.patch.object(bagholder, "filings_enrich", return_value={"ok": False}):
             self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:3", "source": "SEC", "type": "6-K"}]),
-                             ("New disclosure \u00b7 NBIS", "6-K \u00b7 SEC EDGAR"))
+                             ("New disclosure \u00b7 NBIS", "Foreign issuer report (6-K) \u00b7 SEC EDGAR"))
+            self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:9", "source": "SEC", "type": "40-F"}])[1],
+                             "40-F \u00b7 SEC EDGAR", "a form the app has no words for keeps its code")
         # several: counted in the title, named in the body, and only the ones it names are read
         many = [{"id": "sec:%d" % i, "source": "SEC", "type": "4", "subject": "Insider report %d" % i} for i in range(4)]
         self.assertEqual(bagholder.filings_notice("NBIS", many),
@@ -479,7 +483,7 @@ class NotifyTest(unittest.TestCase):
                 self.assertEqual(bagholder.sweep_filings(now=later(31)), 0, "held while the document cannot be read")
                 # after the hold's bound it is told by what the row already says, rather than never told
                 self.assertEqual(bagholder.sweep_filings(now=later(31 + bagholder.FILINGS_HOLD_MAX_MIN + 1)), 1)
-        self.assertEqual([r["body"] for r in store.list_notifications()], ["144 \u00b7 SEDAR+"])
+        self.assertEqual([r["body"] for r in store.list_notifications()], ["Notice of proposed sale (144) \u00b7 SEDAR+"])
 
     def test_a_wires_release_is_told_and_a_first_read_of_a_listing_is_not(self):
         notify.set_settings({"releasesHeld": True})
@@ -538,6 +542,41 @@ class NotifyTest(unittest.TestCase):
                          ("Press release · QNC", "Quantum eMotion Wins Certification"))
         self.assertEqual(bagholder.release_notice("NOSUCH", [{"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"}])[1],
                          "Announces Monthly Distribution", "no record for the listing: the headline stands alone")
+
+    def test_a_notice_carries_when_the_thing_happened(self):
+        """A release found today can have been published weeks ago: the notice carries the item's
+        own moment, so the panel can say when it happened rather than when it was told."""
+        self.assertEqual(bagholder.notice_moment([{"id": "tmx:1", "publishedAt": "2026-08-24T11:00:00Z"},
+                                                  {"id": "tmx:2", "publishedAt": "2026-08-31T07:00:00Z"}]),
+                         {"at": "2026-08-31T07:00:00Z"}, "the newest of them")
+        self.assertEqual(bagholder.notice_moment([{"id": "sedar:1", "date": "2026-09-08T16:22"}]), {"at": "2026-09-08T16:22"})
+        self.assertEqual(bagholder.notice_moment([{"id": "x"}]), {"at": ""})
+
+    def test_a_release_with_no_figures_carries_what_the_source_said(self):
+        notice = bagholder.release_notice("QNC", [{"id": "tmx:1", "headline": "Quantum eMotion Wins Certification",
+                                                   "summary": "The certification covers its entropy module, which NIST listed this week.",
+                                                   "publishedAt": "2026-09-15T13:00:00Z"}])
+        self.assertEqual(notice[1], "Quantum eMotion Wins Certification\nThe certification covers its entropy module, which NIST listed this week.")
+
+    def test_a_disclosure_notice_carries_the_sentence_the_document_yielded(self):
+        rows = [{"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
+                 "subject": "GAB0590 Avis Acceptation WKSI",
+                 "summary": "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."}]
+        title, body = bagholder.filings_notice("QNC", rows)
+        self.assertEqual(title, "New disclosure · QNC")
+        self.assertEqual(body.split("\n"), ["GAB0590 Avis Acceptation WKSI · SEDAR+",
+                                            "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."])
+        same = [dict(rows[0], summary="GAB0590 Avis Acceptation WKSI")]
+        self.assertEqual(bagholder.filings_notice("QNC", same)[1], "GAB0590 Avis Acceptation WKSI · SEDAR+",
+                         "a summary that only repeats the line above it is not a second line")
+
+    def test_a_document_a_regulator_refuses_is_a_page_not_a_json_error(self):
+        """The document route opens in a tab of its own: a refusal has to read as words."""
+        page = bagholder.document_error_page("QNC", "sedar:drm:x", "could not open the profile's documents to download from")
+        self.assertIn("<!doctype html>", page)
+        self.assertIn("would not serve this document just now", page)
+        self.assertIn("could not open the profile&#x27;s documents to download from", page)
+        self.assertIn("/api/filings/doc?symbol=QNC&amp;id=sedar%3Adrm%3Ax", page, "the retry goes back through the app")
 
     def test_a_disclosure_notice_opens_the_document_it_is_about(self):
         self.assertEqual(bagholder.notice_link([{"id": "sedar:9", "source": "SEDAR+", "url": "https://www.sedarplus.ca/x?drmKey=9", "date": "2026-09-15T09:00"}]),

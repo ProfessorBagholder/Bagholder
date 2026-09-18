@@ -986,11 +986,24 @@ function notesPanelHtml() {
   const card = (n) => '<div class="od-card nt-card" data-act="noteOpen" data-arg=\'' + attr({ id: n.id }) + "'>" +
     '<div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">' + (n.readAt ? "" : '<span class="nt-dot"></span>') + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(n.title) + "</span></span></div>" +
     (n.body ? String(n.body).split("\n").map((line) => '<div class="od-row2"><span class="od-line">' + esc(line) + "</span></div>").join("") : "") +
-    '<div class="od-foot"><span class="od-when">' + esc(orderWhenWord(n.at)) + "</span></div></div>";
+    '<div class="od-foot"><span class="od-when">' + esc(noteWhenWord(n)) + "</span></div></div>";
   return '<div id="ntWrap"><div class="tk-scrim" data-act="notesClose"></div><div class="tk" role="dialog" aria-label="Notifications">' +
     '<div class="tk-hd"><span class="tk-title">Notifications</span><button class="tk-x" aria-label="Close" data-act="notesClose"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button></div>' +
     '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
     '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
+}
+// When the thing happened, not when the app got round to telling it: the app reads a listing's back
+// catalogue the first time it sees it, so a release published weeks ago can be told today, and a foot
+// that says only "Today" reads as news that is not new. The telling time follows when they differ.
+function noteWhenWord(n) {
+  const at = (n.extra || {}).at;
+  const told = orderWhenWord(n.at);
+  if (!at) return told;
+  const when = orderWhenWord(at.length === 10 ? at + "T12:00:00" : at);
+  if (when === "—" || when === told) return told;
+  const sameDay = new Date(Date.parse(at.length === 10 ? at + "T12:00:00" : at)).toDateString() === new Date(Date.parse(n.at)).toDateString();
+  const day = at.length === 10 ? when.replace(/,.*$/, "") : when;          // a filing carries a day, a release a moment
+  return sameDay ? told : day + " · told " + told.replace("Today ", "today ");
 }
 function renderNotes() {
   const old = document.getElementById("ntWrap");

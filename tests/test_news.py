@@ -20,7 +20,7 @@ class ParseTest(unittest.TestCase):
                                   {"headline": "no id", "datetime": "2026-08-05T07:00:00-04:00"},
                                   {"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}}
         rows = news.parse_tmx_news(data, "SHOP")
-        self.assertEqual(rows, [{"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire",
+        self.assertEqual(rows, [{"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire", "summary": "",
                                  "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release", "via": "tmx"}])
 
     def test_nasdaq_items_take_their_time_from_the_age_given(self):
@@ -247,6 +247,27 @@ class SourcesTest(unittest.TestCase):
                          [("Kraken Robotics: Undersea Batteries Drive Growth", "Seeking Alpha", "https://seekingalpha.com/article/1", "2026-09-05T14:00:00Z")])
         self.assertEqual([news.sa_form(*x) for x in (("PNG", "TSX-V", "CAD"), ("VEQT", "TSX", "CAD"), ("ASTS", "NASDAQ", "USD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD"))],
                          ["PNG:CA", "VEQT:CA", "ASTS", "", ""], "Seeking Alpha has no form for the CSE or Cboe Canada")
+
+    def test_a_summary_is_what_the_source_said_beneath_its_headline(self):
+        """The line under a headline in a notice: the source's own summary, without the wire's
+        dateline, without a repeat of the headline, and nothing at all where there is nothing."""
+        head = "CHARBONE Announces Closing of $1.5M Drawdown"
+        self.assertEqual(news.summary_text("<p>TORONTO, Sept. 08, 2026 (GLOBE NEWSWIRE) -- Charbone drew $1.5M on its loan.</p>", head),
+                         "Charbone drew $1.5M on its loan.")
+        self.assertEqual(news.summary_text("(TheNewswire) Varennes, Quebec – TheNewswire - le 8 septembre 2026 – CHARBONE annonce la clôture du tirage.", head),
+                         "CHARBONE annonce la clôture du tirage.")
+        self.assertEqual(news.summary_text("VANCOUVER, BC / ACCESSWIRE / September 8, 2026 / CHAR Tech reported results.", head),
+                         "CHAR Tech reported results.")
+        self.assertEqual(news.summary_text("...", head), "", "a placeholder is not a summary")
+        self.assertEqual(news.summary_text(head, head), "", "a summary that only repeats the headline is not one")
+        self.assertEqual(news.summary_text("", head), "")
+        long = "A. " + ("word " * 200)
+        out = news.summary_text(long, head)
+        self.assertLessEqual(len(out), news.SUMMARY_CHARS + 1)
+        self.assertTrue(out.endswith("…"), "cut where no sentence ends")
+        sentences = ("filler words " * 25) + "and it ends here. " + ("more words " * 30) + "."
+        cut = news.summary_text(sentences, head)
+        self.assertTrue(cut.endswith("ends here."), "cut at the last sentence end before the limit")
 
     def test_a_name_is_searched_as_the_press_writes_it(self):
         cases = {"Harvest Reddit Enhanced High Income Shares ETF (the “ETF”)": "Harvest Reddit Enhanced High Income Shares ETF",

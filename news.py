@@ -93,6 +93,56 @@ def clean_text(t):
     return re.sub(r"\s+", " ", html.unescape(_s(t))).strip()
 
 
+SUMMARY_CHARS = 400        # a sentence or two of what a source said beneath its headline
+
+
+# What a wire puts before its first sentence: "(TheNewswire) Varennes, Quebec - TheNewswire - le 8
+# septembre 2026 -", "TORONTO, Sept. 08, 2026 (GLOBE NEWSWIRE) --". It names the wire and the day,
+# which the row already carries, so it is taken off rather than shown as the summary's opening.
+_WIRES = r"globe ?newswire|business ?wire|cnw(?: group)?|newsfile(?: corp)?|accesswire|the ?news ?wire|pr ?newswire|newmediawire|marketwired|cision"
+# What a wire prints before its first sentence: the wire's name, a city and a date, in either
+# language and in either house style — `(TheNewswire) Varennes, Quebec - TheNewswire - le 8 septembre
+# 2026 - `, `TORONTO, Sept. 08, 2026 (GLOBE NEWSWIRE) -- `, `VANCOUVER, BC / ACCESSWIRE / September 8,
+# 2026 / `. The row already carries the wire and the day, so the dateline is taken off rather than
+# shown as the summary's opening words.
+_DATELINES = (re.compile(r"^.{0,80}?(?:\((?:%s)[^)]*\)|(?:%s))[^.]{0,60}?[-–—]{1,2}\s+" % (_WIRES, _WIRES), re.I),
+              re.compile(r"^[^./]{0,60}/\s*(?:%s)\s*/[^./]{0,40}/\s*" % _WIRES, re.I))
+
+
+_LEADING_DATE = re.compile(r"^(?:le\s+)?\d{1,2}(?:er)?\s+[a-zéû]{3,10}\.?\s+\d{4}\s*[-–—,]?\s+|^[A-Za-zéû]{3,10}\.?\s+\d{1,2},?\s+\d{4}\s*[-–—,]?\s+", re.I)
+
+
+def strip_dateline(text):
+    """A wire's dateline off the front of its own summary, however many times it prints one, and the
+    bare date some leave behind (`le 8 septembre 2026 – `)."""
+    for _ in range(3):
+        cut = text
+        for pattern in _DATELINES:
+            cut = pattern.sub("", cut, count=1)
+        cut = _LEADING_DATE.sub("", cut.lstrip(" -–—,/"), count=1).lstrip(" -–—,/")
+        if cut == text:
+            return text
+        text = cut
+    return text
+
+
+def summary_text(raw, headline=""):
+    """What a source said under the headline, as plain text: tags out, one space between words,
+    cut at a sentence end rather than mid-word. A summary that only repeats the headline is not
+    one, and neither is a feed's markup (Google's `description` is an anchor and a publisher)."""
+    text = strip_dateline(clean_text(re.sub(r"<[^>]+>", " ", _s(raw))))
+    # a source that carries a placeholder instead of a summary ("...", "-", "N/A") has none
+    if len(re.sub(r"[^0-9A-Za-zÀ-ÿ]", "", text)) < 12:
+        return ""
+    if not text or news_text(text) == news_text(headline) or news_text(text).startswith(news_text(headline)) and len(text) < len(_s(headline)) + 12:
+        return ""
+    if len(text) <= SUMMARY_CHARS:
+        return text
+    cut = text[:SUMMARY_CHARS]
+    stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    return (cut[:stop + 1] if stop > SUMMARY_CHARS // 2 else cut.rstrip() + "…").strip()
+
+
 def tmx_names(topic, symbol):
     """Whether TMX's own topic codes on an item name the listing, asked in the venue's form: a
     Canadian listing's code carries its market (`PNG:CA`, `HG:CNX`, `HBIX:AQL`) and a US listing's
@@ -127,7 +177,7 @@ def parse_tmx_news(data, symbol, media=False):
             continue
         source = clean_text(it.get("source")).replace(" via QuoteMedia", "")
         rows.append({"id": "tmx:%s" % it["newsid"], "headline": clean_text(it.get("headline")), "source": source,
-                     "url": TMX_NEWS_URL % (symbol, it["newsid"]), "publishedAt": ts,
+                     "url": TMX_NEWS_URL % (symbol, it["newsid"]), "publishedAt": ts, "summary": summary_text(it.get("summary"), it.get("headline")),
                      "kind": "story" if media else kind_of(source), "via": "tmx-media" if media else "tmx"})
     return rows
 
@@ -248,8 +298,8 @@ def parse_yahoo_news(data, form, symbol="", name=""):
             continue
         source = clean_text((attrs.get("provider") or {}).get("displayName")) or "Yahoo Finance"
         url = _s(attrs.get("canonicalUrl") or attrs.get("clickthroughUrl"))
-        rows.append({"id": "yahoo:%s" % asset["id"], "headline": title, "source": source,
-                     "url": url, "publishedAt": when, "kind": kind_of(source), "via": "yahoo"})
+        rows.append({"id": "yahoo:%s" % asset["id"], "headline": title, "source": source, "url": url, "publishedAt": when,
+                     "summary": summary_text(attrs.get("summary") or attrs.get("description"), title), "kind": kind_of(source), "via": "yahoo"})
     return rows
 
 
@@ -296,7 +346,8 @@ def parse_sa_news(xml, form):
         if not (guid and title and when):
             continue
         rows.append({"id": "sa:%s" % hashlib.sha1(guid.encode("utf-8")).hexdigest()[:16], "headline": title, "source": "Seeking Alpha",
-                     "url": _tag(item, "link") or guid, "publishedAt": when, "kind": "story", "via": "sa"})
+                     "url": _tag(item, "link") or guid, "publishedAt": when, "summary": summary_text(_tag(item, "description"), title),
+                     "kind": "story", "via": "sa"})
     return rows
 
 
