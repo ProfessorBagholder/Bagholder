@@ -694,7 +694,7 @@ mutation SoOrdersOrderCreate($input: SoOrders_CreateOrderInput!) {
 # the commit that a release is cut from; once a day the app asks GitHub for the
 # latest release and shows an update link when that tag is newer than this copy.
 # Commits without a release never trigger it.
-APP_VERSION = "1.45.0"
+APP_VERSION = "1.45.1"
 REPO = "ProfessorBagholder/Bagholder"
 REPO_URL = "https://github.com/" + REPO
 RELEASE_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -729,7 +729,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-18.1"
+PROTOCOL = "2026-09-18.2"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -6920,6 +6920,9 @@ def status_payload():
             "syncStep": _state.get("syncStep") or "",
             "error": _state["error"] or "",
             "dataVersion": store.data_version() + "|" + model.today_local(),
+            # everything the model reads except the quotes: when this is unchanged but the
+            # data version moved, only prices ticked, and the page fetches just the live figures
+            "coreVersion": store.core_version() + "|" + model.today_local(),
             # whether a summary could be made right now, read without starting anything: a row
             # that had no model to ask waits for this rather than counting the read against itself
             "summaryReady": enrich.summary_status() == "ready",
@@ -7442,6 +7445,15 @@ def history_payload(query):
             "reason": "" if bars or pending else market.chart_reason(inst, tf)}
 
 
+# The sections a quote tick can change: the open positions and the small aggregates
+# priced off them. Everything else is carried from the page's last full load, so
+# `only=live` returns just these. The cashflow page's market-value column is derived
+# from the positions on the page, so cashflow itself need not travel; the markets/
+# heatmap view is large and only priced live when it is the one on screen, so it is
+# added only when the page asks for it (markets=1).
+MODEL_LIVE_KEYS = ("ok", "today", "currency", "market", "positions", "positionsSummary", "portfolio")
+
+
 def _query_param(query, name):
     return ((parse_qs(query or "").get(name) or [""])[0] or "").strip() or None
 
@@ -7768,6 +7780,14 @@ class Handler(BaseHTTPRequestHandler):
                 sys.stderr.write("model failed: %r\n" % (e,))
                 self._send(500, {"ok": False, "error": "model failed: %s" % type(e).__name__})
                 return
+            if _query_param(query, "only") == "live":
+                # a quote tick moves only what is priced off the open positions; the
+                # closed trades, equity curve, KPIs and options lists are unchanged, so
+                # the page fetches just these sections instead of the whole book
+                keys = list(MODEL_LIVE_KEYS)
+                if _query_param(query, "markets"):
+                    keys.append("markets")   # the heatmap view is on screen and wants live tiles
+                payload = {k: payload[k] for k in keys if k in payload}
             payload["status"] = status_payload()
             self._send(200, payload)
             return
