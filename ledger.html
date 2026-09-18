@@ -810,7 +810,7 @@ function filtersActive() {
 // ---------------------------------------------------------------------------
 // data
 // ---------------------------------------------------------------------------
-let _loadSeq = 0;
+let _loadSeq = 0, _loadingPage = "";
 // The model arrives one page at a time: the sections the open page draws, plus what
 // every page needs (filters, options, accounts). Each page's sections are kept and
 // stand until the filters or the data version move; a page whose sections are
@@ -820,13 +820,35 @@ function modelPage() { return state.page === "heatmap" ? "markets" : (MODEL_PAGE
 function filtersQuery() { return JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })); }
 function modelKey() { return filtersQuery() + "|" + (state.status.dataVersion || ""); }
 function pageReady() { return !!(state.model && state.modelPages[modelPage()] === modelKey()); }
+// Whether a page has sections to draw at all. Data a moment old is still data: a page
+// already drawn stands and is refreshed behind, and only a page that has never been
+// drawn under these filters is shown as a skeleton.
+function pageDrawn(p) { return !!(state.model && state.modelFilters === filtersQuery() && state.modelPages[p || modelPage()]); }
+// The tabs the reader has not opened yet are fetched quietly once the open one is drawn,
+// one at a time and only while nothing else is in flight, so arrowing through them draws
+// from what is already held. Each key is warmed once, so a version that keeps moving
+// costs one pass, not a loop.
+let _warmTimer = 0, _warmKey = "", _warmTried = {};
+function warmPages() {
+  clearTimeout(_warmTimer);
+  _warmTimer = setTimeout(() => {
+    if (state.loading || state.loadError || !state.model) return;
+    const key = modelKey();
+    if (key !== _warmKey) { _warmKey = key; _warmTried = {}; }
+    const next = Object.keys(MODEL_PAGES).find((p) => state.modelPages[p] !== key && !_warmTried[p]);
+    if (!next) return;
+    _warmTried[next] = 1;
+    loadModel(next);
+  }, 800);
+}
 function hydrateRows(cols, rows) { return (rows || []).map((r) => { const o = {}; for (let i = 0; i < cols.length; i++) o[cols[i]] = r[i]; return o; }); }
-function loadModel() {
+function loadModel(forPage) {
   const seq = ++_loadSeq;
   state.loading = true;
-  if (!state.model) render();
   const filters = filtersQuery();
-  const page = modelPage();
+  const page = forPage || modelPage();
+  _loadingPage = page;
+  if (!state.model) render();
   return fetch("/api/model?filters=" + encodeURIComponent(filters) + "&page=" + page, { headers: { "X-Bagholder": "1" } })
     .then((r) => r.json())
     .then((m) => {
@@ -841,8 +863,11 @@ function loadModel() {
       if (state.model && state.modelFilters === filters) Object.assign(state.model, m); else { state.model = m; state.modelPages = {}; }
       state.modelFilters = filters;
       state.modelPages[page] = key;
-      if (state.sel && !selById(state.sel)) { state.sel = null; if (state.page === "trades" || state.page === "portfolio") history.replaceState(null, "", "#" + state.page); }
+      // only the page the reader is on speaks for the open trade: a page warmed in the
+      // background carries no trades and would clear the selection on its way past
+      if (page === modelPage() && state.sel && !selById(state.sel)) { state.sel = null; if (state.page === "trades" || state.page === "portfolio") history.replaceState(null, "", "#" + state.page); }
       render();
+      warmPages();
     })
     .catch((e) => { if (seq !== _loadSeq) return; state.loading = false; state.loadError = String(e); render(); });
 }
@@ -4403,7 +4428,10 @@ function pageHtml() {
   if (state.loadError && !m) return '<div class="empty"><div class="status-err">' + esc(state.loadError) + '</div><button class="btn btn-secondary" data-act="reload">Retry</button></div>';
   if (!m) return skeletonHtml();
   if (!m.activityCount) return emptyHtml();
-  if (!pageReady()) { if (!state.loading) loadModel(); return skeletonHtml(); }
+  if (!pageReady()) {
+    if (!state.loading || _loadingPage !== modelPage()) loadModel();
+    if (!pageDrawn()) return skeletonHtml();
+  }
   if (state.page === "trades") return tradesHtml(m);
   if (state.page === "portfolio") return portfolioHtml(m);
   if (state.page === "cashflow") return cashflowHtml(m);
