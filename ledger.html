@@ -3594,7 +3594,7 @@ function newsCardHtml(items) {
   // companies' own, told by the wire they came on; the market feed carries none, so All there is every listing held or watched.
   const releases = state.newsKind === "releases";
   let rows = (items || []).filter((n) => (releases ? n.kind === "release" : n.kind !== "release") &&
-    (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.length > 0 : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
+    (only ? n.tags.some(isOnly) : scope === "all" ? (releases ? n.tags.some((t) => t.held || t.watched) : n.market) : n.tags.some((t) => scope === "holdings" ? t.held : t.watched)));
   // the issuer's own releases as it filed them, beside the wires': a wire carries what it is sent, and a
   // release it never carried is still on the regulator's record, so both are shown and the same release once
   if (releases) rows = rows.concat(filedReleases(only, scope, rows));
@@ -3665,10 +3665,14 @@ function filedReleases(only, scope, wire) {
     return { symbol: sym, exchange: ex || (p && p.exchange) || (w && w.exchange) || "", held: !!p, watched: !!w,
              percentChange: p ? p.percentChange : (w ? w.percentChange : null), positionId: p ? p.id : null };
   };
-  return rows.filter((f) => FILED_RELEASE.test(String(f.type || "")) && !said.has(news_text_key(f.subject || "")))
+  const out = rows.filter((f) => FILED_RELEASE.test(String(f.type || "")) && !said.has(news_text_key(f.subject || "")))
     .map((f) => ({ id: "filed:" + f.id, headline: f.subject || f.type || "News release", source: f.source || "", url: f.url || "",
                    publishedAt: String(f.date || ""), kind: "release", market: false, tags: [tagOf(f.symbol, f.exchange)],
                    filed: { id: f.id, sym: f.symbol, source: f.source, url: f.url } }));
+  // without a chip the card is a scope, and a scope is the book's own listings: the
+  // disclosure feed reaches every ticker the book has ever seen, and a ticker it no
+  // longer holds or watches belongs behind the chip, where it is quoted on demand
+  return only ? out : out.filter((n) => n.tags.some((t) => t.held || t.watched));
 }
 // the page's own copy of the model's headline key, so a release on a wire and on the record is one row
 function news_text_key(h) { return String(h || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
