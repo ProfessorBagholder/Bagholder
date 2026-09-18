@@ -5,6 +5,7 @@ import (
 	"os"
 	_ "time/tzdata"
 
+	bagholder "github.com/ProfessorBagholder/Bagholder"
 	"github.com/ProfessorBagholder/Bagholder/internal/app"
 	"github.com/ProfessorBagholder/Bagholder/internal/disclosures"
 	"github.com/ProfessorBagholder/Bagholder/internal/mcp"
@@ -40,6 +41,7 @@ func main() {
 		}
 	}
 	cfg := app.ConfigFromEnv()
+	cfg.Static = bagholder.Static
 	if os.Getenv("BAGHOLDER_CHILD") == "1" || cfg.UpdatesOff {
 		a, err := app.New(cfg)
 		if err != nil {

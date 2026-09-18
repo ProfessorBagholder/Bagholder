@@ -143,16 +143,16 @@ func TestTheImageCarriesEveryPackageTheAppImports(t *testing.T) {
 }
 
 func TestTheImageCarriesThePageAndItsChartLibrary(t *testing.T) {
-	// the page, the chart library and the icon are the repository's, shared by every build,
-	// and the image copies them beside the binary rather than baking them into it
-	docker := readRoot(t, filepath.Join("go", "Dockerfile"))
+	// the page, the chart library and the icon are the repository's, shared by every build;
+	// go generate brings them into the module so the binary carries them and needs nothing beside it
+	embedded := readRoot(t, filepath.Join("go", "static.go"))
 	ignored := dockerIgnored(t)
 	for _, needed := range strings.Fields(shipped) {
 		if _, err := os.Stat(filepath.Join(repoRoot(t), needed)); err != nil {
 			t.Errorf("%s is served by the app: %v", needed, err)
 		}
-		if !strings.Contains(docker, needed) {
-			t.Errorf("%s is served by the app but the image would not carry it", needed)
+		if !strings.Contains(embedded, needed) {
+			t.Errorf("%s is served by the app but the binary would not carry it", needed)
 		}
 		for _, pattern := range ignored {
 			if pattern == needed {

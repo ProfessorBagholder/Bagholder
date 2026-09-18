@@ -6,6 +6,8 @@ WORKDIR /src
 COPY go/go.mod go/go.sum ./
 RUN go mod download
 COPY go/ ./
+# the page is the repository's; go generate brings it in so the binary carries it
+COPY ledger.html lightweight-charts.js favicon.png ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bagholder ./cmd/bagholder
 
 # The runtime base is the one the Python image used, not a bare debian:bookworm-slim.
@@ -25,8 +27,6 @@ RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
 WORKDIR /app
 COPY --from=build /out/bagholder /app/bagholder
-# the page, the chart library and the icon are the repository's, shared by every build
-COPY ledger.html lightweight-charts.js favicon.png ./
 
 RUN mkdir -p /data
 
