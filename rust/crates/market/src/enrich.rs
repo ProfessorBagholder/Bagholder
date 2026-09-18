@@ -18,9 +18,9 @@ use bagholder_model::unichars::{is_alpha, is_digit, is_space, is_upper};
 use bagholder_model::textrules::trim_space;
 
 /// Characters of the filing fed to the model.
-pub const MAX_TEXT: usize = 8000;
+pub const MAX_TEXT: usize = 3000;
 /// How long a document read waits for a model that is starting.
-pub const SUMMARY_WAIT_SEC: f64 = 25.0;
+pub const SUMMARY_WAIT_SEC: f64 = 40.0;
 
 macro_rules! re {
     ($name:ident, $pat:expr) => {
@@ -294,6 +294,18 @@ re!(re_special_tokens, r"<\|[^>]*\|>");
 re!(re_bullets, r"^[*#>\-\s]+");
 re!(re_preamble, r"(?i)^\s*(sure[,!.]?\s+)?(here(?:'?s| is| are)\b[^:]*:?\s*)");
 re!(re_label, r"(?i)^\s*(title|summary|answer)\s*[:\-]\s*");
+// "This Form 8-K reports on ...", "This filing contains ...": the form is the
+// row's own column, so a sentence that starts by naming it again starts later.
+re!(re_restates_form, r"(?i)^\s*this\s+(?:form\s+\S+|filing|document|report|prospectus|news\s+release)\s+(?:reports\s+on|report\s+on|contains|includes|covers|presents|outlines|summari[sz]es|relates\s+to|describes|announces|is|provides|details|discloses|sets\s+out)\s+(?:that\s+)?(?:the\s+)?");
+
+/// The same sentence with a capital at the front.
+fn upper_first(text: &str) -> String {
+    let mut c = text.chars();
+    match c.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
 
 /// Drop the chatty preamble a small model prepends.
 pub fn strip_preamble(out: &str) -> String {
@@ -304,6 +316,10 @@ pub fn strip_preamble(out: &str) -> String {
         out = re_preamble().replacen(&out, 1, "").into_owned();
         out = re_label().replacen(&out, 1, "").into_owned();
         out = re_bullets().replacen(&out, 1, "").into_owned();
+    }
+    let shorter = re_restates_form().replacen(&out, 1, "").into_owned();
+    if !shorter.trim().is_empty() {
+        out = upper_first(shorter.trim());
     }
     trim_space(trim_space(&out).trim_matches('"').trim_matches('*')).to_string()
 }

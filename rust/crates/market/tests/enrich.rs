@@ -249,3 +249,24 @@ fn test_a_current_report_is_named_by_its_items() {
     assert!(items_title("8-K", "no items here").is_none());
     assert!(items_title("8-K", "Item 9.01 Financial Statements and Exhibits").is_none(), "every report has exhibits");
 }
+
+#[test]
+fn test_a_summary_does_not_restate_the_form() {
+    use bagholder_market::enrich::strip_preamble;
+    assert_eq!(
+        strip_preamble("This Form 8-K reports on the resale of shares by the Department of Commerce."),
+        "Resale of shares by the Department of Commerce."
+    );
+    assert_eq!(
+        strip_preamble("This filing contains a proposed sale of Class A common stock by Yao Huiwen."),
+        "A proposed sale of Class A common stock by Yao Huiwen."
+    );
+    assert_eq!(
+        strip_preamble("This news release announces a bought deal offering of 10,350,000 units."),
+        "A bought deal offering of 10,350,000 units."
+    );
+    // a sentence that is nothing but the restatement keeps what it had
+    assert_eq!(strip_preamble("This filing contains"), "This filing contains");
+    // and one that never restated it is untouched
+    assert_eq!(strip_preamble("Quarterly results for the third quarter."), "Quarterly results for the third quarter.");
+}

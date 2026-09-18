@@ -729,7 +729,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
 PROTOCOL = "2026-09-17.1"
-ENRICH_VERSION = 12  # bump when title/summary logic improves, so read rows are re-read once
+ENRICH_VERSION = 13  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 Q_FETCH_ACCOUNT_MARGIN_BUYING_POWER = """
@@ -6574,11 +6574,21 @@ def filings_enrich(symbol, doc_id):
         exact = disclosures.enrichment(row)
     except Exception:
         exact = None
-    if exact and (exact.get("subject") or exact.get("summary")):
-        subject, summary = exact.get("subject") or "", exact.get("summary") or ""
-        store.set_filing_enrichment(sym, doc_id, subject=subject, summary=summary, version=ENRICH_VERSION)
-        return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
-                "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+    if exact:
+        # What the source can say exactly: the form's own name, and for the forms it can read
+        # in full, the sentence too. A name on its own is kept and the document still read, so
+        # the sentence follows it.
+        sj, sm = exact.get("subject") or "", exact.get("summary") or ""
+        if sj and not subject:
+            subject = sj
+            store.set_filing_enrichment(sym, doc_id, subject=subject)
+        if sm:
+            store.set_filing_enrichment(sym, doc_id, subject=sj, summary=sm, version=ENRICH_VERSION)
+            return {"ok": True, "id": doc_id, "subject": sj, "summary": sm,
+                    "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
+        if not model:
+            return {"ok": True, "id": doc_id, "subject": subject, "summary": summary,
+                    "summaryAvailable": model, "summaryStatus": enrich.summary_status()}
     try:
         data, ct = disclosures.content(row)
     except Exception as e:

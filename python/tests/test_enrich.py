@@ -211,3 +211,16 @@ class FormNamesTest(unittest.TestCase):
         self.assertIsNone(formnames.items_title("8-K", "no items here"))
         self.assertIsNone(formnames.items_title("8-K", "Item 9.01 Financial Statements and Exhibits"),
                           "every report has exhibits")
+
+
+class RestatedFormTest(unittest.TestCase):
+    def test_a_summary_does_not_restate_the_form(self):
+        strip = enrich._strip_preamble
+        self.assertEqual(strip("This Form 8-K reports on the resale of shares by the Department of Commerce."),
+                         "Resale of shares by the Department of Commerce.")
+        self.assertEqual(strip("This filing contains a proposed sale of Class A common stock by Yao Huiwen."),
+                         "A proposed sale of Class A common stock by Yao Huiwen.")
+        self.assertEqual(strip("This news release announces a bought deal offering of 10,350,000 units."),
+                         "A bought deal offering of 10,350,000 units.")
+        self.assertEqual(strip("This filing contains"), "This filing contains")
+        self.assertEqual(strip("Quarterly results for the third quarter."), "Quarterly results for the third quarter.")

@@ -26,7 +26,7 @@ import formnames
 import localmodel
 import pdftext
 
-MAX_TEXT = 8000            # characters of the filing fed to the model
+MAX_TEXT = 3000            # characters of the filing fed to the model
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 
@@ -157,7 +157,7 @@ def summary_available():
     return localmodel.available()
 
 
-SUMMARY_WAIT_SEC = 25      # how long a document read waits for a model that is starting
+SUMMARY_WAIT_SEC = 40      # how long a document read waits for a model that is starting
 
 
 def wait_for_summary(seconds=SUMMARY_WAIT_SEC):
@@ -240,6 +240,13 @@ _PREAMBLE = re.compile(r"^\s*(sure[,!.]?\s+)?(here(?:'?s| is| are)\b[^:]*:?\s*)"
 _LABEL = re.compile(r"^\s*(title|summary|answer)\s*[:\-]\s*", re.I)
 
 
+# "This Form 8-K reports on ...", "This filing contains ...": the form is the
+# row's own column, so a sentence that starts by naming it again starts later.
+_RESTATES_FORM = re.compile(r"(?i)^\s*this\s+(?:form\s+\S+|filing|document|report|prospectus|news\s+release)\s+"
+                            r"(?:reports\s+on|report\s+on|contains|includes|covers|presents|outlines|summari[sz]es|relates\s+to|describes|announces|is|provides|details|discloses|sets\s+out)\s+"
+                            r"(?:that\s+)?(?:the\s+)?")
+
+
 def _strip_preamble(out):
     """Drop a chatty preamble a small model prepends (\"Sure, here is the title:\", \"Title:\")."""
     out = re.sub(r"<\|[^>]*\|>", " ", out or "")
@@ -249,6 +256,9 @@ def _strip_preamble(out):
         out = _PREAMBLE.sub("", out)
         out = _LABEL.sub("", out)
         out = re.sub(r"^[*#>\-\s]+", "", out)
+    shorter = _RESTATES_FORM.sub("", out, count=1).strip()
+    if shorter:
+        out = shorter[:1].upper() + shorter[1:]
     return out.strip().strip('"').strip("*").strip()
 
 

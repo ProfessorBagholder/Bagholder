@@ -38,11 +38,11 @@ from urllib.request import Request, urlopen
 # SHA-256 so only this exact file is ever executed.
 LLAMAFILE_URL = os.environ.get(
     "BAGHOLDER_LLAMAFILE_URL",
-    "https://huggingface.co/Mozilla/Llama-3.2-1B-Instruct-llamafile/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.llamafile",
+    "https://huggingface.co/mozilla-ai/gemma-2-2b-it-llamafile/resolve/main/gemma-2-2b-it.Q4_K_M.llamafile",
 )
 LLAMAFILE_SHA256 = os.environ.get(
     "BAGHOLDER_LLAMAFILE_SHA256",
-    "ac1c2864000bad7f62ee56ee908d3f55dd051a267d015b15fa6e831e69767b55",
+    "5eae1115b231c9115b260cc2442263db9e84dec99be8610cfe19fac137284217",
 )
 USER_LLM_URL = os.environ.get("BAGHOLDER_LLM_URL", "").rstrip("/")
 OLLAMA_URL = os.environ.get("BAGHOLDER_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -312,6 +312,9 @@ def chat(prompt, max_tokens=90):
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
         "max_tokens": int(max_tokens),
+        # a model that ends its turn with a marker of its own: cut there, so no
+        # marker reaches a title, which has no sentence for the trim to find
+        "stop": ["<end_of_turn>", "<|eot_id|>", "</s>"],
         "stream": False,
     }).encode("utf-8")
     try:
