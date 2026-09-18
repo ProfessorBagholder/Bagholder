@@ -70,7 +70,7 @@ func (l *LocalModel) managedPort() int {
 	return n
 }
 func (l *LocalModel) chatTimeout() time.Duration {
-	f, err := strconv.ParseFloat(envOr("BAGHOLDER_LLM_CHAT_TIMEOUT", "40"), 64)
+	f, err := strconv.ParseFloat(envOr("BAGHOLDER_LLM_CHAT_TIMEOUT", "600"), 64)
 	if err != nil {
 		f = 40
 	}

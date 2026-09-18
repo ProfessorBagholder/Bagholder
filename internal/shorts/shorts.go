@@ -395,7 +395,7 @@ func (c *Client) yahooSession() (market.YahooDoer, string, error) {
 		return nil, "", errors.New("yahoo: off")
 	}
 	session, crumb, err := c.Market.Yahoo.Session()
-	if err != nil && !errors.Is(err, market.ErrYahooCrumb) {
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "bagholder shorts: yahoo would not open: %s\n", err)
 	}
 	return session, crumb, err
@@ -519,9 +519,11 @@ func (c *Client) FloatShares(symbol, exchange, currency, name string) *float64 {
 		for _, form := range forms {
 			resp, err := c.Market.Yahoo.Summary(form, YahooModule)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "bagholder shorts: %s float from yahoo failed: %s\n", form, err)
 				continue
 			}
 			if resp.Status != 200 {
+				fmt.Fprintf(os.Stderr, "bagholder shorts: %s float from yahoo: HTTP %d\n", form, resp.Status)
 				continue
 			}
 			var d map[string]any
