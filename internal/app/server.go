@@ -374,7 +374,9 @@ func (a *App) doGet(rs *responder, port int) {
 		}
 		data, ct, errMsg := a.filingsDocument(symbol, docID)
 		if data == nil {
-			rs.send(502, map[string]any{"ok": false, "error": errMsg}, "")
+			// a refused document opens as a page that says so and offers the retry, since the
+			// tab was opened to read something and a raw error reads as the app being broken
+			rs.send(502, a.documentErrorPage(symbol, docID, errMsg), "text/html; charset=utf-8")
 			return
 		}
 		if ct == "" {

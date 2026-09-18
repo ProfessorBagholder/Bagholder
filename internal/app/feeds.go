@@ -426,8 +426,8 @@ func (a *App) sweepFilings(now time.Time) int {
 		}
 		said := false
 		if len(rel) > 0 && a.inReleaseScope(sym, relScopes) && !a.st.HasWireRelease(sym) {
-			t, b := releaseNoticeFilings(sym, rel)
-			if a.notify.Emit("releases", releaseKeyFilings(sym, rel), t, b, map[string]any{"symbol": sym}) != nil {
+			t, b := a.releaseNoticeFilings(sym, rel)
+			if a.notify.Emit("releases", releaseKeyFilings(sym, rel), t, b, noticeExtra(sym, "", filingNoticeRows(rel))) != nil {
 				said = true
 			}
 		}
@@ -439,7 +439,7 @@ func (a *App) sweepFilings(now time.Time) int {
 			}
 			sort.Strings(marks)
 			digest := sha1Short(strings.Join(marks, "|"), 12)
-			if a.notify.Emit("disclosures", "filings:"+sym+":"+digest, title, body, map[string]any{"symbol": sym}) != nil {
+			if a.notify.Emit("disclosures", "filings:"+sym+":"+digest, title, body, noticeExtra(sym, "", filingNoticeRows(rest))) != nil {
 				said = true
 			}
 		}
@@ -929,7 +929,7 @@ func (a *App) inReleaseScope(sym string, scopes map[string]bool) bool {
 	return false
 }
 
-func releaseNoticeFilings(sym string, rows []store.Filing) (string, string) {
+func (a *App) releaseNoticeFilings(sym string, rows []store.Filing) (string, string) {
 	newest := append([]store.Filing{}, rows...)
 	sort.SliceStable(newest, func(i, j int) bool { return newest[i].Date > newest[j].Date })
 	head := newest[0].Subject
@@ -938,6 +938,13 @@ func releaseNoticeFilings(sym string, rows []store.Filing) (string, string) {
 	}
 	if head == "" {
 		head = "A new release."
+	}
+	// a release announcing distributions carries the figures beneath the headline, since the
+	// headline alone ("Announces August 2026 Distributions") says nothing a holder can act on
+	if distributionReleaseRE.MatchString(head) {
+		if d := a.distributionDetail(sym); d != "" {
+			head += "\n" + d
+		}
 	}
 	title := "Press release · "
 	if len(rows) != 1 {
@@ -955,12 +962,19 @@ func releaseKeyFilings(sym string, rows []store.Filing) string {
 	return "release:" + sym + ":" + sha1Short(strings.Join(ids, "|"), 12)
 }
 
-func releaseNoticeWire(sym string, rows []store.WireItem) (string, string) {
+func (a *App) releaseNoticeWire(sym string, rows []store.WireItem) (string, string) {
 	newest := append([]store.WireItem{}, rows...)
 	sort.SliceStable(newest, func(i, j int) bool { return newest[i].PublishedAt > newest[j].PublishedAt })
 	head := newest[0].Headline
 	if head == "" {
 		head = "A new release."
+	}
+	// a release announcing distributions carries the figures beneath the headline, since the
+	// headline alone ("Announces August 2026 Distributions") says nothing a holder can act on
+	if distributionReleaseRE.MatchString(head) {
+		if d := a.distributionDetail(sym); d != "" {
+			head += "\n" + d
+		}
 	}
 	title := "Press release · "
 	if len(rows) != 1 {
@@ -1011,8 +1025,8 @@ func (a *App) noteWireReleases(symbol, exchange string, rows []store.WireItem, n
 	if len(fresh) == 0 {
 		return
 	}
-	title, body := releaseNoticeWire(sym, fresh)
-	a.notify.Emit("releases", releaseKeyWire(sym, fresh), title, body, map[string]any{"symbol": sym})
+	title, body := a.releaseNoticeWire(sym, fresh)
+	a.notify.Emit("releases", releaseKeyWire(sym, fresh), title, body, noticeExtra(sym, exchange, wireNoticeRows(fresh)))
 }
 
 // What a release is, independent of the id, source and date each carries.
@@ -1024,13 +1038,23 @@ func (a *App) filingsNotice(sym string, fresh []store.Filing) (string, string) {
 	if limit > 3 {
 		limit = 3
 	}
+	said := ""
 	for _, r := range fresh[:limit] {
-		title := py.Strip(r.Subject)
-		if title == "" && r.ID != "" {
-			title = py.Strip(py.S(a.filingsEnrich(sym, r.ID)["subject"]))
+		title, summary := py.Strip(r.Subject), py.Strip(r.Summary)
+		if (title == "" || summary == "") && r.ID != "" {
+			read := a.filingsEnrich(sym, r.ID)
+			if title == "" {
+				title = py.Strip(py.S(read["subject"]))
+			}
+			if summary == "" {
+				summary = py.Strip(py.S(read["summary"]))
+			}
 		}
 		if title == "" {
-			title = py.Strip(r.Type)
+			title = formName(r.Type)
+		}
+		if said == "" {
+			said = summary
 		}
 		if title != "" && !slices.Contains(named, title) {
 			named = append(named, title)
@@ -1064,6 +1088,11 @@ func (a *App) filingsNotice(sym string, fresh []store.Filing) (string, string) {
 	body += tail
 	if body == "" {
 		body = "A new filing."
+	}
+	// the sentence the document itself yielded, under the line that names it: a form code and a
+	// regulator say what arrived, never what it says
+	if said != "" && model.NewsTextKey(said) != model.NewsTextKey(head) {
+		body += "\n" + said
 	}
 	title := "New disclosure · "
 	if len(fresh) != 1 {
