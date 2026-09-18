@@ -1,7 +1,9 @@
-# The suite, on every pull request and every push to master. Nothing ran on a pull request before
-# this: a branch was only ever as tested as whoever remembered to run it. The app is the standard
-# library, so there is nothing to install; the suite refuses the network and writes only into a
-# home of its own (tests/__init__.py), so a red run here is the code, not the day.
+# Both suites, on every pull request and every push to master. Nothing ran on a pull request before
+# this: a branch was only ever as tested as whoever remembered to run it. The two builds are one
+# product -- they share the page, the database and the version number -- so a pull request is green
+# only when both are. The Python app is the standard library, so there is nothing to install; its
+# suite refuses the network and writes only into a home of its own (python/tests/__init__.py), so a
+# red run here is the code, not the day.
 name: Tests
 
 on:
@@ -18,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  suite:
+  python:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -35,7 +37,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"      # the page's script is parsed with node --check; CI fails without it
-      - name: The suite
+      - name: The Python suite
         env:
           CI: "true"              # a missing tool is a failure here, never a skip
-        run: python -m unittest discover -s tests -t .   # --durations is 3.12+, and the floor is 3.9
+        # -t python is what imports python/tests/__init__.py, the run's guards
+        run: python -m unittest discover -s python/tests -t python
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: The Rust suite
+        env:
+          CI: "true"
+        run: cargo test --workspace
+        working-directory: rust

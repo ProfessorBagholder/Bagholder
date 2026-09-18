@@ -1,0 +1,36 @@
+query FetchAccountCurrentMarginBuyingPowerV2($accountId: ID!, $currency: Currency = CAD) {
+  account(id: $accountId) {
+    id
+    financials {
+      current {
+        id
+        marginV3 {
+          trading {
+            buyingPower(asCurrency: $currency) {
+              __typename
+              ... on BuyingPowerMetricAvailable {
+                total { amount currency __typename }
+                __typename
+              }
+              ... on BuyingPowerMetricUnavailable {
+                reason {
+                  __typename
+                  ... on UnavailableSecurities {
+                    securities { securityId status __typename }
+                    __typename
+                  }
+                }
+                __typename
+              }
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

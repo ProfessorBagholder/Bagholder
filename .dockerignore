@@ -11,4 +11,8 @@ android
 docs
 tests
 *.md
-__pycache__
+**/__pycache__
+python/tests
+python/tools
+python/screenshots
+rust/target

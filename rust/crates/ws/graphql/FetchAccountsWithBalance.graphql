@@ -1,0 +1,31 @@
+query FetchAccountsWithBalance($ids: [String!]!, $type: BalanceType!) {
+  accounts(ids: $ids) {
+    ...AccountWithBalance
+    __typename
+  }
+}
+
+fragment AccountWithBalance on Account {
+  id
+  custodianAccounts {
+    id
+    financials {
+      ... on CustodianAccountFinancialsSo {
+        balance(type: $type) {
+          ...Balance
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+  __typename
+}
+
+fragment Balance on Balance {
+  quantity
+  securityId
+  __typename
+}

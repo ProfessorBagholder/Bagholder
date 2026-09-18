@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/model", "crates/store", "crates/market", "crates/ws", "crates/server", "crates/browser"]
+
+[workspace.package]
+version = "1.45.0"
+edition = "2021"
+rust-version = "1.98"
+
+[profile.release]
+# the toolchain's objcopy is not installed with the minimal profile
+strip = false

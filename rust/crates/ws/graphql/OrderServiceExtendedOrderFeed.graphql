@@ -1,0 +1,28 @@
+query OrderServiceExtendedOrderFeed($identityId: ID!, $statuses: [OrderServiceOrderStatus!]!, $first: Int = 25, $cursor: String) {
+  identity(id: $identityId) {
+    id
+    orderServiceExtendedOrderFeed(statuses: $statuses, first: $first, after: $cursor) {
+      edges {
+        cursor
+        node {
+          id
+          orderId
+          canonicalAccountId
+          createdAtUtc
+          status
+          side
+          executionType
+          submittedQuantity
+          limitPrice
+          stopPrice
+          averageFillPrice
+          securityCurrency
+          securityId
+          symbol
+          security { id stock { symbol name } }
+        }
+      }
+      pageInfo { endCursor hasNextPage }
+    }
+  }
+}

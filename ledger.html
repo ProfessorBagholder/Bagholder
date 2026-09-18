@@ -2783,6 +2783,14 @@ function _discStillOpen(sym) {
   return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
+// Whether a row's title is still on its way: it is being read, it has not been
+// read yet, the read found no model up, or the reader is still being fetched.
+// A row that says so wears the shimmer instead of standing in its own form's code.
+function discTitleComing(f, sym) {
+  if (f.subject) return false;
+  return !!(_discEnrichLoading[f.id] || _discSweepActive(sym, f) || !_discEnrichTried[f.id] ||
+            _discEnrichTried[f.id] === "waiting" || _discPreparing(f));
+}
 // One rule for every card that reads documents, because they share this record of what has
 // been read. A row is finished when it has both a title and a summary; anything less is read
 // again. What bounds the reading is not how many times the document was asked for but how
@@ -2948,7 +2956,7 @@ function disclosuresCardHtml(t) {
   const row = (f) => {
     const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
     const exp = state.discExpanded === f.id;
-    const titleCell = f.subject ? esc(f.subject) : (enriching || !_discEnrichTried[f.id] ? skel("70%") : "");   // still to be read, or being read: the shimmer
+    const titleCell = f.subject ? esc(f.subject) : (enriching || discTitleComing(f, sym) ? skel("70%") : "");   // still to be read, or being read: the shimmer
     const sum = f.summary ? esc(f.summary)
       : (enriching || _discPreparing(f)) ? skel("90%") : "";
     return '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
@@ -3645,9 +3653,10 @@ function newsDiscBodyHtml(scope, only, q) {
   }
   const s = state.sort.ndisc;
   rows = sortRows(rows, s.key, s.dir, (f, k) => k === "when" ? f.date : k === "news" ? String(f.subject || f.type || "").toLowerCase() : String(f.symbol || "").toLowerCase());
+  const skel = (w) => '<span class="dc-skel" style="width:' + w + '"></span>';
   const row = (f) => '<div class="nw-row nw-disc" data-act="discOpen" data-arg=\'' + attr({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) + "'>" +
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
-    '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
+    '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + (discTitleComing(f, f.symbol) ? skel("70%") : esc(f.subject || f.type || "")) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject || discTitleComing(f, f.symbol) ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
     '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
   return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
     : '<div class="muted" style="font-size:12px">' + empty + "</div>";
@@ -4493,6 +4502,10 @@ function render() {
   // nodes holding them outlive the redraw
   const keepHeat = state.page === "markets" || state.page === "heatmap" ? document.getElementById("heatBox") : null;
   const keepTab = document.getElementById("tabInd");
+  // the sign-in window's image is the live stream itself: a new element would
+  // open a new stream and show nothing until its first frame, so the redraw
+  // puts the one already showing back in its place
+  const keepLogin = state.loginView ? document.getElementById("loginFrame") : null;
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
@@ -4501,7 +4514,8 @@ function render() {
   const alone = state.page === "heatmap";   // the heatmap on its own: no header, no tabs, no frame
   document.documentElement.classList.toggle("display-heat", alone);
   root.innerHTML = (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
-  if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
+  if (keepLogin && keepLogin.getAttribute("src")) { const fresh = document.getElementById("loginFrame"); if (fresh) fresh.replaceWith(keepLogin); }
+  if (state.loginView) loginFrameLoop();   // a first draw (or one without a stream yet) attaches the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);
