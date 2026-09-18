@@ -48,31 +48,6 @@ def _running_tests():
                                           or (os.sep + "tests" + os.sep) in started)
 
 
-BUILD = "python"
-
-
-def claim_home(path):
-    """A data folder belongs to the build that made it. The marker file `build` in the folder
-    names that build; a folder without one is adopted here and marked, since it predates the
-    rule. Returns the refusal line when the folder belongs to another build, otherwise None."""
-    d = Path(path)
-    marker = d / "build"
-    try:
-        found = marker.read_text(encoding="utf-8").strip()
-    except OSError:
-        found = ""
-    if found and found != BUILD:
-        return ("%s belongs to the %s build of Bagholder; run that build, or point this one "
-                "elsewhere with BAGHOLDER_HOME=<another folder>" % (d, found))
-    if not found:
-        try:
-            d.mkdir(mode=0o700, parents=True, exist_ok=True)
-            marker.write_text(BUILD + "\n", encoding="utf-8")
-        except OSError:
-            pass
-    return None
-
-
 def guard_home(path):
     """The person's own data folder, refused to a test run. A test that reaches ~/.bagholder
     without a temporary home writes its fixtures into the live database: a suite did exactly
