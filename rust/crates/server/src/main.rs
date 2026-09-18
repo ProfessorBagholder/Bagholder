@@ -813,6 +813,7 @@ fn serve() -> i32 {
     spawn("bagholder-archive", feeds::archive_loop);
     spawn("bagholder-watch", feeds::watch_loop);
     spawn("bagholder-filings-sweep", feeds::filings_sweep_loop);
+    spawn("bagholder-disclosure-reader", feeds::disclosure_read_loop);
     spawn("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
     spawn("bagholder-fear-sweep", feeds::fear_sweep_loop);
 

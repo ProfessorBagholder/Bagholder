@@ -772,6 +772,47 @@ pub fn filings_sweep_loop() {
     }
 }
 
+/// How long the reader waits between documents, and after a pass that found
+/// nothing left to read.
+pub const READ_GAP_SEC: u64 = 2;
+pub const READ_IDLE_SEC: u64 = 120;
+
+/// Documents the app reads on its own, newest first, for the listings it
+/// follows: a title and a sentence cost a download and a reading each, and a
+/// list is no use standing still while someone waits for them. One at a time,
+/// paced, and only while a model is up to do the reading.
+pub fn disclosure_read_loop() {
+    app().wait(Duration::from_secs(20));
+    while !app().stopping() {
+        let read = if bagholder_market::enrich::summary_available() { read_one_unread() } else { false };
+        if app().wait(Duration::from_secs(if read { READ_GAP_SEC } else { READ_IDLE_SEC })) {
+            return;
+        }
+    }
+}
+
+/// The newest stored filing that has never been read, read. False when there
+/// is none, or nothing could be read.
+fn read_one_unread() -> bool {
+    let c = match conn() { Some(c) => c, None => return false };
+    let mut best: Option<(String, String, String)> = None;   // date, symbol, id
+    for inst in known_filing_symbols(&["held".to_string(), "watched".to_string()]) {
+        let sym = f(&inst, "symbol");
+        for r in sf::filings_for(&c, &sym).unwrap_or_default() {
+            if !f(&r, "subject").is_empty() || is_true(&r, "enrichFinal") {
+                continue;
+            }
+            let date = f(&r, "date");
+            if best.as_ref().map(|(d, _, _)| date > *d).unwrap_or(true) {
+                best = Some((date, sym.clone(), f(&r, "id")));
+            }
+        }
+    }
+    let (_, sym, id) = match best { Some(b) => b, None => return false };
+    let out = filings_enrich(&sym, &id);
+    truthy(out.get("ok")) && !f(&out, "subject").is_empty()
+}
+
 /// One symbol's disclosures from every covering
 /// source, stored per source. The total written, or -1 when no source could be
 /// reached.

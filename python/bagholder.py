@@ -6404,6 +6404,44 @@ def filings_notice(sym, new):
     return (title, body)
 
 
+READ_GAP_SEC = 2          # between documents the app reads on its own
+READ_IDLE_SEC = 120       # after a pass that found nothing left to read
+
+
+def read_one_unread():
+    """The newest stored filing that has never been read, read. False when there is
+    none, or nothing could be read."""
+    best = None
+    for inst in known_filing_symbols(("held", "watched")):
+        sym = _s(inst.get("symbol"))
+        for r in store.filings(sym):
+            if _s(r.get("subject")) or r.get("enrichFinal"):
+                continue
+            date = _s(r.get("date"))
+            if best is None or date > best[0]:
+                best = (date, sym, _s(r.get("id")))
+    if not best:
+        return False
+    out = filings_enrich(best[1], best[2]) or {}
+    return bool(out.get("ok") and out.get("subject"))
+
+
+def disclosure_read_loop():
+    """Documents the app reads on its own, newest first, for the listings it follows: a
+    title and a sentence cost a download and a reading each, and a list is no use
+    standing still while someone waits for them. One at a time, paced, and only while a
+    model is up to do the reading."""
+    if _stop.wait(20):
+        return
+    while not _stop.is_set():
+        try:
+            read = read_one_unread() if enrich.summary_available() else False
+        except Exception:
+            read = False
+        if _stop.wait(READ_GAP_SEC if read else READ_IDLE_SEC):
+            return
+
+
 def filings_sweep_loop():
     while True:
         time.sleep(FILINGS_SWEEP_EVERY_SEC)
@@ -7901,6 +7939,7 @@ def main():
     threading.Thread(target=archive_loop, name="bagholder-archive", daemon=True).start()
     threading.Thread(target=watch_loop, name="bagholder-watch", daemon=True).start()
     threading.Thread(target=filings_sweep_loop, name="bagholder-filings-sweep", daemon=True).start()
+    threading.Thread(target=disclosure_read_loop, name="bagholder-disclosure-reader", daemon=True).start()
     threading.Thread(target=shorts_sweep_loop, name="bagholder-shorts-sweep", daemon=True).start()
     threading.Thread(target=fear_sweep_loop, name="bagholder-fear-sweep", daemon=True).start()
     url = "http://127.0.0.1:%s" % port
