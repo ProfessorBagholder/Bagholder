@@ -90,9 +90,12 @@ jobs:
           # each architecture is pushed by its digest; the tags go on the joined image
           outputs: type=image,name=ghcr.io/professorbagholder/bagholder,push-by-digest=true,name-canonical=true,push=true
       - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ matrix.arch }}-${{ steps.build.outputs.digest }}"
+          # the file is named for the digest, and a file name cannot carry a colon
+          touch "/tmp/digests/${{ matrix.arch }}-${DIGEST#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.arch }}
@@ -127,6 +130,6 @@ jobs:
         run: |
           cd /tmp/digests
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(for f in *; do echo "ghcr.io/professorbagholder/bagholder@sha256:${f#*-sha256:}"; done)
+            $(for f in *; do echo "ghcr.io/professorbagholder/bagholder@sha256:${f#*-}"; done)
       - name: What was published
         run: docker buildx imagetools inspect ghcr.io/professorbagholder/bagholder:rust
