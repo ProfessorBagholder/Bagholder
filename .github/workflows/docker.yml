@@ -129,7 +129,7 @@ jobs:
       - name: One image from both architectures
         run: |
           cd /tmp/digests
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' "$DOCKER_METADATA_OUTPUT_JSON") \
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(for f in *; do echo "ghcr.io/professorbagholder/bagholder@sha256:${f#*-}"; done)
       - name: What was published
         run: docker buildx imagetools inspect ghcr.io/professorbagholder/bagholder:rust
