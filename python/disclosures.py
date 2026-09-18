@@ -147,6 +147,19 @@ def document(row):
     raise SourceUnavailable("no provider for source %r" % src)
 
 
+def quick_title(row):
+    """The title a row carries without anything being fetched: the name of the form it
+    is, or of the document it is. None when only a reading can say."""
+    src = (row or {}).get("source") or ""
+    if src == edgar.SOURCE:
+        import formnames
+        return formnames.title_of((row or {}).get("type") or "")
+    if src == sedar.SOURCE:
+        exact = sedar.enrichment(row) or {}
+        return exact.get("subject") or None
+    return None
+
+
 def enrichment(row):
     """A provider's deterministic title/summary for a structured filing it can parse
     exactly (e.g. edgar's Schedule 13G), or None to fall back to reading the document

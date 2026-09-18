@@ -6517,6 +6517,13 @@ def _fresh_filings(sym):
         if (r.get("enrichVersion") or 0) < ENRICH_VERSION:
             r["subject"], r["summary"] = "", ""
         r["category"] = disclosures.categorize(r)   # re-derive so a mapping fix applies without a re-fetch
+        # the list arrives named: a form and a named document say what they are without
+        # being fetched, so only the rest wait on a reading
+        if not r.get("subject"):
+            title = disclosures.quick_title(r)
+            if title:
+                store.set_filing_enrichment(sym, r.get("id"), subject=title)
+                r["subject"] = title
     return rows
 
 
