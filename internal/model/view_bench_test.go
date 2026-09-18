@@ -39,7 +39,7 @@ func BenchmarkViewNewFilterTrades10k(b *testing.B) {
 	var size int
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		out := m.View(map[string]any{"search": fmt.Sprintf("S%03d", i%400)}, "")
+		out := m.View(map[string]any{"search": fmt.Sprintf("S%03d", i%400)}, "", "")
 		size = len(out)
 	}
 	b.ReportMetric(float64(size), "bytes")
@@ -55,7 +55,7 @@ func BenchmarkViewNoFilterTrades10k(b *testing.B) {
 		m.viewMu.Lock()
 		m.views = nil
 		m.viewMu.Unlock()
-		out := m.View(nil, "")
+		out := m.View(nil, "", "")
 		size = len(out)
 	}
 	b.ReportMetric(float64(size), "bytes")

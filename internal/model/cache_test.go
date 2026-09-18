@@ -238,7 +238,7 @@ func fullPositions(positions []*Position) []positionFull {
 func slimView(t *testing.T, base *Base) map[string]any {
 	t.Helper()
 	var out map[string]any
-	if err := json.Unmarshal(marshalView(BuildView(base, nil), ""), &out); err != nil {
+	if err := json.Unmarshal(marshalView(BuildView(base, nil), "", ""), &out); err != nil {
 		t.Fatal(err)
 	}
 	delete(out, "generated")
@@ -334,8 +334,8 @@ func TestAViewIsServedFromTheCacheUntilTheDataMoves(t *testing.T) {
 	st := tempStore(t)
 	m := New(st)
 	fixClock(t, "2026-12-31")
-	first := m.View(nil, "")
-	second := m.View(nil, "")
+	first := m.View(nil, "", "")
+	second := m.View(nil, "", "")
 	var a, b map[string]any
 	if err := json.Unmarshal(first, &a); err != nil {
 		t.Fatal(err)
@@ -358,7 +358,7 @@ func TestAViewIsServedFromTheCacheUntilTheDataMoves(t *testing.T) {
 		t.Errorf("cached views = %d, want 1", cached)
 	}
 	st.AddWatch("QNC", "TSX-V", "Quantum eMotion Corp", "CAD", "", "")
-	third := m.View(nil, "")
+	third := m.View(nil, "", "")
 	var c map[string]any
 	if err := json.Unmarshal(third, &c); err != nil {
 		t.Fatal(err)
@@ -366,7 +366,7 @@ func TestAViewIsServedFromTheCacheUntilTheDataMoves(t *testing.T) {
 	if reflect.DeepEqual(c["markets"], a["markets"]) {
 		t.Error("a store write did not refresh the view")
 	}
-	if m.View(map[string]any{"search": "x"}, "") == nil {
+	if m.View(map[string]any{"search": "x"}, "", "") == nil {
 		t.Error("a filtered view")
 	}
 	m.viewMu.Lock()

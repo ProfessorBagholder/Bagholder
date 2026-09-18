@@ -139,7 +139,7 @@ func tempStore(t *testing.T) *store.Store {
 func viewJSON(t *testing.T, m *Model, filters any, detail string) map[string]any {
 	t.Helper()
 	var out map[string]any
-	if err := json.Unmarshal(m.View(filters, detail), &out); err != nil {
+	if err := json.Unmarshal(m.View(filters, detail, ""), &out); err != nil {
 		t.Fatal(err)
 	}
 	return out

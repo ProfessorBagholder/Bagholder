@@ -123,13 +123,13 @@ type viewEntry struct {
 	stamp int
 }
 
-func (m *Model) View(filters any, detail string) []byte {
+func (m *Model) View(filters any, detail, page string) []byte {
 	m.rw.RLock()
 	defer m.rw.RUnlock()
 	base := m.BaseModel(false)
 	f := CleanFilters(filters)
 	keyRaw, _ := json.Marshal(f)
-	key := string(keyRaw) + "\x00" + detail
+	key := string(keyRaw) + "\x00" + detail + "\x00" + page
 	m.viewMu.Lock()
 	if m.viewBase == base {
 		if e, ok := m.views[key]; ok {
@@ -142,7 +142,7 @@ func (m *Model) View(filters any, detail string) []byte {
 		}
 	}
 	m.viewMu.Unlock()
-	out := marshalView(BuildView(base, filters), detail)
+	out := marshalView(BuildView(base, filters), detail, page)
 	stamp := -1
 	if i := bytes.Index(out, []byte(`"generated":"`)); i >= 0 && i+len(`"generated":"`)+20 <= len(out) {
 		stamp = i + len(`"generated":"`)
@@ -163,20 +163,96 @@ type viewOut struct {
 	Positions []any `json:"positions"`
 }
 
-func marshalView(v *View, detail string) []byte {
-	out := viewOut{View: v, Trades: make([]any, len(v.Trades)), Positions: make([]any, len(v.Positions))}
-	for i, t := range v.Trades {
-		if detail != "" && t.ID == detail {
-			out.Trades[i] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
-		} else {
-			out.Trades[i] = &t.TradeCore
-		}
+var TradeCols = []string{"id", "status", "locked", "symbol", "underlying", "name", "exchange", "kind", "currency", "account", "accountId", "securityId", "side", "qty", "entry", "exit", "entryDate", "exitDate", "holdDays", "pnl", "pnlCad", "fees", "pnlPct", "grade", "thesis", "tags"}
+
+func tradeRow(t *TradeCore) []any {
+	tags := t.Tags
+	if tags == nil {
+		tags = []string{}
 	}
+	return []any{t.ID, t.Status, t.Locked, t.Symbol, t.Underlying, t.Name, t.Exchange, t.Kind, t.Currency, t.Account, t.AccountID, t.SecurityID, t.Side, t.Qty, t.Entry, t.Exit, t.EntryDate, t.ExitDate, t.HoldDays, t.Pnl, t.PnlCad, t.Fees, t.PnlPct, t.Grade, t.Thesis, tags}
+}
+
+var PageSections = map[string][]string{
+	"dashboard": {"kpi", "equity", "years", "benchmark", "monthly", "bySymbol", "grades", "queue"},
+	"trades":    {"trades"},
+	"portfolio": {"positions", "positionsSummary", "portfolio"},
+	"markets":   {"markets", "positions"},
+	"cashflow":  {"cashflow", "positions"},
+}
+
+func positionsOut(v *View, detail string) []any {
+	out := make([]any, len(v.Positions))
 	for i, p := range v.Positions {
 		if detail != "" && p.ID == detail {
-			out.Positions[i] = &positionFull{p.PositionCore, nonNilFills(p.Fills)}
+			out[i] = &positionFull{p.PositionCore, nonNilFills(p.Fills)}
 		} else {
-			out.Positions[i] = &p.PositionCore
+			out[i] = &p.PositionCore
+		}
+	}
+	return out
+}
+
+func marshalView(v *View, detail, page string) []byte {
+	sections, scoped := PageSections[page]
+	if !scoped {
+		out := viewOut{View: v, Trades: make([]any, len(v.Trades)), Positions: positionsOut(v, detail)}
+		for i, t := range v.Trades {
+			if detail != "" && t.ID == detail {
+				out.Trades[i] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
+			} else {
+				out.Trades[i] = &t.TradeCore
+			}
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	}
+	out := map[string]any{
+		"ok": v.OK, "generated": v.Generated, "today": v.Today, "syncedAt": v.SyncedAt, "currency": v.Currency, "market": v.Market,
+		"filters": v.Filters, "options": v.Options, "tradeCount": v.TradeCount, "tradeTotal": v.TradeTotal, "unmatched": v.Unmatched,
+		"accounts": v.Accounts, "activityCount": v.ActivityCount, "page": page,
+	}
+	for _, s := range sections {
+		switch s {
+		case "kpi":
+			out[s] = v.KPI
+		case "equity":
+			out[s] = v.Equity
+		case "years":
+			out[s] = v.Years
+		case "benchmark":
+			out[s] = v.Benchmark
+		case "monthly":
+			out[s] = v.Monthly
+		case "bySymbol":
+			out[s] = v.BySymbol
+		case "grades":
+			out[s] = v.Grades
+		case "queue":
+			out[s] = v.Queue
+		case "trades":
+			rows := make([][]any, len(v.Trades))
+			for i, t := range v.Trades {
+				rows[i] = tradeRow(&t.TradeCore)
+				if detail != "" && t.ID == detail {
+					out["tradeDetail"] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
+				}
+			}
+			out["tradeCols"] = TradeCols
+			out["tradeRows"] = rows
+		case "positions":
+			out[s] = positionsOut(v, detail)
+		case "positionsSummary":
+			out[s] = v.PositionsSummary
+		case "portfolio":
+			out[s] = v.Portfolio
+		case "markets":
+			out[s] = v.Markets
+		case "cashflow":
+			out[s] = v.Cashflow
 		}
 	}
 	raw, err := json.Marshal(out)
@@ -190,12 +266,13 @@ type Detail struct {
 	ID    string      `json:"id"`
 	Legs  []SlimSlice `json:"legs"`
 	Fills []Fill      `json:"fills"`
+	Trade *TradeCore  `json:"trade,omitempty"`
 }
 
 func TradeDetail(base *Base, tradeID string) *Detail {
 	for _, t := range base.Trades {
 		if t.ID == tradeID {
-			return &Detail{ID: tradeID, Legs: nonNil(t.Legs), Fills: nonNilFills(t.Fills)}
+			return &Detail{ID: tradeID, Legs: nonNil(t.Legs), Fills: nonNilFills(t.Fills), Trade: &t.TradeCore}
 		}
 	}
 	for _, p := range base.Positions {

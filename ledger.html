@@ -471,6 +471,8 @@ const state = {
   page: "dashboard",
   filters: EMPTY_FILTERS(),
   model: null,
+  modelPages: {},
+  modelFilters: "",
   loading: false,
   loadError: "",
   sel: null,
@@ -543,7 +545,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-17.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-18.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -608,20 +610,24 @@ function attr(o) { return esc(JSON.stringify(o)); }
 // below, with empty rows standing in for the rest so the scrollbar keeps its length.
 // Scrolling redraws the body alone; nothing else on the page is touched.
 const _vrows = {}, _rowH = {}, VROWS_MARGIN = 12;
-function vrows(key, rows, rowHtml) {
-  _vrows[key] = { rows, rowHtml };
+function vrows(key, rows, rowHtml, tag) {
+  _vrows[key] = { rows, rowHtml, tag };
   const h = _rowH[key] || 31;
   const k = _keptScroll[key] || {};
   const top = k.top || 0, seen = k.height || 620;
   const start = Math.max(0, Math.floor(top / h) - VROWS_MARGIN);
   const end = Math.min(rows.length, Math.ceil((top + seen) / h) + VROWS_MARGIN);
-  const pad = (n) => n > 0 ? '<tr class="vpad"><td colspan="99" style="padding:0;border:0;height:' + (n * h) + 'px"></td></tr>' : "";
+  const pad = (n) => n <= 0 ? "" : tag === "div"
+    ? '<div class="vpad" style="flex:none;height:' + (n * h) + 'px;margin:0"></div>'
+    : '<tr class="vpad"><td colspan="99" style="padding:0;border:0;height:' + (n * h) + 'px"></td></tr>';
   return pad(start) + rows.slice(start, end).map(rowHtml).join("") + pad(rows.length - end);
 }
+function vrowsBody(el) { return el.querySelector("tbody") || el; }
 function vrowsMeasure() {
   document.querySelectorAll("[data-vrows]").forEach((el) => {
-    const row = el.querySelector("tbody tr:not(.vpad)");
-    if (row && row.offsetHeight) _rowH[el.dataset.vrows] = row.offsetHeight;
+    const rows = [...vrowsBody(el).children].filter((r) => !r.classList.contains("vpad"));
+    if (!rows.length || !rows[0].offsetHeight) return;
+    _rowH[el.dataset.vrows] = rows.length > 1 ? rows[1].offsetTop - rows[0].offsetTop : rows[0].offsetHeight;
   });
 }
 document.addEventListener("scroll", (e) => {
@@ -634,8 +640,7 @@ document.addEventListener("scroll", (e) => {
   const before = Math.floor((k.top || 0) / h);
   k.top = el.scrollTop; k.left = el.scrollLeft; k.height = el.clientHeight;
   if (Math.abs(Math.floor(k.top / h) - before) < VROWS_MARGIN / 2) return;
-  const body = el.querySelector("tbody");
-  if (body) body.innerHTML = vrows(key, v.rows, v.rowHtml);
+  vrowsBody(el).innerHTML = vrows(key, v.rows, v.rowHtml, v.tag);
 }, true);
 const _nf = {};
 function n2(v, dp) { return (_nf[dp] || (_nf[dp] = new Intl.NumberFormat("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }))).format(Number(v)); }
@@ -806,22 +811,36 @@ function filtersActive() {
 // data
 // ---------------------------------------------------------------------------
 let _loadSeq = 0;
+// The model arrives one page at a time: the sections the open page draws, plus what
+// every page needs (filters, options, accounts). Each page's sections are kept and
+// stand until the filters or the data version move; a page whose sections are
+// missing or stale is fetched when it is shown.
+const MODEL_PAGES = { dashboard: true, trades: true, portfolio: true, markets: true, cashflow: true };
+function modelPage() { return state.page === "heatmap" ? "markets" : (MODEL_PAGES[state.page] ? state.page : "dashboard"); }
+function filtersQuery() { return JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })); }
+function modelKey() { return filtersQuery() + "|" + (state.status.dataVersion || ""); }
+function pageReady() { return !!(state.model && state.modelPages[modelPage()] === modelKey()); }
+function hydrateRows(cols, rows) { return (rows || []).map((r) => { const o = {}; for (let i = 0; i < cols.length; i++) o[cols[i]] = r[i]; return o; }); }
 function loadModel() {
   const seq = ++_loadSeq;
   state.loading = true;
   if (!state.model) render();
-  const q = encodeURIComponent(JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })));
-  // legs and fills travel only for the open trade: the lists never read them
-  const detail = state.sel && !isListingId(state.sel) ? "&trade=" + encodeURIComponent(state.sel) : "";
-  return fetch("/api/model?filters=" + q + detail, { headers: { "X-Bagholder": "1" } })
+  const filters = filtersQuery();
+  const page = modelPage();
+  return fetch("/api/model?filters=" + encodeURIComponent(filters) + "&page=" + page, { headers: { "X-Bagholder": "1" } })
     .then((r) => r.json())
     .then((m) => {
       if (seq !== _loadSeq) return;
       state.loading = false;
       if (!m || !m.ok) { state.loadError = (m && m.error) || "Could not load the model."; render(); return; }
       state.loadError = "";
-      state.model = m;
-      if (m.status) applyStatus(m.status);
+      if (m.tradeCols) { m.trades = hydrateRows(m.tradeCols, m.tradeRows); delete m.tradeCols; delete m.tradeRows; }
+      if (m.tradeDetail) { const row = m.trades.find((t) => t.id === m.tradeDetail.id); if (row) Object.assign(row, m.tradeDetail); delete m.tradeDetail; }
+      if (m.status) applyStatus(m.status, true);
+      const key = modelKey();
+      if (state.model && state.modelFilters === filters) Object.assign(state.model, m); else { state.model = m; state.modelPages = {}; }
+      state.modelFilters = filters;
+      state.modelPages[page] = key;
       if (state.sel && !selById(state.sel)) { state.sel = null; if (state.page === "trades" || state.page === "portfolio") history.replaceState(null, "", "#" + state.page); }
       render();
     })
@@ -842,7 +861,8 @@ function loadTradeDetail(id) {
     const legs = (d && d.ok) ? d.legs || [] : [];
     const fills = (d && d.ok) ? d.fills || [] : [];
     let changed = false;
-    [tradeById(id), positionById(id)].forEach((row) => { if (row && row.fills === undefined) { row.legs = legs; row.fills = fills; changed = true; } });
+    const full = d && d.ok && d.trade ? d.trade : null;
+    [tradeById(id), positionById(id)].forEach((row) => { if (row && row.fills === undefined) { if (full && row === tradeById(id)) Object.assign(row, full); row.legs = legs; row.fills = fills; changed = true; } });
     if (changed && state.sel === id) render();
   });
 }
@@ -851,7 +871,7 @@ function setFilters(patch) {
   if (state.sel) { state.sel = null; if (state.page === "trades") history.replaceState(null, "", "#trades"); }
   loadModel();
 }
-function applyStatus(st) {
+function applyStatus(st, fromModel) {
   if (!st) return;
   // a new version is serving: this page belongs to the old one
   if (st.version && state.status.version && st.version !== state.status.version) { location.reload(); return; }
@@ -869,9 +889,10 @@ function applyStatus(st) {
   discSummaryReady(st.summaryReady);
   const changed = (st.lastSync && st.lastSync !== prev && prev !== undefined) || (st.activityCount !== prevCount && prevCount) ||
     (st.dataVersion && prevVersion && st.dataVersion !== prevVersion);
-  if (changed && !state.status.syncing) {
+  if (changed && !state.status.syncing && !fromModel) {
     // Quotes, distributions, FX and new activity all change the version. Reload
     // now, unless a trade is open or a note is being typed: then on the next page change.
+    // A version that arrives with the model itself is the one just loaded: nothing to reload.
     const el = document.activeElement;
     const typing = !!(el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT"));
     if (typing || state.sel) state.derivedStale = true; else loadModel();
@@ -2439,8 +2460,8 @@ function bySymbolCardHtml(m) {
 function queueCardHtml(m) {
   const q = m.queue || [];
   return '<div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0"><div style="display:flex;align-items:baseline"><h5>Review queue</h5></div><div class="muted" style="font-size:11px;margin-bottom:12px">Closed trades with no grade or thesis</div>' +
-    '<div class="scroll" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;padding-right:2px">' +
-    (q.length ? q.map((r) => '<div class="queue-row" data-act="selectTrade" data-arg=\'' + attr({ id: r.id }) + "'><div style=\"min-width:0\"><div style=\"font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px\">" + esc(symText(r.symbol)) + '</div><div class="muted" style="font-size:11px">' + esc(r.date) + " · " + esc(r.missing) + '</div></div><span class="tab" style="margin-left:auto;font-size:12px;color:' + color(r.pnl) + '">' + money(r.pnl) + "</span></div>").join("")
+    '<div class="scroll" data-keep-scroll="queue" data-vrows="queue" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;padding-right:2px">' +
+    (q.length ? vrows("queue", q, (r) => '<div class="queue-row" data-act="selectTrade" data-arg=\'' + attr({ id: r.id }) + "'><div style=\"min-width:0\"><div style=\"font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px\">" + esc(symText(r.symbol)) + '</div><div class="muted" style="font-size:11px">' + esc(r.date) + " · " + esc(r.missing) + '</div></div><span class="tab" style="margin-left:auto;font-size:12px;color:' + color(r.pnl) + '">' + money(r.pnl) + "</span></div>", "div")
       : '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center;padding:8px 0"><svg width="20" height="20" viewBox="0 0 256 256" style="fill:var(--pos)"><path d="M232.5 82.5l-128 128a12 12 0 0 1-17 0l-56-56a12 12 0 0 1 17-17L96 185l119.5-119.5a12 12 0 0 1 17 17Z"/></svg><div style="font-size:13px">Nothing left to review</div><div class="dim" style="font-size:11px">Every closed trade has a grade and a thesis</div></div>') +
     "</div></div>";
 }
@@ -4369,6 +4390,7 @@ function pageHtml() {
   if (state.loadError && !m) return '<div class="empty"><div class="status-err">' + esc(state.loadError) + '</div><button class="btn btn-secondary" data-act="reload">Retry</button></div>';
   if (!m) return skeletonHtml();
   if (!m.activityCount) return emptyHtml();
+  if (!pageReady()) { if (!state.loading) loadModel(); return skeletonHtml(); }
   if (state.page === "trades") return tradesHtml(m);
   if (state.page === "portfolio") return portfolioHtml(m);
   if (state.page === "cashflow") return cashflowHtml(m);

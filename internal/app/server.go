@@ -431,7 +431,7 @@ func (a *App) doGet(rs *responder, port int) {
 				a.kick("quotes", func() { a.refreshQuotes() })
 			}
 		}
-		payload, err := a.viewJSON(a.modelFilters(q), queryParam(q, "trade"))
+		payload, err := a.viewJSON(a.modelFilters(q), queryParam(q, "trade"), queryParam(q, "page"))
 		if err != nil {
 			a.logf("model failed: %v\n", err)
 			rs.send(500, map[string]any{"ok": false, "error": "model failed: " + err.Error()}, "")
@@ -445,7 +445,7 @@ func (a *App) doGet(rs *responder, port int) {
 			rs.send(404, map[string]any{"ok": false, "error": "no such trade"}, "")
 			return
 		}
-		rs.send(200, map[string]any{"ok": true, "id": detail.ID, "legs": detail.Legs, "fills": detail.Fills}, "")
+		rs.send(200, map[string]any{"ok": true, "id": detail.ID, "legs": detail.Legs, "fills": detail.Fills, "trade": detail.Trade}, "")
 		return
 	case "/favicon.png", "/favicon.ico":
 		e, ok := a.staticFile("favicon.png")
@@ -464,13 +464,13 @@ func (a *App) doGet(rs *responder, port int) {
 	rs.send(404, map[string]any{"ok": false, "error": "not found"}, "")
 }
 
-func (a *App) viewJSON(filters any, detail string) (payload []byte, err error) {
+func (a *App) viewJSON(filters any, detail, page string) (payload []byte, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			err = fmt.Errorf("%v", rec)
 		}
 	}()
-	view := a.model.View(filters, detail)
+	view := a.model.View(filters, detail, page)
 	status, marshalErr := json.Marshal(a.statusPayload())
 	if marshalErr != nil {
 		return nil, marshalErr
