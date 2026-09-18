@@ -36,7 +36,12 @@ _started = False
 
 
 def libs_dir():
-    d = Path(os.environ.get("BAGHOLDER_HOME") or (Path.home() / ".bagholder")) / "pylibs"
+    base = Path(os.environ.get("BAGHOLDER_HOME") or (Path.home() / ".bagholder"))
+    # the package dir is inside the data home, so it is refused to a test run for the same reason
+    # the database is: importing the app must not create anything in the person's own folder
+    import store
+    store.guard_home(base)
+    d = base / "pylibs"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except Exception:

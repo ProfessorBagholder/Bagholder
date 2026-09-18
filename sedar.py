@@ -559,6 +559,13 @@ def _download_bytes(profile_no, doc_id, name=None):
     with _lock:
         html = _scoped_documents(profile_no, name)
         if html is None:
+            # the walk to the profile's documents ends at the bot gate now and then, and the session
+            # that met it keeps meeting it: drop it and walk once more on a fresh one before giving up
+            _scope_cache.pop(profile_no, None)
+            global _session
+            _session = None
+            html = _scoped_documents(profile_no, name)
+        if html is None:
             raise SedarUnavailable("could not open the profile's documents to download from")
         row = next((f for f in parse_filings(html) if key and key in f["url"]), None)
         if not row:

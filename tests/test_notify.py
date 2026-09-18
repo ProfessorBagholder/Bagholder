@@ -29,7 +29,14 @@ ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", 
 
 
 class NotifyTest(unittest.TestCase):
+    # The fixtures here are dated in the middle of September 2026, and a notification is only made
+    # for something recent (bagholder.TELL_WITHIN_HOURS), so the clock is held just after them.
+    NOW = datetime(2026, 9, 15, 14, 0, tzinfo=timezone.utc)
+
     def setUp(self):
+        self._clock = mock.patch.object(bagholder, "_now", return_value=self.NOW)
+        self._clock.start()
+        self.addCleanup(self._clock.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
         os.environ["BAGHOLDER_HOME"] = self.home
@@ -341,8 +348,9 @@ class NotifyTest(unittest.TestCase):
             later = datetime.now(timezone.utc) + timedelta(minutes=31)
             self.assertEqual(bagholder.sweep_filings(now=later), 2)
             self.assertEqual(bagholder.sweep_filings(now=later), 0, "told once")
-        self.assertEqual([(r["kind"], r["title"], r["body"], r["extra"]) for r in store.list_notifications()], [
-            ("disclosures", "New disclosure · QNC", "8-K · SEC EDGAR", {"symbol": "QNC"}),
+        # the extra carries when the filing itself is dated, which is not when it was told
+        self.assertEqual([(r["kind"], r["title"], r["body"], {k: v for k, v in r["extra"].items() if k != "at"}) for r in store.list_notifications()], [
+            ("disclosures", "New disclosure · QNC", "Material event (8-K) · SEC EDGAR", {"symbol": "QNC"}),
             ("disclosures", "New disclosure · SHOP", "Material change report · SEDAR+", {"symbol": "SHOP"}),
         ], "a filed news release is the Releases kind's to tell, and that kind is off here")
         notify.set_settings({"disclosuresHeld": False, "disclosuresWatched": False, "disclosuresAll": False})
@@ -427,10 +435,13 @@ class NotifyTest(unittest.TestCase):
             self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:2", "source": "SEC", "type": "144"}]),
                              ("New disclosure \u00b7 NBIS", "Notice of intent to sell \u00b7 SEC EDGAR"))
         self.assertEqual(read, [("NBIS", "sec:2")], "read once, for the notice it is naming")
-        # nothing could be read from it: the form's code stands in rather than nothing at all
+        # nothing could be read from it: the form stands in, in words where the app knows the form,
+        # since "6-K" alone names the paperwork and not what happened
         with mock.patch.object(bagholder, "filings_enrich", return_value={"ok": False}):
             self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:3", "source": "SEC", "type": "6-K"}]),
-                             ("New disclosure \u00b7 NBIS", "6-K \u00b7 SEC EDGAR"))
+                             ("New disclosure \u00b7 NBIS", "Foreign issuer report (6-K) \u00b7 SEC EDGAR"))
+            self.assertEqual(bagholder.filings_notice("NBIS", [{"id": "sec:9", "source": "SEC", "type": "40-F"}])[1],
+                             "40-F \u00b7 SEC EDGAR", "a form the app has no words for keeps its code")
         # several: counted in the title, named in the body, and only the ones it names are read
         many = [{"id": "sec:%d" % i, "source": "SEC", "type": "4", "subject": "Insider report %d" % i} for i in range(4)]
         self.assertEqual(bagholder.filings_notice("NBIS", many),
@@ -441,7 +452,7 @@ class NotifyTest(unittest.TestCase):
         notify.set_settings({"disclosuresWatched": True})
         watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
         old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
-        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-15T08:27", "size": "1 KB"}]
         answer = {"rows": [old]}
         def fake_fetch(sym, **kw):
             return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
@@ -465,7 +476,7 @@ class NotifyTest(unittest.TestCase):
         notify.set_settings({"disclosuresWatched": True})
         watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
         old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
-        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-15T08:27", "size": "1 KB"}]
         answer = {"rows": [old]}
         def fake_fetch(sym, **kw):
             return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
@@ -479,7 +490,7 @@ class NotifyTest(unittest.TestCase):
                 self.assertEqual(bagholder.sweep_filings(now=later(31)), 0, "held while the document cannot be read")
                 # after the hold's bound it is told by what the row already says, rather than never told
                 self.assertEqual(bagholder.sweep_filings(now=later(31 + bagholder.FILINGS_HOLD_MAX_MIN + 1)), 1)
-        self.assertEqual([r["body"] for r in store.list_notifications()], ["144 \u00b7 SEDAR+"])
+        self.assertEqual([r["body"] for r in store.list_notifications()], ["Notice of proposed sale (144) \u00b7 SEDAR+"])
 
     def test_a_wires_release_is_told_and_a_first_read_of_a_listing_is_not(self):
         notify.set_settings({"releasesHeld": True})
@@ -500,6 +511,166 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual([(r["kind"], r["title"], r["body"]) for r in rows],
                          [("releases", "Press release · QNC", "Quantum eMotion Wins Certification")], "the wire's release, not the story beside it")
         self.assertEqual(len(store.list_notifications()), 1)
+
+    def test_a_distribution_release_carries_the_figures_and_a_way_to_read_it(self):
+        """A headline that says only "Announces August 2026 Distributions" tells a holder nothing
+        they can act on: the notice carries the amount, when it goes ex and is paid, and the one it
+        replaces, from the issuer's own declared record, and it opens the release itself."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        store.upsert_distributions("RDDY", [{"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"},
+                                            {"exDate": "2026-07-31", "payDate": "2026-08-06", "amount": 0.20, "currency": "CAD"}])
+        store.upsert_quote("RDDY", {"price": 4.87, "dividendAmount": 0.15, "dividendFrequency": "Monthly", "exDividendDate": "2026-08-31"})
+        rel = [{"id": "tmx:7", "headline": "Harvest High Income Shares ETFs Announces August 2026 Distributions",
+                "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7", "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"}]
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(rel))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), \
+             mock.patch.object(bagholder.market, "refresh_distributions", return_value=1) as record, \
+             mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                       # the first read is history
+            rel.append(dict(rel[0], id="tmx:8", headline="Harvest ETFs Announces September 2026 Distributions", publishedAt="2026-09-15T14:00:00Z"))
+            bagholder.refresh_news()
+        rows = store.list_notifications()
+        self.assertEqual(len(rows), 1)
+        title, body = rows[0]["title"], rows[0]["body"]
+        self.assertEqual(title, "Press release · RDDY")
+        self.assertEqual(body.split("\n")[0], "Harvest ETFs Announces September 2026 Distributions")
+        self.assertEqual(body.split("\n")[1], "$0.15 a share, monthly · ex Aug 31, paid Sep 4 · was $0.20")
+        self.assertEqual(rows[0]["extra"].get("url"), "https://money.tmx.com/en/quote/RDDY/news/7")
+        self.assertEqual(rows[0]["extra"].get("symbol"), "RDDY")
+        self.assertTrue(record.called, "the record is read again so the notice is not a day behind the release")
+
+    def test_a_release_that_announces_nothing_of_the_kind_carries_the_headline_alone(self):
+        store.upsert_distributions("QNC", [{"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"}])
+        self.assertEqual(bagholder.release_notice("QNC", [{"id": "tmx:1", "headline": "Quantum eMotion Wins Certification", "publishedAt": "2026-09-15T13:00:00Z"}]),
+                         ("Press release · QNC", "Quantum eMotion Wins Certification"))
+        self.assertEqual(bagholder.release_notice("NOSUCH", [{"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"}])[1],
+                         "Announces Monthly Distribution", "no record for the listing: the headline stands alone")
+
+    def test_a_month_old_release_is_never_told_however_it_reaches_the_app(self):
+        """What happened here in the person's own app: a listing's wire carried a distribution
+        release dated 24 August; weeks later a second source returned its own copy of the same
+        release, dated 31 August, which was newer than the stream's mark and had an id the listing
+        had never held — so the bell rang on 18 September for an August event. A notification is
+        about something that just happened: anything older than the window is absorbed into the
+        stream and told to nobody, and the mark still moves past it."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        wire = {"rows": [{"id": "tmx:1", "headline": "Harvest ETFs Announces August 2026 Distributions", "source": "Business Wire",
+                          "url": "u1", "publishedAt": "2026-08-24T11:30:00Z", "kind": "release"}]}
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                       # the listing's first read: history
+            # another source returns its own copy of the same release, a week apart and under its own id
+            wire["rows"].append({"id": "gnews:2", "headline": "Harvest ETFs Announces August 2026 Distributions", "source": "Business Wire",
+                                 "url": "u2", "publishedAt": "2026-08-31T07:00:00Z", "kind": "release"})
+            bagholder.refresh_news()
+            self.assertEqual(store.list_notifications(), [], "three weeks old on the app's clock: history, not news")
+            # and something that just happened is still told, through the same mark
+            wire["rows"].append({"id": "tmx:3", "headline": "Harvest ETFs Announces September 2026 Distributions", "source": "Business Wire",
+                                 "url": "u3", "publishedAt": "2026-09-15T11:30:00Z", "kind": "release"})
+            bagholder.refresh_news()
+        self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · RDDY"])
+        self.assertEqual(store.list_notifications()[0]["extra"]["at"], "2026-09-15T11:30:00Z")
+
+    def test_one_event_is_one_notification_whatever_id_it_arrives_under(self):
+        """The same release reaches the app from several sources, each with its own id and its own
+        date. It is one event and is told once, and meeting it again — a week later, under another
+        id, from a source whose results dropped it and brought it back — tells nothing."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        head = "Harvest ETFs Announces September 2026 Distributions"
+        first = {"id": "tmx:1", "headline": head, "source": "Business Wire", "url": "u1", "publishedAt": "2026-09-14T11:30:00Z", "kind": "release"}
+        wire = {"rows": [{"id": "tmx:0", "headline": "An older release", "source": "Business Wire", "url": "u0",
+                          "publishedAt": "2026-09-01T11:30:00Z", "kind": "release"}]}
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                            # the listing's first read: history
+            wire["rows"].append(first)
+            bagholder.refresh_news()
+            self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · RDDY"], "told once, when it appeared")
+            # Google's copy of the same release: its own id, a week's difference in its date
+            wire["rows"].append({"id": "gnews:2", "headline": head, "source": "Business Wire", "url": "u2",
+                                 "publishedAt": "2026-09-21T07:00:00Z", "kind": "release"})
+            bagholder.refresh_news()
+            # and the wire's own copy drops out of the results and comes back under a new id
+            wire["rows"] = [r for r in wire["rows"] if r["id"] != "tmx:1"]
+            bagholder.refresh_news()
+            wire["rows"].append(dict(first, id="tmx:9"))
+            bagholder.refresh_news()
+        self.assertEqual(len(store.list_notifications()), 1, "one event, one notification")
+
+    def test_the_back_catalogue_a_first_read_brings_can_never_ring_later(self):
+        """A source read for the first time brings history. That history is recorded as met, so the
+        same releases returning under other ids on later passes are recognised rather than rung."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        old = [{"id": "tmx:%d" % i, "headline": "Release number %d" % i, "source": "Business Wire", "url": "u",
+                "publishedAt": "2026-08-%02dT11:30:00Z" % (10 + i), "kind": "release"} for i in range(3)]
+        wire = {"rows": list(old)}
+        listings = [("RDDY", "TSX", "CAD", "")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()
+            # every one of them comes back under another source's ids, dated later, as a search's results shift
+            wire["rows"] = [dict(r, id="gnews:%d" % i, publishedAt="2026-09-%02dT07:00:00Z" % (10 + i)) for i, r in enumerate(old)]
+            bagholder.refresh_news()
+        self.assertEqual(store.list_notifications(), [], "history stays history, whatever id it returns under")
+
+    def test_a_notice_carries_when_the_thing_happened(self):
+        """A release found today can have been published weeks ago: the notice carries the item's
+        own moment, so the panel can say when it happened rather than when it was told."""
+        self.assertEqual(bagholder.notice_moment([{"id": "tmx:1", "publishedAt": "2026-08-24T11:00:00Z"},
+                                                  {"id": "tmx:2", "publishedAt": "2026-08-31T07:00:00Z"}]),
+                         {"at": "2026-08-31T07:00:00Z"}, "the newest of them")
+        self.assertEqual(bagholder.notice_moment([{"id": "sedar:1", "date": "2026-09-08T16:22"}]), {"at": "2026-09-08T16:22"})
+        self.assertEqual(bagholder.notice_moment([{"id": "x"}]), {"at": ""})
+
+    def test_a_release_with_no_figures_carries_what_the_source_said(self):
+        notice = bagholder.release_notice("QNC", [{"id": "tmx:1", "headline": "Quantum eMotion Wins Certification",
+                                                   "summary": "The certification covers its entropy module, which NIST listed this week.",
+                                                   "publishedAt": "2026-09-15T13:00:00Z"}])
+        self.assertEqual(notice[1], "Quantum eMotion Wins Certification\nThe certification covers its entropy module, which NIST listed this week.")
+
+    def test_a_disclosure_notice_carries_the_sentence_the_document_yielded(self):
+        rows = [{"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
+                 "subject": "GAB0590 Avis Acceptation WKSI",
+                 "summary": "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."}]
+        title, body = bagholder.filings_notice("QNC", rows)
+        self.assertEqual(title, "New disclosure · QNC")
+        self.assertEqual(body.split("\n"), ["GAB0590 Avis Acceptation WKSI · SEDAR+",
+                                            "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."])
+        same = [dict(rows[0], summary="GAB0590 Avis Acceptation WKSI")]
+        self.assertEqual(bagholder.filings_notice("QNC", same)[1], "GAB0590 Avis Acceptation WKSI · SEDAR+",
+                         "a summary that only repeats the line above it is not a second line")
+
+    def test_a_document_a_regulator_refuses_is_a_page_not_a_json_error(self):
+        """The document route opens in a tab of its own: a refusal has to read as words."""
+        page = bagholder.document_error_page("QNC", "sedar:drm:x", "could not open the profile's documents to download from")
+        self.assertIn("<!doctype html>", page)
+        self.assertIn("would not serve this document just now", page)
+        self.assertIn("could not open the profile&#x27;s documents to download from", page)
+        self.assertIn("/api/filings/doc?symbol=QNC&amp;id=sedar%3Adrm%3Ax", page, "the retry goes back through the app")
+
+    def test_a_disclosure_notice_opens_the_document_it_is_about(self):
+        self.assertEqual(bagholder.notice_link([{"id": "sedar:9", "source": "SEDAR+", "url": "https://www.sedarplus.ca/x?drmKey=9", "date": "2026-09-15T09:00"}]),
+                         {"url": "https://www.sedarplus.ca/x?drmKey=9", "doc": "sedar:9", "source": "SEDAR+"})
+        self.assertEqual(bagholder.notice_link([{"id": "sec:4", "source": "SEC", "url": "https://www.sec.gov/x/4.htm", "date": "2026-09-15T09:00"}]),
+                         {"url": "https://www.sec.gov/x/4.htm", "doc": "sec:4", "source": "SEC"}, "the SEC serves its own documents")
+        self.assertEqual(bagholder.notice_link([{"id": "tmx:1", "url": "https://money.tmx.com/en/quote/QNC/news/1", "publishedAt": "2026-09-15T13:00:00Z"}]),
+                         {"url": "https://money.tmx.com/en/quote/QNC/news/1"})
+        self.assertEqual(bagholder.notice_link([{"id": "x", "publishedAt": "2026-09-15T13:00:00Z"}]), {}, "nothing to open, nothing claimed")
 
     def test_a_release_outside_the_chosen_sets_is_not_told(self):
         notify.set_settings({"releasesWatched": True})
