@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,27 @@ func TestThePageAndTheServerAgreeOnTheProtocol(t *testing.T) {
 	}
 	if m[1] != Protocol {
 		t.Errorf("ledger.html PROTOCOL = %q, app.Protocol = %q", m[1], Protocol)
+	}
+}
+
+// The page the binary carries is the page it serves. A file beside the binary must not
+// shadow it: that is how a release ends up serving a page its server never shipped with,
+// which is the mismatch PROTOCOL exists to catch.
+func TestAFileBesideTheBinaryDoesNotShadowTheEmbeddedPage(t *testing.T) {
+	a := newTestApp(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ledger.html"), []byte("<!doctype html>stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.AppDir = dir
+	a.staticCache = nil
+	if e, ok := a.staticFile("ledger.html"); ok && strings.Contains(string(e.data), "stale") {
+		t.Error("a file in the app's own directory was served in place of the embedded page")
+	}
+	a.cfg.PageDir = dir
+	a.staticCache = nil
+	e, ok := a.staticFile("ledger.html")
+	if !ok || !strings.Contains(string(e.data), "stale") {
+		t.Error("BAGHOLDER_PAGE_DIR did not replace the page")
 	}
 }

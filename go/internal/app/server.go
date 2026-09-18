@@ -172,8 +172,8 @@ func (a *App) staticFile(name string) (*staticEntry, bool) {
 		a.staticCache = map[string]*staticEntry{}
 	}
 	cur := a.staticCache[name]
-	if a.cfg.AppDir != "" {
-		path := filepath.Join(a.cfg.AppDir, name)
+	if a.cfg.PageDir != "" {
+		path := filepath.Join(a.cfg.PageDir, name)
 		if info, err := os.Stat(path); err == nil {
 			if cur != nil && cur.disk && cur.mod.Equal(info.ModTime()) && cur.size == info.Size() {
 				return cur, true
