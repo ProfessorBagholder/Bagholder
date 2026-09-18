@@ -18,7 +18,7 @@ Read this first, then `SPEC.md`. Bagholder is a local-first trading journal for 
 
 ## Verifying a change
 
-- Tests: `python3 -m unittest discover tests`. Add a test for every behaviour change; the suites are the contract for the model, store and server. `tests/cases` are the shared model cases every implementation (Python, Swift, Kotlin) runs; a model change on any platform comes with a case, regenerated with `python3 tests/make_cases.py` and reviewed as a diff (`tests/README.md`), and the Swift and Kotlin suites are run on it too (`MOBILE.md`).
+- Tests: `python3 -m unittest discover -s tests -t .` (the `-t .` matters: it imports `tests/__init__.py`, which is what refuses the network, refuses the real `~/.bagholder`, and fails a test whose background thread raised). Add a test for every behaviour change; the suites are the contract for the model, store and server. `tests/cases` are the shared model cases every implementation (Python, Swift, Kotlin) runs; a model change on any platform comes with a case, regenerated with `python3 tests/make_cases.py` and reviewed as a diff (`tests/README.md`), and the Swift and Kotlin suites are run on it too (`MOBILE.md`).
 - The page has no automated tests, so render it. Run a second instance on a copy of the user's data, never on the live database:
   ```
   mkdir -p /tmp/bh-scratch && cp ~/.bagholder/bagholder.db /tmp/bh-scratch/

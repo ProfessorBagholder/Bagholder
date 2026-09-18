@@ -11,8 +11,13 @@ PAGE = os.path.join(os.path.dirname(HERE), "ledger.html")
 
 
 class PageScriptTest(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("node"), "node is needed to parse the page's script")
     def test_every_script_on_the_page_parses(self):
+        if not shutil.which("node"):
+            # a skip here is the page going unchecked, and a page whose script does not parse is a
+            # blank app: where the run declares its tools (CI does), the missing tool is a failure
+            if os.environ.get("CI") or os.environ.get("BAGHOLDER_REQUIRE_TOOLS"):
+                self.fail("node is missing, so the page's script was never parsed")
+            self.skipTest("node is needed to parse the page's script")
         html = open(PAGE, encoding="utf-8").read()
         scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
         self.assertTrue(scripts, "the page carries its script inline")

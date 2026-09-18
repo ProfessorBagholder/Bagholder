@@ -185,6 +185,7 @@ class EnrichTest(unittest.TestCase):
              mock.patch.object(bagholder.disclosures, "available", return_value=available), \
              mock.patch.object(bagholder.disclosures, "enrichment", return_value=None), \
              mock.patch.object(bagholder.disclosures, "content", return_value=(b"%PDF-1.4 body", "application/pdf")) as content, \
+             mock.patch.object(bagholder.enrich, "wait_for_summary", return_value=model), \
              mock.patch.object(bagholder.enrich, "enrich_document", return_value=dict({"subject": read[0], "summary": read[1]}, **({"final": True} if final else {}))):
             out = bagholder.filings_enrich("QNC", self.doc)
             return out, content.call_count

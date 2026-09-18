@@ -434,7 +434,7 @@ The header's counts — activities, accounts, last sync — are read as counts. 
 2. The page is rendered against a copy of real data at 1200, 1340, 1440 and 1680 px. On every page, including a trade detail, no table overflows its container and no cell content is clipped at 1340 px and above.
 3. Header boxes are measured to be at one height, and centred headers at zero offset from their column's centre.
 4. Any lookup between tables uses ids, and is exercised with a synthetic duplicate symbol in a second account.
-5. `python3 -m unittest discover tests` passes.
+5. `python3 -m unittest discover -s tests -t .` passes.
 6. If any step fails, nothing is committed and the finding is reported first.
 
 For the phone apps the equivalent is in `CLAUDE.md` ("How changes land", step 6) and `MOBILE.md`: both platforms in the same PR, every screen captured on both from the same seeded rows and compared.

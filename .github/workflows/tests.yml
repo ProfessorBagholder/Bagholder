@@ -1,0 +1,41 @@
+# The suite, on every pull request and every push to master. Nothing ran on a pull request before
+# this: a branch was only ever as tested as whoever remembered to run it. The app is the standard
+# library, so there is nothing to install; the suite refuses the network and writes only into a
+# home of its own (tests/__init__.py), so a red run here is the code, not the day.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # the floor the README promises, and the version most people will have
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # test_package reads the tracked file list
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      - name: The suite
+        env:
+          CI: "true"              # a missing tool is a failure here, never a skip
+        run: python -m unittest discover -s tests -t . --durations 10
