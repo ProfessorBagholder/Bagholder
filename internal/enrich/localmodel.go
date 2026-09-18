@@ -26,7 +26,6 @@ const (
 	DefaultLlamafileSHA256 = "ac1c2864000bad7f62ee56ee908d3f55dd051a267d015b15fa6e831e69767b55"
 	ManagedHost            = "127.0.0.1"
 	DownloadTimeout        = 60 * 30
-	StartTimeout           = 120
 )
 
 var allowedHosts = []string{"huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co"}
@@ -68,13 +67,6 @@ func (l *LocalModel) managedPort() int {
 		return 8121
 	}
 	return n
-}
-func (l *LocalModel) chatTimeout() time.Duration {
-	f, err := strconv.ParseFloat(envOr("BAGHOLDER_LLM_CHAT_TIMEOUT", "600"), 64)
-	if err != nil {
-		f = 40
-	}
-	return time.Duration(f * float64(time.Second))
 }
 func (l *LocalModel) llamafileURL() string {
 	return envOr("BAGHOLDER_LLAMAFILE_URL", DefaultLlamafileURL)
@@ -322,11 +314,10 @@ func (l *LocalModel) spawn(path string) bool {
 
 func (l *LocalModel) waitReady() bool {
 	base := fmt.Sprintf("http://%s:%d", ManagedHost, l.managedPort())
-	deadline := time.Now().Add(StartTimeout * time.Second)
 	l.mu.Lock()
 	done := l.procDone
 	l.mu.Unlock()
-	for time.Now().Before(deadline) {
+	for {
 		select {
 		case <-done:
 			return false
@@ -343,7 +334,6 @@ func (l *LocalModel) waitReady() bool {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return false
 }
 
 func (l *LocalModel) Shutdown() {
@@ -383,7 +373,7 @@ func (l *LocalModel) Chat(prompt string, maxTokens int) string {
 	body, _ := json.Marshal(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "temperature": 0.1, "max_tokens": maxTokens, "stream": false})
 	l.mu.Lock()
 	if l.chat == nil {
-		l.chat = &http.Client{Timeout: l.chatTimeout()}
+		l.chat = &http.Client{}
 	}
 	chat := l.chat
 	l.mu.Unlock()
