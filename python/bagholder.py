@@ -8171,6 +8171,10 @@ def main():
 
 
 if __name__ == "__main__":
+    _refusal = store.claim_home(HOME)   # a data folder belongs to the build that made it
+    if _refusal:
+        print(_refusal, file=sys.stderr, flush=True)
+        sys.exit(1)
     if os.environ.get("BAGHOLDER_CHILD") == "1" or UPDATES_OFF:
         # the supervisor exists to restart an updated server; a copy that never updates runs plain
         main()

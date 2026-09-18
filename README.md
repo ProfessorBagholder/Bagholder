@@ -65,7 +65,7 @@ Futures are not supported yet.
 
 ## Two desktop apps
 
-The desktop app comes in two implementations that serve the same page, show the same figures and read the same data folder: the Python app in `python/`, and a Rust port in `rust/`. Use either one.
+The desktop app comes in two implementations that serve the same page and show the same figures: the Python app in `python/`, and a Rust port in `rust/`. Use either one. Each keeps its own data folder — `~/.bagholder` for the Python app, `~/.bagholder-rust` for the Rust port — and the two never share one.
 
 ## Requirements
 
@@ -121,13 +121,13 @@ docker compose up -d
 
 Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
 
-The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release); set the compose file's `image` to `ghcr.io/professorbagholder/bagholder:rust` to run it instead.
+The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release); set the compose file's `image` to `ghcr.io/professorbagholder/bagholder:rust` and its volume to `./data-rust:/data` to run it instead. Both images keep their data in `/data`, and the two builds never share a host folder.
 
 To build an image yourself, from the root of a clone, `docker build -f python/Dockerfile -t bagholder .` or `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
 
 ## Keeping up to date
 
-Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in `~/.bagholder`.
+Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in the data folder.
 
 - **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release's archive for the app you run, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder/previous` until the next update.
 - **Cloned with git:** the same button runs `git pull` on `master` and restarts; the Rust port first builds the new sources with `cargo build --release --bins` in `rust/`, and a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
@@ -169,6 +169,6 @@ Per-trade figures are in the trade's currency. Anything that adds trades togethe
 
 ## Data
 
-Everything lives in `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows): the database `bagholder.db` and the Wealthsimple session. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
+Everything lives in the data folder: the database `bagholder.db` and the Wealthsimple session. The Python app's is `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows), the Rust port's is `~/.bagholder-rust/`; `BAGHOLDER_HOME` points either one elsewhere. A folder names the build it belongs to in a `build` file, and the other build refuses to open it. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
 
 Market data the app needs but Wealthsimple does not provide is fetched over HTTPS and cached in the same database: USD/CAD rates from the Bank of Canada, S&P 500 closes from FRED, S&P/TSX Composite closes from TMX Money, prices and declared distributions from TMX Money, Cboe Canada prices from cboe.com, crypto prices from Coinbase, US option prices from Cboe's delayed chains, and daily price history for the trade chart from TMX Money, Cboe Canada and CoinGecko. The trade chart is drawn with TradingView's open-source Lightweight Charts, bundled with the app.

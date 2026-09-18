@@ -1,6 +1,6 @@
 # bagholder-store
 
-The SQLite store: `~/.bagholder/bagholder.db`, its schema and migrations, and
+The SQLite store: `~/.bagholder-rust/bagholder.db`, its schema and migrations, and
 every read and write the app makes against it -- activities and the Wealthsimple
 merge, CSV import, accounts, balances, margin, NAV, securities, the journal,
 market data, orders and the feeds.
