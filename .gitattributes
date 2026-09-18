@@ -1,0 +1,12 @@
+# What the release archive carries. The in-app updater downloads `bagholder-vX.Y.Z-web.zip`, which is
+# this repository at the tag, and copies every file in it into the app folder — so anything here that
+# the running app does not need is bytes every user downloads on every update, and a file written
+# into their install for no reason. The tour alone is 14.5 MB of an archive whose app is about 1.5.
+docs/ export-ignore
+tests/ export-ignore
+ios/ export-ignore
+android/ export-ignore
+.github/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+MOBILE.md export-ignore

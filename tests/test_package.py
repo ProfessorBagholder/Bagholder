@@ -88,6 +88,27 @@ class ReleaseArchiveTest(unittest.TestCase):
         for needed in ("ledger.html", "lightweight-charts.js", "favicon.png"):
             self.assertIn(needed, tracked)
 
+    def test_the_archive_carries_the_app_and_nothing_a_user_would_never_run(self):
+        """What the updater downloads is what it installs: every file in the archive is copied into
+        the person's app folder. The tour, the test corpus and the phone projects are none of the
+        running app's business, and were 18 of the archive's 19.8 MB — downloaded by every user on
+        every update."""
+        try:
+            raw = subprocess.run(["git", "-C", ROOT, "archive", "--format=zip", "HEAD"], capture_output=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError):   # pragma: no cover - not a checkout
+            self.skipTest("not a git checkout")
+        import io, zipfile
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            names = z.namelist()
+            size = sum(i.file_size for i in z.infolist())
+        for module in imports_of():
+            self.assertIn(module + ".py", names, "a module the app imports is missing from the archive")
+        for needed in ("ledger.html", "lightweight-charts.js", "favicon.png", "requirements.txt"):
+            self.assertIn(needed, names)
+        for folder in ("docs/", "tests/", "ios/", "android/", ".github/"):
+            self.assertEqual([n for n in names if n.startswith(folder)], [], "%s is not the app" % folder)
+        self.assertLess(size, 4 * 1024 * 1024, "the archive is the app, not the repository")
+
 
 class StartsFromItsOwnFilesTest(unittest.TestCase):
     def test_the_app_imports_cleanly_from_a_copy_of_what_ships(self):
