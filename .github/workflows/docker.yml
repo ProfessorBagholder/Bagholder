@@ -1,13 +1,21 @@
-# Publishes every build's image to GitHub's container registry on every release tag: the
-# Python app as ghcr.io/professorbagholder/bagholder:<version> and :latest, the Rust port
-# as :rust-<version> and :rust, the Go port as :go-<version> and :go. A Docker user updates
-# with `docker compose pull && docker compose up -d`. All build from the repository root.
+# Publishes both desktop apps' images to GitHub's container registry on every release tag:
+# the Python app as ghcr.io/professorbagholder/bagholder:<version> and :latest, the Rust
+# port as :rust-<version> and :rust. A Docker user updates with
+# `docker compose pull && docker compose up -d`. Both build from the repository root.
 name: Docker image
 
 on:
   push:
     tags: ["v*.*.*"]
+  # a run started by hand publishes one build, so a copy of master never goes
+  # out as the image a release tag put there
   workflow_dispatch:
+    inputs:
+      build:
+        description: Which build to publish
+        type: choice
+        options: [rust, python, both]
+        default: rust
 
 permissions:
   contents: read
@@ -15,6 +23,7 @@ permissions:
 
 jobs:
   python:
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["python", "both"]'), inputs.build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +55,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+  # The Rust image is compiled, so each architecture is built on a runner of its
+  # own kind rather than under emulation -- minutes instead of the best part of an
+  # hour -- and the two are joined into one image afterwards.
   rust:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["rust", "both"]'), inputs.build)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, platform: linux/amd64, arch: amd64 }
+          - { runner: ubuntu-22.04-arm, platform: linux/arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: The app's version is the tag's
@@ -56,7 +75,40 @@ jobs:
           want="${GITHUB_REF_NAME#v}"
           have="$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)"
           test "$have" = "$want" || { echo "rust/crates/server/src/app.rs says $have, the tag says $want"; exit 1; }
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: rust/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # each architecture is pushed by its digest; the tags go on the joined image
+          outputs: type=image,name=ghcr.io/professorbagholder/bagholder,push-by-digest=true,name-canonical=true,push=true
+      - name: Keep the digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ matrix.arch }}-${{ steps.build.outputs.digest }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  rust-image:
+    needs: rust
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["rust", "both"]'), inputs.build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -71,45 +123,10 @@ jobs:
           tags: |
             type=semver,pattern={{version}},prefix=rust-
             type=raw,value=rust
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: rust/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: The app's version is the tag's
-        if: github.ref_type == 'tag'
+      - name: One image from both architectures
         run: |
-          want="${GITHUB_REF_NAME#v}"
-          have="$(sed -n 's/^\tAppVersion *= "\(.*\)"$/\1/p' go/internal/app/app.go)"
-          test "$have" = "$want" || { echo "go/internal/app/app.go says $have, the tag says $want"; exit 1; }
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/professorbagholder/bagholder
-          flavor: latest=false
-          tags: |
-            type=semver,pattern={{version}},prefix=go-
-            type=raw,value=go
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: go/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          cd /tmp/digests
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(for f in *; do echo "ghcr.io/professorbagholder/bagholder@sha256:${f#*-sha256:}"; done)
+      - name: What was published
+        run: docker buildx imagetools inspect ghcr.io/professorbagholder/bagholder:rust

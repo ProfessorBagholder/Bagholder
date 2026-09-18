@@ -121,7 +121,7 @@ docker compose up -d
 
 Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
 
-The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release), the Go port `:go` (and `:go-X.Y.Z`); set the compose file's `image` to the one you want and its volume to a folder of its own, `./data-rust:/data` or `./data-go:/data`, to run it instead. Every image keeps its data in `/data`, and no two builds ever share a host folder.
+The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release), the Go port `:go` (and `:go-X.Y.Z`); set the compose file's `image` to the one you want and its volume to a folder of its own, `./data-rust:/data` or `./data-go:/data`, to run it instead. Every image keeps its data in `/data`, on a host folder of its own.
 
 To build an image yourself, from the root of a clone, `docker build -f python/Dockerfile -t bagholder .` or `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
 
@@ -169,6 +169,6 @@ Per-trade figures are in the trade's currency. Anything that adds trades togethe
 
 ## Data
 
-Everything lives in the data folder: the database `bagholder.db` and the Wealthsimple session. The Python app's is `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows), the Rust port's is `~/.bagholder-rust/`; `BAGHOLDER_HOME` points either one elsewhere. A folder names the build it belongs to in a `build` file, and the other build refuses to open it. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
+Everything lives in the data folder: the database `bagholder.db` and the Wealthsimple session. The Python app's is `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows), the Rust port's is `~/.bagholder-rust/`; `BAGHOLDER_HOME` points either one elsewhere. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
 
 Market data the app needs but Wealthsimple does not provide is fetched over HTTPS and cached in the same database: USD/CAD rates from the Bank of Canada, S&P 500 closes from FRED, S&P/TSX Composite closes from TMX Money, prices and declared distributions from TMX Money, Cboe Canada prices from cboe.com, crypto prices from Coinbase, US option prices from Cboe's delayed chains, and daily price history for the trade chart from TMX Money, Cboe Canada and CoinGecko. The trade chart is drawn with TradingView's open-source Lightweight Charts, bundled with the app.
