@@ -3559,6 +3559,7 @@ function newsChip(only) {
 }
 function newsCardHtml(items) {
   const scope = state.newsScope, only = state.newsSymbol, q = state.newsQuery.trim().toUpperCase();
+  const hold = newsHold(q);
   const chipPct = chipChange(only);
   let s = state.sort.news;
   const isOnly = (t) => only && bareSymbol(t.symbol) === only.symbol && String(t.exchange || "").toUpperCase() === only.exchange;
@@ -3598,8 +3599,8 @@ function newsCardHtml(items) {
     (only ? '<span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">' + esc(symText(only.symbol)) + '</span><button class="cx" aria-label="Show every listing" data-act="newsSymClear">×</button></span>' : "") +
     '<div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)"><input id="newsQuery" value="' + esc(state.newsQuery) + '" placeholder="' + (state.newsKind === "disc" ? "Search symbol or filing" : "Search symbol or headline") + '" aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)"></div></div>' +
     (state.newsKind === "disc" ? newsDiscBodyHtml(scope, only, q)
-      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
-      : '<div class="muted" style="font-size:12px">' + ((only && state.newsReading === only.symbol) || newsPassReads(scope, only) ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
+      : rows.length ? '<div class="nw-head' + (bare ? " nw-bare" : "") + '">' + gridTh("news", bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS) + '</div><div class="scroll nw-list" style="' + holdList(hold) + '">' + rows.map(row).join("") + "</div>"
+      : '<div class="muted" style="' + holdEmpty(hold) + '">' + ((only && state.newsReading === only.symbol) || newsPassReads(scope, only) ? "Reading…" : releases ? "No releases." : "No news.") + "</div>") + "</div>";
 }
 // whether the server's news pass has still to read a listing in the card's scope: the card says so rather than
 // `No news.` while items that are on their way have not landed
@@ -3688,8 +3689,9 @@ function newsDiscBodyHtml(scope, only, q) {
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
     '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
     '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
-  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
-    : '<div class="muted" style="font-size:12px">' + empty + "</div>";
+  const hold = newsHold(q);
+  return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="' + holdList(hold) + '">' + rows.map(row).join("") + "</div>"
+    : '<div class="muted" style="' + holdEmpty(hold) + '">' + empty + "</div>";
 }
 // the feed's titles fill in top first, one document at a time, while the feed is what the card shows
 let _feedSweep = "";
@@ -3731,6 +3733,17 @@ function listingByTicker(key) {
 }
 // a ticker typed that the card does not hold takes the chip, and its disclosures, or its wire, are read on demand
 let _ndLookupTimer = 0;
+// while the box holds text the list keeps the height it had when typing began, so the page does not
+// jump as the rows narrow or while the lookup settles into a chip
+let _newsHold = null;
+function newsHold(q) { if (!q) _newsHold = null; return _newsHold; }
+function newsHoldStart(typed) {
+  if (state.newsQuery || !typed) return;
+  const l = document.querySelector(".nw-list"), h = document.querySelector(".nw-head");
+  _newsHold = l ? { list: l.offsetHeight, body: l.offsetHeight + (h ? h.offsetHeight : 0) } : null;
+}
+function holdList(hold) { return "flex:1;min-height:" + (hold ? hold.list + "px" : 0) + ";max-height:436px"; }
+function holdEmpty(hold) { return "font-size:12px" + (hold ? ";min-height:" + hold.body + "px" : ""); }
 function newsDiscLookup(text) {
   clearTimeout(_ndLookupTimer);
   const key = text.trim().toUpperCase();
@@ -5109,7 +5122,7 @@ function bind() {
     const t = e.target;
     if (/^tk-/.test(t.id || "")) { tkInputEvent(t); return; }
     if (t.id === "shortsQuery") { state.shortsQuery = t.value; shortsLookup(t.value); render(); return; }
-    if (t.id === "newsQuery") { state.newsQuery = t.value; newsDiscLookup(t.value); render(); return; }
+    if (t.id === "newsQuery") { newsHoldStart(t.value); state.newsQuery = t.value; newsDiscLookup(t.value); render(); return; }
     if (t.id === "tileQuery") { state.tileQuery = t.value; render(); return; }
     if (t.id === "watchQuery") { state.watchQuery = t.value; extSchedule(t.value); render(); return; }
     if (t.id === "tagInput") { state.tagDraft = t.value; state.tagHi = 0; document.getElementById("tagMenu").innerHTML = tagMenuHtml(); return; }
