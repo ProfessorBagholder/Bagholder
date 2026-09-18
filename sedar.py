@@ -104,11 +104,21 @@ def _get_session():
     return _session
 
 
+def _gate_bounced(response, page):
+    """True when the Radware gate answered instead of SEDAR+."""
+    return "validate.perfdrive.com" in (getattr(response, "url", "") or "") or "validate.perfdrive.com" in (page or "")[:2000]
+
+
+def _drop_session():
+    """Drop the session, for a caller that already holds the lock."""
+    global _session
+    _session = None
+
+
 def reset():
     """Drop the session so the next call opens a fresh one (used after a gate bounce)."""
-    global _session
     with _lock:
-        _session = None
+        _drop_session()
 
 
 # --------------------------------------------------------------------------- #
@@ -213,17 +223,23 @@ class _View:
 
     def __init__(self, service):
         self.service = service
-        _pace()
-        try:
-            r = _get_session().get(
-                "%s/csa-party/service/create.html?targetAppCode=csa-party&service=%s" % (BASE, service),
-                timeout=TIMEOUT,
-            )
-        except Exception as e:
-            raise SedarUnavailable("could not open %s: %s" % (service, e))
-        page = r.text
-        if "validate.perfdrive.com" in (r.url or "") or "validate.perfdrive.com" in page[:2000]:
-            raise SedarUnavailable("the SEDAR+ bot gate turned the request away")
+        # a session the gate has bounced stays bounced, so it is dropped and the
+        # service asked once more on a fresh one before the source counts as unreachable
+        for attempt in (0, 1):
+            _pace()
+            try:
+                r = _get_session().get(
+                    "%s/csa-party/service/create.html?targetAppCode=csa-party&service=%s" % (BASE, service),
+                    timeout=TIMEOUT,
+                )
+            except Exception as e:
+                raise SedarUnavailable("could not open %s: %s" % (service, e))
+            page = r.text
+            if not _gate_bounced(r, page):
+                break
+            if attempt:
+                raise SedarUnavailable("the SEDAR+ bot gate turned the request away")
+            _drop_session()
         m_inst = re.search(r"viewInstance/view\.html\?id=([0-9a-f]+)", r.url or "") or re.search(r"update\.html\?id=([0-9a-f]+)", page)
         m_key = re.search(r"viewInstanceKey:'([^']+)'", page)
         m_sid = re.search(r"sessionId:'([^']+)'", page)

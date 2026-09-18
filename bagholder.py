@@ -724,7 +724,7 @@ LOGIN_VIEW_SIZE = (960, 1000)
 
 # Bumped whenever the page and the server change together. The page compares it
 # with what /api/status reports and tells the user to restart when they differ.
-PROTOCOL = "2026-09-17.1"
+PROTOCOL = "2026-09-18.1"
 ENRICH_VERSION = 11  # bump when title/summary logic improves, so read rows are re-read once
 STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -6451,9 +6451,13 @@ def refresh_filings(symbol, name=None, exchange=None, currency=None):
                 continue
             if status.get("matched") or status.get("available"):
                 total += store.replace_filings(sym, src, rows)
-        store.mark_filings_fetched(sym, profile_no)
         store.set_meta("filings_sources:" + sym, json.dumps(result.get("sources") or {}))
-        return total if any_reached else -1
+        if not any_reached:
+            # a read no source answered is not a read: nothing is stamped, so the next ask
+            # reads again rather than standing a refusal up as the day's answer
+            return -1
+        store.mark_filings_fetched(sym, profile_no)
+        return total
 
     return run()
 

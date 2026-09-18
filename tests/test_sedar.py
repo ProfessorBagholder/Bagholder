@@ -237,5 +237,58 @@ class ScopeCacheTest(unittest.TestCase):
         self.assertEqual(len(calls), 2, "a None result is retried, never cached")
 
 
+class _Resp:
+    def __init__(self, url, text):
+        self.url, self.text = url, text
+
+
+GATE = _Resp("https://validate.perfdrive.com/abc", "<html>gate</html>")
+FORM = _Resp("https://www.sedarplus.ca/csa-party/viewInstance/view.html?id=0a1b",
+             "<html>viewInstanceKey:\'k1\' sessionId:\'s1\'</html>")
+
+
+class GateBounceTest(unittest.TestCase):
+    """A session the Radware gate turns away is dropped and the service asked once more
+    on a fresh one, so one bounce does not stand as the day's answer."""
+
+    def setUp(self):
+        self._saved = (sedar._pace, sedar._get_session, sedar._drop_session)
+        sedar._pace = lambda: None
+        self.asked, self.dropped = [], []
+        sedar._drop_session = lambda: self.dropped.append(1)
+
+    def tearDown(self):
+        sedar._pace, sedar._get_session, sedar._drop_session = self._saved
+
+    def answers(self, *queued):
+        outer = self
+
+        class Session:
+            def get(self, url, **kw):
+                outer.asked.append(url)
+                return queued[len(outer.asked) - 1]
+
+        sedar._get_session = lambda: Session()
+
+    def test_a_bounced_session_is_dropped_and_the_service_asked_again(self):
+        self.answers(GATE, FORM)
+        view = sedar._View("searchReportingIssuers")
+        self.assertEqual(len(self.asked), 2, "the service is asked a second time")
+        self.assertEqual(self.dropped, [1], "the bounced session is dropped before the retry")
+        self.assertEqual((view.inst, view.key, view.sid), ("0a1b", "k1", "s1"))
+
+    def test_a_second_bounce_is_reported_unavailable(self):
+        self.answers(GATE, GATE)
+        with self.assertRaises(sedar.SedarUnavailable):
+            sedar._View("searchReportingIssuers")
+        self.assertEqual(len(self.asked), 2, "the gate is not asked a third time")
+
+    def test_a_clean_answer_is_not_retried(self):
+        self.answers(FORM)
+        sedar._View("searchReportingIssuers")
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(self.dropped, [], "nothing is dropped when the gate lets it through")
+
+
 if __name__ == "__main__":
     unittest.main()

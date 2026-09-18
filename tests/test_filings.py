@@ -116,6 +116,21 @@ class FilingsPayloadTest(unittest.TestCase):
         store.mark_filings_fetched("SHOP", now=old)
         self.assertTrue(bagholder._filings_stale("SHOP"))
 
+    def test_a_read_no_source_answered_is_not_stamped(self):
+        self.stub([], {"SEDAR+": {"available": False, "matched": False, "count": 0,
+                                  "error": "the SEDAR+ bot gate turned the request away"},
+                       "SEC": {"available": False, "matched": False, "count": 0, "error": ""}})
+        out = bagholder.filings_payload("CH", refresh=True)
+        self.assertTrue(out["sourceUnavailable"])
+        self.assertEqual(store.filings_fetched_at("CH"), "", "a refusal is never stamped as a read")
+        self.assertTrue(bagholder._filings_stale("CH"), "the next ask reads again")
+
+    def test_a_read_a_source_answered_is_stamped(self):
+        self.stub([item("SEC", i=1)], {"SEC": {"available": True, "matched": True, "count": 1, "error": ""}})
+        bagholder.filings_payload("CH", refresh=True)
+        self.assertNotEqual(store.filings_fetched_at("CH"), "")
+        self.assertFalse(bagholder._filings_stale("CH"))
+
     def test_refresh_merges_sources_and_reports_status(self):
         self.stub(
             [item("SEDAR+", i=1, profile="000037100"), item("SEC", i=2)],
