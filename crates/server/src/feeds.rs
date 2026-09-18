@@ -791,12 +791,31 @@ pub fn disclosure_read_loop() {
     }
 }
 
-/// The newest stored filing that has never been read, read. False when there
-/// is none, or nothing could be read.
+/// The listing whose disclosures were asked for last: the one someone is
+/// looking at, and so the one whose documents are read first.
+fn looking_at() -> &'static Mutex<String> {
+    static S: OnceLock<Mutex<String>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(String::new()))
+}
+
+/// The newest stored filing that has never been read, read: the listing on
+/// screen first, then everything else. False when there is none, or nothing
+/// could be read.
 fn read_one_unread() -> bool {
+    let open = looking_at().lock().unwrap().clone();
+    if !open.is_empty() && read_one_of(&open) {
+        return true;
+    }
+    read_one_of("")
+}
+
+/// One unread document of `only`, or of every followed listing when it is empty.
+fn read_one_of(only: &str) -> bool {
     let c = match conn() { Some(c) => c, None => return false };
     let mut best: Option<(String, String, String)> = None;   // date, symbol, id
-    for inst in known_filing_symbols(&["held".to_string(), "watched".to_string()]) {
+    let every = known_filing_symbols(&["held".to_string(), "watched".to_string()]);
+    let list: Vec<Value> = if only.is_empty() { every } else { vec![json!({"symbol": only})] };
+    for inst in list {
         let sym = f(&inst, "symbol");
         for r in sf::filings_for(&c, &sym).unwrap_or_default() {
             if !f(&r, "subject").is_empty() || is_true(&r, "enrichFinal") {
@@ -911,6 +930,7 @@ pub fn filings_payload_in(c: &Connection, sym: &str, refresh: bool, refresh_fili
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
+    *looking_at().lock().unwrap() = sym.clone();
     let c = c;
     let mut wrote: Option<i64> = None;
     if refresh || filings_stale(c, &sym, None) {
