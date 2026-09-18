@@ -1,0 +1,39 @@
+# The suite, on every pull request and every push to master. Nothing ran on a pull request before
+# this: a branch was only ever as tested as whoever remembered to run it. The Go program builds from
+# the module alone, so there is nothing to install beyond the toolchain; the page's script is parsed
+# with node --check, so a red run here is the code, not the day.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      - name: Vet
+        run: go vet ./...
+      - name: The suite
+        env:
+          CI: "true"              # a missing tool is a failure here, never a skip
+        run: go test ./...
