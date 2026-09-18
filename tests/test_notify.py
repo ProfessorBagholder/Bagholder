@@ -579,15 +579,54 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · RDDY"])
         self.assertEqual(store.list_notifications()[0]["extra"]["at"], "2026-09-15T11:30:00Z")
 
-    def test_how_recent_a_thing_must_be_to_be_told(self):
-        now = datetime(2026, 9, 15, 14, 0, tzinfo=timezone.utc)
-        self.assertTrue(bagholder.worth_telling("2026-09-15T11:30:00Z", now))
-        self.assertTrue(bagholder.worth_telling("2026-09-13T00:00:00Z", now), "inside three days")
-        self.assertFalse(bagholder.worth_telling("2026-08-31T07:00:00Z", now))
-        self.assertFalse(bagholder.worth_telling("2026-09-12T13:59:00Z", now), "just outside")
-        self.assertTrue(bagholder.worth_telling("2026-09-15", now), "a filing carries a day and no time")
-        self.assertFalse(bagholder.worth_telling("", now), "nothing says when it happened")
-        self.assertFalse(bagholder.worth_telling("not a date", now))
+    def test_one_event_is_one_notification_whatever_id_it_arrives_under(self):
+        """The same release reaches the app from several sources, each with its own id and its own
+        date. It is one event and is told once, and meeting it again — a week later, under another
+        id, from a source whose results dropped it and brought it back — tells nothing."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        head = "Harvest ETFs Announces September 2026 Distributions"
+        first = {"id": "tmx:1", "headline": head, "source": "Business Wire", "url": "u1", "publishedAt": "2026-09-14T11:30:00Z", "kind": "release"}
+        wire = {"rows": [{"id": "tmx:0", "headline": "An older release", "source": "Business Wire", "url": "u0",
+                          "publishedAt": "2026-09-01T11:30:00Z", "kind": "release"}]}
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                            # the listing's first read: history
+            wire["rows"].append(first)
+            bagholder.refresh_news()
+            self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · RDDY"], "told once, when it appeared")
+            # Google's copy of the same release: its own id, a week's difference in its date
+            wire["rows"].append({"id": "gnews:2", "headline": head, "source": "Business Wire", "url": "u2",
+                                 "publishedAt": "2026-09-21T07:00:00Z", "kind": "release"})
+            bagholder.refresh_news()
+            # and the wire's own copy drops out of the results and comes back under a new id
+            wire["rows"] = [r for r in wire["rows"] if r["id"] != "tmx:1"]
+            bagholder.refresh_news()
+            wire["rows"].append(dict(first, id="tmx:9"))
+            bagholder.refresh_news()
+        self.assertEqual(len(store.list_notifications()), 1, "one event, one notification")
+
+    def test_the_back_catalogue_a_first_read_brings_can_never_ring_later(self):
+        """A source read for the first time brings history. That history is recorded as met, so the
+        same releases returning under other ids on later passes are recognised rather than rung."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        old = [{"id": "tmx:%d" % i, "headline": "Release number %d" % i, "source": "Business Wire", "url": "u",
+                "publishedAt": "2026-08-%02dT11:30:00Z" % (10 + i), "kind": "release"} for i in range(3)]
+        wire = {"rows": list(old)}
+        listings = [("RDDY", "TSX", "CAD", "")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()
+            # every one of them comes back under another source's ids, dated later, as a search's results shift
+            wire["rows"] = [dict(r, id="gnews:%d" % i, publishedAt="2026-09-%02dT07:00:00Z" % (10 + i)) for i, r in enumerate(old)]
+            bagholder.refresh_news()
+        self.assertEqual(store.list_notifications(), [], "history stays history, whatever id it returns under")
 
     def test_a_notice_carries_when_the_thing_happened(self):
         """A release found today can have been published weeks ago: the notice carries the item's

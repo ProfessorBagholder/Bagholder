@@ -5964,9 +5964,12 @@ def sweep_filings(now=None):
             by_source.setdefault(_s(r.get("source")), []).append(r)
         new = []
         for src, rows in by_source.items():
-            new.extend(notify.fresh_since("filings:%s:%s" % (sym, src), rows,
-                                          at=lambda r: _s(r.get("date")),
-                                          seen=lambda r: filing_mark(r) in before or not worth_telling(r.get("date"))))
+            scope = "filings:%s:%s" % (sym, src)
+            event = lambda r: "|".join(filing_mark(r))
+            met = store.events_told(scope, [event(r) for r in rows])
+            new.extend(notify.fresh_since(scope, rows, at=lambda r: _s(r.get("date")), ident=event,
+                                          seen=lambda r: filing_mark(r) in before or event(r) in met))
+            store.mark_told(scope, [event(r) for r in rows])
         if not new:
             continue
         # a filed news release is a release, not another filing: it is the Releases kind's to tell, and
@@ -6414,30 +6417,9 @@ def release_notice(sym, rows):
     return (title, head)
 
 
-TELL_WITHIN_HOURS = 72     # how recent a thing must be for its arrival to be worth telling about
-
-
 def _now():
     """The moment the app is at. One place, so a test can hold the clock still."""
     return datetime.now(timezone.utc)
-
-
-def worth_telling(at, now=None):
-    """Whether something that happened at `at` is recent enough to tell. A notification is about
-    something that just happened; a release or a filing from weeks ago is history however it reaches
-    the app, and the app reaches back: a source read for the first time carries a back catalogue, a
-    search's results shift from pass to pass, and the same release syndicated by two sources carries
-    two dates. Without this, any of those rings the bell for a month-old event."""
-    when = _s(at)
-    if not when:
-        return False                      # nothing says when it happened: not news
-    try:
-        moment = datetime.fromisoformat(when.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return (now or _now()) - moment <= timedelta(hours=TELL_WITHIN_HOURS)
 
 
 def notice_moment(rows):
@@ -6459,8 +6441,15 @@ def notice_link(rows):
     return {"url": url} if url else {}
 
 
+def release_event(row):
+    """What a release *is*, independent of the id, the source and the date each carries: the story
+    its headline tells. TMX, Yahoo, Seeking Alpha and Google all carry the same release under their
+    own ids, a week apart in their own timestamps; keyed by id, one release is four events."""
+    return model.news_text_key(_s(row.get("headline") or row.get("subject") or row.get("type")))
+
+
 def _release_key(sym, rows):
-    return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(_s(r.get("id")) for r in rows)).encode("utf-8")).hexdigest()[:12])
+    return "release:%s:%s" % (sym, hashlib.sha1("|".join(sorted(release_event(r) for r in rows)).encode("utf-8")).hexdigest()[:12])
 
 
 def note_wire_releases(symbol, exchange, rows, new_ids):
@@ -6471,10 +6460,16 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
     if not scopes or not in_release_scope(sym, scopes):
         return
     rel = [r for r in rows if _s(r.get("kind")) == "release"]
-    # the mark still moves over everything the wire holds; only what is both new and recent is told
-    fresh = notify.fresh_since("news:" + store.news_key(symbol, exchange), rel,
-                               at=lambda r: _s(r.get("publishedAt")),
-                               seen=lambda r: _s(r.get("id")) not in new_ids or not worth_telling(r.get("publishedAt")))
+    # An event is told once. The stream keeps what it has met, by what the thing is rather than by the
+    # id a source gave it, so the same release reaching the app again — from another source, under
+    # another id, dated a week apart, or simply returning to a search's results after dropping out of
+    # them — is recognised and passed over. Everything met is recorded, told or not, so the back
+    # catalogue a first read brings can never ring later.
+    scope = "news:" + store.news_key(symbol, exchange)
+    met = store.events_told(scope, [release_event(r) for r in rel])
+    fresh = notify.fresh_since(scope, rel, at=lambda r: _s(r.get("publishedAt")), ident=release_event,
+                               seen=lambda r: _s(r.get("id")) not in new_ids or release_event(r) in met)
+    store.mark_told(scope, [release_event(r) for r in rel])
     if not fresh:
         return
     if any(DISTRIBUTION_RELEASE.search(_s(r.get("headline"))) for r in fresh):

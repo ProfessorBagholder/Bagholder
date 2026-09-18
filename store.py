@@ -439,6 +439,14 @@ def _init_schema(conn):
             PRIMARY KEY (symbol, exchange)
         );
 
+        CREATE TABLE IF NOT EXISTS told (
+            scope TEXT NOT NULL,          -- the stream: news:RDDY@TSX, filings:QNC:SEDAR+
+            event TEXT NOT NULL,          -- what the thing is, independent of the id a source gave it
+            at TEXT NOT NULL,             -- when the app first met it
+            PRIMARY KEY (scope, event)
+        );
+        CREATE INDEX IF NOT EXISTS told_at ON told (at);
+
         CREATE TABLE IF NOT EXISTS news (
             id TEXT NOT NULL,
             symbol TEXT NOT NULL,
@@ -3544,6 +3552,49 @@ def _notification(r):
         extra = {}
     return {"id": r["id"], "at": r["at"], "kind": r["kind"], "key": r["key"], "title": r["title"], "body": r["body"] or "", "extra": extra,
             "seenAt": r["seen_at"] or "", "readAt": r["read_at"] or ""}
+
+
+TOLD_KEPT_DAYS = 400          # a year and a bit: long enough that nothing recurs, small enough to stay tidy
+
+
+def events_told(scope, events):
+    """Which of these the stream has already met — told or absorbed as history. An event is what the
+    thing is (a release's headline, a filing's own marks), never the id a source gave it, so the same
+    event from another source, under another id, on another date, is still the same event."""
+    want = [_s(e) for e in events if _s(e)]
+    if not want:
+        return set()
+    out = set()
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            for i in range(0, len(want), 400):
+                chunk = want[i:i + 400]
+                rows = conn.execute("SELECT event FROM told WHERE scope = ? AND event IN (%s)" % ",".join("?" * len(chunk)),
+                                    [_s(scope)] + chunk).fetchall()
+                out |= {r["event"] for r in rows}
+            return out
+        finally:
+            conn.close()
+
+
+def mark_told(scope, events, now=None):
+    """Record that the stream has met these, whether or not they were worth telling about."""
+    when = _s(now.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(now, "strftime") else now) or _now_iso()
+    rows = [(_s(scope), _s(e), when) for e in events if _s(e)]
+    if not rows:
+        return 0
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            conn.executemany("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rows)
+            conn.execute("DELETE FROM told WHERE at < ?", ((datetime.now(timezone.utc) - timedelta(days=TOLD_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ"),))
+            conn.commit()
+            return len(rows)
+        finally:
+            conn.close()
 
 
 def add_notification(kind, key, title, body, extra=None, seen=False):
