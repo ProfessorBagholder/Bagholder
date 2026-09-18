@@ -6408,11 +6408,23 @@ READ_GAP_SEC = 2          # between documents the app reads on its own
 READ_IDLE_SEC = 120       # after a pass that found nothing left to read
 
 
+_LOOKING_AT = [""]   # the listing whose disclosures were asked for last
+
+
 def read_one_unread():
-    """The newest stored filing that has never been read, read. False when there is
-    none, or nothing could be read."""
+    """The newest stored filing that has never been read, read: the listing on screen
+    first, then everything else. False when there is none, or nothing could be read."""
+    open_sym = _LOOKING_AT[0]
+    if open_sym and read_one_of(open_sym):
+        return True
+    return read_one_of("")
+
+
+def read_one_of(only):
+    """One unread document of `only`, or of every followed listing when it is empty."""
     best = None
-    for inst in known_filing_symbols(("held", "watched")):
+    every = known_filing_symbols(("held", "watched")) if not only else [{"symbol": only}]
+    for inst in every:
         sym = _s(inst.get("symbol"))
         for r in store.filings(sym):
             if _s(r.get("subject")) or r.get("enrichFinal"):
@@ -6526,6 +6538,7 @@ def _source_status(sym):
 
 def filings_payload(symbol, refresh=False, name=None, exchange=None, currency=None):
     """The stored disclosures for a symbol, refreshing first when forced or stale."""
+    _LOOKING_AT[0] = _s(symbol).strip().upper()
     sym = _s(symbol).strip().upper()
     if not sym:
         return {"ok": False, "error": "symbol required"}
