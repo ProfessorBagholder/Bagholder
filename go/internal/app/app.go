@@ -64,7 +64,6 @@ var (
 type Config struct {
 	Home       string
 	AppDir     string
-	PageDir    string
 	Exe        string
 	BindHost   string
 	UpdatesOff bool
@@ -94,11 +93,6 @@ func ConfigFromEnv() Config {
 	} else {
 		cfg.AppDir, _ = os.Getwd()
 	}
-	// The page the binary carries is the page it serves. A directory here replaces it, for
-	// working on the page without rebuilding; nothing sets it by accident, and a release
-	// never reads one, so a stale file beside the binary can never shadow the page it shipped
-	// with -- the mismatch PROTOCOL exists to catch.
-	cfg.PageDir = strings.TrimSpace(os.Getenv("BAGHOLDER_PAGE_DIR"))
 	cfg.Ports = portChoices()
 	return cfg
 }

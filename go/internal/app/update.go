@@ -349,8 +349,15 @@ func (a *App) performUpdate(tag string, rec map[string]any) {
 				return errors.New("git pull failed: " + cutStr(msg, 200))
 			}
 			a.setUpdating("Building " + tag + "…")
+			// the module is go/ in the checkout, and the page it carries is brought in from
+			// the repository root first, so a built copy serves the page it was built with
+			gen := exec.Command("go", "generate", "./...")
+			gen.Dir = filepath.Join(a.cfg.AppDir, "go")
+			if outb, err := gen.CombinedOutput(); err != nil {
+				return errors.New("go generate failed: " + cutStr(strings.TrimSpace(string(outb)), 200))
+			}
 			build := exec.Command("go", "build", "-o", staged, "./cmd/bagholder")
-			build.Dir = a.cfg.AppDir
+			build.Dir = filepath.Join(a.cfg.AppDir, "go")
 			if outb, err := build.CombinedOutput(); err != nil {
 				return errors.New("go build failed: " + cutStr(strings.TrimSpace(string(outb)), 200))
 			}
