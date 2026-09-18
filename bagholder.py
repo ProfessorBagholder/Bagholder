@@ -5965,7 +5965,8 @@ def sweep_filings(now=None):
         new = []
         for src, rows in by_source.items():
             new.extend(notify.fresh_since("filings:%s:%s" % (sym, src), rows,
-                                          at=lambda r: _s(r.get("date")), seen=lambda r: filing_mark(r) in before))
+                                          at=lambda r: _s(r.get("date")),
+                                          seen=lambda r: filing_mark(r) in before or not worth_telling(r.get("date"))))
         if not new:
             continue
         # a filed news release is a release, not another filing: it is the Releases kind's to tell, and
@@ -6413,6 +6414,32 @@ def release_notice(sym, rows):
     return (title, head)
 
 
+TELL_WITHIN_HOURS = 72     # how recent a thing must be for its arrival to be worth telling about
+
+
+def _now():
+    """The moment the app is at. One place, so a test can hold the clock still."""
+    return datetime.now(timezone.utc)
+
+
+def worth_telling(at, now=None):
+    """Whether something that happened at `at` is recent enough to tell. A notification is about
+    something that just happened; a release or a filing from weeks ago is history however it reaches
+    the app, and the app reaches back: a source read for the first time carries a back catalogue, a
+    search's results shift from pass to pass, and the same release syndicated by two sources carries
+    two dates. Without this, any of those rings the bell for a month-old event."""
+    when = _s(at)
+    if not when:
+        return False                      # nothing says when it happened: not news
+    try:
+        moment = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now or _now()) - moment <= timedelta(hours=TELL_WITHIN_HOURS)
+
+
 def notice_moment(rows):
     """When the newest of these happened, as its source dates it. A release found today can have
     been published weeks ago — the app reads a listing's back catalogue the first time it sees it —
@@ -6444,8 +6471,10 @@ def note_wire_releases(symbol, exchange, rows, new_ids):
     if not scopes or not in_release_scope(sym, scopes):
         return
     rel = [r for r in rows if _s(r.get("kind")) == "release"]
+    # the mark still moves over everything the wire holds; only what is both new and recent is told
     fresh = notify.fresh_since("news:" + store.news_key(symbol, exchange), rel,
-                               at=lambda r: _s(r.get("publishedAt")), seen=lambda r: _s(r.get("id")) not in new_ids)
+                               at=lambda r: _s(r.get("publishedAt")),
+                               seen=lambda r: _s(r.get("id")) not in new_ids or not worth_telling(r.get("publishedAt")))
     if not fresh:
         return
     if any(DISTRIBUTION_RELEASE.search(_s(r.get("headline"))) for r in fresh):

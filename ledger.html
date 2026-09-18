@@ -992,18 +992,15 @@ function notesPanelHtml() {
     '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
     '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
 }
-// When the thing happened, not when the app got round to telling it: the app reads a listing's back
-// catalogue the first time it sees it, so a release published weeks ago can be told today, and a foot
-// that says only "Today" reads as news that is not new. The telling time follows when they differ.
+// When the thing happened, which is what a reader wants from a notification: the release's own
+// moment, the filing's own day. The app is told at some later moment, and that is its business.
 function noteWhenWord(n) {
   const at = (n.extra || {}).at;
-  const told = orderWhenWord(n.at);
-  if (!at) return told;
-  const when = orderWhenWord(at.length === 10 ? at + "T12:00:00" : at);
-  if (when === "—" || when === told) return told;
-  const sameDay = new Date(Date.parse(at.length === 10 ? at + "T12:00:00" : at)).toDateString() === new Date(Date.parse(n.at)).toDateString();
-  const day = at.length === 10 ? when.replace(/,.*$/, "") : when;          // a filing carries a day, a release a moment
-  return sameDay ? told : day + " · told " + told.replace("Today ", "today ");
+  if (!at) return orderWhenWord(n.at);
+  const day = at.length === 10;
+  const when = orderWhenWord(day ? at + "T12:00:00" : at);
+  if (when === "—") return orderWhenWord(n.at);
+  return day ? when.replace(/,? \d{1,2}:\d{2} (AM|PM)$/, "").replace(/^Today$/, "Today") : when;
 }
 function renderNotes() {
   const old = document.getElementById("ntWrap");

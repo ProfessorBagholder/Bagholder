@@ -29,7 +29,14 @@ ORDER = {"id": "o1", "symbol": "QNC", "account": "🚀 Trading", "side": "BUY", 
 
 
 class NotifyTest(unittest.TestCase):
+    # The fixtures here are dated in the middle of September 2026, and a notification is only made
+    # for something recent (bagholder.TELL_WITHIN_HOURS), so the clock is held just after them.
+    NOW = datetime(2026, 9, 15, 14, 0, tzinfo=timezone.utc)
+
     def setUp(self):
+        self._clock = mock.patch.object(bagholder, "_now", return_value=self.NOW)
+        self._clock.start()
+        self.addCleanup(self._clock.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
         os.environ["BAGHOLDER_HOME"] = self.home
@@ -445,7 +452,7 @@ class NotifyTest(unittest.TestCase):
         notify.set_settings({"disclosuresWatched": True})
         watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
         old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
-        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-15T08:27", "size": "1 KB"}]
         answer = {"rows": [old]}
         def fake_fetch(sym, **kw):
             return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
@@ -469,7 +476,7 @@ class NotifyTest(unittest.TestCase):
         notify.set_settings({"disclosuresWatched": True})
         watched = [{"symbol": "CH", "exchange": "TSX-V", "name": "Charbone", "currency": "CAD"}]
         old = {"id": "sedar:a0", "source": "SEDAR+", "type": "Material change report", "title": "Old", "date": "2026-09-01T09:00", "size": "1 KB"}
-        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-08T08:27", "size": "1 KB"}]
+        rows = [old, {"id": "sedar:a1", "source": "SEDAR+", "type": "144", "title": "Notice", "date": "2026-09-15T08:27", "size": "1 KB"}]
         answer = {"rows": [old]}
         def fake_fetch(sym, **kw):
             return {"items": list(answer["rows"]), "sources": {"SEDAR+": {"available": True, "matched": True, "filer": True, "count": len(answer["rows"]), "error": ""}}}
@@ -542,6 +549,45 @@ class NotifyTest(unittest.TestCase):
                          ("Press release · QNC", "Quantum eMotion Wins Certification"))
         self.assertEqual(bagholder.release_notice("NOSUCH", [{"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"}])[1],
                          "Announces Monthly Distribution", "no record for the listing: the headline stands alone")
+
+    def test_a_month_old_release_is_never_told_however_it_reaches_the_app(self):
+        """What happened here in the person's own app: a listing's wire carried a distribution
+        release dated 24 August; weeks later a second source returned its own copy of the same
+        release, dated 31 August, which was newer than the stream's mark and had an id the listing
+        had never held — so the bell rang on 18 September for an August event. A notification is
+        about something that just happened: anything older than the window is absorbed into the
+        stream and told to nobody, and the mark still moves past it."""
+        notify.set_settings({"releasesHeld": True})
+        base = {"today": "2026-09-15", "positions": [{"symbol": "RDDY", "exchange": "TSX", "currency": "CAD", "kind": "Shares"}], "trades": []}
+        wire = {"rows": [{"id": "tmx:1", "headline": "Harvest ETFs Announces August 2026 Distributions", "source": "Business Wire",
+                          "url": "u1", "publishedAt": "2026-08-24T11:30:00Z", "kind": "release"}]}
+        listings = [("RDDY", "TSX", "CAD", "Harvest Reddit Enhanced High Income Shares ETF")]
+        with mock.patch.object(model, "base_model", return_value=base), \
+             mock.patch.object(news, "fetch_symbol", side_effect=lambda s, e, c, ctx=None, now=None: ("tmx", list(wire["rows"]))), \
+             mock.patch.object(news, "_read_extra", return_value=[]), mock.patch.object(bagholder, "news_listings", return_value=listings), \
+             mock.patch.object(bagholder, "_ssl_context", return_value=None), mock.patch.object(news, "stale", return_value=listings):
+            bagholder.refresh_news()                       # the listing's first read: history
+            # another source returns its own copy of the same release, a week apart and under its own id
+            wire["rows"].append({"id": "gnews:2", "headline": "Harvest ETFs Announces August 2026 Distributions", "source": "Business Wire",
+                                 "url": "u2", "publishedAt": "2026-08-31T07:00:00Z", "kind": "release"})
+            bagholder.refresh_news()
+            self.assertEqual(store.list_notifications(), [], "three weeks old on the app's clock: history, not news")
+            # and something that just happened is still told, through the same mark
+            wire["rows"].append({"id": "tmx:3", "headline": "Harvest ETFs Announces September 2026 Distributions", "source": "Business Wire",
+                                 "url": "u3", "publishedAt": "2026-09-15T11:30:00Z", "kind": "release"})
+            bagholder.refresh_news()
+        self.assertEqual([r["title"] for r in store.list_notifications()], ["Press release · RDDY"])
+        self.assertEqual(store.list_notifications()[0]["extra"]["at"], "2026-09-15T11:30:00Z")
+
+    def test_how_recent_a_thing_must_be_to_be_told(self):
+        now = datetime(2026, 9, 15, 14, 0, tzinfo=timezone.utc)
+        self.assertTrue(bagholder.worth_telling("2026-09-15T11:30:00Z", now))
+        self.assertTrue(bagholder.worth_telling("2026-09-13T00:00:00Z", now), "inside three days")
+        self.assertFalse(bagholder.worth_telling("2026-08-31T07:00:00Z", now))
+        self.assertFalse(bagholder.worth_telling("2026-09-12T13:59:00Z", now), "just outside")
+        self.assertTrue(bagholder.worth_telling("2026-09-15", now), "a filing carries a day and no time")
+        self.assertFalse(bagholder.worth_telling("", now), "nothing says when it happened")
+        self.assertFalse(bagholder.worth_telling("not a date", now))
 
     def test_a_notice_carries_when_the_thing_happened(self):
         """A release found today can have been published weeks ago: the notice carries the item's
