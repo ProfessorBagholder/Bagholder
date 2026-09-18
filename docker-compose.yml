@@ -2,7 +2,7 @@ services:
   bagholder:
     # published on every release; update with: docker compose pull && docker compose up -d
     # the Rust port is the same image tagged :rust; it takes its own host folder
-    # (./data-rust below), since a data folder belongs to one build
+    # (./data-rust below), as each build keeps its own data folder
     image: ghcr.io/professorbagholder/bagholder:latest
     container_name: bagholder
     # loopback only on the host, as the app itself binds. The port is the same
@@ -13,7 +13,7 @@ services:
     ports:
       - "127.0.0.1:${BAGHOLDER_PORT:-8765}:${BAGHOLDER_PORT:-8765}"
     # the database and the login. ./data is the Python app's; the Rust port's is
-    # ./data-rust, and the two builds never share a folder
+    # ./data-rust
     volumes:
       - ./data:/data
       # - ./data-rust:/data

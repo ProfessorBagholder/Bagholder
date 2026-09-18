@@ -21,28 +21,6 @@ pub fn running_tests() -> bool {
         .unwrap_or(false)
 }
 
-pub const BUILD: &str = "rust";
-
-/// A data folder belongs to the build that made it. The marker file `build` in the folder
-/// names that build; a folder without one is adopted here and marked, since it predates the
-/// rule. Returns the refusal line when the folder belongs to another build.
-pub fn claim_home(home: &std::path::Path) -> Result<(), String> {
-    let marker = home.join("build");
-    let found = std::fs::read_to_string(&marker).unwrap_or_default().trim().to_string();
-    if !found.is_empty() && found != BUILD {
-        return Err(format!(
-            "{} belongs to the {} build of Bagholder; run that build, or point this one elsewhere with BAGHOLDER_HOME=<another folder>",
-            home.display(),
-            found
-        ));
-    }
-    if found.is_empty() {
-        let _ = std::fs::create_dir_all(home);
-        let _ = std::fs::write(&marker, format!("{}\n", BUILD));
-    }
-    Ok(())
-}
-
 /// The person's own data folder, refused to a test run. A test that reaches
 /// ~/.bagholder without a temporary home writes its fixtures into the live
 /// database: a suite did exactly that, leaving a made-up QIMC headline in the

@@ -865,11 +865,6 @@ fn main() {
         println!("bagholder {}", app::APP_VERSION);
         return;
     }
-    // a data folder belongs to the build that made it
-    if let Err(refusal) = bagholder_store::claim_home(&home_dir()) {
-        eprintln!("{}", refusal);
-        std::process::exit(1);
-    }
     let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
     if child || update::updates_off() {
         // the supervisor exists to restart an updated server; a copy that never updates runs plain
@@ -894,55 +889,26 @@ mod tests {
 
     const SHIPPED: [&str; 3] = ["ledger.html", "lightweight-charts.js", "favicon.png"];
 
-    /// One data folder per build: the marker that names the build a folder belongs to.
+    /// Where the Rust build keeps its data: ~/.bagholder-rust, or wherever BAGHOLDER_HOME says.
     static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("bh-home-{}-{}", std::process::id(), name));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
     #[test]
-    fn test_a_folder_with_a_foreign_marker_is_refused() {
-        let d = scratch("foreign");
-        std::fs::write(d.join("build"), "python\n").unwrap();
-        let refusal = bagholder_store::claim_home(&d).unwrap_err();
-        assert_eq!(
-            refusal,
-            format!(
-                "{} belongs to the python build of Bagholder; run that build, or point this one elsewhere with BAGHOLDER_HOME=<another folder>",
-                d.display()
-            )
-        );
-        assert_eq!(std::fs::read_to_string(d.join("build")).unwrap(), "python\n");
-    }
-
-    #[test]
-    fn test_a_folder_without_a_marker_is_adopted_and_marked() {
-        let d = scratch("adopted");
-        std::fs::write(d.join("bagholder.db"), b"").unwrap();
-        assert!(bagholder_store::claim_home(&d).is_ok());
-        assert_eq!(std::fs::read_to_string(d.join("build")).unwrap().trim(), "rust");
-    }
-
-    #[test]
-    fn test_the_marker_is_not_rewritten_when_it_already_names_this_build() {
-        let d = scratch("kept");
-        let marker = d.join("build");
-        std::fs::write(&marker, "rust\n").unwrap();
-        let before = std::fs::metadata(&marker).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        assert!(bagholder_store::claim_home(&d).is_ok());
-        assert_eq!(std::fs::metadata(&marker).unwrap().modified().unwrap(), before);
+    fn test_the_default_folder_is_dot_bagholder_rust() {
+        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var("BAGHOLDER_HOME").ok();
+        std::env::remove_var("BAGHOLDER_HOME");
+        let home = crate::home_dir();
+        if let Some(v) = previous {
+            std::env::set_var("BAGHOLDER_HOME", v);
+        }
+        assert_eq!(home.file_name().unwrap(), ".bagholder-rust");
     }
 
     #[test]
     fn test_bagholder_home_decides_where_the_folder_is() {
         let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var("BAGHOLDER_HOME").ok();
-        let d = scratch("elsewhere");
+        let d = std::env::temp_dir().join(format!("bh-home-{}-elsewhere", std::process::id()));
         std::env::set_var("BAGHOLDER_HOME", &d);
         let home = crate::home_dir();
         match previous {
@@ -950,8 +916,6 @@ mod tests {
             None => std::env::remove_var("BAGHOLDER_HOME"),
         }
         assert_eq!(home, d);
-        assert!(bagholder_store::claim_home(&home).is_ok());
-        assert_eq!(std::fs::read_to_string(d.join("build")).unwrap().trim(), "rust");
     }
 
     #[test]
