@@ -72,6 +72,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      # the page is the repository's; the module embeds it, so it is brought in first
+      - name: The page the binary carries
+        run: go generate ./...
+        working-directory: go
       - name: Vet
         run: go vet ./...
         working-directory: go
