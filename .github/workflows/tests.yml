@@ -38,4 +38,4 @@ jobs:
       - name: The suite
         env:
           CI: "true"              # a missing tool is a failure here, never a skip
-        run: python -m unittest discover -s tests -t . --durations 10
+        run: python -m unittest discover -s tests -t .   # --durations is 3.12+, and the floor is 3.9
