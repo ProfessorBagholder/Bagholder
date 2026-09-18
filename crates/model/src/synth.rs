@@ -11,7 +11,7 @@ use crate::dates::option_expiry;
 use crate::fifo::Lot;
 use crate::normalize::kind_of;
 use crate::symbols::{is_option_symbol, underlying_symbol};
-use crate::value::{compact, field_num, field_s, fold_spaces_upper, EPS};
+use crate::value::{FSum, compact, field_num, field_s, fold_spaces_upper, EPS};
 
 /// The strike written into a symbol: ` 10.00 CALL` -> 10.0.
 fn strike_from_symbol(symbol: &str) -> f64 {
@@ -142,7 +142,7 @@ pub fn synthesize_expiries(open_lots: &[Lot], today: &str) -> Vec<Value> {
                 (l.account_type.clone(), l.symbol.clone(), l.currency.clone()) == key && l.direction == lot.direction
             })
             .map(|l| l.qty)
-            .fold(0.0, |a, b| a + b);
+            .fsum();
         if qty <= EPS {
             continue;
         }

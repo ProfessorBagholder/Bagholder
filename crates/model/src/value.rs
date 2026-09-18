@@ -108,6 +108,28 @@ pub fn num_repr(v: f64) -> String {
 
 /// A sum over floats: the integer 0 when there is nothing to add,
 /// else the float total from +0.0 (never -0.0).
+/// A sum of floats as the model's other implementations reach it: each step
+/// keeps what the addition lost and gives it back at the end (Neumaier), so a
+/// column of fractional quantities lands on the same last digit everywhere and
+/// a figure shown to four places never differs by one in the last of them.
+pub trait FSum {
+    fn fsum(self) -> f64;
+}
+
+impl<T: std::borrow::Borrow<f64>, I: IntoIterator<Item = T>> FSum for I {
+    fn fsum(self) -> f64 {
+        let mut total = 0.0f64;
+        let mut lost = 0.0f64;
+        for x in self {
+            let x = *x.borrow();
+            let t = total + x;
+            lost += if total.abs() >= x.abs() { (total - t) + x } else { (x - t) + total };
+            total = t;
+        }
+        total + lost
+    }
+}
+
 pub fn sum_of(empty: bool, total: f64) -> serde_json::Value {
     if empty { serde_json::json!(0) } else { serde_json::json!(total + 0.0) }
 }

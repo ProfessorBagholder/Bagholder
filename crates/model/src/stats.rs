@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::dates::{days_between, MONTHS};
-use crate::value::{field_s, get, num};
+use crate::value::{FSum, field_s, get, num};
 
 pub const GRADES: [&str; 4] = ["A", "B", "C", "F"];
 
@@ -17,10 +17,10 @@ pub fn metrics(trades: &[Value]) -> Value {
     let wins: Vec<f64> = vals.iter().copied().filter(|v| *v > 0.0).collect();
     let losses: Vec<f64> = vals.iter().copied().filter(|v| *v < 0.0).collect();
     let be = vals.iter().filter(|v| **v == 0.0).count();
-    let gw: f64 = wins.iter().fold(0.0, |a, b| a + b);
-    let gl: f64 = losses.iter().fold(0.0, |a, b| a + b).abs();
+    let gw: f64 = wins.iter().fsum();
+    let gl: f64 = losses.iter().fsum().abs();
     let n = vals.len();
-    let total: f64 = vals.iter().fold(0.0, |a, b| a + b);
+    let total: f64 = vals.iter().fsum();
 
     // A book with wins and no losses has no finite profit factor; the page is
     // told so rather than being handed a division by zero.
@@ -46,9 +46,9 @@ pub fn metrics(trades: &[Value]) -> Value {
         "expectancy": if n > 0 { json!(total / n as f64) } else { Value::Null },
         "avgWin": if !wins.is_empty() { gw / wins.len() as f64 } else { 0.0 },
         "avgLoss": if !losses.is_empty() { -gl / losses.len() as f64 } else { 0.0 },
-        "fees": crate::value::sum_of(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fold(0.0, |a, b| a + b)),
+        "fees": crate::value::sum_of(trades.is_empty(), trades.iter().map(|t| num(get(t, "feesCad"), 0.0)).fsum()),
         "avgHold": if n > 0 {
-            json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).fold(0.0, |a, b| a + b) / n as f64)
+            json!(trades.iter().map(|t| num(get(t, "holdDays"), 0.0)).fsum() / n as f64)
         } else { Value::Null },
         "openCount": trades.iter().filter(|t| field_s(t, "status") == "open").count(),
     })
@@ -131,7 +131,7 @@ pub fn grade_buckets(trades: &[Value]) -> Value {
         buckets.push(json!({
             "grade": g,
             "n": rows.len(),
-            "pnl": crate::value::sum_of(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fold(0.0, |a, b| a + b)),
+            "pnl": crate::value::sum_of(rows.is_empty(), rows.iter().map(|t| num(get(t, "pnlCad"), 0.0)).fsum()),
             "tradeIds": rows.iter().map(|t| field_s(t, "id")).collect::<Vec<_>>(),
         }));
     }

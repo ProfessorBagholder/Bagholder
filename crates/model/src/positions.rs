@@ -12,7 +12,7 @@ use crate::fifo::Lot;
 use crate::securities::Securities;
 use crate::symbols::{option_multiplier, underlying_symbol};
 use crate::trades::{quote_fits, Journal};
-use crate::value::{field_s, get, norm_account_name, num};
+use crate::value::{FSum, field_s, get, norm_account_name, num};
 
 /// A number that is absent rather than zero, read with no default.
 fn opt_num(v: Option<&Value>) -> Option<f64> {
@@ -75,12 +75,12 @@ pub fn build_positions(
         lots.sort_by(|a, b| (a.date.clone(), a.when.clone()).cmp(&(b.date.clone(), b.when.clone())));
         let (symbol, account, currency, direction) = k.clone();
         let mult = option_multiplier(&symbol);
-        let qty: f64 = lots.iter().map(|l| l.qty).fold(0.0, |a, b| a + b);
+        let qty: f64 = lots.iter().map(|l| l.qty).fsum();
         if qty <= 1e-9 {
             continue;
         }
-        let cost: f64 = lots.iter().map(|l| l.qty * l.price * mult).fold(0.0, |a, b| a + b);
-        let fees: f64 = lots.iter().map(|l| l.commission).fold(0.0, |a, b| a + b);
+        let cost: f64 = lots.iter().map(|l| l.qty * l.price * mult).fsum();
+        let fees: f64 = lots.iter().map(|l| l.commission).fsum();
         let sec_id = lots.iter().map(|l| l.security_id.clone()).find(|s| !s.is_empty()).unwrap_or_default();
 
         let last = last_prices.get(&symbol);
@@ -109,7 +109,7 @@ pub fn build_positions(
 
         let mv = qty * last_px * mult;
         let unreal = if direction == "LONG" { mv - cost } else { cost - mv };
-        let held: f64 = lots.iter().map(|l| l.qty * days_between(&l.date, today) as f64).fold(0.0, |a, b| a + b);
+        let held: f64 = lots.iter().map(|l| l.qty * days_between(&l.date, today) as f64).fsum();
 
         let mut ws_qty: Option<f64> = None;
         if !sec_id.is_empty() {
@@ -197,7 +197,7 @@ pub fn build_positions(
         }));
     }
 
-    let book: f64 = rows.iter().map(|r| num(get(r, "cost"), 0.0).abs()).fold(0.0, |a, b| a + b);
+    let book: f64 = rows.iter().map(|r| num(get(r, "cost"), 0.0).abs()).fsum();
     for r in rows.iter_mut() {
         let alloc = if book != 0.0 { num(get(r, "cost"), 0.0).abs() / book } else { 0.0 };
         if let Value::Object(m) = r {
