@@ -2462,10 +2462,12 @@ function queueCardHtml(m) {
     "</div></div>";
 }
 function dashboardHtml(m) {
-  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + kpiHtml(m) +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + equityCardHtml(m) + yearsCardHtml(m) + "</div>" +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + monthlyCardHtml(m) + gradeCardHtml(m) + "</div>" +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px;height:342px">' + bySymbolCardHtml(m) + queueCardHtml(m) + "</div></div>";
+  // every dashboard card reads closed-trade figures only (no live key), so each is a core
+  // tile keyed off coreVersion — untouched on a quote tick, rebuilt on a sync or filter.
+  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + tile("d-kpi", coreKey(), () => kpiHtml(m)) +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + tile("d-equity", coreKey(), () => equityCardHtml(m)) + tile("d-years", coreKey(), () => yearsCardHtml(m)) + "</div>" +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + tile("d-monthly", coreKey(), () => monthlyCardHtml(m)) + tile("d-grade", coreKey(), () => gradeCardHtml(m)) + "</div>" +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px;height:342px">' + tile("d-bysym", coreKey(state.sort.bySymbol.key + state.sort.bySymbol.dir), () => bySymbolCardHtml(m)) + tile("d-queue", coreKey(), () => queueCardHtml(m)) + "</div></div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -3088,7 +3090,10 @@ function tagMatches() {
 }
 function tradesHtml(m) {
   const t = state.sel ? tradeById(state.sel) : null;
-  return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + (t ? tradeDetailHtml(t, m) : tradesTableHtml(m)) + "</div>";
+  // the trades list is closed-trade data (no live key): a core tile, so a quote tick
+  // never rebuilds it. Keyed also by its sort, since that reorders the rows.
+  const st = state.sort.trades;
+  return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + (t ? tradeDetailHtml(t, m) : tile("trades-table", coreKey(st.key + st.dir), () => tradesTableHtml(m))) + "</div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -4555,6 +4560,11 @@ function morphChildren(oldParent, newParent) {
 }
 function morphNode(oldN, newN) {
   if (oldN.nodeType !== 1) { if (oldN.nodeValue !== newN.nodeValue) oldN.nodeValue = newN.nodeValue; return; }
+  // A memoized tile that did not change carries the same data-key it did last render;
+  // its markup is identical by construction, so skip its whole subtree — no attribute
+  // and no child work. This is what lets a quote tick leave every unchanged card alone.
+  const nk = newN.getAttribute("data-key");
+  if (nk !== null && nk === oldN.getAttribute("data-key") && newN.getAttribute("data-tile") === oldN.getAttribute("data-tile")) return;
   const oldA = oldN.attributes;
   for (let i = oldA.length - 1; i >= 0; i--) { if (!newN.hasAttribute(oldA[i].name)) oldN.removeAttribute(oldA[i].name); }
   const newA = newN.attributes;
@@ -4562,6 +4572,28 @@ function morphNode(oldN, newN) {
   if (oldN.id && MORPH_SKIP.has(oldN.id)) return;   // owns externally-mounted content: leave its children alone
   if (oldN === document.activeElement && (oldN.tagName === "INPUT" || oldN.tagName === "TEXTAREA")) return;
   morphChildren(oldN, newN);
+}
+// Tile memoization. A card or table is wrapped in tile(id, key, build): while its key is
+// unchanged, build() is not called and its cached markup is reused, and the reconciler
+// skips its subtree too (see the data-key fast-path in morphNode). The key names exactly
+// what the tile reads. coreKey() covers the model's non-quote data (coreVersion), the
+// active filters and the benchmark — everything a "closed" figure depends on — so a quote
+// tick never rebuilds a core tile. liveKey() adds dataVersion, so a tile that shows a live
+// price refreshes on the tick. render() still walks the page, but the expensive per-row
+// markup is generated only where the data actually moved — on a tick, a sync or a filter.
+const _tileCache = {};
+function coreKey(extra) {
+  const s = state.status;
+  return (s.coreVersion || 0) + "|" + JSON.stringify(state.filters) + "|" + benchmarkPref() + (extra != null ? "|" + extra : "");
+}
+function liveKey(extra) { return (state.status.dataVersion || 0) + "~" + coreKey(extra); }
+function tile(id, key, build) {
+  const c = _tileCache[id];
+  if (c && c.key === key) return c.html;
+  let h = build();
+  if (h) h = h.replace(/^(\s*<[a-zA-Z][\w-]*)/, '$1 data-tile="' + id + '" data-key="' + String(key).replace(/"/g, "&quot;") + '"');
+  _tileCache[id] = { key: key, html: h };
+  return h;
 }
 function render() {
   const root = document.getElementById("app");
