@@ -4564,8 +4564,11 @@ function morphNode(oldN, newN) {
   // indicator — is left entirely alone, its own attributes included. Its position, opacity
   // and children are managed by JS (placeTabIndicator, the chart mount, the login stream),
   // so morph must not touch them: stripping the indicator's inline opacity is what made the
-  // selected tab's underline re-fade in on every redraw.
-  if (oldN.id && MORPH_SKIP.has(oldN.id)) return;
+  // selected tab's underline re-fade in on every redraw. Only skip when the new node IS that
+  // same element (same id): morph pairs nodes by position, so on a page change the heatBox
+  // can land opposite an ordinary card (Sectors, Cashflow Positions) — skipping there would
+  // strand the markets treemap on that page instead of replacing it with the card.
+  if (oldN.id && MORPH_SKIP.has(oldN.id)) return newN.id === oldN.id ? undefined : oldN.parentNode.replaceChild(newN, oldN);
   // A memoized tile that did not change carries the same data-tile and data-key it did last
   // render; its markup is identical by construction, so skip its whole subtree. Require the
   // data-tile marker, so an element that merely carries a data-key (the filter popover) is
