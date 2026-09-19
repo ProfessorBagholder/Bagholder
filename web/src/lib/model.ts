@@ -101,6 +101,59 @@ export interface Cashflow {
   count: number
 }
 
+// --- Portfolio tab ---
+export interface Position {
+  id: string
+  symbol: string
+  name: string
+  exchange: string
+  kind: string
+  account: string
+  currency: string
+  short: boolean
+  qty: number
+  avg: number
+  last: number
+  cost: number
+  mv: number
+  priceChange: number | null
+  percentChange: number | null
+  dayChange: number | null
+  unreal: number
+  unrealPct: number
+  priceSource: string
+}
+
+export interface Slice {
+  label?: string
+  name?: string
+  symbol?: string
+  value: number
+  share: number
+}
+
+export interface Portfolio {
+  allocation: { id: string; symbol: string; account: string; value: number; share: number }[]
+  sectors: { name: string; value: number; share: number }[]
+  regions: { name: string; value: number; share: number }[]
+  marketValue: number
+  costBasis: number
+  unrealized: number
+  unrealizedPct: number
+  positionCount: number
+  accountCount: number
+  nav: number
+  marginUsed: number
+  marginUsedPct: number
+  availableMargin: number | null
+  availableMarginUnavailable: string | null
+  hasMargin: boolean
+  cash: number
+  cashPct: number
+  dayChange: number | null
+  dayChangePct: number | null
+}
+
 export interface Model {
   ok: boolean
   currency: string
@@ -108,4 +161,6 @@ export interface Model {
   equity: { label: string; series: EquityPoint[]; annualized: number | null; drawdown: number | null }
   monthly: MonthlyBar[]
   cashflow: Cashflow
+  positions: Position[]
+  portfolio: Portfolio
 }
