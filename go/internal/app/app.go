@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	AppVersion            = "1.46.0"
+	AppVersion            = "1.46.1"
 	Repo                  = "ProfessorBagholder/Bagholder"
 	RepoURL               = "https://github.com/" + Repo
 	ReleaseURL            = "https://api.github.com/repos/" + Repo + "/releases/latest"
