@@ -154,6 +154,27 @@ export interface Portfolio {
   dayChangePct: number | null
 }
 
+// --- Trades tab ---
+export interface Trade {
+  id: string
+  status: string
+  symbol: string
+  exchange: string
+  kind: string
+  currency: string
+  qty: number
+  entry: number
+  exit: number
+  entryDate: string
+  exitDate: string
+  holdDays: number
+  pnl: number
+  pnlPct: number
+  grade: string | null
+  tags: string[]
+  flags: string[]
+}
+
 export interface Model {
   ok: boolean
   currency: string
@@ -163,4 +184,5 @@ export interface Model {
   cashflow: Cashflow
   positions: Position[]
   portfolio: Portfolio
+  trades: Trade[]
 }
