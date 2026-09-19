@@ -4,6 +4,7 @@
   import { route, startRouter } from './lib/router.svelte'
   import TabBar from './lib/TabBar.svelte'
   import Dashboard from './lib/Dashboard.svelte'
+  import Cashflow from './lib/Cashflow.svelte'
   import Placeholder from './lib/Placeholder.svelte'
 
   onMount(() => {
@@ -26,14 +27,14 @@
   <TabBar />
 
   <section class="page">
-    {#if route.tab === 'dashboard'}
-      {#if store.error}
-        <p class="msg err">Could not load model: {store.error}</p>
-      {:else if !store.model}
-        <p class="msg">Loading…</p>
-      {:else}
-        <Dashboard model={store.model} />
-      {/if}
+    {#if store.error}
+      <p class="msg err">Could not load model: {store.error}</p>
+    {:else if !store.model}
+      <p class="msg">Loading…</p>
+    {:else if route.tab === 'dashboard'}
+      <Dashboard model={store.model} />
+    {:else if route.tab === 'cashflow'}
+      <Cashflow cashflow={store.model.cashflow} />
     {:else}
       <Placeholder tab={route.tab} />
     {/if}
