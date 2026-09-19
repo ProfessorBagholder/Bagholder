@@ -1,0 +1,3 @@
+/* Minimal base for the /v3 Svelte spike. Page-level theming lives in App.svelte. */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
