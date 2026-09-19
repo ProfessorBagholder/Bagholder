@@ -651,7 +651,7 @@ func MatchFIFO(activities []*Act) *FIFOResult {
 			if lot.Qty <= 1e-6 {
 				continue
 			}
-			if lot.Kind == "Crypto" && lot.Qty*lot.Price < 1.0 {
+			if lot.Kind == "Crypto" && !slices.Contains(lot.Flags, "reward") && lot.Qty*lot.Price < 1.0 {
 				continue
 			}
 			openLots = append(openLots, lot.clone())

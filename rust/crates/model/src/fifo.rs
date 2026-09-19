@@ -872,7 +872,7 @@ pub fn match_fifo_in_place(activities: &mut Vec<Value>) -> Matched {
         for lot in books.map.get(key).unwrap() {
             if lot.qty <= 1e-6 { continue; }
             // crypto residue from in-kind fees: a lot worth under a dollar is not a position
-            if lot.kind == "Crypto" && lot.qty * lot.price < 1.0 { continue; }
+            if lot.kind == "Crypto" && !lot.flags.iter().any(|f| f == "reward") && lot.qty * lot.price < 1.0 { continue; }
             open_lots.push(lot.clone());
         }
     }

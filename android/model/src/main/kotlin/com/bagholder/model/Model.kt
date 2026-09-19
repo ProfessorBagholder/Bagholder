@@ -398,6 +398,11 @@ object Model {
         val qty = abs(a.quantity)
         a.flags = mutableListOf()
 
+        val swapSub = compact(a.activitySubType)
+        if (((rt.startsWith("CRYPTO") || at.startsWith("CRYPTO")) && swapSub.contains("SWAP")) || rt == "SWAPMARKETORDER") {
+            a.category = "other"; a.kind = "Crypto"; a.flags.add("missing-swap-legs"); return a
+        }
+
         if (rt == "CRYPTOBUY" || at == "CRYPTOBUY") {
             a.category = "trade"; a.activityType = "Trade"; a.activitySubType = "BUY"; a.kind = "Crypto"
             a.quantity = qty
@@ -1095,7 +1100,7 @@ object Model {
             for (lot in book) {
                 if (lot.qty <= 1e-6) continue
                 // crypto residue from in-kind fees: a lot worth under a dollar is not a position
-                if (lot.kind == "Crypto" && lot.qty * lot.price < 1.0) continue
+                if (lot.kind == "Crypto" && !lot.flags.contains("reward") && lot.qty * lot.price < 1.0) continue
                 openLots.add(lot.copy())
             }
         }

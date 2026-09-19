@@ -243,6 +243,15 @@ def normalize_activity(activity):
     qty = abs(_num(a.get("quantity")))
     a["flags"] = []
 
+    if ((rt.startswith("CRYPTO") or at.startswith("CRYPTO")) and "SWAP" in compact(a.get("activitySubType"))) or rt == "SWAPMARKETORDER":
+        # A swap is one summary row tagged with the OUTGOING coin's symbol but the
+        # INCOMING coin's quantity; booking it as a fill records the wrong coin at
+        # the wrong size and fabricates P&L. The incoming leg is not in this row, so
+        # quarantine it (surfaced as missing-swap-legs) rather than invent a fill.
+        a.update(category="other", kind="Crypto")
+        a["flags"].append("missing-swap-legs")
+        return a
+
     if rt == "CRYPTOBUY" or at == "CRYPTOBUY":
         a.update(category="trade", activityType="Trade", activitySubType="BUY", kind="Crypto")
         a["quantity"] = qty
@@ -1028,8 +1037,9 @@ def match_fifo(activities):
         for lot in book:
             if lot["qty"] <= 1e-6:
                 continue
-            # crypto residue from in-kind fees: a lot worth under a dollar is not a position
-            if lot["kind"] == "Crypto" and lot["qty"] * lot["price"] < 1.0:
+            # crypto residue from in-kind fees is dust; drop only genuine dust and
+            # never a staking reward, which opens a real lot at zero cost (SPEC crypto)
+            if lot["kind"] == "Crypto" and "reward" not in lot.get("flags", []) and lot["qty"] * lot["price"] < 1.0:
                 continue
             open_lots.append(dict(lot))
     closed.sort(key=lambda t: (t["exitDate"], t["id"]))

@@ -562,6 +562,11 @@ enum BHModel {
         let qty = abs(a.quantity)
         a.flags = []
 
+        let swapSub = compact(a.activitySubType)
+        if ((rt.hasPrefix("CRYPTO") || at.hasPrefix("CRYPTO")) && swapSub.contains("SWAP")) || rt == "SWAPMARKETORDER" {
+            a.category = "other"; a.kind = "Crypto"; a.flags.append("missing-swap-legs"); return a
+        }
+
         if rt == "CRYPTOBUY" || at == "CRYPTOBUY" {
             a.category = "trade"; a.activityType = "Trade"; a.activitySubType = "BUY"; a.kind = "Crypto"
             a.quantity = qty
@@ -1360,7 +1365,7 @@ enum BHModel {
             for lot in books[key] ?? [] {
                 if lot.qty <= 1e-6 { continue }
                 // crypto residue from in-kind fees: a lot worth under a dollar is not a position
-                if lot.kind == "Crypto" && lot.qty * lot.price < 1.0 { continue }
+                if lot.kind == "Crypto" && !lot.flags.contains("reward") && lot.qty * lot.price < 1.0 { continue }
                 openLots.append(lot)
             }
         }
