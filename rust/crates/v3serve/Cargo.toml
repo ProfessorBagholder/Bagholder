@@ -1,0 +1,20 @@
+[package]
+name = "v3serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "v3serve"
+path = "src/main.rs"
+
+[dependencies]
+# Phase 0b spike (docs/frontend-backend-migration.md): prove axum + tower-http
+# serve the built Svelte /v3 bundle and proxy /api to the existing backend, same
+# origin — the serving layer the Phase 4 server relay is built on. Deliberately
+# small and standalone; not wired into the main `bagholder` binary yet.
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tower-http = { version = "0.6", features = ["fs"] }
+# http-only client for the /api reverse proxy (localhost, no TLS needed).
+reqwest = { version = "0.12", default-features = false }
