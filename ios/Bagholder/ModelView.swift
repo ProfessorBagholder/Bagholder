@@ -756,13 +756,14 @@ extension BHModel {
         v.today = today
         v.filters = f
         v.options = o
-        v.kpi = kpi(trades)
+        let scored = trades.filter { !$0.flags.contains("basis-unknown") }   // deposited coins have no known entry: not scoreable
+        v.kpi = kpi(scored)
         v.equity = BHEquityView(label: seriesLabel, series: shown, drawdown: dd, annualized: ann)
         v.years = years
         v.benchmarkKey = benchKey
         v.benchmarkLabel = benchmarkLabels[benchKey] ?? "S&P 500"
-        v.monthly = monthly(trades)
-        v.bySymbol = bySymbol(trades)
+        v.monthly = monthly(scored)
+        v.bySymbol = bySymbol(scored)
         v.grades = gradeBuckets(trades)
         v.queue = reviewQueue(trades)
         v.trades = trades

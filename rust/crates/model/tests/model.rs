@@ -566,9 +566,13 @@ fn test_a_transfer_out_leaves_at_cost_with_no_pnl() {
     assert_eq!(got, vec![(50.0, 1.0, 100.0), (30.0, 1.0, 120.0)], "the coin sent out came off the first lot at cost; the sale closed one at 100 and one at 120");
     let by_id: HashMap<String, Value> = acts.iter().map(|a| (st(&a["id"]).to_string(), normalize_activity(a))).collect();
     let trades = build_trades(&m.closed, &[], &by_id, &Securities::new(&[]), &Map::new());
-    assert_eq!(trades.len(), 1);
-    assert_eq!(((n(&trades[0]["pnl"]) * 1e6).round() / 1e6, n(&trades[0]["qty"])), (80.0, 2.0));
-    assert!(!arr(&trades[0]["fills"]).iter().any(|f| f["id"] == "to"), "the transfer out is not a fill of the trade");
+    assert_eq!(trades.len(), 2, "the deposited coin is its own unscoreable trade, not merged");
+    let is_dep = |t: &Value| t.get("flags").and_then(|v| v.as_array()).map(|a| a.iter().any(|f| f == "basis-unknown")).unwrap_or(false);
+    let bought = trades.iter().find(|t| !is_dep(t)).unwrap();
+    let deposited = trades.iter().find(|t| is_dep(t)).unwrap();
+    assert_eq!(((n(&bought["pnl"]) * 1e6).round() / 1e6, n(&bought["qty"])), (50.0, 1.0), "coin bought here scores 50");
+    assert_eq!(((n(&deposited["pnl"]) * 1e6).round() / 1e6, n(&deposited["qty"])), (30.0, 1.0), "deposited coin's sale is flagged, not scored");
+    assert!(!trades.iter().any(|t| arr(&t["fills"]).iter().any(|f| f["id"] == "to")), "the transfer out is not a fill of the trade");
     // nothing held: nothing to take off, nothing unmatched, no trade
     let m = match_fifo(&[eth_transfer("to2", 1.0, 200.0, "2026-01-10", true)]);
     assert!(m.closed.is_empty() && m.open.is_empty() && m.unmatched.is_empty());

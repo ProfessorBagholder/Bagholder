@@ -262,7 +262,11 @@ pub fn build_trades(
         if used.contains(&mk) {
             continue;
         }
-        let rt = s.rt.clone().unwrap_or_else(|| format!("rt:{}", mk));
+        let mut rt = s.rt.clone().unwrap_or_else(|| format!("rt:{}", mk));
+        // a deposited (unknown-basis) leg stands as its own unscoreable trade
+        if s.flags.iter().any(|f| f == "basis-unknown") {
+            rt.push_str("|nobasis");
+        }
         if !by_rt.contains_key(&rt) {
             by_rt.insert(rt.clone(), Vec::new());
             order.push(rt.clone());

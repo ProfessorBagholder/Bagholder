@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-18.2"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-19.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -2498,7 +2498,9 @@ function tradesTableHtml(m) {
       '<td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(symText(t.symbol)) + "</td>" +
       '<td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.exchange || "—") + "</td>" +
       '<td style="text-align:right">' + qty(t.qty) + '</td><td style="text-align:right">' + px(t.entry) + '</td><td style="text-align:right">' + px(t.exit) + '</td><td class="dim" style="font-variant-numeric:normal;text-align:center">' + esc(t.currency) + "</td>" +
-      '<td style="text-align:right;font-weight:500;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</td><td style="text-align:right;color:' + color(t.pnl) + '">' + pct(t.pnlPct) + "</td>" +
+      ((t.flags || []).indexOf("basis-unknown") >= 0
+        ? '<td style="text-align:right" class="dim">—</td><td style="text-align:right" class="dim">deposited</td>'
+        : '<td style="text-align:right;font-weight:500;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</td><td style="text-align:right;color:' + color(t.pnl) + '">' + pct(t.pnlPct) + "</td>") +
       '<td style="text-align:right" class="dim">' + hold(t.holdDays) + '</td><td style="white-space:nowrap;padding-left:50px">' + gradeChip(t) + "</td>" +
       '<td style="font-variant-numeric:normal">' + (t.tags && t.tags.length ? '<span class="tagchip">' + esc(t.tags[0]) + "</span>" + (t.tags.length > 1 ? '<span class="muted" style="font-size:10.5px;margin-left:4px">+' + (t.tags.length - 1) + "</span>" : "") : '<span style="color:rgba(var(--ink-rgb),.5)">—</span>') + "</td></tr>").join("") +
     "</tbody></table>" + (rows.length ? "" : '<div class="muted" style="padding:26px 4px;font-size:12px">No trades match these filters. <a href="#" data-act="clearAll">Reset all</a></div>') + "</div></div>";

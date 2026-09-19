@@ -196,6 +196,8 @@ func NormalizeActivity(activity *Act) *Act {
 			a.NetCashAmount = math.Abs(cash)
 		} else {
 			a.ActivitySubType = "BUY"
+			// a deposited coin has no known entry: a later sale is unscoreable
+			a.Flags = append(a.Flags, "basis-unknown")
 			a.Quantity = qty
 			a.NetCashAmount = -math.Abs(cash)
 		}

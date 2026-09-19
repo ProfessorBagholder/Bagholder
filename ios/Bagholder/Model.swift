@@ -585,6 +585,7 @@ enum BHModel {
                 a.netCashAmount = abs(cash)
             } else {
                 a.activitySubType = "BUY"
+                a.flags.append("basis-unknown")   // a deposited coin has no known entry: a later sale is unscoreable
                 a.quantity = qty
                 a.netCashAmount = -abs(cash)
             }
@@ -1783,7 +1784,8 @@ enum BHModel {
         var byRt: [String: [BHSlice]] = [:]
         var order: [String] = []
         for s in closed {
-            let rt = s.rt ?? ("rt:" + sliceMemberKey(s))
+            var rt = s.rt ?? ("rt:" + sliceMemberKey(s))
+            if s.flags.contains("basis-unknown") { rt += "|nobasis" }   // deposited leg stands alone, unscoreable
             if byRt[rt] == nil {
                 byRt[rt] = []
                 order.append(rt)

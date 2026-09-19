@@ -1,6 +1,7 @@
 package model
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -434,15 +435,24 @@ func TestATransferOutLeavesAtCostWithNoPnl(t *testing.T) {
 		byID[acts[i].ID] = NormalizeActivity(&acts[i])
 	}
 	trades := BuildTrades(fifo.Closed, fifo.Open, nil, byID, NewSecurities(nil), noJournal())
-	if len(trades) != 1 {
-		t.Fatalf("trades: %s", jsonOf(trades))
+	if len(trades) != 2 {
+		t.Fatalf("the deposited coin is its own unscoreable trade, not merged: %s", jsonOf(trades))
 	}
-	if py.Round(trades[0].Pnl, 6) != 80 || trades[0].Qty != 2 {
-		t.Errorf("trade: pnl %v qty %v", trades[0].Pnl, trades[0].Qty)
+	byBasis := map[bool]*Trade{}
+	for _, tr := range trades {
+		byBasis[!slices.Contains(tr.Flags, "basis-unknown")] = tr
 	}
-	for _, f := range trades[0].Fills {
-		if f.ID == "to" {
-			t.Error("the transfer out is not a fill of the trade")
+	if py.Round(byBasis[true].Pnl, 6) != 50 || byBasis[true].Qty != 1 {
+		t.Errorf("the coin bought here scores 50: pnl %v qty %v", byBasis[true].Pnl, byBasis[true].Qty)
+	}
+	if py.Round(byBasis[false].Pnl, 6) != 30 || byBasis[false].Qty != 1 {
+		t.Errorf("the deposited coin's sale is flagged, not scored: pnl %v qty %v", byBasis[false].Pnl, byBasis[false].Qty)
+	}
+	for _, tr := range trades {
+		for _, f := range tr.Fills {
+			if f.ID == "to" {
+				t.Error("the transfer out is not a fill of the trade")
+			}
 		}
 	}
 	fifo = MatchFIFO(ptrs([]store.Activity{fixtures.CryptoTransfer("to2", "ETH", 1, 200, "2026-01-10", true, "Ponzi")}))

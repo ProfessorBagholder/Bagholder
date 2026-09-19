@@ -264,6 +264,9 @@ def normalize_activity(activity):
             a["netCashAmount"] = abs(cash)
         else:
             a["activitySubType"] = "BUY"
+            # a coin transferred in is a deposited asset, not a buy made here: its
+            # original cost is unknown, so a later sale is an unscoreable round-trip
+            a["flags"].append("basis-unknown")
             a["quantity"] = qty
             a["netCashAmount"] = -abs(cash)
         return a
@@ -724,6 +727,7 @@ def _make_slice(lot, fill, a, matched, symbol=None):
         "exitCommission": exit_commission,
         "pnl": raw_pnl - commission,
         "pnlCad": raw_pnl - commission,
+        "basisKnown": "basis-unknown" not in (lot.get("flags") or []),
         "openDirection": lot["direction"],
         "buyActivityId": lot["activityId"],
         "sellActivityId": _s(a.get("id")),
@@ -1519,6 +1523,7 @@ def collapse_trade(gid, slices, locked, status, acts_by_id, securities, journal)
         "holdDays": days_between(entry_date, exit_date),
         "pnl": pnl,
         "pnlCad": pnl_cad,
+        "basisKnown": all(sl.get("basisKnown", True) for sl in slices),
         "fees": fees,
         "feesCad": fees_cad,
         "pnlPct": (pnl / basis) if basis > 0 else None,
@@ -1555,12 +1560,16 @@ def build_trades(closed, open_lots, saved_groups, acts_by_id, securities, journa
         if slice_member_key(s) in used:
             continue
         rt = s.get("rt") or "rt:" + slice_member_key(s)
-        if rt not in by_rt:
-            by_rt[rt] = []
-            order.append(rt)
-        by_rt[rt].append(s)
-    for rt in order:
-        groups.append((rt, by_rt[rt], False))
+        # a deposited (unknown-basis) leg never merges into a bought round trip:
+        # it cannot be scored, so it stands as its own trade
+        gk = (rt, bool(s.get("basisKnown", True)))
+        if gk not in by_rt:
+            by_rt[gk] = []
+            order.append(gk)
+        by_rt[gk].append(s)
+    for gk in order:
+        gid = gk[0] if gk[1] else gk[0] + "|nobasis"
+        groups.append((gid, by_rt[gk], False))
     trades = []
     for gid, members, locked in groups:
         trades.append(collapse_trade(gid, members, locked, "closed", acts_by_id, securities, journal))
@@ -2983,6 +2992,7 @@ def build_view(base, filters=None):
     today = base["today"]
     trades_all = base["trades"]
     trades = [t for t in trades_all if trade_matches(t, f, today)]
+    scored = [t for t in trades if t.get("basisKnown", True)]  # a deposited coin has no known entry: not scoreable
     positions_all = base["positions"]
     positions = [p for p in positions_all if position_matches(p, f)]
 
@@ -3049,7 +3059,7 @@ def build_view(base, filters=None):
             "results": ["Winners", "Losers", "Breakeven"],
             "years": year_options,
         },
-        "kpi": metrics(trades),
+        "kpi": metrics(scored),
         "equity": {
             "label": series_label,
             "series": shown,
@@ -3058,8 +3068,8 @@ def build_view(base, filters=None):
         },
         "years": years,
         "benchmark": {"key": bench_key, "label": BENCHMARK_LABELS[bench_key]},
-        "monthly": monthly(trades),
-        "bySymbol": by_symbol(trades),
+        "monthly": monthly(scored),
+        "bySymbol": by_symbol(scored),
         "grades": grade_buckets(trades),
         "queue": review_queue(trades),
         "trades": trades,

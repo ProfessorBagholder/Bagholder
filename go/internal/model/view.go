@@ -1948,6 +1948,14 @@ func BuildView(base *Base, filters any) *View {
 			trades = append(trades, t)
 		}
 	}
+	// performance stats score only trades with a known entry basis: a deposited
+	// (transferred-in) coin has no buy made here and cannot be scored
+	scored := make([]*Trade, 0, len(trades))
+	for _, t := range trades {
+		if !slices.Contains(t.Flags, "basis-unknown") {
+			scored = append(scored, t)
+		}
+	}
 	positionsAll := base.Positions
 	positions := []*Position{}
 	for _, p := range positionsAll {
@@ -2083,12 +2091,12 @@ func BuildView(base *Base, filters any) *View {
 			Results:   []string{"Winners", "Losers", "Breakeven"},
 			Years:     yearOptions,
 		},
-		KPI:              metrics(trades),
+		KPI:              metrics(scored),
 		Equity:           EquityView{Label: seriesLabel, Series: shown, Drawdown: dd, Annualized: ann},
 		Years:            years,
 		Benchmark:        BenchmarkView{benchKey, BenchmarkLabels[benchKey]},
-		Monthly:          monthly(trades),
-		BySymbol:         bySymbol(trades),
+		Monthly:          monthly(scored),
+		BySymbol:         bySymbol(scored),
 		Grades:           gradeBuckets(trades),
 		Queue:            reviewQueue(trades),
 		Trades:           trades,

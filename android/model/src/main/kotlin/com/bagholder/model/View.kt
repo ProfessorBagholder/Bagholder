@@ -630,11 +630,12 @@ object ModelView {
             years = tradesAll.filter { it.exitDate.isNotEmpty() }.map { it.exitDate.take(4) }.toSet().sorted().reversed(),
         )
         val portfolio = portfolioView(base, f, positions)
+        val scored = trades.filter { "basis-unknown" !in it.flags }   // deposited coins have no known entry: not scoreable
         return View(
-            today = today, filters = f, options = options, kpi = Model.kpi(trades),
+            today = today, filters = f, options = options, kpi = Model.kpi(scored),
             equity = EquityView(seriesLabel, shown, dd, ann), years = years,
             benchmarkKey = benchKey, benchmarkLabel = Model.BENCHMARK_LABELS[benchKey] ?: "S&P 500",
-            monthly = monthly(trades), bySymbol = bySymbol(trades), grades = gradeBuckets(trades), queue = reviewQueue(trades),
+            monthly = monthly(scored), bySymbol = bySymbol(scored), grades = gradeBuckets(trades), queue = reviewQueue(trades),
             trades = trades, tradeTotal = tradesAll.size, positions = positions,
             positionsSummary = PositionsSummary(positions.size, positions.sumOf { abs(it.cost) }, positions.sumOf { if (it.short) -it.mv else it.mv }, positions.sumOf { it.unreal }),
             portfolio = portfolio,
