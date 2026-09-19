@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use bagholder_model::base::Base;
 
-pub const APP_VERSION: &str = "1.46.2";
+pub const APP_VERSION: &str = "1.46.3";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-19.1";
 /// Bump when title/summary logic improves, so a row that is missing a half is
