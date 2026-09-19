@@ -414,6 +414,17 @@ CASES = {
         ],
         "market": {"fx": {}, "benchmark": {}},
     },
+    # a coin deposited (transferred in) then sold is not a scoreable trade: no buy
+    # was made here, so it stands alone and is left out of the performance figures
+    "crypto_deposited_coin_not_scored": {
+        "today": "2026-03-01",
+        "activities": [
+            crypto("cb", "buy", "BTC", 1, 100, "2026-01-01"),
+            crypto_transfer("dep", "BTC", 1, 100, "2026-01-05"),
+            crypto("cs", "sell", "BTC", 2, 150, "2026-02-01"),
+        ],
+        "market": {"fx": {}, "benchmark": {}},
+    },
     # a monthly payer between ex-date and pay day: the distribution still to be
     # paid is the one shown, its ex-date passed, its pay day not
     "cashflow_between_ex_date_and_pay_day": {

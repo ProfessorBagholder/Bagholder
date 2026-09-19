@@ -319,6 +319,10 @@ func BuildTrades(closed []*Slice, openLots []*Lot, saved []store.TradeGroup, act
 		if rt == "" {
 			rt = "rt:" + sliceMemberKey(s)
 		}
+		// a deposited (unknown-basis) leg stands as its own unscoreable trade
+		if slices.Contains(s.Flags, "basis-unknown") {
+			rt = rt + "|nobasis"
+		}
 		if _, ok := byRT[rt]; !ok {
 			order = append(order, rt)
 		}

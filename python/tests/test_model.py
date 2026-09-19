@@ -579,9 +579,11 @@ class CryptoTest(unittest.TestCase):
         self.assertEqual([(round(s["pnl"], 6), s["quantity"], s["entryPrice"]) for s in fifo["closed"]], [(50.0, 1.0, 100.0), (30.0, 1.0, 120.0)],
                          "the coin sent out came off the first lot at cost; the sale closed one at 100 and one at 120")
         trades = model.build_trades(fifo["closed"], fifo["open"], [], {a["id"]: model.normalize_activity(a) for a in acts}, model.Securities([]), {})
-        self.assertEqual(len(trades), 1)
-        self.assertEqual((round(trades[0]["pnl"], 6), trades[0]["qty"]), (80.0, 2.0))
-        self.assertNotIn("to", {f["id"] for f in trades[0]["fills"]}, "the transfer out is not a fill of the trade")
+        self.assertEqual(len(trades), 2, "the deposited (transfer-in) coin is its own unscoreable trade, not merged with the one bought here")
+        by_basis = {t["basisKnown"]: t for t in trades}
+        self.assertEqual((round(by_basis[True]["pnl"], 6), by_basis[True]["qty"]), (50.0, 1.0), "the coin bought here scores 50")
+        self.assertEqual((round(by_basis[False]["pnl"], 6), by_basis[False]["qty"]), (30.0, 1.0), "the deposited coin's sale is flagged basis-unknown, not scored")
+        self.assertNotIn("to", {f["id"] for t in trades for f in t["fills"]}, "the transfer out is not a fill of the trade")
         # nothing held: nothing to take off, nothing unmatched, no trade
         fifo = model.match_fifo([transfer("to2", 1, 200, "2026-01-10", True)])
         self.assertEqual((fifo["closed"], fifo["open"], fifo["unmatched"]), ([], [], []))

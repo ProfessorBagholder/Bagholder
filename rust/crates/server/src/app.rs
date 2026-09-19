@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 
 use bagholder_model::base::Base;
 
-pub const APP_VERSION: &str = "1.45.3";
+pub const APP_VERSION: &str = "1.46.0";
 /// Bumped whenever the page and the server change together.
-pub const PROTOCOL: &str = "2026-09-18.2";
+pub const PROTOCOL: &str = "2026-09-19.1";
 /// Bump when title/summary logic improves, so a row that is missing a half is
 /// read again. A row that has both keeps them: a re-read of everything costs a
 /// download and a reading each, which is minutes of a list standing still.

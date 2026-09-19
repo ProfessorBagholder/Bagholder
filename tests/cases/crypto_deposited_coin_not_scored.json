@@ -10,7 +10,7 @@
         "legs": 1,
         "n": 1,
         "pnl": 50.0,
-        "symbol": "ETH",
+        "symbol": "BTC",
         "winRate": 1.0
       }
     ],
@@ -135,7 +135,7 @@
         "Crypto"
       ],
       "symbols": [
-        "ETH"
+        "BTC"
       ],
       "tags": [],
       "years": [
@@ -175,15 +175,15 @@
         "date": "2026-02-01",
         "id": "rt:cb|nobasis",
         "missing": "no grade or thesis",
-        "pnl": 30.0,
-        "symbol": "ETH"
+        "pnl": 50.0,
+        "symbol": "BTC"
       },
       {
         "date": "2026-02-01",
         "id": "rt:cb",
         "missing": "no grade or thesis",
         "pnl": 50.0,
-        "symbol": "ETH"
+        "symbol": "BTC"
       }
     ],
     "trades": [
@@ -211,13 +211,13 @@
         "qty": 1.0,
         "side": "SELL",
         "status": "closed",
-        "symbol": "ETH",
+        "symbol": "BTC",
         "tags": []
       },
       {
         "account": "Crypto",
         "currency": "CAD",
-        "entry": 120.0,
+        "entry": 100.0,
         "entryDate": "2026-01-05",
         "exchange": "Crypto",
         "exit": 150.0,
@@ -232,13 +232,13 @@
         "id": "rt:cb|nobasis",
         "kind": "Crypto",
         "mult": 1,
-        "pnl": 30.0,
-        "pnlCad": 30.0,
-        "pnlPct": 0.25,
+        "pnl": 50.0,
+        "pnlCad": 50.0,
+        "pnlPct": 0.5,
         "qty": 1.0,
         "side": "SELL",
         "status": "closed",
-        "symbol": "ETH",
+        "symbol": "BTC",
         "tags": []
       }
     ],
@@ -263,12 +263,12 @@
         "currency": "CAD",
         "id": "cb",
         "name": "LUNR",
-        "netCashAmount": 200,
+        "netCashAmount": 100,
         "occurredAt": "2026-01-01T15:00:00+00:00",
-        "quantity": 2,
+        "quantity": 1,
         "rawType": "CRYPTO_BUY",
         "securityId": "",
-        "symbol": "ETH",
+        "symbol": "BTC",
         "transactionDate": "2026-01-01",
         "unitPrice": 100
       },
@@ -281,36 +281,16 @@
         "commission": 0,
         "currency": "CAD",
         "direction": "CREDIT",
-        "id": "ti",
+        "id": "dep",
         "name": "LUNR",
-        "netCashAmount": 120,
+        "netCashAmount": 100,
         "occurredAt": "2026-01-05T15:00:00+00:00",
         "quantity": 1,
         "rawType": "CRYPTO_TRANSFER",
         "securityId": "",
-        "symbol": "ETH",
+        "symbol": "BTC",
         "transactionDate": "2026-01-05",
-        "unitPrice": 120.0
-      },
-      {
-        "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "TRANSFER_OUT",
-        "activityType": "CRYPTO_TRANSFER",
-        "category": "other",
-        "commission": 0,
-        "currency": "CAD",
-        "direction": "DEBIT",
-        "id": "to",
-        "name": "LUNR",
-        "netCashAmount": -200,
-        "occurredAt": "2026-01-10T15:00:00+00:00",
-        "quantity": 1,
-        "rawType": "CRYPTO_TRANSFER",
-        "securityId": "",
-        "symbol": "ETH",
-        "transactionDate": "2026-01-10",
-        "unitPrice": 200.0
+        "unitPrice": 100.0
       },
       {
         "accountId": "acct-1",
@@ -327,7 +307,7 @@
         "quantity": 2,
         "rawType": "CRYPTO_SELL",
         "securityId": "",
-        "symbol": "ETH",
+        "symbol": "BTC",
         "transactionDate": "2026-02-01",
         "unitPrice": 150
       }

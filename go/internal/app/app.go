@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	AppVersion            = "1.45.3"
+	AppVersion            = "1.46.0"
 	Repo                  = "ProfessorBagholder/Bagholder"
 	RepoURL               = "https://github.com/" + Repo
 	ReleaseURL            = "https://api.github.com/repos/" + Repo + "/releases/latest"
@@ -35,7 +35,7 @@ const (
 	UpdateCheckHours      = 1
 	UpdatesOffMessage     = "This copy is updated with docker compose pull; a new release is a new image."
 	ImagePage             = RepoURL + "/pkgs/container/bagholder"
-	Protocol              = "2026-09-18.2"
+	Protocol              = "2026-09-19.1"
 	EnrichVersion         = 11
 	LoginURL              = "https://my.wealthsimple.com/app/login"
 

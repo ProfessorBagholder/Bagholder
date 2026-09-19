@@ -529,6 +529,13 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
     let today = base.today.clone();
 
     let trades: Vec<Value> = base.trades.iter().filter(|t| trade_matches(t, &f, &today)).cloned().collect();
+    // performance stats score only trades with a known entry basis: a deposited
+    // (transferred-in) coin has no buy made here and cannot be scored
+    let scored: Vec<Value> = trades
+        .iter()
+        .filter(|t| !t.get("flags").and_then(|v| v.as_array()).map(|a| a.iter().any(|f| f == "basis-unknown")).unwrap_or(false))
+        .cloned()
+        .collect();
     let positions: Vec<Value> = base.positions.iter().filter(|p| position_matches(p, &f)).cloned().collect();
 
     let accts = f.list("account");
@@ -680,7 +687,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
             "results": ["Winners", "Losers", "Breakeven"],
             "years": year_options,
         },
-        "kpi": metrics(&trades),
+        "kpi": metrics(&scored),
         "equity": {
             "label": series_label,
             "series": series_json(&shown_owned),
@@ -692,8 +699,8 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
             "key": bench_key.clone(),
             "label": BENCHMARK_LABELS.iter().find(|(k, _)| *k == bench_key).map(|(_, v)| *v).unwrap_or(""),
         },
-        "monthly": monthly(&trades),
-        "bySymbol": by_symbol(&trades),
+        "monthly": monthly(&scored),
+        "bySymbol": by_symbol(&scored),
         "grades": grade_buckets(&trades),
         "queue": review_queue(&trades),
         "trades": trades,

@@ -421,6 +421,7 @@ object Model {
                 a.netCashAmount = abs(cash)
             } else {
                 a.activitySubType = "BUY"
+                a.flags.add("basis-unknown")   // a deposited coin has no known entry: a later sale is unscoreable
                 a.quantity = qty
                 a.netCashAmount = -abs(cash)
             }
@@ -1485,7 +1486,8 @@ object Model {
     fun buildTrades(closed: List<Slice>, actsById: Map<String, Act>, securities: Securities, journal: Map<String, JournalEntry> = emptyMap()): List<Trade> {
         val byRt = LinkedHashMap<String, MutableList<Slice>>()
         for (s in closed) {
-            val rt = s.rt ?: ("rt:" + sliceMemberKey(s))
+            var rt = s.rt ?: ("rt:" + sliceMemberKey(s))
+            if ("basis-unknown" in s.flags) rt += "|nobasis"   // deposited leg stands alone, unscoreable
             byRt.getOrPut(rt) { mutableListOf() }.add(s)
         }
         return byRt.entries.map { collapseTrade(it.key, it.value, "closed", actsById, securities, journal) }

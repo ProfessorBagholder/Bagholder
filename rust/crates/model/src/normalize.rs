@@ -120,6 +120,8 @@ pub fn normalize_activity(activity: &Value) -> Value {
             setf(&mut a, "netCashAmount", cash.abs());
         } else {
             set(&mut a, "activitySubType", "BUY".into());
+            // a deposited coin has no known entry: a later sale is unscoreable
+            push_flag(&mut a, "basis-unknown");
             setf(&mut a, "quantity", qty);
             setf(&mut a, "netCashAmount", -cash.abs());
         }
