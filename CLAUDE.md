@@ -13,6 +13,11 @@ Each language keeps to its own folder; another port (a future `go/`) sits beside
 
 - `SPEC.md` defines every figure and every screen on every platform: meaning, formula, source, currency, format, layout, refresh cadence, and the verification steps; its §8 is the phone's presentation of the same figures. Check every change against it. When a change needs a definition to differ, change `SPEC.md` in the same commit and say why.
 - The user's standing rules, all recorded in the spec: only what was asked, no captions, tooltips, notes or helper text; per-instrument figures in the instrument's own currency; aggregates in CAD, never labelled; payout frequency verified from the fund's record, never assumed; raw Wealthsimple rows never rewritten; nothing synthetic on a chart.
+- Which of those is checked how: a test enforces the mechanical ones — the version trio and `PROTOCOL` agree, the shared cases match every port, the page's script parses (`node --check`). The rest are policy, held in review against `SPEC.md`, not by a script: the no-caption rule, per-instrument currency, verified payout frequency, nothing synthetic on a chart. Do not assume a policy rule will be caught by the suite; it is caught by reading the change against the spec.
+
+## Planning non-trivial work
+
+Before non-trivial work — anything a maintainer would review as a change of behaviour, not a typo — write a plan from `PLAN.template.md` and put its acceptance criteria in front of the user *before* writing code. The plan is a done-contract: the acceptance criteria are observable and binary, each names how it is verified, and if any fails the work is not done. Surfacing it early is the point — a wrong contract is cheap to fix before it is built and expensive after, and the plan carries the right to refuse a contract that conflicts with `SPEC.md` or the code (stop and say so rather than build the wrong thing). Land the plan in the PR so the review reads the contract beside the diff. Skip it only for a one-line fix or a mechanical edit whose outcome is obvious; when in doubt, the criteria are worth writing.
 
 ## How changes land
 
