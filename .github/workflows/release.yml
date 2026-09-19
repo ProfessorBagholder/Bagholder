@@ -128,13 +128,13 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           ext=""; [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
-          name="bagholder-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
+          name="bagholder-${TAG}-go-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
           mkdir -p ../dist
           go build -trimpath -ldflags="-s -w" -o "../dist/$name" ./cmd/bagholder
       - name: Checksum
         run: |
           ext=""; [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
-          name="bagholder-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
+          name="bagholder-${TAG}-go-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
           cd dist
           if [ "${{ matrix.goos }}" = "windows" ]; then
             sha256sum "$name" > "$name.sha256"
