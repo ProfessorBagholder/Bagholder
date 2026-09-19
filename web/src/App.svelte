@@ -7,6 +7,7 @@
   import Cashflow from './lib/Cashflow.svelte'
   import Portfolio from './lib/Portfolio.svelte'
   import Trades from './lib/Trades.svelte'
+  import TradeDetail from './lib/TradeDetail.svelte'
   import Placeholder from './lib/Placeholder.svelte'
 
   onMount(() => {
@@ -40,7 +41,12 @@
     {:else if route.tab === 'portfolio'}
       <Portfolio model={store.model} />
     {:else if route.tab === 'trades'}
-      <Trades trades={store.model.trades} />
+      {#if route.sub}
+        {@const sel = store.model.trades.find((t) => t.id === route.sub)}
+        {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
+      {:else}
+        <Trades trades={store.model.trades} />
+      {/if}
     {:else}
       <Placeholder tab={route.tab} />
     {/if}

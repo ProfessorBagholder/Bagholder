@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Trade } from './model'
   import { price, money, pct, num } from './fmt'
+  import { goSub } from './router.svelte'
 
   let { trades }: { trades: Trade[] } = $props()
 
@@ -73,7 +74,7 @@
       </thead>
       <tbody>
         {#each rows as t (t.id)}
-          <tr>
+          <tr class="click" onclick={() => goSub('trades', t.id)}>
             <td class="l dim">{t.entryDate}</td>
             <td class="l dim">{t.exitDate}</td>
             <td class="l sym">{t.symbol}</td>
@@ -117,6 +118,7 @@
   td.r { text-align: right; } td.c { text-align: center; } td.l { text-align: left; }
   .sym { font-weight: 500; }
   .dim { color: #8b93a7; }
+  tr.click { cursor: pointer; }
   tr:hover td { background: #171d29; }
   .pos { color: #3ecf8e; } .neg { color: #f0616d; }
   .grade { display: inline-block; min-width: 18px; text-align: center; border-radius: 4px; padding: 1px 5px; font-weight: 600; font-size: 11px; }

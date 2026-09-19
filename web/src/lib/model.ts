@@ -159,6 +159,8 @@ export interface Trade {
   id: string
   status: string
   symbol: string
+  name: string
+  account: string
   exchange: string
   kind: string
   currency: string
