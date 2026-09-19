@@ -4560,16 +4560,22 @@ function morphChildren(oldParent, newParent) {
 }
 function morphNode(oldN, newN) {
   if (oldN.nodeType !== 1) { if (oldN.nodeValue !== newN.nodeValue) oldN.nodeValue = newN.nodeValue; return; }
-  // A memoized tile that did not change carries the same data-key it did last render;
-  // its markup is identical by construction, so skip its whole subtree — no attribute
-  // and no child work. This is what lets a quote tick leave every unchanged card alone.
-  const nk = newN.getAttribute("data-key");
-  if (nk !== null && nk === oldN.getAttribute("data-key") && newN.getAttribute("data-tile") === oldN.getAttribute("data-tile")) return;
+  // Externally-mounted content — the chart, the heatmap, the login stream, the tab-bar
+  // indicator — is left entirely alone, its own attributes included. Its position, opacity
+  // and children are managed by JS (placeTabIndicator, the chart mount, the login stream),
+  // so morph must not touch them: stripping the indicator's inline opacity is what made the
+  // selected tab's underline re-fade in on every redraw.
+  if (oldN.id && MORPH_SKIP.has(oldN.id)) return;
+  // A memoized tile that did not change carries the same data-tile and data-key it did last
+  // render; its markup is identical by construction, so skip its whole subtree. Require the
+  // data-tile marker, so an element that merely carries a data-key (the filter popover) is
+  // never mistaken for a tile and wrongly skipped.
+  const dt = newN.getAttribute("data-tile");
+  if (dt !== null && dt === oldN.getAttribute("data-tile") && newN.getAttribute("data-key") === oldN.getAttribute("data-key")) return;
   const oldA = oldN.attributes;
   for (let i = oldA.length - 1; i >= 0; i--) { if (!newN.hasAttribute(oldA[i].name)) oldN.removeAttribute(oldA[i].name); }
   const newA = newN.attributes;
   for (let i = 0; i < newA.length; i++) { if (oldN.getAttribute(newA[i].name) !== newA[i].value) oldN.setAttribute(newA[i].name, newA[i].value); }
-  if (oldN.id && MORPH_SKIP.has(oldN.id)) return;   // owns externally-mounted content: leave its children alone
   if (oldN === document.activeElement && (oldN.tagName === "INPUT" || oldN.tagName === "TEXTAREA")) return;
   morphChildren(oldN, newN);
 }
