@@ -1,0 +1,246 @@
+{
+  "expect": {
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "bySymbol": [],
+    "cashflowCount": 0,
+    "cashflowHoldings": [],
+    "cashflowMonths": [],
+    "cashflowSkipped": [],
+    "cashflowTiles": [
+      {
+        "count": 0,
+        "label": "2024",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2025",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2026 YTD",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "All time",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "Last 12 months",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "book": 0,
+        "earned": 0,
+        "label": "Yield on cost",
+        "projected": 0.0,
+        "yield": null
+      }
+    ],
+    "cashflowTotal": 0,
+    "equity": {
+      "annualized": {
+        "count": 0,
+        "first": "",
+        "last": "",
+        "rate": null,
+        "years": 0.0
+      },
+      "drawdown": {
+        "abs": null,
+        "at": "",
+        "pct": null,
+        "peakAt": ""
+      },
+      "label": "All accounts",
+      "series": []
+    },
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0
+        }
+      ],
+      "graded": 0,
+      "ungraded": 0
+    },
+    "kpi": {
+      "avgHold": null,
+      "avgLoss": 0.0,
+      "avgWin": 0.0,
+      "breakeven": 0,
+      "count": 0,
+      "expectancy": null,
+      "grossLoss": 0,
+      "grossWin": 0,
+      "losses": 0,
+      "profitFactor": 0.0,
+      "realized": 0,
+      "winRate": null,
+      "wins": 0
+    },
+    "monthly": [],
+    "options": {
+      "accounts": [
+        "Crypto"
+      ],
+      "exchanges": [
+        "Crypto"
+      ],
+      "kinds": [
+        "Crypto"
+      ],
+      "symbols": [
+        "ETH"
+      ],
+      "tags": [],
+      "years": []
+    },
+    "portfolio": {
+      "accountCount": 1,
+      "allocation": [
+        {
+          "account": "Crypto",
+          "id": "rt:cb",
+          "share": 1.0,
+          "symbol": "ETH",
+          "value": 300.0
+        }
+      ],
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "cash": 0,
+      "cashPct": null,
+      "costBasis": 200.0,
+      "dayChange": null,
+      "dayChangePct": null,
+      "hasMargin": false,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": 0.0,
+      "marketValue": 300.0,
+      "nav": null,
+      "navAccounts": 0,
+      "positionCount": 1,
+      "unrealized": 100.0,
+      "unrealizedPct": 0.5
+    },
+    "positions": [
+      {
+        "account": "Crypto",
+        "alloc": 1.0,
+        "avg": 66.666667,
+        "cost": 200.0,
+        "currency": "CAD",
+        "dayChange": null,
+        "exchange": "Crypto",
+        "fills": [
+          "BUY",
+          "BUY"
+        ],
+        "grade": "",
+        "held": 58,
+        "id": "rt:cb",
+        "kind": "Crypto",
+        "qty": 3.0,
+        "short": false,
+        "symbol": "ETH"
+      }
+    ],
+    "positionsSummary": {
+      "book": 200.0,
+      "count": 1,
+      "mv": 300.0,
+      "unreal": 100.0
+    },
+    "queue": [],
+    "trades": [],
+    "years": []
+  },
+  "filters": {},
+  "journal": {},
+  "market": {
+    "benchmark": {},
+    "fx": {}
+  },
+  "snapshot": {
+    "accounts": [],
+    "activities": [
+      {
+        "accountId": "acct-1",
+        "accountType": "Crypto",
+        "activitySubType": "MARKET_ORDER",
+        "activityType": "CRYPTO_BUY",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "cb",
+        "name": "LUNR",
+        "netCashAmount": 200,
+        "occurredAt": "2026-01-01T15:00:00+00:00",
+        "quantity": 2,
+        "rawType": "CRYPTO_BUY",
+        "securityId": "",
+        "symbol": "ETH",
+        "transactionDate": "2026-01-01",
+        "unitPrice": 100
+      },
+      {
+        "accountId": "acct-1",
+        "accountType": "Crypto",
+        "activitySubType": "other",
+        "activityType": "CRYPTO_STAKING_REWARD",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "rw",
+        "name": "LUNR",
+        "netCashAmount": 0,
+        "occurredAt": "2026-01-05T15:00:00+00:00",
+        "quantity": 1,
+        "rawType": "CRYPTO_STAKING_REWARD",
+        "securityId": "",
+        "symbol": "ETH",
+        "transactionDate": "2026-01-05",
+        "unitPrice": 0
+      }
+    ],
+    "balances": [],
+    "margin": [],
+    "navByAccount": {},
+    "navHistory": [],
+    "notes": {},
+    "securities": [],
+    "syncedAt": "",
+    "tradeGroups": []
+  },
+  "today": "2026-03-01"
+}

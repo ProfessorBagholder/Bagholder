@@ -173,6 +173,15 @@ func NormalizeActivity(activity *Act) *Act {
 	qty := math.Abs(a.Quantity)
 	a.Flags = []string{}
 
+	swapSub := compact(a.ActivitySubType)
+	if ((strings.HasPrefix(rt, "CRYPTO") || strings.HasPrefix(at, "CRYPTO")) && strings.Contains(swapSub, "SWAP")) || rt == "SWAPMARKETORDER" {
+		// a swap summary row carries the outgoing coin's symbol but the incoming
+		// coin's quantity; quarantine it rather than book a fabricated fill
+		a.Category, a.Kind = "other", "Crypto"
+		a.Flags = append(a.Flags, "missing-swap-legs")
+		return a
+	}
+
 	if rt == "CRYPTOBUY" || at == "CRYPTOBUY" {
 		a.Category, a.ActivityType, a.ActivitySubType, a.Kind = "trade", "Trade", "BUY", "Crypto"
 		a.Quantity = qty

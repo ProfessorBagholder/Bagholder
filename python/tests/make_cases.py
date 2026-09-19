@@ -66,6 +66,14 @@ def crypto_transfer(id, symbol, qty, value, day, out=False, account="Crypto"):
                transactionDate=day, symbol=symbol, currency="CAD", accountType=account)
 
 
+def crypto_swap(id, out_symbol, in_qty, cash, day, account="Crypto"):
+    # Wealthsimple posts a swap as one CRYPTO_BUY/SWAP row tagged with the coin
+    # sent (out_symbol) but carrying the RECEIVED coin's quantity (in_qty)
+    return act(id=id, activityType="CRYPTO_BUY", activitySubType="SWAP", rawType="CRYPTO_BUY",
+               quantity=in_qty, unitPrice=(cash / in_qty if in_qty else 0.0), netCashAmount=-abs(cash),
+               transactionDate=day, symbol=out_symbol, currency="CAD", accountType=account)
+
+
 def nav(day, equity, deposits=None):
     return {"date": day, "equity": equity, "netDeposits": deposits}
 
@@ -411,6 +419,26 @@ CASES = {
             crypto("cb", "buy", "ETH", 2, 100, "2026-01-01"),
             crypto("rw", "reward", "ETH", 1, 0, "2026-01-05"),
             crypto("cs", "sell", "ETH", 3, 150, "2026-02-01"),
+        ],
+        "market": {"fx": {}, "benchmark": {}},
+    },
+    # a staking reward that is still held stays a position: it opens a real lot at
+    # zero cost, so it must not be dropped as sub-dollar crypto dust
+    "crypto_reward_held": {
+        "today": "2026-03-01",
+        "activities": [
+            crypto("cb", "buy", "ETH", 2, 100, "2026-01-01"),
+            crypto("rw", "reward", "ETH", 1, 0, "2026-01-05"),
+        ],
+        "market": {"fx": {}, "benchmark": {}},
+    },
+    # a swap posts as one CRYPTO_BUY/SWAP row tagged with the coin sent but the
+    # quantity received; it must not be booked as a fill of the sent coin
+    "crypto_swap_quarantined": {
+        "today": "2026-03-01",
+        "activities": [
+            crypto("cb", "buy", "ETH", 2, 100, "2026-01-01"),
+            crypto_swap("sw", "ETH", 1000, 500, "2026-02-01"),
         ],
         "market": {"fx": {}, "benchmark": {}},
     },

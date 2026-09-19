@@ -88,6 +88,16 @@ pub fn normalize_activity(activity: &Value) -> Value {
     let qty = field_num(activity, "quantity").abs();
     set(&mut a, "flags", Value::Array(vec![]));
 
+    let swap_sub = compact(&field_s(activity, "activitySubType"));
+    if ((rt.starts_with("CRYPTO") || at.starts_with("CRYPTO")) && swap_sub.contains("SWAP")) || rt == "SWAPMARKETORDER" {
+        // a swap summary row carries the outgoing coin's symbol but the incoming
+        // coin's quantity; quarantine it rather than book a fabricated fill
+        set(&mut a, "category", "other".into());
+        set(&mut a, "kind", "Crypto".into());
+        push_flag(&mut a, "missing-swap-legs");
+        return Value::Object(a);
+    }
+
     // ---- crypto: the rows carry their direction in the type, not the sign
     if rt == "CRYPTOBUY" || at == "CRYPTOBUY" {
         set(&mut a, "category", "trade".into());
