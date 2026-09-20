@@ -11,6 +11,7 @@ pub mod market;
 pub mod orders;
 pub mod feeds;
 pub mod admin;
+pub mod gens;
 
 /// Whether the program running is a test run: a test harness, which cargo
 /// builds into a `deps` folder, never the app it ships.

@@ -71,6 +71,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             rusqlite::params!["schema_version", SCHEMA_VERSION.to_string()],
         )?;
+        // last, so the triggers are made from the columns as the migrations left them
+        crate::gens::install(conn)?;
         Ok(())
     })
 }

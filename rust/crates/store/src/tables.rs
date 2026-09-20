@@ -72,6 +72,7 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// id is not an account.
 pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
     crate::atomically(conn, || {
+        crate::gens::replace_if_changed(conn, "SELECT id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id FROM accounts", &[], || {
         conn.execute("DELETE FROM accounts", [])?;
         for acc in accounts {
             if !acc.is_object() {
@@ -96,12 +97,15 @@ pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
             )?;
         }
         Ok(())
+        })?;
+        Ok(())
     })
 }
 
 /// `replace_balances`.
 pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
     crate::atomically(conn, || {
+        crate::gens::replace_if_changed(conn, "SELECT account_id, custodian_account_id, security_id, quantity FROM balances", &[], || {
         conn.execute("DELETE FROM balances", [])?;
         for b in balances {
             if !b.is_object() {
@@ -118,6 +122,8 @@ pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
             )?;
         }
         Ok(())
+        })?;
+        Ok(())
     })
 }
 
@@ -126,6 +132,7 @@ pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
 /// unavailable. An account that answers nothing is not a row.
 pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
     crate::atomically(conn, || {
+        let changed = crate::gens::replace_if_changed(conn, "SELECT account_id, buying_power, currency, unavailable FROM margin", &[], || {
         conn.execute("DELETE FROM margin", [])?;
         for m in rows {
             if !m.is_object() || field_s(m, "accountId").is_empty() {
@@ -143,6 +150,12 @@ pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()
                     fetched,
                 ],
             )?;
+        }
+        Ok(())
+        })?;
+        if !changed {
+            // the same figures, read again: only when they were read moves
+            conn.execute("UPDATE margin SET fetched_at = ?", [now])?;
         }
         Ok(())
     })

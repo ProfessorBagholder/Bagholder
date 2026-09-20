@@ -153,6 +153,7 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
     crate::atomically(conn, || {
         let sym = up(symbol);
         let ex = up(exchange);
+        let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex], || {
         conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
         for r in rows {
             let id = field_s(r, "id");
@@ -167,6 +168,11 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
                     field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
                 ],
             )?;
+        }
+        Ok(())
+        })?;
+        if !changed {
+            conn.execute("UPDATE news SET fetched_at = ? WHERE symbol = ? AND exchange = ?", rusqlite::params![now, sym, ex])?;
         }
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -726,6 +732,7 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 /// `replace_universe`.
 pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str) -> Result<()> {
     crate::atomically(conn, || {
+        let changed = crate::gens::replace_if_changed(conn, "SELECT symbol, name, value, percent_change, sector, country FROM universes WHERE key = ?", rusqlite::params![key], || {
         conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
         for r in rows {
             // the row is kept when its symbol is present and non-empty
@@ -742,6 +749,11 @@ pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str)
                     field_s(r, "sector"), field_s(r, "country"), now,
                 ],
             )?;
+        }
+        Ok(())
+        })?;
+        if !changed {
+            conn.execute("UPDATE universes SET fetched_at = ? WHERE key = ?", rusqlite::params![now, key])?;
         }
         Ok(())
     })
