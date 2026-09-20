@@ -1492,13 +1492,16 @@ function popFieldsBodyHtml() {
   const f = state.filters;
   const q = state.fieldQuery == null ? f.search : state.fieldQuery;
   const syms = q ? symbolRows(q) : [];
-  const book = syms.filter((r) => r.book);
-  const ext = syms.filter((r) => !r.book);
+  // The book's symbols the text is a ticker of, then the values it names (an account, a
+  // grade, a tag), then everything matched by a company's name: the book's own first, the
+  // listings found outside it after. A name is the weakest match, so a holding whose name
+  // merely contains the text never stands above the account the text spells, and a run of
+  // same-named companies never pushes that account out of the scroll box.
+  const Q = (q || "").trim().toUpperCase();
+  const byTicker = (r) => r.rank !== 2 || String(r.sym).toUpperCase().indexOf(Q) >= 0 || String(r.sym).toUpperCase().indexOf(bareSymbol(Q)) >= 0;
+  const book = syms.filter((r) => r.book && byTicker(r));
+  const ext = syms.filter((r) => r.book && !byTicker(r)).concat(syms.filter((r) => !r.book));
   const others = fieldMatches(q).filter((m) => m.key !== "symbol");
-  // The book's own symbol matches, then the values the text names (an account, a
-  // grade, a tag), then the listings found outside the book. The field matches sit
-  // above the found listings so one like an account stays in view rather than being
-  // pushed below a long run of same-named companies and out of the scroll box.
   if (q && (book.length || others.length || ext.length)) {
     const hi = Math.min(state.valueHi || 0, book.length + others.length + ext.length - 1);
     const symHtml = (r, i) => r.book
