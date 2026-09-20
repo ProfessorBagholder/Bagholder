@@ -181,29 +181,6 @@ pub(super) fn first_error(errs: &Value) -> Option<String> {
     })
 }
 
-pub(super) fn list_orders() -> Vec<Value> {
-    must(so::list_orders(&db(), 200))
-}
-
-pub(super) fn get_order(id: &str) -> Option<Value> {
-    must(so::get_order(&db(), id))
-}
-
-pub(super) fn insert_order(row: &Value) {
-    must(so::insert_order(&db(), row, &now_iso()))
-}
-
-pub(super) fn update_order(id: &str, patch: Value) {
-    must(so::update_order(&db(), id, &patch, &now_iso()))
-}
-
-pub(super) fn brackets(statuses: &[&str]) -> Vec<Value> {
-    let st: Vec<String> = statuses.iter().map(|x| x.to_string()).collect();
-    must(so::list_brackets(&db(), &st))
-}
-
-// --- the same store, as what the rows are ---
-
 pub(super) fn orders_all() -> Vec<Order> {
     must(so::typed::list_orders(&db(), 200))
 }

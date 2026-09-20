@@ -456,16 +456,16 @@ fn test_the_orders_table_survives_clear_synced_data() {
 #[test]
 fn test_wealthsimple_statuses_group_as_the_page_shows_them() {
     for ws in ["NEW", "PENDING_SUBMISSION", "SUBMITTED", "PLACED", "PARTIALLY_FILLED", "CONTINGENT"] {
-        assert_eq!(o::app_status(ws), "pending", "{}", ws);
+        assert_eq!(o::app_status(ws).as_str(), "pending", "{}", ws);
     }
-    assert_eq!(o::app_status("CANCEL_PENDING"), "cancelling");
-    assert_eq!(o::app_status("FILLED"), "filled");
-    assert_eq!(o::app_status("POSTED"), "filled");
-    assert_eq!(o::app_status("CANCELLED"), "cancelled");
-    assert_eq!(o::app_status("DELETED"), "cancelled");
-    assert_eq!(o::app_status("EXPIRED"), "expired");
-    assert_eq!(o::app_status("REJECTED"), "rejected");
-    assert_eq!(o::app_status(""), "");
+    assert_eq!(o::app_status("CANCEL_PENDING").as_str(), "cancelling");
+    assert_eq!(o::app_status("FILLED").as_str(), "filled");
+    assert_eq!(o::app_status("POSTED").as_str(), "filled");
+    assert_eq!(o::app_status("CANCELLED").as_str(), "cancelled");
+    assert_eq!(o::app_status("DELETED").as_str(), "cancelled");
+    assert_eq!(o::app_status("EXPIRED").as_str(), "expired");
+    assert_eq!(o::app_status("REJECTED").as_str(), "rejected");
+    assert_eq!(o::app_status("").as_str(), "");
 }
 
 fn ident_sess() -> Value {

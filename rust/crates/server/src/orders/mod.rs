@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use bagholder_store::orders as so;
-use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, SlMode, StopLoss, TakeProfit, TrailUnit};
+use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, Source, SlMode, StopLoss, TakeProfit, TrailUnit};
 use serde::Deserialize;
 use bagholder_ws::session::{identity_from, CallError};
 // the one real caller is compiled out of test builds, where no call reaches the network
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(price_words(Some(0.54)), "0.54");
         assert_eq!(order_tick(Some(1.005)), Some(1.0));
         assert_eq!(parse_z("2026-09-10T12:00:00Z"), Some(bagholder_model::dates::to_days(2026, 9, 10) * 86400 + 43200));
-        assert_eq!(app_status("POSTED"), "filled");
-        assert_eq!(app_status("WHATEVER"), "pending");
+        assert_eq!(app_status("POSTED").as_str(), "filled");
+        assert_eq!(app_status("WHATEVER").as_str(), "pending");
     }
 }

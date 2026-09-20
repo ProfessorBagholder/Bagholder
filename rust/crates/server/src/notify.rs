@@ -748,7 +748,10 @@ mod tests {
 
     #[test]
     fn test_a_fill_read_back_is_told_by_its_role() {
-        use crate::orders::order_notice;
+        // the rows as the tests spell them, read as what they are
+        fn order_notice(o: &Value, upd: &Value) -> Option<(String, String, String, String)> {
+            crate::orders::order_notice(&serde_json::from_value(o.clone()).unwrap(), &serde_json::from_value(upd.clone()).unwrap())
+        }
         let o = order();
         assert_eq!(order_notice(&o, &json!({"status": "filled", "filledQty": 5.0, "avgFill": 1.75})), t4("fills", "order:o1:filled", "Order filled · QNC", "Bought 5 at 1.75 · 🚀 Trading"));
         let stop = with(&o, json!({"id": "o2", "side": "SELL", "type": "STOP", "stopPrice": 1.66, "role": "stop"}));
@@ -762,7 +765,10 @@ mod tests {
 
     #[test]
     fn test_problems_are_told_but_not_the_persons_own_cancel_nor_a_legs_expiry() {
-        use crate::orders::order_notice;
+        // the rows as the tests spell them, read as what they are
+        fn order_notice(o: &Value, upd: &Value) -> Option<(String, String, String, String)> {
+            crate::orders::order_notice(&serde_json::from_value(o.clone()).unwrap(), &serde_json::from_value(upd.clone()).unwrap())
+        }
         let o = order();
         assert_eq!(order_notice(&o, &json!({"status": "rejected", "error": "Limit price has too many decimal places. Max allowed: 2"})),
             t4("problems", "order:o1:rejected", "Order rejected · QNC", "Buy 5 at 1.75 limit · Limit price has too many decimal places. Max allowed: 2"));

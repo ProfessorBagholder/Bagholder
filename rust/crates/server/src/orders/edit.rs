@@ -2,52 +2,58 @@
 
 use super::*;
 
+/// Change a resting order's size or its limit. A stop order cannot be changed at
+/// Wealthsimple, only cancelled and placed again.
 pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Option<&Value>) -> Value {
-    let row = match get_order(order_id) {
+    let refused = |e: &str| json!({"ok": false, "error": e});
+    let row = match order(order_id) {
         Some(r) => r,
-        None => return json!({"ok": false, "error": "No such order."}),
+        None => return refused("No such order."),
     };
-    if !st_in(&row, &["sent", "pending"]) {
-        return json!({"ok": false, "error": "That order is not open."});
+    if !matches!(row.status, OrderStatus::Sent | OrderStatus::Pending) {
+        return refused("That order is not open.");
     }
-    let typ = f(&row, "type");
-    if typ == "STOP" {
-        return json!({"ok": false, "error": "A stop order cannot be changed; cancel it and place another."});
+    if row.kind == OrderType::Stop {
+        return refused("A stop order cannot be changed; cancel it and place another.");
     }
     let q = num(quantity, None);
     let lp = order_tick(num(limit_price, None));
     if q.map_or(false, |x| x <= 0.0) {
-        return json!({"ok": false, "error": "Shares must be more than zero."});
+        return refused("Shares must be more than zero.");
     }
     if lp.map_or(false, |x| x <= 0.0) {
-        return json!({"ok": false, "error": "A limit price must be more than zero."});
+        return refused("A limit price must be more than zero.");
     }
-    let limit_type = typ == "LIMIT" || typ == "STOP_LIMIT";
+    let limit_type = matches!(row.kind, OrderType::Limit | OrderType::StopLimit);
     if limit_type && lp.is_none() && q.is_none() {
-        return json!({"ok": false, "error": "Nothing to change."});
+        return refused("Nothing to change.");
     }
-    let id = f(&row, "id");
-    let mut inp = json!({"externalId": id});
-    if lp.is_some() && limit_type && lp != on(&row, "limitPrice") {
-        set(&mut inp, "newLimitPrice", jo(lp));
-    }
-    if q.is_some() && q != on(&row, "quantity") {
-        set(&mut inp, "newQuantity", jo(q));
-    }
-    let inp_map = inp.as_object().cloned().unwrap_or_default();
-    if inp_map.len() == 1 {
+    let id = row.id.clone();
+    // only what differs from the order as it rests is asked for
+    let new_limit = lp.filter(|_| limit_type && lp != row.limit_price);
+    let new_quantity = q.filter(|_| q != row.quantity);
+    if new_limit.is_none() && new_quantity.is_none() {
         return json!({"ok": true, "id": id, "unchanged": true});
     }
     if !orders_live() {
-        return json!({"ok": false, "error": "Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple."});
+        return refused("Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.");
     }
     let sess = match ticket_session() {
         Some(s) => s,
-        None => return json!({"ok": false, "error": "Not connected."}),
+        None => return refused("Not connected."),
     };
+    let mut change = Map::new();
+    if let Some(p) = new_limit {
+        change.insert("newLimitPrice".into(), json!(p));
+    }
+    if let Some(n) = new_quantity {
+        change.insert("newQuantity".into(), json!(n));
+    }
+    let mut inp = change.clone();
+    inp.insert("externalId".into(), json!(id));
     let data = match gql(&sess, "SoOrdersOrderModify", json!({"input": inp})) {
         Ok(d) => d,
-        Err(CallError::NotAuthorized) => return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again."}),
+        Err(CallError::NotAuthorized) => return refused("Wealthsimple refused the session. Connect Wealthsimple again."),
         Err(e) => {
             let msg = err_text(&e);
             log(&format!("bagholder orders: modify {} failed: {}", id, msg));
@@ -58,20 +64,12 @@ pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Optio
         log(&format!("bagholder orders: modify {} refused: {}", id, msg));
         return json!({"ok": false, "error": format!("Wealthsimple refused the change: {}", msg)});
     }
-    let mut patch = Map::new();
-    if inp_map.contains_key("newLimitPrice") {
-        patch.insert("limitPrice".into(), jo(lp));
-    }
-    if inp_map.contains_key("newQuantity") {
-        patch.insert("quantity".into(), jo(q));
-    }
-    update_order(&id, Value::Object(patch));
+    patch_order(&id, OrderPatch { limit_price: new_limit.map(Some), quantity: new_quantity.map(Some), ..OrderPatch::default() });
     // a bracket still waiting on this entry guards the size the entry now has
-    if let Some(b) = must(so::typed::bracket_for_order(&db(), &id)).filter(|b| b.status == BracketStatus::Waiting && inp_map.contains_key("newQuantity")) {
-        patch_bracket(&b.id, BracketPatch { quantity: Some(q), ..BracketPatch::default() });
+    if let Some(b) = must(so::typed::bracket_for_order(&db(), &id)).filter(|b| b.status == BracketStatus::Waiting && new_quantity.is_some()) {
+        patch_bracket(&b.id, BracketPatch { quantity: Some(new_quantity), ..BracketPatch::default() });
     }
-    let shown: Map<String, Value> = inp_map.iter().filter(|(k, _)| *k != "externalId").map(|(k, v)| (k.clone(), v.clone())).collect();
-    log(&format!("bagholder orders: modify {} accepted: {}", id, bagholder_store::tables::json_text_sorted(&Value::Object(shown))));
+    log(&format!("bagholder orders: modify {} accepted: {}", id, bagholder_store::tables::json_text_sorted(&Value::Object(change))));
     let rid = id.clone();
     spawn("bagholder-order-refresh", move || {
         let _ = catch_unwind(|| refresh_orders(&rid));

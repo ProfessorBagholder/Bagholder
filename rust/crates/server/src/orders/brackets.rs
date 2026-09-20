@@ -11,7 +11,6 @@ pub const BRACKET_POLL_SEC: u64 = 5;
 pub(super) const BRACKET_RETRY_SEC: [i64; 4] = [60, 300, 900, 3600];
 pub(super) const TRAIL_MIN_MOVE: f64 = 0.005;
 pub(super) const TARGET_BACK_OFF: f64 = 0.01;
-pub const BRACKET_LIVE: [&str; 6] = ["waiting", "armed", "firing", "target_placed", "stopping", "closing"];
 pub(super) const BRACKET_ROLL_SEC: f64 = 7.0 * 86400.0;
 pub(super) const BRACKET_ROLL_LAST_SEC: f64 = 2.0 * 86400.0;
 pub(super) const GTC_DAYS: i64 = 90;
@@ -30,7 +29,7 @@ pub fn stop_allowed_cache() -> &'static Mutex<HashMap<String, bool>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The statuses of `BRACKET_LIVE`, as what they are.
+/// A bracket that still has work to do stands at one of these.
 pub(super) const BRACKET_LIVE_ST: [BracketStatus; 6] =
     [BracketStatus::Waiting, BracketStatus::Armed, BracketStatus::Firing, BracketStatus::TargetPlaced, BracketStatus::Stopping, BracketStatus::Closing];
 
@@ -47,10 +46,6 @@ pub(super) fn in_flight(o: &Order) -> bool {
 /// A bracket whose exits may be working: past waiting, and not yet winding down.
 pub(super) fn in_play(b: &Bracket) -> bool {
     matches!(b.status, BracketStatus::Armed | BracketStatus::Firing | BracketStatus::TargetPlaced | BracketStatus::Stopping)
-}
-
-pub(super) fn st_in(o: &Value, set: &[&str]) -> bool {
-    set.contains(&f(o, "status").as_str())
 }
 
 pub(super) fn release_shares(b: &Bracket, sold: f64) {
