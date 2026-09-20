@@ -161,7 +161,7 @@ pub fn symbol_search(conn_path: &std::path::Path, text: &str) -> Value {
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
         // or Cboe Canada listing is in none of them: TMX is asked what it
         // knows the ticker as
-        if let Ok(conn) = rusqlite::Connection::open(conn_path) {
+        if let Ok(conn) = bagholder_store::open_db(conn_path) {
             let (today, _, _) = crate::clock_now();
             if let Some(hit) = crate::tmx::tmx_listing(&conn, &text, &today) {
                 found = vec![hit];

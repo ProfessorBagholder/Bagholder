@@ -150,28 +150,30 @@ pub fn news_key(symbol: &str, exchange: &str) -> String {
 /// row is stored under the source it was read from (`via`: tmx, nasdaq,
 /// yahoo, sa, gnews), `source` when it names none.
 pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &str, rows: &[Value], now: &str) -> Result<()> {
-    let sym = up(symbol);
-    let ex = up(exchange);
-    conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
-    for r in rows {
-        let id = field_s(r, "id");
-        if id.is_empty() {
-            continue;
+    crate::atomically(conn, || {
+        let sym = up(symbol);
+        let ex = up(exchange);
+        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
+        for r in rows {
+            let id = field_s(r, "id");
+            if id.is_empty() {
+                continue;
+            }
+            let kind = { let k = field_s(r, "kind"); if k.is_empty() { "story".to_string() } else { k } };
+            conn.execute(
+                "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
+                    field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
+                ],
+            )?;
         }
-        let kind = { let k = field_s(r, "kind"); if k.is_empty() { "story".to_string() } else { k } };
         conn.execute(
-            "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
-                field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
-            ],
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
         )?;
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-        rusqlite::params![format!("news_fetched:{}", news_key(&sym, &ex)), now],
-    )?;
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `news_for`: a listing's stored items, newest first.
@@ -216,13 +218,15 @@ pub fn news_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
 }
 
 pub fn forget_news(conn: &Connection, symbol: &str, exchange: &str) -> Result<()> {
-    conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
-    let tail = format!(":{}", news_key(symbol, exchange));
-    conn.execute(
-        "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
-        rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
-    )?;
-    Ok(())
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![up(symbol), up(exchange)])?;
+        let tail = format!(":{}", news_key(symbol, exchange));
+        conn.execute(
+            "DELETE FROM meta WHERE key = ? OR (key LIKE 'news_source_fetched:%' AND substr(key, -length(?)) = ?)",
+            rusqlite::params![format!("news_fetched:{}", news_key(symbol, exchange)), tail, tail],
+        )?;
+        Ok(())
+    })
 }
 
 /// `trim_news`: keep the newest `keep` items over every symbol.
@@ -360,48 +364,50 @@ pub fn set_filing_enrichment(
 /// throwing the reading away with it meant every document was read again from
 /// nothing on each refresh.
 pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[Value], now: &str) -> Result<usize> {
-    let sym = filing_key(symbol);
-    struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
-    let mut kept: Vec<(String, Kept)> = Vec::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![sym, source])?;
-        while let Some(r) = rows.next()? {
-            kept.push((
-                r.get::<_, String>(0)?,
-                Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)? },
-            ));
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
+        struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
+        let mut kept: Vec<(String, Kept)> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![sym, source])?;
+            while let Some(r) = rows.next()? {
+                kept.push((
+                    r.get::<_, String>(0)?,
+                    Kept { subject: r.get(1)?, summary: r.get(2)?, enriched_at: r.get(3)?, version: r.get(4)?, final_: r.get(5)? },
+                ));
+            }
         }
-    }
-    conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source])?;
+        conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source])?;
 
-    let mut n = 0usize;
-    for r in items {
-        let rid = field_s(r, "id");
-        if rid.is_empty() {
-            continue;
+        let mut n = 0usize;
+        for r in items {
+            let rid = field_s(r, "id");
+            if rid.is_empty() {
+                continue;
+            }
+            let src = if source.is_empty() { field_s(r, "source") } else { source.to_string() };
+            let read = kept.iter().find(|(k, _)| *k == rid).map(|(_, v)| v);
+            conn.execute(
+                "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
+                 subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    sym, rid, src, field_s(r, "category"), field_s(r, "profileNo"), field_s(r, "issuer"),
+                    field_s(r, "type"), field_s(r, "title"), field_s(r, "date"), field_s(r, "dateText"),
+                    field_s(r, "size"), field_s(r, "url"), now,
+                    read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
+                    read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
+                    read.and_then(|k| k.enriched_at.clone()),
+                    read.and_then(|k| k.version),
+                    read.and_then(|k| k.final_),
+                ],
+            )?;
+            n += 1;
         }
-        let src = if source.is_empty() { field_s(r, "source") } else { source.to_string() };
-        let read = kept.iter().find(|(k, _)| *k == rid).map(|(_, v)| v);
-        conn.execute(
-            "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
-             subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                sym, rid, src, field_s(r, "category"), field_s(r, "profileNo"), field_s(r, "issuer"),
-                field_s(r, "type"), field_s(r, "title"), field_s(r, "date"), field_s(r, "dateText"),
-                field_s(r, "size"), field_s(r, "url"), now,
-                read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
-                read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
-                read.and_then(|k| k.enriched_at.clone()),
-                read.and_then(|k| k.version),
-                read.and_then(|k| k.final_),
-            ],
-        )?;
-        n += 1;
-    }
-    Ok(n)
+        Ok(n)
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -450,41 +456,43 @@ pub fn short_row(r: &Row) -> Result<Value> {
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
 pub fn save_shorts(conn: &Connection, symbol: &str, exchange: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
-    let sym = up(symbol);
-    let ex = up(exchange);
-    let series = match rec.get("series") {
-        Some(s) if !s.is_null() => s.clone(),
-        _ => {
-            let held: Option<String> = conn
-                .query_row(
-                    "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
-                    rusqlite::params![sym, ex],
-                    |r| r.get(0),
-                )
-                .unwrap_or(None);
-            match held {
-                Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_else(|_| json!([])),
-                _ => json!([]),
+    crate::atomically(conn, || {
+        let sym = up(symbol);
+        let ex = up(exchange);
+        let series = match rec.get("series") {
+            Some(s) if !s.is_null() => s.clone(),
+            _ => {
+                let held: Option<String> = conn
+                    .query_row(
+                        "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
+                        rusqlite::params![sym, ex],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(None);
+                match held {
+                    Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_else(|_| json!([])),
+                    _ => json!([]),
+                }
             }
+        };
+        let cols: Vec<&str> = SHORT_FIELDS.iter().map(|(_, c)| *c).collect();
+        let marks = vec!["?"; cols.len() + 5].join(", ");
+        let sql = format!(
+            "INSERT OR REPLACE INTO shorts (symbol, exchange, {}, series, read_version, fetched_at) VALUES ({})",
+            cols.join(", "),
+            marks
+        );
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(sym.clone()), Box::new(ex.clone())];
+        for (field, _) in SHORT_FIELDS {
+            args.push(crate::activities::to_sql(rec.get(field).unwrap_or(&Value::Null)));
         }
-    };
-    let cols: Vec<&str> = SHORT_FIELDS.iter().map(|(_, c)| *c).collect();
-    let marks = vec!["?"; cols.len() + 5].join(", ");
-    let sql = format!(
-        "INSERT OR REPLACE INTO shorts (symbol, exchange, {}, series, read_version, fetched_at) VALUES ({})",
-        cols.join(", "),
-        marks
-    );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(sym.clone()), Box::new(ex.clone())];
-    for (field, _) in SHORT_FIELDS {
-        args.push(crate::activities::to_sql(rec.get(field).unwrap_or(&Value::Null)));
-    }
-    args.push(Box::new(crate::tables::json_text(&series)));
-    args.push(Box::new(version));
-    args.push(Box::new(now.to_string()));
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())?;
-    Ok(())
+        args.push(Box::new(crate::tables::json_text(&series)));
+        args.push(Box::new(version));
+        args.push(Box::new(now.to_string()));
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, refs.as_slice())?;
+        Ok(())
+    })
 }
 
 pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<Value>> {
@@ -500,29 +508,31 @@ pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Opt
 /// `save_gauge`: one published index's reading. What the publisher gives
 /// beyond the score travels in the payload.
 pub fn save_gauge(conn: &Connection, name: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
-    let key = name.trim().to_lowercase();
-    let mut rest = Map::new();
-    if let Some(m) = rec.as_object() {
-        for (k, v) in m {
-            if !["index", "source", "score", "rating", "asOf"].contains(&k.as_str()) {
-                rest.insert(k.clone(), v.clone());
+    crate::atomically(conn, || {
+        let key = name.trim().to_lowercase();
+        let mut rest = Map::new();
+        if let Some(m) = rec.as_object() {
+            for (k, v) in m {
+                if !["index", "source", "score", "rating", "asOf"].contains(&k.as_str()) {
+                    rest.insert(k.clone(), v.clone());
+                }
             }
         }
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![
-            key,
-            field_s(rec, "source"),
-            opt_num(get(rec, "score")),
-            field_s(rec, "rating"),
-            field_s(rec, "asOf"),
-            crate::tables::json_text(&Value::Object(rest)),
-            version,
-            now,
-        ],
-    )?;
-    Ok(())
+        conn.execute(
+            "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                key,
+                field_s(rec, "source"),
+                opt_num(get(rec, "score")),
+                field_s(rec, "rating"),
+                field_s(rec, "asOf"),
+                crate::tables::json_text(&Value::Object(rest)),
+                version,
+                now,
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn gauge(conn: &Connection, name: &str) -> Result<Option<Value>> {
@@ -590,16 +600,18 @@ pub fn events_told(conn: &Connection, scope: &str, events: &[String]) -> Result<
 /// `mark_told`: record that the stream has met these, whether or not they
 /// were worth telling about.
 pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -> Result<usize> {
-    let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
-    if rows.is_empty() {
-        return Ok(0);
-    }
-    for e in &rows {
-        conn.execute("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rusqlite::params![scope, e, now])?;
-    }
-    let cutoff = bagholder_model::clock::stamp_days_ago(TOLD_KEPT_DAYS);
-    conn.execute("DELETE FROM told WHERE at < ?", [cutoff])?;
-    Ok(rows.len())
+    crate::atomically(conn, || {
+        let rows: Vec<&String> = events.iter().filter(|e| !e.is_empty()).collect();
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        for e in &rows {
+            conn.execute("INSERT OR IGNORE INTO told(scope, event, at) VALUES (?, ?, ?)", rusqlite::params![scope, e, now])?;
+        }
+        let cutoff = bagholder_model::clock::stamp_days_ago(TOLD_KEPT_DAYS);
+        conn.execute("DELETE FROM told WHERE at < ?", [cutoff])?;
+        Ok(rows.len())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -692,17 +704,19 @@ pub fn list_notifications(
 /// `mark_notifications_seen`: a page has shown these, so no page shows
 /// them again.
 pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Result<usize> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN ({})", marks);
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
-    for i in ids {
-        args.push(Box::new(*i));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())
+    crate::atomically(conn, || {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL AND id IN ({})", marks);
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+        for i in ids {
+            args.push(Box::new(*i));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, refs.as_slice())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -711,24 +725,26 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 
 /// `replace_universe`.
 pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str) -> Result<()> {
-    conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
-    for r in rows {
-        // the row is kept when its symbol is present and non-empty
-        if !r.get("symbol").map(truthy).unwrap_or(false) {
-            continue;
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
+        for r in rows {
+            // the row is kept when its symbol is present and non-empty
+            if !r.get("symbol").map(truthy).unwrap_or(false) {
+                continue;
+            }
+            // the value and the change are stored as they came, not coerced
+            let value = crate::activities::to_sql(r.get("value").unwrap_or(&Value::Null));
+            let change = crate::activities::to_sql(r.get("percentChange").unwrap_or(&Value::Null));
+            conn.execute(
+                "INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    key, field_s(r, "symbol"), field_s(r, "name"), value.as_ref(), change.as_ref(),
+                    field_s(r, "sector"), field_s(r, "country"), now,
+                ],
+            )?;
         }
-        // the value and the change are stored as they came, not coerced
-        let value = crate::activities::to_sql(r.get("value").unwrap_or(&Value::Null));
-        let change = crate::activities::to_sql(r.get("percentChange").unwrap_or(&Value::Null));
-        conn.execute(
-            "INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                key, field_s(r, "symbol"), field_s(r, "name"), value.as_ref(), change.as_ref(),
-                field_s(r, "sector"), field_s(r, "country"), now,
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -776,18 +792,20 @@ pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
 /// `mark_filings_fetched`: when a symbol's disclosures were last
 /// refreshed, and its SEDAR+ profile number when one was found.
 pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, now: &str) -> Result<()> {
-    let sym = filing_key(symbol);
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-        rusqlite::params![format!("filings_fetched:{}", sym), now],
-    )?;
-    if !profile_no.is_empty() {
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
+            rusqlite::params![format!("filings_fetched:{}", sym), now],
         )?;
-    }
-    Ok(())
+        if !profile_no.is_empty() {
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                rusqlite::params![format!("sedar_profile:{}", sym), profile_no],
+            )?;
+        }
+        Ok(())
+    })
 }
 
 pub fn filings_fetched_for(conn: &Connection, symbol: &str) -> Result<String> {
@@ -814,13 +832,15 @@ pub fn sedar_profile(conn: &Connection, symbol: &str) -> Result<String> {
 }
 
 pub fn forget_filings(conn: &Connection, symbol: &str) -> Result<()> {
-    let sym = filing_key(symbol);
-    conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
-    conn.execute(
-        "DELETE FROM meta WHERE key IN (?, ?)",
-        rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
-    )?;
-    Ok(())
+    crate::atomically(conn, || {
+        let sym = filing_key(symbol);
+        conn.execute("DELETE FROM filings WHERE symbol = ?", [&sym])?;
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?, ?)",
+            rusqlite::params![format!("filings_fetched:{}", sym), format!("sedar_profile:{}", sym)],
+        )?;
+        Ok(())
+    })
 }
 
 /// `sold_since`: the shares sold in an account since a moment, from the
@@ -868,20 +888,22 @@ pub fn unread_notifications(conn: &Connection) -> Result<i64> {
 
 /// `mark_notifications_read`: every unread one when no ids are given.
 pub fn mark_notifications_read(conn: &Connection, ids: Option<&[i64]>, now: &str) -> Result<usize> {
-    match ids {
-        None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
-        Some(ids) if ids.is_empty() => Ok(0),
-        Some(ids) => {
-            let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql = format!("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN ({})", marks);
-            let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
-            for i in ids {
-                args.push(Box::new(*i));
+    crate::atomically(conn, || {
+        match ids {
+            None => conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", [now]),
+            Some(ids) if ids.is_empty() => Ok(0),
+            Some(ids) => {
+                let marks = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND id IN ({})", marks);
+                let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.to_string())];
+                for i in ids {
+                    args.push(Box::new(*i));
+                }
+                let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+                conn.execute(&sql, refs.as_slice())
             }
-            let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-            conn.execute(&sql, refs.as_slice())
         }
-    }
+    })
 }
 
 /// `clear_notifications`: the history emptied, and the keys with it --

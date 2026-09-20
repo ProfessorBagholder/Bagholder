@@ -168,50 +168,52 @@ pub fn apply_wealthsimple_mapped(
     rows: &[Value],
     new_id: &dyn Fn() -> String,
 ) -> Result<Applied> {
-    let mut out = Applied::default();
-    let mut known: HashSet<String> = canonical_ids(conn)?.into_iter().collect();
+    crate::atomically(conn, || {
+        let mut out = Applied::default();
+        let mut known: HashSet<String> = canonical_ids(conn)?.into_iter().collect();
 
-    for raw in rows {
-        if !truthy(raw) {
-            continue;
-        }
-        let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
-        row.insert("source".into(), json!("wealthsimple"));
-        let row = Value::Object(row);
-
-        let cid = either(&row, "canonicalId", "canonical_id").trim().to_string();
-        if cid.is_empty() || looks_like_homemade_id(&cid) {
-            continue;
-        }
-        if known.contains(&cid) {
-            if revise_wealthsimple_row(conn, &cid, &row)? {
-                out.revised += 1;
+        for raw in rows {
+            if !truthy(raw) {
                 continue;
             }
-            let sid = either(&row, "securityId", "security_id").trim().to_string();
-            if !sid.is_empty() {
-                conn.execute(
-                    "UPDATE activities SET security_id = ? WHERE canonical_id = ? AND (security_id IS NULL OR security_id = '')",
-                    rusqlite::params![sid, cid],
-                )?;
-            }
-            out.skipped += 1;
-            continue;
-        }
-        let matches = find_link_candidates(conn, &row)?;
-        if matches.len() == 1 {
-            let id = field_s(&matches[0], "id");
-            if stamp_canonical_id(conn, &id, &cid)? {
-                known.insert(cid.clone());
-                out.linked += 1;
+            let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
+            row.insert("source".into(), json!("wealthsimple"));
+            let row = Value::Object(row);
+
+            let cid = either(&row, "canonicalId", "canonical_id").trim().to_string();
+            if cid.is_empty() || looks_like_homemade_id(&cid) {
                 continue;
             }
+            if known.contains(&cid) {
+                if revise_wealthsimple_row(conn, &cid, &row)? {
+                    out.revised += 1;
+                    continue;
+                }
+                let sid = either(&row, "securityId", "security_id").trim().to_string();
+                if !sid.is_empty() {
+                    conn.execute(
+                        "UPDATE activities SET security_id = ? WHERE canonical_id = ? AND (security_id IS NULL OR security_id = '')",
+                        rusqlite::params![sid, cid],
+                    )?;
+                }
+                out.skipped += 1;
+                continue;
+            }
+            let matches = find_link_candidates(conn, &row)?;
+            if matches.len() == 1 {
+                let id = field_s(&matches[0], "id");
+                if stamp_canonical_id(conn, &id, &cid)? {
+                    known.insert(cid.clone());
+                    out.linked += 1;
+                    continue;
+                }
+            }
+            insert_activity(conn, &row, Some(&cid), None, new_id)?;
+            known.insert(cid);
+            out.inserted += 1;
         }
-        insert_activity(conn, &row, Some(&cid), None, new_id)?;
-        known.insert(cid);
-        out.inserted += 1;
-    }
-    Ok(out)
+        Ok(out)
+    })
 }
 
 fn truthy(v: &Value) -> bool {
@@ -236,55 +238,57 @@ pub struct Merged {
 /// `merge_local_rows`: a CSV or typed merge, on date, account, symbol,
 /// quantity, price and cash rather than on any id.
 pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> String) -> Result<Merged> {
-    let mut stored: Vec<Value> = Vec::new();
-    let mut added = 0usize;
-    let mut duplicates = 0usize;
+    crate::atomically(conn, || {
+        let mut stored: Vec<Value> = Vec::new();
+        let mut added = 0usize;
+        let mut duplicates = 0usize;
 
-    let mut existing: HashMap<Key, usize> = HashMap::new();
-    for a in all_activities(conn)? {
-        *existing.entry(Key::of(&a)).or_insert(0) += 1;
-    }
+        let mut existing: HashMap<Key, usize> = HashMap::new();
+        for a in all_activities(conn)? {
+            *existing.entry(Key::of(&a)).or_insert(0) += 1;
+        }
 
-    let mut incoming_seen: HashMap<Key, usize> = HashMap::new();
-    for raw in rows {
-        if !truthy(raw) {
-            continue;
-        }
-        let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
-        let mut source = field_s(raw, "source");
-        if source.is_empty() {
-            source = "csv".into();
-        }
-        if source == "wealthsimple" {
-            let cid = crate::activities::canonical_from_row(raw, "wealthsimple");
-            if let Some(_cid) = cid {
-                let result = apply_wealthsimple_mapped(conn, std::slice::from_ref(raw), new_id)?;
-                added += result.inserted + result.linked;
-                if result.skipped > 0 {
-                    duplicates += result.skipped;
-                }
+        let mut incoming_seen: HashMap<Key, usize> = HashMap::new();
+        for raw in rows {
+            if !truthy(raw) {
                 continue;
             }
-            source = "csv".into();
-        }
-        row.insert("source".into(), json!(source));
-        // as above: a swap-remove would shuffle the row's keys
-        let row: Map<String, Value> = row.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
-        let row = Value::Object(row);
+            let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
+            let mut source = field_s(raw, "source");
+            if source.is_empty() {
+                source = "csv".into();
+            }
+            if source == "wealthsimple" {
+                let cid = crate::activities::canonical_from_row(raw, "wealthsimple");
+                if let Some(_cid) = cid {
+                    let result = apply_wealthsimple_mapped(conn, std::slice::from_ref(raw), new_id)?;
+                    added += result.inserted + result.linked;
+                    if result.skipped > 0 {
+                        duplicates += result.skipped;
+                    }
+                    continue;
+                }
+                source = "csv".into();
+            }
+            row.insert("source".into(), json!(source));
+            // as above: a swap-remove would shuffle the row's keys
+            let row: Map<String, Value> = row.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
+            let row = Value::Object(row);
 
-        let k = Key::of(&row);
-        let n = incoming_seen.entry(k.clone()).or_insert(0);
-        *n += 1;
-        if *n <= *existing.get(&k).unwrap_or(&0) {
-            duplicates += 1;
-            continue;
+            let k = Key::of(&row);
+            let n = incoming_seen.entry(k.clone()).or_insert(0);
+            *n += 1;
+            if *n <= *existing.get(&k).unwrap_or(&0) {
+                duplicates += 1;
+                continue;
+            }
+            let saved = insert_local(conn, &row, new_id)?;
+            *existing.entry(k).or_insert(0) += 1;
+            stored.push(saved);
+            added += 1;
         }
-        let saved = insert_local(conn, &row, new_id)?;
-        *existing.entry(k).or_insert(0) += 1;
-        stored.push(saved);
-        added += 1;
-    }
-    Ok(Merged { ok: true, added, duplicates, activities: stored })
+        Ok(Merged { ok: true, added, duplicates, activities: stored })
+    })
 }
 
 /// Re-exported so callers reading a single row back can use it.

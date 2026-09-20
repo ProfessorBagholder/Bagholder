@@ -23,42 +23,44 @@ fn either(row: &Value, camel: &str, snake: &str) -> String {
 
 /// `upsert_securities`.
 pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
-    for raw in rows {
-        if !raw.is_object() {
-            continue;
+    crate::atomically(conn, || {
+        for raw in rows {
+            if !raw.is_object() {
+                continue;
+            }
+            let sid = field_s(raw, "id").trim().to_string();
+            if sid.is_empty() {
+                continue;
+            }
+            // the camelCase key wins only when it is present at all, even
+            // when empty
+            let under = match get(raw, "underlyingId") {
+                Some(v) => bagholder_model::value::s(Some(v)),
+                None => field_s(raw, "underlying_id"),
+            }
+            .trim()
+            .to_string();
+            let fetched = { let f = either(raw, "fetchedAt", "fetched_at"); if f.is_empty() { now.to_string() } else { f } };
+            conn.execute(
+                "INSERT INTO securities (id, symbol, name, primary_exchange, primary_mic, currency, underlying_id, fetched_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET symbol = excluded.symbol, name = excluded.name, \
+                 primary_exchange = excluded.primary_exchange, primary_mic = excluded.primary_mic, \
+                 currency = excluded.currency, underlying_id = excluded.underlying_id, fetched_at = excluded.fetched_at",
+                rusqlite::params![
+                    sid,
+                    field_s(raw, "symbol"),
+                    field_s(raw, "name"),
+                    either(raw, "primaryExchange", "primary_exchange"),
+                    either(raw, "primaryMic", "primary_mic"),
+                    field_s(raw, "currency"),
+                    if under.is_empty() { None } else { Some(under) },
+                    fetched,
+                ],
+            )?;
         }
-        let sid = field_s(raw, "id").trim().to_string();
-        if sid.is_empty() {
-            continue;
-        }
-        // the camelCase key wins only when it is present at all, even
-        // when empty
-        let under = match get(raw, "underlyingId") {
-            Some(v) => bagholder_model::value::s(Some(v)),
-            None => field_s(raw, "underlying_id"),
-        }
-        .trim()
-        .to_string();
-        let fetched = { let f = either(raw, "fetchedAt", "fetched_at"); if f.is_empty() { now.to_string() } else { f } };
-        conn.execute(
-            "INSERT INTO securities (id, symbol, name, primary_exchange, primary_mic, currency, underlying_id, fetched_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET symbol = excluded.symbol, name = excluded.name, \
-             primary_exchange = excluded.primary_exchange, primary_mic = excluded.primary_mic, \
-             currency = excluded.currency, underlying_id = excluded.underlying_id, fetched_at = excluded.fetched_at",
-            rusqlite::params![
-                sid,
-                field_s(raw, "symbol"),
-                field_s(raw, "name"),
-                either(raw, "primaryExchange", "primary_exchange"),
-                either(raw, "primaryMic", "primary_mic"),
-                field_s(raw, "currency"),
-                if under.is_empty() { None } else { Some(under) },
-                fetched,
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 pub fn list_securities(conn: &Connection) -> Result<Vec<Value>> {
@@ -237,29 +239,31 @@ fn weekday_of(y: i64, m: u32, d: u32) -> u32 {
 /// The journal and the downloaded market data are kept unless told otherwise.
 /// The Wealthsimple login is not this function's business.
 pub fn clear_synced_data(conn: &Connection, keep_journal: bool, keep_market: bool) -> Result<()> {
-    for table in ["activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"] {
-        conn.execute(&format!("DELETE FROM {}", table), [])?;
-    }
-    let mut keys: Vec<String> = SYNC_META_KEYS.iter().map(|k| k.to_string()).collect();
-    keys.push("trade_groups".into());
-    keys.push("trade_notes".into());
-    if !keep_journal {
-        keys.push(crate::tables::JOURNAL_META.into());
-    }
-    for k in keys {
-        conn.execute("DELETE FROM meta WHERE key = ?", [k])?;
-    }
-    if !keep_market {
-        for table in [
-            "fx_rates", "benchmark_prices", "distributions", "distribution_fetches", "quotes",
-            "price_history", "history_fetches", "price_bars", "bar_fetches",
-        ] {
+    crate::atomically(conn, || {
+        for table in ["activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"] {
             conn.execute(&format!("DELETE FROM {}", table), [])?;
         }
-        conn.execute("DELETE FROM meta WHERE key IN ('spy_by_date', 'market_attempt_at')", [])?;
-        for prefix in ["bars_miss:", "bars_source:", "coinbase_product:", "coingecko_id:", "tmx_form:", "yahoo_miss:"] {
-            conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{}%", prefix)])?;
+        let mut keys: Vec<String> = SYNC_META_KEYS.iter().map(|k| k.to_string()).collect();
+        keys.push("trade_groups".into());
+        keys.push("trade_notes".into());
+        if !keep_journal {
+            keys.push(crate::tables::JOURNAL_META.into());
         }
-    }
-    Ok(())
+        for k in keys {
+            conn.execute("DELETE FROM meta WHERE key = ?", [k])?;
+        }
+        if !keep_market {
+            for table in [
+                "fx_rates", "benchmark_prices", "distributions", "distribution_fetches", "quotes",
+                "price_history", "history_fetches", "price_bars", "bar_fetches",
+            ] {
+                conn.execute(&format!("DELETE FROM {}", table), [])?;
+            }
+            conn.execute("DELETE FROM meta WHERE key IN ('spy_by_date', 'market_attempt_at')", [])?;
+            for prefix in ["bars_miss:", "bars_source:", "coinbase_product:", "coingecko_id:", "tmx_form:", "yahoo_miss:"] {
+                conn.execute("DELETE FROM meta WHERE key LIKE ?", [format!("{}%", prefix)])?;
+            }
+        }
+        Ok(())
+    })
 }

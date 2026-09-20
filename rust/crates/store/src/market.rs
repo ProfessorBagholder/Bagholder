@@ -58,39 +58,41 @@ pub fn distributions(conn: &Connection) -> Result<Map<String, Value>> {
 /// `upsert_distributions`: a record with no ex-date or no positive
 /// amount is not a distribution.
 pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], source: &str) -> Result<usize> {
-    let sym = sym_of(symbol);
-    if sym.is_empty() {
-        return Ok(0);
-    }
-    let mut clean: Vec<(String, Option<String>, f64, Option<String>)> = Vec::new();
-    for r in rows {
-        let ex = head10(&field_s(r, "exDate"));
-        let amt = opt_num(get(r, "amount"));
-        match amt {
-            Some(a) if ex.len() == 10 && a > 0.0 => {
-                let pay = head10(&field_s(r, "payDate"));
-                let ccy = field_s(r, "currency");
-                clean.push((
-                    ex,
-                    if pay.is_empty() { None } else { Some(pay) },
-                    a,
-                    if ccy.is_empty() { None } else { Some(ccy) },
-                ));
-            }
-            _ => continue,
+    crate::atomically(conn, || {
+        let sym = sym_of(symbol);
+        if sym.is_empty() {
+            return Ok(0);
         }
-    }
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    for (ex, pay, amt, ccy) in &clean {
-        conn.execute(
-            "INSERT INTO distributions(symbol, ex_date, pay_date, amount, currency, source) VALUES (?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(symbol, ex_date, source) DO UPDATE SET pay_date = excluded.pay_date, amount = excluded.amount, currency = excluded.currency",
-            rusqlite::params![sym, ex, pay, amt, ccy, source],
-        )?;
-    }
-    Ok(clean.len())
+        let mut clean: Vec<(String, Option<String>, f64, Option<String>)> = Vec::new();
+        for r in rows {
+            let ex = head10(&field_s(r, "exDate"));
+            let amt = opt_num(get(r, "amount"));
+            match amt {
+                Some(a) if ex.len() == 10 && a > 0.0 => {
+                    let pay = head10(&field_s(r, "payDate"));
+                    let ccy = field_s(r, "currency");
+                    clean.push((
+                        ex,
+                        if pay.is_empty() { None } else { Some(pay) },
+                        a,
+                        if ccy.is_empty() { None } else { Some(ccy) },
+                    ));
+                }
+                _ => continue,
+            }
+        }
+        if clean.is_empty() {
+            return Ok(0);
+        }
+        for (ex, pay, amt, ccy) in &clean {
+            conn.execute(
+                "INSERT INTO distributions(symbol, ex_date, pay_date, amount, currency, source) VALUES (?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(symbol, ex_date, source) DO UPDATE SET pay_date = excluded.pay_date, amount = excluded.amount, currency = excluded.currency",
+                rusqlite::params![sym, ex, pay, amt, ccy, source],
+            )?;
+        }
+        Ok(clean.len())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -226,49 +228,51 @@ struct DayBar {
 
 /// `upsert_price_history`.
 pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], source: &str) -> Result<usize> {
-    let sym = sym_of(symbol);
-    let mut clean: Vec<DayBar> = Vec::new();
-    for b in bars {
-        let d = head10(&field_s(b, "date"));
-        let close = opt_num(get(b, "close"));
-        let ok = d.len() == 10 && d.as_bytes()[4] == b'-' && close.map_or(false, |c| c > 0.0);
-        if !ok {
-            continue;
+    crate::atomically(conn, || {
+        let sym = sym_of(symbol);
+        let mut clean: Vec<DayBar> = Vec::new();
+        for b in bars {
+            let d = head10(&field_s(b, "date"));
+            let close = opt_num(get(b, "close"));
+            let ok = d.len() == 10 && d.as_bytes()[4] == b'-' && close.map_or(false, |c| c > 0.0);
+            if !ok {
+                continue;
+            }
+            clean.push(DayBar {
+                date: d,
+                open: opt_num(get(b, "open")),
+                high: opt_num(get(b, "high")),
+                low: opt_num(get(b, "low")),
+                close: close.unwrap(),
+                volume: opt_num(get(b, "volume")),
+            });
         }
-        clean.push(DayBar {
-            date: d,
-            open: opt_num(get(b, "open")),
-            high: opt_num(get(b, "high")),
-            low: opt_num(get(b, "low")),
-            close: close.unwrap(),
-            volume: opt_num(get(b, "volume")),
-        });
-    }
-    if sym.is_empty() || clean.is_empty() {
-        return Ok(0);
-    }
-    let newest: String = conn
-        .query_row("SELECT MAX(date) FROM price_history WHERE symbol = ?", [&sym], |r| {
-            r.get::<_, Option<String>>(0)
-        })?
-        .unwrap_or_default();
+        if sym.is_empty() || clean.is_empty() {
+            return Ok(0);
+        }
+        let newest: String = conn
+            .query_row("SELECT MAX(date) FROM price_history WHERE symbol = ?", [&sym], |r| {
+                r.get::<_, Option<String>>(0)
+            })?
+            .unwrap_or_default();
 
-    for c in &clean {
-        conn.execute(
-            "INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![sym, c.date, c.open, c.high, c.low, c.close, c.volume, source],
-        )?;
-    }
-    if !newest.is_empty() {
-        // the session that was still open when it was first stored
-        for c in clean.iter().filter(|c| c.date == newest) {
+        for c in &clean {
             conn.execute(
-                "UPDATE price_history SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND date = ?",
-                rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, c.date],
+                "INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![sym, c.date, c.open, c.high, c.low, c.close, c.volume, source],
             )?;
         }
-    }
-    Ok(clean.len())
+        if !newest.is_empty() {
+            // the session that was still open when it was first stored
+            for c in clean.iter().filter(|c| c.date == newest) {
+                conn.execute(
+                    "UPDATE price_history SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND date = ?",
+                    rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, c.date],
+                )?;
+            }
+        }
+        Ok(clean.len())
+    })
 }
 
 pub fn history_fetch(conn: &Connection, symbol: &str) -> Result<Value> {
@@ -324,48 +328,50 @@ pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_
 
 /// `upsert_price_bars`.
 pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Value], source: &str) -> Result<usize> {
-    let sym = sym_of(symbol);
-    struct Bar { ts: i64, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64> }
-    let mut clean: Vec<Bar> = Vec::new();
-    for b in bars {
-        let time = get(b, "time");
-        let close = opt_num(get(b, "close"));
-        // a zero close is rejected too
-        match (time, close) {
-            (Some(t), Some(c)) if c > 0.0 => clean.push(Bar {
-                ts: num(Some(t), 0.0) as i64,
-                open: opt_num(get(b, "open")),
-                high: opt_num(get(b, "high")),
-                low: opt_num(get(b, "low")),
-                close: c,
-                volume: opt_num(get(b, "volume")),
-            }),
-            _ => continue,
+    crate::atomically(conn, || {
+        let sym = sym_of(symbol);
+        struct Bar { ts: i64, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64> }
+        let mut clean: Vec<Bar> = Vec::new();
+        for b in bars {
+            let time = get(b, "time");
+            let close = opt_num(get(b, "close"));
+            // a zero close is rejected too
+            match (time, close) {
+                (Some(t), Some(c)) if c > 0.0 => clean.push(Bar {
+                    ts: num(Some(t), 0.0) as i64,
+                    open: opt_num(get(b, "open")),
+                    high: opt_num(get(b, "high")),
+                    low: opt_num(get(b, "low")),
+                    close: c,
+                    volume: opt_num(get(b, "volume")),
+                }),
+                _ => continue,
+            }
         }
-    }
-    if sym.is_empty() || clean.is_empty() {
-        return Ok(0);
-    }
-    let newest: Option<i64> = conn.query_row(
-        "SELECT MAX(ts) FROM price_bars WHERE symbol = ? AND tf = ?",
-        rusqlite::params![sym, tf],
-        |r| r.get(0),
-    )?;
-    for c in &clean {
-        conn.execute(
-            "INSERT OR IGNORE INTO price_bars(symbol, tf, ts, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![sym, tf, c.ts, c.open, c.high, c.low, c.close, c.volume, source],
+        if sym.is_empty() || clean.is_empty() {
+            return Ok(0);
+        }
+        let newest: Option<i64> = conn.query_row(
+            "SELECT MAX(ts) FROM price_bars WHERE symbol = ? AND tf = ?",
+            rusqlite::params![sym, tf],
+            |r| r.get(0),
         )?;
-    }
-    if let Some(n) = newest {
-        for c in clean.iter().filter(|c| c.ts == n) {
+        for c in &clean {
             conn.execute(
-                "UPDATE price_bars SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND tf = ? AND ts = ?",
-                rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, tf, c.ts],
+                "INSERT OR IGNORE INTO price_bars(symbol, tf, ts, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![sym, tf, c.ts, c.open, c.high, c.low, c.close, c.volume, source],
             )?;
         }
-    }
-    Ok(clean.len())
+        if let Some(n) = newest {
+            for c in clean.iter().filter(|c| c.ts == n) {
+                conn.execute(
+                    "UPDATE price_bars SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND tf = ? AND ts = ?",
+                    rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, tf, c.ts],
+                )?;
+            }
+        }
+        Ok(clean.len())
+    })
 }
 
 /// `last_bar_time`: one indexed lookup, rather than reading the archive

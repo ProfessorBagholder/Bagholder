@@ -100,37 +100,39 @@ fn cash_near(a: f64, b: f64) -> bool {
 /// contracts a hundred times too high. Rows that are already right are left
 /// alone.
 pub fn scale_option_unit_prices(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare("SELECT id, symbol, quantity, unit_price, net_cash_amount FROM activities")?;
-    let rows: Vec<(String, String, f64, f64, f64)> = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-                r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
-                r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
-            ))
-        })?
-        .collect::<Result<Vec<_>>>()?;
-    drop(stmt);
+    crate::atomically(conn, || {
+        let mut stmt = conn.prepare("SELECT id, symbol, quantity, unit_price, net_cash_amount FROM activities")?;
+        let rows: Vec<(String, String, f64, f64, f64)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                    r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                    r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        drop(stmt);
 
-    for (id, symbol, quantity, unit_price, cash) in rows {
-        if !is_option_symbol(&symbol) {
-            continue;
+        for (id, symbol, quantity, unit_price, cash) in rows {
+            if !is_option_symbol(&symbol) {
+                continue;
+            }
+            let (qty, px, cash) = (quantity.abs(), unit_price.abs(), cash.abs());
+            if qty <= 0.0 || px <= 0.0 || cash <= 0.0 {
+                continue;
+            }
+            let implied = px * qty;
+            if cash_near(cash, implied * 100.0) {
+                continue;
+            }
+            if cash_near(cash, implied) {
+                conn.execute("UPDATE activities SET unit_price = ? WHERE id = ?", rusqlite::params![px / 100.0, id])?;
+            }
         }
-        let (qty, px, cash) = (quantity.abs(), unit_price.abs(), cash.abs());
-        if qty <= 0.0 || px <= 0.0 || cash <= 0.0 {
-            continue;
-        }
-        let implied = px * qty;
-        if cash_near(cash, implied * 100.0) {
-            continue;
-        }
-        if cash_near(cash, implied) {
-            conn.execute("UPDATE activities SET unit_price = ? WHERE id = ?", rusqlite::params![px / 100.0, id])?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `ensure`: the schema, then the relabelling, then the one-shot price

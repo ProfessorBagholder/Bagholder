@@ -48,29 +48,31 @@ fn add_missing(conn: &Connection, table: &str, cols: &[(&str, &str)]) -> Result<
 
 /// `_init_schema`.
 pub fn init_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA_0)?;
+    crate::atomically(conn, || {
+        conn.execute_batch(SCHEMA_0)?;
 
-    migrate_nav_history(conn)?;
-    ensure_bar_columns(conn)?;
-    ensure_activity_security_id(conn)?;
-    migrate_spy_meta(conn)?;
-    ensure_quote_columns(conn)?;
-    ensure_shorts_columns(conn)?;
-    ensure_order_columns(conn)?;
-    ensure_account_columns(conn)?;
+        migrate_nav_history(conn)?;
+        ensure_bar_columns(conn)?;
+        ensure_activity_security_id(conn)?;
+        migrate_spy_meta(conn)?;
+        ensure_quote_columns(conn)?;
+        ensure_shorts_columns(conn)?;
+        ensure_order_columns(conn)?;
+        ensure_account_columns(conn)?;
 
-    conn.execute_batch(SCHEMA_1)?;
+        conn.execute_batch(SCHEMA_1)?;
 
-    ensure_notifications_columns(conn)?;
-    ensure_news_columns(conn)?;
-    ensure_filings_columns(conn)?;
-    migrate_history_sources(conn)?;
+        ensure_notifications_columns(conn)?;
+        ensure_news_columns(conn)?;
+        ensure_filings_columns(conn)?;
+        migrate_history_sources(conn)?;
 
-    conn.execute(
-        "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        rusqlite::params!["schema_version", SCHEMA_VERSION.to_string()],
-    )?;
-    Ok(())
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params!["schema_version", SCHEMA_VERSION.to_string()],
+        )?;
+        Ok(())
+    })
 }
 
 /// `_migrate_nav_history`: the table gained an account column and a

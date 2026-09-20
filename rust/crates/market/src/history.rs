@@ -944,8 +944,7 @@ pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: Str
         p.push(sym.clone());
     }
     let _ = std::thread::Builder::new().name(format!("bagholder-intraday-{}", sym)).spawn(move || {
-        if let Ok(conn) = rusqlite::Connection::open(&db) {
-            let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+        if let Ok(conn) = bagholder_store::open_db(&db) {
             let (today, now_unix, stamp) = crate::clock_now();
             let _ = ensure_intraday(&conn, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true);
         }

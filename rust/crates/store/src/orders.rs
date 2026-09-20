@@ -130,31 +130,33 @@ const ORDER_NUM: [(&str, &str); 5] = [
 /// `update_order`: a status, the broker's own order id, or an error on
 /// a ticket that already exists. Only the named fields are touched.
 pub fn update_order(conn: &Connection, order_id: &str, patch: &Value, now: &str) -> Result<()> {
-    let p = match patch.as_object() { Some(p) => p, None => return Ok(()) };
-    let mut sets: Vec<String> = Vec::new();
-    let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    for (k, col) in ORDER_TEXT {
-        if p.contains_key(k) {
-            sets.push(format!("{} = ?", col));
-            vals.push(Box::new(field_s(patch, k)));
+    crate::atomically(conn, || {
+        let p = match patch.as_object() { Some(p) => p, None => return Ok(()) };
+        let mut sets: Vec<String> = Vec::new();
+        let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for (k, col) in ORDER_TEXT {
+            if p.contains_key(k) {
+                sets.push(format!("{} = ?", col));
+                vals.push(Box::new(field_s(patch, k)));
+            }
         }
-    }
-    for (k, col) in ORDER_NUM {
-        if p.contains_key(k) {
-            sets.push(format!("{} = ?", col));
-            vals.push(Box::new(opt_num(p.get(k))));
+        for (k, col) in ORDER_NUM {
+            if p.contains_key(k) {
+                sets.push(format!("{} = ?", col));
+                vals.push(Box::new(opt_num(p.get(k))));
+            }
         }
-    }
-    if sets.is_empty() {
-        return Ok(());
-    }
-    sets.push("updated_at = ?".into());
-    vals.push(Box::new(now.to_string()));
-    vals.push(Box::new(order_id.to_string()));
-    let sql = format!("UPDATE orders SET {} WHERE id = ?", sets.join(", "));
-    let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())?;
-    Ok(())
+        if sets.is_empty() {
+            return Ok(());
+        }
+        sets.push("updated_at = ?".into());
+        vals.push(Box::new(now.to_string()));
+        vals.push(Box::new(order_id.to_string()));
+        let sql = format!("UPDATE orders SET {} WHERE id = ?", sets.join(", "));
+        let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, refs.as_slice())?;
+        Ok(())
+    })
 }
 
 /// `list_orders`: newest first.
@@ -270,39 +272,41 @@ pub fn insert_bracket(conn: &Connection, b: &Value, now: &str) -> Result<()> {
 }
 
 pub fn update_bracket(conn: &Connection, bracket_id: &str, patch: &Value, now: &str) -> Result<()> {
-    let p = match patch.as_object() { Some(p) => p, None => return Ok(()) };
-    let mut sets: Vec<String> = Vec::new();
-    let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    for (k, col) in BRACKET_TEXT {
-        if p.contains_key(k) {
-            sets.push(format!("{} = ?", col));
-            vals.push(Box::new(field_s(patch, k)));
-        }
-    }
-    for (k, col) in BRACKET_NUM {
-        if let Some(v) = p.get(k) {
-            sets.push(format!("{} = ?", col));
-            if v.is_null() {
-                vals.push(Box::new(None::<f64>));
-            } else if k == "slNative" || k == "seenHeld" {
-                vals.push(Box::new(if truthy(v) { 1i64 } else { 0i64 }));
-            } else if k == "attempts" {
-                vals.push(Box::new(num(Some(v), 0.0) as i64));
-            } else {
-                vals.push(Box::new(opt_num(Some(v))));
+    crate::atomically(conn, || {
+        let p = match patch.as_object() { Some(p) => p, None => return Ok(()) };
+        let mut sets: Vec<String> = Vec::new();
+        let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for (k, col) in BRACKET_TEXT {
+            if p.contains_key(k) {
+                sets.push(format!("{} = ?", col));
+                vals.push(Box::new(field_s(patch, k)));
             }
         }
-    }
-    if sets.is_empty() {
-        return Ok(());
-    }
-    sets.push("updated_at = ?".into());
-    vals.push(Box::new(now.to_string()));
-    vals.push(Box::new(bracket_id.to_string()));
-    let sql = format!("UPDATE brackets SET {} WHERE id = ?", sets.join(", "));
-    let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
-    conn.execute(&sql, refs.as_slice())?;
-    Ok(())
+        for (k, col) in BRACKET_NUM {
+            if let Some(v) = p.get(k) {
+                sets.push(format!("{} = ?", col));
+                if v.is_null() {
+                    vals.push(Box::new(None::<f64>));
+                } else if k == "slNative" || k == "seenHeld" {
+                    vals.push(Box::new(if truthy(v) { 1i64 } else { 0i64 }));
+                } else if k == "attempts" {
+                    vals.push(Box::new(num(Some(v), 0.0) as i64));
+                } else {
+                    vals.push(Box::new(opt_num(Some(v))));
+                }
+            }
+        }
+        if sets.is_empty() {
+            return Ok(());
+        }
+        sets.push("updated_at = ?".into());
+        vals.push(Box::new(now.to_string()));
+        vals.push(Box::new(bracket_id.to_string()));
+        let sql = format!("UPDATE brackets SET {} WHERE id = ?", sets.join(", "));
+        let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, refs.as_slice())?;
+        Ok(())
+    })
 }
 
 pub fn list_brackets(conn: &Connection, statuses: &[String]) -> Result<Vec<Value>> {

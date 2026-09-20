@@ -71,75 +71,81 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// `replace_accounts`: the account list, replaced whole. A row with no
 /// id is not an account.
 pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
-    conn.execute("DELETE FROM accounts", [])?;
-    for acc in accounts {
-        if !acc.is_object() {
-            continue;
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM accounts", [])?;
+        for acc in accounts {
+            if !acc.is_object() {
+                continue;
+            }
+            let aid = field_s(acc, "id");
+            if aid.is_empty() {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO accounts (id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    aid,
+                    field_s(acc, "nickname"),
+                    either(acc, "unifiedAccountType", "unified_account_type"),
+                    field_s(acc, "currency"),
+                    field_s(acc, "status"),
+                    field_s(acc, "type"),
+                    opt_num(get(acc, "netLiquidationValue")),
+                    field_s(acc, "marginAccountId"),
+                ],
+            )?;
         }
-        let aid = field_s(acc, "id");
-        if aid.is_empty() {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO accounts (id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                aid,
-                field_s(acc, "nickname"),
-                either(acc, "unifiedAccountType", "unified_account_type"),
-                field_s(acc, "currency"),
-                field_s(acc, "status"),
-                field_s(acc, "type"),
-                opt_num(get(acc, "netLiquidationValue")),
-                field_s(acc, "marginAccountId"),
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `replace_balances`.
 pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
-    conn.execute("DELETE FROM balances", [])?;
-    for b in balances {
-        if !b.is_object() {
-            continue;
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM balances", [])?;
+        for b in balances {
+            if !b.is_object() {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO balances (account_id, custodian_account_id, security_id, quantity) VALUES (?, ?, ?, ?)",
+                rusqlite::params![
+                    either(b, "accountId", "account_id"),
+                    either(b, "custodianAccountId", "custodian_account_id"),
+                    either(b, "securityId", "security_id"),
+                    opt_num(get(b, "quantity")),
+                ],
+            )?;
         }
-        conn.execute(
-            "INSERT INTO balances (account_id, custodian_account_id, security_id, quantity) VALUES (?, ?, ?, ?)",
-            rusqlite::params![
-                either(b, "accountId", "account_id"),
-                either(b, "custodianAccountId", "custodian_account_id"),
-                either(b, "securityId", "security_id"),
-                opt_num(get(b, "quantity")),
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `replace_margin`: Wealthsimple's margin figures per account, replaced
 /// whole on every read -- buying power with its currency, or the reason it was
 /// unavailable. An account that answers nothing is not a row.
 pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
-    conn.execute("DELETE FROM margin", [])?;
-    for m in rows {
-        if !m.is_object() || field_s(m, "accountId").is_empty() {
-            continue;
+    crate::atomically(conn, || {
+        conn.execute("DELETE FROM margin", [])?;
+        for m in rows {
+            if !m.is_object() || field_s(m, "accountId").is_empty() {
+                continue;
+            }
+            let currency = { let c = field_s(m, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
+            let fetched = { let f = field_s(m, "fetchedAt"); if f.is_empty() { now.to_string() } else { f } };
+            conn.execute(
+                "INSERT INTO margin (account_id, buying_power, currency, unavailable, fetched_at) VALUES (?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    field_s(m, "accountId"),
+                    opt_num(get(m, "buyingPower")),
+                    currency,
+                    field_s(m, "unavailable"),
+                    fetched,
+                ],
+            )?;
         }
-        let currency = { let c = field_s(m, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-        let fetched = { let f = field_s(m, "fetchedAt"); if f.is_empty() { now.to_string() } else { f } };
-        conn.execute(
-            "INSERT INTO margin (account_id, buying_power, currency, unavailable, fetched_at) VALUES (?, ?, ?, ?, ?)",
-            rusqlite::params![
-                field_s(m, "accountId"),
-                opt_num(get(m, "buyingPower")),
-                currency,
-                field_s(m, "unavailable"),
-                fetched,
-            ],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -149,31 +155,33 @@ pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()
 /// `_write_nav_points`: a point with no date or no equity is not a
 /// point; an existing day is updated rather than duplicated.
 fn write_nav_points(conn: &Connection, points: &[Value]) -> Result<()> {
-    for rec in points {
-        if !rec.is_object() {
-            continue;
+    crate::atomically(conn, || {
+        for rec in points {
+            if !rec.is_object() {
+                continue;
+            }
+            let day: String = field_s(rec, "date").chars().take(10).collect();
+            if day.is_empty() {
+                continue;
+            }
+            let equity = match opt_num(get(rec, "equity")) { Some(e) => e, None => continue };
+            let account_id = match get(rec, "accountId") {
+                Some(v) => vs(Some(v)),
+                None => field_s(rec, "account_id"),
+            };
+            let currency = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
+            let deposits = match get(rec, "netDeposits") {
+                Some(v) => opt_num(Some(v)),
+                None => opt_num(get(rec, "net_deposits")),
+            };
+            conn.execute(
+                "INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES (?, ?, ?, ?, ?) \
+                 ON CONFLICT(account_id, date) DO UPDATE SET equity = excluded.equity, currency = excluded.currency, net_deposits = excluded.net_deposits",
+                rusqlite::params![account_id, day, equity, currency, deposits],
+            )?;
         }
-        let day: String = field_s(rec, "date").chars().take(10).collect();
-        if day.is_empty() {
-            continue;
-        }
-        let equity = match opt_num(get(rec, "equity")) { Some(e) => e, None => continue };
-        let account_id = match get(rec, "accountId") {
-            Some(v) => vs(Some(v)),
-            None => field_s(rec, "account_id"),
-        };
-        let currency = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-        let deposits = match get(rec, "netDeposits") {
-            Some(v) => opt_num(Some(v)),
-            None => opt_num(get(rec, "net_deposits")),
-        };
-        conn.execute(
-            "INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT(account_id, date) DO UPDATE SET equity = excluded.equity, currency = excluded.currency, net_deposits = excluded.net_deposits",
-            rusqlite::params![account_id, day, equity, currency, deposits],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `upsert_nav`: insert or update daily values, deleting no day.
@@ -275,17 +283,19 @@ pub fn fx_last_date(conn: &Connection, pair: &str) -> Result<String> {
 /// `upsert_fx_rates`: `INSERT OR IGNORE`, so a rate already stored for a
 /// day is never rewritten.
 pub fn upsert_fx_rates(conn: &Connection, mapping: Option<&Value>, pair: &str) -> Result<usize> {
-    let clean = clean_date_map(mapping);
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    for (d, v) in &clean {
-        conn.execute(
-            "INSERT OR IGNORE INTO fx_rates(pair, date, rate) VALUES (?, ?, ?)",
-            rusqlite::params![pair, d, v],
-        )?;
-    }
-    Ok(clean.len())
+    crate::atomically(conn, || {
+        let clean = clean_date_map(mapping);
+        if clean.is_empty() {
+            return Ok(0);
+        }
+        for (d, v) in &clean {
+            conn.execute(
+                "INSERT OR IGNORE INTO fx_rates(pair, date, rate) VALUES (?, ?, ?)",
+                rusqlite::params![pair, d, v],
+            )?;
+        }
+        Ok(clean.len())
+    })
 }
 
 pub fn benchmark_prices(conn: &Connection, symbol: &str) -> Result<Map<String, Value>> {
@@ -311,17 +321,19 @@ pub fn benchmark_last_date(conn: &Connection, symbol: &str) -> Result<String> {
 }
 
 pub fn upsert_benchmark_prices(conn: &Connection, mapping: Option<&Value>, symbol: &str) -> Result<usize> {
-    let clean = clean_date_map(mapping);
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    for (d, v) in &clean {
-        conn.execute(
-            "INSERT OR IGNORE INTO benchmark_prices(symbol, date, close) VALUES (?, ?, ?)",
-            rusqlite::params![symbol, d, v],
-        )?;
-    }
-    Ok(clean.len())
+    crate::atomically(conn, || {
+        let clean = clean_date_map(mapping);
+        if clean.is_empty() {
+            return Ok(0);
+        }
+        for (d, v) in &clean {
+            conn.execute(
+                "INSERT OR IGNORE INTO benchmark_prices(symbol, date, close) VALUES (?, ?, ?)",
+                rusqlite::params![symbol, d, v],
+            )?;
+        }
+        Ok(clean.len())
+    })
 }
 
 // --------------------------------------------------------------------------
