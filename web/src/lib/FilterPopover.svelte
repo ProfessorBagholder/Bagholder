@@ -136,10 +136,17 @@
   }
 
   // ---- derived views ----
+  // The book's own symbol matches first, then the field values the text names (an
+  // account, a grade, a tag), then the listings found outside the book. Field matches
+  // sit above the found listings so one like an account stays in view rather than being
+  // pushed below a long run of same-named companies and out of the scroll box.
   const fieldsQ = $derived(fieldQuery == null ? filters.search : fieldQuery)
   const syms = $derived(fieldsQ ? symbolRows(fieldsQ) : [])
+  const bookSyms = $derived(syms.filter((r) => r.book))
+  const extSyms = $derived(syms.filter((r) => !r.book))
   const others = $derived(fieldMatches(fieldsQ).filter((m) => m.key !== 'symbol'))
-  const hasMatches = $derived(!!fieldsQ && (syms.length > 0 || others.length > 0))
+  const matchTotal = $derived(bookSyms.length + others.length + extSyms.length)
+  const hasMatches = $derived(!!fieldsQ && matchTotal > 0)
 
   const valueOpts = $derived.by(() => {
     if (!active || active.kind !== 'list') return { opts: [] as string[], shown: [] as string[] }
@@ -204,21 +211,22 @@
   // the fields search box: typing lists matches; Enter with no match commits free text
   function onFieldsInput(v: string) { fieldQuery = v; valueHi = 0; extSchedule(v) }
   function onFieldsEnter() {
-    const total = syms.length + others.length
-    if (!total) { filters.search = (fieldQuery ?? '').trim(); fieldQuery = null; loadModel(); return }
-    const i = Math.min(valueHi, total - 1)
-    if (i < syms.length) {
-      const r = syms[i]
-      if (r.book && !OPTION_RE.test(r.sym)) listingOpen(bareSymbol(r.sym), r.exchange)
-      else if (!r.book) listingOpen(r.sym, r.exchange)
-      else toggleList('symbol', r.sym)
-    } else {
-      const m = others[i - syms.length]
+    if (!matchTotal) { filters.search = (fieldQuery ?? '').trim(); fieldQuery = null; loadModel(); return }
+    const i = Math.min(valueHi, matchTotal - 1)
+    if (i < bookSyms.length) {
+      const r = bookSyms[i]
+      if (OPTION_RE.test(r.sym)) toggleList('symbol', r.sym)
+      else listingOpen(bareSymbol(r.sym), r.exchange)
+    } else if (i < bookSyms.length + others.length) {
+      const m = others[i - bookSyms.length]
       toggleList(m.key, m.value)
+    } else {
+      const r = extSyms[i - bookSyms.length - others.length]
+      listingOpen(r.sym, r.exchange)
     }
   }
   function onFieldsKey(e: KeyboardEvent) {
-    const total = syms.length + others.length
+    const total = matchTotal
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && total) {
       e.preventDefault()
       valueHi = (Math.min(valueHi, total - 1) + (e.key === 'ArrowDown' ? 1 : -1) + total) % total
@@ -265,19 +273,18 @@
     <div>
       {#if hasMatches}
         <div class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">
-          {#each syms as r, i (r.sym + '|' + r.exchange + '#' + i)}
+          {#each bookSyms as r, i (r.sym + '|' + r.exchange + '#' + i)}
             {@const on = filters.lists.symbol.indexOf(r.sym) >= 0}
             {@const cls = (on ? ' on' : '') + (i === valueHi ? ' hi' : '')}
             {@const contract = OPTION_RE.test(r.sym)}
-            {#if r.book}
-              {@render symbolRow(contract ? r.sym : bareSymbol(r.sym), r.name, r.exchange, r.sym, cls, contract ? undefined : () => listingOpen(bareSymbol(r.sym), r.exchange), contract ? () => toggleList('symbol', r.sym) : undefined, true)}
-            {:else}
-              {@render extRow(r, i === valueHi ? ' hi' : '')}
-            {/if}
+            {@render symbolRow(contract ? r.sym : bareSymbol(r.sym), r.name, r.exchange, r.sym, cls, contract ? undefined : () => listingOpen(bareSymbol(r.sym), r.exchange), contract ? () => toggleList('symbol', r.sym) : undefined, true)}
           {/each}
           {#each others as m, i (m.key + '|' + m.value)}
             {@const on = filters.lists[m.key as ListKey].indexOf(m.value) >= 0}
-            <button class="pop-row{(on ? ' on' : '') + (syms.length + i === valueHi ? ' hi' : '')}" tabindex="-1" onclick={() => toggleList(m.key, m.value)}>{m.value}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{m.label}</span></button>
+            <button class="pop-row{(on ? ' on' : '') + (bookSyms.length + i === valueHi ? ' hi' : '')}" tabindex="-1" onclick={() => toggleList(m.key, m.value)}>{m.value}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{m.label}</span></button>
+          {/each}
+          {#each extSyms as r, i (r.sym + '|' + r.exchange + '#' + i)}
+            {@render extRow(r, bookSyms.length + others.length + i === valueHi ? ' hi' : '')}
           {/each}
         </div>
       {:else}
