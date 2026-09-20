@@ -60,6 +60,7 @@ export interface Status {
   updateUrl: string
   updateBy: string
   updating: string
+  updateError: string
   protocol: string
   notify: Notify
   [k: string]: unknown

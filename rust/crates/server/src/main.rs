@@ -305,6 +305,10 @@ mod tests {
         let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&html).expect("the page names its protocol");
         assert_eq!(&m[1], crate::app::PROTOCOL);
         // status::payload()["protocol"] is app::PROTOCOL by construction
+        // and the Svelte page's
+        let ts = std::fs::read_to_string(root().join("web/src/lib/protocol.ts")).unwrap();
+        let m = regex::Regex::new(r"export const PROTOCOL = '([^']+)'").unwrap().captures(&ts).expect("the page names its protocol");
+        assert_eq!(&m[1], crate::app::PROTOCOL);
     }
 
     #[test]

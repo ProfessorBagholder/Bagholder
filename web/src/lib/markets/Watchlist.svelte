@@ -13,6 +13,8 @@
   import GridHead from './GridHead.svelte'
   import { request } from '../api'
   import { searchSymbols } from '../api'
+  import { goSub } from '../router.svelte'
+  import { rememberListing } from '../listing.svelte'
 
   let { watchlist }: { watchlist: WatchItem[] } = $props()
 
@@ -123,7 +125,7 @@
   }
   function openRow(w: WatchItem) {
     if (w.positionId) return void (location.hash = 'portfolio/' + encodeURIComponent(w.positionId))
-    location.hash = 'markets/' + encodeURIComponent('listing:' + bareSymbol(w.symbol).toUpperCase() + '@' + String(w.exchange || '').toUpperCase())
+    goSub('markets', rememberListing(w))
   }
   const chgColor = (v: number | null | undefined) => (v == null ? 'var(--ink55)' : v >= 0 ? 'var(--pos)' : 'var(--neg)')
 </script>

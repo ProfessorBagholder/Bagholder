@@ -7,10 +7,10 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 ## Open items
 
 ### Header and menu
-- [ ] **Update button** "Update to vX.Y.Z", and the "Update available" / "image available" link (`L:943-946`, action `update` `L:4972`); nothing calls `/api/update`.
-- [ ] `Downloading…`, `Installing…`, `Restarting…` and the update-failed line (`L:929-930`).
-- [ ] **"Restart Bagholder to finish the update"** on a protocol mismatch (`L:931`); the page has no `PROTOCOL`.
-- [ ] Sync status: the spinner alone before the server's first answer (`L:937`); `Refreshing session…` (`L:933`, `L:4861`).
+- [x] **Update button** "Update to vX.Y.Z", and the "Update available" / "image available" link (`L:943-946`, action `update` `L:4972`); nothing calls `/api/update`.
+- [x] `Downloading…`, `Installing…`, `Restarting…` and the update-failed line (`L:929-930`).
+- [x] **"Restart Bagholder to finish the update"** on a protocol mismatch (`L:931`); the page has no `PROTOCOL`.
+- [x] Sync status: the spinner alone before the server's first answer (`L:937`); `Refreshing session…` (`L:933`, `L:4861`).
 - [ ] Theme row: opens on a tap as well as hover (`L:4964`); choosing a theme closes the list (`L:5019`).
 - [ ] Notifications row: opens on a tap; the state word reads `Blocked` and `Unavailable` as well as `On`/`Off`; the permission prompt on first press; dimmed switches when refused (`L:1086-1122`).
 - [ ] `Send a test notification` (`L:1101`, `L:1123`).
@@ -28,7 +28,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] Value-axis labels that collide are hidden (`spaceAxisLabels`, `L:2399-2412`).
 
 ### Trade, holding and listing detail
-- [ ] **The listing page** for a ticker the book does not hold: route `markets/listing:SYMBOL@VENUE`, `/api/listing`, `listingAsTrade` (`L:710-749`). Every click on an unheld ticker (watchlist, shorts, heatmap, ⌘K, a notification) depends on it.
+- [x] **The listing page** for a ticker the book does not hold: route `markets/listing:SYMBOL@VENUE`, `/api/listing`, `listingAsTrade` (`L:710-749`). Every click on an unheld ticker (watchlist, shorts, heatmap, ⌘K, a notification) depends on it.
 - [ ] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
 - [ ] A journal save that fails says so in the header (`L:909`).
 - [ ] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`).

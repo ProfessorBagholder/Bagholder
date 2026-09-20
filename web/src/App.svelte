@@ -17,7 +17,7 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, loginInput } from './lib/ui.svelte'
+  import { cancelConnect, loginInput, updateNow } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
@@ -26,6 +26,8 @@
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
   import { panel as ordersPanel } from './lib/orders/orders.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
+  import { isListingId, listingAsTrade, loadListing } from './lib/listing.svelte'
+  import { PROTOCOL } from './lib/protocol'
   import { notesStore, showNotifications } from './lib/notes/notes.svelte'
 
   let filterOpen = $state(false)
@@ -142,6 +144,16 @@
           null
       : null,
   )
+  // a listing the book does not hold: its own page, under Markets
+  const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, store.model) : null)
+  $effect(() => {
+    if (route.tab !== 'markets' || !isListingId(route.sub)) return
+    loadListing(route.sub!, (positionId) => {
+      // held after all: its page is the holding's, and Back does not return here
+      history.replaceState(null, '', '#portfolio/' + encodeURIComponent(positionId))
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+  })
 
   function syncLine(): string {
     const s = status
@@ -213,13 +225,25 @@
       <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
       <span style="font-size:15px;font-weight:600;letter-spacing:var(--brand-spacing);color:var(--brand-color);text-transform:var(--brand-transform)">Bagholder</span>
       {#if status?.version}<span class="muted" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
+      {#if status?.updateAvailable}
+        {#if status.canUpdate}
+          <button class="pill" style="font-size:11px;margin-left:8px;padding:1px 8px;width:auto;color:var(--accent-300)" onclick={updateNow}>Update to {status.latestVersion}</button>
+        {:else}
+          <a href={status.updateUrl || '#'} target="_blank" rel="noopener" style="font-size:11px;margin-left:8px;color:var(--accent-300);text-decoration:none">{status.updateBy === 'image' ? status.latestVersion + ' image available' : 'Update available'}</a>
+        {/if}
+      {/if}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
-      <span style="font-size:12px;color:var(--ink55)">
-        {#if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
-        {:else if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
+      <span id="syncline" style="font-size:12px;color:var(--ink55)">
+        {#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
+        {:else if status?.updating}<span class="spin"></span>{status.updating}
+        {:else if status?.updateError}<span class="status-err">{status.updateError}</span>
+        {:else if status?.protocol && status.protocol !== PROTOCOL}<span class="status-err">Restart Bagholder to finish the update</span>
+        {:else if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
+        {:else if ui.busy === 'refresh'}<span class="spin"></span>Refreshing session…
         {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
         {:else if status?.error}<span class="status-err">{status.error.length > 60 ? status.error.slice(0, 57) + '…' : status.error}</span>
+        {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
       <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ordersOpen = true)}>
@@ -281,7 +305,7 @@
     {:else if route.tab === 'trades'}
       {#if sel}{#key sel.id}<TradeDetail trade={sel as import('./lib/model').Trade} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
     {:else if route.tab === 'markets'}
-      <Markets markets={store.model.markets} />
+      {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else}<Markets markets={store.model.markets} />{/if}
     {/if}
   </div>
 

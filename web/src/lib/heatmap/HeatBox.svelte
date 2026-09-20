@@ -10,6 +10,7 @@
   import { signedPct } from '../markets/util'
   import { bareSymbol } from '../sym'
   import { goSub } from '../router.svelte'
+  import { rememberListing } from '../listing.svelte'
 
   let { tiles, universe, boxStyle }: { tiles: Tile[]; universe: string; boxStyle: string } = $props()
 
@@ -46,7 +47,7 @@
     if (c.id) goSub('portfolio', c.id)
     else if (c.symbol && !c.other) {
       const o = heatListing(c)
-      goSub('markets', 'listing:' + o.symbol.toUpperCase() + '@' + String(o.exchange || '').toUpperCase())
+      goSub('markets', rememberListing(o))
     }
   }
   const opens = (c: Tile & { other?: boolean }) => !!c.id || (!!c.symbol && !c.other)

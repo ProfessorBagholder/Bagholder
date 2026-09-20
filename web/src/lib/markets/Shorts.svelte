@@ -11,6 +11,8 @@
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
   import { request } from '../api'
+  import { goSub } from '../router.svelte'
+  import { rememberListing } from '../listing.svelte'
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const SHORTS_COLS = [
@@ -84,7 +86,7 @@
   }
   function openRow(r: ShortsFeedRow) {
     if (r.positionId) return void (location.hash = 'portfolio/' + encodeURIComponent(r.positionId))
-    location.hash = 'markets/' + encodeURIComponent('listing:' + bareSymbol(r.symbol).toUpperCase() + '@' + String(r.exchange || '').toUpperCase())
+    goSub('markets', rememberListing(r))
   }
 </script>
 

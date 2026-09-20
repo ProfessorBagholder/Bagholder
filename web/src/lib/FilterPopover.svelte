@@ -10,6 +10,7 @@
   import { symText, bareSymbol } from './sym'
   import { ICONS } from './icons'
   import { searchSymbols } from './api'
+  import { rememberListing } from './listing.svelte'
 
   // `field` opens the popover straight at one field's editor (for a chip's Edit /
   // ledger chipEdit: 'search' → the fields view, any other key → that field). The
@@ -198,7 +199,7 @@
 
   function listingOpen(symbol: string, exchange: string) {
     onclose()
-    goSub('markets', 'listing:' + bareSymbol(symbol) + '@' + String(exchange || '').toUpperCase())
+    goSub('markets', rememberListing({ symbol, exchange }))
   }
   function trade(symbol: string, side: 'BUY' | 'SELL', exchange: string, securityId: string) {
     openTicket(symbol, side, exchange, securityId)

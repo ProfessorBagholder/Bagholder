@@ -4,6 +4,7 @@
   import { ICONS } from '../icons'
   import { bareSymbol } from '../sym'
   import { goSub } from '../router.svelte'
+  import { rememberListing } from '../listing.svelte'
 
   let { onclose }: { onclose: () => void } = $props()
 
@@ -44,7 +45,7 @@
     if (x.url) { window.open(x.url, '_blank', 'noopener'); return }
     if (x.symbol) {
       onclose()
-      goSub('markets', 'listing:' + bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase())
+      goSub('markets', rememberListing({ symbol: String(x.symbol), exchange: x.exchange }))
     }
   }
 </script>

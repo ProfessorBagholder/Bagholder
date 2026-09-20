@@ -44,7 +44,7 @@ export const ui = $state<{
   confirm: string
   notice: string
   noticeKind: '' | 'ok' | 'err'
-  busy: '' | 'trade' | 'folder' | 'clearing'
+  busy: '' | 'trade' | 'folder' | 'clearing' | 'refresh'
   tradeForm: TradeForm
   importReport: ImportReport | null
   folderPath: string
@@ -103,8 +103,17 @@ export function syncNow(): void {
 
 export function refreshSession(): void {
   ui.menuOpen = false
+  ui.busy = 'refresh'
   request('POST', '/api/refresh').then((r) => {
+    ui.busy = ''
     flash(r && r.ok ? 'Session refreshed' : (r && (r.error as string)) || 'Refresh failed', r && r.ok ? 'ok' : 'err')
+  })
+}
+
+/** Install the release on offer. Its progress reaches the header as the status changes. */
+export function updateNow(): void {
+  request('POST', '/api/update').then((r) => {
+    if (!r || !r.ok) flash((r && (r.error as string)) || 'Update failed.', 'err')
   })
 }
 
