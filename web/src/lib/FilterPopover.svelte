@@ -174,6 +174,7 @@
     // a value picked from the fields search stays checked; the box clears so more can be picked
     if (hasMatches && filters.search) filters.search = ''
     refilter()
+    boxEl?.focus() // the keyboard stays with the box after a click on a row
   }
   function toggleYear(y: string) {
     const i = filters.years.indexOf(y)
@@ -197,9 +198,12 @@
     }, 500)
   }
 
+  // A symbol row goes to its ticker's page: the holding's where the book holds it, the listing's own otherwise.
   function listingOpen(symbol: string, exchange: string) {
     onclose()
-    goSub('markets', rememberListing({ symbol, exchange }))
+    const held = store.model?.positions.find((p) => !OPTION_RE.test(p.symbol) && bareSymbol(p.symbol).toUpperCase() === symbol.toUpperCase() && (!exchange || !p.exchange || p.exchange.toUpperCase() === exchange.toUpperCase()))
+    if (held) goSub('portfolio', held.id)
+    else goSub('markets', rememberListing({ symbol, exchange }))
   }
   function trade(symbol: string, side: 'BUY' | 'SELL', exchange: string, securityId: string) {
     openTicket(symbol, side, exchange, securityId)
@@ -223,15 +227,71 @@
       listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange)
     }
   }
+  // ---- keys the two search boxes share (SPEC §3, Filters) ----
+  let boxEl = $state<HTMLInputElement>()
+  let doneEl = $state<HTMLButtonElement>()
+  let clearEl = $state<HTMLButtonElement>()
+
+  // Tab runs box -> Done -> Clear all -> box, and Shift+Tab runs it backwards: the rows
+  // between are driven by the arrows, so Tab does not walk them.
+  function ring(e: KeyboardEvent, from: 'box' | 'done' | 'clear') {
+    if (e.key !== 'Tab') return false
+    const order = { box: [doneEl, clearEl], done: [clearEl, boxEl], clear: [boxEl, doneEl] }[from]
+    const to = e.shiftKey ? order[1] : order[0]
+    if (to) { e.preventDefault(); to.focus() }
+    return true
+  }
+  // the value under the highlight, as (field, value), when it is one a list filter can hold
+  function highlighted(): [string, string] | null {
+    if (active) {
+      const v = valueOpts.shown[Math.min(valueHi, valueOpts.shown.length - 1)]
+      return v == null ? null : [active.key, v]
+    }
+    const i = Math.min(valueHi, matchTotal - 1)
+    if (i < 0) return null
+    if (i < bookSyms.length) return ['symbol', bookSyms[i].sym]
+    if (i < bookSyms.length + others.length) { const m = others[i - bookSyms.length]; return [m.key, m.value] }
+    const r = extSyms[i - bookSyms.length - others.length]
+    return r?.book ? ['symbol', r.sym] : null
+  }
+  // Delete, or Backspace in an empty box, deselects the highlighted value
+  function deselects(e: KeyboardEvent): boolean {
+    if (!(e.key === 'Delete' || (e.key === 'Backspace' && !(e.target as HTMLInputElement).value))) return false
+    const hi = highlighted()
+    if (hi && filters.lists[hi[0] as ListKey]?.includes(hi[1])) { e.preventDefault(); toggleList(hi[0], hi[1]) }
+    return true
+  }
+  // The box takes the keyboard whenever it appears: when the popover opens and when a
+  // field's own box replaces the search. (An `autofocus` attribute does not do this: a
+  // browser ignores it once anything on the page has had focus.)
+  $effect(() => {
+    boxEl?.focus()
+  })
+  // the highlight is kept in view as the arrows move it
+  $effect(() => {
+    void valueHi
+    void picker
+    queueMicrotask(() => popEl?.querySelector('.pop-row.hi, .tk-row.hi')?.scrollIntoView({ block: 'nearest' }))
+  })
+
   function onFieldsKey(e: KeyboardEvent) {
+    if (ring(e, 'box') || deselects(e)) return
     const total = matchTotal
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && total) {
       e.preventDefault()
       valueHi = (Math.min(valueHi, total - 1) + (e.key === 'ArrowDown' ? 1 : -1) + total) % total
-    } else if (e.key === 'Enter') { e.preventDefault(); onFieldsEnter() }
-    else if (e.key === 'Escape') onclose()
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      // Enter does what a click does -- a symbol row goes to its ticker -- and Shift+Enter
+      // narrows the book by it instead
+      const hi = highlighted()
+      if (e.shiftKey && hi && hi[0] === 'symbol') toggleList('symbol', hi[1])
+      else onFieldsEnter()
+    }
+    else if (e.key === 'Escape') { e.stopPropagation(); onclose() } // this Esc closes the popover and does nothing else
   }
   function onValueKey(e: KeyboardEvent) {
+    if (ring(e, 'box') || deselects(e)) return
     const rows = valueOpts.shown
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && rows.length) {
       e.preventDefault()
@@ -240,9 +300,9 @@
       e.preventDefault()
       const v = rows[Math.min(valueHi, rows.length - 1)]
       if (v == null) return
-      if (active.key === 'symbol' && !OPTION_RE.test(v)) { const l = options.listings?.[v] ?? {}; listingOpen(bareSymbol(v), l.exchange ?? '') }
+      if (active.key === 'symbol' && !OPTION_RE.test(v) && !e.shiftKey) { const l = options.listings?.[v] ?? {}; listingOpen(bareSymbol(v), l.exchange ?? '') }
       else toggleList(active.key, v)
-    } else if (e.key === 'Escape') onclose()
+    } else if (e.key === 'Escape') { e.stopPropagation(); onclose() } // this Esc closes the popover and does nothing else
   }
 
   const summaryFor = (x: Field): string =>
@@ -265,8 +325,7 @@
   {#if !active}
     <!-- fields view: search box + matches, or the list of fields -->
     <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:8px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-      <!-- svelte-ignore a11y_autofocus -->
-      <input value={fieldsQ} oninput={(e) => onFieldsInput((e.target as HTMLInputElement).value)} onkeydown={onFieldsKey} placeholder="Search symbol, account, tag…" aria-label="Search" autocomplete="off" autofocus style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
+      <input value={fieldsQ} oninput={(e) => onFieldsInput((e.target as HTMLInputElement).value)} onkeydown={onFieldsKey} bind:this={boxEl} placeholder="Search symbol, account, tag…" aria-label="Search" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
     </div>
     <div>
       {#if hasMatches}
@@ -313,8 +372,7 @@
     {#if active.kind === 'list'}
       {#if active.search}
         <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:6px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-          <!-- svelte-ignore a11y_autofocus -->
-          <input value={valueQuery} oninput={(e) => { valueQuery = (e.target as HTMLInputElement).value; valueHi = 0 }} onkeydown={onValueKey} placeholder="Search" aria-label="Search values" autocomplete="off" autofocus style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
+          <input value={valueQuery} oninput={(e) => { valueQuery = (e.target as HTMLInputElement).value; valueHi = 0 }} onkeydown={onValueKey} bind:this={boxEl} placeholder="Search" aria-label="Search values" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
         </div>
       {/if}
       <div class="scroll" style="max-height:260px;display:flex;flex-direction:column;gap:1px">
@@ -369,8 +427,8 @@
   {/if}
 
   <div class="rule-t" style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:9px">
-    <button class="btn btn-secondary" onclick={clearAll} style="font-size:12px;padding:4px 10px">Clear all</button>
-    <button class="btn btn-primary" onclick={closeFilter} style="font-size:12px;padding:4px 10px;margin-left:auto">Done</button>
+    <button class="btn btn-secondary" bind:this={clearEl} onkeydown={(e) => ring(e, 'clear')} onclick={clearAll} style="font-size:12px;padding:4px 10px">Clear all</button>
+    <button class="btn btn-primary" bind:this={doneEl} onkeydown={(e) => ring(e, 'done')} onclick={closeFilter} style="font-size:12px;padding:4px 10px;margin-left:auto">Done</button>
   </div>
 </div>
 

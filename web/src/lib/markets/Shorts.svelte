@@ -85,7 +85,7 @@
     try { localStorage.setItem('bh2.shorts', v) } catch { /* ignore */ }
   }
   function openRow(r: ShortsFeedRow) {
-    if (r.positionId) return void (location.hash = 'portfolio/' + encodeURIComponent(r.positionId))
+    if (r.positionId) return goSub('portfolio', r.positionId)
     goSub('markets', rememberListing(r))
   }
 </script>

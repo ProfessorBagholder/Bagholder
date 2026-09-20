@@ -5,7 +5,7 @@
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { setBenchmark, setFilters } from './state.svelte'
   import { filters } from './filters.svelte'
-  import { goSub } from './router.svelte'
+  import { goSub, go } from './router.svelte'
 
   let { model }: { model: Model } = $props()
 
@@ -160,7 +160,7 @@
   }
   function symbolOpen(row: { symbol: string; tradeIds: string[] }) {
     if (row.tradeIds.length === 1) return openTrade(row.tradeIds[0])
-    location.hash = 'trades'
+    go('trades')
     setFilters({ lists: { ...filters.lists, symbol: [row.symbol] } })
   }
   function monthOpen(i: number) {
@@ -169,14 +169,14 @@
     if (b.tradeIds && b.tradeIds.length === 1) return openTrade(b.tradeIds[0])
     const y = +b.key.slice(0, 4), m = +b.key.slice(5, 7)
     const last = new Date(y, m, 0).getDate()
-    location.hash = 'trades'
+    go('trades')
     setFilters({ preset: 'all', years: [], from: b.key + '-01', to: b.key + '-' + String(last).padStart(2, '0') })
   }
   function gradeOpen(grade: string) {
     const b = grades.buckets.find((x) => x.grade === grade)
     if (!b || !b.n) return
     if (b.n === 1) return openTrade(b.tradeIds[0])
-    location.hash = 'trades'
+    go('trades')
     setFilters({ lists: { ...filters.lists, grade: [grade] } })
   }
 </script>
@@ -299,7 +299,7 @@
         <div style="flex:1;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center">
           <div style="font-size:13px">No trades graded yet</div>
           <div class="dim" style="font-size:11px">{k.count} closed trades to review</div>
-          <button class="btn btn-secondary" style="font-size:12px;margin-top:2px" onclick={() => (location.hash = 'trades')}>Open Trades</button>
+          <button class="btn btn-secondary" style="font-size:12px;margin-top:2px" onclick={() => go('trades')}>Open Trades</button>
         </div>
       {:else}
         <div style="position:relative;flex:1;min-height:120px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end">

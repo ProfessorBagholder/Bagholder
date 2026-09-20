@@ -124,7 +124,7 @@
     input?.focus()
   }
   function openRow(w: WatchItem) {
-    if (w.positionId) return void (location.hash = 'portfolio/' + encodeURIComponent(w.positionId))
+    if (w.positionId) return goSub('portfolio', w.positionId)
     goSub('markets', rememberListing(w))
   }
   const chgColor = (v: number | null | undefined) => (v == null ? 'var(--ink55)' : v >= 0 ? 'var(--pos)' : 'var(--neg)')

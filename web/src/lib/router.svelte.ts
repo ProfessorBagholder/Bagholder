@@ -34,25 +34,30 @@ export const route = $state<{ tab: Tab; sub: string | null }>({ tab: tabFromHash
 // and a page newly opened starts at its top.
 let listScrollY = 0
 
+// The route follows the address. It is read at once wherever the page itself changes
+// the address (`go`, `goSub`), since the browser only announces a change of hash some
+// time after it happens; the announcement still covers Back, Forward and an address typed.
+function follow(): void {
+  const was = { tab: route.tab, sub: route.sub }
+  route.tab = tabFromHash(location.hash)
+  route.sub = subFromHash(location.hash)
+  if (route.tab === was.tab && route.sub === was.sub) return
+  const opened = !!route.sub && route.sub !== was.sub
+  const backToList = !route.sub && !!was.sub && route.tab === was.tab
+  // the page under the old address is still what the window shows
+  if (opened && !was.sub) listScrollY = window.scrollY
+  if (opened || backToList) {
+    const y = opened ? 0 : listScrollY
+    // once the page under the new address has been drawn
+    requestAnimationFrame(() => window.scrollTo(0, y))
+  }
+}
+
 // Wire hash changes to the store; returns a teardown for onMount.
 export function startRouter(): () => void {
-  const on = () => {
-    const was = { tab: route.tab, sub: route.sub }
-    route.tab = tabFromHash(location.hash)
-    route.sub = subFromHash(location.hash)
-    const opened = !!route.sub && route.sub !== was.sub
-    const backToList = !route.sub && !!was.sub && route.tab === was.tab
-    // the hash changed before the page did: what the window shows now is still the page being left
-    if (opened && !was.sub) listScrollY = window.scrollY
-    if (opened || backToList) {
-      const y = opened ? 0 : listScrollY
-      // once the page under the new address has been drawn
-      requestAnimationFrame(() => window.scrollTo(0, y))
-    }
-  }
-  on()
-  window.addEventListener('hashchange', on)
-  return () => window.removeEventListener('hashchange', on)
+  follow()
+  window.addEventListener('hashchange', follow)
+  return () => window.removeEventListener('hashchange', follow)
 }
 
 /** Leave the open row for its list without adding to the history: Back should not return to it. */
@@ -64,8 +69,10 @@ export function leaveSub(): void {
 
 export function go(tab: Tab): void {
   location.hash = tab
+  follow()
 }
 
 export function goSub(tab: Tab, sub: string): void {
   location.hash = tab + '/' + encodeURIComponent(sub)
+  follow()
 }

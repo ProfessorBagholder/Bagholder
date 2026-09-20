@@ -43,6 +43,7 @@
     refilter()
   }
   let ordersOpen = $state(false)
+  let filterOpened = $state(0)
   let notesOpen = $state(false)
   let menuWrap = $state<HTMLElement>()
 
@@ -88,6 +89,16 @@
       ordersOpen = !ordersOpen
       return
     }
+    // ⌘K opens the filters' search from anywhere -- over the Orders panel too -- and, with
+    // the popover already open on one field, returns it to the search
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      ui.menuOpen = false
+      filterField = 'fields'
+      filterOpen = true
+      filterOpened++
+      return
+    }
     if (notesOpen && !ui.confirm && !filterOpen) {
       if (e.key === 'Escape') { e.preventDefault(); notesOpen = false; return }
     }
@@ -111,13 +122,6 @@
           ordersPanel.bracketEdit = null
         }
       }
-      return
-    }
-    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
-      e.preventDefault()
-      ui.menuOpen = false
-      filterField = 'fields'
-      filterOpen = true
       return
     }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.modal && !ui.confirm && !isFieldFocused()) {
@@ -262,7 +266,7 @@
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
-        {#if filterOpen}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/if}
+        {#if filterOpen}{#key filterOpened}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
       </div>
       <div style="position:relative" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>

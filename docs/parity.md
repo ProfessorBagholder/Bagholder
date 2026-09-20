@@ -16,11 +16,11 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] `Send a test notification` (`L:1101`, `L:1123`).
 
 ### Filters
-- [ ] A symbol row for a held symbol opens its holding page, not the listing route (`L:751-752`).
-- [ ] Shift+Enter narrows by the highlighted symbol (`L:5174`, `L:5203`).
-- [ ] Backspace/Delete in an empty box deselects the highlighted value (`L:4825-4829`).
-- [ ] Tab ring: box → Done → Clear all → box, Shift+Tab backwards (`L:4820-4824`, `L:5149-5155`).
-- [ ] The highlight scrolls into view (`L:5163`); focus returns to the box after a click toggle (`L:4956`); ⌘K with the popover open on a field returns to the fields view.
+- [x] A symbol row for a held symbol opens its holding page, not the listing route (`L:751-752`).
+- [x] Shift+Enter narrows by the highlighted symbol (`L:5174`, `L:5203`).
+- [x] Backspace/Delete in an empty box deselects the highlighted value (`L:4825-4829`).
+- [x] Tab ring: box → Done → Clear all → box, Shift+Tab backwards (`L:4820-4824`, `L:5149-5155`).
+- [x] The highlight scrolls into view (`L:5163`); focus returns to the box after a click toggle (`L:4956`); ⌘K with the popover open on a field returns to the fields view.
 - [x] Filtering while a trade is open returns to the list (`L:843-847`).
 - [ ] Cashflow names the filters it ignored (SPEC §5; in neither page yet).
 
@@ -47,7 +47,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 
 ### Order ticket and Orders panel
 - [ ] The page behind an open panel does not scroll (`panel-open`, `L:4648`).
-- [ ] ⌘K works over the Orders panel (`L:5104`).
+- [x] ⌘K works over the Orders panel (`L:5104`).
 - [ ] Enter saves an order editor; the editor takes focus when it opens (`L:4992-4995`, `L:5113`).
 - [ ] **Unsure:** the cards' pixel grammar against the original, line by line.
 
