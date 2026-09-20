@@ -14,7 +14,7 @@ use crate::value::EPS;
 use crate::wire::{Annualized, Drawdown, YearRow};
 
 /// One day of the equity curve as the page is sent it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 pub struct Point {
     pub d: String,
     pub v: f64,

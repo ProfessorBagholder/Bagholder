@@ -188,7 +188,7 @@
     <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v">{k.winRate == null ? '—' : pctPlain(k.winRate)}</div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v">{pf}</div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v">{k.expectancy == null ? '—' : money(k.expectancy)}</div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}">{dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}</div><div class="s">{dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}">{dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}</div><div class="s">{dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs ?? 0)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Avg annualized</div><div class="v {ann.rate == null ? '' : cls(ann.rate)}">{ann.rate == null ? '—' : pct(ann.rate)}</div><div class="s">{ann.rate == null ? 'No NAV history' : 'Over ' + ann.count + (ann.count === 1 ? ' year' : ' years')}</div></div>
   </div>
 

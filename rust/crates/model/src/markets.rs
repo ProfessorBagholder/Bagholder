@@ -10,7 +10,7 @@ use crate::fx::to_cad;
 use crate::input::Listing;
 use crate::instruments;
 use crate::venues::{tmx_symbol, watch_exposure_key};
-use crate::wire::{HeldTile, ImpliedRate, MarketInstrument, MarketTile, Markets, NewsItem, NewsTag, Ordered, Position, UniverseTile, WatchItem};
+use crate::wire::{HeldTile, MarketInstrument, MarketTile, Markets, NewsItem, NewsTag, Ordered, Position, UniverseTile, WatchItem};
 
 /// The feed whose items belong to the market rather than to a listing.
 const MARKET_FEED: (&str, &str) = ("*", "MARKET");
@@ -72,6 +72,11 @@ pub fn tile_rows(base: &Base) -> Vec<MarketTile> {
             let quote = base.quotes.get(&watch_quote_key(inst.symbol, inst.exchange));
             let last = quote.and_then(|q| q.price);
             let change = quote.and_then(|q| q.price_change);
+            // A contract quoted as 100 minus the rate carries that rate beside its
+            // published price: the price is what the exchange gives, the rate is
+            // the contract's own definition of it, and a day that moves the price
+            // down has moved the rate it prices up.
+            let (rate, rate_change) = MarketTile::implied(instruments::implied_rate(inst.symbol, last), change);
             MarketTile {
                 symbol: inst.symbol,
                 exchange: inst.exchange,
@@ -82,11 +87,8 @@ pub fn tile_rows(base: &Base) -> Vec<MarketTile> {
                 change,
                 percent_change: quote.and_then(|q| q.percent_change),
                 decimals: tile_decimals(inst),
-                // A contract quoted as 100 minus the rate carries that rate beside its
-                // published price: the price is what the exchange gives, the rate is
-                // the contract's own definition of it, and a day that moves the price
-                // down has moved the rate it prices up.
-                implied: instruments::implied_rate(inst.symbol, last).map(|rate| ImpliedRate { rate, rate_change: change.map(|v| (-v * 1e4).round() / 1e4) }),
+                rate,
+                rate_change,
             }
         })
         .collect()

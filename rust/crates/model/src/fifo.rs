@@ -79,7 +79,7 @@ pub struct Slice {
 }
 
 /// A fill that closed more than the book held and cannot open anything.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Unmatched {
     pub symbol: String,

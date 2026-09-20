@@ -17,7 +17,7 @@ use crate::value::compact;
 // --------------------------------------------------------------------------
 
 /// What is traded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
 pub enum Kind {
     Shares,
     Options,
@@ -49,7 +49,7 @@ impl fmt::Display for Kind {
 }
 
 /// Which way a fill goes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 pub enum Side {
     #[serde(rename = "BUY")]
     Buy,
@@ -75,7 +75,7 @@ impl Side {
 }
 
 /// Which way a position faces.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 pub enum Direction {
     #[serde(rename = "LONG")]
     Long,

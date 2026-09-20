@@ -100,7 +100,7 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
 export async function addWatch(m: { symbol: string; exchange: string; name: string; currency: string }): Promise<void> {
   const mk = store.model?.markets
   if (mk && !mk.watchlist.some((w) => w.symbol === m.symbol && w.exchange === m.exchange)) {
-    mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', positionId: null })
+    mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', kind: 'Shares', positionId: null })
   }
   try {
     const d = await post('/api/watchlist/add', m)

@@ -6,6 +6,7 @@
 //! is `null` on the wire unless the field says it is left out.
 
 use serde::Serialize;
+use ts_rs::TS;
 use std::sync::Arc;
 
 use crate::activity::{Direction, Flag, Kind, Side};
@@ -15,7 +16,7 @@ use crate::activity::{Direction, Flag, Kind, Side};
 // --------------------------------------------------------------------------
 
 /// How a trade was closed: a long is sold, a short is covered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub enum ExitSide {
     #[serde(rename = "SELL")]
     Sell,
@@ -33,7 +34,7 @@ impl ExitSide {
 }
 
 /// One closed piece of a trade: a lot against the fill that closed it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Leg {
     /// What a saved group names this member by.
@@ -48,11 +49,12 @@ pub struct Leg {
     pub fees: f64,
     pub buy_activity_id: String,
     pub sell_activity_id: String,
+    #[ts(as = "Vec<String>")]
     pub flags: Vec<Flag>,
 }
 
 /// One broker fill as the page prints it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Fill {
     pub id: String,
@@ -61,6 +63,7 @@ pub struct Fill {
     pub time: String,
     /// `BUY`, `SELL`, or nothing when the row does not say.
     #[serde(serialize_with = "side_or_blank")]
+    #[ts(type = r#""BUY" | "SELL" | """#)]
     pub side: Option<Side>,
     /// Under a trade, what the fill did in it (`BUY TO OPEN`, `SELL (close +
     /// open)`); under a holding, the broker's own sub-type.
@@ -71,6 +74,7 @@ pub struct Fill {
     pub amount: f64,
     pub fees: f64,
     pub currency: String,
+    #[ts(as = "Vec<String>")]
     pub flags: Vec<Flag>,
 }
 
@@ -79,7 +83,7 @@ fn side_or_blank<S: serde::Serializer>(side: &Option<Side>, s: S) -> Result<S::O
 }
 
 /// How much was opened or closed, at what average, in how many fills.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Tally {
     pub qty: f64,
     pub avg: f64,
@@ -87,7 +91,7 @@ pub struct Tally {
 }
 
 /// A round trip: a position going from flat to open and back to flat.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
     pub id: String,
@@ -122,14 +126,17 @@ pub struct Trade {
     pub pnl_pct: Option<f64>,
     /// Sent only for the trade whose page is open.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub legs: Option<Arc<Vec<Leg>>>,
     pub leg_count: usize,
     /// Sent only for the trade whose page is open.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub fills: Option<Arc<Vec<Fill>>>,
     pub opened: Tally,
     pub closed: Tally,
     pub net_cash: f64,
+    #[ts(as = "Vec<String>")]
     pub flags: Vec<Flag>,
     pub grade: String,
     pub thesis: String,
@@ -141,7 +148,7 @@ pub struct Trade {
 // --------------------------------------------------------------------------
 
 /// What a holding is marked at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum Mark {
     /// Its own last fill.
@@ -151,7 +158,7 @@ pub enum Mark {
 }
 
 /// One opening fill's share of a holding.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenLot {
     pub opened: String,
@@ -159,13 +166,14 @@ pub struct OpenLot {
     pub price: f64,
     pub basis: f64,
     pub held: i64,
+    #[ts(as = "Vec<String>")]
     pub flags: Vec<Flag>,
     pub activity_id: String,
 }
 
 /// An open position: the open lots of one symbol in one account, currency and
 /// direction.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     /// The round trip that opened it, which is the id the trade will have when
@@ -204,6 +212,7 @@ pub struct Position {
     pub lots: Vec<OpenLot>,
     /// Sent only for the holding whose page is open.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub fills: Option<Arc<Vec<Fill>>>,
     pub grade: String,
     pub thesis: String,
@@ -217,7 +226,7 @@ pub struct Position {
 // --------------------------------------------------------------------------
 
 /// What kind of payment a cashflow row is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub enum Payment {
     Dividend,
     Interest,
@@ -239,7 +248,7 @@ impl Payment {
 }
 
 /// One payment into or out of the book that is not a trade.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CashflowRow {
     pub id: String,
@@ -301,7 +310,7 @@ impl<V: Serialize> Serialize for Ordered<V> {
 // --------------------------------------------------------------------------
 
 /// The KPI tiles: what one filtered list of trades adds up to, in CAD.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Kpi {
     pub realized: f64,
@@ -323,7 +332,7 @@ pub struct Kpi {
     pub open_count: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BySymbolRow {
     /// The underlying, so a chain of contracts sits under the name it is written on.
@@ -336,7 +345,7 @@ pub struct BySymbolRow {
     pub trade_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MonthlyBar {
     /// `YYYY-MM`.
@@ -347,7 +356,7 @@ pub struct MonthlyBar {
     pub trade_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GradeBucket {
     pub grade: &'static str,
@@ -356,7 +365,7 @@ pub struct GradeBucket {
     pub trade_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Grades {
     pub buckets: Vec<GradeBucket>,
     pub ungraded: usize,
@@ -364,7 +373,7 @@ pub struct Grades {
 }
 
 /// A closed trade still missing a grade or a thesis.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct QueueRow {
     pub id: String,
     pub symbol: String,
@@ -379,7 +388,7 @@ pub struct QueueRow {
 // --------------------------------------------------------------------------
 
 /// One year's time-weighted return beside the benchmark's over the same days.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct YearRow {
     pub year: String,
@@ -393,7 +402,7 @@ pub struct YearRow {
     pub sp_r: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Annualized {
     pub rate: Option<f64>,
     pub years: f64,
@@ -402,7 +411,7 @@ pub struct Annualized {
     pub last: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Drawdown {
     pub pct: Option<f64>,
@@ -415,7 +424,7 @@ pub struct Drawdown {
 // portfolio
 // --------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Allocation {
     pub id: String,
     pub symbol: String,
@@ -425,7 +434,7 @@ pub struct Allocation {
 }
 
 /// One slice of the book by sector or by country.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct ExposureSlice {
     pub name: String,
     pub value: f64,
@@ -433,7 +442,7 @@ pub struct ExposureSlice {
 }
 
 /// The Portfolio tiles: CAD aggregates over the accounts in scope.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Portfolio {
     pub allocation: Vec<Allocation>,
@@ -449,6 +458,7 @@ pub struct Portfolio {
     pub nav_accounts: usize,
     pub margin_used: f64,
     /// By currency, to the cent.
+    #[ts(type = "Record<string, number>")]
     pub margin_used_by: std::collections::BTreeMap<String, f64>,
     pub margin_used_pct: Option<f64>,
     pub available_margin: Option<f64>,
@@ -461,7 +471,7 @@ pub struct Portfolio {
     pub day_change_pct: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Account {
     pub id: String,
     pub name: String,
@@ -477,21 +487,31 @@ pub struct Account {
 // --------------------------------------------------------------------------
 
 /// A tile over the cashflow chart. Three kinds share the row.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(untagged)]
 pub enum CashflowTile {
     /// What was paid over a span.
     #[serde(rename_all = "camelCase")]
-    Paid { label: String, total: f64, per_month: f64, count: usize },
+    Paid {
+        label: String,
+        total: f64,
+        per_month: f64,
+        count: usize,
+    },
     /// Margin drawn (the Portfolio tab's figure) and what it costs a month.
     #[serde(rename_all = "camelCase")]
-    Margin { label: &'static str, margin_used: f64, interest_per_month: f64, interest_months: usize },
+    Margin {
+        label: &'static str,
+        margin_used: f64,
+        interest_per_month: f64,
+        interest_months: usize,
+    },
     /// The declared rate of what is held, over its cost.
     #[serde(rename_all = "camelCase")]
     Yield { label: &'static str, r#yield: Option<f64>, projected: f64, earned: f64, book: f64 },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct CashflowMonth {
     pub key: String,
     pub label: String,
@@ -500,7 +520,7 @@ pub struct CashflowMonth {
 }
 
 /// Where a payer's rate came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum RateSource {
     /// The fund's own declared record.
@@ -512,7 +532,7 @@ pub enum RateSource {
 }
 
 /// What a payer is priced at in the cashflow table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum Priced {
     Close,
@@ -520,7 +540,7 @@ pub enum Priced {
 }
 
 /// A holding that pays, with its rate and what it has paid.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CashflowHolding {
     pub id: String,
@@ -550,7 +570,7 @@ pub struct CashflowHolding {
     pub current_yield: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Cashflow {
     pub tiles: Vec<CashflowTile>,
@@ -571,7 +591,7 @@ pub struct Cashflow {
 // --------------------------------------------------------------------------
 
 /// One tile of the heatmap of what the book holds.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldTile {
     pub id: String,
@@ -583,7 +603,7 @@ pub struct HeldTile {
 }
 
 /// One tile of a market universe's heatmap.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UniverseTile {
     /// A universe's tile is no holding: always nothing.
@@ -596,7 +616,7 @@ pub struct UniverseTile {
     pub country: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchItem {
     pub symbol: String,
@@ -612,7 +632,7 @@ pub struct WatchItem {
 }
 
 /// A listing a news item was read for.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsTag {
     pub symbol: String,
@@ -623,7 +643,7 @@ pub struct NewsTag {
     pub position_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsItem {
     pub id: String,
@@ -639,7 +659,7 @@ pub struct NewsItem {
 }
 
 /// One tile of the Markets tab's row.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketTile {
     pub symbol: &'static str,
@@ -651,21 +671,26 @@ pub struct MarketTile {
     pub change: Option<f64>,
     pub percent_change: Option<f64>,
     pub decimals: i64,
-    /// A contract quoted as 100 minus a rate carries that rate, and its move,
-    /// beside the price: both keys, or neither.
-    #[serde(flatten)]
-    pub implied: Option<ImpliedRate>,
+    /// A contract quoted as 100 minus a rate carries that rate beside its price, and
+    /// the rate's move with it: both keys, or neither (`implied`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rate: Option<f64>,
+    /// Present with `rate`; nothing inside when the price has not moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number | null")]
+    pub rate_change: Option<Option<f64>>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImpliedRate {
-    pub rate: f64,
-    pub rate_change: Option<f64>,
+impl MarketTile {
+    /// The rate a price implies and its move, as the two keys carry them.
+    pub fn implied(rate: Option<f64>, price_change: Option<f64>) -> (Option<f64>, Option<Option<f64>>) {
+        (rate, rate.map(|_| price_change.map(|v| (-v * 1e4).round() / 1e4)))
+    }
 }
 
 /// An entry of the directory the tile picker searches.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct MarketInstrument {
     pub symbol: &'static str,
     pub label: String,
@@ -675,11 +700,12 @@ pub struct MarketInstrument {
     pub aliases: &'static [&'static str],
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Markets {
     pub holdings: Vec<HeldTile>,
     pub watchlist: Vec<WatchItem>,
     pub news: Vec<NewsItem>,
+    #[ts(type = "Record<string, Array<UniverseTile>>")]
     pub universes: Ordered<Vec<UniverseTile>>,
     pub tiles: Vec<MarketTile>,
     pub instruments: Vec<MarketInstrument>,
@@ -690,7 +716,7 @@ pub struct Markets {
 // --------------------------------------------------------------------------
 
 /// What the symbol picker shows beside a symbol.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct ListingInfo {
     pub name: String,
     pub exchange: String,
@@ -699,10 +725,11 @@ pub struct ListingInfo {
 }
 
 /// What the filters can be set to, from the whole book.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Options {
     pub accounts: Vec<String>,
     pub symbols: Vec<String>,
+    #[ts(type = "Record<string, ListingInfo>")]
     pub listings: Ordered<ListingInfo>,
     pub tags: Vec<String>,
     pub exchanges: Vec<String>,
@@ -713,14 +740,14 @@ pub struct Options {
     pub years: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketDates {
     pub fx_last: String,
     pub benchmark_last: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct EquityBlock {
     pub label: String,
     pub series: Vec<crate::nav::Point>,
@@ -728,13 +755,13 @@ pub struct EquityBlock {
     pub annualized: Annualized,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct BenchmarkRef {
     pub key: String,
     pub label: &'static str,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct PositionsSummary {
     pub count: usize,
     pub book: f64,
@@ -743,7 +770,7 @@ pub struct PositionsSummary {
 }
 
 /// Everything the page shows, for one set of filters.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub ok: bool,
@@ -775,7 +802,7 @@ pub struct View {
 }
 
 /// The legs and fills of one trade or holding.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct TradeDetail {
     pub id: String,
     pub legs: Arc<Vec<Leg>>,

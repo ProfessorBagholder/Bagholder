@@ -117,9 +117,9 @@
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px;min-height:380px">
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     {#each c.tiles as t (t.label)}
-      {#if t.label === 'Margin used'}
+      {#if 'marginUsed' in t}
         <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v">{money0(t.marginUsed)}</div><div class="s">{money0(t.interestPerMonth)}/mo margin interest</div></div>
-      {:else if t.label === 'Yield on cost'}
+      {:else if 'yield' in t}
         <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)">{t.yield == null ? '—' : pctPlain(t.yield, 2)}</div><div class="s">{money0(t.projected)}/mo</div></div>
       {:else}
         <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v">{money0(t.total)}</div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}</div></div>
