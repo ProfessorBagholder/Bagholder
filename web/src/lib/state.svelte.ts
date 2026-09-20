@@ -48,6 +48,22 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   }
 }
 
+// Add a listing to the watchlist: show it at once (a stub row), then persist and
+// reload so the server's quote and sector fill in.
+export async function addWatch(m: { symbol: string; exchange: string; name: string; currency: string }): Promise<void> {
+  const mk = store.model?.markets
+  if (mk && !mk.watchlist.some((w) => w.symbol === m.symbol && w.exchange === m.exchange)) {
+    mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', positionId: null })
+  }
+  try {
+    const r = await fetch('/api/watchlist/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(m) })
+    const d = await r.json()
+    if (!d.ok) throw new Error('add failed')
+  } finally {
+    loadModel()
+  }
+}
+
 // Remove a watchlist listing: drop it from the store at once (so the Watchlist
 // card and the heatmap's watchlist universe update, and nothing else does), then
 // persist. On failure, reload the authoritative model.
