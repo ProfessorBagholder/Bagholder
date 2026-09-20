@@ -153,7 +153,6 @@ pub fn refresh_exposures() -> Value {
                 done.fetch_add(1, Ordering::SeqCst);
                 log(&line);
                 // each record shows as soon as it lands
-                app().invalidate();
             }
         });
         if let Ok(h) = h {
@@ -186,7 +185,6 @@ fn refresh_quote_symbols(what: &str, sym: &str) -> bool {
     let (today_s, now, stamp) = bagholder_market::clock_now();
     match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::markets::quote_symbols(&b), &today_s, now, &stamp) {
         Ok(_) => {
-            app().invalidate();
             true
         }
         Err(e) => {
@@ -211,7 +209,6 @@ pub fn watch_add(body: &Value) -> Value {
     let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "name"));
     let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "currency"));
     let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &f(body, "securityId"), &now_iso()).ok().flatten().unwrap_or(json!({}));
-    app().invalidate();
     let is_inst = inst.is_some();
     let crypto = ex.to_uppercase() == "CRYPTO";
     let sym2 = sym.clone();
@@ -224,7 +221,6 @@ pub fn watch_add(body: &Value) -> Value {
         if let Some(c) = conn() {
             let ctx = exposure::Ctx { conn: &c, db: app().db_path(), today: today() };
             exposure::share_exposure(&ctx, &f(&row, "symbol"), &f(&row, "exchange"), &f(&row, "currency"));
-            app().invalidate();
         }
     });
     json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
@@ -241,7 +237,6 @@ pub fn watch_remove(body: &Value) -> Value {
     // a row kept under Wealthsimple's form
     let _ = sf::remove_watch(&c, &f(body, "symbol").trim().to_uppercase(), &ex);
     let _ = sf::forget_news(&c, &sym, &ex);
-    app().invalidate();
     json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
 }
 
@@ -265,7 +260,6 @@ pub fn tiles_set(body: &Value) -> Value {
     }
     let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let _ = bagholder_store::admin::save_tiles(&c, &rows);
-    app().invalidate();
     spawn("tiles-fetch", || {
         refresh_quote_symbols("tiles", "");
     });
@@ -285,7 +279,7 @@ pub fn news_listings() -> Vec<news::Listing> {
     let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string(), String::new())];
     let b = match base() { Some(b) => b, None => return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
-    for p in &b.positions {
+    for p in b.positions.iter() {
         if f(p, "kind") != "Shares" {
             continue;
         }
@@ -295,7 +289,7 @@ pub fn news_listings() -> Vec<news::Listing> {
             out.push((key.0, f(p, "exchange"), f(p, "currency"), f(p, "name")));
         }
     }
-    for w in &b.watchlist {
+    for w in b.watchlist.iter() {
         let key = (tmx_symbol(&f(w, "symbol")), f(w, "exchange").to_uppercase());
         if !key.0.is_empty() && !seen.contains(&key) && instruments::find(&f(w, "symbol"), &f(w, "exchange")).is_none() && key.1 != "CRYPTO" {
             seen.insert(key.clone());
@@ -332,7 +326,6 @@ pub fn refresh_news() -> usize {
         };
         let done = |l: &news::Listing, _answered: bool| {
             news_pass().lock().unwrap().remove(&key(l));
-            app().invalidate();
         };
         let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(c, sym, ex, rows, ids);
         let got = news::refresh(&conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
@@ -424,7 +417,6 @@ pub fn news_symbol_payload_with(
     };
     let rows = match rows { Some(r) => r, None => return json!({"ok": false, "error": "the wire did not answer"}) };
     let _ = sf::trim_news(&c, news::KEEP);
-    app().invalidate();
     json!({"ok": true, "count": rows.len(), "source": src, "exchange": ex})
 }
 
@@ -513,7 +505,7 @@ pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
     if let Some(b) = &b {
         rows.extend(bagholder_model::symbols_of::held_symbols(b));
         if has("all") {
-            for t in &b.trades {
+            for t in b.trades.iter() {
                 let mut rec = json!({"symbol": t.get("symbol").cloned().unwrap_or(Value::Null), "exchange": t.get("exchange").cloned().unwrap_or(Value::Null),
                                      "currency": t.get("currency").cloned().unwrap_or(Value::Null), "kind": t.get("kind").cloned().unwrap_or(Value::Null)});
                 if f(&rec, "kind") == "Options" {
@@ -1582,12 +1574,12 @@ pub fn shorts_feed() -> Value {
     let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
     let mut held: HashMap<(String, String), Value> = HashMap::new();
     let mut watched: HashMap<(String, String), Value> = HashMap::new();
-    for p in &b.positions {
+    for p in b.positions.iter() {
         if f(p, "kind") == "Shares" {
             held.insert((tmx_symbol(&f(p, "symbol")).to_uppercase(), f(p, "exchange").to_uppercase()), p.clone());
         }
     }
-    for w in &b.watchlist {
+    for w in b.watchlist.iter() {
         watched.insert((tmx_symbol(&f(w, "symbol")).to_uppercase(), f(w, "exchange").to_uppercase()), w.clone());
     }
     let mut rows = Vec::new();
@@ -1771,7 +1763,6 @@ pub fn refresh_universes() -> Vec<String> {
         let c = match conn() { Some(c) => c, None => return vec![] };
         let done = bagholder_market::universes::refresh(&c, &now_iso());
         if !done.is_empty() {
-            app().invalidate();
         }
         done
     })
@@ -1827,7 +1818,6 @@ pub fn refresh_market_data() -> Value {
         let q = refresh_quotes();
         out["quotes"] = json!(q);
         if truthy(out.get("distributions")) || q > 0 {
-            app().invalidate();
         }
         out
     })
@@ -1842,7 +1832,6 @@ pub fn refresh_quotes() -> usize {
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let n = bagholder_market::quotes::refresh_quotes(&c, &syms, &today_s, now, &stamp).unwrap_or(0);
         if n > 0 {
-            app().invalidate();
         }
         n
     })
@@ -1855,7 +1844,6 @@ pub fn refresh_periodic_market() -> Value {
         let c = match conn() { Some(c) => c, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
         let out = bagholder_market::refresh::refresh_periodic(&c, &payer_symbols());
         if truthy(out.get("fx")) || truthy(out.get("benchmark")) || truthy(out.get("distributions")) {
-            app().invalidate();
         }
         out
     })
@@ -1953,7 +1941,6 @@ pub fn scan_watched_folder() -> Option<Value> {
     }
     let result = bagholder_store::csvimport::scan_folder(&c, None, false).ok()?;
     if is_true(&result, "ok") && is_true(&result, "added") {
-        app().invalidate();
     }
     Some(result)
 }

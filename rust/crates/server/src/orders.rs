@@ -1240,7 +1240,6 @@ pub fn book_order_fill(order: &Value, upd: &Value) -> bool {
     let conn = db();
     must(bagholder_store::activities::insert_local(&conn, &act, &uuid4));
     must(so::mark_order_fill_booked(&conn, &f(order, "id"), filled, &now_iso()));
-    app().invalidate();
     log(&format!("bagholder orders: {} filled {} {} @ {} booked as a local trade until the next sync", f(order, "id"), qty_text(filled), symbol, rp(Some(price))));
     true
 }

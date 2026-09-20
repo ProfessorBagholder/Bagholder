@@ -20,3 +20,7 @@ tiny_http = "0.12"
 [[bin]]
 name = "bagholder"
 path = "src/main.rs"
+
+[dev-dependencies]
+# a database of its own for the model cache tests, as the store's tests have
+tempfile = "3"

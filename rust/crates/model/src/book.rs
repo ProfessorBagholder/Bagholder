@@ -18,24 +18,18 @@ pub struct Book {
     pub activities: Vec<Value>,
     pub acts_by_id: HashMap<String, Value>,
     pub securities: Securities,
+    /// The match as it comes: native amounts only. What a closed slice is worth
+    /// in CAD depends on the FX table, which is not the book's to read.
     pub fifo: Matched,
+    /// The last fill price of each symbol, what an open position is marked at
+    /// until a quote says otherwise.
+    pub last_prices: serde_json::Map<String, Value>,
     pub raw_count: usize,
 }
 
-pub fn build_book(snapshot: &Value, today: &str) -> Book {
-    let raw_acts: Vec<Value> = snapshot
-        .get("activities")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut acts = normalize_activities(&raw_acts);
-
-    let sec_rows: Vec<Value> = snapshot
-        .get("securities")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let securities = Securities::new(&sec_rows);
+pub fn build_book(raw_acts: &[Value], sec_rows: &[Value], today: &str) -> Book {
+    let mut acts = normalize_activities(raw_acts);
+    let securities = Securities::new(sec_rows);
 
     let delivered = synthesize_assignment_shares(&acts, &|sid| securities.underlying_id(sid));
     if !delivered.is_empty() {
@@ -53,5 +47,6 @@ pub fn build_book(snapshot: &Value, today: &str) -> Book {
     for a in &acts {
         acts_by_id.insert(field_s(a, "id"), a.clone());
     }
-    Book { activities: acts, acts_by_id, securities, fifo, raw_count: raw_acts.len() }
+    let last_prices = crate::trades::last_fill_prices(&acts);
+    Book { activities: acts, acts_by_id, securities, fifo, last_prices, raw_count: raw_acts.len() }
 }

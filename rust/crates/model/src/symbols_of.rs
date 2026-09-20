@@ -15,7 +15,7 @@ use crate::value::field_s;
 pub fn held_symbols(base: &Base) -> Vec<Value> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for p in &base.positions {
+    for p in base.positions.iter() {
         let sym = field_s(p, "symbol");
         if !seen.insert(sym.clone()) {
             continue;
@@ -31,7 +31,7 @@ pub fn payer_symbols(base: &Base) -> Vec<Value> {
     let payers: HashSet<String> = base.cashflow.iter().filter(|r| field_s(r, "kind") == "Dividend").map(|r| field_s(r, "symbol")).collect();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for p in &base.positions {
+    for p in base.positions.iter() {
         let sym = field_s(p, "symbol");
         let short = p.get("short").and_then(|v| v.as_bool()).unwrap_or(false);
         if payers.contains(&sym) && !seen.contains(&sym) && !short {
@@ -67,13 +67,13 @@ pub fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
         }
     };
     let pick = |v: &Value| json!({"symbol": v["symbol"], "exchange": v["exchange"], "currency": v["currency"], "kind": v["kind"]});
-    for t in &base.trades {
+    for t in base.trades.iter() {
         if field_s(t, "exitDate") >= since {
             let entry = field_s(t, "entryDate");
             want(charted(pick(t)), if entry > since { entry } else { since.clone() });
         }
     }
-    for p in &base.positions {
+    for p in base.positions.iter() {
         let opened = { let o = field_s(p, "opened"); if o.is_empty() { since.clone() } else { o } };
         want(charted(pick(p)), if opened > since { opened } else { since.clone() });
     }

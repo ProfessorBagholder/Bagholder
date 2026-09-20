@@ -42,11 +42,6 @@ pub struct State {
     pub update_error: String,
 }
 
-struct Cache {
-    version: String,
-    base: Option<std::sync::Arc<Base>>,
-}
-
 struct Job {
     running: bool,
     until: Option<Instant>,
@@ -61,7 +56,7 @@ pub struct App {
     pub state: Mutex<State>,
     pub stop: AtomicBool,
     pub exit_code: AtomicI32,
-    cache: Mutex<Cache>,
+    model: crate::model_cache::ModelCache,
     jobs: Mutex<HashMap<String, Job>>,
 }
 
@@ -81,7 +76,7 @@ pub fn init(home: PathBuf, root: PathBuf, bind_host: String) -> &'static App {
         state: Mutex::new(State::default()),
         stop: AtomicBool::new(false),
         exit_code: AtomicI32::new(0),
-        cache: Mutex::new(Cache { version: String::new(), base: None }),
+        model: crate::model_cache::ModelCache::new(),
         jobs: Mutex::new(HashMap::new()),
     })
 }
@@ -117,44 +112,41 @@ impl App {
         self.stopping()
     }
 
-    /// Rebuilt when the data or the day has changed.
+    /// The model as it stands: each layer rebuilt only when something it reads
+    /// has changed (`model_cache`).
     pub fn base(&self) -> rusqlite::Result<std::sync::Arc<Base>> {
         let conn = self.open()?;
         let today = bagholder_model::clock::today_local();
-        let version = format!("{}|{}", crate::versions::data_version(&conn)?, today);
-        {
-            let cache = self.cache.lock().unwrap();
-            if let Some(b) = cache.base.as_ref() {
-                if cache.version == version {
-                    return Ok(b.clone());
+        let base = self.model.base(&conn, &today)?;
+        // Once a run: notes an older version kept per trade are carried into the
+        // journal. The save moves the journal's counter, so the next build has them.
+        static CARRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !CARRIED.swap(true, Ordering::SeqCst) {
+            let notes = bagholder_store::snapshot::notes_part(&conn)?;
+            if !notes.is_empty() && bagholder_store::snapshot::journal(&conn)?.is_empty() {
+                let groups = bagholder_store::snapshot::groups_part(&conn)?;
+                let migrated = bagholder_model::symbols_of::migrate_legacy_notes(&base.book.fifo.closed, &groups, &notes);
+                if !migrated.is_empty() {
+                    bagholder_store::admin::save_journal(&conn, Some(&Value::Object(migrated)))?;
+                    return self.model.base(&conn, &today);
                 }
             }
         }
-        let snapshot = bagholder_store::snapshot::snapshot(&conn, true)?;
-        let market = bagholder_store::market::market_data(&conn)?;
-        let mut journal = bagholder_store::snapshot::journal(&conn)?;
-        let mut version = version;
-        let notes = snapshot.get("notes").and_then(|n| n.as_object()).cloned().unwrap_or_default();
-        if journal.is_empty() && !notes.is_empty() {
-            let probe = bagholder_model::base::build_base(&snapshot, &market, &journal, Some(&today));
-            let groups = snapshot.get("tradeGroups").and_then(|g| g.as_array()).cloned().unwrap_or_default();
-            let migrated = bagholder_model::symbols_of::migrate_legacy_notes(&probe.book.fifo.closed, &groups, &notes);
-            if !migrated.is_empty() {
-                journal = bagholder_store::admin::save_journal(&conn, Some(&Value::Object(migrated)))?;
-                version = format!("{}|{}", crate::versions::data_version(&conn)?, today);
-            }
-        }
-        let base = std::sync::Arc::new(bagholder_model::base::build_base(&snapshot, &market, &journal, Some(&today)));
-        let mut cache = self.cache.lock().unwrap();
-        cache.version = version;
-        cache.base = Some(base.clone());
         Ok(base)
     }
 
+    /// The model as the page is sent it, under these filters and with this
+    /// trade's detail: built once for a base, then shared.
+    pub fn view(&self, filters: Option<&Value>, detail: Option<&str>) -> rusqlite::Result<std::sync::Arc<Value>> {
+        let base = self.base()?;
+        Ok(self.model.view(&base, filters, detail))
+    }
+
+    /// Forget the model. Nothing in the app needs this -- the store's counters say
+    /// exactly what changed -- it is for a test that swaps the database under it.
+    #[cfg(test)]
     pub fn invalidate(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.version.clear();
-        cache.base = None;
+        self.model.clear();
     }
 
     /// Run `f` only when no other call of that name

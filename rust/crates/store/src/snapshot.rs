@@ -150,11 +150,13 @@ where
     Ok(out)
 }
 
-/// `snapshot`.
-pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
-    let activities = if with_activities { all_activities(conn)? } else { vec![] };
+// --- the parts ----------------------------------------------------------------
+// Each reads one thing the model is built from and nothing else, so a cache can
+// read again only what a change touched: a price tick reads the quotes, not six
+// thousand activities. `snapshot` is all of them together.
 
-    let accounts = collect(conn, "SELECT * FROM accounts ORDER BY id", |r| {
+pub fn accounts_part(conn: &Connection) -> Result<Vec<Value>> {
+    collect(conn, "SELECT * FROM accounts ORDER BY id", |r| {
         Ok(json!({
             "id": text(r, "id")?,
             "nickname": text(r, "nickname")?,
@@ -165,19 +167,23 @@ pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
             "netLiquidationValue": real(r, "net_liquidation_value")?,
             "marginAccountId": text(r, "margin_account_id")?,
         }))
-    })?;
+    })
+}
 
+pub fn balances_part(conn: &Connection) -> Result<Vec<Value>> {
     // no ORDER BY: the rowid order is the order
-    let balances = collect(conn, "SELECT * FROM balances", |r| {
+    collect(conn, "SELECT * FROM balances", |r| {
         Ok(json!({
             "accountId": opt_text(r, "account_id")?,
             "custodianAccountId": opt_text(r, "custodian_account_id")?,
             "securityId": opt_text(r, "security_id")?,
             "quantity": real(r, "quantity")?,
         }))
-    })?;
+    })
+}
 
-    let margin = collect(conn, "SELECT * FROM margin ORDER BY account_id", |r| {
+pub fn margin_part(conn: &Connection) -> Result<Vec<Value>> {
+    collect(conn, "SELECT * FROM margin ORDER BY account_id", |r| {
         let currency = { let c = text(r, "currency")?; if c.is_empty() { "CAD".to_string() } else { c } };
         Ok(json!({
             "accountId": text(r, "account_id")?,
@@ -186,83 +192,118 @@ pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
             "unavailable": text(r, "unavailable")?,
             "fetchedAt": text(r, "fetched_at")?,
         }))
-    })?;
+    })
+}
 
+/// The NAV history: every account together, and each account's own.
+pub fn nav_part(conn: &Connection) -> Result<(Vec<Value>, Map<String, Value>)> {
     let mut nav: Vec<Value> = Vec::new();
     let mut nav_by_account: Map<String, Value> = Map::new();
-    {
-        let mut stmt = conn.prepare("SELECT * FROM nav_history ORDER BY account_id, date")?;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            let currency = { let c = text(r, "currency")?; if c.is_empty() { "CAD".to_string() } else { c } };
-            let mut rec = Map::new();
-            rec.insert("date".into(), json!(text(r, "date")?));
-            rec.insert("equity".into(), real(r, "equity")?);
-            rec.insert("currency".into(), json!(currency));
-            if let Some(d) = r.get::<_, Option<f64>>("net_deposits")? {
-                rec.insert("netDeposits".into(), json!(d));
-            }
-            let aid = text(r, "account_id")?;
-            if aid.is_empty() {
-                nav.push(Value::Object(rec));
-            } else {
-                nav_by_account
-                    .entry(aid)
-                    .or_insert_with(|| Value::Array(vec![]))
-                    .as_array_mut()
-                    .unwrap()
-                    .push(Value::Object(rec));
-            }
+    let mut stmt = conn.prepare("SELECT * FROM nav_history ORDER BY account_id, date")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let currency = { let c = text(r, "currency")?; if c.is_empty() { "CAD".to_string() } else { c } };
+        let mut rec = Map::new();
+        rec.insert("date".into(), json!(text(r, "date")?));
+        rec.insert("equity".into(), real(r, "equity")?);
+        rec.insert("currency".into(), json!(currency));
+        if let Some(d) = r.get::<_, Option<f64>>("net_deposits")? {
+            rec.insert("netDeposits".into(), json!(d));
+        }
+        let aid = text(r, "account_id")?;
+        if aid.is_empty() {
+            nav.push(Value::Object(rec));
+        } else {
+            nav_by_account
+                .entry(aid)
+                .or_insert_with(|| Value::Array(vec![]))
+                .as_array_mut()
+                .unwrap()
+                .push(Value::Object(rec));
         }
     }
+    Ok((nav, nav_by_account))
+}
 
-    let synced = get_meta(conn, "synced_at", "")?;
-    let groups_raw = get_meta(conn, "trade_groups", "")?;
-    let groups = if groups_raw.is_empty() {
+pub fn groups_part(conn: &Connection) -> Result<Vec<Value>> {
+    let raw = get_meta(conn, "trade_groups", "")?;
+    Ok(if raw.is_empty() {
         vec![]
     } else {
-        match serde_json::from_str::<Value>(&groups_raw) {
+        match serde_json::from_str::<Value>(&raw) {
             Ok(v) => clean_trade_groups(Some(&v)),
             Err(_) => vec![],
         }
-    };
-    let notes_raw = get_meta(conn, "trade_notes", "")?;
-    let notes = if notes_raw.is_empty() {
+    })
+}
+
+/// The notes an older version kept per trade, read only to carry them into the journal.
+pub fn notes_part(conn: &Connection) -> Result<Map<String, Value>> {
+    let raw = get_meta(conn, "trade_notes", "")?;
+    Ok(if raw.is_empty() {
         Map::new()
     } else {
-        match serde_json::from_str::<Value>(&notes_raw) {
+        match serde_json::from_str::<Value>(&raw) {
             Ok(v) => clean_trade_notes(Some(&v)),
             Err(_) => Map::new(),
         }
-    };
+    })
+}
 
-    let securities = collect(conn, "SELECT * FROM securities ORDER BY id", security_from_row)?;
+pub fn securities_part(conn: &Connection) -> Result<Vec<Value>> {
+    collect(conn, "SELECT * FROM securities ORDER BY id", security_from_row)
+}
 
+pub fn exposures_part(conn: &Connection) -> Result<Map<String, Value>> {
     let mut exposures: Map<String, Value> = Map::new();
-    {
-        let mut stmt = conn.prepare("SELECT * FROM exposures")?;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            exposures.insert(text(r, "key")?, exposure_from_row(r)?);
-        }
+    let mut stmt = conn.prepare("SELECT * FROM exposures")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        exposures.insert(text(r, "key")?, exposure_from_row(r)?);
     }
+    Ok(exposures)
+}
 
+pub fn watchlist_part(conn: &Connection) -> Result<Vec<Value>> {
+    collect(conn, "SELECT * FROM watchlist ORDER BY added_at, symbol", watch_from_row)
+}
+
+pub fn news_part(conn: &Connection) -> Result<Vec<Value>> {
+    collect(conn, "SELECT * FROM news ORDER BY published_at DESC, id", news_from_row)
+}
+
+pub fn universes_part(conn: &Connection) -> Result<Map<String, Value>> {
+    universes(conn)
+}
+
+pub fn tiles_part(conn: &Connection) -> Result<Value> {
+    Ok(tiles_from(&get_meta(conn, TILES_META, "")?))
+}
+
+pub fn synced_at_part(conn: &Connection) -> Result<String> {
+    get_meta(conn, "synced_at", "")
+}
+
+/// `snapshot`: every part together.
+pub fn snapshot(conn: &Connection, with_activities: bool) -> Result<Value> {
+    let activities = if with_activities { all_activities(conn)? } else { vec![] };
+    let (nav, nav_by_account) = nav_part(conn)?;
     Ok(json!({
         "activities": activities,
-        "accounts": accounts,
-        "balances": balances,
-        "margin": margin,
-        "exposures": exposures,
-        "watchlist": collect(conn, "SELECT * FROM watchlist ORDER BY added_at, symbol", watch_from_row)?,
-        "news": collect(conn, "SELECT * FROM news ORDER BY published_at DESC, id", news_from_row)?,
-        "universes": universes(conn)?,
+        "accounts": accounts_part(conn)?,
+        "balances": balances_part(conn)?,
+        "margin": margin_part(conn)?,
+        "exposures": exposures_part(conn)?,
+        "watchlist": watchlist_part(conn)?,
+        "news": news_part(conn)?,
+        "universes": universes_part(conn)?,
         "navHistory": nav,
         "navByAccount": nav_by_account,
-        "syncedAt": synced,
-        "tradeGroups": groups,
-        "notes": notes,
-        "tiles": tiles_from(&get_meta(conn, TILES_META, "")?),
-        "securities": securities,
+        "syncedAt": synced_at_part(conn)?,
+        "tradeGroups": groups_part(conn)?,
+        "notes": notes_part(conn)?,
+        "tiles": tiles_part(conn)?,
+        "securities": securities_part(conn)?,
     }))
 }
 

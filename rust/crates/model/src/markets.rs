@@ -41,7 +41,7 @@ pub fn watch_quote_key(symbol: &str, exchange: &str) -> String {
 /// `tile_list`: the saved set, else the default; only what the directory
 /// knows, twelve at most.
 fn tile_list(base: &Base) -> Vec<&'static instruments::Instrument> {
-    let saved = base.tiles.as_ref().and_then(|v| v.as_array());
+    let saved = (*base.tiles).as_ref().and_then(|v| v.as_array());
     let rows: Vec<(String, String)> = match saved {
         Some(rows) => rows
             .iter()
@@ -122,7 +122,7 @@ pub fn tile_rows(base: &Base) -> Vec<Value> {
 /// needs to price it.
 pub fn watch_symbols(base: &Base) -> Vec<Value> {
     let mut out = Vec::new();
-    for w in &base.watchlist {
+    for w in base.watchlist.iter() {
         let sym = field_s(w, "symbol");
         let ex = field_s(w, "exchange");
         let inst = instruments::find(&sym, &ex);
@@ -192,7 +192,7 @@ pub fn watch_rows(base: &Base, positions: &[Value]) -> Vec<Value> {
         }
     }
     let mut out = Vec::new();
-    for w in &base.watchlist {
+    for w in base.watchlist.iter() {
         let sym = field_s(w, "symbol");
         let ex = field_s(w, "exchange");
         let q = base.quotes.get(&watch_quote_key(&sym, &ex)).cloned().unwrap_or(Value::Null);
@@ -479,7 +479,7 @@ pub fn markets_view(base: &Base, positions: &[Value]) -> Value {
     let watch = watch_rows(base, positions);
 
     let mut universes = Map::new();
-    for (k, rows) in &base.universes {
+    for (k, rows) in base.universes.iter() {
         let arr: Vec<Value> = rows
             .as_array()
             .map(|a| {

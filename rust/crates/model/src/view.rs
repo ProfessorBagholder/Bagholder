@@ -73,7 +73,7 @@ pub fn portfolio_view(base: &Base, f: &Filters, positions: &[Value]) -> Value {
     // the negative cash balances are the margin drawn; the positive ones the cash
     let mut used: BTreeMap<String, f64> = BTreeMap::new();
     let mut cash_by: BTreeMap<String, f64> = BTreeMap::new();
-    for bal in &base.balances {
+    for bal in base.balances.iter() {
         let aid = field_s(bal, "accountId");
         let ccy = base.cash_currencies.get(&field_s(bal, "securityId")).cloned();
         let q = num(get(bal, "quantity"), 0.0);
@@ -116,7 +116,7 @@ pub fn portfolio_view(base: &Base, f: &Filters, positions: &[Value]) -> Value {
         .collect();
     let mut avail: Vec<f64> = Vec::new();
     let mut unavailable: Vec<String> = Vec::new();
-    for m in &base.margin {
+    for m in base.margin.iter() {
         let aid = field_s(m, "accountId");
         if !margin_ids.contains(&aid) {
             continue;
@@ -542,7 +542,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
     let (series, series_label) = if accts.len() == 1 && base.equity_by_account.contains_key(&accts[0]) {
         (base.equity_by_account[&accts[0]].clone(), accts[0].clone())
     } else {
-        (base.equity.clone(), "All accounts".to_string())
+        ((*base.equity).clone(), "All accounts".to_string())
     };
 
     let bench_key = f.benchmark.clone();
@@ -712,7 +712,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
         "markets": crate::markets::markets_view(base, &positions),
         "cashflow": cashflow,
         "unmatched": base.book.fifo.unmatched,
-        "accounts": base.accounts,
+        "accounts": *base.accounts,
         "activityCount": base.activity_count,
     })
 }
@@ -764,7 +764,7 @@ pub fn slim(view: &Value, detail: Option<&str>) -> Value {
 /// `trade_detail`: the legs and fills of one trade or holding, by id.
 pub fn trade_detail(base: &Base, trade_id: &str) -> Option<Value> {
     for rows in [&base.trades, &base.positions] {
-        for r in rows {
+        for r in rows.iter() {
             if field_s(r, "id") == trade_id {
                 return Some(json!({
                     "id": trade_id,

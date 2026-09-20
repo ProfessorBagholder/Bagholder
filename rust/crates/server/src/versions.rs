@@ -4,10 +4,10 @@
 //! The keys are spelled from the store's generation counters
 //! (`bagholder_store::gens`): one statement, and exact -- a counter moves only
 //! when rows really differ, never because something was read again and found the
-//! same. Three keys, from the whole to the part: everything; everything but the
-//! quotes (prices move every minute and nothing else does, so a tick leaves the
-//! match, the closed trades, the cashflow and the equity curve standing); and
-//! the rows the FIFO match itself reads.
+//! same. Two keys for the page: everything; and everything but the quotes
+//! (prices move every minute and nothing else does, so a tick leaves the match,
+//! the closed trades, the cashflow and the equity curve standing). The model's
+//! own cache reads the counters one by one (`model_cache`).
 
 use rusqlite::{Connection, Result};
 
@@ -30,11 +30,6 @@ pub fn data_version(conn: &Connection) -> Result<String> {
 /// fetches just the live figures instead of the whole book.
 pub fn core_version(conn: &Connection) -> Result<String> {
     Ok(versions(conn)?.1)
-}
-
-/// The rows the FIFO match itself depends on.
-pub fn book_version(conn: &Connection) -> Result<String> {
-    Ok(gens::key(&gens::all(conn)?, &["activities", "securities"]))
 }
 
 /// What the header needs, read without counting the

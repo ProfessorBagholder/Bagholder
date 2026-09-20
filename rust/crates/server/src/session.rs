@@ -549,7 +549,6 @@ pub fn refresh_portfolio() -> Value {
         bagholder_store::tables::replace_balances(&conn, &balances).map_err(|e| e.to_string())?;
         bagholder_store::tables::replace_margin(&conn, &margin, &now).map_err(|e| e.to_string())?;
         bagholder_store::tables::set_meta(&conn, "balances_read_at", &now).map_err(|e| e.to_string())?;
-        app().invalidate();
         let available = margin.iter().filter(|m| !m.get("buyingPower").map(|v| v.is_null()).unwrap_or(true)).count();
         log(&format!("bagholder portfolio: {} accounts, {} balances, buying power for {} of {} margin accounts", ids.len(), balances.len(), available, margin.len()));
         Ok(json!({"ok": true, "accounts": ids.len(), "balances": balances.len(), "margin": margin.len()}))

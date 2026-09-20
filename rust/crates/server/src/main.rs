@@ -8,6 +8,7 @@
 mod app;
 mod feeds;
 mod login;
+mod model_cache;
 mod notify;
 mod orders;
 mod session;
@@ -484,15 +485,10 @@ fn handle_get(req: Request, path: &str, query: &str) {
             }
             let filters = qp(query, "filters").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
             let trade = qp(query, "trade");
-            let built = std::panic::catch_unwind(|| {
-                app().base().map(|base| {
-                    let full = bagholder_model::view::build_view(&base, filters.as_ref());
-                    bagholder_model::view::slim(&full, trade.as_deref())
-                })
-            });
+            let built = std::panic::catch_unwind(|| app().view(filters.as_ref(), trade.as_deref()));
             match built {
-                Ok(Ok(mut payload)) => {
-                    if qp(query, "only").as_deref() == Some("live") {
+                Ok(Ok(view)) => {
+                    let mut payload = if qp(query, "only").as_deref() == Some("live") {
                         // a quote tick moves only what is priced off the open positions; the
                         // closed trades, equity curve, KPIs and options lists are unchanged, so
                         // the page fetches just these sections instead of the whole book
@@ -500,21 +496,11 @@ fn handle_get(req: Request, path: &str, query: &str) {
                         if qp(query, "markets").filter(|v| !v.is_empty()).is_some() {
                             keys.push("markets"); // the heatmap view is on screen and wants live tiles
                         }
-                        let lean = if let Value::Object(full) = &payload {
-                            let mut m = serde_json::Map::new();
-                            for k in &keys {
-                                if let Some(v) = full.get(*k) {
-                                    m.insert((*k).to_string(), v.clone());
-                                }
-                            }
-                            Some(Value::Object(m))
-                        } else {
-                            None
-                        };
-                        if let Some(l) = lean {
-                            payload = l;
-                        }
-                    }
+                        // only these sections are copied out of the shared view, not the whole of it
+                        Value::Object(keys.iter().filter_map(|k| view.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect())
+                    } else {
+                        (*view).clone()
+                    };
                     payload["status"] = status_payload();
                     send_json(req, 200, &payload)
                 }
@@ -645,7 +631,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
                         st.last_sync.clear();
                         st.error.clear();
                     }
-                    app().invalidate();
                     summary["ok"] = json!(true);
                     summary["sessionPresent"] = json!(session::load_session().is_some());
                     send_json(req, 200, &summary)
@@ -702,7 +687,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
             });
             with_store(req, &|conn| {
                 let entries = bagholder_store::admin::save_journal_entry(conn, &id, Some(&entry))?;
-                app().invalidate();
                 Ok(json!({"ok": true, "journal": entries}))
             })
         }
@@ -712,7 +696,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
         }
         "/api/book/append" => {
             let result = guarded(|| orders::append_manual(&body));
-            app().invalidate();
             send_json(req, 200, &result)
         }
         "/api/import" => {
@@ -725,7 +708,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
             match bagholder_store::csvimport::import_text(&conn, &name, &text) {
                 Ok(report) => {
                     if truthy(report.get("added")) {
-                        app().invalidate();
                     }
                     send_json(req, 200, &report)
                 }
@@ -744,7 +726,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
                 }
                 let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
                 if truthy(result.get("added")) {
-                    app().invalidate();
                 }
                 result["status"] = bagholder_store::csvimport::status(&conn)?;
                 Ok((200, result))
@@ -759,7 +740,6 @@ fn handle_post(req: Request, path: &str, body: Value) {
                 let conn = app().open()?;
                 let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
                 if truthy(result.get("ok")) && truthy(result.get("added")) {
-                    app().invalidate();
                 }
                 result["status"] = bagholder_store::csvimport::status(&conn)?;
                 Ok(result)
