@@ -5,6 +5,7 @@
   import { go } from './router.svelte'
   import TradeJournal from './trade/TradeJournal.svelte'
   import Disclosures from './trade/Disclosures.svelte'
+  import ShortInterest from './trade/ShortInterest.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
@@ -143,6 +144,8 @@
     <TradeJournal {trade} />
     <Disclosures {trade} />
   </div>
+
+  <ShortInterest {trade} />
 </div>
 
 <style>

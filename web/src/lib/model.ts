@@ -178,6 +178,26 @@ export interface Trade {
   flags: string[]
 }
 
+export interface Shorts {
+  symbol: string
+  exchange: string
+  market: string
+  asOf: string
+  shares: number
+  previous: number | null
+  change: number | null
+  float: number | null
+  ofFloat: number | null
+  averageVolume: number | null
+  daysToCover: number | null
+  volumeOf: string
+  volumeSpan: string
+  shortVolume: number | null
+  totalVolume: number | null
+  volumePct: number | null
+  series: { date: string; shares: number }[]
+}
+
 export interface Filing {
   id: string
   source: string
