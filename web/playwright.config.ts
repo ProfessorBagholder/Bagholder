@@ -22,6 +22,7 @@ export default defineConfig({
     url: `http://127.0.0.1:${PORT}/api/status`,
     reuseExistingServer: false,
     timeout: 600_000, // a cold `cargo build` on a fresh machine
-    stdout: 'pipe',
+    stdout: 'ignore',
+    stderr: 'ignore',
   },
 })

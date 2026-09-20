@@ -21,7 +21,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] Backspace/Delete in an empty box deselects the highlighted value (`L:4825-4829`).
 - [ ] Tab ring: box → Done → Clear all → box, Shift+Tab backwards (`L:4820-4824`, `L:5149-5155`).
 - [ ] The highlight scrolls into view (`L:5163`); focus returns to the box after a click toggle (`L:4956`); ⌘K with the popover open on a field returns to the fields view.
-- [ ] Filtering while a trade is open returns to the list (`L:843-847`).
+- [x] Filtering while a trade is open returns to the list (`L:843-847`).
 - [ ] Cashflow names the filters it ignored (SPEC §5; in neither page yet).
 
 ### Dashboard
@@ -29,7 +29,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 
 ### Trade, holding and listing detail
 - [x] **The listing page** for a ticker the book does not hold: route `markets/listing:SYMBOL@VENUE`, `/api/listing`, `listingAsTrade` (`L:710-749`). Every click on an unheld ticker (watchlist, shorts, heatmap, ⌘K, a notification) depends on it.
-- [ ] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
+- [x] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
 - [ ] A journal save that fails says so in the header (`L:909`).
 - [ ] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`).
 - [ ] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
@@ -61,9 +61,9 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] Enter submits Add trade and the folder path (`L:5180-5181`).
 
 ### Keyboard and navigation
-- [ ] `#positions` is an alias of `#portfolio` in the router (`L:4699`).
+- [x] `#positions` is an alias of `#portfolio` in the router (`L:4699`).
 - [ ] Esc in the tag box does not navigate back (the guard looks for an id no element has).
-- [ ] Every write carries the `X-Bagholder` header (several rely on the browser's `Sec-Fetch-Site` today).
+- [x] Every write carries the `X-Bagholder` header (several rely on the browser's `Sec-Fetch-Site` today).
 
 ### States
 - [ ] Per-tab loading skeletons with the cross-fade (`L:4367-4431`).

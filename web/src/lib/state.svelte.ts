@@ -2,6 +2,7 @@ import type { Model } from './model'
 import { filters } from './filters.svelte'
 import { connect, disconnect, onChange } from './live'
 import { get, post } from './api'
+import { leaveSub, route } from './router.svelte'
 
 // The reactive store. This is the whole point of the migration: state lives in
 // one $state rune and the UI derives from it — no manual coreVersion/dataVersion
@@ -20,6 +21,8 @@ export const store = $state<{ model: Model | null; error: string | null; loading
 
 /** Connect, or connect again because the filters changed. */
 export function refilter(): void {
+  // a filter changed under an open trade: back to the list the filter is about
+  if (store.model && route.tab === 'trades') leaveSub()
   connect(store, filters)
 }
 
