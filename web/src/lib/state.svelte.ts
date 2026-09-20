@@ -1,6 +1,7 @@
 import type { Model } from './model'
 import { filters } from './filters.svelte'
 import { connect, disconnect, onChange } from './live'
+import { get, post } from './api'
 
 // The reactive store. This is the whole point of the migration: state lives in
 // one $state rune and the UI derives from it — no manual coreVersion/dataVersion
@@ -35,8 +36,7 @@ export async function loadDetail(id: string | null): Promise<void> {
   _detailFor = id ?? ''
   if (!id) return
   try {
-    const r = await fetch('/api/trade?id=' + encodeURIComponent(id), { headers: { 'X-Bagholder': '1' } })
-    const d = (await r.json()) as { ok?: boolean; legs?: unknown[]; fills?: unknown[] }
+    const d = await get<{ legs?: unknown[]; fills?: unknown[] }>('/api/trade', { id })
     if (!d.ok || _detailFor !== id) return
     const m = store.model
     for (const row of [m?.trades.find((t) => t.id === id), m?.positions?.find((p) => p.id === id)]) {
@@ -87,8 +87,7 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   }
   const body = { id, thesis: (t as { thesis?: string }).thesis ?? '', tags: (t as { tags?: string[] }).tags ?? [], grade: (t as { grade?: string }).grade ?? '' }
   try {
-    const r = await fetch('/api/journal', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify(body) })
-    const d = await r.json()
+    const d = await post('/api/journal', body)
     if (!d.ok) throw new Error('save failed')
   } catch {
     store.error = 'Could not save journal entry.'
@@ -104,8 +103,7 @@ export async function addWatch(m: { symbol: string; exchange: string; name: stri
     mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', positionId: null })
   }
   try {
-    const r = await fetch('/api/watchlist/add', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify(m) })
-    const d = await r.json()
+    const d = await post('/api/watchlist/add', m)
     if (!d.ok) throw new Error('add failed')
     // the row's quote and sector arrive as a change to that row when the server has them
   } catch {
@@ -121,8 +119,7 @@ export async function removeWatch(symbol: string, exchange: string): Promise<voi
   if (!mk) return
   mk.watchlist = mk.watchlist.filter((w) => !(w.symbol === symbol && w.exchange === exchange))
   try {
-    const r = await fetch('/api/watchlist/remove', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify({ symbol, exchange }) })
-    const d = await r.json()
+    const d = await post('/api/watchlist/remove', { symbol, exchange })
     if (!d.ok) throw new Error('remove failed')
   } catch {
     resync()

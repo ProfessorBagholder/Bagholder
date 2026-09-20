@@ -1,9 +1,12 @@
-// Notifications: loaded once, then kept live over the SSE stream. Newest first.
+// Notifications, newest first.
 
 // A notification's `extra`: the symbol/exchange it is about, the moment it
 // happened (`at`, a day or a full timestamp), and its link (a filed document id
 // with its source, or an external url). Drives the timestamp word and the click
 // target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
+import { post } from '../api'
+import { watchDoc, type Holder } from '../live'
+
 export interface NoteExtra {
   symbol?: string
   exchange?: string
@@ -27,57 +30,42 @@ export interface Note {
   href?: string
 }
 
-export const notesStore = $state<{ rows: Note[]; unread: number; loaded: boolean }>({ rows: [], unread: 0, loaded: false })
+// The bell is a document on the page's one stream (live.ts): it arrives whole once,
+// then a new notification is a row inserted and "mark all read" is `readAt` set on
+// the rows it touched. There is no second connection and nothing is asked again.
+const doc = $state<Holder<{ rows: Note[]; unread: number }>>({ data: null })
 
-let source: EventSource | null = null
-
-export async function loadNotes(): Promise<void> {
-  try {
-    const r = await fetch('/api/notifications')
-    const d = await r.json()
-    if (d.ok) {
-      notesStore.rows = d.rows ?? []
-      notesStore.unread = d.unread ?? notesStore.rows.filter((n) => !n.readAt).length
-    }
-  } catch {
-    /* leave */
-  }
-  notesStore.loaded = true
+export const notesStore = {
+  get rows(): Note[] {
+    return doc.data?.rows ?? []
+  },
+  get unread(): number {
+    return doc.data?.unread ?? 0
+  },
+  get loaded(): boolean {
+    return doc.data !== null
+  },
 }
 
-// The stream keeps the bell live without polling — one event, one row prepended.
-export function startNotesStream(): () => void {
-  loadNotes()
-  try {
-    source = new EventSource('/api/notifications/stream')
-    source.onmessage = (e) => {
-      try {
-        const n = JSON.parse(e.data) as Note
-        if (!n || !n.id) return
-        if (notesStore.rows.some((x) => x.id === n.id)) return
-        notesStore.rows = [n, ...notesStore.rows]
-        if (!n.readAt) notesStore.unread++
-      } catch {
-        /* ignore malformed frame */
-      }
-    }
-    source.onerror = () => { /* EventSource auto-reconnects */ }
-  } catch {
-    /* SSE unavailable */
-  }
-  return () => { source?.close(); source = null }
+/** Keep the bell current for as long as the page is open. Returns what stops it. */
+export function showNotifications(): () => void {
+  return watchDoc('notifications', {}, doc)
 }
 
+// What the person does shows at once; the server's own account of it follows on
+// the stream and is written over the same rows.
 export async function markAllRead(): Promise<void> {
-  if (!notesStore.rows.some((n) => !n.readAt)) return
+  if (!doc.data || !doc.data.rows.some((n) => !n.readAt)) return
   const now = new Date().toISOString()
-  notesStore.rows.forEach((n) => { if (!n.readAt) n.readAt = now })
-  notesStore.unread = 0
-  try { await fetch('/api/notifications/read', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }) } catch { /* ignore */ }
+  doc.data.rows.forEach((n) => { if (!n.readAt) n.readAt = now })
+  doc.data.unread = 0
+  await post('/api/notifications/read')
 }
 
 export async function clearNotes(): Promise<void> {
-  notesStore.rows = []
-  notesStore.unread = 0
-  try { await fetch('/api/notifications/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }) } catch { /* ignore */ }
+  if (doc.data) {
+    doc.data.rows.splice(0)
+    doc.data.unread = 0
+  }
+  await post('/api/notifications/clear')
 }

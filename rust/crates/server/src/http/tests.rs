@@ -195,3 +195,28 @@ fn test_a_feed_with_nothing_new_has_nothing_to_say() {
     assert_eq!(first.iter().map(|m| m.0).collect::<Vec<_>>(), ["snapshot"]);
     assert!(feed.step(&crate::status::payload).is_empty(), "the same view and the same status: no message at all");
 }
+
+#[test]
+fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
+    let _g = guard();
+    std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
+    let conn = app().open().unwrap();
+    crate::notify::set_settings(&conn, &json!({"fills": true})).unwrap();
+    bagholder_store::feeds::clear_notifications(&conn).unwrap();
+    let mut feed = crate::events::Feed::open(None, None);
+    assert!(crate::events::watch(feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
+    let first = feed.step(&crate::status::payload);
+    let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");
+    assert_eq!((bell.0, &bell.1["data"]), ("snapshot", &json!({"rows": [], "unread": 0})));
+
+    let row = crate::notify::emit(&conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).expect("fills are on");
+    let next = feed.step(&crate::status::payload);
+    let change = next.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell is told");
+    assert_eq!(change.0, "patch");
+    let ops = change.1["ops"].as_array().unwrap();
+    assert!(ops.contains(&json!(["set", ["unread"], 1])), "{:?}", ops);
+    let inserted = ops.iter().find(|op| op[0] == "rows").expect("a row inserted, not the list again");
+    let added = inserted[4].as_object().unwrap();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added.values().next().unwrap()["title"], row["title"]);
+}

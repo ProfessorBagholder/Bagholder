@@ -5,7 +5,8 @@
   import type { MarketTile, MarketInstrument } from '../model'
   import { ICONS } from '../icons'
   import Icon from './Icon.svelte'
-  import { n2, signedPct, api } from './util'
+  import { n2, signedPct } from './util'
+  import { request } from '../api'
 
   let { tiles: propTiles, instruments }: { tiles: MarketTile[]; instruments: MarketInstrument[] } = $props()
 
@@ -34,7 +35,7 @@
 
   async function postTiles(next: MarketTile[]) {
     order = next.slice()
-    const r = await api<{ ok?: boolean }>('POST', '/api/tiles/set', { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) })
+    const r = await request<{ ok?: boolean }>('POST', '/api/tiles/set', { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) })
     if (!r || !r.ok) order = null // refused: back to what the server has
   }
   // The saved row reaches the page as a change to the tiles, and each tile's price as

@@ -215,9 +215,14 @@ impl Feed {
         Feed { _watching: Watching::new(), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
     }
 
+    /// This stream's id.
+    pub fn id(&self) -> u64 {
+        self.registered.0
+    }
+
     /// The first message: the id the page names in `POST /api/events/watch`.
     pub fn hello(&self) -> Message {
-        ("hello", serde_json::json!({"id": self.registered.0}))
+        ("hello", serde_json::json!({"id": self.id()}))
     }
 
     /// What differs now from what this page was last sent: nothing when nothing

@@ -46,14 +46,3 @@ export function newsTextKey(h: string): string {
   return String(h || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-// A ticker as the JSON body sends it. Small shared helper for the fetch calls.
-export function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-  const opts: RequestInit = { method, headers: { 'X-Bagholder': '1' } }
-  if (body !== undefined) {
-    ;(opts.headers as Record<string, string>)['Content-Type'] = 'application/json'
-    opts.body = JSON.stringify(body)
-  }
-  return fetch(path, opts)
-    .then((r) => r.json())
-    .catch((e) => ({ ok: false, error: String(e) })) as Promise<T>
-}

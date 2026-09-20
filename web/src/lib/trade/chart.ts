@@ -5,6 +5,7 @@
 // them verbatim.
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
+import { get } from '../api'
 
 export interface Bar {
   date?: string | null
@@ -90,9 +91,7 @@ export function loadHistory(t: Trade, tf: string): Promise<History> {
   const key = t.id + '|' + tf
   if (_histCache[key]) return Promise.resolve(_histCache[key])
   const q = historyQuery(t, tf)
-  return fetch('/api/history?' + q, { headers: { 'X-Bagholder': '1' } })
-    .then((r) => r.json())
-    .catch(() => ({ ok: false }))
+  return get('/api/history?' + q)
     .then((r: any) => {
       const out: History = {
         reason: (r && r.ok && r.reason) || '',

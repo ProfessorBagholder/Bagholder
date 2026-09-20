@@ -1,6 +1,7 @@
 // Small shared UI state for the header menu, modals and the confirm dialog —
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
 import { store } from './state.svelte'
+import { request } from './api'
 
 export interface TradeForm {
   date: string
@@ -67,16 +68,6 @@ export const ui = $state<{
   loginView: false,
 })
 
-function api(method: string, path: string, body?: unknown): Promise<{ ok?: boolean; error?: string; [k: string]: unknown }> {
-  const opts: RequestInit = { method, headers: { 'X-Bagholder': '1' } }
-  if (body !== undefined) {
-    ;(opts.headers as Record<string, string>)['Content-Type'] = 'application/json'
-    opts.body = JSON.stringify(body)
-  }
-  return fetch(path, opts)
-    .then((r) => r.json())
-    .catch((e) => ({ ok: false, error: String(e) }))
-}
 
 function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
   ui.notice = msg
@@ -100,7 +91,7 @@ export function syncNow(): void {
     s.syncing = true
     s.syncStep = 'Syncing…'
   }
-  api('POST', '/api/sync').then((r) => {
+  request('POST', '/api/sync').then((r) => {
     if (r && r.ok) return
     const cur = store.model?.status
     if (cur) {
@@ -112,7 +103,7 @@ export function syncNow(): void {
 
 export function refreshSession(): void {
   ui.menuOpen = false
-  api('POST', '/api/refresh').then((r) => {
+  request('POST', '/api/refresh').then((r) => {
     flash(r && r.ok ? 'Session refreshed' : (r && (r.error as string)) || 'Refresh failed', r && r.ok ? 'ok' : 'err')
   })
 }
@@ -137,7 +128,7 @@ export function connect(): void {
   sawCapturing = false
   const s = store.model?.status
   if (s) s.error = ''
-  api('POST', '/api/login/start').then((res) => {
+  request('POST', '/api/login/start').then((res) => {
     if (!ui.connecting) return // cancelled meanwhile
     if (!res || !res.ok) {
       endConnect((res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.')
@@ -170,11 +161,11 @@ export function cancelConnect(): void {
   endConnect('')
   const cur = store.model?.status
   if (cur) cur.error = ''
-  api('POST', '/api/login/cancel')
+  request('POST', '/api/login/cancel')
 }
 // One login input event (click/key/wheel/text), forwarded to the streamed browser.
 export function loginInput(ev: unknown): void {
-  api('POST', '/api/login/input', ev)
+  request('POST', '/api/login/input', ev)
 }
 
 export function disconnect(): void {
@@ -183,7 +174,7 @@ export function disconnect(): void {
 }
 export function disconnectNow(): void {
   ui.confirm = ''
-  api('POST', '/api/disconnect')
+  request('POST', '/api/disconnect')
 }
 
 export function openData(): void {
@@ -192,7 +183,7 @@ export function openData(): void {
 }
 export function clearDataNow(): void {
   ui.confirm = ''
-  api('POST', '/api/data/clear', { journal: true, market: true })
+  request('POST', '/api/data/clear', { journal: true, market: true })
 }
 
 export function openTradeModal(): void {
@@ -217,7 +208,7 @@ export function saveTrade(accounts: { id: string; name: string }[]): void {
   const acc = accounts.find((a) => a.id === f.account)
   ui.busy = 'trade'
   f.error = ''
-  api('POST', '/api/book/append', {
+  request('POST', '/api/book/append', {
     date: f.date,
     symbol: f.symbol.trim().toUpperCase(),
     side: f.side,
@@ -262,7 +253,7 @@ async function importFiles(list: FileList | null): Promise<void> {
   for (const file of files) {
     try {
       const text = await file.text()
-      const r = await api('POST', '/api/import', { name: file.name, text })
+      const r = await request('POST', '/api/import', { name: file.name, text })
       if (!r || !r.ok) report.files.push({ file: file.name, error: (r && (r.error as string)) || 'Import failed' })
       else {
         report.files.push(r as unknown as ImportFileReport)
@@ -279,14 +270,14 @@ async function importFiles(list: FileList | null): Promise<void> {
 export function openFolder(): void {
   ui.menuOpen = false
   ui.modal = 'folder'
-  api('GET', '/api/watch').then((w) => {
+  request('GET', '/api/watch').then((w) => {
     ui.watch = w && w.ok ? (w as typeof ui.watch) : null
   })
 }
 export function watchFolder(): void {
   ui.busy = 'folder'
   ui.folderError = ''
-  api('POST', '/api/watch', { path: ui.folderPath }).then((r) => {
+  request('POST', '/api/watch', { path: ui.folderPath }).then((r) => {
     ui.busy = ''
     if (!r || !r.ok) ui.folderError = (r && (r.error as string)) || 'Could not watch that folder.'
     else {
@@ -296,7 +287,7 @@ export function watchFolder(): void {
 }
 export function scanFolder(): void {
   ui.busy = 'folder'
-  api('POST', '/api/watch/scan', {}).then((r) => {
+  request('POST', '/api/watch/scan', {}).then((r) => {
     ui.busy = ''
     if (r && r.ok) {
       ui.watch = r as typeof ui.watch
@@ -304,7 +295,7 @@ export function scanFolder(): void {
   })
 }
 export function stopWatch(): void {
-  api('POST', '/api/watch/clear', {}).then((w) => {
+  request('POST', '/api/watch/clear', {}).then((w) => {
     ui.watch = w && w.ok ? (w as typeof ui.watch) : null
     ui.folderPath = ''
   })
@@ -335,5 +326,5 @@ export function notifyToggle(kind: string): void {
   if (!cur) return
   const patch = { [kind]: !cur[kind] }
   Object.assign(cur, patch)
-  api('POST', '/api/notifications/settings', patch)
+  request('POST', '/api/notifications/settings', patch)
 }

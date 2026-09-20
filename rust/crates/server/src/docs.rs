@@ -41,6 +41,15 @@ pub fn read(key: &str, _params: &Value) -> Option<Value> {
     match key {
         "orders" => Some(crate::orders::orders_payload(false)),
         "shorts" => Some(crate::feeds::shorts_feed()),
+        // the bell: the newest notifications and how many are unread. A new one reaches
+        // the page as a row inserted; marking them read, as `readAt` set on those rows
+        "notifications" => {
+            let conn = crate::app::app().open().ok()?;
+            Some(serde_json::json!({
+                "rows": bagholder_store::feeds::list_notifications(&conn, 0, "", false, 50, true).ok()?,
+                "unread": bagholder_store::feeds::unread_notifications(&conn).ok()?,
+            }))
+        }
         // `history:<the chart's own query>`: only whether its intraday bars are still
         // being read -- the bars themselves are fetched once, when this says they are in
         // `filings:<symbol=…&name=…&exchange=…&currency=…>`: one listing's disclosures

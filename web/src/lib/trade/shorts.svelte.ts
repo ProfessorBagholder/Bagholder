@@ -3,6 +3,7 @@
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
 import type { Trade, ShortsResp } from '../model'
 import { listingTicker } from './chart'
+import { get } from '../api'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -33,9 +34,7 @@ export function ensureShorts(t: Trade): void {
     'symbol=' + encodeURIComponent(sym) +
     (t.exchange ? '&exchange=' + encodeURIComponent(t.exchange) : '') +
     (t.currency ? '&currency=' + encodeURIComponent(t.currency) : '')
-  fetch('/api/shorts?' + q, { headers: { 'X-Bagholder': '1' } })
-    .then((r) => r.json())
-    .catch(() => ({ ok: false }))
+  get('/api/shorts?' + q)
     .then((d: any) => {
       delete _pending[key]
       shortsStore[key] = Object.assign({ at: Date.now() }, d && d.ok ? d : { ok: false })
@@ -43,9 +42,7 @@ export function ensureShorts(t: Trade): void {
       // one is a file per reporting date, asked for once the figures are on screen
       if (d && d.ok && d.covered && !((d.shorts || {}).series || []).length && !_trend[key]) {
         _trend[key] = true
-        fetch('/api/shorts?' + q + '&trend=1', { headers: { 'X-Bagholder': '1' } })
-          .then((r) => r.json())
-          .catch(() => ({ ok: false }))
+        get('/api/shorts?' + q + '&trend=1')
           .then((more: any) => {
             const rec = shortsStore[key]
             if (more && more.ok && more.covered && rec && rec.shorts) rec.shorts.series = (more.shorts || {}).series || []

@@ -5,7 +5,7 @@
   // merge the issuer's filed releases; disclosures come from /api/filings/feed (or
   // one listing's /api/filings under a chip).
   import type { NewsItem, NewsTag } from '../model'
-  import { signedPct, newsWhen, discDate, newsTextKey, api } from './util'
+  import { signedPct, newsWhen, discDate, newsTextKey } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
   import { store } from '../state.svelte'
@@ -14,6 +14,8 @@
   import { titleComing } from '../trade/discStore.svelte'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
+  import { request } from '../api'
+  import { searchSymbols } from '../api'
 
   let { news }: { news: NewsItem[] } = $props()
 
@@ -201,7 +203,7 @@
         const items = (store.model?.markets?.news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol))
         if (kind !== 'disc' && !items) {
           reading = only.symbol
-          api<{ ok: boolean; exchange?: string }>('GET', '/api/news/symbol?symbol=' + encodeURIComponent(only.symbol) + '&exchange=' + encodeURIComponent(only.exchange) + '&currency=' + encodeURIComponent(only.currency || '')).then((r) => {
+          request<{ ok: boolean; exchange?: string }>('GET', '/api/news/symbol?symbol=' + encodeURIComponent(only.symbol) + '&exchange=' + encodeURIComponent(only.exchange) + '&currency=' + encodeURIComponent(only.currency || '')).then((r) => {
             reading = ''
             if (r && r.ok && r.exchange && sym === only) only.exchange = String(r.exchange).toUpperCase()
             // the items it read reach the card as rows inserted into the news
@@ -213,8 +215,7 @@
         return s.indexOf(' ') < 0 && bareSymbol(s).toUpperCase() === key
       })
       if (book) return take({ symbol: bareSymbol(String(book.symbol)).toUpperCase(), exchange: String(book.exchange || '').toUpperCase(), name: book.name || '', currency: book.currency || '' })
-      api<{ ok: boolean; matches?: { symbol?: string; exchange?: string; name?: string; currency?: string }[] }>('GET', '/api/symbols/search?q=' + encodeURIComponent(key)).then((r) => {
-        const m = (r && r.ok && r.matches) || []
+      searchSymbols(key).then((m) => {
         const hit = m.find((x) => bareSymbol(String(x.symbol || '')).toUpperCase() === key) || m[0]
         take(hit ? { symbol: bareSymbol(String(hit.symbol || '')).toUpperCase(), exchange: String(hit.exchange || '').toUpperCase(), name: hit.name || '', currency: hit.currency || '' } : { symbol: key, exchange: '', name: '', currency: '' })
       })

@@ -9,6 +9,7 @@
   import { goSub } from './router.svelte'
   import { symText, bareSymbol } from './sym'
   import { ICONS } from './icons'
+  import { searchSymbols } from './api'
 
   // `field` opens the popover straight at one field's editor (for a chip's Edit /
   // ledger chipEdit: 'search' → the fields view, any other key → that field). The
@@ -48,7 +49,6 @@
   // is scheduled imperatively from the input handler (extSchedule, like ledger.html)
   // — deterministic per keystroke — and the results land in flat $state tagged with
   // the query they belong to, so the rows derived tracks them and shows the matches.
-  const extCache = new Map<string, SymRow[]>() // a plain cache, not reactive
   let extResults = $state<{ q: string; rows: SymRow[] }>({ q: '', rows: [] })
   let extTimer: ReturnType<typeof setTimeout> | undefined
   function extSchedule(v: string) {
@@ -58,19 +58,10 @@
       extResults = { q: '', rows: [] }
       return
     }
-    if (extCache.has(q)) {
-      extResults = { q, rows: extCache.get(q)! }
-      return
-    }
+    // an answer already had comes back at once (api.ts keeps them); a new one waits for a pause in the typing
     extTimer = setTimeout(async () => {
-      try {
-        const r = await fetch('/api/symbols/search?q=' + encodeURIComponent(q))
-        const d = await r.json()
-        if (d && d.ok) {
-          extCache.set(q, d.matches ?? [])
-          extResults = { q, rows: d.matches ?? [] }
-        }
-      } catch { /* a failed lookup is not remembered */ }
+      const rows = await searchSymbols(q)
+      if (rows.length || q === v.trim().toUpperCase()) extResults = { q, rows }
     }, 300)
   }
   function extRows(q: string): SymRow[] {

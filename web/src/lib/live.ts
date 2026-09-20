@@ -14,6 +14,8 @@
 
 import type { Model } from './model'
 
+import { post } from './api'
+
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
 
@@ -162,7 +164,7 @@ function sayWanted(): void {
     if (saidFor === streamId && now === said) return
     saidFor = streamId
     said = now
-    fetch('/api/events/watch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify({ id: streamId, docs }) }).catch(() => {})
+    void post('/api/events/watch', { id: streamId, docs })
   })
 }
 

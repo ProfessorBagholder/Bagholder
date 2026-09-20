@@ -26,7 +26,7 @@
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
   import { panel as ordersPanel } from './lib/orders/orders.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
-  import { notesStore, startNotesStream } from './lib/notes/notes.svelte'
+  import { notesStore, showNotifications } from './lib/notes/notes.svelte'
 
   let filterOpen = $state(false)
   let filterField = $state<string | undefined>(undefined)
@@ -189,7 +189,7 @@
     // one connection: the whole view once, then only what changes in it (live.ts)
     refilter()
     const stopRouter = startRouter()
-    const stopNotes = startNotesStream()
+    const stopNotes = showNotifications()
     return () => {
       stopRouter()
       stopNotes()

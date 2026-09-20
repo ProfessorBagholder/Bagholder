@@ -5,6 +5,7 @@ import { watchDoc } from '../live'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
 import { computeVals, tick, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
+import { request } from '../api'
 
 // The order ticket's live state. Opened from a ⌘K row's Buy/Sell (or the trade
 // detail); the quote is polled while open; submit posts to /api/order. A draft is
@@ -25,14 +26,6 @@ export const draftStore = $state<{ d: TicketDraft | null }>({ d: null })
 
 const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl', 'tp', 'text'] as const
 
-function api(method: string, path: string, body?: unknown): Promise<{ ok?: boolean; error?: string; [k: string]: unknown }> {
-  const opts: RequestInit = { method, headers: { 'X-Bagholder': '1' } }
-  if (body !== undefined) {
-    ;(opts.headers as Record<string, string>)['Content-Type'] = 'application/json'
-    opts.body = JSON.stringify(body)
-  }
-  return fetch(path, opts).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }))
-}
 
 // what the book knows about the symbol: its listing id, kind, and the open position
 function tkLookup(symbol: string): { securityId: string; kind: string; position: Position | null } {
@@ -194,7 +187,7 @@ export async function submit() {
   }
   t.busy = true
   t.submitError = ''
-  const r = await api('POST', '/api/order', body)
+  const r = await request('POST', '/api/order', body)
   const cur = ticketStore.t
   if (!cur) return
   cur.busy = false

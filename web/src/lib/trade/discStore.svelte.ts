@@ -7,6 +7,7 @@
 import type { Trade, Filing, FilingsPayload } from '../model'
 import { listingTicker } from './chart'
 import { watchDoc } from '../live'
+import { get } from '../api'
 
 export const DISC_ORDER = ['Financials', 'Material events', 'Governance', 'Offerings', 'Insider & ownership', 'News releases', 'Other']
 
@@ -63,7 +64,7 @@ export function showDisclosures(t: { symbol: string; kind?: string; underlying?:
 /** Read the sources again now, whatever their age; what they say reaches the rows as changes. */
 export function refreshDisclosures(sym: string, t: { name?: string; exchange?: string; currency?: string } | null): void {
   const q = docKey(sym, t ?? {}).slice('filings:'.length)
-  fetch('/api/filings?' + q + '&refresh=1', { headers: { 'X-Bagholder': '1' } }).catch(() => {})
+  void get('/api/filings?' + q + '&refresh=1')
 }
 
 // ---- what a row wears while it waits: said by the server, which does the reading ----

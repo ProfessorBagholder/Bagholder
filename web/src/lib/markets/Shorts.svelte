@@ -4,12 +4,13 @@
   // box reaches any ticker (/api/shorts?symbol=).
   import type { ShortsFeedRow } from '../model'
   import { qty } from '../fmt'
-  import { n2, shortDay, api } from './util'
+  import { n2, shortDay } from './util'
   import { sort, sortRows } from '../sort.svelte'
   import { bareSymbol } from '../sym'
   import { watchDoc } from '../live'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
+  import { request } from '../api'
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const SHORTS_COLS = [
@@ -46,7 +47,7 @@
       if (query.trim().toUpperCase() !== key) return
       if ((feed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return
       found[key] = { loading: true }
-      api<{ ok: boolean; covered?: boolean; shorts?: ShortsFeedRow }>('GET', '/api/shorts?symbol=' + encodeURIComponent(key)).then((d) => {
+      request<{ ok: boolean; covered?: boolean; shorts?: ShortsFeedRow }>('GET', '/api/shorts?symbol=' + encodeURIComponent(key)).then((d) => {
         found[key] = d && d.ok && d.covered ? { row: { name: '', ...(d.shorts as ShortsFeedRow) } } : { missing: true }
       })
     }, 450)

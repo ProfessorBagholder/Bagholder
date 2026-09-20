@@ -4,13 +4,15 @@
   import type { WatchItem, SymbolMatch } from '../model'
   import { ICONS } from '../icons'
   import { px } from '../fmt'
-  import { signedPct, api } from './util'
+  import { signedPct } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, toggleSort, sortRows } from '../sort.svelte'
   import { store, addWatch, removeWatch } from '../state.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import Icon from './Icon.svelte'
   import GridHead from './GridHead.svelte'
+  import { request } from '../api'
+  import { searchSymbols } from '../api'
 
   let { watchlist }: { watchlist: WatchItem[] } = $props()
 
@@ -77,10 +79,10 @@
     clearTimeout(searchTimer)
     const key = q
     searchTimer = setTimeout(() => {
-      api<{ ok: boolean; matches?: { symbol: string; exchange?: string; name?: string; currency?: string; kind?: string }[] }>('GET', '/api/symbols/search?q=' + encodeURIComponent(key)).then((r) => {
+      searchSymbols(key).then((found) => {
         if (query.trim() !== key) return
         const out: SymbolMatch[] = []
-        ;(r?.matches || []).forEach((m) => {
+        found.forEach((m) => {
           if (OPTION_RE.test(m.symbol) || m.kind) return
           const k = bareSymbol(m.symbol) + '@' + String(m.exchange || '').toUpperCase()
           if (watchedKeys.has(k) || out.some((x) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase() === k)) return

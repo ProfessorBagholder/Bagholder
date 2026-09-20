@@ -10,8 +10,8 @@
   import Mseg from '../markets/Mseg.svelte'
   import Icon from '../markets/Icon.svelte'
   import HeatBox from './HeatBox.svelte'
-  import { api } from '../markets/util'
-
+  import { request } from '../api'
+  
   let { markets }: { markets: Markets } = $props()
 
   const MARKET_U: Record<string, string> = { ca: 'Canada', us: 'US', intl: 'International' }
@@ -62,7 +62,7 @@
     heat = { ...heat, ...patch }
     save()
     // a market universe never read: ask for it now
-    if (MARKET_U[heat.universe] && !((markets.universes as Record<string, unknown[]>)[heat.universe] || []).length) api('POST', '/api/markets/refresh', {})
+    if (MARKET_U[heat.universe] && !((markets.universes as Record<string, unknown[]>)[heat.universe] || []).length) request('POST', '/api/markets/refresh', {})
   }
 
   // the slideshow: every 20s, the next scope with something to show
@@ -73,7 +73,7 @@
       for (let k = 1; k <= HEAT_UNIVERSES.length; k++) {
         const u = HEAT_UNIVERSES[(i + k) % HEAT_UNIVERSES.length]
         const next = { ...heat, universe: u }
-        if (MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length) api('POST', '/api/markets/refresh', {})
+        if (MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length) request('POST', '/api/markets/refresh', {})
         if (heatTilesFor(next).length) {
           heat = next
           save()

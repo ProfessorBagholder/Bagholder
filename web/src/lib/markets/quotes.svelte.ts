@@ -2,7 +2,7 @@
 // the page lives (ledger's _sugQuotes / sugQuoteSchedule). Reactive $state so the
 // watchlist row and the add-row suggestion fill in when a quote lands.
 import { bareSymbol } from '../sym'
-import { api } from './util'
+import { request } from '../api'
 
 export interface Quote {
   last: number | null
@@ -21,7 +21,7 @@ export function sugQuoteSchedule(rows: { symbol: string; exchange?: string; curr
     const k = sugKey(w)
     if (w.last != null || sugQuotes[k] || pending[k]) return
     pending[k] = true
-    api<{ ok: boolean; price?: number | null; percentChange?: number | null }>(
+    request<{ ok: boolean; price?: number | null; percentChange?: number | null }>(
       'GET',
       '/api/symbols/quote?symbol=' + encodeURIComponent(w.symbol) + '&exchange=' + encodeURIComponent(w.exchange || '') + '&currency=' + encodeURIComponent(w.currency || ''),
     ).then((r) => {
