@@ -2,10 +2,9 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-// The Svelte SPA spike. In dev, /api is proxied to a running Bagholder backend
-// (BAGHOLDER_PORT, default 8788 for the scratch server) so the page renders real
-// model JSON. In production this bundle is served by the Rust server at /v3, so
-// the base is relative.
+// The page. In development /api is proxied to a running Bagholder server
+// (BAGHOLDER_PORT), so the page renders real data with hot reload; the built bundle
+// is served by the Rust server at /, its asset paths relative.
 export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [svelte()],

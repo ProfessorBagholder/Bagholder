@@ -1,0 +1,3147 @@
+{
+  "view": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-07",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2026-06-12",
+      "benchmarkLast": "2026-09-04"
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [
+          "TSX"
+        ],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "a",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "TFSA",
+        "Trading"
+      ],
+      "symbols": [
+        "AAA",
+        "BBB",
+        "CCC",
+        "DDD",
+        "EEE",
+        "ZZZ 21AUG26 10.00 CALL"
+      ],
+      "listings": {
+        "CCC": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "USD"
+        },
+        "ZZZ 21AUG26 10.00 CALL": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "BBB": {
+          "name": "Bee Inc",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "AAA": {
+          "name": "Triple A Corp",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "EEE": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "DDD": {
+          "name": "Dee Fund",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        }
+      },
+      "tags": [
+        "breakout",
+        "earnings",
+        "income"
+      ],
+      "exchanges": [
+        "NASDAQ",
+        "TSX"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2026"
+      ]
+    },
+    "kpi": {
+      "realized": 150.0,
+      "count": 2,
+      "wins": 1,
+      "losses": 1,
+      "breakeven": 0,
+      "winRate": 0.5,
+      "grossWin": 200.0,
+      "grossLoss": 50.0,
+      "profitFactor": 4.0,
+      "profitFactorInfinite": false,
+      "expectancy": 75.0,
+      "avgWin": 200.0,
+      "avgLoss": -50.0,
+      "fees": 0.0,
+      "avgHold": 11.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [
+        {
+          "d": "2024-01-15",
+          "v": 100000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-03-01",
+          "v": 110000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-06-03",
+          "v": 95000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-09-03",
+          "v": 140000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2024-12-31",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-03-03",
+          "v": 170000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-06-02",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-12-31",
+          "v": 200000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-03-02",
+          "v": 230000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-06-01",
+          "v": 190000.0,
+          "dep": 120000.0
+        },
+        {
+          "d": "2026-09-04",
+          "v": 215000.0,
+          "dep": 120000.0
+        }
+      ],
+      "drawdown": {
+        "pct": -0.13636363636363635,
+        "abs": -14999.999999999998,
+        "at": "2024-06-03",
+        "peakAt": "2024-03-01"
+      },
+      "annualized": {
+        "rate": 0.24369745230508744,
+        "years": 2.639288158795346,
+        "count": 3,
+        "first": "2024",
+        "last": "2026"
+      }
+    },
+    "years": [
+      {
+        "year": "2024",
+        "r": 0.1785714285714286,
+        "days": 351,
+        "from": "2024-01-15",
+        "to": "2024-12-31",
+        "flow": 129950.0,
+        "endV": 150000.0,
+        "spR": 0.25531914893617014
+      },
+      {
+        "year": "2025",
+        "r": 0.33333333333333304,
+        "days": 364,
+        "from": "2025-01-01",
+        "to": "2025-12-31",
+        "flow": 0.0,
+        "endV": 200000.0,
+        "spR": 0.15254237288135597
+      },
+      {
+        "year": "2026",
+        "r": 0.1315789473684208,
+        "days": 249,
+        "from": "2026-01-01",
+        "to": "2026-09-07",
+        "flow": -10000.0,
+        "endV": 215000.0,
+        "spR": 0.05882352941176472
+      }
+    ],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2026-01",
+        "label": "Jan '26",
+        "value": 200.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b1"
+        ]
+      },
+      {
+        "key": "2026-02",
+        "label": "Feb '26",
+        "value": -50.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b2"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "AAA",
+        "pnl": 150.0,
+        "n": 2,
+        "legs": 2,
+        "winRate": 0.5,
+        "avgHold": 11.5,
+        "tradeIds": [
+          "rt:b2",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 1,
+          "pnl": 200.0,
+          "tradeIds": [
+            "rt:b1"
+          ]
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 1,
+          "pnl": -50.0,
+          "tradeIds": [
+            "rt:b2"
+          ]
+        }
+      ],
+      "ungraded": 0,
+      "graded": 2
+    },
+    "queue": [
+      {
+        "id": "rt:b2",
+        "symbol": "AAA",
+        "date": "2026-02-10",
+        "pnl": -50.0,
+        "currency": "CAD",
+        "missing": "no thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:b2",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 50.0,
+        "mult": 1,
+        "entry": 12.0,
+        "exit": 11.0,
+        "entryDate": "2026-02-02",
+        "exitDate": "2026-02-10",
+        "entryWhen": "2026-02-02T15:00:00+00:00",
+        "exitWhen": "2026-02-10T15:00:00+00:00",
+        "holdDays": 8,
+        "pnl": -50.0,
+        "pnlCad": -50.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": -0.08333333333333333,
+        "legs": [
+          {
+            "key": "b2|s2|50.00000000",
+            "qty": 50.0,
+            "entry": 12.0,
+            "exit": 11.0,
+            "entryDate": "2026-02-02",
+            "exitDate": "2026-02-10",
+            "pnl": -50.0,
+            "pnlCad": -50.0,
+            "fees": 0.0,
+            "buyActivityId": "b2",
+            "sellActivityId": "s2",
+            "flags": []
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "s2",
+            "when": "2026-02-10T15:00:00+00:00",
+            "date": "2026-02-10",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL",
+            "qty": -50.0,
+            "price": 11.0,
+            "amount": 550.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          },
+          {
+            "id": "b2",
+            "when": "2026-02-02T15:00:00+00:00",
+            "date": "2026-02-02",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 50.0,
+            "price": 12.0,
+            "amount": -600.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 50.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 50.0,
+          "avg": 11.0,
+          "fills": 1
+        },
+        "netCash": -50.0,
+        "flags": [],
+        "grade": "F",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 100.0,
+        "mult": 1,
+        "entry": 10.0,
+        "exit": 12.0,
+        "entryDate": "2026-01-05",
+        "exitDate": "2026-01-20",
+        "entryWhen": "2026-01-05T15:00:00+00:00",
+        "exitWhen": "2026-01-20T15:00:00+00:00",
+        "holdDays": 15,
+        "pnl": 200.0,
+        "pnlCad": 200.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.2,
+        "legs": [
+          {
+            "key": "b1|s1|100.00000000",
+            "qty": 100.0,
+            "entry": 10.0,
+            "exit": 12.0,
+            "entryDate": "2026-01-05",
+            "exitDate": "2026-01-20",
+            "pnl": 200.0,
+            "pnlCad": 200.0,
+            "fees": 0.0,
+            "buyActivityId": "b1",
+            "sellActivityId": "s1",
+            "flags": []
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "s1",
+            "when": "2026-01-20T15:00:00+00:00",
+            "date": "2026-01-20",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL",
+            "qty": -100.0,
+            "price": 12.0,
+            "amount": 1200.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          },
+          {
+            "id": "b1",
+            "when": "2026-01-05T15:00:00+00:00",
+            "date": "2026-01-05",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 100.0,
+            "price": 10.0,
+            "amount": -1000.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 100.0,
+          "avg": 10.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 100.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "netCash": 200.0,
+        "flags": [],
+        "grade": "A",
+        "thesis": "Breakout after earnings.",
+        "tags": [
+          "earnings",
+          "breakout"
+        ]
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 5,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [
+        "exchange"
+      ],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 13
+  },
+  "wire": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-07",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2026-06-12",
+      "benchmarkLast": "2026-09-04"
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [
+          "TSX"
+        ],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "a",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "TFSA",
+        "Trading"
+      ],
+      "symbols": [
+        "AAA",
+        "BBB",
+        "CCC",
+        "DDD",
+        "EEE",
+        "ZZZ 21AUG26 10.00 CALL"
+      ],
+      "listings": {
+        "CCC": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "USD"
+        },
+        "ZZZ 21AUG26 10.00 CALL": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "BBB": {
+          "name": "Bee Inc",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "AAA": {
+          "name": "Triple A Corp",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "EEE": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "DDD": {
+          "name": "Dee Fund",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        }
+      },
+      "tags": [
+        "breakout",
+        "earnings",
+        "income"
+      ],
+      "exchanges": [
+        "NASDAQ",
+        "TSX"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2026"
+      ]
+    },
+    "kpi": {
+      "realized": 150.0,
+      "count": 2,
+      "wins": 1,
+      "losses": 1,
+      "breakeven": 0,
+      "winRate": 0.5,
+      "grossWin": 200.0,
+      "grossLoss": 50.0,
+      "profitFactor": 4.0,
+      "profitFactorInfinite": false,
+      "expectancy": 75.0,
+      "avgWin": 200.0,
+      "avgLoss": -50.0,
+      "fees": 0.0,
+      "avgHold": 11.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [
+        {
+          "d": "2024-01-15",
+          "v": 100000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-03-01",
+          "v": 110000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-06-03",
+          "v": 95000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-09-03",
+          "v": 140000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2024-12-31",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-03-03",
+          "v": 170000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-06-02",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-12-31",
+          "v": 200000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-03-02",
+          "v": 230000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-06-01",
+          "v": 190000.0,
+          "dep": 120000.0
+        },
+        {
+          "d": "2026-09-04",
+          "v": 215000.0,
+          "dep": 120000.0
+        }
+      ],
+      "drawdown": {
+        "pct": -0.13636363636363635,
+        "abs": -14999.999999999998,
+        "at": "2024-06-03",
+        "peakAt": "2024-03-01"
+      },
+      "annualized": {
+        "rate": 0.24369745230508744,
+        "years": 2.639288158795346,
+        "count": 3,
+        "first": "2024",
+        "last": "2026"
+      }
+    },
+    "years": [
+      {
+        "year": "2024",
+        "r": 0.1785714285714286,
+        "days": 351,
+        "from": "2024-01-15",
+        "to": "2024-12-31",
+        "flow": 129950.0,
+        "endV": 150000.0,
+        "spR": 0.25531914893617014
+      },
+      {
+        "year": "2025",
+        "r": 0.33333333333333304,
+        "days": 364,
+        "from": "2025-01-01",
+        "to": "2025-12-31",
+        "flow": 0.0,
+        "endV": 200000.0,
+        "spR": 0.15254237288135597
+      },
+      {
+        "year": "2026",
+        "r": 0.1315789473684208,
+        "days": 249,
+        "from": "2026-01-01",
+        "to": "2026-09-07",
+        "flow": -10000.0,
+        "endV": 215000.0,
+        "spR": 0.05882352941176472
+      }
+    ],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2026-01",
+        "label": "Jan '26",
+        "value": 200.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b1"
+        ]
+      },
+      {
+        "key": "2026-02",
+        "label": "Feb '26",
+        "value": -50.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b2"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "AAA",
+        "pnl": 150.0,
+        "n": 2,
+        "legs": 2,
+        "winRate": 0.5,
+        "avgHold": 11.5,
+        "tradeIds": [
+          "rt:b2",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 1,
+          "pnl": 200.0,
+          "tradeIds": [
+            "rt:b1"
+          ]
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 1,
+          "pnl": -50.0,
+          "tradeIds": [
+            "rt:b2"
+          ]
+        }
+      ],
+      "ungraded": 0,
+      "graded": 2
+    },
+    "queue": [
+      {
+        "id": "rt:b2",
+        "symbol": "AAA",
+        "date": "2026-02-10",
+        "pnl": -50.0,
+        "currency": "CAD",
+        "missing": "no thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:b2",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 50.0,
+        "mult": 1,
+        "entry": 12.0,
+        "exit": 11.0,
+        "entryDate": "2026-02-02",
+        "exitDate": "2026-02-10",
+        "entryWhen": "2026-02-02T15:00:00+00:00",
+        "exitWhen": "2026-02-10T15:00:00+00:00",
+        "holdDays": 8,
+        "pnl": -50.0,
+        "pnlCad": -50.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": -0.08333333333333333,
+        "legCount": 1,
+        "opened": {
+          "qty": 50.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 50.0,
+          "avg": 11.0,
+          "fills": 1
+        },
+        "netCash": -50.0,
+        "flags": [],
+        "grade": "F",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 100.0,
+        "mult": 1,
+        "entry": 10.0,
+        "exit": 12.0,
+        "entryDate": "2026-01-05",
+        "exitDate": "2026-01-20",
+        "entryWhen": "2026-01-05T15:00:00+00:00",
+        "exitWhen": "2026-01-20T15:00:00+00:00",
+        "holdDays": 15,
+        "pnl": 200.0,
+        "pnlCad": 200.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.2,
+        "legCount": 1,
+        "opened": {
+          "qty": 100.0,
+          "avg": 10.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 100.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "netCash": 200.0,
+        "flags": [],
+        "grade": "A",
+        "thesis": "Breakout after earnings.",
+        "tags": [
+          "earnings",
+          "breakout"
+        ]
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 5,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [
+        "exchange"
+      ],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 13
+  },
+  "wireWithDetail": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-07",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2026-06-12",
+      "benchmarkLast": "2026-09-04"
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [
+          "TSX"
+        ],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "a",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "TFSA",
+        "Trading"
+      ],
+      "symbols": [
+        "AAA",
+        "BBB",
+        "CCC",
+        "DDD",
+        "EEE",
+        "ZZZ 21AUG26 10.00 CALL"
+      ],
+      "listings": {
+        "CCC": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "USD"
+        },
+        "ZZZ 21AUG26 10.00 CALL": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "BBB": {
+          "name": "Bee Inc",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "AAA": {
+          "name": "Triple A Corp",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "EEE": {
+          "name": "LUNR",
+          "exchange": "",
+          "kind": "Shares",
+          "currency": "CAD"
+        },
+        "DDD": {
+          "name": "Dee Fund",
+          "exchange": "TSX",
+          "kind": "Shares",
+          "currency": "CAD"
+        }
+      },
+      "tags": [
+        "breakout",
+        "earnings",
+        "income"
+      ],
+      "exchanges": [
+        "NASDAQ",
+        "TSX"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2026"
+      ]
+    },
+    "kpi": {
+      "realized": 150.0,
+      "count": 2,
+      "wins": 1,
+      "losses": 1,
+      "breakeven": 0,
+      "winRate": 0.5,
+      "grossWin": 200.0,
+      "grossLoss": 50.0,
+      "profitFactor": 4.0,
+      "profitFactorInfinite": false,
+      "expectancy": 75.0,
+      "avgWin": 200.0,
+      "avgLoss": -50.0,
+      "fees": 0.0,
+      "avgHold": 11.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [
+        {
+          "d": "2024-01-15",
+          "v": 100000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-03-01",
+          "v": 110000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-06-03",
+          "v": 95000.0,
+          "dep": 100000.0
+        },
+        {
+          "d": "2024-09-03",
+          "v": 140000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2024-12-31",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-03-03",
+          "v": 170000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-06-02",
+          "v": 150000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2025-12-31",
+          "v": 200000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-03-02",
+          "v": 230000.0,
+          "dep": 130000.0
+        },
+        {
+          "d": "2026-06-01",
+          "v": 190000.0,
+          "dep": 120000.0
+        },
+        {
+          "d": "2026-09-04",
+          "v": 215000.0,
+          "dep": 120000.0
+        }
+      ],
+      "drawdown": {
+        "pct": -0.13636363636363635,
+        "abs": -14999.999999999998,
+        "at": "2024-06-03",
+        "peakAt": "2024-03-01"
+      },
+      "annualized": {
+        "rate": 0.24369745230508744,
+        "years": 2.639288158795346,
+        "count": 3,
+        "first": "2024",
+        "last": "2026"
+      }
+    },
+    "years": [
+      {
+        "year": "2024",
+        "r": 0.1785714285714286,
+        "days": 351,
+        "from": "2024-01-15",
+        "to": "2024-12-31",
+        "flow": 129950.0,
+        "endV": 150000.0,
+        "spR": 0.25531914893617014
+      },
+      {
+        "year": "2025",
+        "r": 0.33333333333333304,
+        "days": 364,
+        "from": "2025-01-01",
+        "to": "2025-12-31",
+        "flow": 0.0,
+        "endV": 200000.0,
+        "spR": 0.15254237288135597
+      },
+      {
+        "year": "2026",
+        "r": 0.1315789473684208,
+        "days": 249,
+        "from": "2026-01-01",
+        "to": "2026-09-07",
+        "flow": -10000.0,
+        "endV": 215000.0,
+        "spR": 0.05882352941176472
+      }
+    ],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2026-01",
+        "label": "Jan '26",
+        "value": 200.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b1"
+        ]
+      },
+      {
+        "key": "2026-02",
+        "label": "Feb '26",
+        "value": -50.0,
+        "count": 1,
+        "tradeIds": [
+          "rt:b2"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "AAA",
+        "pnl": 150.0,
+        "n": 2,
+        "legs": 2,
+        "winRate": 0.5,
+        "avgHold": 11.5,
+        "tradeIds": [
+          "rt:b2",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 1,
+          "pnl": 200.0,
+          "tradeIds": [
+            "rt:b1"
+          ]
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 1,
+          "pnl": -50.0,
+          "tradeIds": [
+            "rt:b2"
+          ]
+        }
+      ],
+      "ungraded": 0,
+      "graded": 2
+    },
+    "queue": [
+      {
+        "id": "rt:b2",
+        "symbol": "AAA",
+        "date": "2026-02-10",
+        "pnl": -50.0,
+        "currency": "CAD",
+        "missing": "no thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:b2",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 50.0,
+        "mult": 1,
+        "entry": 12.0,
+        "exit": 11.0,
+        "entryDate": "2026-02-02",
+        "exitDate": "2026-02-10",
+        "entryWhen": "2026-02-02T15:00:00+00:00",
+        "exitWhen": "2026-02-10T15:00:00+00:00",
+        "holdDays": 8,
+        "pnl": -50.0,
+        "pnlCad": -50.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": -0.08333333333333333,
+        "legs": [
+          {
+            "key": "b2|s2|50.00000000",
+            "qty": 50.0,
+            "entry": 12.0,
+            "exit": 11.0,
+            "entryDate": "2026-02-02",
+            "exitDate": "2026-02-10",
+            "pnl": -50.0,
+            "pnlCad": -50.0,
+            "fees": 0.0,
+            "buyActivityId": "b2",
+            "sellActivityId": "s2",
+            "flags": []
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "s2",
+            "when": "2026-02-10T15:00:00+00:00",
+            "date": "2026-02-10",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL",
+            "qty": -50.0,
+            "price": 11.0,
+            "amount": 550.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          },
+          {
+            "id": "b2",
+            "when": "2026-02-02T15:00:00+00:00",
+            "date": "2026-02-02",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 50.0,
+            "price": 12.0,
+            "amount": -600.0,
+            "fees": 0.0,
+            "currency": "CAD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 50.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 50.0,
+          "avg": 11.0,
+          "fills": 1
+        },
+        "netCash": -50.0,
+        "flags": [],
+        "grade": "F",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "AAA",
+        "underlying": "AAA",
+        "name": "Triple A Corp",
+        "exchange": "TSX",
+        "kind": "Shares",
+        "currency": "CAD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-aaa",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 100.0,
+        "mult": 1,
+        "entry": 10.0,
+        "exit": 12.0,
+        "entryDate": "2026-01-05",
+        "exitDate": "2026-01-20",
+        "entryWhen": "2026-01-05T15:00:00+00:00",
+        "exitWhen": "2026-01-20T15:00:00+00:00",
+        "holdDays": 15,
+        "pnl": 200.0,
+        "pnlCad": 200.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.2,
+        "legCount": 1,
+        "opened": {
+          "qty": 100.0,
+          "avg": 10.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 100.0,
+          "avg": 12.0,
+          "fills": 1
+        },
+        "netCash": 200.0,
+        "flags": [],
+        "grade": "A",
+        "thesis": "Breakout after earnings.",
+        "tags": [
+          "earnings",
+          "breakout"
+        ]
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 5,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [
+        "exchange"
+      ],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 13
+  },
+  "tradeDetail": {
+    "id": "rt:b2",
+    "legs": [
+      {
+        "key": "b2|s2|50.00000000",
+        "qty": 50.0,
+        "entry": 12.0,
+        "exit": 11.0,
+        "entryDate": "2026-02-02",
+        "exitDate": "2026-02-10",
+        "pnl": -50.0,
+        "pnlCad": -50.0,
+        "fees": 0.0,
+        "buyActivityId": "b2",
+        "sellActivityId": "s2",
+        "flags": []
+      }
+    ],
+    "fills": [
+      {
+        "id": "s2",
+        "when": "2026-02-10T15:00:00+00:00",
+        "date": "2026-02-10",
+        "time": "08:00",
+        "side": "SELL",
+        "sub": "SELL",
+        "qty": -50.0,
+        "price": 11.0,
+        "amount": 550.0,
+        "fees": 0.0,
+        "currency": "CAD",
+        "flags": []
+      },
+      {
+        "id": "b2",
+        "when": "2026-02-02T15:00:00+00:00",
+        "date": "2026-02-02",
+        "time": "08:00",
+        "side": "BUY",
+        "sub": "BUY",
+        "qty": 50.0,
+        "price": 12.0,
+        "amount": -600.0,
+        "fees": 0.0,
+        "currency": "CAD",
+        "flags": []
+      }
+    ]
+  }
+}

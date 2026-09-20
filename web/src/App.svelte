@@ -12,7 +12,6 @@
   import Trades from './lib/Trades.svelte'
   import TradeDetail from './lib/TradeDetail.svelte'
   import Markets from './lib/Markets.svelte'
-  import Placeholder from './lib/Placeholder.svelte'
   import FilterPopover from './lib/FilterPopover.svelte'
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -291,8 +290,6 @@
       {#if sel}{#key sel.id}<TradeDetail trade={sel as import('./lib/model').Trade} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
     {:else if route.tab === 'markets'}
       <Markets markets={store.model.markets} />
-    {:else}
-      <Placeholder tab={route.tab} />
     {/if}
   </div>
 

@@ -1,0 +1,2761 @@
+{
+  "view": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-06",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2025-03-07",
+      "benchmarkLast": ""
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "Trading"
+      ],
+      "symbols": [
+        "ASTS",
+        "ASTS 07MAR25 31.00 CALL"
+      ],
+      "listings": {
+        "ASTS 07MAR25 31.00 CALL": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "ASTS": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "USD"
+        }
+      },
+      "tags": [],
+      "exchanges": [
+        "NASDAQ"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2025"
+      ]
+    },
+    "kpi": {
+      "realized": 3142.5,
+      "count": 2,
+      "wins": 2,
+      "losses": 0,
+      "breakeven": 0,
+      "winRate": 1.0,
+      "grossWin": 3142.5,
+      "grossLoss": 0,
+      "profitFactor": null,
+      "profitFactorInfinite": true,
+      "expectancy": 1571.25,
+      "avgWin": 1571.25,
+      "avgLoss": 0.0,
+      "fees": 0.0,
+      "avgHold": 40.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [],
+      "drawdown": {
+        "pct": null,
+        "abs": null,
+        "at": "",
+        "peakAt": ""
+      },
+      "annualized": {
+        "rate": null,
+        "years": 0.0,
+        "count": 0,
+        "first": "",
+        "last": ""
+      }
+    },
+    "years": [],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2025-03",
+        "label": "Mar '25",
+        "value": 3142.5,
+        "count": 2,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "ASTS",
+        "pnl": 3142.5,
+        "n": 2,
+        "legs": 2,
+        "winRate": 1.0,
+        "avgHold": 40.5,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        }
+      ],
+      "ungraded": 2,
+      "graded": 0
+    },
+    "queue": [
+      {
+        "id": "rt:sto",
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "date": "2025-03-07",
+        "pnl": 643.5,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      },
+      {
+        "id": "rt:b1",
+        "symbol": "ASTS",
+        "date": "2025-03-07",
+        "pnl": 2499.0,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:sto",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Options",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-o-asts",
+        "side": "COVER",
+        "openDirection": "SHORT",
+        "qty": 3.0,
+        "mult": 100,
+        "entry": 1.5,
+        "exit": 0.0,
+        "entryDate": "2025-02-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-02-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 25,
+        "pnl": 450.0,
+        "pnlCad": 643.5,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 1.0,
+        "legs": [
+          {
+            "key": "sto|asg|3.00000000",
+            "qty": 3.0,
+            "entry": 1.5,
+            "exit": 0.0,
+            "entryDate": "2025-02-10",
+            "exitDate": "2025-03-07",
+            "pnl": 450.0,
+            "pnlCad": 643.5,
+            "fees": 0.0,
+            "buyActivityId": "sto",
+            "sellActivityId": "asg",
+            "flags": []
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "asg",
+            "when": "2025-03-07T15:00:00+00:00",
+            "date": "2025-03-07",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY TO CLOSE",
+            "qty": 3.0,
+            "price": 0.0,
+            "amount": 9300.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          },
+          {
+            "id": "sto",
+            "when": "2025-02-10T15:00:00+00:00",
+            "date": "2025-02-10",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL TO OPEN",
+            "qty": -3.0,
+            "price": 1.5,
+            "amount": 450.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 3.0,
+          "avg": 1.5,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 3.0,
+          "avg": 0.0,
+          "fills": 1
+        },
+        "netCash": 450.0,
+        "flags": [],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Shares",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-s-asts",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 300.0,
+        "mult": 1,
+        "entry": 25.0,
+        "exit": 31.0,
+        "entryDate": "2025-01-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-01-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 56,
+        "pnl": 1800.0,
+        "pnlCad": 2499.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.24,
+        "legs": [
+          {
+            "key": "b1|assign-shares:asg|300.00000000",
+            "qty": 300.0,
+            "entry": 25.0,
+            "exit": 31.0,
+            "entryDate": "2025-01-10",
+            "exitDate": "2025-03-07",
+            "pnl": 1800.0,
+            "pnlCad": 2499.0,
+            "fees": 0.0,
+            "buyActivityId": "b1",
+            "sellActivityId": "assign-shares:asg",
+            "flags": [
+              "assignment"
+            ]
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "assign-shares:asg",
+            "when": "2025-03-07T15:00:00+00:00",
+            "date": "2025-03-07",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL",
+            "qty": -300.0,
+            "price": 31.0,
+            "amount": 9300.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": [
+              "assignment"
+            ]
+          },
+          {
+            "id": "b1",
+            "when": "2025-01-10T15:00:00+00:00",
+            "date": "2025-01-10",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY",
+            "qty": 300.0,
+            "price": 25.0,
+            "amount": -7500.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 300.0,
+          "avg": 25.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 300.0,
+          "avg": 31.0,
+          "fills": 1
+        },
+        "netCash": 1800.0,
+        "flags": [
+          "assignment"
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 2,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 3
+  },
+  "wire": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-06",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2025-03-07",
+      "benchmarkLast": ""
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "Trading"
+      ],
+      "symbols": [
+        "ASTS",
+        "ASTS 07MAR25 31.00 CALL"
+      ],
+      "listings": {
+        "ASTS 07MAR25 31.00 CALL": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "ASTS": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "USD"
+        }
+      },
+      "tags": [],
+      "exchanges": [
+        "NASDAQ"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2025"
+      ]
+    },
+    "kpi": {
+      "realized": 3142.5,
+      "count": 2,
+      "wins": 2,
+      "losses": 0,
+      "breakeven": 0,
+      "winRate": 1.0,
+      "grossWin": 3142.5,
+      "grossLoss": 0,
+      "profitFactor": null,
+      "profitFactorInfinite": true,
+      "expectancy": 1571.25,
+      "avgWin": 1571.25,
+      "avgLoss": 0.0,
+      "fees": 0.0,
+      "avgHold": 40.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [],
+      "drawdown": {
+        "pct": null,
+        "abs": null,
+        "at": "",
+        "peakAt": ""
+      },
+      "annualized": {
+        "rate": null,
+        "years": 0.0,
+        "count": 0,
+        "first": "",
+        "last": ""
+      }
+    },
+    "years": [],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2025-03",
+        "label": "Mar '25",
+        "value": 3142.5,
+        "count": 2,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "ASTS",
+        "pnl": 3142.5,
+        "n": 2,
+        "legs": 2,
+        "winRate": 1.0,
+        "avgHold": 40.5,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        }
+      ],
+      "ungraded": 2,
+      "graded": 0
+    },
+    "queue": [
+      {
+        "id": "rt:sto",
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "date": "2025-03-07",
+        "pnl": 643.5,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      },
+      {
+        "id": "rt:b1",
+        "symbol": "ASTS",
+        "date": "2025-03-07",
+        "pnl": 2499.0,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:sto",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Options",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-o-asts",
+        "side": "COVER",
+        "openDirection": "SHORT",
+        "qty": 3.0,
+        "mult": 100,
+        "entry": 1.5,
+        "exit": 0.0,
+        "entryDate": "2025-02-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-02-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 25,
+        "pnl": 450.0,
+        "pnlCad": 643.5,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 1.0,
+        "legCount": 1,
+        "opened": {
+          "qty": 3.0,
+          "avg": 1.5,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 3.0,
+          "avg": 0.0,
+          "fills": 1
+        },
+        "netCash": 450.0,
+        "flags": [],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Shares",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-s-asts",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 300.0,
+        "mult": 1,
+        "entry": 25.0,
+        "exit": 31.0,
+        "entryDate": "2025-01-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-01-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 56,
+        "pnl": 1800.0,
+        "pnlCad": 2499.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.24,
+        "legCount": 1,
+        "opened": {
+          "qty": 300.0,
+          "avg": 25.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 300.0,
+          "avg": 31.0,
+          "fills": 1
+        },
+        "netCash": 1800.0,
+        "flags": [
+          "assignment"
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 2,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 3
+  },
+  "wireWithDetail": {
+    "ok": true,
+    "generated": "",
+    "today": "2026-09-06",
+    "syncedAt": "",
+    "currency": "CAD",
+    "market": {
+      "fxLast": "2025-03-07",
+      "benchmarkLast": ""
+    },
+    "filters": {
+      "lists": {
+        "account": [],
+        "symbol": [],
+        "grade": [],
+        "tag": [],
+        "kind": [],
+        "exchange": [],
+        "side": [],
+        "result": []
+      },
+      "ranges": {
+        "price": {
+          "op": ">",
+          "v": null
+        },
+        "hold": {
+          "op": ">",
+          "v": null
+        },
+        "pnl": {
+          "op": ">",
+          "v": null
+        },
+        "qty": {
+          "op": ">",
+          "v": null
+        }
+      },
+      "preset": "all",
+      "years": [],
+      "from": "",
+      "to": "",
+      "search": "",
+      "benchmark": "SP500"
+    },
+    "options": {
+      "accounts": [
+        "Trading"
+      ],
+      "symbols": [
+        "ASTS",
+        "ASTS 07MAR25 31.00 CALL"
+      ],
+      "listings": {
+        "ASTS 07MAR25 31.00 CALL": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Options",
+          "currency": "USD"
+        },
+        "ASTS": {
+          "name": "AST SpaceMobile",
+          "exchange": "NASDAQ",
+          "kind": "Shares",
+          "currency": "USD"
+        }
+      },
+      "tags": [],
+      "exchanges": [
+        "NASDAQ"
+      ],
+      "kinds": [
+        "Shares",
+        "Options"
+      ],
+      "grades": [
+        "A",
+        "B",
+        "C",
+        "F",
+        "Ungraded"
+      ],
+      "sides": [
+        "SELL",
+        "COVER"
+      ],
+      "results": [
+        "Winners",
+        "Losers",
+        "Breakeven"
+      ],
+      "years": [
+        "2025"
+      ]
+    },
+    "kpi": {
+      "realized": 3142.5,
+      "count": 2,
+      "wins": 2,
+      "losses": 0,
+      "breakeven": 0,
+      "winRate": 1.0,
+      "grossWin": 3142.5,
+      "grossLoss": 0,
+      "profitFactor": null,
+      "profitFactorInfinite": true,
+      "expectancy": 1571.25,
+      "avgWin": 1571.25,
+      "avgLoss": 0.0,
+      "fees": 0.0,
+      "avgHold": 40.5,
+      "openCount": 0
+    },
+    "equity": {
+      "label": "All accounts",
+      "series": [],
+      "drawdown": {
+        "pct": null,
+        "abs": null,
+        "at": "",
+        "peakAt": ""
+      },
+      "annualized": {
+        "rate": null,
+        "years": 0.0,
+        "count": 0,
+        "first": "",
+        "last": ""
+      }
+    },
+    "years": [],
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "monthly": [
+      {
+        "key": "2025-03",
+        "label": "Mar '25",
+        "value": 3142.5,
+        "count": 2,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "bySymbol": [
+      {
+        "symbol": "ASTS",
+        "pnl": 3142.5,
+        "n": 2,
+        "legs": 2,
+        "winRate": 1.0,
+        "avgHold": 40.5,
+        "tradeIds": [
+          "rt:sto",
+          "rt:b1"
+        ]
+      }
+    ],
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0,
+          "tradeIds": []
+        }
+      ],
+      "ungraded": 2,
+      "graded": 0
+    },
+    "queue": [
+      {
+        "id": "rt:sto",
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "date": "2025-03-07",
+        "pnl": 643.5,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      },
+      {
+        "id": "rt:b1",
+        "symbol": "ASTS",
+        "date": "2025-03-07",
+        "pnl": 2499.0,
+        "currency": "CAD",
+        "missing": "no grade or thesis"
+      }
+    ],
+    "trades": [
+      {
+        "id": "rt:sto",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS 07MAR25 31.00 CALL",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Options",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-o-asts",
+        "side": "COVER",
+        "openDirection": "SHORT",
+        "qty": 3.0,
+        "mult": 100,
+        "entry": 1.5,
+        "exit": 0.0,
+        "entryDate": "2025-02-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-02-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 25,
+        "pnl": 450.0,
+        "pnlCad": 643.5,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 1.0,
+        "legs": [
+          {
+            "key": "sto|asg|3.00000000",
+            "qty": 3.0,
+            "entry": 1.5,
+            "exit": 0.0,
+            "entryDate": "2025-02-10",
+            "exitDate": "2025-03-07",
+            "pnl": 450.0,
+            "pnlCad": 643.5,
+            "fees": 0.0,
+            "buyActivityId": "sto",
+            "sellActivityId": "asg",
+            "flags": []
+          }
+        ],
+        "legCount": 1,
+        "fills": [
+          {
+            "id": "asg",
+            "when": "2025-03-07T15:00:00+00:00",
+            "date": "2025-03-07",
+            "time": "08:00",
+            "side": "BUY",
+            "sub": "BUY TO CLOSE",
+            "qty": 3.0,
+            "price": 0.0,
+            "amount": 9300.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          },
+          {
+            "id": "sto",
+            "when": "2025-02-10T15:00:00+00:00",
+            "date": "2025-02-10",
+            "time": "08:00",
+            "side": "SELL",
+            "sub": "SELL TO OPEN",
+            "qty": -3.0,
+            "price": 1.5,
+            "amount": 450.0,
+            "fees": 0.0,
+            "currency": "USD",
+            "flags": []
+          }
+        ],
+        "opened": {
+          "qty": 3.0,
+          "avg": 1.5,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 3.0,
+          "avg": 0.0,
+          "fills": 1
+        },
+        "netCash": 450.0,
+        "flags": [],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      },
+      {
+        "id": "rt:b1",
+        "status": "closed",
+        "locked": false,
+        "symbol": "ASTS",
+        "underlying": "ASTS",
+        "name": "AST SpaceMobile",
+        "exchange": "NASDAQ",
+        "kind": "Shares",
+        "currency": "USD",
+        "account": "Trading",
+        "accountId": "acct-1",
+        "securityId": "sec-s-asts",
+        "side": "SELL",
+        "openDirection": "LONG",
+        "qty": 300.0,
+        "mult": 1,
+        "entry": 25.0,
+        "exit": 31.0,
+        "entryDate": "2025-01-10",
+        "exitDate": "2025-03-07",
+        "entryWhen": "2025-01-10T15:00:00+00:00",
+        "exitWhen": "2025-03-07T15:00:00+00:00",
+        "holdDays": 56,
+        "pnl": 1800.0,
+        "pnlCad": 2499.0,
+        "fees": 0.0,
+        "feesCad": 0.0,
+        "pnlPct": 0.24,
+        "legCount": 1,
+        "opened": {
+          "qty": 300.0,
+          "avg": 25.0,
+          "fills": 1
+        },
+        "closed": {
+          "qty": 300.0,
+          "avg": 31.0,
+          "fills": 1
+        },
+        "netCash": 1800.0,
+        "flags": [
+          "assignment"
+        ],
+        "grade": "",
+        "thesis": "",
+        "tags": []
+      }
+    ],
+    "tradeCount": 2,
+    "tradeTotal": 2,
+    "positions": [],
+    "positionsSummary": {
+      "count": 0,
+      "book": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "portfolio": {
+      "allocation": [],
+      "sectors": [],
+      "regions": [],
+      "marketValue": 0,
+      "costBasis": 0,
+      "unrealized": 0,
+      "unrealizedPct": null,
+      "positionCount": 0,
+      "accountCount": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "hasMargin": false,
+      "cash": 0,
+      "cashPct": null,
+      "dayChange": null,
+      "dayChangePct": null
+    },
+    "markets": {
+      "holdings": [],
+      "watchlist": [],
+      "news": [],
+      "universes": {},
+      "tiles": [
+        {
+          "symbol": "SPX",
+          "exchange": "Index",
+          "label": "SPX",
+          "name": "S&P 500",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "NDX",
+          "exchange": "Index",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "DJI",
+          "exchange": "Index",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "VIX",
+          "exchange": "Index",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "kind": "Index",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "label": "GOLD",
+          "name": "Gold",
+          "kind": "Commodity",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 2
+        },
+        {
+          "symbol": "BTCUSD",
+          "exchange": "FX",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "kind": "Currency",
+          "last": null,
+          "change": null,
+          "percentChange": null,
+          "decimals": 0
+        }
+      ],
+      "instruments": [
+        {
+          "symbol": "SPX",
+          "label": "SPX",
+          "name": "S&P 500",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "S&P",
+            "S&P500",
+            "SP500",
+            "GSPC"
+          ]
+        },
+        {
+          "symbol": "NDX",
+          "label": "NDX",
+          "name": "Nasdaq 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ100",
+            "NASDAQ 100"
+          ]
+        },
+        {
+          "symbol": "IXIC",
+          "label": "IXIC",
+          "name": "Nasdaq Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NASDAQ",
+            "COMP"
+          ]
+        },
+        {
+          "symbol": "DJI",
+          "label": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DJIA",
+            "DOW",
+            "DOW JONES"
+          ]
+        },
+        {
+          "symbol": "RUT",
+          "label": "RUT",
+          "name": "Russell 2000",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "RUSSELL",
+            "RUSSELL 2000"
+          ]
+        },
+        {
+          "symbol": "VIX",
+          "label": "VIX",
+          "name": "CBOE Volatility Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "VOLATILITY"
+          ]
+        },
+        {
+          "symbol": "TSX",
+          "label": "TSX",
+          "name": "S&P/TSX Composite",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GSPTSE",
+            "TSX COMPOSITE",
+            "S&P/TSX"
+          ]
+        },
+        {
+          "symbol": "FTSE",
+          "label": "FTSE",
+          "name": "FTSE 100",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "FTSE 100"
+          ]
+        },
+        {
+          "symbol": "DAX",
+          "label": "DAX",
+          "name": "DAX",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "GDAXI"
+          ]
+        },
+        {
+          "symbol": "N225",
+          "label": "N225",
+          "name": "Nikkei 225",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "NIKKEI",
+            "NIKKEI 225"
+          ]
+        },
+        {
+          "symbol": "HSI",
+          "label": "HSI",
+          "name": "Hang Seng",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "HANG SENG"
+          ]
+        },
+        {
+          "symbol": "STOXX50E",
+          "label": "STOXX50E",
+          "name": "Euro Stoxx 50",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "STOXX",
+            "EURO STOXX"
+          ]
+        },
+        {
+          "symbol": "DXY",
+          "label": "DXY",
+          "name": "US Dollar Index",
+          "exchange": "Index",
+          "kind": "Index",
+          "aliases": [
+            "DOLLAR INDEX"
+          ]
+        },
+        {
+          "symbol": "ES",
+          "label": "ES",
+          "name": "S&P 500 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "ES=F",
+            "S&P FUTURES",
+            "S&P 500 FUTURES",
+            "SPX FUTURES",
+            "ES FUTURES",
+            "FUTURES"
+          ]
+        },
+        {
+          "symbol": "NQ",
+          "label": "NQ",
+          "name": "Nasdaq 100 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "NQ=F",
+            "NASDAQ FUTURES",
+            "NASDAQ 100 FUTURES",
+            "NQ FUTURES"
+          ]
+        },
+        {
+          "symbol": "YM",
+          "label": "YM",
+          "name": "Dow E-mini futures",
+          "exchange": "CBOT",
+          "kind": "Future",
+          "aliases": [
+            "YM=F",
+            "DOW FUTURES",
+            "YM FUTURES"
+          ]
+        },
+        {
+          "symbol": "RTY",
+          "label": "RTY",
+          "name": "Russell 2000 E-mini futures",
+          "exchange": "CME",
+          "kind": "Future",
+          "aliases": [
+            "RTY=F",
+            "RUSSELL FUTURES",
+            "RTY FUTURES"
+          ]
+        },
+        {
+          "symbol": "CL",
+          "label": "WTI",
+          "name": "Crude Oil (WTI)",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "WTI",
+            "CRUDE",
+            "OIL",
+            "CRUDE OIL"
+          ]
+        },
+        {
+          "symbol": "BZ",
+          "label": "BRENT",
+          "name": "Brent Crude Oil",
+          "exchange": "ICE",
+          "kind": "Commodity",
+          "aliases": [
+            "BRENT"
+          ]
+        },
+        {
+          "symbol": "NG",
+          "label": "NATGAS",
+          "name": "Natural Gas",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "NATGAS",
+            "NATURAL GAS",
+            "GAS"
+          ]
+        },
+        {
+          "symbol": "GC",
+          "label": "GOLD",
+          "name": "Gold",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "GOLD"
+          ]
+        },
+        {
+          "symbol": "SI",
+          "label": "SILVER",
+          "name": "Silver",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "SILVER"
+          ]
+        },
+        {
+          "symbol": "HG",
+          "label": "COPPER",
+          "name": "Copper",
+          "exchange": "COMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "COPPER"
+          ]
+        },
+        {
+          "symbol": "PL",
+          "label": "PLATINUM",
+          "name": "Platinum",
+          "exchange": "NYMEX",
+          "kind": "Commodity",
+          "aliases": [
+            "PLATINUM"
+          ]
+        },
+        {
+          "symbol": "ZC",
+          "label": "CORN",
+          "name": "Corn",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "CORN"
+          ]
+        },
+        {
+          "symbol": "ZW",
+          "label": "WHEAT",
+          "name": "Wheat",
+          "exchange": "CBOT",
+          "kind": "Commodity",
+          "aliases": [
+            "WHEAT"
+          ]
+        },
+        {
+          "symbol": "TNX",
+          "label": "10Y",
+          "name": "US 10-Year Treasury Yield",
+          "exchange": "Index",
+          "kind": "Rate",
+          "aliases": [
+            "10Y",
+            "10-YEAR",
+            "10 YEAR",
+            "TREASURY",
+            "YIELD"
+          ]
+        },
+        {
+          "symbol": "ZQ",
+          "label": "FED FUNDS",
+          "name": "30-Day Federal Funds futures",
+          "exchange": "CBOT",
+          "kind": "Rate",
+          "aliases": [
+            "FED",
+            "FED FUNDS",
+            "FED FUNDS FUTURES",
+            "FEDERAL FUNDS",
+            "FOMC",
+            "POLICY RATE",
+            "ZQ=F"
+          ]
+        },
+        {
+          "symbol": "SR3",
+          "label": "SOFR",
+          "name": "Three-Month SOFR futures",
+          "exchange": "CME",
+          "kind": "Rate",
+          "aliases": [
+            "SOFR",
+            "SOFR FUTURES",
+            "THREE-MONTH SOFR",
+            "SR3=F"
+          ]
+        },
+        {
+          "symbol": "USDCAD",
+          "label": "USD/CAD",
+          "name": "US Dollar / Canadian Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/CAD",
+            "CAD",
+            "LOONIE"
+          ]
+        },
+        {
+          "symbol": "EURUSD",
+          "label": "EUR/USD",
+          "name": "Euro / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "EUR/USD",
+            "EURO"
+          ]
+        },
+        {
+          "symbol": "GBPUSD",
+          "label": "GBP/USD",
+          "name": "British Pound / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "GBP/USD",
+            "POUND"
+          ]
+        },
+        {
+          "symbol": "USDJPY",
+          "label": "USD/JPY",
+          "name": "US Dollar / Japanese Yen",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "USD/JPY",
+            "YEN"
+          ]
+        },
+        {
+          "symbol": "BTCUSD",
+          "label": "BITCOIN",
+          "name": "Bitcoin / US Dollar",
+          "exchange": "FX",
+          "kind": "Currency",
+          "aliases": [
+            "BITCOIN",
+            "BTC"
+          ]
+        }
+      ]
+    },
+    "cashflow": {
+      "tiles": [
+        {
+          "label": "2024",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2025",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "2026 YTD",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "All time",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Last 12 months",
+          "total": 0,
+          "perMonth": 0.0,
+          "count": 0
+        },
+        {
+          "label": "Yield on cost",
+          "yield": null,
+          "projected": 0.0,
+          "earned": 0,
+          "book": 0
+        }
+      ],
+      "months": [],
+      "holdings": [],
+      "rows": [],
+      "other": [],
+      "total": 0,
+      "count": 0,
+      "skippedFilters": [],
+      "interest": 0.0,
+      "withholding": 0.0
+    },
+    "unmatched": [],
+    "accounts": [],
+    "activityCount": 3
+  },
+  "tradeDetail": {
+    "id": "rt:sto",
+    "legs": [
+      {
+        "key": "sto|asg|3.00000000",
+        "qty": 3.0,
+        "entry": 1.5,
+        "exit": 0.0,
+        "entryDate": "2025-02-10",
+        "exitDate": "2025-03-07",
+        "pnl": 450.0,
+        "pnlCad": 643.5,
+        "fees": 0.0,
+        "buyActivityId": "sto",
+        "sellActivityId": "asg",
+        "flags": []
+      }
+    ],
+    "fills": [
+      {
+        "id": "asg",
+        "when": "2025-03-07T15:00:00+00:00",
+        "date": "2025-03-07",
+        "time": "08:00",
+        "side": "BUY",
+        "sub": "BUY TO CLOSE",
+        "qty": 3.0,
+        "price": 0.0,
+        "amount": 9300.0,
+        "fees": 0.0,
+        "currency": "USD",
+        "flags": []
+      },
+      {
+        "id": "sto",
+        "when": "2025-02-10T15:00:00+00:00",
+        "date": "2025-02-10",
+        "time": "08:00",
+        "side": "SELL",
+        "sub": "SELL TO OPEN",
+        "qty": -3.0,
+        "price": 1.5,
+        "amount": 450.0,
+        "fees": 0.0,
+        "currency": "USD",
+        "flags": []
+      }
+    ]
+  }
+}
