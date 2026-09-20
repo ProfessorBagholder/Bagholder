@@ -20,12 +20,26 @@
   let H = $state(0)
   const layout = $derived(W > 0 && H > 0 && tiles.length ? heatmapLayout(tiles, W, H) : { blocks: [], cells: [] })
 
+  // A tile is kept under its symbol so it travels; what a symbol alone does not tell apart
+  // is told apart by more: a sector's folded remainder by its sector (two sectors may each
+  // fold to `Other (2)`), a symbol met twice by its venue and then by its place.
+  const cells = $derived.by(() => {
+    const taken = new Set<string>()
+    return layout.cells.map((c, i) => {
+      let key = c.other ? 'other|' + c.sector : c.symbol
+      if (taken.has(key)) key += '|' + (c.exchange || '')
+      if (taken.has(key)) key += '|' + i
+      taken.add(key)
+      return { ...c, key }
+    })
+  })
+
   // arrival tracking, mirroring mountHeatmap's `had`/`fresh`
   let seen = new Set<string>()
   let had = false
   let fresh = $state(new Set<string>())
   $effect(() => {
-    const keys = new Set(layout.cells.map((c) => c.symbol))
+    const keys = new Set(cells.map((c) => c.key))
     if (had) fresh = new Set([...keys].filter((k) => !seen.has(k)))
     seen = keys
     if (keys.size) had = true
@@ -60,11 +74,11 @@
       <div class="heat-hd"><span class="heat-hl">{b.label}</span><span class="num" style="margin-left:auto;font-weight:400;color:{blkColor(b.chg)}">{signedPct(b.chg)}</span></div>
     </div>
   {/each}
-  {#each layout.cells as c (c.symbol)}
+  {#each cells as c (c.key)}
     <div
       class="heat-tile"
       class:go={opens(c)}
-      class:bh-new={fresh.has(c.symbol)}
+      class:bh-new={fresh.has(c.key)}
       style="left:{px1(c.x + 1)};top:{px1(c.y + 1)};width:{px1(Math.max(0, c.w - 2))};height:{px1(Math.max(0, c.h - 2))};background:{heatColor(c.percentChange)}"
       data-sym={c.other ? c.symbol : bareSymbol(c.symbol)}
       data-tip-sub={c.name || ''}

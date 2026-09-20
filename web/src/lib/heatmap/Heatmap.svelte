@@ -1,8 +1,7 @@
 <script lang="ts">
-  // The heatmap card (heatmapCardHtml) and, expanded, the full-page view
-  // (heatmapFullHtml at #heatFull). The reference page reaches the full view by a
-  // route; because this migration may not add routes, the expander opens it as a
-  // fixed overlay instead — the same #heatFull markup, the same controls.
+  // The heatmap: Markets' card (heatmapCardHtml) and, with `alone`, the heatmap on its
+  // own at `#heatmap/...` (heatmapFullHtml) -- the same header row, the same box, the
+  // window to itself.
   import type { Markets } from '../model'
   import type { Tile } from './treemap'
   import { heatColor } from './treemap'
@@ -11,33 +10,14 @@
   import Icon from '../markets/Icon.svelte'
   import HeatBox from './HeatBox.svelte'
   import { request } from '../api'
-  
-  let { markets }: { markets: Markets } = $props()
+  import { go, goHash, rewrite, route } from '../router.svelte'
+  import { heat, show, remember, heatHash, applyAddress, nextScope, MARKET_U, EVERY_SCOPE } from './heat.svelte'
 
-  const MARKET_U: Record<string, string> = { ca: 'Canada', us: 'US', intl: 'International' }
-  const HEAT_UNIVERSES = ['holdings', 'watchlist', 'both', 'ca', 'us', 'intl']
+  let { markets, alone = false }: { markets: Markets; alone?: boolean } = $props()
+
   const UNIVERSE_OPTS = [['holdings', 'Holdings'], ['watchlist', 'Watchlist'], ['both', 'Both'], '|', ['ca', 'Canada'], ['us', 'US'], ['intl', 'International']] as const
   const SIZE_OPTS = [['value', 'Market value'], ['equal', 'Equal']] as const
   const LEGEND = [-3, -2, -1, -0.2, 0.2, 1, 2, 3]
-
-  function load(): { universe: string; size: string } {
-    try {
-      return { universe: 'holdings', size: 'value', ...JSON.parse(localStorage.getItem('bh2.heatmap') || '{}') }
-    } catch {
-      return { universe: 'holdings', size: 'value' }
-    }
-  }
-  let heat = $state(load())
-  function save() {
-    try {
-      localStorage.setItem('bh2.heatmap', JSON.stringify(heat))
-    } catch {
-      /* ignore */
-    }
-  }
-
-  let full = $state(false)
-  let cycling = $state(false)
 
   // ledger's heatTiles: the tiles for the chosen universe
   function heatTilesFor(h: { universe: string; size: string }): Tile[] {
@@ -56,51 +36,47 @@
   }
   const tiles = $derived(heatTilesFor(heat))
   const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? 'Not read yet.' : 'No open positions.')
+  const unread = (u: string) => !!MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length
+  const readMarkets = () => void request('POST', '/api/markets/refresh', {})
 
   function pick(patch: Partial<typeof heat>) {
-    if ('universe' in patch && cycling) cycling = false // a scope picked by hand ends the cycling
-    heat = { ...heat, ...patch }
-    save()
-    // a market universe never read: ask for it now
-    if (MARKET_U[heat.universe] && !((markets.universes as Record<string, unknown[]>)[heat.universe] || []).length) request('POST', '/api/markets/refresh', {})
+    if ('universe' in patch) show.on = null // a scope picked by hand ends the cycling
+    Object.assign(heat, patch)
+    remember()
+    if (unread(heat.universe)) readMarkets() // a market universe never read: ask for it now
+    if (alone) rewrite(heatHash()) // the address stays true, without a history entry
   }
 
-  // the slideshow: every 20s, the next scope with something to show
+  // on its own, the address says what to show: a bookmark lands where the view was left
   $effect(() => {
-    if (!cycling || !full) return
+    if (alone && route.heat) applyAddress(route.heat)
+  })
+
+  // The slideshow: after each dwell, the next scope with something to show. The dwell is
+  // the reader's own figure, from the address or the play button -- a timer by nature.
+  $effect(() => {
+    const s = show.on
+    if (!alone || !s) return
     const id = setInterval(() => {
-      const i = Math.max(0, HEAT_UNIVERSES.indexOf(heat.universe))
-      for (let k = 1; k <= HEAT_UNIVERSES.length; k++) {
-        const u = HEAT_UNIVERSES[(i + k) % HEAT_UNIVERSES.length]
-        const next = { ...heat, universe: u }
-        if (MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length) request('POST', '/api/markets/refresh', {})
-        if (heatTilesFor(next).length) {
-          heat = next
-          save()
-          break
+      let asked = false
+      const next = nextScope(s.list, heat.universe, (u) => heatTilesFor({ ...heat, universe: u }).length > 0, (u) => {
+        if (unread(u) && !asked) {
+          asked = true
+          readMarkets()
         }
-      }
-    }, 20000)
+      })
+      if (next === heat.universe) return
+      heat.universe = next
+      remember()
+    }, s.seconds * 1000)
     return () => clearInterval(id)
   })
 
-  function closeFull() {
-    full = false
-    cycling = false
-  }
-
-  // Escape leaves the full-page heatmap (the reference does this from its route).
-  // Capture phase so it runs before App's global Escape cascade, and stop there.
-  function onKeyCapture(e: KeyboardEvent) {
-    if (full && e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      closeFull()
-    }
+  function toggleShow() {
+    show.on = show.on ? null : { ...EVERY_SCOPE }
+    rewrite(heatHash()) // a bookmark of a running show restarts it
   }
 </script>
-
-<svelte:window onkeydowncapture={onKeyCapture} />
 
 {#snippet header(isFull: boolean)}
   <div style="display:flex;align-items:center;gap:14px{isFull ? '' : ';margin-bottom:12px'}">
@@ -113,43 +89,30 @@
       <span>+3%</span>
     </span>
     {#if isFull}
-      <button class="heat-ghost" aria-label={cycling ? 'Stop cycling' : 'Cycle through the scopes'} onclick={() => (cycling = !cycling)}><Icon d={cycling ? ICONS.pause : ICONS.play} size={14} /></button>
-      <button class="heat-ghost" aria-label="Back to Markets" onclick={closeFull}><Icon d={ICONS.x} size={14} /></button>
+      <button class="heat-ghost" aria-label={show.on ? 'Stop cycling' : 'Cycle through the scopes'} onclick={toggleShow}><Icon d={show.on ? ICONS.pause : ICONS.play} size={14} /></button>
+      <button class="heat-ghost" aria-label="Back to Markets" onclick={() => go('markets')}><Icon d={ICONS.x} size={14} /></button>
     {:else}
-      <button class="heat-ghost" aria-label="Heatmap on its own" onclick={() => (full = true)}><Icon d={ICONS.arrowsOut} size={14} /></button>
+      <button class="heat-ghost" aria-label="Heatmap on its own" onclick={() => goHash(heatHash())}><Icon d={ICONS.arrowsOut} size={14} /></button>
     {/if}
   </div>
 {/snippet}
 
-<div class="card elev-sm" style="padding:14px 16px 16px">
-  {@render header(false)}
-  {#if tiles.length}
-    <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
-  {:else}
-    <div class="muted empty" style="font-size:12px">{emptyWord}</div>
-  {/if}
-</div>
-
-{#if full}
-  <div class="heat-full-scrim">
-    <div id="heatFull">
-      {@render header(true)}
-      {#if tiles.length}
-        <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
-      {:else}
-        <div class="muted empty" style="font-size:12px">{emptyWord}</div>
-      {/if}
-    </div>
+{#if alone}
+  <div id="heatFull">
+    {@render header(true)}
+    {#if tiles.length}
+      <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
+    {:else}
+      <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+    {/if}
+  </div>
+{:else}
+  <div class="card elev-sm" style="padding:14px 16px 16px">
+    {@render header(false)}
+    {#if tiles.length}
+      <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
+    {:else}
+      <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+    {/if}
   </div>
 {/if}
-
-<style>
-  /* the reference page renders #heatFull as its own route; here it is an overlay
-     over the app, on the page's own background */
-  .heat-full-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    background: var(--bg);
-  }
-</style>

@@ -31,6 +31,7 @@
   import { dismissInnermost } from './lib/escape'
   import Empty from './lib/Empty.svelte'
   import Skeleton from './lib/Skeleton.svelte'
+  import Heatmap from './lib/heatmap/Heatmap.svelte'
   import { minuteNow } from './lib/clock.svelte'
   import { startCutTip } from './lib/cuttip'
   import { startScrollbars } from './lib/scrollbars'
@@ -128,6 +129,11 @@
       }
       return
     }
+    // the heatmap on its own: Esc returns to Markets, and there are no tabs for the arrows to move
+    if (route.heat && !ui.confirm && !ui.modal) {
+      if (e.key === 'Escape') { e.preventDefault(); go('markets') }
+      if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') return
+    }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.modal && !ui.confirm && !isFieldFocused()) {
       const j = TABS.indexOf(route.tab) + (e.key === 'ArrowRight' ? 1 : -1)
       if (j >= 0 && j < TABS.length) { e.preventDefault(); go(TABS[j]) }
@@ -155,6 +161,10 @@
           null
       : null,
   )
+  // the heatmap on its own: no header, no tabs, no frame
+  $effect(() => {
+    document.documentElement.classList.toggle('display-heat', !!route.heat)
+  })
   // the wheel over an open panel must not move the page behind it
   $effect(() => {
     document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ui.ordersOpen || ui.notesOpen))
@@ -260,6 +270,14 @@
 
 <svelte:window onkeydown={onKey} onpointerdown={onDocPointerDown} />
 
+{#if route.heat && !showingEmpty && !(store.error && !store.model)}
+  {#if store.model}
+    <Heatmap markets={store.model.markets} alone />
+  {:else}
+    <!-- a wall display starting up: the window is the heatmap's from the first frame -->
+    <div id="heatFull" aria-hidden="true"><div class="bhsk" style="width:220px;height:22px"></div><div class="bhsk" style="flex:1;min-height:0;border-radius:5px;animation-delay:120ms"></div></div>
+  {/if}
+{:else}
   <!-- header: drawn before the model is, so the app is there at once -->
   <div id="hdr" style="display:flex;align-items:center;gap:22px;padding:12px 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
     <div style="display:flex;align-items:center;gap:9px;margin-right:8px">
@@ -361,6 +379,8 @@
     </div>
     {/if}
   </div>
+
+{/if}
 
   {#if ticketStore.t}<OrderTicket />{/if}
   {#if ui.ordersOpen}<OrdersPanel onclose={() => (ui.ordersOpen = false)} />{/if}

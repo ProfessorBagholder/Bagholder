@@ -18,17 +18,40 @@ const ALIAS: Record<string, Tab> = { positions: 'portfolio' }
 
 export function tabFromHash(hash: string): Tab {
   const h = hash.replace(/^#\/?/, '').split('/')[0]
+  if (h === 'heatmap') return 'markets' // the heatmap on its own is Markets' card, alone
   return (TABS as readonly string[]).includes(h) ? (h as Tab) : (ALIAS[h] ?? 'dashboard')
+}
+
+// The heatmap on its own, `#heatmap/<scopes>/<size>/<seconds>`: what its address asks
+// for. A list of scopes with a dwell of five seconds to an hour is a slideshow.
+export const HEAT_UNIVERSES = ['holdings', 'watchlist', 'both', 'ca', 'us', 'intl']
+export const HEAT_SIZES = ['value', 'equal']
+export interface HeatAddress {
+  list: string[]
+  size: string | null
+  seconds: number | null
+}
+export function heatFromHash(hash: string): HeatAddress | null {
+  const parts = decodeURIComponent(hash.replace(/^#\/?/, '')).split('/')
+  if (parts[0] !== 'heatmap') return null
+  const list = (parts[1] || '').split(',').filter((u) => HEAT_UNIVERSES.includes(u))
+  const secs = parseInt(parts[3], 10)
+  return {
+    list,
+    size: HEAT_SIZES.includes(parts[2]) ? parts[2] : null,
+    seconds: list.length > 1 && secs >= 5 && secs <= 3600 ? secs : null,
+  }
 }
 
 // The second path segment — a drill-down id (e.g. a selected trade), or null.
 export function subFromHash(hash: string): string | null {
   const parts = hash.replace(/^#\/?/, '').split('/')
+  if (parts[0] === 'heatmap') return null
   return parts.length > 1 && parts[1] ? decodeURIComponent(parts.slice(1).join('/')) : null
 }
 
 const initHash = typeof location !== 'undefined' ? location.hash : ''
-export const route = $state<{ tab: Tab; sub: string | null }>({ tab: tabFromHash(initHash), sub: subFromHash(initHash) })
+export const route = $state<{ tab: Tab; sub: string | null; heat: HeatAddress | null }>({ tab: tabFromHash(initHash), sub: subFromHash(initHash), heat: heatFromHash(initHash) })
 
 // Where the list was scrolled to when a row of it was opened: Back returns there,
 // and a page newly opened starts at its top.
@@ -39,6 +62,8 @@ let listScrollY = 0
 // time after it happens; the announcement still covers Back, Forward and an address typed.
 function follow(): void {
   const was = { tab: route.tab, sub: route.sub }
+  const heat = heatFromHash(location.hash)
+  if (JSON.stringify(heat) !== JSON.stringify(route.heat)) route.heat = heat
   route.tab = tabFromHash(location.hash)
   route.sub = subFromHash(location.hash)
   if (route.tab === was.tab && route.sub === was.sub) return
@@ -65,6 +90,18 @@ export function leaveSub(): void {
   if (!route.sub) return
   history.replaceState(null, '', '#' + route.tab)
   route.sub = null
+}
+
+/** Make the address say what the page now shows, without a history entry (the heatmap's controls, a slideshow started or stopped). */
+export function rewrite(hash: string): void {
+  history.replaceState(null, '', hash)
+  follow()
+}
+
+/** Go to an address the page writes itself. */
+export function goHash(hash: string): void {
+  location.hash = hash
+  follow()
 }
 
 export function go(tab: Tab): void {
