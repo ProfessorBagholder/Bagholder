@@ -155,13 +155,6 @@ impl App {
         self.stopping()
     }
 
-    /// Wait until the app stops, however long that is.
-    pub fn wait_stop(&self) {
-        let (m, c) = &self.stop_bell;
-        let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        drop(c.wait_while(g, |_| !self.stopping()));
-    }
-
     /// Stop: every waiter wakes at once.
     pub fn request_stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -169,6 +162,7 @@ impl App {
         self.stop_bell.1.notify_all();
         drop(_g);
         crate::events::signal(); // the streams and anything parked on a change, too
+        crate::notify::wake_streams();
     }
 
     /// The model as it stands: each layer rebuilt only when something it reads

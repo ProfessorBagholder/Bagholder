@@ -19,6 +19,10 @@
 //! view again only by connecting again, which it does when its filters or its
 //! open trade change. An idle stream carries a comment every fifteen seconds so
 //! a dead connection is noticed; that is the transport's keepalive, not a poll.
+//!
+//! A stream is a task on the runtime, not a thread: it sleeps on a channel until
+//! a signal (`changed`), and only the comparison itself (`Feed::step`) runs on a
+//! blocking thread, for as long as it takes.
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,12 +38,34 @@ fn bell() -> &'static (Mutex<u64>, Condvar) {
     B.get_or_init(|| (Mutex::new(0), Condvar::new()))
 }
 
+/// The same bell for whoever waits without a thread of its own (a page's stream
+/// is a task on the runtime): a channel that holds the count.
+fn ticker() -> &'static tokio::sync::watch::Sender<u64> {
+    static T: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
+    T.get_or_init(|| tokio::sync::watch::channel(0).0)
+}
+
 /// Something changed. Cheap, and safe to call from anywhere, SQLite's commit
 /// hook included: it counts and wakes, no more.
 pub fn signal() {
     let (m, c) = bell();
     *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
     c.notify_all();
+    ticker().send_modify(|n| *n = n.wrapping_add(1));
+}
+
+/// A receiver that is told of every signal from now on.
+pub fn subscribe() -> tokio::sync::watch::Receiver<u64> {
+    ticker().subscribe()
+}
+
+/// Wait for the next signal; then let the signals that follow it close behind
+/// settle (`GATHER`), so a burst reaches the page as one message.
+pub async fn changed(rx: &mut tokio::sync::watch::Receiver<u64>) {
+    if rx.changed().await.is_err() {
+        return std::future::pending().await; // the sender is a static: this cannot happen
+    }
+    while let Ok(Ok(())) = tokio::time::timeout(GATHER, rx.changed()).await {}
 }
 
 /// Pages connected now. What a periodic read of an outside source consults
@@ -109,31 +135,8 @@ pub fn park_until_or(most: Duration, ready: impl Fn() -> bool) -> bool {
 /// How long signals are gathered before the page is told. A quote pass commits a
 /// dozen rows one after another; they reach the page as one message.
 const GATHER: Duration = Duration::from_millis(40);
-const KEEPALIVE: Duration = Duration::from_secs(15);
-
-/// Wait for a signal after `seen`; then let the signals that follow it close
-/// behind settle. The count now, or `None` when the wait timed out.
-fn wait_for_change(seen: u64) -> Option<u64> {
-    let (m, c) = bell();
-    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
-    if *g == seen {
-        g = c.wait_timeout_while(g, KEEPALIVE, |n| *n == seen).unwrap_or_else(|e| e.into_inner()).0;
-        if *g == seen {
-            return None;
-        }
-    }
-    loop {
-        let at = *g;
-        g = c.wait_timeout_while(g, GATHER, |n| *n == at).unwrap_or_else(|e| e.into_inner()).0;
-        if *g == at {
-            return Some(at);
-        }
-    }
-}
-
-fn message(event: &str, data: &Value) -> String {
-    format!("event: {}\ndata: {}\n\n", event, data)
-}
+/// How often an idle stream carries a comment, so a dead connection is noticed.
+pub const KEEPALIVE: Duration = Duration::from_secs(15);
 
 // --- documents --------------------------------------------------------------------
 //
@@ -192,19 +195,38 @@ impl Drop for Registered {
     }
 }
 
-/// One page's stream. `write` sends text and says whether the page is still there.
-pub fn stream<W: FnMut(&str) -> bool>(filters: Option<Value>, detail: Option<String>, status: &dyn Fn() -> Value, mut write: W) {
-    let _watching = Watching::new();
-    let (registered, wanted) = Registered::new();
-    if !write(&message("hello", &serde_json::json!({"id": registered.0}))) {
-        return;
+/// One page's stream: what it was last sent, and so what to send it next.
+pub struct Feed {
+    _watching: Watching,
+    registered: Registered,
+    wanted: Arc<Mutex<Wanted>>,
+    filters: Option<Value>,
+    detail: Option<String>,
+    sent: Option<(Arc<Value>, Value)>,
+    sent_docs: std::collections::BTreeMap<String, Value>,
+}
+
+/// One message on the stream: its event name and its data.
+pub type Message = (&'static str, Value);
+
+impl Feed {
+    pub fn open(filters: Option<Value>, detail: Option<String>) -> Feed {
+        let (registered, wanted) = Registered::new();
+        Feed { _watching: Watching::new(), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
     }
-    let mut seen = *bell().0.lock().unwrap_or_else(|e| e.into_inner());
-    let mut sent: Option<(Arc<Value>, Value)> = None;
-    let mut sent_docs: std::collections::BTreeMap<String, Value> = Default::default();
-    while !app().stopping() {
-        let mut out = String::new();
-        let view = match std::panic::catch_unwind(|| app().view(filters.as_ref(), detail.as_deref())) {
+
+    /// The first message: the id the page names in `POST /api/events/watch`.
+    pub fn hello(&self) -> Message {
+        ("hello", serde_json::json!({"id": self.registered.0}))
+    }
+
+    /// What differs now from what this page was last sent: nothing when nothing
+    /// does. Reads the store and may rebuild a layer of the model, so it runs off
+    /// the runtime's own threads.
+    pub fn step(&mut self, status: &dyn Fn() -> Value) -> Vec<Message> {
+        let mut out: Vec<Message> = Vec::new();
+        let (filters, detail) = (self.filters.clone(), self.detail.clone());
+        let view = match std::panic::catch_unwind(move || app().view(filters.as_ref(), detail.as_deref())) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
         };
@@ -216,51 +238,40 @@ pub fn stream<W: FnMut(&str) -> bool>(filters: Option<Value>, detail: Option<Str
                 o.remove("dataVersion");
                 o.remove("coreVersion");
             }
-            match &sent {
+            match &self.sent {
                 None => {
                     let mut whole = (*view).clone();
                     whole["status"] = now.clone();
-                    out.push_str(&message("snapshot", &serde_json::json!({"doc": "model", "data": whole})));
+                    out.push(("snapshot", serde_json::json!({"doc": "model", "data": whole})));
                 }
                 Some((was, was_status)) => {
                     // the same view object is the same data: only a different one is compared
                     let mut ops = if Arc::ptr_eq(was, &view) { vec![] } else { patch::diff(was, &view) };
                     ops.extend(patch::diff_under(&["status"], was_status, &now));
                     if !ops.is_empty() {
-                        out.push_str(&message("patch", &serde_json::json!({"doc": "model", "ops": ops})));
+                        out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
                     }
                 }
             }
-            sent = Some((view, now));
+            self.sent = Some((view, now));
         }
         // the documents this page is showing now
-        let want: Wanted = wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        sent_docs.retain(|k, _| want.contains_key(k));
+        let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.sent_docs.retain(|k, _| want.contains_key(k));
         for (key, params) in &want {
             let Ok(Some(now)) = std::panic::catch_unwind(|| crate::docs::read(key, params)) else { continue };
-            match sent_docs.get(key) {
-                None => out.push_str(&message("snapshot", &serde_json::json!({"doc": key, "data": now}))),
+            match self.sent_docs.get(key) {
+                None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
                 Some(was) => {
                     let ops = patch::diff(was, &now);
                     if !ops.is_empty() {
-                        out.push_str(&message("patch", &serde_json::json!({"doc": key, "ops": ops})));
+                        out.push(("patch", serde_json::json!({"doc": key, "ops": ops})));
                     }
                 }
             }
-            sent_docs.insert(key.clone(), now);
+            self.sent_docs.insert(key.clone(), now);
         }
-        if !out.is_empty() && !write(&out) {
-            return;
-        }
-        // nothing is looked at again until something signals: a quiet stream only
-        // carries its keepalive
-        seen = loop {
-            match wait_for_change(seen) {
-                Some(n) => break n,
-                None if app().stopping() || !write(": ping\n\n") => return,
-                None => {}
-            }
-        };
+        out
     }
 }
 

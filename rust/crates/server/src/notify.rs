@@ -218,6 +218,13 @@ fn wake() -> &'static (Mutex<u64>, Condvar) {
     W.get_or_init(|| (Mutex::new(0), Condvar::new()))
 }
 
+/// Wake every notification stream to look again: the app is stopping.
+pub fn wake_streams() {
+    let (m, c) = wake();
+    *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+    c.notify_all();
+}
+
 /// One notification, if its kind is on and this key has not
 /// been told before.
 pub fn emit(conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
@@ -517,6 +524,9 @@ pub fn stream<W: FnMut(&str) -> bool>(after: Option<i64>, mut write: W) {
             let (m, c) = wake();
             let g = m.lock().unwrap();
             let _ = c.wait_timeout(g, heartbeat());
+            if app().stopping() {
+                return;
+            }
             let rows = app().open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
             if rows.is_empty() {
                 if !write(": ping\n\n") {

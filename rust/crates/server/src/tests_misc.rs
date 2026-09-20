@@ -54,19 +54,19 @@ fn insert_local(conn: &Connection, row: Value) {
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
     let conn = app().open().unwrap();
-    let v0 = crate::status_payload()["dataVersion"].as_str().unwrap().to_string();
+    let v0 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
     assert!(!v0.is_empty());
     let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
     bagholder_store::market::upsert_quote(&conn, "RDDY", &json!({"price": price, "fetchedAt": "2026-09-07T15:00:00Z"}), "tmx", &app::now_iso()).unwrap();
-    let v1 = crate::status_payload()["dataVersion"].as_str().unwrap().to_string();
+    let v1 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
     assert_ne!(v0, v1);
     bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2026-09-30", "payDate": "2026-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
-    let v2 = crate::status_payload()["dataVersion"].as_str().unwrap().to_string();
+    let v2 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
     // the shared home may already hold this row: then a second, later one moves it
     if v1 == v2 {
         bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2099-09-30", "payDate": "2099-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
     }
-    assert_ne!(v1, crate::status_payload()["dataVersion"].as_str().unwrap());
+    assert_ne!(v1, crate::status::payload()["dataVersion"].as_str().unwrap());
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
     let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
     app().invalidate();
@@ -77,7 +77,7 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
 #[test]
 fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight() {
     let _g = guard();
-    let v = crate::status_payload()["dataVersion"].as_str().unwrap().to_string();
+    let v = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
     assert!(v.ends_with(&format!("|{}", bagholder_model::clock::today_local())), "{}", v);
 }
 
@@ -87,7 +87,7 @@ fn test_page_and_server_agree_on_the_protocol_stamp() {
     let page = std::fs::read_to_string(crate::feeds::ledger_path()).unwrap();
     let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&page).expect("PROTOCOL on the page");
     assert_eq!(&m[1], app::PROTOCOL);
-    assert_eq!(crate::status_payload()["protocol"], app::PROTOCOL);
+    assert_eq!(crate::status::payload()["protocol"], app::PROTOCOL);
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn test_update_check_flags_only_a_newer_release() {
     set_checked_at(2.0 * 3600.0);
     let rec = update::check_for_update_if_due();
     assert_eq!((rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(newer.as_str())));
-    let st = crate::status_payload();
+    let st = crate::status::payload();
     assert_eq!(
         (st["version"].clone(), st["latestVersion"].clone(), st["updateAvailable"].clone(), st["updateUrl"].clone()),
         (json!(app::APP_VERSION), json!(newer), json!(true), rec["url"].clone())
@@ -342,13 +342,13 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
     let _fakes = UpdateFakes::new(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/x/y/releases/tag/{}", newer), "assets": [{"name": format!("bagholder-{}-web.zip", newer), "browser_download_url": "u"}]})));
     std::env::set_var("BAGHOLDER_NO_UPDATE", "1");
     let rec = update::check_for_update();
-    let st = crate::status_payload();
+    let st = crate::status::payload();
     let out = update::start_update();
     std::env::remove_var("BAGHOLDER_NO_UPDATE");
     assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(true), Some(newer.as_str())));
     assert_eq!((st["updateBy"].as_str(), st["updateUrl"].clone()), (Some("image"), json!(update::image_page())), "told of the release, sent to the image");
     assert_eq!((out["ok"].as_bool(), out["error"].as_str()), (Some(false), Some(update::UPDATES_OFF_MESSAGE)));
-    assert_eq!(crate::status_payload()["updateBy"], "app");
+    assert_eq!(crate::status::payload()["updateBy"], "app");
 }
 
 #[test]
@@ -446,7 +446,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// docs/architecture.md, "Timers that remain", and then counted here.
-const TIMED_WAITS: [(&str, usize, &str); 15] = [
+const TIMED_WAITS: [(&str, usize, &str); 16] = [
     ("market/src/edgar.rs", 1, "the SEC's request rate: a turn taken, waited for outside the lock"),
     ("market/src/exposure.rs", 1, "a host's request rate"),
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
@@ -455,8 +455,9 @@ const TIMED_WAITS: [(&str, usize, &str); 15] = [
     ("market/src/quotes.rs", 3, "Yahoo's request rate, waited for outside the lock"),
     ("market/src/sedar.rs", 1, "SEDAR+'s request rate on its one session"),
     ("server/src/app.rs", 1, "`wait` itself"),
-    ("server/src/events.rs", 8, "`park_until_or` itself, the 40 ms gather, the 15 s keepalive, midnight; three in its tests"),
+    ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather, midnight; three in its tests"),
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
     ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 6); a test"),
     ("server/src/orders.rs", 3, "Wealthsimple offers no order push: read only while an order is live or shown"),
@@ -469,7 +470,7 @@ fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let timed = |line: &str| {
         let l = line.trim_start();
-        !l.starts_with("//") && [".wait(Duration", "thread::sleep", "park_until_or(", "wait_timeout"].iter().any(|p| l.contains(p))
+        !l.starts_with("//") && [".wait(Duration", "thread::sleep", "park_until_or(", "wait_timeout", "time::sleep", "time::timeout", "time::interval"].iter().any(|p| l.contains(p))
     };
     let mut found: Vec<(String, usize)> = Vec::new();
     let mut dirs = vec![crates.clone()];
@@ -481,7 +482,7 @@ fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
                 if name != "tests" && name != "target" {
                     dirs.push(p);
                 }
-            } else if name.ends_with(".rs") && !name.starts_with("tests_") {
+            } else if name.ends_with(".rs") && !name.starts_with("tests") {
                 let n = std::fs::read_to_string(&p).unwrap().lines().filter(|l| timed(l)).count();
                 if n > 0 {
                     found.push((p.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/"), n));

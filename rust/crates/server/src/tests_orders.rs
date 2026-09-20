@@ -391,7 +391,7 @@ fn test_under_the_dry_setting_a_submit_is_recorded_and_nothing_is_sent() {
     set_gql(|_, _| panic!("must not be called"));
     set_live(Some(false));
     let r = o::place_order(&ticket(json!({})));
-    assert_eq!(crate::status_payload()["ordersLive"], json!(false));
+    assert_eq!(crate::status::payload()["ordersLive"], json!(false));
     unpatch();
     assert_eq!(r["ok"], json!(true));
     assert_eq!(st(&r, "status"), "dry");
@@ -891,7 +891,7 @@ fn test_open_orders_are_counted_for_the_header_badge() {
     let (_g, e) = engine();
     let (oid, b) = e.entry(json!({}));
     assert_eq!(o::open_orders_count(), 1);
-    assert_eq!(crate::status_payload()["openOrders"], json!(1));
+    assert_eq!(crate::status::payload()["openOrders"], json!(1));
     update_order(&oid, json!({"status": "filled", "filledQty": 25}));
     e.tick(None);
     assert_eq!(st(&get_bracket(&st(&b, "id")), "status"), "armed");

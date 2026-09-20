@@ -13,9 +13,17 @@ openssl = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-# The standard library has no HTTP server. tiny_http is the smallest thing that
-# is a real one: threads and sockets, no async runtime behind it.
-tiny_http = "0.12"
+# The HTTP server (docs/architecture.md, "Process and HTTP"). axum on tokio and
+# hyper: typed extractors and responses per route, tower middleware for the gate,
+# the limits and the panic catcher, streamed bodies for the event stream, and a
+# graceful stop. It replaced tiny_http and a thread per request with hand-rolled
+# routing, query parsing and chunked writes.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
+# streams for response bodies (the event stream, the sign-in frames)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "bagholder"
