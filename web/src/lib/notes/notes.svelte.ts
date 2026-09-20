@@ -6,6 +6,7 @@
 // target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
 import { post } from '../api'
 import { watchDoc, type Holder } from '../live'
+import { arrived } from './channel.svelte'
 
 export interface NoteExtra {
   symbol?: string
@@ -18,7 +19,7 @@ export interface NoteExtra {
 }
 
 export interface Note {
-  id: string
+  id: number
   kind: string
   key?: string
   title: string
@@ -49,7 +50,14 @@ export const notesStore = {
 
 /** Keep the bell current for as long as the page is open. Returns what stops it. */
 export function showNotifications(): () => void {
-  return watchDoc('notifications', {}, doc)
+  // a row this page has not had before has just arrived -- except the first time, when
+  // the rows are the history
+  let known: Set<Note['id']> | null = null
+  return watchDoc('notifications', {}, doc, () => {
+    const rows = doc.data?.rows ?? []
+    if (known) for (const n of rows) if (!known.has(n.id)) arrived(n)
+    known = new Set(rows.map((n) => n.id))
+  })
 }
 
 // What the person does shows at once; the server's own account of it follows on

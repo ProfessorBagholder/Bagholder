@@ -43,9 +43,7 @@
     clearField(key)
     refilter()
   }
-  let ordersOpen = $state(false)
   let filterOpened = $state(0)
-  let notesOpen = $state(false)
   let menuWrap = $state<HTMLElement>()
 
   // Close the header menu on any pointerdown outside it (the original's data-pop
@@ -87,7 +85,7 @@
     const mod = e.metaKey || e.ctrlKey
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'o') {
       e.preventDefault()
-      ordersOpen = !ordersOpen
+      ui.ordersOpen = !ui.ordersOpen
       return
     }
     // ⌘K opens the filters' search from anywhere -- over the Orders panel too -- and, with
@@ -100,17 +98,17 @@
       filterOpened++
       return
     }
-    if (notesOpen && !ui.confirm && !filterOpen) {
-      if (e.key === 'Escape') { e.preventDefault(); notesOpen = false; return }
+    if (ui.notesOpen && !ui.confirm && !filterOpen) {
+      if (e.key === 'Escape') { e.preventDefault(); ui.notesOpen = false; return }
     }
-    if (ordersOpen && !ui.confirm && !filterOpen) {
+    if (ui.ordersOpen && !ui.confirm && !filterOpen) {
       // Esc closes an open editor first, then the panel; ←/→ move between tabs
       if (e.key === 'Escape') {
         e.preventDefault()
         if (ordersPanel.orderEdit || ordersPanel.bracketEdit) {
           ordersPanel.orderEdit = null
           ordersPanel.bracketEdit = null
-        } else ordersOpen = false
+        } else ui.ordersOpen = false
         return
       }
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !isFieldFocused()) {
@@ -154,7 +152,7 @@
   )
   // the wheel over an open panel must not move the page behind it
   $effect(() => {
-    document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ordersOpen || notesOpen))
+    document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ui.ordersOpen || ui.notesOpen))
   })
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
   const showingEmpty = $derived(!!store.model && !store.model.activityCount)
@@ -260,11 +258,11 @@
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
-      <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ordersOpen = true)}>
+      <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ui.ordersOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.receipt} /></svg>
         {#if status?.openOrders}<span class="od-badge quiet">{status.openOrders}</span>{/if}
       </button>
-      <button class="btn btn-icon btn-secondary" aria-label="Notifications" style="position:relative" onclick={() => (notesOpen = true)}>
+      <button class="btn btn-icon btn-secondary" aria-label="Notifications" style="position:relative" onclick={() => (ui.notesOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.bell} /></svg>
         {#if notesUnread}<span class="od-badge">{notesUnread}</span>{/if}
       </button>
@@ -326,8 +324,8 @@
   </div>
 
   {#if ticketStore.t}<OrderTicket />{/if}
-  {#if ordersOpen}<OrdersPanel onclose={() => (ordersOpen = false)} />{/if}
-  {#if notesOpen}<NotesPanel onclose={() => (notesOpen = false)} />{/if}
+  {#if ui.ordersOpen}<OrdersPanel onclose={() => (ui.ordersOpen = false)} />{/if}
+  {#if ui.notesOpen}<NotesPanel onclose={() => (ui.notesOpen = false)} />{/if}
   {#if ui.loginView}<LoginView />{/if}
   {#if ui.confirm}<ConfirmDialog />{/if}
   {#if ui.modal}<Modals />{/if}

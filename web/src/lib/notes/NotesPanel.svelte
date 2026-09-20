@@ -5,6 +5,7 @@
   import { bareSymbol } from '../sym'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
+  import { openNoteTarget } from './channel.svelte'
 
   let { onclose }: { onclose: () => void } = $props()
 
@@ -38,8 +39,9 @@
 
   // Every row leads to the thing it is about: a filed document or a release opens
   // where it is published, in a new tab; a row carrying a ticker opens that listing.
-  // (An order notice's Orders-panel target is a gap — see report.)
   function noteOpen(n: Note) {
+    // an order's card opens the Orders panel at its tab
+    if (n.kind === 'fills' || n.kind === 'problems') { openNoteTarget(n); return }
     const x = n.extra || {}
     if (x.doc && x.source !== 'SEC') { window.open('/api/filings/doc?symbol=' + encodeURIComponent(x.symbol || '') + '&id=' + encodeURIComponent(x.doc), '_blank', 'noopener'); return }
     if (x.url) { window.open(x.url, '_blank', 'noopener'); return }

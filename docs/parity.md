@@ -11,9 +11,9 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] `Downloading…`, `Installing…`, `Restarting…` and the update-failed line (`L:929-930`).
 - [x] **"Restart Bagholder to finish the update"** on a protocol mismatch (`L:931`); the page has no `PROTOCOL`.
 - [x] Sync status: the spinner alone before the server's first answer (`L:937`); `Refreshing session…` (`L:933`, `L:4861`).
-- [ ] Theme row: opens on a tap as well as hover (`L:4964`); choosing a theme closes the list (`L:5019`).
-- [ ] Notifications row: opens on a tap; the state word reads `Blocked` and `Unavailable` as well as `On`/`Off`; the permission prompt on first press; dimmed switches when refused (`L:1086-1122`).
-- [ ] `Send a test notification` (`L:1101`, `L:1123`).
+- [x] Theme row: opens on a tap as well as hover (`L:4964`); choosing a theme closes the list (`L:5019`).
+- [x] Notifications row: opens on a tap; the state word reads `Blocked` and `Unavailable` as well as `On`/`Off`; the permission prompt on first press; dimmed switches when refused (`L:1086-1122`).
+- [x] `Send a test notification` (`L:1101`, `L:1123`).
 
 ### Filters
 - [x] A symbol row for a held symbol opens its holding page, not the listing route (`L:751-752`).
@@ -32,7 +32,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
 - [x] A journal save that fails says so in the header (`L:909`).
 - [ ] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`).
-- [ ] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
+- [x] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
 - [ ] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
 - [ ] **Unsure:** the short-interest reading expiring after 30 minutes on an open page.
 
@@ -42,7 +42,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Enter adds the banded watchlist suggestion (`L:5146`).
 - [x] Esc in the News box clears the words, then the chip; Esc in the Shorts box clears its words (`L:5134-5137`).
 - [x] News reads `Reading…` while a pass is reading the scope, not only for a chip lookup (`newsPassReads`, `L:3618`).
-- [ ] The Shorts feed refreshes on an open page. *(Design: by event, stage 6.)*
+- [x] The Shorts feed refreshes on an open page. *(Design: by event, stage 6.)*
 - [x] Esc closes the tile picker and the watchlist add row wherever focus is (`L:5133`).
 
 ### Order ticket and Orders panel
@@ -52,9 +52,9 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] **Unsure:** the cards' pixel grammar against the original, line by line.
 
 ### Notifications
-- [ ] The browser channel: `new Notification`, `/api/notifications/seen`, the banner's click (`L:1137-1149`).
-- [ ] A fill or order-problem card opens the Orders panel at its tab (`L:1059`).
-- [ ] A row arriving while the panel is open reads at once; the stream opens with `?after=`; the server's returned settings are adopted (`L:1071`, `L:1133`, `L:1114`).
+- [x] The browser channel: `new Notification`, `/api/notifications/seen`, the banner's click (`L:1137-1149`).
+- [x] A fill or order-problem card opens the Orders panel at its tab (`L:1059`).
+- [x] A row arriving while the panel is open reads at once; the stream opens with `?after=`; the server's returned settings are adopted (`L:1071`, `L:1133`, `L:1114`).
 
 ### Connect, sync, data
 - [x] **The first-run page**: "No activity yet" / "Pulling your history", its button, the full sync error (`L:4329`).
@@ -71,7 +71,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] The cut-text hover (`#cutTip`, `L:3379-3395`, `L:5259`).
 - [ ] **Scrollbars appear while scrolling** (`scrolling` class, `L:5270-5277`); today their thumbs are transparent and never show.
 - [ ] A model reply with `ok:false` is handled; the error state offers a retry (`L:787`, action `reload`).
-- [ ] A quote tick fetches only live figures (`L:803-818`). *(Design: carried by the event, stage 6.)*
+- [x] A quote tick fetches only live figures (`L:803-818`). *(Design: carried by the event, stage 6.)*
 
 ## Found done (each still owed its browser test)
 Header brand, version, sync line and notices; Orders button and bell with badges; menu items and the confirm dialog; filter fields, presets, ranges, chips, ranked search with external lookup; ⌘K, Esc cascade, arrow keys between tabs; Dashboard tiles, equity curve, annualized card and benchmark switch, monthly bars, grades, by symbol, review queue; Trades list columns, sorts and reset; trade and holding detail, chart timeframes and markers, executions, journal, short interest, disclosures; Portfolio tiles, donuts and holdings; Markets tiles, fear and greed, heatmap card, watchlist, shorts, news; Cashflow tiles, chart, tables and donut; order ticket and brackets; Orders panel tabs, drafts and actions; notification history and stream; connect with the streamed sign-in, sync, refresh, disconnect; CSV import, watch folder, add trade, export, clear data; reload on a new server version.

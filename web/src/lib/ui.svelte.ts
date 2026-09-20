@@ -52,6 +52,9 @@ export const ui = $state<{
   watch: { watching: boolean; path: string; lastScan?: string; files?: { file: string; format?: string; added: number; duplicates: number }[] } | null
   connecting: boolean
   loginView: boolean
+  /** the side panels: a notification's card opens the Orders panel, so they are not the app shell's alone */
+  ordersOpen: boolean
+  notesOpen: boolean
 }>({
   menuOpen: false,
   modal: '',
@@ -64,6 +67,8 @@ export const ui = $state<{
   folderPath: '',
   folderError: '',
   watch: null,
+  ordersOpen: false,
+  notesOpen: false,
   connecting: false,
   loginView: false,
 })
@@ -329,12 +334,4 @@ export function exportCsv(): void {
   a.download = 'bagholder-trades.csv'
   a.click()
   URL.revokeObjectURL(a.href)
-}
-
-export function notifyToggle(kind: string): void {
-  const cur = store.model?.status?.notify
-  if (!cur) return
-  const patch = { [kind]: !cur[kind] }
-  Object.assign(cur, patch)
-  request('POST', '/api/notifications/settings', patch)
 }
