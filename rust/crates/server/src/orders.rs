@@ -16,7 +16,10 @@ use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 
 use bagholder_store::orders as so;
-use bagholder_ws::session::{identity_from, CallError, Client};
+use bagholder_ws::session::{identity_from, CallError};
+// the one real caller is compiled out of test builds, where no call reaches the network
+#[cfg(not(test))]
+use bagholder_ws::session::Client;
 
 use crate::app::{app, f, log, now_iso, now_unix, num, qty_text, s, truthy, uuid4};
 
