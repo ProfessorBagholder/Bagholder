@@ -110,6 +110,7 @@ export interface Position {
   kind: string
   account: string
   currency: string
+  securityId: string
   short: boolean
   qty: number
   avg: number
@@ -287,6 +288,15 @@ export interface Markets {
   news: NewsItem[]
 }
 
+export interface Account {
+  id: string
+  name: string
+  type: string
+  currency: string
+  status: string
+  nav: number | null
+}
+
 export interface Options {
   accounts: string[]
   symbols: string[]
@@ -311,4 +321,5 @@ export interface Model {
   portfolio: Portfolio
   trades: Trade[]
   markets: Markets
+  accounts: Account[]
 }

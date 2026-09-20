@@ -1,10 +1,18 @@
 <script lang="ts">
   import { addWatch } from './state.svelte'
   import { store } from './state.svelte'
+  import { openTicket } from './ticket/ticket.svelte'
 
   let { onclose }: { onclose: () => void } = $props()
 
   interface Match { symbol: string; name: string; exchange: string; currency: string; kind?: string }
+  // A tradeable listing (share or ETF) carries Buy/Sell; instruments (indices,
+  // commodities, futures, rates, pairs) and crypto do not.
+  const tradeable = (m: Match) => !m.kind || m.kind === 'Shares' || m.kind === 'ETF'
+  function trade(m: Match, side: 'BUY' | 'SELL') {
+    openTicket(m.symbol, side, m.exchange, '')
+    onclose()
+  }
 
   let query = $state('')
   let matches = $state<Match[]>([])
@@ -60,14 +68,18 @@
   {#if matches.length}
     <div class="results">
       {#each matches as m, i (keyOf(m))}
-        <button class="row" class:hi={i === hi} onmouseenter={() => (hi = i)} onclick={() => add(m)}>
+        <div class="row" class:hi={i === hi} role="presentation" onmouseenter={() => (hi = i)}>
           <span class="sym">{m.symbol}</span>
           <span class="name">{m.name}</span>
           <span class="exch">{m.exchange}</span>
           <span class="act">
-            {#if watched.has(keyOf(m)) || added.has(keyOf(m))}<span class="on">✓ Watching</span>{:else}<span class="add">+ Watch</span>{/if}
+            {#if tradeable(m)}
+              <button class="tbtn buy" onclick={() => trade(m, 'BUY')} aria-label="Buy {m.symbol}">Buy</button>
+              <button class="tbtn sell" onclick={() => trade(m, 'SELL')} aria-label="Sell {m.symbol}">Sell</button>
+            {/if}
+            {#if watched.has(keyOf(m)) || added.has(keyOf(m))}<span class="on">✓</span>{:else}<button class="tbtn add" onclick={() => add(m)} aria-label="Watch {m.symbol}">+ Watch</button>{/if}
           </span>
-        </button>
+        </div>
       {/each}
     </div>
   {:else if query.trim()}
@@ -87,7 +99,11 @@
   .sym { font-weight: 600; font-size: 13px; }
   .name { color: #8b93a7; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .exch { color: #8b93a7; font-size: 11px; }
-  .act { font-size: 11px; }
-  .add { color: #4b9fff; } .on { color: #3ecf8e; }
+  .act { font-size: 11px; display: inline-flex; gap: 6px; align-items: center; }
+  .tbtn { background: #1c2230; border: 0; color: #c4cbd8; border-radius: 5px; padding: 3px 8px; font: inherit; font-size: 11px; cursor: pointer; }
+  .tbtn.buy:hover { background: rgba(62,207,142,0.2); color: #3ecf8e; }
+  .tbtn.sell:hover { background: rgba(240,97,109,0.2); color: #f0616d; }
+  .tbtn.add { color: #4b9fff; }
+  .on { color: #3ecf8e; }
   .empty { padding: 18px 16px; color: #8b93a7; font-size: 13px; }
 </style>

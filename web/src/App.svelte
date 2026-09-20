@@ -12,6 +12,8 @@
   import Placeholder from './lib/Placeholder.svelte'
   import FilterPopover from './lib/FilterPopover.svelte'
   import CommandPalette from './lib/CommandPalette.svelte'
+  import OrderTicket from './lib/ticket/OrderTicket.svelte'
+  import { ticketStore } from './lib/ticket/ticket.svelte'
   import { activeCount } from './lib/filters.svelte'
 
   let filterOpen = $state(false)
@@ -52,6 +54,9 @@
   {/if}
   {#if paletteOpen}
     <CommandPalette onclose={() => (paletteOpen = false)} />
+  {/if}
+  {#if ticketStore.t}
+    <OrderTicket />
   {/if}
 
   <TabBar />
