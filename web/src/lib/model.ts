@@ -247,11 +247,44 @@ export interface WatchItem {
   positionId?: string | null
 }
 
+export interface NewsTag {
+  symbol: string
+  exchange: string
+  held: boolean
+  watched: boolean
+  percentChange: number | null
+  positionId: string | null
+}
+export interface NewsItem {
+  id: string
+  headline: string
+  source: string
+  url: string
+  publishedAt: string
+  market: boolean
+  tags: NewsTag[]
+  kind: string
+}
+
+export interface FearReading { label: string; score: number; rating: string }
+export interface FearPart { name: string; score: number; rating: string }
+export interface FearGauge {
+  index: string
+  source: string
+  score: number
+  rating: string
+  asOf: string
+  previous: FearReading[]
+  parts: FearPart[]
+  series: { date: string; score: number }[]
+}
+
 export interface Markets {
   holdings: HeatHolding[]
   watchlist: WatchItem[]
   universes: { ca?: HeatHolding[]; us?: HeatHolding[]; intl?: HeatHolding[] }
   tiles: MarketTile[]
+  news: NewsItem[]
 }
 
 export interface Model {

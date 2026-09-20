@@ -45,3 +45,19 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
     loadModel()
   }
 }
+
+// Remove a watchlist listing: drop it from the store at once (so the Watchlist
+// card and the heatmap's watchlist universe update, and nothing else does), then
+// persist. On failure, reload the authoritative model.
+export async function removeWatch(symbol: string, exchange: string): Promise<void> {
+  const mk = store.model?.markets
+  if (!mk) return
+  mk.watchlist = mk.watchlist.filter((w) => !(w.symbol === symbol && w.exchange === exchange))
+  try {
+    const r = await fetch('/api/watchlist/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol, exchange }) })
+    const d = await r.json()
+    if (!d.ok) throw new Error('remove failed')
+  } catch {
+    loadModel()
+  }
+}
