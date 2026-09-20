@@ -454,16 +454,71 @@ fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::R
     Ok(())
 }
 
+/// Daily bars for every listing the book traded, so a chart has something to draw with
+/// no source to ask (the browser tests run offline): each listing's closes pass through
+/// the prices it was traded at on the days it was traded, with a small fixed ripple
+/// between them, and are marked as read from the first day they cover.
+fn write_bars(dir: &Path, b: &Book) -> rusqlite::Result<()> {
+    let conn = Connection::open(dir.join("bagholder.db"))?;
+    let (ty, tm, td) = parse_iso(TODAY).unwrap();
+    let end = to_days(ty, tm, td);
+    let mut written = 0usize;
+    for (sym, ..) in LISTINGS.iter() {
+        let mut anchors: Vec<(i64, f64)> = b.acts.iter()
+            .filter(|a| a["category"] == "trade" && a["symbol"] == *sym)
+            .filter_map(|a| {
+                let (y, m, d) = parse_iso(a["transactionDate"].as_str()?)?;
+                Some((to_days(y, m, d), a["unitPrice"].as_f64()?))
+            })
+            .collect();
+        anchors.sort_by(|x, y| x.0.cmp(&y.0));
+        anchors.dedup_by_key(|x| x.0);
+        let Some(&(first, _)) = anchors.first() else { continue };
+        let start = first - 30;
+        let at = |day: i64| -> f64 {
+            let next = anchors.iter().position(|x| x.0 >= day);
+            match next {
+                Some(0) => anchors[0].1,
+                None => anchors[anchors.len() - 1].1,
+                Some(k) => {
+                    let (d0, p0) = anchors[k - 1];
+                    let (d1, p1) = anchors[k];
+                    p0 + (p1 - p0) * (day - d0) as f64 / (d1 - d0) as f64
+                }
+            }
+        };
+        let traded = |day: i64| anchors.iter().any(|x| x.0 == day);
+        let mut bars = Vec::new();
+        let mut prev = at(start);
+        for day in start..=end {
+            if (day + 3).rem_euclid(7) >= 5 { continue; }
+            let ripple = if traded(day) { 0.0 } else { 0.012 * ((day as f64) * 0.9).sin() + 0.007 * ((day as f64) * 0.23).cos() };
+            let close = round_half_even(at(day) * (1.0 + ripple), 2);
+            let (open, hi, lo) = (prev, prev.max(close) * 1.004, prev.min(close) * 0.996);
+            let (y, m, d) = from_days(day);
+            bars.push(json!({"date": fmt(y, m, d), "open": open, "high": round_half_even(hi, 2), "low": round_half_even(lo, 2), "close": close, "volume": 100000.0 + ((day % 17) as f64) * 5000.0}));
+            prev = close;
+        }
+        let (y, m, d) = from_days(start);
+        written += bagholder_store::market::upsert_price_history(&conn, sym, &bars, "demo")?;
+        bagholder_store::market::mark_history_fetched(&conn, sym, &fmt(y, m, d), SYNCED)?;
+    }
+    println!("desktop: {} daily bars", written);
+    Ok(())
+}
+
 fn main() {
     let mut home = None;
     let mut pull = None;
+    let mut bars = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--home" => home = args.next(),
             "--pull" => pull = args.next(),
+            "--bars" => bars = true,
             _ => {
-                eprintln!("usage: demo-book [--home DIR] [--pull DIR]\n  --home DIR  write a desktop data directory (bagholder.db) here\n  --pull DIR  write last-pull.json and journal.json for the phone apps here");
+                eprintln!("usage: demo-book [--home DIR [--bars]] [--pull DIR]\n  --home DIR  write a desktop data directory (bagholder.db) here\n  --bars      with --home: daily bars for the listings traded, for a chart with no source to ask\n  --pull DIR  write last-pull.json and journal.json for the phone apps here");
                 std::process::exit(2);
             }
         }
@@ -476,5 +531,8 @@ fn main() {
     }
     if let Some(dir) = home {
         write_home(Path::new(&dir), &book, &lst, &nav).expect("write the desktop data directory");
+        if bars {
+            write_bars(Path::new(&dir), &book).expect("write the daily bars");
+        }
     }
 }

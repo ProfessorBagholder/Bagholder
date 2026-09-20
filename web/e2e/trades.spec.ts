@@ -247,12 +247,15 @@ test.describe('Trade detail', () => {
     await expect(page.locator('#page .pill.on')).toHaveText('1D')
   })
 
-  test('when the offline server\'s sources cannot be reached, the chart\'s place says so by naming them', async ({ page, request }) => {
+  test('with no bars to draw, the chart\'s place says why in the server\'s words', async ({ page, request }) => {
     const model = await getModel(request)
     const t = model.trades.find((x: any) => x.kind === 'Shares')
+    const reason = 'TMX Money could not be reached; Yahoo Finance could not be reached.'
+    await page.route('**/api/history?*', (route) => route.fulfill({ json: { ok: true, bars: [], available: ['1d', '1w', '1M'], reason, pending: false } }))
     await page.goto('/#trades/' + encodeURIComponent(t.id))
     await ready(page)
-    await expect(page.locator('#page .empty').first()).toHaveText('TMX Money could not be reached; Yahoo Finance could not be reached.')
+    await expect(page.locator('#page .empty').first()).toHaveText(reason)
+    await expect(page.getByRole('img', { name: /^Price chart/ })).toHaveCount(0)
   })
 
   test('thesis saves on blur', async ({ page, request }) => {
@@ -332,5 +335,40 @@ test.describe('Holding detail (from Portfolio)', () => {
     await expect(page.locator('.tabbar')).toContainText(symText(p.symbol))
     const priceLine = page.locator('#page .tab', { hasText: /^\d/ }).first()
     await expect(priceLine).toBeVisible()
+  })
+})
+
+test.describe('The chart, on stored bars', () => {
+  test('a trade draws its daily bars with every execution marked on its day', async ({ page, request }) => {
+    const model = await getModel(request)
+    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 10 && x.holdDays <= 180)
+    const detail = await (await request.get('/api/trade?id=' + encodeURIComponent(t.id))).json()
+    await page.goto('/#trades/' + encodeURIComponent(t.id))
+    await ready(page)
+    const chart = page.getByRole('img', { name: /^Price chart, 1D/ })
+    await expect(chart).toBeVisible()
+    const label = (await chart.getAttribute('aria-label'))!
+    const [, bars, marked, fills] = label.match(/(\d+) bars, (\d+) of (\d+) executions marked/)!.map(Number)
+    expect(bars).toBeGreaterThan(10)
+    expect(fills).toBe(detail.fills.length)
+    expect(marked).toBe(fills)
+    await expect(chart.locator('canvas').first()).toBeVisible()
+  })
+
+  test('another timeframe redraws the same chart in place, with other bars', async ({ page, request }) => {
+    const model = await getModel(request)
+    const t = model.trades.find((x: any) => x.kind === 'Shares' && x.holdDays > 30 && x.holdDays <= 180)
+    await page.goto('/#trades/' + encodeURIComponent(t.id))
+    await ready(page)
+    const chart = page.getByRole('img', { name: /^Price chart/ })
+    await expect(chart).toHaveAttribute('aria-label', /^Price chart, 1D/)
+    const canvas = chart.locator('canvas').first()
+    await canvas.evaluate((el) => ((el as unknown as { mark: number }).mark = 1))
+    const daily = Number((await chart.getAttribute('aria-label'))!.match(/(\d+) bars/)![1])
+    await page.locator('#page .pill', { hasText: '1W' }).click()
+    await expect(chart).toHaveAttribute('aria-label', /^Price chart, 1W/)
+    const weekly = Number((await chart.getAttribute('aria-label'))!.match(/(\d+) bars/)![1])
+    expect(weekly).toBeLessThan(daily)
+    expect(await canvas.evaluate((el) => (el as unknown as { mark?: number }).mark)).toBe(1)
   })
 })

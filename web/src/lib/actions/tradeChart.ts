@@ -142,6 +142,9 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     if (fills || colors || view) {
       const idx = mark(p)
       if (view) frame(p, idx)
+      // a canvas says nothing to a screen reader: what it shows is said in words
+      node.setAttribute('role', 'img')
+      node.setAttribute('aria-label', `Price chart, ${p.tf.toUpperCase()}: ${p.bars.length} bars, ${idx.length} of ${orderedFills(p).length} executions marked`)
     }
   }
 
