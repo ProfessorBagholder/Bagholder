@@ -6,6 +6,7 @@
 //! page itself.
 
 mod app;
+mod events;
 mod feeds;
 mod login;
 mod model_cache;
@@ -341,6 +342,13 @@ fn handle_get(req: Request, path: &str, query: &str) {
         "/api/login/stream" => stream(req, "multipart/x-mixed-replace; boundary=frame", |write| {
             login::login_stream(|chunk| write(chunk));
         }),
+        "/api/events" => {
+            let filters = qp(query, "filters").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let detail = qp(query, "trade").filter(|t| !t.is_empty());
+            stream(req, "text/event-stream; charset=utf-8", move |write| {
+                events::stream(filters, detail, &status_payload, |text| write(text.as_bytes()));
+            })
+        }
         "/api/login/frame" => match login::login_frame() {
             Some(data) => send(req, 200, data, "image/jpeg"),
             None => send(req, 204, vec![], "application/json; charset=utf-8"),
@@ -830,6 +838,10 @@ fn serve() -> i32 {
     };
     *a.port.lock().unwrap() = port;
 
+    // from here on a change reaches an open page because it happened: every commit
+    // on any connection, every write to the app's state, the day turning
+    bagholder_store::on_commit(events::signal);
+    events::signal_at_each_midnight();
     spawn("bagholder-auto-sync", session::auto_sync_loop);
     spawn("bagholder-market", || {
         feeds::refresh_market_data();

@@ -371,11 +371,7 @@ mod tests {
         let mkt = market::market_data(&conn).unwrap();
         let journal = snapshot::journal(&conn).unwrap();
         let scratch = bagholder_model::base::build_base(&snap, &mkt, &journal, Some(TODAY));
-        let view = |b: &Base| {
-            let mut v = bagholder_model::view::build_view(b, None);
-            v["generated"] = json!("");
-            v
-        };
+        let view = |b: &Base| bagholder_model::view::build_view(b, None);
         assert_eq!(view(&layered), view(&scratch));
     }
 }

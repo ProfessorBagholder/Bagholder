@@ -669,7 +669,6 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
 
     json!({
         "ok": true,
-        "generated": crate::clock::now_utc_stamp(),
         "today": today,
         "syncedAt": base.synced_at,
         "currency": "CAD",

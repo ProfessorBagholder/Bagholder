@@ -33,4 +33,5 @@ pub mod venues;
 pub mod instruments;
 pub mod markets;
 pub mod view;
+pub mod patch;
 pub mod cases;

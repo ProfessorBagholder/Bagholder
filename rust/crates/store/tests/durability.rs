@@ -96,3 +96,22 @@ fn test_a_change_inside_a_change_is_one_transaction() {
     assert!(out.is_err());
     assert!(ids(&conn).is_empty(), "the inner change went with the outer one");
 }
+
+#[test]
+fn test_every_commit_is_heard_whichever_connection_made_it() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static HEARD: AtomicUsize = AtomicUsize::new(0);
+    bagholder_store::on_commit(|| {
+        HEARD.fetch_add(1, Ordering::SeqCst);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bagholder.db");
+    let a = open_db(&path).unwrap();
+    relabel::ensure(&a).unwrap();
+    let b = open_db(&path).unwrap();
+    let before = HEARD.load(Ordering::SeqCst);
+    tables::replace_accounts(&a, &[account("a1")]).unwrap(); // one transaction, several rows
+    tables::set_meta(&b, "market_tiles", "[]").unwrap(); // a single statement, on another connection
+    // at least: the hook is the process's, and the tests beside this one commit too
+    assert!(HEARD.load(Ordering::SeqCst) >= before + 2, "both commits were heard");
+}

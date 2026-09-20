@@ -1,4 +1,4 @@
-import { store, loadModel } from '../state.svelte'
+import { store } from '../state.svelte'
 import type { Position } from '../model'
 import { ui } from '../ui.svelte'
 import { symText } from '../sym'
@@ -193,7 +193,6 @@ export async function submit() {
   }
   flash(notice(v, r.status === 'sent'), 10000) // longer than the other notices: it names the whole order
   closeTicket(true)
-  loadModel()
 }
 
 // Resume a set-aside draft (from the Orders panel): reopen its ticket.

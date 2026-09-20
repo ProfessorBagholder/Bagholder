@@ -4,7 +4,7 @@
     filters, resetFilters, FIELDS, PRESETS, dateLabel, listSummary, rangeSummary, clearField,
     type ListKey, type RangeKey, type Field,
   } from './filters.svelte'
-  import { setFilters, loadModel, store } from './state.svelte'
+  import { setFilters, refilter, store } from './state.svelte'
   import { openTicket } from './ticket/ticket.svelte'
   import { goSub } from './router.svelte'
   import { symText, bareSymbol } from './sym'
@@ -171,8 +171,8 @@
   function closeFilter() { onclose() }
   // ledger clearAll resets the filters and sets picker=null, which closes the popover.
   // resetFilters() keeps the benchmark, as the original does (benchmark is not a filter).
-  function clearAll() { resetFilters(); loadModel(); onclose() }
-  function clearFieldAct(key: string) { clearField(key); loadModel() }
+  function clearAll() { resetFilters(); refilter(); onclose() }
+  function clearFieldAct(key: string) { clearField(key); refilter() }
 
   function toggleList(key: string, value: string) {
     const on = filters.lists[key as ListKey]
@@ -181,7 +181,7 @@
     else on.push(value)
     // a value picked from the fields search stays checked; the box clears so more can be picked
     if (hasMatches && filters.search) filters.search = ''
-    loadModel()
+    refilter()
   }
   function toggleYear(y: string) {
     const i = filters.years.indexOf(y)
@@ -190,8 +190,8 @@
     setFilters({ from: '', to: '', preset: 'all' })
   }
   function preset(p: string) { setFilters({ preset: filters.preset === p ? 'all' : p, years: [], from: '', to: '' }) }
-  function rangeOp(key: RangeKey, op: string) { filters.ranges[key].op = op; if (filters.ranges[key].v != null) loadModel() }
-  function rangeStep(key: RangeKey, v: number) { filters.ranges[key].v = String(filters.ranges[key].v) === String(v) ? null : v; loadModel() }
+  function rangeOp(key: RangeKey, op: string) { filters.ranges[key].op = op; if (filters.ranges[key].v != null) refilter() }
+  function rangeStep(key: RangeKey, v: number) { filters.ranges[key].v = String(filters.ranges[key].v) === String(v) ? null : v; refilter() }
 
   let rangeTimer: ReturnType<typeof setTimeout> | undefined
   function rangeInput(key: RangeKey, raw: string) {
@@ -201,7 +201,7 @@
       let n = v === '' ? null : Number(v.replace(/[$,]/g, ''))
       if (v !== '' && n != null && isNaN(n)) n = null
       filters.ranges[key].v = n
-      loadModel()
+      refilter()
     }, 500)
   }
 
@@ -217,7 +217,7 @@
   // the fields search box: typing lists matches; Enter with no match commits free text
   function onFieldsInput(v: string) { fieldQuery = v; valueHi = 0; extSchedule(v) }
   function onFieldsEnter() {
-    if (!matchTotal) { filters.search = (fieldQuery ?? '').trim(); fieldQuery = null; loadModel(); return }
+    if (!matchTotal) { filters.search = (fieldQuery ?? '').trim(); fieldQuery = null; refilter(); return }
     const i = Math.min(valueHi, matchTotal - 1)
     if (i < bookSyms.length) {
       const r = bookSyms[i]

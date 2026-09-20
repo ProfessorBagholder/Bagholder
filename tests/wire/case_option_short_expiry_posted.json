@@ -1,7 +1,6 @@
 {
   "view": {
     "ok": true,
-    "generated": "",
     "today": "2027-02-01",
     "syncedAt": "",
     "currency": "CAD",
@@ -835,7 +834,6 @@
   },
   "wire": {
     "ok": true,
-    "generated": "",
     "today": "2027-02-01",
     "syncedAt": "",
     "currency": "CAD",
@@ -1623,7 +1621,6 @@
   },
   "wireWithDetail": {
     "ok": true,
-    "generated": "",
     "today": "2027-02-01",
     "syncedAt": "",
     "currency": "CAD",

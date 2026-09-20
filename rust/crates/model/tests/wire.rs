@@ -4,7 +4,8 @@
 //! picked key by key; this pins the payload itself -- every key, in order, every
 //! value -- so the model's internals can be replaced (typed structs for JSON
 //! values, layered caches for one) and any difference the page could see fails
-//! here. Strings, keys, key order, array order and lengths are exact. Numbers
+//! here. (It found its first fault at once: the view carried the wall clock, which
+//! no page read and which made every build of it differ; that is gone.) Strings, keys, key order, array order and lengths are exact. Numbers
 //! are equal to within what a different machine's `powf` can move the last bit.
 //!
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-model
@@ -28,10 +29,6 @@ fn payload(snapshot: &Value, market: &Value, journal: &Value, today: &str, filte
     let journal = journal.as_object().cloned().unwrap_or_default();
     let base = build_base(snapshot, market, &journal, Some(today));
     let view = build_view(&base, Some(filters));
-    let mut view = view;
-    // the one value that is the clock's and not the book's: when the payload was made
-    // (no page reads it; it goes when the payload is typed)
-    view["generated"] = json!("");
     let first = view["trades"].as_array().and_then(|t| t.first()).and_then(|t| t["id"].as_str()).map(|s| s.to_string());
     json!({
         "view": view,

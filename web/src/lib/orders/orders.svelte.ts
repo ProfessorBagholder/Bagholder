@@ -2,7 +2,6 @@
 // while the panel is open. Ported from ledger.html's orders panel: the tabs, the
 // card/leg/foot builders, the in-place editors, cancel and adjust.
 
-import { loadModel } from '../state.svelte'
 import { filters } from '../filters.svelte'
 import { ui } from '../ui.svelte'
 import { draftStore } from '../ticket/ticket.svelte'
@@ -218,7 +217,6 @@ export async function orderEditSave(id: string) {
   panel.orderEdit = null
   flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice != null ? limitPrice : o.limitPrice }), 'ok', 10000)
   loadOrders()
-  loadModel()
 }
 
 export async function bracketEditSave(id: string) {
@@ -246,7 +244,6 @@ export async function bracketEditSave(id: string) {
   panel.busy = ''; panel.bracketEdit = null
   flash('Bracket changed · ' + b.symbol, 'ok', 10000)
   loadOrders()
-  loadModel()
 }
 
 export async function bracketRemove(id: string, leg: string) {
@@ -259,7 +256,6 @@ export async function bracketRemove(id: string, leg: string) {
   panel.bracketEdit = null
   flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + b.symbol, 'ok', 10000)
   loadOrders()
-  loadModel()
 }
 
 export async function cancelOrderNow(id: string) {
@@ -267,14 +263,12 @@ export async function cancelOrderNow(id: string) {
   const r = await api('POST', '/api/order/cancel', { id })
   flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && (r.error as string)) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
   loadOrders()
-  loadModel()
 }
 export async function cancelBracketNow(id: string) {
   const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
   const r = await api('POST', '/api/bracket/cancel', { id })
   flash(r && r.ok ? 'Bracket cancelled · ' + (b ? b.symbol : '') : (r && (r.error as string)) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
   loadOrders()
-  loadModel()
 }
 
 export { draftStore }

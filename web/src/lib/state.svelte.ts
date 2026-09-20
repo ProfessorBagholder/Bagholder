@@ -1,5 +1,6 @@
 import type { Model } from './model'
 import { filters } from './filters.svelte'
+import { connect, disconnect, onChange } from './live'
 
 // The reactive store. This is the whole point of the migration: state lives in
 // one $state rune and the UI derives from it — no manual coreVersion/dataVersion
@@ -11,84 +12,43 @@ export const store = $state<{ model: Model | null; error: string | null; loading
   loading: true,
 })
 
-// The detail id in the address (trades/<id> or portfolio/<id>): the open trade's
-// legs and fills travel only for it, exactly as the legacy loadModel did.
-function detailParam(): string {
-  if (typeof location === 'undefined') return ''
-  const parts = location.hash.replace(/^#\/?/, '').split('/')
-  const page = parts[0] === 'positions' ? 'portfolio' : parts[0]
-  const id = parts.slice(1).join('/')
-  if ((page === 'trades' || page === 'portfolio') && id) return '&trade=' + encodeURIComponent(decodeURIComponent(id))
-  return ''
+// The page's data comes over one connection (live.ts): the whole view once, then
+// only the fields of only the entities that change, written into the objects held
+// here. Nothing polls and nothing is refetched to see the result of a change: a
+// change made here or anywhere else reaches the page because it was committed.
+
+/** Connect, or connect again because the filters changed. */
+export function refilter(): void {
+  connect(store, filters)
 }
 
-// The data layer, behavior-equivalent to the legacy loadModel(): fetch the
-// server-derived model (filters + benchmark + the open trade's detail) and hand
-// it to the store. Svelte tracks what each component reads.
-let _loadSeq = 0
-export async function loadModel(): Promise<void> {
-  const seq = ++_loadSeq
-  store.loading = true
+/** The server's word over an optimistic write that failed: the whole view again, reconciled. */
+export function resync(): void {
+  disconnect()
+  connect(store, filters)
+}
+
+// The legs and fills of the trade or holding that is open: asked for once when it
+// opens, and again only when a change touched that very row.
+let _detailFor = ''
+export async function loadDetail(id: string | null): Promise<void> {
+  _detailFor = id ?? ''
+  if (!id) return
   try {
-    const q = encodeURIComponent(JSON.stringify(filters))
-    const r = await fetch('/api/model?filters=' + q + detailParam(), { headers: { 'X-Bagholder': '1' } })
-    if (!r.ok) throw new Error('HTTP ' + r.status)
-    const m = (await r.json()) as Model
-    if (seq !== _loadSeq) return
-    store.model = m
-    store.error = null
-  } catch (e) {
-    if (seq !== _loadSeq) return
-    store.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    if (seq === _loadSeq) store.loading = false
+    const r = await fetch('/api/trade?id=' + encodeURIComponent(id), { headers: { 'X-Bagholder': '1' } })
+    const d = (await r.json()) as { ok?: boolean; legs?: unknown[]; fills?: unknown[] }
+    if (!d.ok || _detailFor !== id) return
+    const m = store.model
+    for (const row of [m?.trades.find((t) => t.id === id), m?.positions?.find((p) => p.id === id)]) {
+      if (row) Object.assign(row, { legs: d.legs ?? [], fills: d.fills ?? [] })
+    }
+  } catch {
+    /* the rest of the page stands; the detail is asked for again when the row next changes */
   }
 }
-
-// Keep the page live, ported from ledger.html pollStatus(): poll the lightweight
-// /api/status and only reload the model when the data actually changed. Poll fast
-// (2.5s) while something is happening — syncing, capturing a login, an update —
-// so the header's sync step moves promptly, and slowly (30s) when idle. This
-// replaces a blind full-model reload on a fixed timer.
-let _pollTimer: ReturnType<typeof setTimeout> | undefined
-export function startStatusPoll(): () => void {
-  const poll = () => {
-    fetch('/api/status', { headers: { 'X-Bagholder': '1' } })
-      .then((r) => r.json())
-      .then((st) => {
-        // during a server restart (an update) the answers are not status payloads
-        if (!st || !st.protocol) {
-          _pollTimer = setTimeout(poll, 1000)
-          return
-        }
-        const m = store.model
-        if (m) {
-          const prev = m.status
-          if (st.version && prev?.version && st.version !== prev.version) {
-            location.reload()
-            return
-          }
-          const lastSyncChanged = !!(st.lastSync && prev?.lastSync && st.lastSync !== prev.lastSync)
-          const changed =
-            lastSyncChanged ||
-            (st.activityCount !== prev?.activityCount && prev?.activityCount) ||
-            (st.dataVersion && prev?.dataVersion && st.dataVersion !== prev.dataVersion)
-          m.status = { ...prev, ...st } as typeof m.status
-          // reload the model when the data moved and a sync is not still running
-          // (a partial book mid-sync would flash); Svelte then patches only the
-          // cells that changed, so this is not the old whole-page redraw.
-          if (changed && !st.syncing) loadModel()
-        }
-        const fast = st.syncing || st.capturing || st.updating || (st.newsReading || []).length
-        _pollTimer = setTimeout(poll, fast ? 2500 : 30000)
-      })
-      .catch(() => {
-        _pollTimer = setTimeout(poll, 5000)
-      })
-  }
-  poll()
-  return () => clearTimeout(_pollTimer)
-}
+onChange((touched) => {
+  if (_detailFor && touched.has(_detailFor)) loadDetail(_detailFor)
+})
 
 // Switch the benchmark the annualized-returns card compares against: persist it,
 // send it on the next model load (spR is computed server-side for it), reload.
@@ -99,13 +59,13 @@ export function setBenchmark(key: string): void {
   } catch {
     /* ignore */
   }
-  loadModel()
+  refilter()
 }
 
 // Apply a partial filter change and recompute the model, like the legacy setFilters().
 export function setFilters(patch: Partial<typeof filters>): void {
   Object.assign(filters, patch)
-  loadModel()
+  refilter()
 }
 
 // A journal edit: mutate the one trade optimistically (so the UI reflects it at
@@ -127,28 +87,29 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   }
   const body = { id, thesis: (t as { thesis?: string }).thesis ?? '', tags: (t as { tags?: string[] }).tags ?? [], grade: (t as { grade?: string }).grade ?? '' }
   try {
-    const r = await fetch('/api/journal', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const r = await fetch('/api/journal', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify(body) })
     const d = await r.json()
     if (!d.ok) throw new Error('save failed')
   } catch {
     store.error = 'Could not save journal entry.'
-    loadModel()
+    resync()
   }
 }
 
-// Add a listing to the watchlist: show it at once (a stub row), then persist and
-// reload so the server's quote and sector fill in.
+// Add a listing to the watchlist: show it at once (a stub row), then persist; the
+// server's quote and sector reach that row as a change to it.
 export async function addWatch(m: { symbol: string; exchange: string; name: string; currency: string }): Promise<void> {
   const mk = store.model?.markets
   if (mk && !mk.watchlist.some((w) => w.symbol === m.symbol && w.exchange === m.exchange)) {
     mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', positionId: null })
   }
   try {
-    const r = await fetch('/api/watchlist/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(m) })
+    const r = await fetch('/api/watchlist/add', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify(m) })
     const d = await r.json()
     if (!d.ok) throw new Error('add failed')
-  } finally {
-    loadModel()
+    // the row's quote and sector arrive as a change to that row when the server has them
+  } catch {
+    resync()
   }
 }
 
@@ -160,10 +121,10 @@ export async function removeWatch(symbol: string, exchange: string): Promise<voi
   if (!mk) return
   mk.watchlist = mk.watchlist.filter((w) => !(w.symbol === symbol && w.exchange === exchange))
   try {
-    const r = await fetch('/api/watchlist/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol, exchange }) })
+    const r = await fetch('/api/watchlist/remove', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify({ symbol, exchange }) })
     const d = await r.json()
     if (!d.ok) throw new Error('remove failed')
   } catch {
-    loadModel()
+    resync()
   }
 }

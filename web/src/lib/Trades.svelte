@@ -5,7 +5,7 @@
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { goSub } from './router.svelte'
   import { resetFilters } from './filters.svelte'
-  import { loadModel } from './state.svelte'
+  import { refilter } from './state.svelte'
 
   let { trades }: { trades: Trade[] } = $props()
 
@@ -42,7 +42,7 @@
   function clearAll(e: Event) {
     e.preventDefault()
     resetFilters()
-    loadModel()
+    refilter()
   }
 </script>
 

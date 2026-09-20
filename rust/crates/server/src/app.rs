@@ -47,13 +47,55 @@ struct Job {
     until: Option<Instant>,
 }
 
+/// A lock whose guard says when it was written through: the page shows this state
+/// (the sync step, connected, an update's progress), so a write to it is a change
+/// the page is told of, and no writer has to remember to say so. A read is silent.
+pub struct Watched<T>(Mutex<T>);
+
+pub struct WatchedGuard<'a, T> {
+    guard: std::sync::MutexGuard<'a, T>,
+    written: bool,
+}
+
+impl<T> Watched<T> {
+    pub fn new(v: T) -> Watched<T> {
+        Watched(Mutex::new(v))
+    }
+    /// Never fails: a writer that panicked left a state still worth showing.
+    pub fn lock(&self) -> Result<WatchedGuard<'_, T>, std::convert::Infallible> {
+        Ok(WatchedGuard { guard: self.0.lock().unwrap_or_else(|e| e.into_inner()), written: false })
+    }
+}
+
+impl<T> std::ops::Deref for WatchedGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.guard
+    }
+}
+
+impl<T> std::ops::DerefMut for WatchedGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.written = true;
+        &mut self.guard
+    }
+}
+
+impl<T> Drop for WatchedGuard<'_, T> {
+    fn drop(&mut self) {
+        if self.written {
+            crate::events::signal();
+        }
+    }
+}
+
 pub struct App {
     pub home: PathBuf,
     pub root: PathBuf,
     pub bind_host: String,
     pub port: Mutex<u16>,
     pub started_at: String,
-    pub state: Mutex<State>,
+    pub state: Watched<State>,
     pub stop: AtomicBool,
     pub exit_code: AtomicI32,
     model: crate::model_cache::ModelCache,
@@ -73,7 +115,7 @@ pub fn init(home: PathBuf, root: PathBuf, bind_host: String) -> &'static App {
         bind_host,
         port: Mutex::new(0),
         started_at: now_iso(),
-        state: Mutex::new(State::default()),
+        state: Watched::new(State::default()),
         stop: AtomicBool::new(false),
         exit_code: AtomicI32::new(0),
         model: crate::model_cache::ModelCache::new(),

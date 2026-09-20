@@ -323,13 +323,16 @@ pub fn refresh_news() -> usize {
         let key = |l: &news::Listing| { let t = tmx_symbol(&l.0); (if t.is_empty() { l.0.clone() } else { t }).to_uppercase() };
         let start = |due: &[news::Listing]| {
             *news_pass().lock().unwrap() = due.iter().map(key).collect();
+            crate::events::signal(); // the status names the listings still to read
         };
         let done = |l: &news::Listing, _answered: bool| {
             news_pass().lock().unwrap().remove(&key(l));
+            crate::events::signal();
         };
         let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(c, sym, ex, rows, ids);
         let got = news::refresh(&conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         news_pass().lock().unwrap().clear();
+        crate::events::signal();
         match got {
             Ok(n) => n,
             Err(e) => {
@@ -1918,8 +1921,13 @@ pub fn archive_loop() {
 
 /// Prices, every QUOTE_REFRESH_MINUTES.
 pub fn quote_loop() {
+    // The exchanges offer no push, so prices are asked for; but only while a page is
+    // open to show them. With nobody looking, nothing is fetched; a page that opens
+    // asks for fresh quotes itself (`/api/events` -> the model's own kick).
     while !app().wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
-        refresh_quotes();
+        if crate::events::watchers() > 0 {
+            refresh_quotes();
+        }
     }
 }
 

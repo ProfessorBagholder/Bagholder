@@ -9,7 +9,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # SQLite itself, built from source so a copy of the app carries its own and
 # does not depend on what the machine happens to have.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# "hooks": SQLite tells the process when a transaction commits (open_db), so a change
+# reaches the page because it happened, not because something polled for it
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # the CSV importer's patterns
 regex = "1"
 

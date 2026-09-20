@@ -8,7 +8,7 @@
   import { signedPct, newsWhen, discDate, newsTextKey, api } from './util'
   import { bareSymbol, symText } from '../sym'
   import { sort, sortRows } from '../sort.svelte'
-  import { store, loadModel } from '../state.svelte'
+  import { store } from '../state.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
   import { discFeed, discBySym, loadDiscFeed, ensureDisclosures, discTitleComing, sweepEnrich, type DiscRow } from './disc.svelte'
   import Mseg from './Mseg.svelte'
@@ -211,7 +211,7 @@
           api<{ ok: boolean; exchange?: string }>('GET', '/api/news/symbol?symbol=' + encodeURIComponent(only.symbol) + '&exchange=' + encodeURIComponent(only.exchange) + '&currency=' + encodeURIComponent(only.currency || '')).then((r) => {
             reading = ''
             if (r && r.ok && r.exchange && sym === only) only.exchange = String(r.exchange).toUpperCase()
-            loadModel()
+            // the items it read reach the card as rows inserted into the news
           })
         }
       }

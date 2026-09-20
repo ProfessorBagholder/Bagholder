@@ -6,7 +6,6 @@
   import { ICONS } from '../icons'
   import Icon from './Icon.svelte'
   import { n2, signedPct, api } from './util'
-  import { loadModel } from '../state.svelte'
 
   let { tiles: propTiles, instruments }: { tiles: MarketTile[]; instruments: MarketInstrument[] } = $props()
 
@@ -33,15 +32,19 @@
     if (!plus && tileAdd) tileAdd = false // the plus cell is gone: its box goes with it
   })
 
-  let saveTimers: ReturnType<typeof setTimeout>[] = []
   async function postTiles(next: MarketTile[]) {
     order = next.slice()
-    await api('POST', '/api/tiles/set', { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) })
-    await loadModel()
-    order = null
-    saveTimers.forEach(clearTimeout)
-    saveTimers = [3000, 9000].map((ms) => setTimeout(() => loadModel(), ms))
+    const r = await api<{ ok?: boolean }>('POST', '/api/tiles/set', { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) })
+    if (!r || !r.ok) order = null // refused: back to what the server has
   }
+  // The saved row reaches the page as a change to the tiles, and each tile's price as
+  // a change to that tile when the server has read it. The optimistic order steps
+  // aside the moment the server's row says the same thing.
+  $effect(() => {
+    if (!order || !propTiles) return
+    const sent = order.map((t) => t.symbol + '@' + t.exchange).join()
+    if (sent === propTiles.map((t) => t.symbol + '@' + t.exchange).join()) order = null
+  })
 
   function tileRemove(sym: string) {
     postTiles(tiles.filter((t) => t.symbol !== sym))

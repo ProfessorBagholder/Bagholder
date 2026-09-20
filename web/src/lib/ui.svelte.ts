@@ -1,6 +1,6 @@
 // Small shared UI state for the header menu, modals and the confirm dialog —
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
-import { store, loadModel } from './state.svelte'
+import { store } from './state.svelte'
 
 export interface TradeForm {
   date: string
@@ -89,10 +89,9 @@ function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
   }, ms)
 }
 
-// Sync, ported from ledger.html syncNow(): start it, then poll status every 1.5s
-// so the header shows each step live (a first pull of a large book runs well past
-// five minutes and only the server knows when it is done), and reload the model
-// once it finishes.
+// Sync: ask for it. Each step, and the end, reach the header as changes to the
+// status (the server's state is written, the page is told) -- nothing here asks how
+// it is going. The rows a sync brings arrive the same way, as they are committed.
 export function syncNow(): void {
   ui.menuOpen = false
   const s = store.model?.status
@@ -102,24 +101,12 @@ export function syncNow(): void {
     s.syncStep = 'Syncing…'
   }
   api('POST', '/api/sync').then((r) => {
-    if (!r || !r.ok) {
-      const cur = store.model?.status
-      if (cur) {
-        cur.syncing = false
-        cur.error = (r && (r.error as string)) || 'Sync failed.'
-      }
-      return
+    if (r && r.ok) return
+    const cur = store.model?.status
+    if (cur) {
+      cur.syncing = false
+      cur.error = (r && (r.error as string)) || 'Sync failed.'
     }
-    const tick = () =>
-      api('GET', '/api/status').then((st) => {
-        if (store.model && st && st.ok) store.model.status = { ...store.model.status, ...(st as object) } as typeof store.model.status
-        if (st && !st.syncing) {
-          loadModel()
-          return
-        }
-        setTimeout(tick, 1500)
-      })
-    setTimeout(tick, 1000)
   })
 }
 
@@ -127,65 +114,63 @@ export function refreshSession(): void {
   ui.menuOpen = false
   api('POST', '/api/refresh').then((r) => {
     flash(r && r.ok ? 'Session refreshed' : (r && (r.error as string)) || 'Refresh failed', r && r.ok ? 'ok' : 'err')
-    loadModel()
   })
 }
 
-// Connect to Wealthsimple, ported from ledger.html connect(): start the login
-// browser, show the in-app sign-in window if the server streams one, then poll
-// status until the session lands (then sync) or the attempt ends/times out.
+// Connect to Wealthsimple: start the login browser and show the in-app sign-in
+// window if the server streams one. How it goes is read off the status as it
+// changes: the session landing (then sync), or the attempt ending without one. The
+// one timer is a deadline -- three minutes to sign in -- not a question asked again.
+const NO_SESSION = 'No session yet. Finish login in the Chrome window, then try Sync now.'
+let sawCapturing = false
+let connectDeadline: ReturnType<typeof setTimeout> | undefined
+function endConnect(error: string): void {
+  clearTimeout(connectDeadline)
+  ui.connecting = false
+  closeLoginView()
+  const cur = store.model?.status
+  if (cur && error) cur.error = error
+}
 export function connect(): void {
   ui.menuOpen = false
   ui.connecting = true
+  sawCapturing = false
   const s = store.model?.status
   if (s) s.error = ''
   api('POST', '/api/login/start').then((res) => {
+    if (!ui.connecting) return // cancelled meanwhile
     if (!res || !res.ok) {
-      ui.connecting = false
-      const st = store.model?.status
-      if (st) st.error = (res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.'
+      endConnect((res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.')
       return
     }
     if (store.model?.status?.loginView) ui.loginView = true
-    const t0 = Date.now()
-    const tick = () =>
-      api('GET', '/api/status').then((st) => {
-        if (!ui.connecting) return // cancelled meanwhile
-        if (store.model && st && st.ok) store.model.status = st as unknown as typeof store.model.status
-        if (st && st.connected) {
-          ui.connecting = false
-          closeLoginView()
-          syncNow()
-          return
-        }
-        if (st && !st.capturing) {
-          ui.connecting = false
-          closeLoginView()
-          const cur = store.model?.status
-          if (cur) cur.error = (st.error as string) || 'No session yet. Finish login in the Chrome window, then try Sync now.'
-          return
-        }
-        if (Date.now() - t0 > 180000) {
-          ui.connecting = false
-          closeLoginView()
-          const cur = store.model?.status
-          if (cur) cur.error = 'No session yet. Finish login in the Chrome window, then try Sync now.'
-          return
-        }
-        setTimeout(tick, 500)
-      })
-    tick()
+    clearTimeout(connectDeadline)
+    connectDeadline = setTimeout(() => ui.connecting && endConnect(NO_SESSION), 180000)
   })
 }
+$effect.root(() => {
+  $effect(() => {
+    const st = store.model?.status
+    if (!ui.connecting || !st) return
+    if (st.connected) {
+      endConnect('')
+      syncNow()
+    } else if (st.capturing) {
+      sawCapturing = true
+    } else if (sawCapturing) {
+      // the login window was there and is gone, with no session
+      endConnect((st.error as string) || NO_SESSION)
+    }
+  })
+})
 function closeLoginView(): void {
   ui.loginView = false
 }
 export function cancelConnect(): void {
-  ui.connecting = false
-  closeLoginView()
+  endConnect('')
   const cur = store.model?.status
   if (cur) cur.error = ''
-  api('POST', '/api/login/cancel').then(() => loadModel())
+  api('POST', '/api/login/cancel')
 }
 // One login input event (click/key/wheel/text), forwarded to the streamed browser.
 export function loginInput(ev: unknown): void {
@@ -198,7 +183,7 @@ export function disconnect(): void {
 }
 export function disconnectNow(): void {
   ui.confirm = ''
-  api('POST', '/api/disconnect').then(() => loadModel())
+  api('POST', '/api/disconnect')
 }
 
 export function openData(): void {
@@ -207,7 +192,7 @@ export function openData(): void {
 }
 export function clearDataNow(): void {
   ui.confirm = ''
-  api('POST', '/api/data/clear', { journal: true, market: true }).then(() => loadModel())
+  api('POST', '/api/data/clear', { journal: true, market: true })
 }
 
 export function openTradeModal(): void {
@@ -250,7 +235,6 @@ export function saveTrade(accounts: { id: string; name: string }[]): void {
     }
     ui.modal = ''
     flash(r.added ? 'Trade added' : 'That trade was already recorded')
-    loadModel()
   })
 }
 
@@ -290,7 +274,6 @@ async function importFiles(list: FileList | null): Promise<void> {
     }
   }
   ui.importReport = report
-  if (report.added) loadModel()
 }
 
 export function openFolder(): void {
@@ -308,7 +291,6 @@ export function watchFolder(): void {
     if (!r || !r.ok) ui.folderError = (r && (r.error as string)) || 'Could not watch that folder.'
     else {
       ui.watch = r as typeof ui.watch
-      loadModel()
     }
   })
 }
@@ -318,7 +300,6 @@ export function scanFolder(): void {
     ui.busy = ''
     if (r && r.ok) {
       ui.watch = r as typeof ui.watch
-      loadModel()
     }
   })
 }

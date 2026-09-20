@@ -28,6 +28,13 @@ fn local_parts(unix: i64) -> Option<(i64, u32, u32, u32, u32)> {
     Some((y, m, d, (secs / 3600) as u32, ((secs % 3600) / 60) as u32))
 }
 
+/// Seconds from now until the local day turns.
+pub fn seconds_until_local_midnight() -> u64 {
+    let now = Utc::now().timestamp();
+    let offset = zone().as_ref().and_then(|tz| tz.find_local_time_type(now).ok()).map(|t| t.ut_offset() as i64).unwrap_or(0);
+    (86400 - (now + offset).rem_euclid(86400)) as u64
+}
+
 /// `when_parts`: an ISO instant becomes `(YYYY-MM-DD, HH:MM)` locally.
 /// A bare date has no time, and an unreadable instant keeps its first ten
 /// characters.

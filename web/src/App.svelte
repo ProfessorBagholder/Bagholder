@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { store, loadModel, startStatusPoll } from './lib/state.svelte'
+  import { store, refilter, loadDetail } from './lib/state.svelte'
+  import { disconnect } from './lib/live'
   import { route, startRouter, go, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
@@ -36,7 +37,7 @@
   }
   function removeChip(key: string) {
     clearField(key)
-    loadModel()
+    refilter()
   }
   let ordersOpen = $state(false)
   let notesOpen = $state(false)
@@ -127,7 +128,7 @@
       if (filterOpen || ui.menuOpen) { filterOpen = false; filterField = undefined; ui.menuOpen = false; return }
       const el = document.activeElement as HTMLElement | null
       if (route.sub && route.tab === 'trades' && el && el.tagName !== 'TEXTAREA' && el.id !== 'tagInput') { history.back(); return }
-      if (activeCount() > 0 && !isFieldFocused()) { resetFilters(); loadModel(); return }
+      if (activeCount() > 0 && !isFieldFocused()) { resetFilters(); refilter(); return }
     }
   }
 
@@ -185,30 +186,21 @@
   }
 
   onMount(() => {
-    loadModel()
+    // one connection: the whole view once, then only what changes in it (live.ts)
+    refilter()
     const stopRouter = startRouter()
     const stopNotes = startNotesStream()
-    // Keep the page live off /api/status (fast while syncing, slow when idle) and
-    // reload the model only when the data changed and a sync is not running — never
-    // a blind full reload on a timer, which would churn an open filter popover mid-sync.
-    const stopPoll = startStatusPoll()
     return () => {
       stopRouter()
       stopNotes()
-      stopPoll()
+      disconnect()
     }
   })
 
-  // Selecting a trade or holding (or leaving one) changes the &trade= detail the
-  // model is fetched with — its fills/legs travel only for the open item — so
-  // reload when the drill-down id changes. (Runs once on mount too; harmless.)
-  let lastSub: string | null = null
+  // The legs and fills of the trade or holding that is open are asked for when it
+  // opens -- that one row's detail, not the model again.
   $effect(() => {
-    const sub = route.sub
-    if (sub !== lastSub) {
-      lastSub = sub
-      loadModel()
-    }
+    loadDetail(route.sub && (route.tab === 'trades' || route.tab === 'portfolio') ? route.sub : null)
   })
 </script>
 

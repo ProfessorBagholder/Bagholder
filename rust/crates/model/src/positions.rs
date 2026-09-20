@@ -88,7 +88,6 @@ pub fn build_positions(
             Some(l) => num(get(l, "price"), 0.0),
             None => if qty != 0.0 { cost / (qty * mult) } else { 0.0 },
         };
-        let mut last_at = last.map(|l| field_s(l, "date")).unwrap_or_default();
         let mut price_source = "fill";
 
         let mut quote = quotes.get(&symbol);
@@ -101,7 +100,6 @@ pub fn build_positions(
             if let Some(p) = opt_num(get(q, "price")) {
                 if p != 0.0 {
                     last_px = p;
-                    last_at = field_s(q, "fetchedAt");
                     price_source = "quote";
                 }
             }
@@ -168,7 +166,6 @@ pub fn build_positions(
             "cost": cost,
             "fees": fees,
             "last": last_px,
-            "lastAt": last_at,
             "priceSource": price_source,
             "priceChange": price_change,
             "percentChange": percent_change,

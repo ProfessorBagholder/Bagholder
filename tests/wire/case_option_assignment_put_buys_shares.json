@@ -1,7 +1,6 @@
 {
   "view": {
     "ok": true,
-    "generated": "",
     "today": "2026-01-01",
     "syncedAt": "",
     "currency": "CAD",
@@ -312,7 +311,6 @@
         "cost": 500.0,
         "fees": 0.0,
         "last": 5.0,
-        "lastAt": "2025-12-05",
         "priceSource": "fill",
         "priceChange": null,
         "percentChange": null,
@@ -939,7 +937,6 @@
   },
   "wire": {
     "ok": true,
-    "generated": "",
     "today": "2026-01-01",
     "syncedAt": "",
     "currency": "CAD",
@@ -1204,7 +1201,6 @@
         "cost": 500.0,
         "fees": 0.0,
         "last": 5.0,
-        "lastAt": "2025-12-05",
         "priceSource": "fill",
         "priceChange": null,
         "percentChange": null,
@@ -1813,7 +1809,6 @@
   },
   "wireWithDetail": {
     "ok": true,
-    "generated": "",
     "today": "2026-01-01",
     "syncedAt": "",
     "currency": "CAD",
@@ -2124,7 +2119,6 @@
         "cost": 500.0,
         "fees": 0.0,
         "last": 5.0,
-        "lastAt": "2025-12-05",
         "priceSource": "fill",
         "priceChange": null,
         "percentChange": null,
