@@ -177,6 +177,48 @@ export interface Trade {
   flags: string[]
 }
 
+// --- Markets tab ---
+export interface MarketTile {
+  symbol: string
+  label: string
+  name: string
+  exchange: string
+  kind: string
+  last: number | null
+  change: number | null
+  percentChange: number | null
+  decimals: number
+  rateOf?: number | null
+}
+
+export interface HeatHolding {
+  id: string
+  symbol: string
+  exchange: string
+  value: number
+  percentChange: number | null
+  sector: string
+}
+
+export interface WatchItem {
+  symbol: string
+  exchange: string
+  name: string
+  currency: string
+  last: number | null
+  priceChange: number | null
+  percentChange: number | null
+  sector: string
+  positionId?: string | null
+}
+
+export interface Markets {
+  holdings: HeatHolding[]
+  watchlist: WatchItem[]
+  universes: { ca?: HeatHolding[]; us?: HeatHolding[]; intl?: HeatHolding[] }
+  tiles: MarketTile[]
+}
+
 export interface Model {
   ok: boolean
   currency: string
@@ -187,4 +229,5 @@ export interface Model {
   positions: Position[]
   portfolio: Portfolio
   trades: Trade[]
+  markets: Markets
 }

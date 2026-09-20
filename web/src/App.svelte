@@ -8,6 +8,7 @@
   import Portfolio from './lib/Portfolio.svelte'
   import Trades from './lib/Trades.svelte'
   import TradeDetail from './lib/TradeDetail.svelte'
+  import Markets from './lib/Markets.svelte'
   import Placeholder from './lib/Placeholder.svelte'
 
   onMount(() => {
@@ -47,6 +48,8 @@
       {:else}
         <Trades trades={store.model.trades} />
       {/if}
+    {:else if route.tab === 'markets'}
+      <Markets markets={store.model.markets} />
     {:else}
       <Placeholder tab={route.tab} />
     {/if}
