@@ -446,7 +446,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// docs/architecture.md, "Timers that remain", and then counted here.
-const TIMED_WAITS: [(&str, usize, &str); 14] = [
+const TIMED_WAITS: [(&str, usize, &str); 15] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pace.rs", 1, "a host's request rate (the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
@@ -458,7 +458,8 @@ const TIMED_WAITS: [(&str, usize, &str); 14] = [
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
     ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 6); a test"),
-    ("server/src/orders.rs", 3, "Wealthsimple offers no order push: read only while an order is live or shown"),
+    ("server/src/orders/brackets.rs", 2, "the bracket engine, parked until a bracket is armed: a stop's cadence; a cancel given its seconds to land"),
+    ("server/src/orders/readback.rs", 1, "Wealthsimple offers no order push: read only while an order is live or shown"),
     ("server/src/session.rs", 2, "the portfolio while a page is open; the token and pull deadlines"),
     ("server/src/update.rs", 3, "child processes with a deadline: std has no wait with one"),
 ];
