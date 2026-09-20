@@ -17,7 +17,7 @@ use crate::orders::{self as o, seam};
 
 type Sent = Arc<Mutex<Vec<(String, Value)>>>;
 
-fn conn() -> rusqlite::Connection {
+fn conn() -> bagholder_store::pool::Pooled<'static> {
     app().open().unwrap()
 }
 

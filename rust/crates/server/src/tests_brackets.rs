@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use bagholder_store::orders as so;
@@ -19,7 +18,7 @@ fn lk<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn db() -> Connection {
+fn db() -> bagholder_store::pool::Pooled<'static> {
     crate::app::app().open().unwrap()
 }
 

@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 
 use bagholder_store::orders as so;
@@ -71,7 +70,7 @@ pub fn orders_live() -> bool {
     *LIVE.get_or_init(|| std::env::var("BAGHOLDER_DRY_ORDERS").map(|v| v.trim() != "1").unwrap_or(true))
 }
 
-fn db() -> Connection {
+fn db() -> bagholder_store::pool::Pooled<'static> {
     app().open().expect("bagholder orders: the store could not be opened")
 }
 

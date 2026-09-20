@@ -2,7 +2,6 @@
 //! Wealthsimple session and the work in flight, the derived model it serves,
 //! and the small tools every part of the server shares.
 
-use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -100,6 +99,7 @@ pub struct App {
     stop_bell: (Mutex<()>, std::sync::Condvar),
     pub exit_code: AtomicI32,
     model: crate::model_cache::ModelCache,
+    store: bagholder_store::pool::Pool,
     jobs: Mutex<HashMap<String, Job>>,
 }
 
@@ -111,6 +111,7 @@ pub fn app() -> &'static App {
 
 pub fn init(home: PathBuf, root: PathBuf, bind_host: String) -> &'static App {
     APP.get_or_init(|| App {
+        store: bagholder_store::pool::Pool::new(&home.join("bagholder.db")),
         home,
         root,
         bind_host,
@@ -130,10 +131,12 @@ impl App {
         self.home.join("bagholder.db")
     }
 
-    /// A connection to the store, ready.
-    pub fn open(&self) -> rusqlite::Result<Connection> {
+    /// A connection to the store, on loan from the pool: used as a `&Connection`
+    /// and given back when dropped.
+    pub fn open(&self) -> rusqlite::Result<bagholder_store::pool::Pooled<'_>> {
         // every connection passes here: a test never opens the live database
-        bagholder_store::connect(&self.home)
+        bagholder_store::guard_home(&self.home).map_err(|_| rusqlite::Error::InvalidPath(self.home.clone()))?;
+        self.store.get()
     }
 
     pub fn ws_home(&self) -> bagholder_ws::session::Home {

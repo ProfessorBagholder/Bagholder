@@ -21,8 +21,14 @@ use bagholder_store::tables::{get_meta, json_text, set_meta};
 use crate::app::{app, f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, ENRICH_VERSION};
 use crate::notify;
 
-fn conn() -> Option<Connection> {
+fn conn() -> Option<bagholder_store::pool::Pooled<'static>> {
     app().open().ok()
+}
+
+/// A connection of the caller's own, not the pool's: for work that hands it to
+/// threads it starts itself and keeps it for the length of a pass.
+fn own_conn() -> Option<Connection> {
+    bagholder_store::connect(&app().home).ok()
 }
 
 fn base() -> Option<Arc<Base>> {
@@ -339,7 +345,7 @@ pub fn refresh_news() -> usize {
             crate::events::signal();
         };
         let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(c, sym, ex, rows, ids);
-        let got = news::refresh(&conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
+        let got = news::refresh(&own_conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         news_pass().lock().unwrap().clear();
         crate::events::signal();
         match got {

@@ -566,7 +566,7 @@ mod tests {
 
     /// One store for the whole test binary; each test starts it empty, with
     /// every kind off, nothing posted on this machine.
-    fn setup() -> (MutexGuard<'static, ()>, Connection) {
+    fn setup() -> (MutexGuard<'static, ()>, bagholder_store::pool::Pooled<'static>) {
         let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(MODE_ENV, "browser");
         let home = std::env::temp_dir().join(format!("bagholder-notify-tests-{}", std::process::id()));
