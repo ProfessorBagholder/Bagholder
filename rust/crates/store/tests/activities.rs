@@ -184,3 +184,25 @@ fn test_the_orders_table_survives_clear_synced_data() {
     assert_eq!(rows.len(), 1, "what was submitted is a record of the user's own actions, never cleared with the synced rows");
     assert_eq!(rows[0]["id"], "order-1");
 }
+
+#[test]
+fn test_the_models_reading_of_a_row_is_the_same_with_and_without_json_between() {
+    // the model used to be handed JSON rows and read them leniently; it is now handed the
+    // rows read straight from the columns. Both readings, of rows of every shape:
+    let d = db();
+    d.apply(&[
+        json!({"id": "a1", "canonicalId": "c1", "occurredAt": "2026-01-05T15:30:00Z", "transactionDate": "2026-01-05", "accountId": "acct-1", "fifoId": "pool-1", "accountType": "TFSA",
+            "activityType": "Trade", "activitySubType": "BUY", "description": "Buy", "direction": "DEBIT", "symbol": "QNC", "name": "Quantum", "currency": "CAD",
+            "quantity": 10, "unitPrice": 1.75, "commission": 0.0, "netCashAmount": -17.5, "category": "trade", "rawType": "DIY_BUY", "aftType": "", "securityId": "sec-1"}),
+        json!({"id": "a2", "canonicalId": "c2", "transactionDate": "2026-01-06", "accountId": "acct-1", "activityType": "Dividend", "symbol": "ENB", "currency": "CAD", "netCashAmount": 3.2, "category": "dividend"}),
+        json!({"id": "a3", "canonicalId": "c3", "transactionDate": "2026-01-07", "accountId": "acct-2", "bookId": "book-2", "activityType": "Deposit", "category": "deposit", "aftType": "misc_payments"}),
+    ]);
+    let as_json = activities::all_activities(&d.conn).unwrap();
+    let through_json: Vec<bagholder_model::activity::RawActivity> = as_json.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect();
+    let direct = activities::all_raw_activities(&d.conn).unwrap();
+    assert_eq!(direct.len(), 3);
+    assert_eq!(direct, through_json);
+    // what a row does not say: a number is zero, and the book and the pool are the account
+    let dividend = direct.iter().find(|r| r.id == "a2").unwrap();
+    assert_eq!((dividend.quantity, dividend.fifo_id.as_str(), dividend.book_id.as_str()), (0.0, dividend.account_id.as_str(), dividend.account_id.as_str()));
+}

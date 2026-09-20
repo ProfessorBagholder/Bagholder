@@ -240,7 +240,7 @@ pub fn mark(flags: &mut Vec<Flag>, flag: Flag) {
 /// A row as the store (or a shared case, or a CSV) gives it. Every field has a
 /// default, and text and numbers are read leniently (`lenient`), because the
 /// cases every implementation runs leave most of them out.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RawActivity {
     #[serde(deserialize_with = "lenient::text")]

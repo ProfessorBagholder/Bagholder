@@ -104,6 +104,10 @@ impl Inputs {
     pub fn set_activities(&mut self, list: &[Value]) {
         self.activities = rows(list);
     }
+    /// The activities already read as what they are (the store's own reading of its rows).
+    pub fn set_raw_activities(&mut self, list: Vec<crate::activity::RawActivity>) {
+        self.activities = Arc::new(list);
+    }
     pub fn set_securities(&mut self, list: &[Value]) {
         self.securities = rows(list);
     }

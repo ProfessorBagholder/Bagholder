@@ -202,6 +202,48 @@ pub fn all_activities(conn: &Connection) -> Result<Vec<Value>> {
     rows.collect()
 }
 
+/// A stored row as the model reads one: the same columns `row_to_activity` gives, with
+/// no JSON between the row and the struct. A number that is not there is zero and a text
+/// that is not there is empty, as the model's lenient reading of the JSON row has it.
+fn row_to_raw(row: &Row) -> rusqlite::Result<bagholder_model::activity::RawActivity> {
+    let number = |idx: usize| -> rusqlite::Result<f64> { Ok(row.get::<_, Option<f64>>(idx)?.filter(|x| !x.is_nan()).unwrap_or(0.0)) };
+    let account_id = text(row, 5)?;
+    let or_account = |t: String| if t.is_empty() { account_id.clone() } else { t };
+    Ok(bagholder_model::activity::RawActivity {
+        id: text(row, 0)?,
+        occurred_at: text(row, 2)?,
+        transaction_date: text(row, 3)?,
+        book_id: or_account(text(row, 6)?),
+        fifo_id: or_account(text(row, 7)?),
+        account_type: text(row, 8)?,
+        activity_type: text(row, 9)?,
+        activity_sub_type: text(row, 10)?,
+        description: text(row, 11)?,
+        direction: text(row, 12)?,
+        symbol: text(row, 13)?,
+        name: text(row, 14)?,
+        currency: text(row, 15)?,
+        quantity: number(16)?,
+        unit_price: number(17)?,
+        commission: number(18)?,
+        net_cash_amount: number(19)?,
+        category: text(row, 20)?,
+        raw_type: text(row, 23)?,
+        aft_type: text(row, 24)?,
+        security_id: text(row, 26)?,
+        kind: String::new(), // a stored row never says what it is
+        account_id,
+    })
+}
+
+/// Every row, oldest first, as the model reads them.
+pub fn all_raw_activities(conn: &Connection) -> Result<Vec<bagholder_model::activity::RawActivity>> {
+    let sql = format!("{SELECT_ALL} ORDER BY COALESCE(occurred_at, transaction_date) ASC, id ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_raw)?;
+    rows.collect()
+}
+
 pub fn activity_by_id(conn: &Connection, id: &str) -> Result<Option<Value>> {
     let sql = format!("{SELECT_ALL} WHERE id = ?");
     let mut stmt = conn.prepare(&sql)?;

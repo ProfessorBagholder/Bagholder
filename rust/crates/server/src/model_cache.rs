@@ -138,7 +138,7 @@ impl ModelCache {
                 }
             };
         }
-        part!("activities", ["activities"], i.set_activities(&activities::all_activities(conn)?));
+        part!("activities", ["activities"], i.set_raw_activities(activities::all_raw_activities(conn)?));
         part!("securities", ["securities"], i.set_securities(&snapshot::securities_part(conn)?));
         part!("fx", ["fx"], i.fx = Arc::new(base::fx_part(Some(&Value::Object(tables::fx_rates(conn, tables::FX_PAIR)?)))));
         part!("benchmark", ["benchmark"], {
