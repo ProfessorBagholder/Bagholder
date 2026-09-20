@@ -56,13 +56,13 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
     let built = blocking(move || -> Result<Value, ApiError> {
         if let (Ok(conn), Ok(base)) = (app.open(), app.base()) {
             let (today, now, _) = bagholder_market::clock_now();
-            if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::symbols_of::payer_symbols(&base)) {
+            if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&base))) {
                 app.kick("market", || {
                     feeds::refresh_market_data();
                 });
             } else {
-                let mut syms = bagholder_model::symbols_of::held_symbols(&base);
-                syms.extend(bagholder_model::markets::quote_symbols(&base));
+                let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&base));
+                syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&base)));
                 let due = bagholder_market::quotes::quote_symbols_needing_refresh(&conn, &syms, now, bagholder_market::quotes::QUOTE_REFRESH_MINUTES).map(|v| !v.is_empty()).unwrap_or(false);
                 if due {
                     app.kick("quotes", || {
@@ -101,9 +101,8 @@ async fn trade(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> 
     let app = state.app;
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.base().map(|base| bagholder_model::view::trade_detail(&base, &id))).await?.map_err(|e| ApiError::Model(e.to_string()))?;
-    let mut detail = found.ok_or_else(|| ApiError::NotFound("no such trade".into()))?;
-    detail["ok"] = json!(true);
-    Ok(Json(detail))
+    let detail = found.ok_or_else(|| ApiError::NotFound("no such trade".into()))?;
+    Ok(Json(json!({"ok": true, "id": detail.id, "legs": detail.legs, "fills": detail.fills})))
 }
 
 /// `GET /api/book`: the stored rows as they are, for the phones and for export.

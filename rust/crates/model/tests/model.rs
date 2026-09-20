@@ -10,7 +10,7 @@ use bagholder_model::dates::option_expiry;
 use bagholder_model::fifo::{match_fifo, match_fifo_in_place, Matched};
 use bagholder_model::filters::clean_filters;
 use bagholder_model::fx::{apply_fx, rate_on, to_cad, Fx, FX_FALLBACK};
-use bagholder_model::nav::{drawdown, equity_series, year_return, yearly_returns};
+use bagholder_model::nav::{year_return, NavRow, Point};
 use bagholder_model::activity::{Direction, Flag, Kind, RawActivity};
 use bagholder_model::book::Book;
 use bagholder_model::input::{journal_from, Quote};
@@ -18,9 +18,9 @@ use bagholder_model::normalize::normalize_all;
 use bagholder_model::securities::Securities;
 use bagholder_model::stats::payments_per_year;
 use bagholder_model::symbols::is_option_symbol;
-use bagholder_model::symbols_of::{held_symbols, intraday_archive_symbols, migrate_legacy_notes, payer_symbols};
+use bagholder_model::symbols_of::migrate_legacy_notes;
 use bagholder_model::trades::{build_trades, group_id_for_keys, slice_member_key};
-use bagholder_model::view::{build_view, slim, trade_detail};
+use bagholder_model::view::{view_of, Detail};
 
 // --------------------------------------------------------------------------
 // helpers
@@ -47,6 +47,51 @@ fn st(v: &Value) -> &str {
 
 fn arr(v: &Value) -> &Vec<Value> {
     v.as_array().unwrap_or_else(|| panic!("not a list: {}", v))
+}
+
+
+// The tests below assert on what the page is sent, so they read the model's rows
+// as that JSON: these stand in front of the typed functions and hand it over.
+
+fn sent<T: serde::Serialize>(rows: &[T]) -> Vec<Value> {
+    rows.iter().map(|r| serde_json::to_value(r).unwrap()).collect()
+}
+
+fn build_view(base: &Base, filters: Option<&Value>) -> Value {
+    bagholder_model::view::build_view(base, filters).to_value()
+}
+
+/// The view as sent: no row's legs and fills, or only the open one's.
+fn slim(base: &Base, open: Option<&str>) -> Value {
+    view_of(base, None, Detail::Only(open)).to_value()
+}
+
+fn trade_detail(base: &Base, id: &str) -> Option<Value> {
+    bagholder_model::view::trade_detail(base, id).map(|d| serde_json::to_value(d).unwrap())
+}
+
+fn equity_series(days: &[Value]) -> Vec<Point> {
+    bagholder_model::nav::equity_series(&days.iter().map(|d| serde_json::from_value::<NavRow>(d.clone()).unwrap()).collect::<Vec<_>>())
+}
+
+fn drawdown(series: &[Point]) -> Value {
+    serde_json::to_value(bagholder_model::nav::drawdown(series)).unwrap()
+}
+
+fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &str) -> Vec<Value> {
+    sent(&bagholder_model::nav::yearly_returns(series, bench, today))
+}
+
+fn held_symbols(base: &Base) -> Vec<Value> {
+    sent(&bagholder_model::symbols_of::held_symbols(base))
+}
+
+fn payer_symbols(base: &Base) -> Vec<Value> {
+    sent(&bagholder_model::symbols_of::payer_symbols(base))
+}
+
+fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
+    sent(&bagholder_model::symbols_of::intraday_archive_symbols(base))
 }
 
 fn snap(acts: Vec<Value>) -> Value {
@@ -435,17 +480,17 @@ fn test_saved_group_overrides_round_trip() {
 fn test_position_notes_carry_over_to_the_closed_trade() {
     let mut snapshot = snap(vec![buy("b1", "AAA", 100, 10, "2026-01-01")]);
     let base = base_of(&snapshot, empty_market(), json!({}), "2026-02-01");
-    let pid = st(&base.positions[0]["id"]).to_string();
+    let pid = st(&sent(&base.positions)[0]["id"]).to_string();
     assert_eq!(pid, "rt:b1");
     let journal = json!({pid.clone(): {"thesis": "holding for the catalyst", "tags": ["core"], "grade": ""}});
     let base = base_of(&snapshot, empty_market(), journal.clone(), "2026-02-01");
-    assert_eq!(base.positions[0]["thesis"], "holding for the catalyst");
+    assert_eq!(sent(&base.positions)[0]["thesis"], "holding for the catalyst");
     snapshot["activities"].as_array_mut().unwrap().push(sell("s1", "AAA", 100, 12, "2026-03-01"));
     let base = base_of(&snapshot, empty_market(), journal, "2026-04-01");
     assert!(base.positions.is_empty());
-    assert_eq!(base.trades[0]["id"], "rt:b1");
-    assert_eq!(base.trades[0]["thesis"], "holding for the catalyst");
-    assert_eq!(base.trades[0]["tags"], json!(["core"]));
+    assert_eq!(sent(&base.trades)[0]["id"], "rt:b1");
+    assert_eq!(sent(&base.trades)[0]["thesis"], "holding for the catalyst");
+    assert_eq!(sent(&base.trades)[0]["tags"], json!(["core"]));
 }
 
 #[test]
@@ -511,7 +556,7 @@ fn test_open_option_past_expiry_is_closed_at_zero() {
     assert_eq!(base.book.fifo.open.len(), 1);
     assert_eq!(base.book.fifo.open[0].symbol, "ZZZ 17JUL26 10.00 CALL");
     assert_eq!(base.trades.len(), 1);
-    let t = &base.trades[0];
+    let t = &sent(&base.trades)[0];
     assert_eq!(t["exitDate"], "2026-01-02");
     assert_eq!(n(&t["exit"]), 0.0);
     near(n(&t["pnl"]), 60.0);
@@ -529,7 +574,8 @@ fn test_assigned_call_delivers_the_shares() {
     snapshot["securities"] = json!([{"id": "sec-o-asts", "symbol": "ASTS", "underlyingId": "sec-s-asts"}, {"id": "sec-s-asts", "symbol": "ASTS", "name": "AST SpaceMobile", "primaryExchange": "NASDAQ"}]);
     let base = base_of(&snapshot, empty_market(), json!({}), "2026-09-06");
     assert!(base.book.fifo.open.is_empty());
-    let by_sym = by_key(&base.trades, "symbol");
+    let trades = sent(&base.trades);
+    let by_sym = by_key(&trades, "symbol");
     let shares = by_sym["ASTS"];
     assert_eq!(n(&shares["qty"]), 300.0);
     assert_eq!(n(&shares["exit"]), 31.0);
@@ -975,7 +1021,7 @@ fn test_cashflow_tiles_roll_over_with_the_calendar() {
 
 #[test]
 fn test_filters_are_cleaned() {
-    let f = clean_filters(Some(&json!({"lists": {"account": ["A", 3, ""]}, "ranges": {"hold": {"op": "<", "v": "7"}}, "preset": "bogus", "years": [2025, "abcd"], "from": "2026-1-1", "to": "2026-02-01"}))).to_json();
+    let f = serde_json::to_value(clean_filters(Some(&json!({"lists": {"account": ["A", 3, ""]}, "ranges": {"hold": {"op": "<", "v": "7"}}, "preset": "bogus", "years": [2025, "abcd"], "from": "2026-1-1", "to": "2026-02-01"})))).unwrap();
     assert_eq!(f["lists"]["account"], json!(["A", "3"]));
     assert_eq!(f["ranges"]["hold"], json!({"op": "<", "v": 7.0}));
     assert_eq!(f["preset"], "all");
@@ -1164,7 +1210,8 @@ fn test_positions_use_the_quote_when_present() {
     ]);
     let quotes = json!({"VEQT": {"price": 62.4, "priceChange": 0.08, "percentChange": 0.128, "fetchedAt": "2026-09-06T14:00:00Z"}});
     let base = base_of(&snapshot, json!({"fx": {}, "benchmark": {}, "quotes": quotes}), json!({}), "2026-09-06");
-    let p = by_key(&base.positions, "symbol");
+    let positions = sent(&base.positions);
+    let p = by_key(&positions, "symbol");
     assert_eq!(n(&p["VEQT"]["last"]), 62.4);
     assert_eq!(p["VEQT"]["priceSource"], "quote");
     near(n(&p["VEQT"]["unreal"]), (62.4 - 49.76) * 100.0);
@@ -1182,7 +1229,8 @@ fn test_positions_price_crypto_and_options_from_quotes() {
     ]);
     let quotes = json!({"BTC": {"price": 120000.0}, "QNC 20NOV26 3.00 CALL": {"price": 0.15}});
     let base = base_of(&snapshot, json!({"fx": {}, "benchmark": {}, "quotes": quotes}), json!({}), "2026-09-06");
-    let by = by_key(&base.positions, "symbol");
+    let positions = sent(&base.positions);
+    let by = by_key(&positions, "symbol");
     let row = |p: &Value| (st(&p["kind"]).to_string(), st(&p["priceSource"]).to_string(), n(&p["last"]), n(&p["mv"]));
     assert_eq!(row(by["BTC"]), ("Crypto".into(), "quote".into(), 120000.0, 60000.0));
     assert_eq!(row(by["QNC 20NOV26 3.00 CALL"]), ("Options".into(), "quote".into(), 0.15, 30.0));
@@ -1200,7 +1248,7 @@ fn test_a_coins_price_never_prices_a_share_with_the_same_symbol() {
     ]);
     let quotes = json!({"BTC": {"price": 109998.0, "source": "coinbase"}});
     let base = base_of(&snapshot, json!({"fx": {}, "benchmark": {}, "quotes": quotes}), json!({}), "2026-09-06");
-    let find = |kind: &str| base.positions.iter().find(|p| p["symbol"] == "BTC" && p["kind"] == kind).unwrap();
+    let find = |kind: &str| sent(&base.positions).into_iter().find(|p| p["symbol"] == "BTC" && p["kind"] == kind).unwrap();
     assert_eq!((st(&find("Crypto")["priceSource"]), n(&find("Crypto")["last"])), ("quote", 109998.0));
     let share = find("Shares");
     assert_eq!((st(&share["priceSource"]), n(&share["last"]), (n(&share["mv"]) * 100.0).round() / 100.0), ("fill", 1.75, 8142.75), "the share keeps its fill price rather than the coin's");
@@ -1399,30 +1447,29 @@ fn detail_base() -> Base {
 #[test]
 fn test_the_view_carries_legs_and_fills_for_the_open_trade_only() {
     let base = detail_base();
-    let trade = base.trades[0].clone();
-    let holding = base.positions[0].clone();
+    let trade = sent(&base.trades)[0].clone();
+    let holding = sent(&base.positions)[0].clone();
     assert_eq!((arr(&trade["fills"]).len(), arr(&holding["fills"]).len()), (2, 1), "the base model keeps every fill");
-    let full = build_view(&base, None);
-    let v = slim(&full, None);
+    let v = slim(&base, None);
     assert!(v["trades"][0].get("legs").is_none() && v["trades"][0].get("fills").is_none());
     assert!(v["positions"][0].get("legs").is_none() && v["positions"][0].get("fills").is_none());
     assert_eq!(n(&v["trades"][0]["legCount"]), 1.0, "the counts stay on the row");
-    let v = slim(&full, Some(st(&trade["id"])));
+    let v = slim(&base, Some(st(&trade["id"])));
     assert_eq!(arr(&v["trades"][0]["fills"]).len(), 2);
     assert!(v["positions"][0].get("fills").is_none());
-    let v = slim(&full, Some(st(&holding["id"])));
+    let v = slim(&base, Some(st(&holding["id"])));
     assert_eq!(arr(&v["positions"][0]["fills"]).len(), 1);
     assert!(v["trades"][0].get("fills").is_none());
-    assert_eq!(arr(&base.trades[0]["fills"]).len(), 2, "slimming the view never touches the base model");
+    assert_eq!(arr(&sent(&base.trades)[0]["fills"]).len(), 2, "slimming the view never touches the base model");
 }
 
 #[test]
 fn test_trade_detail_finds_a_trade_or_a_holding_by_id() {
     let base = detail_base();
-    let d = trade_detail(&base, st(&base.trades[0]["id"])).unwrap();
+    let d = trade_detail(&base, st(&sent(&base.trades)[0]["id"])).unwrap();
     let ids = |d: &Value| arr(&d["fills"]).iter().map(|f| st(&f["id"]).to_string()).collect::<Vec<_>>();
-    assert_eq!((d["id"].clone(), arr(&d["legs"]).len(), ids(&d)), (base.trades[0]["id"].clone(), 1, strs(&["s1", "b1"])));
-    let d = trade_detail(&base, st(&base.positions[0]["id"])).unwrap();
+    assert_eq!((d["id"].clone(), arr(&d["legs"]).len(), ids(&d)), (sent(&base.trades)[0]["id"].clone(), 1, strs(&["s1", "b1"])));
+    let d = trade_detail(&base, st(&sent(&base.positions)[0]["id"])).unwrap();
     assert_eq!((d["legs"].clone(), ids(&d)), (json!([]), strs(&["b2"])));
     assert!(trade_detail(&base, "nope").is_none());
 }

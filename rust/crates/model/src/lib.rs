@@ -39,3 +39,4 @@ pub mod markets;
 pub mod view;
 pub mod patch;
 pub mod cases;
+pub mod testing;

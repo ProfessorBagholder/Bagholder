@@ -152,3 +152,116 @@ pub struct LastFill {
 pub fn journal_from(map: &serde_json::Map<String, serde_json::Value>) -> Journal {
     map.iter().filter(|(_, v)| v.is_object()).filter_map(|(k, v)| Some((k.clone(), JournalEntry::deserialize(v).ok()?))).collect()
 }
+
+/// A listing the person watches.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct WatchRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub exchange: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub currency: String,
+}
+
+/// A stored news item, as read for one listing (or for the market: `*` on `MARKET`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NewsRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub id: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub exchange: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub headline: String,
+    /// The wire that carried it, which is the source the page names.
+    #[serde(deserialize_with = "lenient::text")]
+    pub wire: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub url: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub published_at: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub kind: String,
+}
+
+/// One constituent of a market universe (the heatmaps beyond the book).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UniverseRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub name: String,
+    #[serde(deserialize_with = "lenient::number")]
+    pub value: f64,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub percent_change: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    pub sector: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub country: String,
+}
+
+/// A tile the person put in the Markets tab's row.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TileRef {
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub exchange: String,
+}
+
+/// A declared distribution of a fund.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Distribution {
+    #[serde(deserialize_with = "lenient::text")]
+    pub ex_date: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub pay_date: String,
+    #[serde(deserialize_with = "lenient::number")]
+    pub amount: f64,
+}
+
+/// A listing as the market readers are asked for it: what a quote, a chart or a
+/// record source needs to find it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Listing {
+    pub symbol: String,
+    pub exchange: String,
+    pub currency: String,
+    /// `Shares`, `Options`, `Crypto`, `Futures`, or `Instrument` for an index, a
+    /// future, a rate or a currency pair from the directory. Left out where the
+    /// reader is not told (a payer's record is asked for by symbol and venue).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// Where its quote is kept, when that is not under its symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote_key: Option<String>,
+    /// A directory instrument's Yahoo symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yahoo: Option<String>,
+    /// The earliest day its bars are wanted from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+}
+
+impl Listing {
+    /// The listing as the JSON the market readers take.
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).expect("a listing is plain data")
+    }
+}
+
+/// Listings as the JSON the market readers take.
+pub fn listings_json(listings: &[Listing]) -> Vec<serde_json::Value> {
+    listings.iter().map(Listing::to_value).collect()
+}

@@ -697,7 +697,7 @@ fn each(v: &Value, keys: &[&str]) -> Value {
 pub fn expect_from(snap: &Value, market: &Value, today: &str, filters: &Value, journal: Option<&Value>) -> Value {
     let journal = journal.and_then(|j| j.as_object()).cloned().unwrap_or_default();
     let base = build_base(snap, market, &journal, Some(today));
-    let view = build_view(&base, Some(filters));
+    let view = build_view(&base, Some(filters)).to_value();
 
     let mut trades = rows(&view["trades"]);
     trades.sort_by(|a, b| {

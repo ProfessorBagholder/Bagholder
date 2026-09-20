@@ -87,7 +87,7 @@ fn test_issuer_of_a_fund_name() {
 fn test_ishares_holdings_csv() {
     let (rows, as_of) = exposure::parse_ishares_csv(ISHARES_CSV);
     assert_eq!(as_of, "Sep 9, 2026");
-    let got: Vec<Vec<Value>> = rows.iter().map(|r| row(r, &["ticker", "weight", "sector", "country", "fund"])).collect();
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["ticker", "weight", "sector", "country", "fund"])).collect();
     assert_eq!(got, vec![
         vec![json!("RY"), json!(9.73), json!("Financials"), json!("Canada"), json!(false)],
         vec![json!("SHOP"), json!(5.21), json!("Information Technology"), json!("Canada"), json!(false)],
@@ -110,14 +110,14 @@ fn test_evolve_page() {
 fn test_harvest_tables() {
     let (rows, rf) = exposure::parse_harvest_tables(&html_tables(HARVEST_TABLE_HTML));
     assert_eq!(rf, "");
-    let got: Vec<Vec<Value>> = rows.iter().map(|r| row(r, &["ticker", "weight", "sector", "country"])).collect();
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["ticker", "weight", "sector", "country"])).collect();
     assert_eq!(got, vec![vec![json!("IBIT"), json!(130.3), json!("Digital assets"), json!("United States")]], "options and cash rows are out");
     let (rows, rf) = exposure::parse_harvest_tables(&html_tables(HARVEST_NAMES_HTML));
     assert_eq!(rf, "PLTR");
-    let got: Vec<Vec<Value>> = rows.iter().map(|r| row(r, &["name", "weight", "fund"])).collect();
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["name", "weight", "fund"])).collect();
     assert_eq!(got, vec![vec![json!("Palantir Technologies Inc."), json!(128.2), json!(false)]]);
     let (rows, _) = exposure::parse_harvest_tables(&html_tables(HARVEST_FOF_HTML));
-    let got: Vec<Vec<Value>> = rows.iter().map(|r| row(r, &["name", "weight", "fund"])).collect();
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["name", "weight", "fund"])).collect();
     assert_eq!(got, vec![
         vec![json!("Harvest Apple Enhanced High Income Shares ETF"), json!(7.0), json!(true)],
         vec![json!("Harvest NVIDIA Enhanced High Income Shares ETF"), json!(6.9), json!(true)],
@@ -299,8 +299,18 @@ fn obj(v: Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap()
 }
 
-fn named(v: &[Value]) -> Vec<(String, f64)> {
-    v.iter().map(|s| (s["name"].as_str().unwrap().to_string(), (s["value"].as_f64().unwrap() * 100.0).round() / 100.0)).collect()
+fn named(v: &[bagholder_model::wire::ExposureSlice]) -> Vec<(String, f64)> {
+    v.iter().map(|s| (s.name.clone(), (s.value * 100.0).round() / 100.0)).collect()
+}
+
+/// Holdings sketched from a few fields.
+fn held(rows: &[Value]) -> Vec<bagholder_model::wire::Position> {
+    rows.iter().cloned().map(bagholder_model::testing::holding).collect()
+}
+
+/// Exposure records as the model reads them.
+fn read(exposures: &Map<String, Value>) -> bagholder_model::exposure::Exposures {
+    exposures.iter().map(|(k, v)| (k.clone(), serde_json::from_value(v.clone()).unwrap())).collect()
 }
 
 #[test]
@@ -317,10 +327,10 @@ fn test_positions_spread_by_their_records() {
         "b": {"sectors": {"Information Technology": 0.5, "Energy": 0.25}, "countries": {"United States": 0.75}, "coverage": 0.75},
         "share:AAPL::US": {"sectors": {"Information Technology": 1.0}, "countries": {"United States": 1.0}, "coverage": 1.0}}));
     let cad = |v: f64, c: &str| v * if c == "USD" { 2.0 } else { 1.0 };
-    let (sectors, regions) = bagholder_model::exposure::exposure_slices(&positions, &exposures, &cad);
+    let (sectors, regions) = bagholder_model::exposure::exposure_slices(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &cad);
     let f = |n: &str, v: f64| (n.to_string(), v);
     assert_eq!(named(&sectors), vec![f("Financials", 1100.0), f("Information Technology", 600.0), f("Energy", 250.0), f("Digital assets", 200.0), f("Not classified", 550.0)]);
-    let total: f64 = sectors.iter().map(|s| s["share"].as_f64().unwrap()).sum();
+    let total: f64 = sectors.iter().map(|s| s.share).sum();
     assert!((total - 1.0).abs() < 1e-7);
     assert_eq!(named(&regions), vec![f("Canada", 1100.0), f("United States", 850.0), f("Not classified", 750.0)], "a coin has no country");
 }
@@ -331,7 +341,7 @@ fn test_a_stored_alias_folds_when_read() {
                          json!({"mv": 100.0, "currency": "CAD", "securityId": "b", "short": false, "kind": "Shares"})];
     let exposures = obj(json!({"a": {"sectors": {"Communication": 1.0}, "countries": {}, "coverage": 1.0},
                                "b": {"sectors": {"Communication Services": 1.0}, "countries": {}, "coverage": 1.0}}));
-    let (sectors, _) = bagholder_model::exposure::exposure_slices(&positions, &exposures, &|v, _| v);
+    let (sectors, _) = bagholder_model::exposure::exposure_slices(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &|v, _| v);
     assert_eq!(named(&sectors), vec![("Communication Services".to_string(), 200.0)]);
 }
 
@@ -350,8 +360,8 @@ fn test_heatmap_tiles_take_the_dominant_sector() {
     let exposures = obj(json!({"a": {"sectors": {"Financials": 0.3, "Information Technology": 0.45, "Energy": 0.25}},
                                "b": {"sectors": {"Information Technology": 1.0}},
                                "share:AAPL::US": {"sectors": {"Information Technology": 1.0}}}));
-    let tiles = bagholder_model::markets::heatmap_items(&positions, &exposures, &|v, c| v * if c == "USD" { 2.0 } else { 1.0 });
-    let got: Vec<Vec<Value>> = tiles.iter().map(|t| row(t, &["symbol", "value", "sector", "percentChange"])).collect();
+    let tiles = bagholder_model::markets::heatmap_items(&held(&positions).iter().collect::<Vec<_>>(), &read(&exposures), &|v, c| v * if c == "USD" { 2.0 } else { 1.0 });
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&tiles).iter().map(|t| row(t, &["symbol", "value", "sector", "percentChange"])).collect();
     assert_eq!(got, vec![
         vec![json!("XEQT"), json!(1000.0), json!("Information Technology"), json!(0.4)],
         vec![json!("NVDA"), json!(1500.0), json!("Information Technology"), json!(-1.2)],
@@ -367,8 +377,8 @@ fn test_watch_rows_carry_the_quote_the_sector_and_the_holding() {
     let market = json!({"quotes": {"SHOP@TSX": {"price": 212.06, "priceChange": 1.56, "percentChange": 0.74}}});
     let base = bagholder_model::base::build_base(&snapshot, &market, &Default::default(), Some("2026-09-16"));
     let positions = vec![json!({"id": "p9", "symbol": "SHOP", "exchange": "TSX"})];
-    let rows = bagholder_model::markets::watch_rows(&base, &positions);
-    let got: Vec<Vec<Value>> = rows.iter().map(|r| row(r, &["symbol", "last", "percentChange", "sector", "positionId"])).collect();
+    let rows = bagholder_model::markets::watch_rows(&base, &held(&positions).iter().collect::<Vec<_>>());
+    let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["symbol", "last", "percentChange", "sector", "positionId"])).collect();
     assert_eq!(got, vec![
         vec![json!("SHOP"), json!(212.06), json!(0.74), json!("Information Technology"), json!("p9")],
         vec![json!("RKLB"), Value::Null, Value::Null, json!("Not classified"), Value::Null],

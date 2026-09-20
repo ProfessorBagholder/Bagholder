@@ -1,28 +1,75 @@
 //! One filter object, applied to the trades and the positions alike:
 //! `clean_filters`, `trade_matches`, `position_matches`.
 
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::dates::shift_date;
-use crate::value::{field_s, get, num, s as vs};
+use crate::lenient::opt_num;
+use crate::value::s as text;
+use crate::wire::{Position, Trade};
 
-pub const LIST_KEYS: [&str; 8] = ["account", "symbol", "grade", "tag", "kind", "exchange", "side", "result"];
-pub const RANGE_KEYS: [&str; 4] = ["price", "hold", "pnl", "qty"];
 pub const BENCHMARK_LABELS: [(&str, &str); 3] = [("SP500", "S&P 500"), ("TSX", "S&P/TSX"), ("TSX60", "TSX 60")];
-pub const PRESET_DAYS: [(&str, i64); 7] =
-    [("1d", 1), ("1w", 7), ("1m", 30), ("3m", 90), ("6m", 180), ("1y", 365), ("5y", 1826)];
+pub const PRESET_DAYS: [(&str, i64); 7] = [("1d", 1), ("1w", 7), ("1m", 30), ("3m", 90), ("6m", 180), ("1y", 365), ("5y", 1826)];
 
-#[derive(Clone, Debug)]
+/// Which side of its bound a range keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Op {
+    #[serde(rename = ">")]
+    Above,
+    #[serde(rename = "<")]
+    Below,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Range {
-    pub op: String,
+    pub op: Op,
+    /// Nothing: the range is off.
     pub v: Option<f64>,
 }
 
-#[derive(Clone, Debug)]
+impl Default for Range {
+    fn default() -> Range {
+        Range { op: Op::Above, v: None }
+    }
+}
+
+impl Range {
+    fn keeps(&self, value: f64) -> bool {
+        match (self.v, self.op) {
+            (None, _) => true,
+            (Some(bound), Op::Above) => value > bound,
+            (Some(bound), Op::Below) => value < bound,
+        }
+    }
+}
+
+/// The values each list filter keeps; empty keeps everything.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Lists {
+    pub account: Vec<String>,
+    pub symbol: Vec<String>,
+    pub grade: Vec<String>,
+    pub tag: Vec<String>,
+    pub kind: Vec<String>,
+    pub exchange: Vec<String>,
+    pub side: Vec<String>,
+    pub result: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Ranges {
+    pub price: Range,
+    pub hold: Range,
+    pub pnl: Range,
+    pub qty: Range,
+}
+
+/// The filters as the model acts on them, and as it echoes them to the page.
+#[derive(Clone, Debug, Serialize)]
 pub struct Filters {
-    pub lists: HashMap<String, Vec<String>>,
-    pub ranges: HashMap<String, Range>,
+    pub lists: Lists,
+    pub ranges: Ranges,
     pub preset: String,
     pub years: Vec<String>,
     pub from: String,
@@ -33,40 +80,26 @@ pub struct Filters {
 
 impl Default for Filters {
     fn default() -> Self {
-        Filters {
-            lists: LIST_KEYS.iter().map(|k| (k.to_string(), vec![])).collect(),
-            ranges: RANGE_KEYS
-                .iter()
-                .map(|k| (k.to_string(), Range { op: ">".into(), v: None }))
-                .collect(),
-            preset: "all".into(),
-            years: vec![],
-            from: String::new(),
-            to: String::new(),
-            search: String::new(),
-            benchmark: "SP500".into(),
-        }
+        Filters { lists: Lists::default(), ranges: Ranges::default(), preset: "all".into(), years: vec![], from: String::new(), to: String::new(), search: String::new(), benchmark: "SP500".into() }
     }
 }
 
 impl Filters {
-    pub fn list(&self, k: &str) -> &[String] {
-        self.lists.get(k).map(|v| v.as_slice()).unwrap_or(&[])
+    /// The filters as text, the same for the same filters: what a view is remembered under.
+    pub fn key(&self) -> String {
+        serde_json::to_string(self).expect("filters are plain data")
     }
-    pub fn to_json(&self) -> Value {
-        let mut lists = serde_json::Map::new();
-        for k in LIST_KEYS {
-            lists.insert(k.into(), json!(self.list(k)));
-        }
-        let mut ranges = serde_json::Map::new();
-        for k in RANGE_KEYS {
-            let r = &self.ranges[k];
-            ranges.insert(k.into(), json!({"op": r.op, "v": r.v}));
-        }
-        json!({
-            "lists": lists, "ranges": ranges, "preset": self.preset, "years": self.years,
-            "from": self.from, "to": self.to, "search": self.search, "benchmark": self.benchmark,
-        })
+
+    /// The filters in force that the cashflow does not read, lists then ranges.
+    pub fn unread_by_cashflow(&self) -> Vec<&'static str> {
+        let l = &self.lists;
+        let r = &self.ranges;
+        [("grade", !l.grade.is_empty()), ("tag", !l.tag.is_empty()), ("kind", !l.kind.is_empty()), ("exchange", !l.exchange.is_empty()), ("side", !l.side.is_empty()), ("result", !l.result.is_empty()),
+         ("price", r.price.v.is_some()), ("hold", r.hold.v.is_some()), ("pnl", r.pnl.v.is_some()), ("qty", r.qty.v.is_some())]
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| name)
+            .collect()
     }
 }
 
@@ -76,17 +109,12 @@ fn is_four_digits(s: &str) -> bool {
 
 fn is_iso_date(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
+    b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b[..4].iter().all(|c| c.is_ascii_digit()) && b[5..7].iter().all(|c| c.is_ascii_digit()) && b[8..10].iter().all(|c| c.is_ascii_digit())
 }
 
-/// `clean_filters`: whatever the page sent, reduced to the shape the
-/// model will act on. Anything unrecognised falls back to the default rather
-/// than filtering the book to nothing.
+/// Whatever the page sent, reduced to the shape the model will act on. Anything
+/// unrecognised falls back to the default rather than filtering the book to
+/// nothing.
 pub fn clean_filters(raw: Option<&Value>) -> Filters {
     let mut f = Filters::default();
     let raw = match raw {
@@ -95,59 +123,50 @@ pub fn clean_filters(raw: Option<&Value>) -> Filters {
     };
 
     if let Some(Value::Object(lists)) = raw.get("lists") {
-        for k in LIST_KEYS {
-            if let Some(Value::Array(vals)) = lists.get(k) {
-                let cleaned: Vec<String> = vals.iter().map(|v| vs(Some(v))).filter(|s| !s.is_empty()).collect();
-                f.lists.insert(k.into(), cleaned);
+        let list = |k: &str| -> Option<Vec<String>> {
+            match lists.get(k) {
+                Some(Value::Array(vals)) => Some(vals.iter().map(|v| text(Some(v))).filter(|s| !s.is_empty()).collect()),
+                _ => None,
+            }
+        };
+        let l = &mut f.lists;
+        for (k, slot) in [("account", &mut l.account), ("symbol", &mut l.symbol), ("grade", &mut l.grade), ("tag", &mut l.tag), ("kind", &mut l.kind), ("exchange", &mut l.exchange), ("side", &mut l.side), ("result", &mut l.result)] {
+            if let Some(values) = list(k) {
+                *slot = values;
             }
         }
     }
     if let Some(Value::Object(ranges)) = raw.get("ranges") {
-        for k in RANGE_KEYS {
-            if let Some(Value::Object(r)) = ranges.get(k) {
-                let op = vs(r.get("op"));
-                let entry = f.ranges.get_mut(k).unwrap();
-                entry.op = if op == ">" || op == "<" { op } else { ">".into() };
-                entry.v = match r.get("v") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(s)) if s.is_empty() => None,
-                    Some(x) => {
-                        let n = num(Some(x), f64::NAN);
-                        if n.is_nan() { None } else { Some(n) }
-                    }
-                };
+        let r = &mut f.ranges;
+        for (k, slot) in [("price", &mut r.price), ("hold", &mut r.hold), ("pnl", &mut r.pnl), ("qty", &mut r.qty)] {
+            if let Some(Value::Object(given)) = ranges.get(k) {
+                slot.op = if text(given.get("op")) == "<" { Op::Below } else { Op::Above };
+                slot.v = given.get("v").and_then(opt_num);
             }
         }
     }
-    let preset = vs(raw.get("preset")).to_lowercase();
-    f.preset = if PRESET_DAYS.iter().any(|(k, _)| *k == preset) || preset == "ytd" || preset == "all" {
-        preset
-    } else {
-        "all".into()
-    };
+    let preset = text(raw.get("preset")).to_lowercase();
+    f.preset = if PRESET_DAYS.iter().any(|(k, _)| *k == preset) || preset == "ytd" || preset == "all" { preset } else { "all".into() };
     if let Some(Value::Array(years)) = raw.get("years") {
-        let mut ys: Vec<String> = years
-            .iter()
-            .map(|y| vs(Some(y)).chars().take(4).collect::<String>())
-            .filter(|y| is_four_digits(y))
-            .collect();
+        let mut ys: Vec<String> = years.iter().map(|y| text(Some(y)).chars().take(4).collect::<String>()).filter(|y| is_four_digits(y)).collect();
         ys.sort();
         ys.dedup();
         f.years = ys;
     }
-    for k in ["from", "to"] {
-        let v: String = vs(raw.get(k)).chars().take(10).collect();
-        let v = if is_iso_date(&v) { v } else { String::new() };
-        if k == "from" { f.from = v } else { f.to = v }
-    }
-    f.search = vs(raw.get("search")).trim().to_string();
-    let b = vs(raw.get("benchmark")).trim().to_uppercase();
+    let day = |k: &str| -> String {
+        let v: String = text(raw.get(k)).chars().take(10).collect();
+        if is_iso_date(&v) { v } else { String::new() }
+    };
+    f.from = day("from");
+    f.to = day("to");
+    f.search = text(raw.get("search")).trim().to_string();
+    let b = text(raw.get("benchmark")).trim().to_uppercase();
     f.benchmark = if BENCHMARK_LABELS.iter().any(|(k, _)| *k == b) { b } else { "SP500".into() };
     f
 }
 
-/// `date_bounds`: the explicit range, then the preset; `None` when the
-/// years list is doing the filtering instead.
+/// The explicit range, then the preset; `None` when the years list is doing the
+/// filtering instead.
 pub fn date_bounds(f: &Filters, today: &str) -> Option<(String, String)> {
     if !f.from.is_empty() || !f.to.is_empty() {
         let from = if f.from.is_empty() { "0000-01-01".to_string() } else { f.from.clone() };
@@ -166,7 +185,6 @@ pub fn date_bounds(f: &Filters, today: &str) -> Option<(String, String)> {
     None
 }
 
-/// `in_date_scope`.
 pub fn in_date_scope(f: &Filters, today: &str, day: &str) -> bool {
     if let Some((lo, hi)) = date_bounds(f, today) {
         return lo.as_str() <= day && day <= hi.as_str();
@@ -182,101 +200,48 @@ fn contains_ci(haystack: &str, needle_upper: &str) -> bool {
     haystack.to_uppercase().contains(needle_upper)
 }
 
-/// `trade_matches`.
-pub fn trade_matches(t: &Value, f: &Filters, today: &str) -> bool {
-    let s = f.search.to_uppercase();
-    if !s.is_empty()
-        && !contains_ci(&field_s(t, "symbol"), &s)
-        && !contains_ci(&field_s(t, "underlying"), &s)
-        && !contains_ci(&field_s(t, "name"), &s)
-    {
-        return false;
-    }
-    let account = f.list("account");
-    if !account.is_empty() && !account.contains(&field_s(t, "account")) {
-        return false;
-    }
-    let symbol = f.list("symbol");
-    if !symbol.is_empty() && !symbol.contains(&field_s(t, "symbol")) && !symbol.contains(&field_s(t, "underlying")) {
-        return false;
-    }
-    let grade_list = f.list("grade");
-    if !grade_list.is_empty() {
-        let g = field_s(t, "grade");
-        let g = if g.is_empty() { "Ungraded".to_string() } else { g };
-        if !grade_list.contains(&g) {
-            return false;
-        }
-    }
-    let tag_list = f.list("tag");
-    if !tag_list.is_empty() {
-        let tags: Vec<String> = match t.get("tags").and_then(|v| v.as_array()) {
-            Some(a) if !a.is_empty() => a.iter().map(|x| vs(Some(x))).collect(),
-            _ => vec!["untagged".into()],
-        };
-        if !tags.iter().any(|x| tag_list.contains(x)) {
-            return false;
-        }
-    }
-    let kind = f.list("kind");
-    if !kind.is_empty() && !kind.contains(&field_s(t, "kind")) {
-        return false;
-    }
-    let exchange = f.list("exchange");
-    if !exchange.is_empty() && !exchange.contains(&field_s(t, "exchange")) {
-        return false;
-    }
-    let side = f.list("side");
-    if !side.is_empty() && !side.contains(&field_s(t, "side")) {
-        return false;
-    }
-    let result = f.list("result");
-    if !result.is_empty() {
-        let p = num(get(t, "pnlCad"), 0.0);
-        let res = if p > 0.0 { "Winners" } else if p < 0.0 { "Losers" } else { "Breakeven" };
-        if !result.iter().any(|r| r == res) {
-            return false;
-        }
-    }
-    for (key, val) in [
-        ("price", num(get(t, "entry"), 0.0)),
-        ("hold", num(get(t, "holdDays"), 0.0)),
-        ("pnl", num(get(t, "pnlCad"), 0.0)),
-        ("qty", num(get(t, "qty"), 0.0)),
-    ] {
-        let r = &f.ranges[key];
-        let bound = match r.v { Some(v) => v, None => continue };
-        if r.op == ">" && !(val > bound) {
-            return false;
-        }
-        if r.op == "<" && !(val < bound) {
-            return false;
-        }
-    }
-    in_date_scope(f, today, &field_s(t, "exitDate"))
+/// Whether a list filter keeps a value: an empty list keeps everything.
+fn keeps(list: &[String], value: &str) -> bool {
+    list.is_empty() || list.iter().any(|v| v == value)
 }
 
-/// `position_matches`.
-pub fn position_matches(p: &Value, f: &Filters) -> bool {
+pub fn trade_matches(t: &Trade, f: &Filters, today: &str) -> bool {
     let s = f.search.to_uppercase();
-    if !s.is_empty() && !contains_ci(&field_s(p, "symbol"), &s) && !contains_ci(&field_s(p, "name"), &s) {
+    if !s.is_empty() && !contains_ci(&t.symbol, &s) && !contains_ci(&t.underlying, &s) && !contains_ci(&t.name, &s) {
         return false;
     }
-    let account = f.list("account");
-    if !account.is_empty() && !account.contains(&field_s(p, "account")) {
+    let l = &f.lists;
+    if !keeps(&l.account, &t.account) || !(keeps(&l.symbol, &t.symbol) || keeps(&l.symbol, &t.underlying)) {
         return false;
     }
-    let symbol = f.list("symbol");
-    if !symbol.is_empty() && !symbol.contains(&field_s(p, "symbol")) && !symbol.contains(&field_s(p, "underlying")) {
+    if !keeps(&l.grade, if t.grade.is_empty() { "Ungraded" } else { &t.grade }) {
         return false;
     }
-    let kind = f.list("kind");
-    if !kind.is_empty() && !kind.contains(&field_s(p, "kind")) {
+    if !l.tag.is_empty() {
+        let tagged = if t.tags.is_empty() { l.tag.iter().any(|x| x == "untagged") } else { t.tags.iter().any(|x| l.tag.contains(x)) };
+        if !tagged {
+            return false;
+        }
+    }
+    if !keeps(&l.kind, t.kind.as_str()) || !keeps(&l.exchange, &t.exchange) || !keeps(&l.side, t.side.as_str()) {
         return false;
     }
-    let exchange = f.list("exchange");
-    if !exchange.is_empty() && !exchange.contains(&field_s(p, "exchange")) {
+    let result = if t.pnl_cad > 0.0 { "Winners" } else if t.pnl_cad < 0.0 { "Losers" } else { "Breakeven" };
+    if !keeps(&l.result, result) {
         return false;
     }
-    true
+    let r = &f.ranges;
+    if !r.price.keeps(t.entry) || !r.hold.keeps(t.hold_days as f64) || !r.pnl.keeps(t.pnl_cad) || !r.qty.keeps(t.qty) {
+        return false;
+    }
+    in_date_scope(f, today, &t.exit_date)
+}
+
+pub fn position_matches(p: &Position, f: &Filters) -> bool {
+    let s = f.search.to_uppercase();
+    if !s.is_empty() && !contains_ci(&p.symbol, &s) && !contains_ci(&p.name, &s) {
+        return false;
+    }
+    let l = &f.lists;
+    keeps(&l.account, &p.account) && (keeps(&l.symbol, &p.symbol) || keeps(&l.symbol, &p.underlying)) && keeps(&l.kind, p.kind.as_str()) && keeps(&l.exchange, &p.exchange)
 }

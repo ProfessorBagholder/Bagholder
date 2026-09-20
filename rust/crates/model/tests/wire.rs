@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use bagholder_model::base::build_base;
 use bagholder_model::cases::{act, buy, buy_x, sell};
-use bagholder_model::view::{build_view, slim, trade_detail};
+use bagholder_model::view::{build_view, trade_detail, view_of, Detail};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests")
@@ -29,11 +29,11 @@ fn payload(snapshot: &Value, market: &Value, journal: &Value, today: &str, filte
     let journal = journal.as_object().cloned().unwrap_or_default();
     let base = build_base(snapshot, market, &journal, Some(today));
     let view = build_view(&base, Some(filters));
-    let first = view["trades"].as_array().and_then(|t| t.first()).and_then(|t| t["id"].as_str()).map(|s| s.to_string());
+    let first = view.trades.first().map(|t| t.id.clone());
     json!({
-        "view": view,
-        "wire": slim(&view, None),
-        "wireWithDetail": first.as_deref().map(|id| slim(&view, Some(id))),
+        "view": view.to_value(),
+        "wire": view_of(&base, Some(filters), Detail::Only(None)).to_value(),
+        "wireWithDetail": first.as_deref().map(|id| view_of(&base, Some(filters), Detail::Only(Some(id))).to_value()),
         "tradeDetail": first.as_deref().and_then(|id| trade_detail(&base, id)),
     })
 }
@@ -167,4 +167,86 @@ fn test_saved_groups_keep_their_payload() {
     let journal = json!({"g_manual": {"thesis": "two swings, one idea", "tags": ["swing"], "grade": "B"}});
     check("scenario_saved_groups", &payload(&s, &market(json!({})), &journal, "2026-03-02", &json!({})));
     check("scenario_saved_groups_filtered", &payload(&s, &market(json!({})), &journal, "2026-03-02", &json!({"lists": {"symbol": ["AAA"]}})));
+}
+
+/// The Markets tab and the corners of the Portfolio no case reaches: a watchlist
+/// (a held listing, an index, a coin, a plain listing), news (a story two listings
+/// share, a release carried twice, the market feed, a French twin), a universe,
+/// a tile row with the two rate contracts (one with a move, one without),
+/// exposures by security and by share key, an option looked through to its
+/// underlying, balances that give `wsQty`, cash and margin drawn, buying power
+/// known and unknown, and a sale the book cannot match.
+#[test]
+fn test_markets_and_the_corners_keep_their_payload() {
+    let mut s = snap(vec![
+        buy_x("b1", "ENB", 100, 50.0, "2026-01-05", json!({"accountType": "Margin", "accountId": "acct-m", "currency": "CAD", "securityId": "sec-enb", "name": "Enbridge"})),
+        buy_x("b2", "ASTS", 10, 30.0, "2026-01-06", json!({"accountType": "Margin", "accountId": "acct-m", "currency": "USD", "securityId": "sec-asts", "name": "AST SpaceMobile"})),
+        act(json!({"id": "o1", "category": "trade", "activityType": "BUY", "rawType": "OPTIONS_BUY", "quantity": 1, "unitPrice": 2.0, "netCashAmount": -200, "transactionDate": "2026-02-05", "symbol": "ASTS 15JAN27 40.00 CALL", "currency": "USD", "accountType": "Margin", "accountId": "acct-m", "securityId": "sec-o-asts"})),
+        act(json!({"id": "c1", "category": "trade", "activityType": "BUY", "rawType": "CRYPTO_BUY", "quantity": 0.1, "unitPrice": 100000, "netCashAmount": -10000, "transactionDate": "2026-01-05", "symbol": "BTC", "currency": "CAD", "accountType": "Crypto", "accountId": "acct-c"})),
+        act(json!({"id": "x1", "category": "trade", "activityType": "SELL", "rawType": "DIY_SELL", "quantity": -25, "unitPrice": 4.0, "netCashAmount": 100, "transactionDate": "2026-02-10", "symbol": "GONE", "currency": "CAD", "accountType": "Margin", "accountId": "acct-m", "description": "Sold before the history starts"})),
+    ], json!([]));
+    let o = s.as_object_mut().unwrap();
+    o.insert("accounts".into(), json!([
+        {"id": "acct-m", "nickname": "Margin", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "margin", "netLiquidationValue": 9000.5},
+        {"id": "acct-m2", "nickname": "Margin  US", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "USD", "status": "open", "type": "margin", "netLiquidationValue": null},
+        {"id": "acct-c", "nickname": "Crypto", "unifiedAccountType": "SELF_DIRECTED_CRYPTO", "currency": "CAD", "status": "open", "type": "crypto", "netLiquidationValue": "10500"},
+        {"id": "acct-x", "nickname": "Old", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "CLOSED", "type": "tfsa", "netLiquidationValue": 0},
+    ]));
+    o.insert("balances".into(), json!([
+        {"accountId": "acct-m", "custodianAccountId": null, "securityId": "sec-enb", "quantity": 100},
+        {"accountId": "acct-m", "custodianAccountId": null, "securityId": "sec-c-cad", "quantity": -2500.255},
+        {"accountId": "acct-m", "custodianAccountId": null, "securityId": "sec-c-usd", "quantity": 120.5},
+        {"accountId": "acct-c", "custodianAccountId": null, "securityId": "sec-c-cad", "quantity": 40},
+    ]));
+    o.insert("margin".into(), json!([
+        {"accountId": "acct-m", "buyingPower": 4200.75, "currency": "CAD", "unavailable": "", "fetchedAt": ""},
+        {"accountId": "acct-m2", "buyingPower": null, "currency": "USD", "unavailable": "not offered", "fetchedAt": ""},
+        {"accountId": "acct-c", "buyingPower": 40, "currency": "CAD", "unavailable": "", "fetchedAt": ""},
+    ]));
+    o.insert("securities".into(), json!([
+        {"id": "sec-enb", "symbol": "ENB", "name": "Enbridge Inc.", "primaryExchange": "TSX", "primaryMic": "XTSX", "currency": "CAD", "underlyingId": null},
+        {"id": "sec-asts", "symbol": "ASTS", "name": "AST SpaceMobile, Inc.", "primaryExchange": "", "primaryMic": "XNAS", "currency": "USD", "underlyingId": null},
+        {"id": "sec-o-asts", "symbol": "ASTS 15JAN27 40.00 CALL", "name": "", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": "sec-asts"},
+        {"id": "sec-c-cad", "symbol": "CAD", "name": "Canadian dollar", "primaryExchange": "", "primaryMic": "", "currency": "CAD", "underlyingId": null},
+        {"id": "sec-c-usd", "symbol": "USD", "name": "US dollar", "primaryExchange": "", "primaryMic": "", "currency": "", "underlyingId": null},
+    ]));
+    o.insert("exposures".into(), json!({
+        "sec-enb": {"sectors": {"energy": 0.9, "Utilities": 0.1}, "countries": {"Canada": 1.0}},
+        "share:ASTS::US": {"sectors": {"Communication Services": 1}, "countries": {"United States": "1.0"}},
+        "share:QNC:": {"sectors": {"Technology": 0.6, "Industrials": 0.6}, "countries": {"Canada": 1}},
+    }));
+    o.insert("watchlist".into(), json!([
+        {"symbol": "ENB", "exchange": "TSX", "name": "Enbridge Inc.", "currency": "CAD", "securityId": "sec-enb", "addedAt": "2026-01-01T00:00:00Z"},
+        {"symbol": "SPX", "exchange": "INDEX", "name": "S&P 500", "currency": "USD", "securityId": "", "addedAt": ""},
+        {"symbol": "ETH", "exchange": "Crypto", "name": "Ethereum", "currency": "CAD", "securityId": "", "addedAt": ""},
+        {"symbol": "QNC", "exchange": "TSX-V", "name": "Quantum eMotion", "currency": "CAD", "securityId": "", "addedAt": ""},
+    ]));
+    o.insert("news".into(), json!([
+        {"id": "n1", "symbol": "ENB", "exchange": "TSX", "source": "tmx", "headline": "Enbridge Announces Quarterly Results", "wire": "CNW", "url": "https://example.test/n1", "publishedAt": "2026-03-01T13:00:00Z", "fetchedAt": "", "kind": "story", "summary": ""},
+        {"id": "n1", "symbol": "QNC", "exchange": "TSX-V", "source": "tmx", "headline": "Enbridge Announces Quarterly Results", "wire": "CNW", "url": "https://example.test/n1", "publishedAt": "2026-03-01T13:00:00Z", "fetchedAt": "", "kind": "story", "summary": ""},
+        {"id": "n2", "symbol": "ENB", "exchange": "TSX", "source": "sa", "headline": "Enbridge announces quarterly results!", "wire": "Newswire", "url": "https://example.test/n2", "publishedAt": "2026-03-01T13:05:00Z", "fetchedAt": "", "kind": "release", "summary": ""},
+        {"id": "n3", "symbol": "ENB", "exchange": "TSX", "source": "tmx", "headline": "Enbridge annonce ses résultats du trimestre", "wire": "CNW", "url": "https://example.test/n3", "publishedAt": "2026-03-01T14:00:00Z", "fetchedAt": "", "kind": "", "summary": ""},
+        {"id": "m1", "symbol": "*", "exchange": "market", "source": "nasdaq", "headline": "Stocks close higher", "wire": "Nasdaq", "url": "https://example.test/m1", "publishedAt": "2026-03-01T21:00:00Z", "fetchedAt": "", "kind": "story", "summary": ""},
+        {"id": "n4", "symbol": "ZZZ", "exchange": "NYSE", "source": "yahoo", "headline": "A listing nobody follows any more", "wire": "Yahoo", "url": "", "publishedAt": "2026-02-27T10:00:00Z", "fetchedAt": "", "kind": "story", "summary": ""},
+    ]));
+    o.insert("universes".into(), json!({
+        "ca": [
+            {"symbol": "RY", "name": "Royal Bank of Canada", "value": 250000000000.0, "percentChange": 0.42, "sector": "Financial Services", "country": "Canada", "fetchedAt": ""},
+            {"symbol": "SHOP", "name": "Shopify", "value": null, "percentChange": null, "sector": "", "country": "Canada", "fetchedAt": ""},
+        ],
+        "us": [],
+    }));
+    o.insert("tiles".into(), json!([{"symbol": "ZQ", "exchange": "CBOT"}, {"symbol": "SR3", "exchange": "CME"}, {"symbol": "SPX", "exchange": "INDEX"}, {"symbol": "NOPE", "exchange": "X"}]));
+    let quotes = json!({
+        "ENB": {"price": 55.5, "priceChange": -0.25, "percentChange": -0.448, "source": "tmx"},
+        "ENB@TSX": {"price": 55.5, "priceChange": -0.25, "percentChange": -0.448},
+        "SPX@INDEX": {"price": 7712.5, "priceChange": 5.25, "percentChange": 0.068},
+        "QNC@TSX-V": {"price": "1.75", "priceChange": null, "percentChange": null},
+        "ZQ@CBOT": {"price": 96.3725, "priceChange": -0.0125, "percentChange": -0.013},
+        "SR3@CME": {"price": 96.5},
+        "BTC": {"price": 120000.0, "source": "coinbase"},
+    });
+    let journal = json!({"rt:b1": {"thesis": "pipes", "tags": ["income", "core"], "grade": "A"}});
+    check("scenario_markets", &payload(&s, &market(quotes), &journal, "2026-03-02", &json!({})));
+    check("scenario_markets_one_account", &payload(&s, &market(json!({})), &journal, "2026-03-02", &json!({"lists": {"account": ["Margin"]}, "ranges": {"pnl": {"op": "<", "v": "5"}}, "years": [2026, "2025x"], "search": " en "})));
 }

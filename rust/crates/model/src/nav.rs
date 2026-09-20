@@ -4,47 +4,45 @@
 //! Returns are net of deposits and withdrawals throughout: money moved into or
 //! out of the account is never counted as a gain or a loss.
 
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::dates::{days_between, shift_date};
-use crate::value::{field_s, get, num, EPS};
+use crate::lenient;
+use crate::value::EPS;
+use crate::wire::{Annualized, Drawdown, YearRow};
 
-#[derive(Clone, Debug)]
+/// One day of the equity curve as the page is sent it.
+#[derive(Clone, Debug, Serialize)]
 pub struct Point {
     pub d: String,
     pub v: f64,
+    /// Net deposits to date; nothing when the record does not carry them.
     pub dep: Option<f64>,
 }
 
-impl Point {
-    pub fn to_json(&self) -> Value {
-        json!({"d": self.d, "v": self.v, "dep": self.dep})
-    }
+/// One day of net asset value as the store holds it.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NavRow {
+    #[serde(deserialize_with = "lenient::text")]
+    pub date: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub equity: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub net_deposits: Option<f64>,
 }
 
-/// A number that is absent rather than zero.
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
-}
-
-/// `equity_series`.
-pub fn equity_series(points: &[Value]) -> Vec<Point> {
-    let mut out: Vec<Point> = Vec::new();
-    for p in points {
-        let d: String = field_s(p, "date").chars().take(10).collect();
-        let v = match opt_num(get(p, "equity")) { Some(v) => v, None => continue };
-        if d.is_empty() {
-            continue;
-        }
-        out.push(Point { d, v, dep: opt_num(get(p, "netDeposits")) });
-    }
+/// The equity curve from the stored days: those with a value and a date, in date order.
+pub fn equity_series(rows: &[NavRow]) -> Vec<Point> {
+    let mut out: Vec<Point> = rows
+        .iter()
+        .filter_map(|r| {
+            let d: String = r.date.chars().take(10).collect();
+            Some(Point { v: r.equity?, dep: r.net_deposits, d }).filter(|p| !p.d.is_empty())
+        })
+        .collect();
     out.sort_by(|a, b| a.d.cmp(&b.d));
     out
 }
@@ -177,7 +175,7 @@ pub fn benchmark_return(bench: &BTreeMap<String, f64>, year: &str, today: &str, 
 }
 
 /// `yearly_returns`.
-pub fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &str) -> Vec<Value> {
+pub fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &str) -> Vec<YearRow> {
     if series.is_empty() {
         return vec![];
     }
@@ -208,47 +206,27 @@ pub fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &s
         };
         let end_v = nav_on(series, &yr.to);
         let sp_start = if yr.from != jan1 { Some(yr.from.as_str()) } else { None };
-        out.push(json!({
-            "year": y,
-            "r": yr.r,
-            "days": yr.days,
-            "from": yr.from,
-            "to": yr.to,
-            "flow": flow,
-            "endV": end_v,
-            "spR": benchmark_return(bench, &y, today, sp_start),
-        }));
+        out.push(YearRow { r: yr.r, days: yr.days, flow, end_v, sp_r: benchmark_return(bench, &y, today, sp_start), from: yr.from.clone(), to: yr.to.clone(), year: y });
     }
     out
 }
 
-/// `annualized`: the chain of usable years turned into a yearly rate.
-pub fn annualized(years: &[Value]) -> Value {
-    let mut prod = 1.0_f64;
-    let mut days = 0_i64;
-    let mut used: Vec<String> = Vec::new();
-    for y in years {
-        let r = match opt_num(get(y, "r")) { Some(r) => r, None => continue };
-        let d = num(get(y, "days"), 0.0) as i64;
-        if r <= -1.0 || d < 30 {
-            continue;
-        }
-        prod *= 1.0 + r;
-        days += d;
-        used.push(field_s(y, "year"));
-    }
+/// The chain of usable years turned into a yearly rate.
+pub fn annualized(years: &[YearRow]) -> Annualized {
+    let used: Vec<&YearRow> = years.iter().filter(|y| y.r > -1.0 && y.days >= 30).collect();
+    let days: i64 = used.iter().map(|y| y.days).sum();
     if days == 0 {
-        return json!({"rate": Value::Null, "years": 0.0, "count": 0, "first": "", "last": ""});
+        return Annualized { rate: None, years: 0.0, count: 0, first: String::new(), last: String::new() };
     }
+    let prod: f64 = used.iter().map(|y| 1.0 + y.r).product();
     let yrs = days as f64 / 365.25;
-    let rate = if yrs >= 1.0 / 12.0 { prod.powf(1.0 / yrs) - 1.0 } else { prod - 1.0 };
-    json!({
-        "rate": rate,
-        "years": yrs,
-        "count": used.len(),
-        "first": used.first().cloned().unwrap_or_default(),
-        "last": used.last().cloned().unwrap_or_default(),
-    })
+    Annualized {
+        rate: Some(if yrs >= 1.0 / 12.0 { prod.powf(1.0 / yrs) - 1.0 } else { prod - 1.0 }),
+        years: yrs,
+        count: used.len(),
+        first: used.first().map(|y| y.year.clone()).unwrap_or_default(),
+        last: used.last().map(|y| y.year.clone()).unwrap_or_default(),
+    }
 }
 
 /// `_paired_flows`: the net deposit change per day, moved one day later
@@ -278,9 +256,9 @@ fn paired_flows(series: &[Point]) -> Vec<f64> {
 }
 
 /// `drawdown`: the deepest fall of the flow-adjusted equity index.
-pub fn drawdown(series: &[Point]) -> Value {
+pub fn drawdown(series: &[Point]) -> Drawdown {
     if series.is_empty() {
-        return json!({"pct": Value::Null, "abs": Value::Null, "at": "", "peakAt": ""});
+        return Drawdown { pct: None, abs: None, at: String::new(), peak_at: String::new() };
     }
     let peak_v = series.iter().map(|p| p.v).fold(f64::NEG_INFINITY, f64::max);
     let floor = peak_v * 0.01;
@@ -321,36 +299,13 @@ pub fn drawdown(series: &[Point]) -> Value {
             dd_peak_at = peak_at.clone();
         }
     }
-    json!({"pct": dd, "abs": dd_abs, "at": dd_at, "peakAt": dd_peak_at})
+    Drawdown { pct: Some(dd), abs: Some(dd_abs), at: dd_at, peak_at: dd_peak_at }
 }
 
 /// The benchmark map as the model reads it: dates to levels, in date order.
 pub fn bench_map(v: Option<&Value>) -> BTreeMap<String, f64> {
-    let mut out = BTreeMap::new();
-    if let Some(Value::Object(m)) = v {
-        for (k, val) in m {
-            if let Some(f) = opt_num(Some(val)) {
-                out.insert(k.clone(), f);
-            }
-        }
+    match v {
+        Some(Value::Object(m)) => m.iter().filter_map(|(k, level)| Some((k.clone(), lenient::opt_num(level)?))).collect(),
+        _ => BTreeMap::new(),
     }
-    out
-}
-
-/// The equity series as the page receives it.
-pub fn series_json(series: &[Point]) -> Vec<Value> {
-    series.iter().map(|p| p.to_json()).collect()
-}
-
-/// Per-account equity series, keyed by the normalized nickname.
-pub fn by_account(v: Option<&Value>) -> Map<String, Value> {
-    let mut out = Map::new();
-    if let Some(Value::Object(m)) = v {
-        for (nick, pts) in m {
-            let arr: Vec<Value> = pts.as_array().cloned().unwrap_or_default();
-            let s = equity_series(&arr);
-            out.insert(crate::value::norm_account_name(nick), Value::Array(series_json(&s)));
-        }
-    }
-    out
 }

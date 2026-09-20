@@ -74,7 +74,7 @@ pub fn refresh_exposures() -> Value {
             secs.insert(id, sec);
         }
     }
-    let mut held: HashSet<String> = b.positions.iter().filter(|p| f(p, "kind") == "Shares").map(|p| f(p, "securityId")).collect();
+    let mut held: HashSet<String> = b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares).map(|p| p.security_id.clone()).collect();
     for bal in snap.get("balances").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
         let sid = f(&bal, "securityId");
         if num(bal.get("quantity"), Some(0.0)).unwrap_or(0.0) > 0.0 && sid.starts_with("sec-s-") {
@@ -90,8 +90,8 @@ pub fn refresh_exposures() -> Value {
     let mut unders: Vec<(String, String)> = b
         .positions
         .iter()
-        .filter(|p| f(p, "kind") == "Options" && truthy(p.get("underlying")))
-        .map(|p| (f(p, "underlying").to_uppercase(), f(p, "currency")))
+        .filter(|p| p.kind == bagholder_model::activity::Kind::Options && !p.underlying.is_empty())
+        .map(|p| (p.underlying.to_uppercase(), p.currency.clone()))
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -103,8 +103,8 @@ pub fn refresh_exposures() -> Value {
     let watched: Vec<(String, String, String)> = b
         .watchlist
         .iter()
-        .filter(|w| instruments::find(&f(w, "symbol"), &f(w, "exchange")).is_none() && f(w, "exchange").to_uppercase() != "CRYPTO")
-        .map(|w| (f(w, "symbol"), f(w, "exchange"), f(w, "currency")))
+        .filter(|w| instruments::find(&w.symbol, &w.exchange).is_none() && w.exchange.to_uppercase() != "CRYPTO")
+        .map(|w| (w.symbol.clone(), w.exchange.clone(), w.currency.clone()))
         .filter(|(sy, e, cc)| !exposure::stale(&ctx, &[bagholder_model::symbols_of::watch_exposure_key(sy, e, cc)]).is_empty())
         .collect();
 
@@ -198,7 +198,7 @@ pub const TILES_MAX: usize = 12;
 fn refresh_quote_symbols(what: &str, sym: &str) -> bool {
     let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return false };
     let (today_s, now, stamp) = bagholder_market::clock_now();
-    match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::markets::quote_symbols(&b), &today_s, now, &stamp) {
+    match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)), &today_s, now, &stamp) {
         Ok(_) => {
             true
         }
@@ -294,21 +294,16 @@ pub fn news_listings() -> Vec<news::Listing> {
     let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string(), String::new())];
     let b = match base() { Some(b) => b, None => return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
-    for p in b.positions.iter() {
-        if f(p, "kind") != "Shares" {
-            continue;
-        }
-        let key = (tmx_symbol(&f(p, "symbol")), f(p, "exchange").to_uppercase());
-        if !key.0.is_empty() && !seen.contains(&key) {
-            seen.insert(key.clone());
-            out.push((key.0, f(p, "exchange"), f(p, "currency"), f(p, "name")));
+    for p in b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares) {
+        let key = (tmx_symbol(&p.symbol), p.exchange.to_uppercase());
+        if !key.0.is_empty() && seen.insert(key.clone()) {
+            out.push((key.0, p.exchange.clone(), p.currency.clone(), p.name.clone()));
         }
     }
     for w in b.watchlist.iter() {
-        let key = (tmx_symbol(&f(w, "symbol")), f(w, "exchange").to_uppercase());
-        if !key.0.is_empty() && !seen.contains(&key) && instruments::find(&f(w, "symbol"), &f(w, "exchange")).is_none() && key.1 != "CRYPTO" {
-            seen.insert(key.clone());
-            out.push((key.0, f(w, "exchange"), f(w, "currency"), f(w, "name")));
+        let key = (tmx_symbol(&w.symbol), w.exchange.to_uppercase());
+        if !key.0.is_empty() && key.1 != "CRYPTO" && instruments::find(&w.symbol, &w.exchange).is_none() && seen.insert(key.clone()) {
+            out.push((key.0, w.exchange.clone(), w.currency.clone(), w.name.clone()));
         }
     }
     out
@@ -528,11 +523,10 @@ pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
         }
     }
     if let Some(b) = &b {
-        rows.extend(bagholder_model::symbols_of::held_symbols(b));
+        rows.extend(bagholder_model::symbols_of::held_symbols(b).iter().map(|l| l.to_value()));
         if has("all") {
             for t in b.trades.iter() {
-                let mut rec = json!({"symbol": t.get("symbol").cloned().unwrap_or(Value::Null), "exchange": t.get("exchange").cloned().unwrap_or(Value::Null),
-                                     "currency": t.get("currency").cloned().unwrap_or(Value::Null), "kind": t.get("kind").cloned().unwrap_or(Value::Null)});
+                let mut rec = json!({"symbol": t.symbol, "exchange": t.exchange, "currency": t.currency, "kind": t.kind});
                 if f(&rec, "kind") == "Options" {
                     let under = bagholder_model::symbols::underlying_symbol(&f(&rec, "symbol"));
                     if under.is_empty() || under == "—" {
@@ -699,7 +693,7 @@ pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) ->
     };
     if scopes.iter().any(|x| x == "held") {
         if let Some(b) = base() {
-            if b.positions.iter().any(|p| same(&f(p, "symbol"))) {
+            if b.positions.iter().any(|p| same(&p.symbol)) {
                 return true;
             }
         }
@@ -1710,15 +1704,19 @@ pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&st
 pub fn shorts_feed() -> Value {
     let reading = SHORTS_LEFT.load(Ordering::SeqCst) > 0;
     let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
-    let mut held: HashMap<(String, String), Value> = HashMap::new();
-    let mut watched: HashMap<(String, String), Value> = HashMap::new();
-    for p in b.positions.iter() {
-        if f(p, "kind") == "Shares" {
-            held.insert((tmx_symbol(&f(p, "symbol")).to_uppercase(), f(p, "exchange").to_uppercase()), p.clone());
-        }
+    // what the feed says of a listing: its name, its venue, and the holding it opens
+    struct Known {
+        name: String,
+        exchange: String,
+        position_id: Option<String>,
+    }
+    let mut held: HashMap<(String, String), Known> = HashMap::new();
+    let mut watched: HashMap<(String, String), Known> = HashMap::new();
+    for p in b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares) {
+        held.insert((tmx_symbol(&p.symbol).to_uppercase(), p.exchange.to_uppercase()), Known { name: p.name.clone(), exchange: p.exchange.clone(), position_id: Some(p.id.clone()) });
     }
     for w in b.watchlist.iter() {
-        watched.insert((tmx_symbol(&f(w, "symbol")).to_uppercase(), f(w, "exchange").to_uppercase()), w.clone());
+        watched.insert((tmx_symbol(&w.symbol).to_uppercase(), w.exchange.to_uppercase()), Known { name: w.name.clone(), exchange: w.exchange.clone(), position_id: None });
     }
     let mut rows = Vec::new();
     for mut r in sf::all_shorts(&c).unwrap_or_default() {
@@ -1727,11 +1725,9 @@ pub fn shorts_feed() -> Value {
         if r.get("shares").map(|v| v.is_null()).unwrap_or(true) {
             continue;
         }
-        let name = { let n = f(source, "name"); if n.is_empty() { f(&r, "name") } else { n } };
-        r["name"] = json!(name);
-        let ex = { let e = f(source, "exchange"); if e.is_empty() { key.1.clone() } else { e } };
-        r["exchange"] = json!(ex);
-        r["positionId"] = if truthy(source.get("positionId")) { source["positionId"].clone() } else { source.get("id").cloned().unwrap_or(Value::Null) };
+        r["name"] = json!(if source.name.is_empty() { f(&r, "name") } else { source.name.clone() });
+        r["exchange"] = json!(if source.exchange.is_empty() { key.1.clone() } else { source.exchange.clone() });
+        r["positionId"] = json!(source.position_id);
         r["held"] = json!(held.contains_key(&key));
         r["watched"] = json!(watched.contains_key(&key));
         rows.push(r);
@@ -1748,18 +1744,50 @@ pub fn listing_payload(symbol: &str, exchange: &str, currency: &str, name: &str)
     }
     let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": false, "error": "store unavailable"}) };
     let day = today();
-    listing_payload_in(&c, &b.positions, &b.trades, &b.watchlist, &sym, exchange, currency, name, &|rec| {
+    let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
+    let positions: Vec<ListedRow> = b.positions.iter().filter(|p| named(&p.symbol)).map(|p| ListedRow { id: p.id.clone(), symbol: p.symbol.clone(), exchange: p.exchange.clone(), currency: p.currency.clone(), kind: p.kind.to_string(), name: p.name.clone(), security_id: p.security_id.clone(), fills: vec![] }).collect();
+    let trades: Vec<ListedRow> = b
+        .trades
+        .iter()
+        .filter(|t| named(&t.symbol))
+        .map(|t| ListedRow {
+            id: t.id.clone(),
+            symbol: t.symbol.clone(),
+            exchange: t.exchange.clone(),
+            currency: t.currency.clone(),
+            kind: t.kind.to_string(),
+            name: t.name.clone(),
+            security_id: t.security_id.clone(),
+            fills: t.fills.iter().flat_map(|fills| fills.iter()).map(|x| serde_json::to_value(x).unwrap_or(Value::Null)).collect(),
+        })
+        .collect();
+    let watchlist: Vec<ListedRow> = b.watchlist.iter().filter(|w| named(&w.symbol)).map(|w| ListedRow { symbol: w.symbol.clone(), exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone(), ..ListedRow::default() }).collect();
+    listing_payload_in(&c, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|rec| {
         bagholder_market::quotes::peek_quote(&c, rec, &day)
     })
+}
+
+/// A row of the book as the listing page reads it: a holding, a trade or a watched listing.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ListedRow {
+    pub id: String,
+    pub symbol: String,
+    pub exchange: String,
+    pub currency: String,
+    pub kind: String,
+    pub name: String,
+    pub security_id: String,
+    pub fills: Vec<Value>,
 }
 
 /// `listing_payload` over the book given, with the quote lookup given.
 #[allow(clippy::too_many_arguments)]
 pub fn listing_payload_in(
     c: &Connection,
-    positions: &[Value],
-    trades: &[Value],
-    watchlist: &[Value],
+    positions: &[ListedRow],
+    trades: &[ListedRow],
+    watchlist: &[ListedRow],
     symbol: &str,
     exchange: &str,
     currency: &str,
@@ -1772,45 +1800,44 @@ pub fn listing_payload_in(
     }
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
     let exu = ex.to_uppercase();
-    let same = |r: &Value| {
-        if f(r, "kind") == "Options" || tmx_symbol(&f(r, "symbol")).trim().to_uppercase() != sym {
+    let same = |r: &ListedRow| {
+        if r.kind == "Options" || tmx_symbol(&r.symbol).trim().to_uppercase() != sym {
             return false;
         }
-        let there = f(r, "exchange").trim().to_uppercase();
+        let there = r.exchange.trim().to_uppercase();
         exu.is_empty() || there.is_empty() || there == exu
     };
     if let Some(h) = positions.iter().find(|p| same(p)) {
-        return json!({"ok": true, "symbol": sym, "positionId": h.get("id").cloned().unwrap_or(Value::Null)});
+        return json!({"ok": true, "symbol": sym, "positionId": h.id});
     }
-    let trades: Vec<&Value> = trades.iter().filter(|t| same(t)).collect();
+    let trades: Vec<&ListedRow> = trades.iter().filter(|t| same(t)).collect();
     let watched = watchlist.iter().find(|w| same(w));
-    let empty = json!({});
-    let known: &Value = trades.first().copied().or(watched).unwrap_or(&empty);
+    let empty = ListedRow::default();
+    let known: &ListedRow = trades.first().copied().or(watched).unwrap_or(&empty);
     let meta = instrument_meta(c, &sym);
     if ex.is_empty() {
-        ex = f(known, "exchange");
+        ex = known.exchange.clone();
         if ex.is_empty() {
             ex = meta.1.clone();
         }
     }
     if ccy.is_empty() {
-        ccy = f(known, "currency");
+        ccy = known.currency.clone();
         if ccy.is_empty() {
             ccy = meta.2.clone();
         }
     }
-    let kind = { let k = f(known, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-    let mut fills: Vec<Value> = trades.iter().flat_map(|t| t.get("fills").and_then(|v| v.as_array()).cloned().unwrap_or_default()).collect();
+    let kind = if known.kind.is_empty() { "Shares".to_string() } else { known.kind.clone() };
+    let mut fills: Vec<Value> = trades.iter().flat_map(|t| t.fills.iter().cloned()).collect();
     fills.sort_by_key(|x| f(x, "when"));
     let nm = {
         let n = name.trim().to_string();
         if !n.is_empty() { n } else {
-            let k = f(known, "name");
-            if !k.is_empty() { k } else if meta.0 != sym { meta.0.clone() } else { String::new() }
+            if !known.name.is_empty() { known.name.clone() } else if meta.0 != sym { meta.0.clone() } else { String::new() }
         }
     };
     let mut out = json!({"ok": true, "symbol": sym, "exchange": ex, "currency": ccy, "kind": kind, "name": nm,
-                         "securityId": f(known, "securityId"), "fills": fills, "price": null, "percentChange": null});
+                         "securityId": known.security_id, "fills": fills, "price": null, "percentChange": null});
     if kind == "Shares" {
         let q = peek_quote(&json!({"symbol": sym, "exchange": ex, "currency": ccy, "kind": kind})).unwrap_or(json!({}));
         out["price"] = q.get("price").cloned().unwrap_or(Value::Null);
@@ -1823,26 +1850,23 @@ pub fn listing_payload_in(
 /// short selling is published.
 pub fn shorts_listings(scope: &str) -> Vec<(String, String, String, String)> {
     let b = match base() { Some(b) => b, None => return vec![] };
-    let mut groups: Vec<&Vec<Value>> = Vec::new();
+    let mut rows: Vec<(&str, &str, &str, &str)> = Vec::new();
     if scope == "holdings" || scope == "all" {
-        groups.push(&b.positions);
+        rows.extend(b.positions.iter().map(|p| (p.symbol.as_str(), p.exchange.as_str(), p.currency.as_str(), p.name.as_str())));
     }
     if scope == "watchlist" || scope == "all" {
-        groups.push(&b.watchlist);
+        rows.extend(b.watchlist.iter().map(|w| (w.symbol.as_str(), w.exchange.as_str(), w.currency.as_str(), w.name.as_str())));
     }
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut out = Vec::new();
-    for group in groups {
-        for row in group {
-            let sym = tmx_symbol(&f(row, "symbol"));
-            let (ex, ccy) = (f(row, "exchange"), f(row, "currency"));
-            let key = (sym.to_uppercase(), ex.to_uppercase());
-            if sym.is_empty() || seen.contains(&key) || shorts::market_of(&sym, &ex, &ccy).is_empty() {
-                continue;
-            }
-            seen.insert(key);
-            out.push((sym, ex, ccy, f(row, "name")));
+    for (symbol, ex, ccy, name) in rows {
+        let sym = tmx_symbol(symbol);
+        let key = (sym.to_uppercase(), ex.to_uppercase());
+        if sym.is_empty() || seen.contains(&key) || shorts::market_of(&sym, ex, ccy).is_empty() {
+            continue;
         }
+        seen.insert(key);
+        out.push((sym, ex.to_string(), ccy.to_string(), name.to_string()));
     }
     out
 }
@@ -1953,7 +1977,7 @@ pub fn ledger_path() -> std::path::PathBuf {
 }
 
 fn payer_symbols() -> Vec<Value> {
-    base().map(|b| bagholder_model::symbols_of::payer_symbols(&b)).unwrap_or_default()
+    base().map(|b| bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&b))).unwrap_or_default()
 }
 
 /// USD/CAD, S&P 500, declared distributions
@@ -1975,8 +1999,8 @@ pub fn refresh_market_data() -> Value {
 pub fn refresh_quotes() -> usize {
     app().single_flight("quotes", 0, || {
         let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return 0 };
-        let mut syms = bagholder_model::symbols_of::held_symbols(&b);
-        syms.extend(bagholder_model::markets::quote_symbols(&b));
+        let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&b));
+        syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)));
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let n = bagholder_market::quotes::refresh_quotes(&c, &syms, &today_s, now, &stamp).unwrap_or(0);
         if n > 0 {
@@ -2001,7 +2025,7 @@ pub fn refresh_periodic_market() -> Value {
 pub fn archive_intraday_bars(limit: Option<usize>) -> Vec<String> {
     app().single_flight("archive", vec![], || {
         let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
-        let recs = bagholder_model::symbols_of::intraday_archive_symbols(&b);
+        let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(&b));
         let limit = limit.map(|l| l.max(1)).unwrap_or(history::ARCHIVE_BATCH);
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let mut out = history::archive_daily(&c, &recs, &today_s, now, &stamp, limit);
@@ -2056,7 +2080,7 @@ pub fn archive_loop() {
             let was = base();
             let due = match (conn(), was.as_ref()) {
                 (Some(c), Some(b)) => {
-                    let recs = bagholder_model::symbols_of::intraday_archive_symbols(b);
+                    let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(b));
                     let (today_s, now, _) = bagholder_market::clock_now();
                     history::archive_next_due_secs(&c, &recs, &today_s, now)
                 }
@@ -2663,6 +2687,8 @@ mod tests {
     const EARLIER: &str = "2026-01-05T14:40:00Z";
 
     fn listing(positions: &[Value], trades: &[Value], watchlist: &[Value], q: (f64, f64), args: (&str, &str, &str, &str)) -> Value {
+        let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect() };
+        let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
         let c = store();
         let quote = move |_: &Value| Some(json!({"price": q.0, "percentChange": q.1}));
         listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)

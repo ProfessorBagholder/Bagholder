@@ -14,25 +14,25 @@
         "count": 0,
         "label": "2024",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2025",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2026 YTD",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "All time",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "interestMonths": 0,
@@ -41,14 +41,14 @@
         "marginUsed": 315.0
       },
       {
-        "book": 0,
-        "earned": 0,
+        "book": 0.0,
+        "earned": 0.0,
         "label": "Yield on cost",
         "projected": 0.0,
         "yield": null
       }
     ],
-    "cashflowTotal": 0,
+    "cashflowTotal": 0.0,
     "equity": {
       "annualized": {
         "count": 0,
@@ -71,22 +71,22 @@
         {
           "grade": "A",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "B",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "C",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "F",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         }
       ],
       "graded": 0,
@@ -99,11 +99,11 @@
       "breakeven": 0,
       "count": 0,
       "expectancy": null,
-      "grossLoss": 0,
-      "grossWin": 0,
+      "grossLoss": 0.0,
+      "grossWin": 0.0,
       "losses": 0,
       "profitFactor": 0.0,
-      "realized": 0,
+      "realized": 0.0,
       "winRate": null,
       "wins": 0
     },

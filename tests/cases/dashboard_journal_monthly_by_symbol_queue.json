@@ -77,13 +77,13 @@
         "count": 0,
         "label": "2024",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2025",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 1,
@@ -189,7 +189,7 @@
         {
           "grade": "C",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "F",
@@ -297,13 +297,13 @@
       ],
       "availableMargin": null,
       "availableMarginUnavailable": [],
-      "cash": 0,
+      "cash": 0.0,
       "cashPct": null,
       "costBasis": 1600.0,
       "dayChange": null,
       "dayChangePct": null,
       "hasMargin": false,
-      "marginUsed": 0,
+      "marginUsed": 0.0,
       "marginUsedBy": {},
       "marginUsedPct": 0.0,
       "marketValue": 1600.0,

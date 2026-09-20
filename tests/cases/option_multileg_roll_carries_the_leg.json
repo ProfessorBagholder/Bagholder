@@ -23,41 +23,41 @@
         "count": 0,
         "label": "2024",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2025",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "2026 YTD",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "All time",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
         "count": 0,
         "label": "Last 12 months",
         "perMonth": 0.0,
-        "total": 0
+        "total": 0.0
       },
       {
-        "book": 0,
-        "earned": 0,
+        "book": 0.0,
+        "earned": 0.0,
         "label": "Yield on cost",
         "projected": 0.0,
         "yield": null
       }
     ],
-    "cashflowTotal": 0,
+    "cashflowTotal": 0.0,
     "equity": {
       "annualized": {
         "count": 0,
@@ -80,22 +80,22 @@
         {
           "grade": "A",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "B",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "C",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         },
         {
           "grade": "F",
           "n": 0,
-          "pnl": 0
+          "pnl": 0.0
         }
       ],
       "graded": 0,
@@ -109,7 +109,7 @@
       "count": 1,
       "expectancy": -23508.9,
       "grossLoss": 23508.9,
-      "grossWin": 0,
+      "grossWin": 0.0,
       "losses": 1,
       "profitFactor": 0.0,
       "realized": -23508.9,
@@ -145,28 +145,28 @@
       "allocation": [],
       "availableMargin": null,
       "availableMarginUnavailable": [],
-      "cash": 0,
+      "cash": 0.0,
       "cashPct": null,
-      "costBasis": 0,
+      "costBasis": 0.0,
       "dayChange": null,
       "dayChangePct": null,
       "hasMargin": false,
-      "marginUsed": 0,
+      "marginUsed": 0.0,
       "marginUsedBy": {},
       "marginUsedPct": null,
-      "marketValue": 0,
+      "marketValue": 0.0,
       "nav": null,
       "navAccounts": 0,
       "positionCount": 0,
-      "unrealized": 0,
+      "unrealized": 0.0,
       "unrealizedPct": null
     },
     "positions": [],
     "positionsSummary": {
-      "book": 0,
+      "book": 0.0,
       "count": 0,
-      "mv": 0,
-      "unreal": 0
+      "mv": 0.0,
+      "unreal": 0.0
     },
     "queue": [
       {

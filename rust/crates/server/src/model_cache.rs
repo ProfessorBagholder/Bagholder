@@ -91,7 +91,7 @@ impl ModelCache {
     /// same object: a second tab, a reload, a filter set and cleared cost nothing.
     /// Views of an earlier base are dropped the first time a newer one is asked for.
     pub fn view(&self, base: &Arc<Base>, filters: Option<&Value>, detail: Option<&str>) -> Arc<Value> {
-        let key = format!("{}|{}", bagholder_model::filters::clean_filters(filters).to_json(), detail.unwrap_or(""));
+        let key = format!("{}|{}", bagholder_model::filters::clean_filters(filters).key(), detail.unwrap_or(""));
         {
             let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
             views.retain(|s| Arc::ptr_eq(&s.base, base));
@@ -103,8 +103,7 @@ impl ModelCache {
             }
         }
         // built outside the lock: a slow view never holds up a cached one
-        let full = bagholder_model::view::build_view(base, filters);
-        let view = Arc::new(bagholder_model::view::slim(&full, detail));
+        let view = Arc::new(bagholder_model::view::view_of(base, filters, bagholder_model::view::Detail::Only(detail)).to_value());
         let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
         views.retain(|s| Arc::ptr_eq(&s.base, base));
         if views.len() >= VIEWS_KEPT {
@@ -129,7 +128,7 @@ impl ModelCache {
         let old = std::mem::take(&mut c.gens);
         let mut i = match c.inputs.take() {
             Some(i) => i,
-            None => Inputs::from_snapshot(&Value::Null, &Value::Null, &Default::default()),
+            None => Inputs::default(),
         };
         macro_rules! part {
             ($name:literal, [$($gen:literal),+], $load:expr) => {
@@ -143,30 +142,28 @@ impl ModelCache {
         part!("securities", ["securities"], i.set_securities(&snapshot::securities_part(conn)?));
         part!("fx", ["fx"], i.fx = Arc::new(base::fx_part(Some(&Value::Object(tables::fx_rates(conn, tables::FX_PAIR)?)))));
         part!("benchmark", ["benchmark"], {
-            i.benchmark = Arc::new(bagholder_model::nav::bench_map(Some(&Value::Object(tables::benchmark_prices(conn, tables::BENCHMARK_SYMBOL)?))));
             let mut all = serde_json::Map::new();
             for sym in market::BENCHMARK_SYMBOLS.iter() {
                 all.insert((*sym).to_string(), Value::Object(tables::benchmark_prices(conn, sym)?));
             }
-            i.benchmarks = Arc::new(base::benchmarks_part(Some(&Value::Object(all))));
+            i.set_benchmarks(Some(&Value::Object(tables::benchmark_prices(conn, tables::BENCHMARK_SYMBOL)?)), Some(&Value::Object(all)));
         });
-        part!("distributions", ["distributions"], i.distributions = Arc::new(market::distributions(conn)?));
-        part!("quotes", ["quotes"], i.set_quotes(market::quotes(conn)?));
+        part!("distributions", ["distributions"], i.set_distributions(&market::distributions(conn)?));
+        part!("quotes", ["quotes"], i.set_quotes(&market::quotes(conn)?));
         part!("groups", ["groups"], i.set_groups(&snapshot::groups_part(conn)?));
         part!("journal", ["journal"], i.set_journal(&snapshot::journal(conn)?));
-        part!("accounts", ["accounts"], i.set_accounts(snapshot::accounts_part(conn)?));
-        part!("balances", ["balances"], i.set_balances(snapshot::balances_part(conn)?));
-        part!("margin", ["margin"], i.margin = Arc::new(snapshot::margin_part(conn)?));
+        part!("accounts", ["accounts"], i.set_accounts(&snapshot::accounts_part(conn)?));
+        part!("balances", ["balances"], i.set_balances(&snapshot::balances_part(conn)?));
+        part!("margin", ["margin"], i.set_margin(&snapshot::margin_part(conn)?));
         part!("nav", ["nav"], {
             let (nav, by_account) = snapshot::nav_part(conn)?;
-            i.nav = Arc::new(nav);
-            i.nav_by_account = Arc::new(by_account);
+            i.set_nav(&nav, &by_account);
         });
-        part!("exposures", ["exposures"], i.exposures = Arc::new(snapshot::exposures_part(conn)?));
-        part!("watchlist", ["watchlist"], i.watchlist = Arc::new(snapshot::watchlist_part(conn)?));
-        part!("news", ["news"], i.news = Arc::new(snapshot::news_part(conn)?));
-        part!("universes", ["universes"], i.universes = Arc::new(snapshot::universes_part(conn)?));
-        part!("tiles", ["tiles"], i.tiles = Arc::new(Some(snapshot::tiles_part(conn)?).filter(|v| !v.is_null())));
+        part!("exposures", ["exposures"], i.set_exposures(&snapshot::exposures_part(conn)?));
+        part!("watchlist", ["watchlist"], i.set_watchlist(&snapshot::watchlist_part(conn)?));
+        part!("news", ["news"], i.set_news(&snapshot::news_part(conn)?));
+        part!("universes", ["universes"], i.set_universes(&snapshot::universes_part(conn)?));
+        part!("tiles", ["tiles"], i.set_tiles(Some(&snapshot::tiles_part(conn)?)));
         part!("synced", ["synced"], i.synced_at = snapshot::synced_at_part(conn)?);
         drop(tx);
 
@@ -275,9 +272,8 @@ mod tests {
         assert!(Arc::ptr_eq(&before.cashflow, &after.cashflow));
         assert!(Arc::ptr_eq(&before.equity, &after.equity));
         // and the position is marked at the new price
-        assert_eq!(after.positions[0]["last"], json!(2.10));
-        assert_eq!(after.positions[0]["priceSource"], "quote");
-        assert_ne!(before.positions[0]["last"], after.positions[0]["last"]);
+        assert_eq!((after.positions[0].last, after.positions[0].price_source), (2.10, bagholder_model::wire::Mark::Quote));
+        assert_ne!(before.positions[0].last, after.positions[0].last);
     }
 
     #[test]
@@ -324,13 +320,13 @@ mod tests {
     fn test_a_journal_entry_leaves_the_match_standing() {
         let (_d, conn, cache) = seeded();
         let (before, _) = cache.base_and_work(&conn, TODAY).unwrap();
-        let id = before.trades[0]["id"].as_str().unwrap().to_string();
+        let id = before.trades[0].id.clone();
         bagholder_store::admin::save_journal_entry(&conn, &id, Some(&json!({"thesis": "held through the quarter", "tags": ["swing"], "grade": "B"}))).unwrap();
         let (after, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert_eq!(work.read, vec!["journal"]);
         assert!(!work.built.contains(&"book"));
         assert!(Arc::ptr_eq(&before.book, &after.book) && Arc::ptr_eq(&before.cashflow, &after.cashflow));
-        assert_eq!(after.trades[0]["grade"], "B");
+        assert_eq!(after.trades[0].grade, "B");
     }
 
     #[test]
@@ -344,7 +340,7 @@ mod tests {
         assert!(Arc::ptr_eq(&before.equity, &after.equity), "the NAV history did not move");
         // the position is closed out: one trade of two legs, nothing left open
         assert_eq!((after.trades.len(), after.positions.len()), (1, 0));
-        assert_eq!(after.trades[0]["legCount"], json!(2));
+        assert_eq!(after.trades[0].leg_count, 2);
     }
 
     #[test]
@@ -371,7 +367,7 @@ mod tests {
         let mkt = market::market_data(&conn).unwrap();
         let journal = snapshot::journal(&conn).unwrap();
         let scratch = bagholder_model::base::build_base(&snap, &mkt, &journal, Some(TODAY));
-        let view = |b: &Base| bagholder_model::view::build_view(b, None);
+        let view = |b: &Base| bagholder_model::view::build_view(b, None).to_value();
         assert_eq!(view(&layered), view(&scratch));
     }
 }

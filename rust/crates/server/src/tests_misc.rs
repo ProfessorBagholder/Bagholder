@@ -231,7 +231,7 @@ fn base_of(conn: &Connection, quotes: Option<Value>) -> bagholder_model::base::B
 #[test]
 fn test_the_row_is_the_default_until_saved_and_then_what_was_saved() {
     let d = db();
-    let rows = |d: &Db| bagholder_model::markets::tile_rows(&base_of(&d.conn, None));
+    let rows = |d: &Db| bagholder_model::testing::sent(&bagholder_model::markets::tile_rows(&base_of(&d.conn, None)));
     let got: Vec<(String, String, i64)> = rows(&d).iter().map(|t| (app::f(t, "symbol"), app::f(t, "label"), t["decimals"].as_i64().unwrap())).collect();
     let want: Vec<(String, String, i64)> = [("SPX", "SPX", 2), ("NDX", "NDX", 2), ("DJI", "DJI", 2), ("VIX", "VIX", 2), ("GC", "GOLD", 2), ("BTCUSD", "BITCOIN", 0)]
         .iter()
@@ -254,10 +254,10 @@ fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
     let d = db();
     bagholder_store::admin::save_tiles(&d.conn, &[json!({"symbol": "SPX", "exchange": "Index"})]).unwrap();
     let base = base_of(&d.conn, None);
-    let q: Vec<(String, String, String)> = bagholder_model::markets::quote_symbols(&base).iter().map(|r| (app::f(r, "quoteKey"), app::f(r, "yahoo"), app::f(r, "kind"))).collect();
+    let q: Vec<(String, String, String)> = bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&base)).iter().map(|r| (app::f(r, "quoteKey"), app::f(r, "yahoo"), app::f(r, "kind"))).collect();
     assert_eq!(q, vec![("SPX@INDEX".to_string(), "^GSPC".to_string(), "Instrument".to_string())], "quoted through the watch path");
     let base = base_of(&d.conn, Some(json!({"SPX@INDEX": {"price": 6742.18, "priceChange": 42.18, "percentChange": 0.63}})));
-    let row = &bagholder_model::markets::tile_rows(&base)[0];
+    let row = &bagholder_model::testing::sent(&bagholder_model::markets::tile_rows(&base))[0];
     assert_eq!((row["last"].as_f64(), row["change"].as_f64(), row["percentChange"].as_f64()), (Some(6742.18), Some(42.18), Some(0.63)));
 }
 
@@ -273,7 +273,7 @@ fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twel
     let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
     assert_eq!(crate::feeds::tiles_set(&json!({"tiles": too_many}))["ok"], false);
     let b = app().base().unwrap();
-    let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| app::f(t, "symbol")).collect();
+    let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
     assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
     if saved.is_empty() {
         conn.execute("DELETE FROM meta WHERE key = ?", [bagholder_store::snapshot::TILES_META]).unwrap();

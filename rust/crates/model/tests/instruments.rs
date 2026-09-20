@@ -19,6 +19,10 @@ fn base_with(snapshot: Value, quotes: Value) -> bagholder_model::base::Base {
     build_base(&snapshot, &json!({"fx": {}, "benchmark": {}, "quotes": quotes}), &Default::default(), Some("2026-09-16"))
 }
 
+fn sent<T: serde::Serialize>(rows: &[T]) -> Vec<serde_json::Value> {
+    rows.iter().map(|r| serde_json::to_value(r).unwrap()).collect()
+}
+
 #[test]
 fn test_aliases_find_what_people_type() {
     assert_eq!(syms("WTI", 1), v(&["CL"]));
@@ -50,16 +54,16 @@ fn test_find_by_symbol_and_venue() {
 #[test]
 fn test_an_instrument_takes_the_directory_name_and_a_kind() {
     let base = base_with(json!({"watchlist": [{"symbol": "CL", "exchange": "NYMEX", "name": "Crude Oil (WTI)", "currency": "USD"}]}), json!({"CL@NYMEX": {"price": 99.4, "priceChange": 6.37, "percentChange": 6.85}}));
-    assert_eq!(watch_symbols(&base), vec![json!({"symbol": "CL", "exchange": "NYMEX", "currency": "USD", "kind": "Instrument", "quoteKey": "CL@NYMEX", "yahoo": "CL=F"})]);
-    let rows = watch_rows(&base, &[]);
+    assert_eq!(sent(&watch_symbols(&base)), vec![json!({"symbol": "CL", "exchange": "NYMEX", "currency": "USD", "kind": "Instrument", "quoteKey": "CL@NYMEX", "yahoo": "CL=F"})]);
+    let rows = sent(&watch_rows(&base, &[]));
     assert_eq!((&rows[0]["sector"], &rows[0]["kind"], &rows[0]["last"]), (&json!("Commodities"), &json!("Commodity"), &json!(99.4)), "an instrument groups under its kind on the heatmap");
 }
 
 #[test]
 fn test_a_coin_from_the_book_is_quoted_by_coinbase() {
     let base = base_with(json!({"watchlist": [{"symbol": "BTC", "exchange": "CRYPTO", "name": "Bitcoin", "currency": "CAD"}]}), json!({"BTC@CRYPTO": {"price": 150000.0}}));
-    assert_eq!(watch_symbols(&base), vec![json!({"symbol": "BTC", "exchange": "CRYPTO", "currency": "USD", "kind": "Crypto", "quoteKey": "BTC@CRYPTO"})], "the USD pair, whatever currency the book holds the coin in");
-    let row = &watch_rows(&base, &[])[0];
+    assert_eq!(sent(&watch_symbols(&base)), vec![json!({"symbol": "BTC", "exchange": "CRYPTO", "currency": "USD", "kind": "Crypto", "quoteKey": "BTC@CRYPTO"})], "the USD pair, whatever currency the book holds the coin in");
+    let row = &sent(&watch_rows(&base, &[]))[0];
     assert_eq!((&row["sector"], &row["kind"], &row["last"]), (&json!("Digital assets"), &json!("Crypto"), &json!(150000.0)));
 }
 
@@ -85,7 +89,7 @@ fn test_a_tile_carries_the_rate_beside_the_published_price_and_the_day_runs_the_
     quotes.insert(watch_quote_key("ZQ", "CBOT"), json!({"price": 96.13, "priceChange": -0.157, "percentChange": -0.163}));
     quotes.insert(watch_quote_key("ES", "CME"), json!({"price": 7674.0, "priceChange": 18.0, "percentChange": 0.24}));
     let base = base_with(json!({"tiles": [{"symbol": "ZQ", "exchange": "CBOT"}, {"symbol": "ES", "exchange": "CME"}]}), Value::Object(quotes));
-    let rows = tile_rows(&base);
+    let rows = sent(&tile_rows(&base));
     let zq = rows.iter().find(|r| r["symbol"] == "ZQ").unwrap();
     let es = rows.iter().find(|r| r["symbol"] == "ES").unwrap();
     assert_eq!((&zq["last"], &zq["rate"], &zq["rateChange"]), (&json!(96.13), &json!(3.87), &json!(0.157)),

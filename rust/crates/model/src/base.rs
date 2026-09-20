@@ -19,7 +19,7 @@
 //! the wire snapshots run -- and a cache composes the same functions, reusing
 //! what has not moved, so the two cannot disagree.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -27,183 +27,179 @@ use crate::activity::RawActivity;
 use crate::book::{build_book, Book};
 use crate::cashflow::build_cashflow;
 use crate::clock::today_local;
+use crate::exposure::Exposures;
 use crate::fx::{apply_fx, Fx};
-use crate::input::{AccountRow, BalanceRow, Journal, Quotes, TradeGroup};
+use crate::input::{AccountRow, BalanceRow, Distribution, Journal, MarginRow, NewsRow, Quotes, TileRef, TradeGroup, UniverseRow, WatchRow};
 use crate::lenient;
-use crate::nav::{equity_series, Point};
+use crate::nav::{equity_series, NavRow, Point};
 use crate::positions::build_positions;
 use crate::securities::{Securities, Security};
 use crate::trades::build_trades;
-use crate::value::{field_s, get, norm_account_name, num};
+use crate::value::{field_s, norm_account_name};
+use crate::wire::{Account, CashflowRow, Ordered, Position, Trade};
 
 /// What the model is built from, each part shared rather than copied so a base
-/// can be assembled again from the parts that did not change.
-#[derive(Clone)]
+/// can be assembled again from the parts that did not change. Every part is read
+/// into its types once, when it is set (`lenient`), and never looked up by name
+/// again.
+#[derive(Clone, Default)]
 pub struct Inputs {
     pub activities: Arc<Vec<RawActivity>>,
     pub securities: Arc<Vec<Security>>,
     pub fx: Arc<Fx>,
     pub benchmark: Arc<BTreeMap<String, f64>>,
     pub benchmarks: Arc<HashMap<String, BTreeMap<String, f64>>>,
-    pub distributions: Arc<Map<String, Value>>,
-    pub quotes: Arc<Map<String, Value>>,
-    pub quote_rows: Arc<Quotes>,
+    pub distributions: Arc<HashMap<String, Vec<Distribution>>>,
+    pub quotes: Arc<Quotes>,
     pub groups: Arc<Vec<TradeGroup>>,
     pub journal: Arc<Journal>,
-    pub accounts: Arc<Vec<Value>>,
-    pub account_rows: Arc<Vec<AccountRow>>,
-    pub balances: Arc<Vec<Value>>,
-    pub balance_rows: Arc<Vec<BalanceRow>>,
-    pub margin: Arc<Vec<Value>>,
-    pub nav: Arc<Vec<Value>>,
-    pub nav_by_account: Arc<Map<String, Value>>,
-    pub exposures: Arc<Map<String, Value>>,
-    pub watchlist: Arc<Vec<Value>>,
-    pub news: Arc<Vec<Value>>,
-    pub universes: Arc<Map<String, Value>>,
-    pub tiles: Arc<Option<Value>>,
+    pub accounts: Arc<Vec<AccountRow>>,
+    pub balances: Arc<Vec<BalanceRow>>,
+    pub margin: Arc<Vec<MarginRow>>,
+    pub nav: Arc<Vec<NavRow>>,
+    pub nav_by_account: Arc<HashMap<String, Vec<NavRow>>>,
+    pub exposures: Arc<Exposures>,
+    pub watchlist: Arc<Vec<WatchRow>>,
+    pub news: Arc<Vec<NewsRow>>,
+    /// In the order the store gives them, which is the order the page is sent them in.
+    pub universes: Arc<Ordered<Vec<UniverseRow>>>,
+    /// Never saved is not the same as saved empty: the first shows the default row.
+    pub tiles: Arc<Option<Vec<TileRef>>>,
     pub synced_at: String,
+}
+
+/// The object rows of a JSON list, each read as `T`.
+fn rows<T: serde::de::DeserializeOwned>(list: &[Value]) -> Arc<Vec<T>> {
+    Arc::new(list.iter().filter(|r| r.is_object()).filter_map(|r| T::deserialize(r).ok()).collect())
+}
+
+/// The object values of a JSON map, each read as `T`.
+fn keyed<T: serde::de::DeserializeOwned>(map: &Map<String, Value>) -> impl Iterator<Item = (String, T)> + '_ {
+    map.iter().filter_map(|(k, v)| Some((k.clone(), T::deserialize(v).ok()?)))
 }
 
 impl Inputs {
     /// The parts, from a whole snapshot and the whole market data.
     pub fn from_snapshot(snapshot: &Value, market: &Value, journal: &Map<String, Value>) -> Inputs {
-        let mut i = Inputs {
-            activities: Default::default(),
-            securities: Default::default(),
-            fx: Arc::new(fx_part(market.get("fx"))),
-            benchmark: Arc::new(crate::nav::bench_map(market.get("benchmark"))),
-            benchmarks: Arc::new(benchmarks_part(market.get("benchmarks"))),
-            distributions: Arc::new(obj(market.get("distributions"))),
-            quotes: Default::default(),
-            quote_rows: Default::default(),
-            groups: Default::default(),
-            journal: Default::default(),
-            accounts: Default::default(),
-            account_rows: Default::default(),
-            balances: Default::default(),
-            balance_rows: Default::default(),
-            margin: Arc::new(arr(snapshot.get("margin"))),
-            nav: Arc::new(arr(snapshot.get("navHistory"))),
-            nav_by_account: Arc::new(obj(snapshot.get("navByAccount"))),
-            exposures: Arc::new(obj(snapshot.get("exposures"))),
-            watchlist: Arc::new(arr(snapshot.get("watchlist"))),
-            news: Arc::new(arr(snapshot.get("news"))),
-            universes: Arc::new(obj(snapshot.get("universes"))),
-            tiles: Arc::new(snapshot.get("tiles").filter(|v| !v.is_null()).cloned()),
-            synced_at: field_s(snapshot, "syncedAt"),
-        };
+        let mut i = Inputs { fx: Arc::new(fx_part(market.get("fx"))), synced_at: field_s(snapshot, "syncedAt"), ..Inputs::default() };
+        i.set_benchmarks(market.get("benchmark"), market.get("benchmarks"));
+        i.set_distributions(&obj(market.get("distributions")));
+        i.set_quotes(&obj(market.get("quotes")));
         i.set_activities(&arr(snapshot.get("activities")));
         i.set_securities(&arr(snapshot.get("securities")));
-        i.set_quotes(obj(market.get("quotes")));
         i.set_groups(&arr(snapshot.get("tradeGroups")));
         i.set_journal(journal);
-        i.set_accounts(arr(snapshot.get("accounts")));
-        i.set_balances(arr(snapshot.get("balances")));
+        i.set_accounts(&arr(snapshot.get("accounts")));
+        i.set_balances(&arr(snapshot.get("balances")));
+        i.set_margin(&arr(snapshot.get("margin")));
+        i.set_nav(&arr(snapshot.get("navHistory")), &obj(snapshot.get("navByAccount")));
+        i.set_exposures(&obj(snapshot.get("exposures")));
+        i.set_watchlist(&arr(snapshot.get("watchlist")));
+        i.set_news(&arr(snapshot.get("news")));
+        i.set_universes(&obj(snapshot.get("universes")));
+        i.set_tiles(snapshot.get("tiles"));
         i
     }
 
-    pub fn set_activities(&mut self, rows: &[Value]) {
-        self.activities = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+    pub fn set_activities(&mut self, list: &[Value]) {
+        self.activities = rows(list);
     }
-
-    pub fn set_securities(&mut self, rows: &[Value]) {
-        self.securities = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+    pub fn set_securities(&mut self, list: &[Value]) {
+        self.securities = rows(list);
     }
-
-    pub fn set_quotes(&mut self, quotes: Map<String, Value>) {
-        self.quote_rows = Arc::new(quotes.iter().filter_map(|(k, v)| Some((k.clone(), serde_json::from_value(v.clone()).ok()?))).collect());
-        self.quotes = Arc::new(quotes);
+    pub fn set_benchmarks(&mut self, benchmark: Option<&Value>, benchmarks: Option<&Value>) {
+        self.benchmark = Arc::new(crate::nav::bench_map(benchmark));
+        self.benchmarks = Arc::new(obj(benchmarks).iter().map(|(k, v)| (k.clone(), crate::nav::bench_map(Some(v)))).collect());
     }
-
-    pub fn set_groups(&mut self, rows: &[Value]) {
-        self.groups = Arc::new(lenient::rows(&Value::Array(rows.to_vec())));
+    pub fn set_distributions(&mut self, by_symbol: &Map<String, Value>) {
+        self.distributions = Arc::new(by_symbol.iter().map(|(k, v)| (k.clone(), lenient::rows(v))).collect());
     }
-
+    pub fn set_quotes(&mut self, by_key: &Map<String, Value>) {
+        self.quotes = Arc::new(keyed(by_key).collect());
+    }
+    pub fn set_groups(&mut self, list: &[Value]) {
+        self.groups = rows(list);
+    }
     pub fn set_journal(&mut self, journal: &Map<String, Value>) {
         self.journal = Arc::new(crate::input::journal_from(journal));
     }
-
-    pub fn set_accounts(&mut self, rows: Vec<Value>) {
-        self.account_rows = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
-        self.accounts = Arc::new(rows);
+    pub fn set_accounts(&mut self, list: &[Value]) {
+        // an account is read whatever it is: a row that is not an object is an account with nothing known
+        self.accounts = Arc::new(list.iter().map(|r| AccountRow::deserialize(r).unwrap_or_default()).collect());
     }
-
-    pub fn set_balances(&mut self, rows: Vec<Value>) {
-        self.balance_rows = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
-        self.balances = Arc::new(rows);
+    pub fn set_balances(&mut self, list: &[Value]) {
+        self.balances = rows(list);
+    }
+    pub fn set_margin(&mut self, list: &[Value]) {
+        self.margin = rows(list);
+    }
+    pub fn set_nav(&mut self, all: &[Value], by_account: &Map<String, Value>) {
+        self.nav = rows(all);
+        self.nav_by_account = Arc::new(by_account.iter().map(|(k, v)| (k.clone(), lenient::rows(v))).collect());
+    }
+    pub fn set_exposures(&mut self, by_key: &Map<String, Value>) {
+        self.exposures = Arc::new(keyed(by_key).collect());
+    }
+    pub fn set_watchlist(&mut self, list: &[Value]) {
+        self.watchlist = rows(list);
+    }
+    pub fn set_news(&mut self, list: &[Value]) {
+        self.news = rows(list);
+    }
+    pub fn set_universes(&mut self, by_key: &Map<String, Value>) {
+        self.universes = Arc::new(Ordered(by_key.iter().map(|(k, v)| (k.clone(), lenient::rows(v))).collect()));
+    }
+    pub fn set_tiles(&mut self, saved: Option<&Value>) {
+        self.tiles = Arc::new(saved.filter(|v| !v.is_null()).map(|v| lenient::rows(v)));
     }
 }
+
+use serde::Deserialize;
 
 pub fn fx_part(v: Option<&Value>) -> Fx {
     obj(v).iter().filter_map(|(k, x)| x.as_f64().map(|f| (k.clone(), f))).collect()
-}
-
-pub fn benchmarks_part(v: Option<&Value>) -> HashMap<String, BTreeMap<String, f64>> {
-    obj(v).into_iter().map(|(k, v)| (k, crate::nav::bench_map(Some(&v)))).collect()
 }
 
 /// The derived layers, each behind an `Arc` so an unchanged one is shared.
 #[derive(Clone)]
 pub struct Layers {
     pub book: Arc<Book>,
-    pub trades: Arc<Vec<Value>>,
-    pub cashflow: Arc<Vec<Value>>,
-    pub positions: Arc<Vec<Value>>,
+    pub trades: Arc<Vec<Trade>>,
+    pub cashflow: Arc<Vec<CashflowRow>>,
+    pub positions: Arc<Vec<Position>>,
     pub equity: Arc<Vec<Point>>,
     pub equity_by_account: Arc<HashMap<String, Vec<Point>>>,
-    pub accounts: Arc<Vec<Value>>,
+    pub accounts: Arc<Vec<Account>>,
 }
 
 pub fn book_layer(i: &Inputs, today: &str) -> Book {
     build_book(&i.activities, Securities::new(&i.securities), today)
 }
 
-/// The rows of a typed layer as the JSON the parts of the model not yet typed
-/// read. Goes when they are.
-fn as_json<T: serde::Serialize>(rows: &[T]) -> Vec<Value> {
-    rows.iter().map(|r| serde_json::to_value(r).expect("a row of the model is plain data")).collect()
-}
-
 /// The closed trades: the match's slices valued in CAD at the FX table's rates,
 /// collapsed into trades, the journal joined on.
-pub fn trades_layer(book: &Book, i: &Inputs) -> Vec<Value> {
+pub fn trades_layer(book: &Book, i: &Inputs) -> Vec<Trade> {
     let mut closed = book.fifo.closed.clone();
     apply_fx(&mut closed, &i.fx);
-    as_json(&build_trades(&closed, &i.groups, book, &i.journal))
+    build_trades(&closed, &i.groups, book, &i.journal)
 }
 
-pub fn cashflow_layer(book: &Book, i: &Inputs) -> Vec<Value> {
-    as_json(&build_cashflow(&book.activities, &book.securities, &i.fx))
+pub fn cashflow_layer(book: &Book, i: &Inputs) -> Vec<CashflowRow> {
+    build_cashflow(&book.activities, &book.securities, &i.fx)
 }
 
 /// The open positions marked at the quotes: what a price tick rebuilds.
-pub fn positions_layer(book: &Book, i: &Inputs, today: &str) -> Vec<Value> {
-    as_json(&build_positions(book, &i.balance_rows, &i.account_rows, &i.journal, today, &i.quote_rows))
+pub fn positions_layer(book: &Book, i: &Inputs, today: &str) -> Vec<Position> {
+    build_positions(book, &i.balances, &i.accounts, &i.journal, today, &i.quotes)
 }
 
 pub fn equity_layer(i: &Inputs) -> (Vec<Point>, HashMap<String, Vec<Point>>) {
-    let by_account = i.nav_by_account.iter().map(|(nick, pts)| (norm_account_name(nick), equity_series(&arr(Some(pts))))).collect();
+    let by_account = i.nav_by_account.iter().map(|(name, days)| (norm_account_name(name), equity_series(days))).collect();
     (equity_series(&i.nav), by_account)
 }
 
-pub fn accounts_layer(i: &Inputs) -> Vec<Value> {
-    i.accounts.iter().map(|acc| {
-        let nick = ["nickname", "unifiedAccountType", "type"]
-            .iter()
-            .map(|k| field_s(acc, k))
-            .find(|v| !v.is_empty())
-            .map(|v| norm_account_name(&v))
-            .unwrap_or_default();
-        json!({
-            "id": field_s(acc, "id"),
-            "name": nick,
-            "type": field_s(acc, "unifiedAccountType"),
-            "currency": field_s(acc, "currency"),
-            "status": field_s(acc, "status"),
-            "nav": opt_num(get(acc, "netLiquidationValue")),
-        })
-    }).collect()
+pub fn accounts_layer(i: &Inputs) -> Vec<Account> {
+    i.accounts.iter().map(|a| Account { id: a.id.clone(), name: a.name(), kind: a.unified_account_type.clone(), currency: a.currency.clone(), status: a.status.clone(), nav: a.net_liquidation_value }).collect()
 }
 
 impl Layers {
@@ -223,30 +219,33 @@ impl Layers {
     }
 }
 
+/// Everything a view is computed from: the inputs a view reads directly and the
+/// layers derived from the rest, all shared.
 pub struct Base {
     pub today: String,
     pub synced_at: String,
     pub fx: Arc<Fx>,
     pub benchmark: Arc<BTreeMap<String, f64>>,
     pub benchmarks: Arc<HashMap<String, BTreeMap<String, f64>>>,
-    pub distributions: Arc<Map<String, Value>>,
-    pub quotes: Arc<Map<String, Value>>,
+    pub distributions: Arc<HashMap<String, Vec<Distribution>>>,
+    pub quotes: Arc<Quotes>,
     pub fx_last: String,
     pub benchmark_last: String,
     pub book: Arc<Book>,
-    pub trades: Arc<Vec<Value>>,
-    pub positions: Arc<Vec<Value>>,
-    pub cashflow: Arc<Vec<Value>>,
+    pub trades: Arc<Vec<Trade>>,
+    pub positions: Arc<Vec<Position>>,
+    pub cashflow: Arc<Vec<CashflowRow>>,
     pub equity: Arc<Vec<Point>>,
     pub equity_by_account: Arc<HashMap<String, Vec<Point>>>,
-    pub accounts: Arc<Vec<Value>>,
-    pub balances: Arc<Vec<Value>>,
-    pub margin: Arc<Vec<Value>>,
-    pub exposures: Arc<Map<String, Value>>,
-    pub watchlist: Arc<Vec<Value>>,
-    pub news: Arc<Vec<Value>>,
-    pub universes: Arc<Map<String, Value>>,
-    pub tiles: Arc<Option<Value>>,
+    pub accounts: Arc<Vec<Account>>,
+    pub balances: Arc<Vec<BalanceRow>>,
+    pub margin: Arc<Vec<MarginRow>>,
+    pub exposures: Arc<Exposures>,
+    pub watchlist: Arc<Vec<WatchRow>>,
+    pub news: Arc<Vec<NewsRow>>,
+    pub universes: Arc<Ordered<Vec<UniverseRow>>>,
+    pub tiles: Arc<Option<Vec<TileRef>>>,
+    /// The cash rows Wealthsimple lists as securities: id -> currency.
     pub cash_currencies: HashMap<String, String>,
     pub activity_count: usize,
 }
@@ -265,32 +264,13 @@ fn arr(v: Option<&Value>) -> Vec<Value> {
     }
 }
 
-/// A number that is absent rather than zero.
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
-}
-
 impl Base {
     /// A base from its inputs and its layers: shares, copies nothing.
     pub fn assemble(today: &str, i: &Inputs, l: &Layers) -> Base {
-        let objects = |rows: &Arc<Vec<Value>>| -> Arc<Vec<Value>> {
-            if rows.iter().all(|r| r.is_object()) { rows.clone() } else { Arc::new(rows.iter().filter(|r| r.is_object()).cloned().collect()) }
-        };
         let mut benchmarks = i.benchmarks.clone();
         if !benchmarks.contains_key("SP500") {
             Arc::make_mut(&mut benchmarks).insert("SP500".into(), (*i.benchmark).clone());
         }
-        let universes = if i.universes.values().all(|v| v.as_array().map_or(false, |a| a.iter().all(|r| r.is_object()))) {
-            i.universes.clone()
-        } else {
-            Arc::new(i.universes.iter().map(|(k, v)| (k.clone(), Value::Array(arr(Some(v)).into_iter().filter(|r| r.is_object()).collect()))).collect())
-        };
         Base {
             today: today.to_string(),
             synced_at: i.synced_at.clone(),
@@ -310,13 +290,12 @@ impl Base {
             equity: l.equity.clone(),
             equity_by_account: l.equity_by_account.clone(),
             accounts: l.accounts.clone(),
-            balances: objects(&i.balances),
-            margin: objects(&i.margin),
+            balances: i.balances.clone(),
+            margin: i.margin.clone(),
             exposures: i.exposures.clone(),
-            watchlist: objects(&i.watchlist),
-            news: objects(&i.news),
-            universes,
-            // absent is not the same as an empty row: it means never saved
+            watchlist: i.watchlist.clone(),
+            news: i.news.clone(),
+            universes: i.universes.clone(),
             tiles: i.tiles.clone(),
         }
     }

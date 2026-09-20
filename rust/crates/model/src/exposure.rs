@@ -4,10 +4,12 @@
 //! A share carries one sector and one country; a fund is looked through to
 //! what it holds. Whatever no record covers is named rather than hidden.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::value::{FSum, field_s, get, num};
+use crate::activity::Kind;
+use crate::value::{num, FSum};
+use crate::wire::{ExposureSlice, Position};
 
 pub const UNCLASSIFIED: &str = "Not classified";
 
@@ -71,93 +73,96 @@ pub fn norm_sector(name: &str) -> String {
     name.trim().to_string()
 }
 
-fn weight_map(v: Option<&Value>) -> Vec<(String, f64)> {
-    match v {
-        Some(Value::Object(m)) => m.iter().map(|(k, x)| (k.clone(), num(Some(x), 0.0))).collect(),
-        _ => vec![],
+/// What a security is exposed to: weights by sector and by country, in the
+/// order the record gives them (which decides a tie for the dominant sector).
+#[derive(Clone, Debug, Default)]
+pub struct Exposure {
+    pub sectors: Vec<(String, f64)>,
+    pub countries: Vec<(String, f64)>,
+}
+
+impl<'de> serde::Deserialize<'de> for Exposure {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Exposure, D::Error> {
+        let v = Value::deserialize(d)?;
+        let weights = |key: &str| match v.get(key) {
+            Some(Value::Object(m)) => m.iter().map(|(name, w)| (name.clone(), num(Some(w), 0.0))).collect(),
+            _ => vec![],
+        };
+        Ok(Exposure { sectors: weights("sectors"), countries: weights("countries") })
     }
 }
 
-/// `exposure_slices`: the open long positions in scope spread by sector
-/// and by country, largest first, `Not classified` last.
-pub fn exposure_slices(
-    positions: &[Value],
-    exposures: &serde_json::Map<String, Value>,
-    cad: &dyn Fn(f64, &str) -> f64,
-) -> (Vec<Value>, Vec<Value>) {
-    let mut sec_tot: HashMap<String, f64> = HashMap::new();
-    let mut cty_tot: HashMap<String, f64> = HashMap::new();
-    let mut sec_order: Vec<String> = Vec::new();
-    let mut cty_order: Vec<String> = Vec::new();
-    let mut sec_unc = 0.0_f64;
-    let mut cty_unc = 0.0_f64;
+/// Exposure records by key: a security's id, `share:<TICKER>:<venue form>` for a
+/// listing looked up by ticker, `fund:…` for a fund's own record.
+pub type Exposures = HashMap<String, Exposure>;
+
+/// The record an option's exposure is read from: its underlying's share record,
+/// on the venue its currency suggests first.
+pub fn underlying_exposure<'a>(exposures: &'a Exposures, underlying: &str, currency: &str) -> Option<&'a Exposure> {
+    let under = underlying.to_uppercase();
+    let us = format!("{}{}::US", crate::venues::SHARE_KEY, under);
+    let ca = format!("{}{}:", crate::venues::SHARE_KEY, under);
+    let (first, second) = if currency.to_uppercase() == "USD" { (us, ca) } else { (ca, us) };
+    exposures.get(&first).or_else(|| exposures.get(&second))
+}
+
+/// The open long positions in scope spread by sector and by country, largest
+/// first, `Not classified` last.
+pub fn exposure_slices(positions: &[&Position], exposures: &Exposures, cad: &dyn Fn(f64, &str) -> f64) -> (Vec<ExposureSlice>, Vec<ExposureSlice>) {
+    #[derive(Default)]
+    struct Spread {
+        total: HashMap<String, f64>,
+        order: Vec<String>,
+        unclassified: f64,
+    }
+    impl Spread {
+        fn add(&mut self, name: String, amount: f64) {
+            if !self.total.contains_key(&name) {
+                self.order.push(name.clone());
+            }
+            *self.total.entry(name).or_insert(0.0) += amount;
+        }
+        fn rows(self, all: f64) -> Vec<ExposureSlice> {
+            let mut out: Vec<(String, f64)> = self.order.into_iter().filter_map(|n| self.total.get(&n).copied().filter(|v| *v > 0.0).map(|v| (n, v))).collect();
+            out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            if self.unclassified > 0.005 {
+                out.push((UNCLASSIFIED.to_string(), self.unclassified));
+            }
+            out.into_iter().map(|(name, value)| ExposureSlice { name, value, share: if all != 0.0 { value / all } else { 0.0 } }).collect()
+        }
+    }
+    let (mut sectors, mut countries) = (Spread::default(), Spread::default());
     let mut total = 0.0_f64;
+    let nothing = Exposure::default();
+    // a coin is its own sector and no country's
+    let coin = Exposure { sectors: vec![("Digital assets".to_string(), 1.0)], countries: vec![] };
 
     for p in positions {
         // the same positions and values as Allocation: every one worth something
-        let v = cad(num(get(p, "mv"), 0.0), &field_s(p, "currency"));
+        let v = cad(p.mv, &p.currency);
         if v <= 0.0 {
             continue;
         }
         total += v;
-        let kind = field_s(p, "kind");
-        let mut rec = exposures.get(&field_s(p, "securityId")).cloned().unwrap_or(Value::Null);
-
-        if kind == "Options" {
+        let record = match p.kind {
+            Kind::Crypto => &coin,
             // a contract is its underlying's exposure, under the share's record
-            let under = field_s(p, "underlying").to_uppercase();
-            // exposure.share_exposure's keys: the ticker, then the venue form
-            let us = format!("share:{}::US", under);
-            let ca = format!("share:{}:", under);
-            let (first, second) = if field_s(p, "currency").to_uppercase() == "USD" { (us, ca) } else { (ca, us) };
-            rec = exposures
-                .get(&first)
-                .or_else(|| exposures.get(&second))
-                .cloned()
-                .unwrap_or(Value::Null);
-        }
-
-        let (s_map, c_map) = if kind == "Crypto" {
-            // a coin is its own sector and no country's
-            (vec![("Digital assets".to_string(), 1.0)], vec![])
-        } else {
-            (weight_map(rec.get("sectors")), weight_map(rec.get("countries")))
+            Kind::Options => underlying_exposure(exposures, &p.underlying, &p.currency).unwrap_or(&nothing),
+            _ => exposures.get(&p.security_id).unwrap_or(&nothing),
         };
-
-        let s_sum: f64 = s_map.iter().map(|(_, w)| *w).fsum();
-        let c_sum: f64 = c_map.iter().map(|(_, w)| *w).fsum();
-        for (n, w) in &s_map {
+        for (name, w) in &record.sectors {
             // a record read before an alias was known folds here
-            let name = { let x = norm_sector(n); if x.is_empty() { n.clone() } else { x } };
-            if !sec_tot.contains_key(&name) {
-                sec_order.push(name.clone());
-            }
-            *sec_tot.entry(name).or_insert(0.0) += v * w;
+            let known = norm_sector(name);
+            sectors.add(if known.is_empty() { name.clone() } else { known }, v * w);
         }
-        for (n, w) in &c_map {
-            if !cty_tot.contains_key(n) {
-                cty_order.push(n.clone());
-            }
-            *cty_tot.entry(n.clone()).or_insert(0.0) += v * w;
+        for (name, w) in &record.countries {
+            countries.add(name.clone(), v * w);
         }
-        sec_unc += v * f64::max(0.0, 1.0 - f64::min(1.0, s_sum));
-        cty_unc += v * f64::max(0.0, 1.0 - f64::min(1.0, c_sum));
+        let covered = |weights: &[(String, f64)]| f64::min(1.0, weights.iter().map(|(_, w)| *w).fsum());
+        sectors.unclassified += v * f64::max(0.0, 1.0 - covered(&record.sectors));
+        countries.unclassified += v * f64::max(0.0, 1.0 - covered(&record.countries));
     }
-
-    let rows = |tot: &HashMap<String, f64>, order: &[String], unc: f64| -> Vec<Value> {
-        let mut out: Vec<(String, f64)> = order
-            .iter()
-            .filter_map(|n| tot.get(n).filter(|v| **v > 0.0).map(|v| (n.clone(), *v)))
-            .collect();
-        out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        if unc > 0.005 {
-            out.push((UNCLASSIFIED.to_string(), unc));
-        }
-        out.into_iter()
-            .map(|(name, value)| json!({"name": name, "value": value, "share": if total != 0.0 { value / total } else { 0.0 }}))
-            .collect()
-    };
-    (rows(&sec_tot, &sec_order, sec_unc), rows(&cty_tot, &cty_order, cty_unc))
+    (sectors.rows(total), countries.rows(total))
 }
 
 /// `exposure._ISSUERS`: the fund families named at the start of a fund's name.
