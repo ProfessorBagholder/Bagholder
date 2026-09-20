@@ -61,9 +61,11 @@ words!(
     OrderType { Market = "MARKET", Limit = "LIMIT", Stop = "STOP", StopLimit = "STOP_LIMIT" }
 );
 words!(
-    /// Where an order stands, in Bagholder's words. `Dry`: written and not sent, orders being off.
+    /// Where an order stands, in Bagholder's words. `Dry`: written and not sent, orders being
+    /// off. `Sending`: written, and Wealthsimple not yet heard from -- what a crash between the
+    /// two leaves behind.
     OrderStatus {
-        Dry = "dry", Sent = "sent", Pending = "pending", Cancelling = "cancelling",
+        Dry = "dry", Sending = "sending", Sent = "sent", Pending = "pending", Cancelling = "cancelling",
         Filled = "filled", Cancelled = "cancelled", Expired = "expired", Rejected = "rejected", Failed = "failed",
     }
 );
@@ -79,7 +81,7 @@ words!(
     /// Where a bracket stands.
     BracketStatus {
         Waiting = "waiting", Armed = "armed", Firing = "firing", TargetPlaced = "target_placed",
-        Stopping = "stopping", Closing = "closing", Done = "done", Closed = "closed", Cancelled = "cancelled",
+        Stopping = "stopping", Closing = "closing", Done = "done", Cancelled = "cancelled",
     }
 );
 words!(

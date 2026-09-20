@@ -74,6 +74,26 @@ fn test_the_json_view_of_an_order_is_the_typed_one() {
 }
 
 #[test]
+fn test_every_word_the_order_code_writes_is_kept_as_written() {
+    // a word missing from its enum would be stored as nothing: each is written through
+    // the JSON door the order code still uses, and read back
+    let d = db();
+    for (n, status) in ["dry", "sending", "sent", "pending", "cancelling", "filled", "cancelled", "expired", "rejected", "failed"].iter().enumerate() {
+        let id = format!("order-w{}", n);
+        orders::insert_order(&d.conn, &json!({"id": id, "status": status, "role": "target", "source": "wealthsimple", "side": "SELL", "type": "STOP_LIMIT"}), NOW).unwrap();
+        let row = orders::get_order(&d.conn, &id).unwrap().unwrap();
+        assert_eq!((row["status"].as_str(), row["role"].as_str(), row["source"].as_str(), row["side"].as_str(), row["type"].as_str()),
+            (Some(*status), Some("target"), Some("wealthsimple"), Some("SELL"), Some("STOP_LIMIT")));
+    }
+    for (n, status) in ["waiting", "armed", "firing", "target_placed", "stopping", "closing", "done", "cancelled"].iter().enumerate() {
+        let id = format!("br-w{}", n);
+        orders::insert_bracket(&d.conn, &json!({"id": id, "orderId": "o", "status": status, "slKind": "trail", "slTrailUnit": "amt", "slMode": "watched"}), NOW).unwrap();
+        let row = orders::get_bracket(&d.conn, &id).unwrap().unwrap();
+        assert_eq!((row["status"].as_str(), row["slKind"].as_str(), row["slTrailUnit"].as_str(), row["slMode"].as_str()), (Some(*status), Some("trail"), Some("amt"), Some("watched")));
+    }
+}
+
+#[test]
 fn test_a_word_this_build_does_not_know_reads_as_not_set() {
     let d = db();
     typed::insert_order(&d.conn, &ticket(), NOW).unwrap();
