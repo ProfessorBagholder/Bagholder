@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import {
-    ordersStore, panel, startOrdersPoll, stopOrdersPoll,
+    ordersStore, panel, openOrders, closeOrders,
     ORDER_LIVE, BRACKET_LIVE, orderById, bracketOf, bracketLegs,
     orderTitle, orderDetailLine, orderFillLine, orderValue, orderPill,
     orderWhenWord, orderMultiplier, bracketEndWord, bracketExited,
@@ -19,8 +19,8 @@
 
   let { onclose }: { onclose: () => void } = $props()
 
-  onMount(() => startOrdersPoll())
-  onDestroy(() => stopOrdersPoll())
+  onMount(() => openOrders())
+  onDestroy(() => closeOrders())
 
   const TABS: [string, string][] = [['pending', 'Pending'], ['filled', 'Filled'], ['cancelled', 'Cancelled']]
 

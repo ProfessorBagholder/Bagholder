@@ -7,6 +7,7 @@
   import { n2, shortDay, api } from './util'
   import { sort, sortRows } from '../sort.svelte'
   import { bareSymbol } from '../sym'
+  import { watchDoc } from '../live'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
 
@@ -20,31 +21,21 @@
     { key: 'volumePct', label: 'Short volume', align: 'right' as const },
     { key: 'asOf', label: 'As of', align: 'right' as const },
   ]
-  const KEEP_MS = 3 * 60 * 1000
-  const READING_MS = 4000
 
   let scope = $state((() => { try { return localStorage.getItem('bh2.shorts') || 'all' } catch { return 'all' } })())
   let query = $state('')
 
-  const feed = $state<{ rows: ShortsFeedRow[] | null; at: number; loading: boolean; reading: boolean }>({ rows: null, at: 0, loading: false, reading: false })
-  const found = $state<Record<string, { loading?: boolean; missing?: boolean; row?: ShortsFeedRow }>>({})
-
-  function ensureShortsFeed() {
-    const keep = feed.reading ? READING_MS : KEEP_MS
-    if (feed.loading || (feed.at && Date.now() - feed.at < keep)) return
-    feed.loading = true
-    api<{ ok: boolean; rows?: ShortsFeedRow[]; reading?: boolean }>('GET', '/api/shorts/feed').then((d) => {
-      feed.loading = false
-      feed.at = Date.now()
-      if (d && d.ok) feed.rows = d.rows || []
-      else if (!feed.rows) feed.rows = []
-      feed.reading = !!(d && d.ok && d.reading)
-      if (feed.reading) setTimeout(ensureShortsFeed, READING_MS)
-    })
+  // The table is shown only while this card is, so it is sent only then: whole once,
+  // and after that each listing's row as the sweep reads it, and the word that a read
+  // is under way -- pushed, not asked for every four seconds.
+  const feedDoc = $state<{ data: { ok: boolean; rows: ShortsFeedRow[]; reading: boolean } | null }>({ data: null })
+  const feed = {
+    get rows() { return feedDoc.data ? feedDoc.data.rows : null },
+    get reading() { return !!feedDoc.data?.reading },
+    get loading() { return feedDoc.data == null },
   }
-  $effect(() => {
-    ensureShortsFeed()
-  })
+  const found = $state<Record<string, { loading?: boolean; missing?: boolean; row?: ShortsFeedRow }>>({})
+  $effect(() => watchDoc('shorts', {}, feedDoc))
 
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   function shortsLookup(text: string) {

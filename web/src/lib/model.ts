@@ -353,6 +353,8 @@ export interface Filing {
   subject: string
   summary: string
   summaryStatus?: string
+  /** nothing a further reading would add: the row is named as it will stay */
+  enrichFinal?: boolean
   date: string
   dateText: string
   size: string
@@ -370,6 +372,12 @@ export interface FilingsPayload {
   filings?: Filing[]
   sources?: Record<string, FilingsSource>
   fetchedAt?: string
+  /** false until the sources have been asked once for this listing */
+  everRead?: boolean
+  /** the documents the server's pass has still to read; the first is being read now */
+  reading?: string[]
+  /** the local model that writes the sentences: ready, starting, downloading, off */
+  summaryStatus?: string
   error?: string
 }
 

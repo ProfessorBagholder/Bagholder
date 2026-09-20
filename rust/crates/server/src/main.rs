@@ -6,6 +6,7 @@
 //! page itself.
 
 mod app;
+mod docs;
 mod events;
 mod feeds;
 mod login;
@@ -683,6 +684,12 @@ fn handle_post(req: Request, path: &str, body: Value) {
         "/api/watchlist/add" => send_json(req, 200, &feeds::watch_add(&body)),
         "/api/watchlist/remove" => send_json(req, 200, &feeds::watch_remove(&body)),
         "/api/tiles/set" => send_json(req, 200, &feeds::tiles_set(&body)),
+        "/api/events/watch" => {
+            // what this page is showing now, beyond the model: {id, docs: {key: params}}
+            let id = body.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let docs = body.get("docs").and_then(|v| v.as_object()).map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+            send_json(req, 200, &json!({"ok": events::watch(id, docs)}))
+        }
         "/api/journal" => {
             let id = s(body.get("id")).trim().to_string();
             if id.is_empty() {

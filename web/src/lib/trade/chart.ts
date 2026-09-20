@@ -74,16 +74,22 @@ function chartSpan(t: Trade): { from: string; to: string } {
 }
 
 const _histCache: Record<string, History> = {}
-export function loadHistory(t: Trade, tf: string): Promise<History> {
-  const key = t.id + '|' + tf
-  if (_histCache[key]) return Promise.resolve(_histCache[key])
+/** The chart's own question, as the server is asked it; also names what it watches while the answer is pending. */
+export function historyQuery(t: Trade, tf: string): string {
   const sp = chartSpan(t)
-  const q =
+  return (
     'symbol=' + encodeURIComponent(t.symbol) +
     '&exchange=' + encodeURIComponent(t.exchange || '') +
     '&currency=' + encodeURIComponent(t.currency || '') +
     '&kind=' + encodeURIComponent(t.kind || '') +
     '&from=' + sp.from + '&to=' + sp.to + '&tf=' + tf
+  )
+}
+
+export function loadHistory(t: Trade, tf: string): Promise<History> {
+  const key = t.id + '|' + tf
+  if (_histCache[key]) return Promise.resolve(_histCache[key])
+  const q = historyQuery(t, tf)
   return fetch('/api/history?' + q, { headers: { 'X-Bagholder': '1' } })
     .then((r) => r.json())
     .catch(() => ({ ok: false }))

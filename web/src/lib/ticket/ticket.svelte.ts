@@ -1,6 +1,7 @@
 import { store } from '../state.svelte'
 import type { Position } from '../model'
 import { ui } from '../ui.svelte'
+import { watchDoc } from '../live'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
 import { computeVals, tick, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
@@ -22,10 +23,7 @@ export interface TicketDraft {
 }
 export const draftStore = $state<{ d: TicketDraft | null }>({ d: null })
 
-const POLL_MS = 5000
 const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl', 'tp', 'text'] as const
-let seq = 0
-let timer: ReturnType<typeof setTimeout> | undefined
 
 function api(method: string, path: string, body?: unknown): Promise<{ ok?: boolean; error?: string; [k: string]: unknown }> {
   const opts: RequestInit = { method, headers: { 'X-Bagholder': '1' } }
@@ -129,30 +127,43 @@ export function closeTicket(discard = false) {
   const t = ticketStore.t
   if (t) { if (discard) dropDraft(); else saveDraft(t) }
   ticketStore.t = null
-  seq++
-  clearTimeout(timer)
+  stopQuote?.()
+  stopQuote = undefined
 }
 
-export async function fetchQuote() {
+// The open ticket's quote. Wealthsimple pushes nothing, so the server asks it again
+// every few seconds while a ticket shows it (rust docs.rs), and sends here only what
+// moved -- the bid, the ask, the last -- written into the quote already shown. Called
+// when the ticket opens and when its account changes (the quote is per account).
+let stopQuote: (() => void) | undefined
+export function fetchQuote() {
   const t = ticketStore.t
+  stopQuote?.()
+  stopQuote = undefined
   if (!t) return
-  const my = ++seq
-  clearTimeout(timer)
   const qp = new URLSearchParams({ symbol: t.symbol, security: t.securityId || '', account: t.accountId || '', exchange: t.exchange || '' })
-  const r = await api('GET', '/api/order/quote?' + qp.toString())
-  const cur = ticketStore.t
-  if (!cur || my !== seq) return
-  if (r && r.ok) {
-    cur.data = r as typeof cur.data
-    cur.error = ''
-    const accts = (r.accounts as TicketAccount[]) || []
-    if (!cur.accountId && accts.length) cur.accountId = (accts.find((a) => a.margin) || accts[0]).id
-    const ot = (r.orderTypes as string[]) || []
-    if (ot.length && ot.indexOf(cur.type) < 0) cur.type = ot.indexOf('LIMIT') >= 0 ? 'LIMIT' : ot[0]
-  } else {
-    cur.error = (r && (r.error as string)) || 'Quote failed.'
+  const holder = {
+    get data() { return ticketStore.t === t ? t.data : null },
+    set data(v: typeof t.data) { if (ticketStore.t === t) t.data = v },
   }
-  if (ticketStore.t && my === seq) timer = setTimeout(fetchQuote, POLL_MS)
+  stopQuote = watchDoc('quote:' + qp.toString(), {}, holder, () => {
+    const cur = ticketStore.t
+    const r = cur?.data as ({ ok?: boolean; error?: string; accounts?: TicketAccount[]; orderTypes?: string[] } | null | undefined)
+    if (!cur || cur !== t || !r) return
+    if (r.ok === false) {
+      cur.error = r.error || 'Quote failed.'
+      return
+    }
+    cur.error = ''
+    const accts = r.accounts || []
+    if (!cur.accountId && accts.length) {
+      cur.accountId = (accts.find((a) => a.margin) || accts[0]).id
+      fetchQuote() // the quote is the account's: watch that one
+      return
+    }
+    const ot = r.orderTypes || []
+    if (ot.length && ot.indexOf(cur.type) < 0) cur.type = ot.indexOf('LIMIT') >= 0 ? 'LIMIT' : ot[0]
+  })
 }
 
 function notice(v: ReturnType<typeof computeVals>, sent: boolean) {

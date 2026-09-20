@@ -12,7 +12,8 @@
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { store, saveJournal } from './state.svelte'
   import { openTicket } from './ticket/ticket.svelte'
-  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyQuery, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { watchDoc } from './live'
   import { tradeChart } from './actions/tradeChart'
   import ShortInterest from './trade/ShortInterest.svelte'
   import Disclosures from './trade/Disclosures.svelte'
@@ -31,7 +32,7 @@
     if (t.fills === undefined) return // the trade's fills are still on their way
     const wanted = wantedTf || chartTfFor(t)
     let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopWatching: (() => void) | undefined
     const mount = async (want: string) => {
       const h = await loadHistory(t, want)
       if (cancelled) return
@@ -46,9 +47,20 @@
           const d = await loadHistory(t, '1d')
           if (!cancelled) loaded = { tf: '1d', hist: d, provisional: true }
         }
-        timer = setTimeout(() => {
-          if (!cancelled && chartTfFor(t) === want) mount(want)
-        }, 3000)
+        // the minute bars are being read: be told when they are in, and ask once more
+        // then -- not every three seconds until they are
+        let pending = true
+        const flag = {
+          get pending() { return pending },
+          set pending(v: boolean) {
+            pending = v
+            if (v || cancelled) return
+            stopWatching?.()
+            if (chartTfFor(t) === want) mount(want)
+          },
+        }
+        stopWatching?.()
+        stopWatching = watchDoc('history:' + historyQuery(t, want), {}, { data: flag })
         return
       }
       loaded = { tf, hist: h, provisional: false }
@@ -56,7 +68,7 @@
     mount(wanted)
     return () => {
       cancelled = true
-      clearTimeout(timer)
+      stopWatching?.()
     }
   })
 

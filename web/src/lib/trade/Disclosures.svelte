@@ -10,13 +10,9 @@
   import {
     DISC_ORDER,
     discStore,
-    discVersion,
     discSymbol,
-    ensureDisclosures,
+    showDisclosures,
     refreshDisclosures,
-    sweepDiscEnrich,
-    markDiscOpen,
-    markDiscClosed,
     enrichLoading,
     sweepActive,
     preparing,
@@ -37,13 +33,8 @@
   let discOpening = $state<string | null>(null)
   let openTimer: ReturnType<typeof setTimeout> | undefined
 
-  $effect(() => {
-    ensureDisclosures(trade)
-  })
-  $effect(() => {
-    markDiscOpen(sym)
-    return () => markDiscClosed(sym)
-  })
+  // shown while this card is: the list, then each row's title and sentence as read
+  $effect(() => showDisclosures(trade))
 
   interface Col {
     key: string
@@ -54,9 +45,8 @@
   }
 
   const view = $derived.by(() => {
-    // reference the enrich counter so titles/summaries re-render as they arrive
-    void discVersion.n
-    if (!rec || rec.loading) return { state: 'loading' as const }
+    // until the sources have been asked once there is nothing to say about this listing
+    if (!rec || rec.loading || (rec.payload && rec.payload.everRead === false)) return { state: 'loading' as const }
     if (rec.error) return { state: 'error' as const, error: rec.error }
     const p = rec.payload || { ok: true }
     const all = p.filings || []
@@ -98,11 +88,6 @@
     const tmpl = cols.map((c) => c.w).join(' ') + ' 22px'
     const rightText = [!multiSource && !discSource && oneSource ? oneSource : '', p.fetchedAt ? 'read ' + relTime(p.fetchedAt) : ''].filter(Boolean).join(' · ')
     return { state: 'list' as const, all, rows, cols, tmpl, effCat, catsAll, multiCat, multiSource, anySize, rightText }
-  })
-
-  // the background read of each row's title and summary
-  $effect(() => {
-    if (view.state === 'list') sweepDiscEnrich(sym, view.rows)
   })
 
   function toggleExpand(id: string) {
@@ -184,13 +169,13 @@
     </div>
     <div class="scroll dc-list" style="max-height:330px">
       {#each view.rows as f (f.id)}
-        {@const enriching = enrichLoading(f.id) || sweepActive(sym, f)}
+        {@const enriching = enrichLoading(sym, f.id) || sweepActive(sym, f)}
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
         <div class="dc-row" class:on={discExpanded === f.id} onclick={() => toggleExpand(f.id)} style="grid-template-columns:{view.tmpl}">
           <div class="dc-date">{discDate(f)}</div>
           <div class="dc-doc"><b>{f.type}</b></div>
           <div class="dc-title">{#if f.subject}{f.subject}{:else if enriching || titleComing(f, sym)}<span class="dc-skel" style="width:70%"></span>{/if}</div>
-          <div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || preparing(f)}<span class="dc-skel" style="width:90%"></span>{/if}</div>
+          <div class="dc-sumcell">{#if f.summary}{f.summary}{:else if enriching || (preparing(sym) && !f.enrichFinal)}<span class="dc-skel" style="width:90%"></span>{/if}</div>
           {#if view.multiSource}<button class="dc-src" onclick={(e) => { e.stopPropagation(); pickSource(f.source) }}>{f.source}</button>{/if}
           {#if view.anySize}<div style="font-size:11.5px;color:var(--ink55);text-align:right;font-variant-numeric:tabular-nums;padding-top:1px">{f.size || ''}</div>{/if}
           <button class="dc-open" class:lit={discOpening === f.id} onclick={(e) => { e.stopPropagation(); openDoc(f) }} aria-label="Open document">{discOpening === f.id ? '…' : '↗'}</button>

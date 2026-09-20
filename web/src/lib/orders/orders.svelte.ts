@@ -4,6 +4,7 @@
 
 import { filters } from '../filters.svelte'
 import { ui } from '../ui.svelte'
+import { watchDoc } from '../live'
 import { draftStore } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
 import { plain } from '../ticket/vals'
@@ -34,10 +35,6 @@ export const panel = $state<{
   busy: string
 }>({ tab: 'pending', orderEdit: null, bracketEdit: null, busy: '' })
 
-const POLL_MS = 10000
-let timer: ReturnType<typeof setTimeout> | undefined
-let seq = 0
-
 function api(method: string, path: string, body?: unknown): Promise<{ ok?: boolean; error?: string; [k: string]: unknown }> {
   const opts: RequestInit = { method, headers: { 'X-Bagholder': '1' } }
   if (body !== undefined) {
@@ -55,24 +52,29 @@ function flash(msg: string, kind: 'ok' | 'err', ms: number) {
 export const ORDER_LIVE: Record<string, number> = { sent: 1, pending: 1, cancelling: 1 }
 export const BRACKET_LIVE: Record<string, number> = { waiting: 1, armed: 1, firing: 1, target_placed: 1, stopping: 1, closing: 1 }
 
-export async function loadOrders(): Promise<void> {
-  const my = ++seq
-  const r = await api('GET', '/api/orders')
-  if (my !== seq) return
-  if (r && r.ok) { ordersStore.data = r as unknown as OrdersResp; ordersStore.error = '' } else ordersStore.error = (r && (r.error as string)) || 'Could not load the orders.'
-  ordersStore.loaded = true
-}
-export function startOrdersPoll(): void {
+// The orders are shown only while the panel is open, so they are sent only then: the
+// whole list when it opens, and after that each order's change as it happens (a fill,
+// a cancel going through, a bracket arming) written into that order's object. The
+// server reads them back from Wealthsimple closely while the panel is open or an
+// order is live; nothing here asks again.
+let stopWatching: (() => void) | undefined
+export function openOrders(): void {
   panel.orderEdit = null
   panel.bracketEdit = null
-  loadOrders()
-  clearTimeout(timer)
-  const tick = () => { timer = setTimeout(async () => { await loadOrders(); tick() }, POLL_MS) }
-  tick()
+  stopWatching?.()
+  const holder = {
+    get data() { return ordersStore.data },
+    set data(v: OrdersResp | null) {
+      ordersStore.data = v
+      ordersStore.loaded = true
+      ordersStore.error = v && v.ok === false ? 'Could not load the orders.' : ''
+    },
+  }
+  stopWatching = watchDoc<OrdersResp>('orders', {}, holder)
 }
-export function stopOrdersPoll(): void {
-  seq++
-  clearTimeout(timer)
+export function closeOrders(): void {
+  stopWatching?.()
+  stopWatching = undefined
 }
 
 // --- pure formatting, ported verbatim ---
@@ -216,7 +218,6 @@ export async function orderEditSave(id: string) {
   if (!r || !r.ok) { if (panel.orderEdit) panel.orderEdit.error = (r && (r.error as string)) || 'Could not change the order.'; return }
   panel.orderEdit = null
   flash('Order changed · ' + orderLine({ ...o, quantity, limitPrice: limitPrice != null ? limitPrice : o.limitPrice }), 'ok', 10000)
-  loadOrders()
 }
 
 export async function bracketEditSave(id: string) {
@@ -239,11 +240,10 @@ export async function bracketEditSave(id: string) {
   panel.busy = 'orders'; e.error = ''
   for (const call of calls) {
     const r = await api('POST', '/api/bracket/adjust', call)
-    if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not change the bracket.'; loadOrders(); return }
+    if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not change the bracket.'; return }
   }
   panel.busy = ''; panel.bracketEdit = null
   flash('Bracket changed · ' + b.symbol, 'ok', 10000)
-  loadOrders()
 }
 
 export async function bracketRemove(id: string, leg: string) {
@@ -255,20 +255,17 @@ export async function bracketRemove(id: string, leg: string) {
   if (!r || !r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not remove the leg.'; return }
   panel.bracketEdit = null
   flash((leg === 'sl' ? 'Stop loss removed · ' : 'Take profit removed · ') + b.symbol, 'ok', 10000)
-  loadOrders()
 }
 
 export async function cancelOrderNow(id: string) {
   const o = orderById(id)
   const r = await api('POST', '/api/order/cancel', { id })
   flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && (r.error as string)) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
-  loadOrders()
 }
 export async function cancelBracketNow(id: string) {
   const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
   const r = await api('POST', '/api/bracket/cancel', { id })
   flash(r && r.ok ? 'Bracket cancelled · ' + (b ? b.symbol : '') : (r && (r.error as string)) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
-  loadOrders()
 }
 
 export { draftStore }

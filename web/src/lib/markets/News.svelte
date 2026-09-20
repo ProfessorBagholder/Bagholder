@@ -10,7 +10,8 @@
   import { sort, sortRows } from '../sort.svelte'
   import { store } from '../state.svelte'
   import { sugQuotes, sugKey, sugQuoteSchedule } from './quotes.svelte'
-  import { discFeed, discBySym, loadDiscFeed, ensureDisclosures, discTitleComing, sweepEnrich, type DiscRow } from './disc.svelte'
+  import { discFeed, discBySym, showDiscFeed, showDisclosures, discTitleComing, type DiscRow } from './disc.svelte'
+  import { titleComing } from '../trade/discStore.svelte'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
 
@@ -94,7 +95,7 @@
       if (!rec || !rec.payload) return []
       rows = (rec.payload.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
     } else {
-      rows = discFeed[sc]?.rows || []
+      rows = discFeed[sc]?.data?.filings || []
     }
     const said = new Set((wire || []).map((n) => newsTextKey(n.headline)))
     return rows
@@ -149,9 +150,9 @@
       rows = (p.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
       if (!rows.length) empty = Object.values(p.sources || {}).some((x) => x && x.filer) ? 'Nothing filed.' : 'No regulatory filer for this listing.'
     } else {
-      const f = discFeed[scope]
-      if (!f || !f.rows) return { state: 'reading' as const }
-      rows = f.rows
+      const f = discFeed[scope]?.data
+      if (!f) return { state: 'reading' as const }
+      rows = f.filings
     }
     const q = query.trim().toUpperCase()
     if (q) {
@@ -165,23 +166,15 @@
     return { state: 'rows' as const, rows, empty }
   })
 
-  // Side effects that used to (wrongly) live inside the deriveds above. Effects
-  // may mutate $state; deriveds may not. Load the disclosures feed or per-listing
-  // payload for the current view, and fill titles top-first.
+  const coming = (f: DiscRow) => (sym ? titleComing(f, sym.symbol.toUpperCase()) : discTitleComing(f, scope))
+
+  // The disclosures this view shows are sent while it shows them, and stop when it
+  // stops: one listing's under the chip, or the scope's feed. The server reads the
+  // documents; their titles reach the rows as they are read.
   $effect(() => {
     if (kind !== 'releases' && kind !== 'disc') return
-    if (sym) ensureDisclosures({ symbol: sym.symbol, exchange: sym.exchange || '', name: sym.name || '', currency: sym.currency || '' })
-    else loadDiscFeed(scope)
-  })
-  $effect(() => {
-    if (kind !== 'releases' && kind !== 'disc') return
-    if (sym) {
-      const filings = discBySym[sym.symbol]?.payload?.filings as DiscRow[] | undefined
-      if (filings && filings.length) sweepEnrich(sym.symbol, filings, () => true)
-    } else {
-      const f = discFeed[scope]
-      if (f && f.rows && f.rows.length) sweepEnrich('feed:' + scope, f.rows, () => true)
-    }
+    if (sym) return showDisclosures({ symbol: sym.symbol, exchange: sym.exchange || '', name: sym.name || '', currency: sym.currency || '' })
+    return showDiscFeed(scope)
   })
   // A chip for a listing the book neither holds nor watches: fetch its quote.
   $effect(() => {
@@ -275,8 +268,8 @@
           <div class="nw-row nw-disc" role="button" tabindex="-1" onclick={() => openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url })} onkeydown={(e) => { if (e.key === 'Enter') openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) }}>
             <div class="tab" style="font-size:11px;color:var(--ink55)">{discDate(f)}</div>
             <div>
-              <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">{#if discTitleComing(f)}<span class="dc-skel" style="width:70%"></span>{:else}{f.subject || f.type || ''}{/if}</div>
-              <div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">{(f.subject || discTitleComing(f) ? String(f.type || '') + ' · ' : '') + String(f.source || '')}</div>
+              <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">{#if coming(f)}<span class="dc-skel" style="width:70%"></span>{:else}{f.subject || f.type || ''}{/if}</div>
+              <div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">{(f.subject || coming(f) ? String(f.type || '') + ' · ' : '') + String(f.source || '')}</div>
             </div>
             <div style="text-align:right"><button class="nw-sym go" onclick={(e) => { e.stopPropagation(); newsSym({ symbol: f.symbol || '', exchange: f.exchange || '' }) }}>{f.symbol}</button></div>
           </div>

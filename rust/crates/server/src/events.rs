@@ -92,15 +92,75 @@ fn message(event: &str, data: &Value) -> String {
     format!("event: {}\ndata: {}\n\n", event, data)
 }
 
+// --- documents --------------------------------------------------------------------
+//
+// The model is what every page shows. Some things are shown only some of the time
+// -- the orders while their panel is open, the short-interest table while the
+// Markets tab is, one listing's filings while its page is -- and those are sent
+// only while they are: the page says what it is showing (`POST /api/events/watch`)
+// and the stream carries that document too, whole once and then by change, exactly
+// as it carries the model. When the page stops showing it, it stops being sent.
+// This is what replaces each panel asking again every few seconds.
+
+type Wanted = std::collections::BTreeMap<String, Value>;
+
+fn streams() -> &'static Mutex<std::collections::HashMap<u64, Arc<Mutex<Wanted>>>> {
+    static S: OnceLock<Mutex<std::collections::HashMap<u64, Arc<Mutex<Wanted>>>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// What the page on stream `id` is showing now, beyond the model. Replaces what it
+/// said before. False when there is no such stream (it closed; the page will
+/// connect again and say so again).
+pub fn watch(id: u64, docs: Wanted) -> bool {
+    let Some(wanted) = streams().lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned() else { return false };
+    let fresh: Vec<String> = {
+        let mut w = wanted.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = docs.keys().filter(|k| !w.contains_key(*k)).cloned().collect();
+        *w = docs;
+        fresh
+    };
+    // a document just opened is worth reading fresh: once, now, in the background
+    for key in &fresh {
+        crate::docs::opened(key);
+    }
+    signal();
+    true
+}
+
+/// Whether any page is showing the document `key` now.
+pub fn watched(key: &str) -> bool {
+    streams().lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
+}
+
+struct Registered(u64);
+impl Registered {
+    fn new() -> (Registered, Arc<Mutex<Wanted>>) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+        let wanted = Arc::new(Mutex::new(Wanted::new()));
+        streams().lock().unwrap_or_else(|e| e.into_inner()).insert(id, wanted.clone());
+        (Registered(id), wanted)
+    }
+}
+impl Drop for Registered {
+    fn drop(&mut self) {
+        streams().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
 /// One page's stream. `write` sends text and says whether the page is still there.
 pub fn stream<W: FnMut(&str) -> bool>(filters: Option<Value>, detail: Option<String>, status: &dyn Fn() -> Value, mut write: W) {
     let _watching = Watching::new();
-    if !write(": bagholder\n\n") {
+    let (registered, wanted) = Registered::new();
+    if !write(&message("hello", &serde_json::json!({"id": registered.0}))) {
         return;
     }
     let mut seen = *bell().0.lock().unwrap_or_else(|e| e.into_inner());
     let mut sent: Option<(Arc<Value>, Value)> = None;
+    let mut sent_docs: std::collections::BTreeMap<String, Value> = Default::default();
     while !app().stopping() {
+        let mut out = String::new();
         let view = match std::panic::catch_unwind(|| app().view(filters.as_ref(), detail.as_deref())) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
@@ -113,25 +173,41 @@ pub fn stream<W: FnMut(&str) -> bool>(filters: Option<Value>, detail: Option<Str
                 o.remove("dataVersion");
                 o.remove("coreVersion");
             }
-            let text = match &sent {
+            match &sent {
                 None => {
                     let mut whole = (*view).clone();
                     whole["status"] = now.clone();
-                    Some(message("snapshot", &whole))
+                    out.push_str(&message("snapshot", &serde_json::json!({"doc": "model", "data": whole})));
                 }
                 Some((was, was_status)) => {
                     // the same view object is the same data: only a different one is compared
                     let mut ops = if Arc::ptr_eq(was, &view) { vec![] } else { patch::diff(was, &view) };
                     ops.extend(patch::diff_under(&["status"], was_status, &now));
-                    if ops.is_empty() { None } else { Some(message("patch", &Value::Array(ops))) }
-                }
-            };
-            if let Some(t) = text {
-                if !write(&t) {
-                    return;
+                    if !ops.is_empty() {
+                        out.push_str(&message("patch", &serde_json::json!({"doc": "model", "ops": ops})));
+                    }
                 }
             }
             sent = Some((view, now));
+        }
+        // the documents this page is showing now
+        let want: Wanted = wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        sent_docs.retain(|k, _| want.contains_key(k));
+        for (key, params) in &want {
+            let Ok(Some(now)) = std::panic::catch_unwind(|| crate::docs::read(key, params)) else { continue };
+            match sent_docs.get(key) {
+                None => out.push_str(&message("snapshot", &serde_json::json!({"doc": key, "data": now}))),
+                Some(was) => {
+                    let ops = patch::diff(was, &now);
+                    if !ops.is_empty() {
+                        out.push_str(&message("patch", &serde_json::json!({"doc": key, "ops": ops})));
+                    }
+                }
+            }
+            sent_docs.insert(key.clone(), now);
+        }
+        if !out.is_empty() && !write(&out) {
+            return;
         }
         // nothing is looked at again until something signals: a quiet stream only
         // carries its keepalive

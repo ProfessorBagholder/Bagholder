@@ -1230,6 +1230,85 @@ pub fn filings_payload(symbol: &str, refresh: bool, name: Option<&str>, exchange
     filings_payload_in(&c, &sym, refresh, &|| refresh_filings(&sym, name, exchange, currency))
 }
 
+// --- a listing's disclosures while a page shows them ------------------------------
+//
+// The page used to drive the reading itself: ask for one document's title, wait, ask
+// for the next, and re-kick the whole pass on timers of a second and a half to
+// fifteen while the local model was coming up. The reading is the server's work. A
+// page says it is showing a listing's disclosures (`docs`); the server brings the
+// list up to date, then reads each document that has no title yet, newest first, for
+// as long as some page is still showing them. Each title and sentence is committed
+// as it is read and reaches its row as a change to that row.
+
+fn reading_now() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static R: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+fn set_reading(sym: &str, ids: Vec<String>) {
+    {
+        let mut r = reading_now().lock().unwrap_or_else(|e| e.into_inner());
+        if ids.is_empty() { r.remove(sym); } else { r.insert(sym.to_string(), ids); }
+    }
+    crate::events::signal(); // the rows still to be read wear the shimmer
+}
+
+/// The disclosures as stored, never waiting on a source: what a page showing them
+/// is sent. `reading` names the documents the pass has still to read, the first of
+/// them the one being read now.
+pub fn filings_stored(symbol: &str) -> Value {
+    let sym = symbol.trim().to_uppercase();
+    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let reading = reading_now().lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
+    json!({
+        "ok": true,
+        "symbol": sym,
+        "available": disclosures::available(),
+        "sources": source_status(&c, &sym),
+        "categories": disclosures::CATEGORIES,
+        "fetchedAt": sf::filings_fetched_for(&c, &sym).unwrap_or_default(),
+        "everRead": !sf::filings_fetched_for(&c, &sym).unwrap_or_default().is_empty(),
+        "summaryStatus": enrich::summary_status(),
+        "reading": reading,
+        "filings": fresh_filings(&c, &sym),
+    })
+}
+
+/// A page has started showing `symbol`'s disclosures (`doc` is the document's key):
+/// bring the list up to date if it is stale, then read what has no title, until no
+/// page shows them any more. One pass per listing at a time.
+pub fn filings_shown(doc: String, symbol: String, name: String, exchange: String, currency: String) {
+    let sym = symbol.trim().to_uppercase();
+    if sym.is_empty() {
+        return;
+    }
+    spawn("bagholder-filings-shown", move || {
+        app().single_flight(&format!("filings-shown:{}", sym), (), || {
+            *looking_at().lock().unwrap() = sym.clone();
+            fn opt(s: &str) -> Option<&str> { if s.is_empty() { None } else { Some(s) } }
+            if conn().map_or(false, |c| filings_stale(&c, &sym, None)) {
+                refresh_filings(&sym, opt(&name), opt(&exchange), opt(&currency));
+            }
+            let mut tried: HashSet<String> = HashSet::new();
+            while crate::events::watched(&doc) && !app().stopping() {
+                let c = match conn() { Some(c) => c, None => break };
+                let mut left: Vec<Value> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
+                    .filter(|r| (f(r, "subject").is_empty() || f(r, "summary").is_empty()) && !is_true(r, "enrichFinal") && !tried.contains(&f(r, "id")))
+                    .collect();
+                left.sort_by(|a, b| f(b, "date").cmp(&f(a, "date")));
+                let Some(next) = left.first().map(|r| f(r, "id")) else { break };
+                set_reading(&sym, left.iter().map(|r| f(r, "id")).collect());
+                filings_enrich(&sym, &next); // waits for the local model itself when one is coming up
+                tried.insert(next);
+                if app().wait(Duration::from_millis(150)) { // a person's pace at the source
+                    break;
+                }
+            }
+            set_reading(&sym, vec![]);
+        });
+    });
+}
+
 /// `filings_payload` on one connection with the refresh given.
 pub fn filings_payload_in(c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Value {
     let sym = sym.trim().to_uppercase();
@@ -1726,10 +1805,12 @@ pub fn sweep_shorts() -> usize {
     }
     let mut done = 0;
     SHORTS_LEFT.store(due.len() as i64, Ordering::SeqCst);
+    crate::events::signal(); // the short-interest table says a read is under way
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
             SHORTS_LEFT.store(0, Ordering::SeqCst);
+            crate::events::signal();
         }
     }
     let _reset = Reset;
@@ -1738,6 +1819,7 @@ pub fn sweep_shorts() -> usize {
             done += 1;
         }
         SHORTS_LEFT.fetch_sub(1, Ordering::SeqCst);
+        crate::events::signal();
     }
     done
 }
@@ -1991,7 +2073,7 @@ fn decode(t: &str) -> String {
 
 /// `parse_qs(query).get(k)[0].strip()`: blank values are dropped, as parse_qs
 /// drops them.
-fn qs_one(query: &str, name: &str) -> String {
+pub fn qs_one(query: &str, name: &str) -> String {
     for pair in query.split('&') {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         if decode(k) == name {
@@ -2006,6 +2088,22 @@ fn qs_one(query: &str, name: &str) -> String {
 
 /// Bars for one instrument over a span, fetched
 /// and cached on demand.
+/// Whether the intraday bars this chart asked for are still being read. What the
+/// chart watches (`docs`) in place of asking for its history again every few seconds.
+pub fn history_pending(query: &str) -> bool {
+    let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
+    let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),
+                     "currency": or(qs_one(query, "currency"), "CAD"), "kind": or(qs_one(query, "kind"), "Shares")});
+    let start: String = qs_one(query, "from").chars().take(10).collect();
+    let tf = or(qs_one(query, "tf"), "1d");
+    if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
+        return false;
+    }
+    let inst = history::chart_instrument(&rec);
+    let (today_s, now, _) = bagholder_market::clock_now();
+    conn().map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
+}
+
 pub fn history_payload(query: &str) -> Value {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
     let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),

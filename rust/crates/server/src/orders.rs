@@ -1345,7 +1345,13 @@ pub fn orders_loop() {
             continue;
         }
         let r = catch_unwind(|| {
-            if !list_orders().iter().any(is_live) && !refreshed_at().is_empty() && (now_unix() / ORDERS_REFRESH_SEC as f64) as i64 % 10 != 0 {
+            // Wealthsimple pushes nothing, so orders are read back. Closely while it
+            // matters -- an order is live, or the panel is open on some page -- and
+            // otherwise only often enough to hear of an order placed in Wealthsimple's
+            // own app, which the fills notification is owed.
+            let closely = list_orders().iter().any(is_live) || crate::events::watched("orders");
+            let age = parse_z(&refreshed_at()).map(|t| now_unix() - t as f64);
+            if !closely && age.map_or(false, |a| a < (ORDERS_REFRESH_SEC * 10) as f64) {
                 return;
             }
             refresh_orders("");

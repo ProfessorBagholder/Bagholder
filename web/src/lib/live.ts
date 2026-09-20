@@ -128,13 +128,59 @@ export interface Sink {
   loading: boolean
 }
 
+/** Where a document the page is showing is kept: `data` is written into, never replaced. */
+export interface Holder<T> {
+  data: T | null
+}
+
 let source: EventSource | null = null
 let url = ''
+let streamId = 0
+const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
 
-/** What runs after a change is written, with the ids it touched (the open trade refreshes its fills). */
+/** What runs after a change to the model is written, with the ids it touched (the open trade refreshes its fills). */
 let afterChange: (touched: Set<string>) => void = () => {}
 export function onChange(fn: (touched: Set<string>) => void): void {
   afterChange = fn
+}
+
+// Tell the server what this page is showing beyond the model: once per turn of the
+// page however many things opened and closed in it, and not at all when the set is
+// what was last said (a card that closes and opens again in one update says nothing).
+let saidFor = 0
+let said = ''
+let saying = false
+function sayWanted(): void {
+  if (saying) return
+  saying = true
+  queueMicrotask(() => {
+    saying = false
+    if (!streamId) return
+    const docs: Record<string, unknown> = {}
+    for (const key of [...wanted.keys()].sort()) docs[key] = wanted.get(key)!.params ?? {}
+    const now = JSON.stringify(docs)
+    if (saidFor === streamId && now === said) return
+    saidFor = streamId
+    said = now
+    fetch('/api/events/watch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Bagholder': '1' }, body: JSON.stringify({ id: streamId, docs }) }).catch(() => {})
+  })
+}
+
+/**
+ * Show a document for as long as something on the page needs it: the orders while
+ * their panel is open, the short-interest table while its card is. It arrives whole
+ * once and then by change, written into `holder.data`; `changed` runs after each.
+ * Returns what stops it.
+ */
+export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, changed?: () => void): () => void {
+  wanted.set(key, { params, holder: holder as Holder<unknown>, changed })
+  sayWanted()
+  return () => {
+    if (wanted.get(key)?.holder === holder) {
+      wanted.delete(key)
+      sayWanted()
+    }
+  }
 }
 
 /**
@@ -146,23 +192,44 @@ export function connect(sink: Sink, filters: unknown): void {
   if (source && next === url && source.readyState !== EventSource.CLOSED) return
   source?.close()
   url = next
+  streamId = 0
   if (!sink.model) sink.loading = true
   const es = new EventSource(next)
   source = es
+  es.addEventListener('hello', (e) => {
+    streamId = (JSON.parse((e as MessageEvent).data) as { id: number }).id
+    sayWanted() // a new stream knows nothing of what this page shows
+  })
   es.addEventListener('snapshot', (e) => {
-    const view = JSON.parse((e as MessageEvent).data) as Model
-    if (sink.model) reconcile(sink.model as unknown as Obj, view as unknown as Obj)
-    else sink.model = view
-    sink.error = null
-    sink.loading = false
+    const { doc, data } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown }
+    if (doc === 'model') {
+      if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj)
+      else sink.model = data as Model
+      sink.error = null
+      sink.loading = false
+      return
+    }
+    const w = wanted.get(doc)
+    if (!w) return
+    if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data)
+    else w.holder.data = data
+    w.changed?.()
   })
   es.addEventListener('patch', (e) => {
-    if (!sink.model) return
-    afterChange(applyOps(sink.model, JSON.parse((e as MessageEvent).data) as Op[]))
+    const { doc, ops } = JSON.parse((e as MessageEvent).data) as { doc: string; ops: Op[] }
+    if (doc === 'model') {
+      if (sink.model) afterChange(applyOps(sink.model, ops))
+      return
+    }
+    const w = wanted.get(doc)
+    if (w?.holder.data == null) return
+    applyOps(w.holder.data, ops)
+    w.changed?.()
   })
   // the browser connects again by itself; the server then sends the whole view, which
   // is reconciled, so whatever was missed while away is made good
   es.onerror = () => {
+    streamId = 0
     if (!sink.model) sink.error = 'Could not reach Bagholder.'
   }
 }
@@ -171,4 +238,5 @@ export function disconnect(): void {
   source?.close()
   source = null
   url = ''
+  streamId = 0
 }
