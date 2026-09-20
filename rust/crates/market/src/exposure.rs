@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::http::FetchError;
 pub use bagholder_model::exposure::{is_fund, issuer_of, norm_sector};
@@ -91,13 +91,7 @@ fn num_str(t: &str, default: f64) -> f64 {
 }
 
 fn pace(host: &str) {
-    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
-    let last = LAST.get_or_init(|| Mutex::new(HashMap::new()));
-    let wait = last.lock().unwrap().get(host).map(|t| PACE.saturating_sub(t.elapsed())).unwrap_or(Duration::ZERO);
-    if !wait.is_zero() {
-        std::thread::sleep(wait);
-    }
-    last.lock().unwrap().insert(host.to_string(), Instant::now());
+    crate::pace::turn(host, PACE);
 }
 
 fn host_of(url: &str) -> String {

@@ -158,18 +158,7 @@ fn log(line: &str) {
 /// listings read side by side still ask each host one at a time, `seconds`
 /// apart.
 pub fn pace(host: &str, seconds: f64) {
-    static LAST: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
-    let last = LAST.get_or_init(|| Mutex::new(HashMap::new()));
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    let turn = {
-        let mut m = last.lock().unwrap();
-        let turn = now.max(m.get(host).copied().unwrap_or(0.0) + seconds);
-        m.insert(host.to_string(), turn);
-        turn
-    };
-    if turn > now {
-        std::thread::sleep(std::time::Duration::from_secs_f64(turn - now));
-    }
+    crate::pace::turn(host, std::time::Duration::from_secs_f64(seconds.max(0.0)));
 }
 
 fn paced(net: &Net, host: &str, seconds: f64) {

@@ -780,7 +780,11 @@ fn sum_of(a: Option<&Value>, b: Option<&Value>, float_sum: f64) -> Value {
 
 /// One-minute bars over [start, end], a month at a
 /// time, a few months in parallel. A month that fails is a month with none.
-pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
+/// The gap the archive leaves between months it asks TMX for. A chart someone is
+/// waiting on is not paced; the archive's own backfill has all day.
+pub const ARCHIVE_TMX_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str, on_demand: bool) -> Vec<Value> {
     let mut chunks: Vec<(String, String)> = Vec::new();
     let mut cur = match bagholder_model::dates::parse_iso(&start.chars().take(10).collect::<String>()) { Some(d) => d, None => return vec![] };
     let last = match bagholder_model::dates::parse_iso(&end.chars().take(10).collect::<String>()) { Some(d) => d, None => return vec![] };
@@ -792,13 +796,16 @@ pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str) -> Vec<Value> {
         cur = bagholder_model::dates::from_days(day_n(stop) + 1);
     }
     let one = |span: (String, String)| -> Vec<Value> {
+        if !on_demand {
+            crate::pace::turn("app-money.tmx.com", ARCHIVE_TMX_GAP);
+        }
         let payload = json!({"operationName": "getCompanyChart", "variables": {"symbol": key, "from": span.0, "to": span.1}, "query": TMX_CHART_QUERY});
         match post_json(TMX_URL, &payload, &TMX_HEADERS) {
             Ok(d) => parse_tmx_minutes(&d),
             Err(_) => vec![],
         }
     };
-    let mut out: Vec<Value> = parallel(chunks, 4, one).into_iter().flatten().collect();
+    let mut out: Vec<Value> = parallel(chunks, if on_demand { 4 } else { 1 }, one).into_iter().flatten().collect();
     out.sort_by_key(|b| b["time"].as_i64().unwrap_or(0));
     out
 }
@@ -961,6 +968,7 @@ pub fn fetch_intraday_from(
     start_ts: i64,
     end_ts: i64,
     today: &str,
+    on_demand: bool,
 ) -> Result<Map<String, Value>, FetchError> {
     let crypto = field_s(rec, "kind") == "Crypto";
     let mut out = Map::new();
@@ -969,7 +977,7 @@ pub fn fetch_intraday_from(
             let start = day_of_epoch(start_ts);
             let end = day_of_epoch(end_ts);
             let minutes = tmx_lookup(conn, key, today, |form| {
-                let bars = fetch_tmx_minutes(form, &start, &end);
+                let bars = fetch_tmx_minutes(form, &start, &end, on_demand);
                 if bars.is_empty() { None } else { Some(Value::Array(bars)) }
             })
             .0
@@ -1036,7 +1044,7 @@ pub fn fetch_intraday(
         if reach.is_empty() || start_day < reach || (!on_demand && ON_DEMAND_ONLY_SOURCES.contains(&source.as_str())) {
             continue;
         }
-        let by_tf = match fetch_intraday_from(conn, &source, &key, rec, start_ts, end_ts, today) {
+        let by_tf = match fetch_intraday_from(conn, &source, &key, rec, start_ts, end_ts, today, on_demand) {
             Ok(m) => {
                 notes.push((source.clone(), key.clone(), Note::Bars));
                 m

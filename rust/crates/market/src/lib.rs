@@ -22,6 +22,7 @@ pub mod pdftext;
 pub mod fear;
 pub mod entities;
 pub mod news;
+pub mod pace;
 pub mod history;
 pub mod quotes;
 pub mod tmx;

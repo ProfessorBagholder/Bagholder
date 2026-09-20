@@ -10,7 +10,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::disclosures::{self as d, Fetched, SourceError};
 
@@ -38,19 +38,7 @@ pub fn available() -> bool {
 }
 
 fn pace() {
-    // Each caller takes the next turn and waits for it with the lock released: two
-    // callers wait side by side for their own turns, not one behind the other's sleep.
-    static NEXT: Mutex<Option<Instant>> = Mutex::new(None);
-    let now = Instant::now();
-    let turn = {
-        let mut next = NEXT.lock().unwrap();
-        let turn = next.map_or(now, |t| t.max(now));
-        *next = Some(turn + PACE);
-        turn
-    };
-    if turn > now {
-        std::thread::sleep(turn - now);
-    }
+    crate::pace::turn("sec.gov", PACE);
 }
 
 /// The standard reason phrase for an HTTP status, for failure messages.
