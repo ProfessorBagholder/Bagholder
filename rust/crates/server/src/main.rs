@@ -216,6 +216,25 @@ fn static_file(name: &str) -> Option<Vec<u8>> {
     std::fs::read(app().root.join(name)).ok()
 }
 
+// Content type for a built Svelte asset (web/dist/assets/*), by extension.
+fn asset_ct(name: &str) -> &'static str {
+    if name.ends_with(".js") || name.ends_with(".mjs") {
+        "text/javascript; charset=utf-8"
+    } else if name.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if name.ends_with(".svg") {
+        "image/svg+xml"
+    } else if name.ends_with(".woff2") {
+        "font/woff2"
+    } else if name.ends_with(".json") || name.ends_with(".map") {
+        "application/json; charset=utf-8"
+    } else if name.ends_with(".png") {
+        "image/png"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 // --------------------------------------------------------------------------
 // what the header shows
 // --------------------------------------------------------------------------
@@ -308,6 +327,15 @@ fn read_json(req: &mut Request) -> Value {
 }
 
 fn handle_get(req: Request, path: &str, query: &str) {
+    // The built Svelte SPA's hashed assets (web/dist/assets/*), served beside /api.
+    if let Some(rest) = path.strip_prefix("/assets/") {
+        if !rest.contains("..") {
+            return match static_file(&format!("web/dist/assets/{}", rest)) {
+                Some(data) => send(req, 200, data, asset_ct(rest)),
+                None => send_json(req, 404, &json!({"ok": false, "error": "asset missing"})),
+            };
+        }
+    }
     match path {
         "/api/login/stream" => stream(req, "multipart/x-mixed-replace; boundary=frame", |write| {
             login::login_stream(|chunk| write(chunk));
@@ -316,7 +344,12 @@ fn handle_get(req: Request, path: &str, query: &str) {
             Some(data) => send(req, 200, data, "image/jpeg"),
             None => send(req, 204, vec![], "application/json; charset=utf-8"),
         },
-        "/" | "/index.html" | "/ledger.html" | "/v2" | "/v2/" => match std::fs::read(feeds::ledger_path()) {
+        // The Svelte SPA is the app now; the legacy page stays at /v2 as a fallback.
+        "/" | "/index.html" => match std::fs::read(app().root.join("web/dist/index.html")).or_else(|_| std::fs::read(feeds::ledger_path())) {
+            Ok(data) => send(req, 200, data, "text/html; charset=utf-8"),
+            Err(_) => send_json(req, 404, &json!({"ok": false, "error": "index missing"})),
+        },
+        "/ledger.html" | "/v2" | "/v2/" => match std::fs::read(feeds::ledger_path()) {
             Ok(data) => send(req, 200, data, "text/html; charset=utf-8"),
             Err(_) => send_json(req, 404, &json!({"ok": false, "error": "ledger.html missing"})),
         },
