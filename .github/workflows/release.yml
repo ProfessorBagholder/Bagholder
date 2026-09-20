@@ -68,6 +68,12 @@ jobs:
       - name: Build tools (Windows)
         if: runner.os == 'Windows'
         run: choco install -y nasm && vcpkg install openssl:x64-windows-static-md && echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the Svelte frontend
+        working-directory: web
+        run: npm ci && npm run build
       - name: Build
         working-directory: rust
         run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
@@ -78,6 +84,7 @@ jobs:
           ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
           for b in bagholder bagholder-browser disclosures-mcp sedar; do cp "rust/target/release/$b$ext" dist/pkg/; done
           cp ledger.html lightweight-charts.js favicon.png dist/pkg/
+          mkdir -p dist/pkg/web && cp -r web/dist dist/pkg/web/dist
           cd dist/pkg
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "../$name.zip" . >/dev/null; cd .. && sha256sum "$name.zip" > "$name.zip.sha256"

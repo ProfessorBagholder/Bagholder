@@ -11,6 +11,14 @@ COPY rust/rust-toolchain.toml rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/crates crates
 RUN cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
 
+# The Svelte frontend, built to web/dist and served by the binary.
+FROM node:22-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web ./
+RUN npm run build
+
 FROM debian:bookworm-slim
 # Chromium for the Wealthsimple sign-in, on a virtual display (Xvfb): the app's page shows
 # its window and passes your clicks and keys to it, so nothing is needed on the host but
@@ -23,6 +31,7 @@ RUN chmod +x /usr/local/bin/bagholder-entrypoint
 WORKDIR /app
 COPY --from=build /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
 COPY ledger.html lightweight-charts.js favicon.png ./
+COPY --from=web /web/dist ./web/dist
 
 RUN mkdir -p /data
 
