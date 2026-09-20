@@ -89,6 +89,10 @@ function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
   }, ms)
 }
 
+// Sync, ported from ledger.html syncNow(): start it, then poll status every 1.5s
+// so the header shows each step live (a first pull of a large book runs well past
+// five minutes and only the server knows when it is done), and reload the model
+// once it finishes.
 export function syncNow(): void {
   ui.menuOpen = false
   const s = store.model?.status
@@ -97,7 +101,26 @@ export function syncNow(): void {
     s.syncing = true
     s.syncStep = 'Syncing…'
   }
-  api('POST', '/api/sync').then(() => loadModel())
+  api('POST', '/api/sync').then((r) => {
+    if (!r || !r.ok) {
+      const cur = store.model?.status
+      if (cur) {
+        cur.syncing = false
+        cur.error = (r && (r.error as string)) || 'Sync failed.'
+      }
+      return
+    }
+    const tick = () =>
+      api('GET', '/api/status').then((st) => {
+        if (store.model && st && st.ok) store.model.status = { ...store.model.status, ...(st as object) } as typeof store.model.status
+        if (st && !st.syncing) {
+          loadModel()
+          return
+        }
+        setTimeout(tick, 1500)
+      })
+    setTimeout(tick, 1000)
+  })
 }
 
 export function refreshSession(): void {

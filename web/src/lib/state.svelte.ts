@@ -45,6 +45,51 @@ export async function loadModel(): Promise<void> {
   }
 }
 
+// Keep the page live, ported from ledger.html pollStatus(): poll the lightweight
+// /api/status and only reload the model when the data actually changed. Poll fast
+// (2.5s) while something is happening — syncing, capturing a login, an update —
+// so the header's sync step moves promptly, and slowly (30s) when idle. This
+// replaces a blind full-model reload on a fixed timer.
+let _pollTimer: ReturnType<typeof setTimeout> | undefined
+export function startStatusPoll(): () => void {
+  const poll = () => {
+    fetch('/api/status', { headers: { 'X-Bagholder': '1' } })
+      .then((r) => r.json())
+      .then((st) => {
+        // during a server restart (an update) the answers are not status payloads
+        if (!st || !st.protocol) {
+          _pollTimer = setTimeout(poll, 1000)
+          return
+        }
+        const m = store.model
+        if (m) {
+          const prev = m.status
+          if (st.version && prev?.version && st.version !== prev.version) {
+            location.reload()
+            return
+          }
+          const lastSyncChanged = !!(st.lastSync && prev?.lastSync && st.lastSync !== prev.lastSync)
+          const changed =
+            lastSyncChanged ||
+            (st.activityCount !== prev?.activityCount && prev?.activityCount) ||
+            (st.dataVersion && prev?.dataVersion && st.dataVersion !== prev.dataVersion)
+          m.status = { ...prev, ...st } as typeof m.status
+          // reload the model when the data moved and a sync is not still running
+          // (a partial book mid-sync would flash); Svelte then patches only the
+          // cells that changed, so this is not the old whole-page redraw.
+          if (changed && !st.syncing) loadModel()
+        }
+        const fast = st.syncing || st.capturing || st.updating || (st.newsReading || []).length
+        _pollTimer = setTimeout(poll, fast ? 2500 : 30000)
+      })
+      .catch(() => {
+        _pollTimer = setTimeout(poll, 5000)
+      })
+  }
+  poll()
+  return () => clearTimeout(_pollTimer)
+}
+
 // Switch the benchmark the annualized-returns card compares against: persist it,
 // send it on the next model load (spR is computed server-side for it), reload.
 export function setBenchmark(key: string): void {

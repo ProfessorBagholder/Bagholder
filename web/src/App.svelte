@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { store, loadModel } from './lib/state.svelte'
+  import { store, loadModel, startStatusPoll } from './lib/state.svelte'
   import { route, startRouter, go, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
@@ -189,11 +189,14 @@
     loadModel()
     const stopRouter = startRouter()
     const stopNotes = startNotesStream()
-    const id = setInterval(loadModel, 30_000)
+    // Keep the page live off /api/status (fast while syncing, slow when idle) and
+    // reload the model only when the data changed and a sync is not running — never
+    // a blind full reload on a timer, which would churn an open filter popover mid-sync.
+    const stopPoll = startStatusPoll()
     return () => {
       stopRouter()
       stopNotes()
-      clearInterval(id)
+      stopPoll()
     }
   })
 
@@ -224,6 +227,8 @@
       <span style="font-size:12px;color:var(--ink55)">
         {#if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
         {:else if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
+        {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
+        {:else if status?.error}<span class="status-err">{status.error.length > 60 ? status.error.slice(0, 57) + '…' : status.error}</span>
         {:else}{syncLine()}{/if}
       </span>
       <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ordersOpen = true)}>
