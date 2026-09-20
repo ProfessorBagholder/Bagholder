@@ -11,6 +11,7 @@
     type Order, type Bracket,
   } from './orders.svelte'
   import { draftStore, resumeDraft, discardDraft } from '../ticket/ticket.svelte'
+  import { ui } from '../ui.svelte'
   import { plain } from '../ticket/vals'
   import { px, money, qty as qtyFmt } from '../fmt'
   import { symText } from '../sym'
@@ -157,7 +158,7 @@
                     {#if panel.orderEdit.error}<div class="status-err" style="font-size:12px">{panel.orderEdit.error}</div>{/if}
                   </div>
                 {/if}
-                <div class="od-foot"><span class="od-when">{orderWhenWord(o.createdAt)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" disabled={!orderCanEdit(o)} onclick={() => editOrder(o.id)}>Edit</button><button class="od-link neg" onclick={() => cancelOrderNow(o.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{/if}</div>
+                <div class="od-foot"><span class="od-when">{orderWhenWord(o.createdAt)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" disabled={!orderCanEdit(o)} onclick={() => editOrder(o.id)}>Edit</button><button class="od-link neg" onclick={() => (ui.confirm = 'cancel:' + o.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{/if}</div>
               </div>
             {:else if card.kind === 'bracket' && card.b}
               {@const b = card.b}
@@ -184,7 +185,7 @@
                     {#if panel.bracketEdit.error}<div class="status-err" style="font-size:12px">{panel.bracketEdit.error}</div>{/if}
                   </div>
                 {/if}
-                <div class="od-foot"><span class="od-when">{bracketWhen(b)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" onclick={() => editBracket(b.id)}>Edit</button><button class="od-link neg" onclick={() => cancelBracketNow(b.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{/if}</div>
+                <div class="od-foot"><span class="od-when">{bracketWhen(b)}</span>{#if live && !editing}<span class="od-foot-acts"><button class="od-link" onclick={() => editBracket(b.id)}>Edit</button><button class="od-link neg" onclick={() => (ui.confirm = 'bracket:' + b.id)}>Cancel</button></span>{:else if ended}<span class="od-state{ended[1] === 'neg' ? ' neg' : ''}">{ended[0]}</span>{/if}</div>
               </div>
             {/if}
           {/each}

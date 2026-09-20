@@ -39,7 +39,8 @@ function freshTradeForm(): TradeForm {
 export const ui = $state<{
   menuOpen: boolean
   modal: '' | 'trade' | 'import' | 'folder'
-  confirm: '' | 'clear' | 'disconnect'
+  // '' | 'clear' | 'disconnect' | `cancel:<orderId>` | `bracket:<bracketId>`
+  confirm: string
   notice: string
   noticeKind: '' | 'ok' | 'err'
   busy: '' | 'trade' | 'folder' | 'clearing'

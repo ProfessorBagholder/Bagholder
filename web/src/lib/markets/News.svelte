@@ -76,9 +76,7 @@
     const held = (store.model?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
     const watched = (store.model?.markets?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
     if (held || watched) return null
-    const c = sugQuotes[sugKey(only)]
-    if (!c) sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
-    return c ? c.percentChange : null
+    return sugQuotes[sugKey(only)]?.percentChange ?? null
   })
 
   // --- filed releases: the issuer's own releases, beside the wires' ---
@@ -89,19 +87,14 @@
   }
   function filedReleases(only: Chip | null, sc: string, wire: NewsItem[]): NewsItem[] {
     let rows: DiscRow[]
+    // pure read only — the feed/payload load and title enrichment happen in the
+    // effects below, never inside this derived
     if (only) {
       const rec = discBySym[only.symbol]
-      if (!rec) {
-        ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || '', name: only.name || '', currency: only.currency || '' })
-        return []
-      }
-      if (!rec.payload) return []
+      if (!rec || !rec.payload) return []
       rows = (rec.payload.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
-      sweepEnrich(only.symbol, rows, () => kind === 'releases' && sym?.symbol === only.symbol)
     } else {
-      loadDiscFeed(sc)
       rows = discFeed[sc]?.rows || []
-      sweepEnrich('feed:' + sc, rows, () => kind === 'releases' && !sym && scope === sc)
     }
     const said = new Set((wire || []).map((n) => newsTextKey(n.headline)))
     return rows
@@ -147,24 +140,18 @@
     const only = sym
     let rows: DiscRow[]
     let empty = 'Nothing filed.'
+    // pure read only — loading and enrichment run in the effects below
     if (only) {
       const rec = discBySym[only.symbol]
-      if (!rec || rec.loading) {
-        ensureDisclosures({ symbol: only.symbol, exchange: only.exchange || '', name: only.name || '', currency: only.currency || '' })
-        return { state: 'reading' as const }
-      }
+      if (!rec || rec.loading) return { state: 'reading' as const }
       if (rec.error) return { state: 'error' as const, error: rec.error }
       const p = rec.payload!
       rows = (p.filings || []).map((f) => ({ ...f, symbol: only.symbol, exchange: only.exchange || '' }))
       if (!rows.length) empty = Object.values(p.sources || {}).some((x) => x && x.filer) ? 'Nothing filed.' : 'No regulatory filer for this listing.'
-      sweepEnrich(only.symbol, rows, () => kind === 'disc' && sym?.symbol === only.symbol)
     } else {
-      loadDiscFeed(scope)
       const f = discFeed[scope]
       if (!f || !f.rows) return { state: 'reading' as const }
       rows = f.rows
-      const sc = scope
-      sweepEnrich('feed:' + sc, rows, () => kind === 'disc' && !sym && scope === sc)
     }
     const q = query.trim().toUpperCase()
     if (q) {
@@ -176,6 +163,34 @@
     const s = sort.ndisc
     rows = sortRows(rows, s.key, s.dir, (f, k) => (k === 'when' ? f.date : k === 'news' ? String(f.subject || f.type || '').toLowerCase() : String(f.symbol || '').toLowerCase()))
     return { state: 'rows' as const, rows, empty }
+  })
+
+  // Side effects that used to (wrongly) live inside the deriveds above. Effects
+  // may mutate $state; deriveds may not. Load the disclosures feed or per-listing
+  // payload for the current view, and fill titles top-first.
+  $effect(() => {
+    if (kind !== 'releases' && kind !== 'disc') return
+    if (sym) ensureDisclosures({ symbol: sym.symbol, exchange: sym.exchange || '', name: sym.name || '', currency: sym.currency || '' })
+    else loadDiscFeed(scope)
+  })
+  $effect(() => {
+    if (kind !== 'releases' && kind !== 'disc') return
+    if (sym) {
+      const filings = discBySym[sym.symbol]?.payload?.filings as DiscRow[] | undefined
+      if (filings && filings.length) sweepEnrich(sym.symbol, filings, () => true)
+    } else {
+      const f = discFeed[scope]
+      if (f && f.rows && f.rows.length) sweepEnrich('feed:' + scope, f.rows, () => true)
+    }
+  })
+  // A chip for a listing the book neither holds nor watches: fetch its quote.
+  $effect(() => {
+    const only = sym
+    if (!only) return
+    const held = (store.model?.positions || []).some((p) => bareSymbol(p.symbol).toUpperCase() === only.symbol)
+    const watched = (store.model?.markets?.watchlist || []).some((w) => bareSymbol(w.symbol).toUpperCase() === only.symbol)
+    if (held || watched) return
+    if (!sugQuotes[sugKey(only)]) sugQuoteSchedule([{ symbol: only.symbol, exchange: only.exchange, currency: only.currency }])
   })
 
   // --- on-demand chip lookup: a ticker typed that the card does not hold ---
@@ -256,7 +271,7 @@
     {:else if discView.rows.length}
       <div class="nw-head nw-disc"><GridHead table="ndisc" cols={NDISC_COLS} /></div>
       <div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">
-        {#each discView.rows as f (f.id)}
+        {#each discView.rows as f, i (f.id + '#' + i)}
           <div class="nw-row nw-disc" role="button" tabindex="-1" onclick={() => openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url })} onkeydown={(e) => { if (e.key === 'Enter') openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) }}>
             <div class="tab" style="font-size:11px;color:var(--ink55)">{discDate(f)}</div>
             <div>
@@ -273,7 +288,7 @@
   {:else if storyRows.length}
     <div class="nw-head" class:nw-bare={bare}><GridHead table="news" cols={bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS} /></div>
     <div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">
-      {#each storyRows as n (n.id)}
+      {#each storyRows as n, i (n.id + '#' + i)}
         <div class="nw-row" class:nw-bare={bare} role="button" tabindex="-1" onclick={() => openStory(n)} onkeydown={(e) => { if (e.key === 'Enter') openStory(n) }}>
           <div class="tab" style="font-size:11px;color:var(--ink55)">{newsWhen(n.publishedAt)}</div>
           <div>

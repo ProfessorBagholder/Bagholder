@@ -18,8 +18,9 @@
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
+  import { resetFilters } from './lib/filters.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
-  import { ticketStore } from './lib/ticket/ticket.svelte'
+  import { ticketStore, closeTicket } from './lib/ticket/ticket.svelte'
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
   import { notesStore, startNotesStream } from './lib/notes/notes.svelte'
@@ -37,6 +38,70 @@
   }
   let ordersOpen = $state(false)
   let notesOpen = $state(false)
+  let menuWrap = $state<HTMLElement>()
+
+  // Close the header menu on any pointerdown outside it (the original's data-pop
+  // outside-click, without a click-blocking scrim over the menu).
+  function onDocPointerDown(e: PointerEvent) {
+    if (ui.menuOpen && menuWrap && !menuWrap.contains(e.target as Node)) ui.menuOpen = false
+  }
+
+  // Present a held position as a trade for the shared detail view (holdingAsTrade).
+  function holdingAsTrade(p: any) {
+    if (!p) return null
+    return { ...p, holding: true, pnl: p.unreal, pnlPct: p.unrealPct, entryDate: p.opened, exitDate: '', entry: p.avg, exit: p.last, holdDays: p.held, status: 'open', legs: [] }
+  }
+
+  const isFieldFocused = () => {
+    const el = document.activeElement
+    return !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+  }
+
+  // The global keyboard shortcuts, ported from ledger.html's document keydown:
+  // ⌘/Ctrl+O toggles Orders, ⌘/Ctrl+K opens the filter popover, ←/→ move between
+  // tabs, and Escape unwinds whatever is open (ticket → notes → orders → menu →
+  // filter → modal → confirm → back out of a trade → clear filters).
+  function onKey(e: KeyboardEvent) {
+    if (ticketStore.t) {
+      if (e.key === 'Escape') { e.preventDefault(); closeTicket(); return }
+      const t = e.target as HTMLElement | null
+      if (e.key === 'Enter' && t && /^tk-/.test(t.id) && t.tagName === 'INPUT') { e.preventDefault(); t.blur() }
+      return
+    }
+    const mod = e.metaKey || e.ctrlKey
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'o') {
+      e.preventDefault()
+      ordersOpen = !ordersOpen
+      return
+    }
+    if (notesOpen && !ui.confirm && !filterOpen) {
+      if (e.key === 'Escape') { e.preventDefault(); notesOpen = false; return }
+    }
+    if (ordersOpen && !ui.confirm && !filterOpen) {
+      if (e.key === 'Escape') { e.preventDefault(); ordersOpen = false; return }
+      return
+    }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      ui.menuOpen = false
+      filterField = 'fields'
+      filterOpen = true
+      return
+    }
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !filterOpen && !ui.menuOpen && !ui.modal && !ui.confirm && !isFieldFocused()) {
+      const j = TABS.indexOf(route.tab) + (e.key === 'ArrowRight' ? 1 : -1)
+      if (j >= 0 && j < TABS.length) { e.preventDefault(); go(TABS[j]) }
+      return
+    }
+    if (e.key === 'Escape') {
+      if (ui.confirm) { ui.confirm = ''; return }
+      if (ui.modal) { ui.modal = ''; return }
+      if (filterOpen || ui.menuOpen) { filterOpen = false; filterField = undefined; ui.menuOpen = false; return }
+      const el = document.activeElement as HTMLElement | null
+      if (route.sub && route.tab === 'trades' && el && el.tagName !== 'TEXTAREA' && el.id !== 'tagInput') { history.back(); return }
+      if (activeCount() > 0 && !isFieldFocused()) { resetFilters(); loadModel(); return }
+    }
+  }
 
   const status = $derived(store.model?.status ?? null)
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
@@ -116,6 +181,8 @@
   })
 </script>
 
+<svelte:window onkeydown={onKey} onpointerdown={onDocPointerDown} />
+
 {#if store.model}
   <!-- header -->
   <div id="hdr" style="display:flex;align-items:center;gap:22px;padding:12px 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
@@ -141,14 +208,11 @@
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
         {#if filterOpen}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/if}
       </div>
-      <div style="position:relative">
+      <div style="position:relative" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>
           <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.menu} /></svg>
         </button>
-        {#if ui.menuOpen}
-          <div class="mt-scrim" role="presentation" onclick={() => (ui.menuOpen = false)}></div>
-          <Menu />
-        {/if}
+        {#if ui.menuOpen}<Menu />{/if}
       </div>
     </div>
   </div>
@@ -184,7 +248,7 @@
     {:else if route.tab === 'cashflow'}
       <Cashflow model={store.model} />
     {:else if route.tab === 'portfolio'}
-      <Portfolio model={store.model} />
+      {#if sel}{#key sel.id}<TradeDetail trade={holdingAsTrade(sel) as import('./lib/model').Trade} />{/key}{:else}<Portfolio model={store.model} />{/if}
     {:else if route.tab === 'trades'}
       {#if sel}{#key sel.id}<TradeDetail trade={sel as import('./lib/model').Trade} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
     {:else if route.tab === 'markets'}

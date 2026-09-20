@@ -5,7 +5,15 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bagholder</title>
-    <script type="module" crossorigin src="./assets/index-D595Wh3E.js"></script>
+    <script>
+      // Apply the saved theme before the bundle loads so the first paint has no
+      // flash. Svelte then owns html[data-theme] reactively (see App.svelte).
+      try {
+        var t = localStorage.getItem('bh2.theme')
+        if (t && t !== 'nocturne') document.documentElement.setAttribute('data-theme', t)
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="./assets/index-BPhXstJQ.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-V0Yk81IR.css">
   </head>
   <body>
