@@ -9,6 +9,14 @@ Read this first, then `SPEC.md`. Bagholder is a local-first trading journal for 
 
 Each language keeps to its own folder; another port (a future `go/`) sits beside them the same way, with its own build, image tag and release archive, reading the shared page and `tests/cases`. On the phone: an iOS app (`ios/`, SwiftUI) and an Android app (`android/`, Compose), each with its own implementation of the model; `MOBILE.md` is their build-and-test guide. The repository is public.
 
+## The build going forward
+
+The Rust server (`rust/`) with the Svelte page (`web/`, Svelte 5 + TypeScript + Vite, served from `web/dist`, embedded in a release binary) is the only build going forward. `python/`, `go/` and `ledger.html` are frozen: they take no features and no fixes beyond what keeps a released copy safe, and they are deleted at the cutover. `docs/architecture.md` is the plan of record — the rules every change is held to (work only because something changed; the server tells the page; one element updates, never a screen; types, not blobs; every feature in `SPEC.md` driven by a browser test), the target design, and the stages with what is done. `docs/parity.md` lists what the old page did that the new one still owes. Read both before any work under `rust/` or `web/`.
+
+- Page checks, from `web/`: `npm run check` (svelte-check), `npm test` (Vitest), `npm run e2e` (builds the page, then Playwright against the real server on a made-up book: offline, dry orders, its own temporary home, port 8791; `E2E_PORT=<n>` gives a second run its own server). A behaviour in `SPEC.md` is not done until a browser test drives it.
+- A timer anywhere is argued for in `docs/architecture.md` under "Timers that remain", or it is replaced by waiting for the thing itself; `test_no_wait_on_a_clock_that_is_not_accounted_for` holds the server to that.
+- The wire is typed in `rust/crates/model/src/wire.rs`; `cargo test -p bagholder-model --test types` regenerates `web/src/lib/generated/wire.ts`, and the page takes its types from there.
+
 ## What is authoritative
 
 - `SPEC.md` defines every figure and every screen on every platform: meaning, formula, source, currency, format, layout, refresh cadence, and the verification steps; its §8 is the phone's presentation of the same figures. Check every change against it. When a change needs a definition to differ, change `SPEC.md` in the same commit and say why.
