@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+# "rc": a trade's legs and fills are shared, not copied, between the model and each view of it
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # The activity clock is America/Edmonton. The rules have to come from the
 # system's own tzdata, not a bundled copy: a bundled

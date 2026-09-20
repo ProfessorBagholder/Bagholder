@@ -1,7 +1,7 @@
 //! The derived model: FIFO matching, round trips, FX, the view and its filters,
 //! cash flow and returns.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bagholder_model::base::{build_base, Base};
@@ -11,12 +11,15 @@ use bagholder_model::fifo::{match_fifo, match_fifo_in_place, Matched};
 use bagholder_model::filters::clean_filters;
 use bagholder_model::fx::{apply_fx, rate_on, to_cad, Fx, FX_FALLBACK};
 use bagholder_model::nav::{drawdown, equity_series, year_return, yearly_returns};
-use bagholder_model::normalize::{normalize_activities, normalize_activity};
+use bagholder_model::activity::{Direction, Flag, Kind, RawActivity};
+use bagholder_model::book::Book;
+use bagholder_model::input::{journal_from, Quote};
+use bagholder_model::normalize::normalize_all;
 use bagholder_model::securities::Securities;
 use bagholder_model::stats::payments_per_year;
 use bagholder_model::symbols::is_option_symbol;
 use bagholder_model::symbols_of::{held_symbols, intraday_archive_symbols, migrate_legacy_notes, payer_symbols};
-use bagholder_model::trades::{build_trades, group_id_for_keys, quote_fits, slice_member_key};
+use bagholder_model::trades::{build_trades, group_id_for_keys, slice_member_key};
 use bagholder_model::view::{build_view, slim, trade_detail};
 
 // --------------------------------------------------------------------------
@@ -58,8 +61,13 @@ fn empty_market() -> Value {
     json!({"fx": {}, "benchmark": {}})
 }
 
+/// Stored rows, read as the model reads them.
+fn raws(acts: &[Value]) -> Vec<RawActivity> {
+    acts.iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect()
+}
+
 fn fifo(acts: Vec<Value>) -> Matched {
-    match_fifo(&acts)
+    match_fifo(&raws(&acts))
 }
 
 fn pnl_sum(m: &Matched) -> f64 {
@@ -90,14 +98,14 @@ fn test_multileg_zero_qty_closes_short() {
         opt(json!({"id": "ml2", "activityType": "OPTIONS_MULTILEG", "activitySubType": "FILLED", "rawType": "OPTIONS_MULTILEG", "quantity": 0, "netCashAmount": -2025, "transactionDate": "2026-03-01"})),
     ]);
     assert!(r.open.is_empty());
-    let mut real: Vec<_> = r.closed.iter().filter(|t| !t.flags.iter().any(|f| f == "rolled-out")).collect();
+    let mut real: Vec<_> = r.closed.iter().filter(|t| !t.flags.iter().any(|f| *f == Flag::RolledOut)).collect();
     assert_eq!(real.len(), 2);
     real.sort_by(|a, b| a.quantity.partial_cmp(&b.quantity).unwrap());
     assert_eq!(real[0].quantity, 1.0);
     near(real[0].exit_price, 1.28);
     assert_eq!(real[1].quantity, 15.0);
     near(real[1].exit_price, 1.35);
-    assert!(r.closed.iter().all(|t| t.open_direction == "SHORT"));
+    assert!(r.closed.iter().all(|t| t.open_direction == Direction::Short));
     let want = (6.2225 - 1.28) * 1.0 * 100.0 + (6.2225 - 1.35) * 15.0 * 100.0;
     near(pnl_sum(&r), want);
     assert!(real.iter().all(|t| t.rt.as_deref() == Some("rt:sto")));
@@ -116,7 +124,7 @@ fn test_roll_carries_the_unposted_leg_to_the_next_buy_back() {
     assert!(r.unmatched.is_empty());
     assert!(r.open.is_empty());
     near(pnl_sum(&r), (9956 - 2160 + 4050 - 29260) as f64);
-    let rolled_in: Vec<_> = r.closed.iter().filter(|t| t.flags.iter().any(|f| f == "rolled-in")).collect();
+    let rolled_in: Vec<_> = r.closed.iter().filter(|t| t.flags.iter().any(|f| *f == Flag::RolledIn)).collect();
     near(rolled_in.iter().map(|t| t.quantity).sum(), 16.0);
     assert!(rolled_in.iter().all(|t| t.symbol == "LUNR 21JAN28 12.00 CALL"));
     // everything the buy-back closed is one position, so one trade row
@@ -161,7 +169,7 @@ fn test_buy_back_closes_older_contracts_of_a_rolled_chain() {
 fn test_plain_option_buys_without_a_roll_stay_long() {
     let r = fifo(vec![opt(json!({"id": "bto", "category": "trade", "activityType": "OPTIONS_BUY", "activitySubType": "BUYTOOPEN", "rawType": "OPTIONS_BUY", "quantity": 10, "unitPrice": 1.27, "netCashAmount": -1270, "transactionDate": "2026-06-15", "symbol": "QNC 20NOV26 3.00 CALL"}))]);
     assert_eq!(r.open.len(), 1);
-    assert_eq!(r.open[0].direction, "LONG");
+    assert_eq!(r.open[0].direction, Direction::Long);
 }
 
 #[test]
@@ -209,7 +217,7 @@ fn test_long_expiry_and_same_day_expiry() {
     assert!(r.unmatched.is_empty());
     assert!(r.open.is_empty());
     assert_eq!(r.closed.len(), 1);
-    assert_eq!(r.closed[0].open_direction, "LONG");
+    assert_eq!(r.closed[0].open_direction, Direction::Long);
     near(r.closed[0].pnl, -80.0);
     let r = fifo(vec![
         opt(json!({"id": "spy-bto", "category": "trade", "activityType": "OPTIONS_BUY", "activitySubType": "BUYTOOPEN", "rawType": "OPTIONS_BUY", "quantity": 1, "unitPrice": 1.1, "netCashAmount": -110, "transactionDate": "2025-07-17", "symbol": "SPY 17JUL25 624.00 PUT"})),
@@ -225,11 +233,11 @@ fn test_debit_multileg_opens_long_and_sto_opens_short() {
     let r = fifo(vec![opt(json!({"id": "put-ml", "activityType": "OPTIONS_MULTILEG", "activitySubType": "FILLED", "rawType": "OPTIONS_MULTILEG", "quantity": 0, "netCashAmount": -90, "transactionDate": "2026-01-30", "symbol": "BBAI 30JAN26 6.00 PUT"}))]);
     assert!(r.unmatched.is_empty());
     assert_eq!(r.open.len(), 1);
-    assert_eq!(r.open[0].direction, "LONG");
+    assert_eq!(r.open[0].direction, Direction::Long);
     let r = fifo(vec![opt(json!({"id": "sto-only", "category": "trade", "activityType": "OPTIONS_SELL", "activitySubType": "SELLTOOPEN", "rawType": "OPTIONS_SELL", "quantity": -4, "unitPrice": 2, "netCashAmount": 800, "transactionDate": "2026-01-01", "symbol": "XYZ 15JAN27 5.00 CALL"}))]);
     assert!(r.unmatched.is_empty());
     assert_eq!(r.open.len(), 1);
-    assert_eq!(r.open[0].direction, "SHORT");
+    assert_eq!(r.open[0].direction, Direction::Short);
     assert_eq!(r.open[0].qty, 4.0);
 }
 
@@ -260,7 +268,7 @@ fn test_same_day_roll_folds_into_far_contract() {
     assert_eq!(r.closed[0].symbol, "ZZZ 15JAN27 12.00 CALL");
     near(r.closed[0].entry_price, 4.0);
     near(r.closed[0].pnl, 350.0);
-    assert!(r.closed[0].flags.contains(&"rolled".to_string()));
+    assert!(r.closed[0].flags.contains(&Flag::Rolled));
 }
 
 #[test]
@@ -303,7 +311,7 @@ fn test_reverse_split_marker_rescales_open_lots() {
         buy("b3", "MSTY", 4, 34.0, "2025-12-11"),
         sell("s1", "MSTY", 39, 31.0, "2026-01-16"),
     ];
-    let r = match_fifo(&normalize_activities(&acts));
+    let r = match_fifo(&raws(&acts));
     assert!(r.unmatched.is_empty());
     assert!(r.open.is_empty());
     near(r.closed.iter().map(|t| t.quantity).sum(), 39.0);
@@ -319,12 +327,12 @@ fn test_forward_split_and_no_marker_without_prices() {
         opt(json!({"id": "ca", "category": "trade", "activityType": "STKDIS", "activitySubType": "BUY", "rawType": "CORPORATE_ACTION", "quantity": 0, "transactionDate": "2024-06-10", "symbol": "NVDA", "currency": "CAD"})),
         buy_x("b2", "NVDA", 5, 98.0, "2024-06-12", json!({"currency": "USD"})),
     ];
-    let r = match_fifo(&normalize_activities(&acts));
+    let r = match_fifo(&raws(&acts));
     near(r.open.iter().map(|l| l.qty).sum(), 105.0);
     let big = r.open.iter().max_by(|a, b| a.qty.partial_cmp(&b.qty).unwrap()).unwrap();
     near(big.price, 100.0);
-    assert!(big.flags.contains(&"split 10:1".to_string()));
-    let r = match_fifo(&normalize_activities(&[
+    assert!(big.flags.contains(&Flag::Split(10)));
+    let r = match_fifo(&raws(&[
         buy("b1", "AAA", 10, 10.0, "2024-05-01"),
         opt(json!({"id": "ca", "category": "trade", "activityType": "STKDIS", "activitySubType": "BUY", "rawType": "CORPORATE_ACTION", "quantity": 0, "transactionDate": "2024-06-10", "symbol": "AAA", "currency": "CAD"})),
     ]));
@@ -335,12 +343,15 @@ fn test_forward_split_and_no_marker_without_prices() {
 // RoundTripTest
 // --------------------------------------------------------------------------
 
+/// The trades of some rows, as the page is sent them.
 fn trades_of(acts: Vec<Value>, groups: Vec<Value>, journal: Value) -> Vec<Value> {
-    let mut norm = normalize_activities(&acts);
-    let mut m = match_fifo_in_place(&mut norm);
-    apply_fx(&mut m.closed, &Fx::new());
-    let by_id: HashMap<String, Value> = norm.iter().map(|a| (st(&a["id"]).to_string(), a.clone())).collect();
-    build_trades(&m.closed, &groups, &by_id, &Securities::new(&[]), journal.as_object().unwrap())
+    let mut rows = normalize_all(&raws(&acts));
+    let matched = match_fifo_in_place(&mut rows);
+    let book = Book::of(rows, matched, Securities::default(), acts.len());
+    let mut closed = book.fifo.closed.clone();
+    apply_fx(&mut closed, &Fx::new());
+    let groups = groups.iter().map(|g| serde_json::from_value(g.clone()).unwrap()).collect::<Vec<_>>();
+    build_trades(&closed, &groups, &book, &journal_from(journal.as_object().unwrap())).iter().map(|t| serde_json::to_value(t).unwrap()).collect()
 }
 
 fn trades_plain(acts: Vec<Value>) -> Vec<Value> {
@@ -538,7 +549,7 @@ fn test_assigned_put_buys_the_shares() {
     let base = base_of(&snapshot, empty_market(), json!({}), "2026-01-01");
     let lots: Vec<(String, f64, f64)> = base.book.fifo.open.iter().map(|l| (l.symbol.clone(), l.qty, l.price)).collect();
     assert_eq!(lots, vec![("BBAI".to_string(), 100.0, 5.0)]);
-    assert!(base.book.fifo.open[0].flags.contains(&"assignment".to_string()));
+    assert!(base.book.fifo.open[0].flags.contains(&Flag::Assignment));
 }
 
 // --------------------------------------------------------------------------
@@ -559,13 +570,12 @@ fn test_a_transfer_out_leaves_at_cost_with_no_pnl() {
         eth_transfer("to", 1.0, 200.0, "2026-01-10", true), // would be +100 as a sale
         opt(json!({"id": "cs", "activityType": "CRYPTO_SELL", "activitySubType": "MARKET_ORDER", "rawType": "CRYPTO_SELL", "quantity": 2, "unitPrice": 150, "netCashAmount": 300, "transactionDate": "2026-02-01", "symbol": "ETH", "currency": "CAD", "accountType": "Ponzi"})),
     ];
-    let m = match_fifo(&acts);
+    let m = match_fifo(&raws(&acts));
     assert!(m.unmatched.is_empty());
     assert!(m.open.is_empty());
     let got: Vec<(f64, f64, f64)> = m.closed.iter().map(|s| ((s.pnl * 1e6).round() / 1e6, s.quantity, s.entry_price)).collect();
     assert_eq!(got, vec![(50.0, 1.0, 100.0), (30.0, 1.0, 120.0)], "the coin sent out came off the first lot at cost; the sale closed one at 100 and one at 120");
-    let by_id: HashMap<String, Value> = acts.iter().map(|a| (st(&a["id"]).to_string(), normalize_activity(a))).collect();
-    let trades = build_trades(&m.closed, &[], &by_id, &Securities::new(&[]), &Map::new());
+    let trades = trades_plain(acts.clone());
     assert_eq!(trades.len(), 2, "the deposited coin is its own unscoreable trade, not merged");
     let is_dep = |t: &Value| t.get("flags").and_then(|v| v.as_array()).map(|a| a.iter().any(|f| f == "basis-unknown")).unwrap_or(false);
     let bought = trades.iter().find(|t| !is_dep(t)).unwrap();
@@ -574,7 +584,7 @@ fn test_a_transfer_out_leaves_at_cost_with_no_pnl() {
     assert_eq!(((n(&deposited["pnl"]) * 1e6).round() / 1e6, n(&deposited["qty"])), (30.0, 1.0), "deposited coin's sale is flagged, not scored");
     assert!(!trades.iter().any(|t| arr(&t["fills"]).iter().any(|f| f["id"] == "to")), "the transfer out is not a fill of the trade");
     // nothing held: nothing to take off, nothing unmatched, no trade
-    let m = match_fifo(&[eth_transfer("to2", 1.0, 200.0, "2026-01-10", true)]);
+    let m = match_fifo(&raws(&[eth_transfer("to2", 1.0, 200.0, "2026-01-10", true)]));
     assert!(m.closed.is_empty() && m.open.is_empty() && m.unmatched.is_empty());
 }
 
@@ -585,16 +595,16 @@ fn test_crypto_buy_sell_and_reward() {
         opt(json!({"id": "rw", "activityType": "CRYPTO_STAKING_REWARD", "activitySubType": "other", "rawType": "CRYPTO_STAKING_REWARD", "quantity": 1, "unitPrice": 0, "netCashAmount": 0, "transactionDate": "2026-01-05", "symbol": "ETH", "currency": "CAD", "accountType": "Ponzi"})),
         opt(json!({"id": "cs", "activityType": "CRYPTO_SELL", "activitySubType": "MARKET_ORDER", "rawType": "CRYPTO_SELL", "quantity": 3, "unitPrice": 150, "netCashAmount": 450, "transactionDate": "2026-02-01", "symbol": "ETH", "currency": "CAD", "accountType": "Ponzi"})),
     ];
-    let norm = normalize_activities(&acts);
-    assert_eq!(norm[0]["kind"], "Crypto");
-    assert!(n(&norm[0]["netCashAmount"]) < 0.0);
-    assert!(arr(&norm[1]["flags"]).contains(&json!("reward")));
-    let m = match_fifo(&norm);
+    let norm = normalize_all(&raws(&acts));
+    assert_eq!(norm[0].kind, Kind::Crypto);
+    assert!(norm[0].net_cash_amount < 0.0);
+    assert!(norm[1].flags.contains(&Flag::Reward));
+    let m = match_fifo(&raws(&acts));
     assert!(m.unmatched.is_empty());
     assert!(m.open.is_empty());
     assert_eq!(m.closed.len(), 2);
     near(pnl_sum(&m), (150.0 - 100.0) * 2.0 + 150.0);
-    assert!(m.closed.iter().all(|t| t.kind == "Crypto"));
+    assert!(m.closed.iter().all(|t| t.kind == Kind::Crypto));
 }
 
 #[test]
@@ -603,7 +613,7 @@ fn test_crypto_dust_sell_is_not_unmatched() {
         opt(json!({"id": "cb", "activityType": "CRYPTO_BUY", "rawType": "CRYPTO_BUY", "quantity": 1.0, "unitPrice": 100, "netCashAmount": 100, "transactionDate": "2026-01-01", "symbol": "DOGE", "currency": "CAD"})),
         opt(json!({"id": "cs", "activityType": "CRYPTO_SELL", "rawType": "CRYPTO_SELL", "quantity": 1.0000004, "unitPrice": 120, "netCashAmount": 120, "transactionDate": "2026-02-01", "symbol": "DOGE", "currency": "CAD"})),
     ];
-    let m = match_fifo(&normalize_activities(&acts));
+    let m = match_fifo(&raws(&acts));
     assert!(m.unmatched.is_empty());
     assert_eq!(m.closed.len(), 1);
 }
@@ -614,7 +624,7 @@ fn test_pending_distribution_notice_is_not_a_lot() {
         buy("b", "RDDY", 100, 9, "2026-01-01"),
         opt(json!({"id": "stk", "category": "trade", "activityType": "STKDIS", "activitySubType": "BUY", "rawType": "DIVIDEND", "quantity": 100, "unitPrice": 0, "netCashAmount": 0, "transactionDate": "2026-02-01", "symbol": "RDDY", "currency": "CAD"})),
     ];
-    let m = match_fifo(&normalize_activities(&acts));
+    let m = match_fifo(&raws(&acts));
     assert_eq!(m.open.len(), 1);
     assert_eq!(m.open[0].qty, 100.0);
     assert_eq!(m.open[0].price, 9.0);
@@ -1194,8 +1204,10 @@ fn test_a_coins_price_never_prices_a_share_with_the_same_symbol() {
     assert_eq!((st(&find("Crypto")["priceSource"]), n(&find("Crypto")["last"])), ("quote", 109998.0));
     let share = find("Shares");
     assert_eq!((st(&share["priceSource"]), n(&share["last"]), (n(&share["mv"]) * 100.0).round() / 100.0), ("fill", 1.75, 8142.75), "the share keeps its fill price rather than the coin's");
-    assert!(quote_fits(Some(&json!({"price": 1.0})), "Shares"), "a quote with no source stated is the kind's own");
-    assert!(!quote_fits(Some(&json!({"price": 1.0, "source": "tmx"})), "Crypto"));
+    let quote = |v: Value| serde_json::from_value::<Quote>(v).unwrap();
+    assert!(quote(json!({"price": 1.0})).fits(Kind::Shares), "a quote with no source stated is the kind's own");
+    assert!(!quote(json!({"price": 1.0, "source": "tmx"})).fits(Kind::Crypto));
+    assert!(!quote(json!({"price": 1.0, "source": "coinbase"})).fits(Kind::Shares));
 }
 
 // --------------------------------------------------------------------------
@@ -1265,8 +1277,7 @@ fn test_group_id_matches_ledger_html() {
 
 #[test]
 fn test_legacy_note_lands_on_round_trip() {
-    let acts = normalize_activities(&[buy("b1", "AAA", 100, 10, "2026-01-01"), sell("s1", "AAA", 100, 12, "2026-01-10")]);
-    let m = match_fifo(&acts);
+    let m = match_fifo(&raws(&[buy("b1", "AAA", 100, 10, "2026-01-01"), sell("s1", "AAA", 100, 12, "2026-01-10")]));
     let key = slice_member_key(&m.closed[0]);
     let legacy_id = group_id_for_keys(&[key]);
     let notes = json!({legacy_id: {"thesis": "why", "tag": "a, b", "grade": "C"}});

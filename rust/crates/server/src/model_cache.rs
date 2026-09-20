@@ -139,8 +139,8 @@ impl ModelCache {
                 }
             };
         }
-        part!("activities", ["activities"], i.activities = Arc::new(activities::all_activities(conn)?));
-        part!("securities", ["securities"], i.securities = Arc::new(snapshot::securities_part(conn)?));
+        part!("activities", ["activities"], i.set_activities(&activities::all_activities(conn)?));
+        part!("securities", ["securities"], i.set_securities(&snapshot::securities_part(conn)?));
         part!("fx", ["fx"], i.fx = Arc::new(base::fx_part(Some(&Value::Object(tables::fx_rates(conn, tables::FX_PAIR)?)))));
         part!("benchmark", ["benchmark"], {
             i.benchmark = Arc::new(bagholder_model::nav::bench_map(Some(&Value::Object(tables::benchmark_prices(conn, tables::BENCHMARK_SYMBOL)?))));
@@ -151,11 +151,11 @@ impl ModelCache {
             i.benchmarks = Arc::new(base::benchmarks_part(Some(&Value::Object(all))));
         });
         part!("distributions", ["distributions"], i.distributions = Arc::new(market::distributions(conn)?));
-        part!("quotes", ["quotes"], i.quotes = Arc::new(market::quotes(conn)?));
-        part!("groups", ["groups"], i.groups = Arc::new(snapshot::groups_part(conn)?));
-        part!("journal", ["journal"], i.journal = Arc::new(snapshot::journal(conn)?));
-        part!("accounts", ["accounts"], i.accounts = Arc::new(snapshot::accounts_part(conn)?));
-        part!("balances", ["balances"], i.balances = Arc::new(snapshot::balances_part(conn)?));
+        part!("quotes", ["quotes"], i.set_quotes(market::quotes(conn)?));
+        part!("groups", ["groups"], i.set_groups(&snapshot::groups_part(conn)?));
+        part!("journal", ["journal"], i.set_journal(&snapshot::journal(conn)?));
+        part!("accounts", ["accounts"], i.set_accounts(snapshot::accounts_part(conn)?));
+        part!("balances", ["balances"], i.set_balances(snapshot::balances_part(conn)?));
         part!("margin", ["margin"], i.margin = Arc::new(snapshot::margin_part(conn)?));
         part!("nav", ["nav"], {
             let (nav, by_account) = snapshot::nav_part(conn)?;

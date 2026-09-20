@@ -23,30 +23,37 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use crate::activity::RawActivity;
 use crate::book::{build_book, Book};
 use crate::cashflow::build_cashflow;
 use crate::clock::today_local;
 use crate::fx::{apply_fx, Fx};
+use crate::input::{AccountRow, BalanceRow, Journal, Quotes, TradeGroup};
+use crate::lenient;
 use crate::nav::{equity_series, Point};
 use crate::positions::build_positions;
-use crate::trades::{build_trades, Journal};
+use crate::securities::{Securities, Security};
+use crate::trades::build_trades;
 use crate::value::{field_s, get, norm_account_name, num};
 
 /// What the model is built from, each part shared rather than copied so a base
 /// can be assembled again from the parts that did not change.
 #[derive(Clone)]
 pub struct Inputs {
-    pub activities: Arc<Vec<Value>>,
-    pub securities: Arc<Vec<Value>>,
+    pub activities: Arc<Vec<RawActivity>>,
+    pub securities: Arc<Vec<Security>>,
     pub fx: Arc<Fx>,
     pub benchmark: Arc<BTreeMap<String, f64>>,
     pub benchmarks: Arc<HashMap<String, BTreeMap<String, f64>>>,
     pub distributions: Arc<Map<String, Value>>,
     pub quotes: Arc<Map<String, Value>>,
-    pub groups: Arc<Vec<Value>>,
+    pub quote_rows: Arc<Quotes>,
+    pub groups: Arc<Vec<TradeGroup>>,
     pub journal: Arc<Journal>,
     pub accounts: Arc<Vec<Value>>,
+    pub account_rows: Arc<Vec<AccountRow>>,
     pub balances: Arc<Vec<Value>>,
+    pub balance_rows: Arc<Vec<BalanceRow>>,
     pub margin: Arc<Vec<Value>>,
     pub nav: Arc<Vec<Value>>,
     pub nav_by_account: Arc<Map<String, Value>>,
@@ -60,19 +67,22 @@ pub struct Inputs {
 
 impl Inputs {
     /// The parts, from a whole snapshot and the whole market data.
-    pub fn from_snapshot(snapshot: &Value, market: &Value, journal: &Journal) -> Inputs {
-        Inputs {
-            activities: Arc::new(arr(snapshot.get("activities"))),
-            securities: Arc::new(arr(snapshot.get("securities"))),
+    pub fn from_snapshot(snapshot: &Value, market: &Value, journal: &Map<String, Value>) -> Inputs {
+        let mut i = Inputs {
+            activities: Default::default(),
+            securities: Default::default(),
             fx: Arc::new(fx_part(market.get("fx"))),
             benchmark: Arc::new(crate::nav::bench_map(market.get("benchmark"))),
             benchmarks: Arc::new(benchmarks_part(market.get("benchmarks"))),
             distributions: Arc::new(obj(market.get("distributions"))),
-            quotes: Arc::new(obj(market.get("quotes"))),
-            groups: Arc::new(arr(snapshot.get("tradeGroups"))),
-            journal: Arc::new(journal.clone()),
-            accounts: Arc::new(arr(snapshot.get("accounts"))),
-            balances: Arc::new(arr(snapshot.get("balances"))),
+            quotes: Default::default(),
+            quote_rows: Default::default(),
+            groups: Default::default(),
+            journal: Default::default(),
+            accounts: Default::default(),
+            account_rows: Default::default(),
+            balances: Default::default(),
+            balance_rows: Default::default(),
             margin: Arc::new(arr(snapshot.get("margin"))),
             nav: Arc::new(arr(snapshot.get("navHistory"))),
             nav_by_account: Arc::new(obj(snapshot.get("navByAccount"))),
@@ -82,7 +92,46 @@ impl Inputs {
             universes: Arc::new(obj(snapshot.get("universes"))),
             tiles: Arc::new(snapshot.get("tiles").filter(|v| !v.is_null()).cloned()),
             synced_at: field_s(snapshot, "syncedAt"),
-        }
+        };
+        i.set_activities(&arr(snapshot.get("activities")));
+        i.set_securities(&arr(snapshot.get("securities")));
+        i.set_quotes(obj(market.get("quotes")));
+        i.set_groups(&arr(snapshot.get("tradeGroups")));
+        i.set_journal(journal);
+        i.set_accounts(arr(snapshot.get("accounts")));
+        i.set_balances(arr(snapshot.get("balances")));
+        i
+    }
+
+    pub fn set_activities(&mut self, rows: &[Value]) {
+        self.activities = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+    }
+
+    pub fn set_securities(&mut self, rows: &[Value]) {
+        self.securities = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+    }
+
+    pub fn set_quotes(&mut self, quotes: Map<String, Value>) {
+        self.quote_rows = Arc::new(quotes.iter().filter_map(|(k, v)| Some((k.clone(), serde_json::from_value(v.clone()).ok()?))).collect());
+        self.quotes = Arc::new(quotes);
+    }
+
+    pub fn set_groups(&mut self, rows: &[Value]) {
+        self.groups = Arc::new(lenient::rows(&Value::Array(rows.to_vec())));
+    }
+
+    pub fn set_journal(&mut self, journal: &Map<String, Value>) {
+        self.journal = Arc::new(crate::input::journal_from(journal));
+    }
+
+    pub fn set_accounts(&mut self, rows: Vec<Value>) {
+        self.account_rows = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+        self.accounts = Arc::new(rows);
+    }
+
+    pub fn set_balances(&mut self, rows: Vec<Value>) {
+        self.balance_rows = Arc::new(rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect());
+        self.balances = Arc::new(rows);
     }
 }
 
@@ -107,7 +156,13 @@ pub struct Layers {
 }
 
 pub fn book_layer(i: &Inputs, today: &str) -> Book {
-    build_book(&i.activities, &i.securities, today)
+    build_book(&i.activities, Securities::new(&i.securities), today)
+}
+
+/// The rows of a typed layer as the JSON the parts of the model not yet typed
+/// read. Goes when they are.
+fn as_json<T: serde::Serialize>(rows: &[T]) -> Vec<Value> {
+    rows.iter().map(|r| serde_json::to_value(r).expect("a row of the model is plain data")).collect()
 }
 
 /// The closed trades: the match's slices valued in CAD at the FX table's rates,
@@ -115,16 +170,16 @@ pub fn book_layer(i: &Inputs, today: &str) -> Book {
 pub fn trades_layer(book: &Book, i: &Inputs) -> Vec<Value> {
     let mut closed = book.fifo.closed.clone();
     apply_fx(&mut closed, &i.fx);
-    build_trades(&closed, &i.groups, &book.acts_by_id, &book.securities, &i.journal)
+    as_json(&build_trades(&closed, &i.groups, book, &i.journal))
 }
 
 pub fn cashflow_layer(book: &Book, i: &Inputs) -> Vec<Value> {
-    build_cashflow(&book.activities, &book.securities, &i.fx)
+    as_json(&build_cashflow(&book.activities, &book.securities, &i.fx))
 }
 
 /// The open positions marked at the quotes: what a price tick rebuilds.
 pub fn positions_layer(book: &Book, i: &Inputs, today: &str) -> Vec<Value> {
-    build_positions(&book.fifo.open, &book.last_prices, &i.balances, &i.accounts, &book.securities, &i.journal, today, &i.quotes, &book.acts_by_id)
+    as_json(&build_positions(book, &i.balance_rows, &i.account_rows, &i.journal, today, &i.quote_rows))
 }
 
 pub fn equity_layer(i: &Inputs) -> (Vec<Point>, HashMap<String, Vec<Point>>) {
@@ -268,7 +323,7 @@ impl Base {
 }
 
 /// The whole base from scratch: every layer built, then assembled.
-pub fn build_base(snapshot: &Value, market: &Value, journal: &Journal, today: Option<&str>) -> Base {
+pub fn build_base(snapshot: &Value, market: &Value, journal: &Map<String, Value>, today: Option<&str>) -> Base {
     let today = match today {
         Some(t) if !t.is_empty() => t.to_string(),
         _ => today_local(),

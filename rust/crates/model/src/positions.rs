@@ -4,210 +4,140 @@
 //! position and the trade it becomes when it closes share one journal entry,
 //! because both are keyed by the round trip that opened it.
 
-use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use crate::activity::{Direction, Kind};
+use crate::book::Book;
 use crate::dates::days_between;
 use crate::fifo::Lot;
-use crate::securities::Securities;
+use crate::input::{AccountRow, BalanceRow, Journal, Quotes};
 use crate::symbols::{option_multiplier, underlying_symbol};
-use crate::trades::{quote_fits, Journal};
-use crate::value::{FSum, field_s, get, norm_account_name, num};
+use crate::value::FSum;
+use crate::wire::{Fill, Mark, OpenLot, Position};
 
-/// A number that is absent rather than zero, read with no default.
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
+pub fn build_positions(book: &Book, balances: &[BalanceRow], accounts: &[AccountRow], journal: &Journal, today: &str, quotes: &Quotes) -> Vec<Position> {
+    let mut ids_by_name: HashMap<String, HashSet<&str>> = HashMap::new();
+    for account in accounts {
+        ids_by_name.entry(account.name()).or_default().insert(&account.id);
     }
-}
-
-fn account_nick(acc: &Value) -> String {
-    for k in ["nickname", "unifiedAccountType", "type"] {
-        let v = field_s(acc, k);
-        if !v.is_empty() {
-            return norm_account_name(&v);
-        }
-    }
-    String::new()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn build_positions(
-    open_lots: &[Lot],
-    last_prices: &Map<String, Value>,
-    balances: &[Value],
-    accounts: &[Value],
-    securities: &Securities,
-    journal: &Journal,
-    today: &str,
-    quotes: &Map<String, Value>,
-    acts_by_id: &HashMap<String, Value>,
-) -> Vec<Value> {
-    let mut nick_ids: HashMap<String, HashSet<String>> = HashMap::new();
-    for acc in accounts {
-        nick_ids.entry(account_nick(acc)).or_default().insert(field_s(acc, "id"));
-    }
-    let mut bal: HashMap<(String, String), f64> = HashMap::new();
+    let mut held_at_ws: HashMap<(&str, &str), f64> = HashMap::new();
     for b in balances {
-        let k = (field_s(b, "accountId"), field_s(b, "securityId"));
-        *bal.entry(k).or_insert(0.0) += num(get(b, "quantity"), 0.0);
+        *held_at_ws.entry((&b.account_id, &b.security_id)).or_insert(0.0) += b.quantity;
     }
 
-    type Key = (String, String, String, String);
-    let mut groups: HashMap<Key, Vec<Lot>> = HashMap::new();
+    type Key<'a> = (&'a str, &'a str, &'a str, Direction);
+    let mut groups: HashMap<Key, Vec<&Lot>> = HashMap::new();
     let mut order: Vec<Key> = Vec::new();
-    for lot in open_lots {
-        let k = (lot.symbol.clone(), lot.account_type.clone(), lot.currency.clone(), lot.direction.clone());
-        if !groups.contains_key(&k) {
-            groups.insert(k.clone(), Vec::new());
-            order.push(k.clone());
+    for lot in &book.fifo.open {
+        let key = (lot.symbol.as_str(), lot.account_type.as_str(), lot.currency.as_str(), lot.direction);
+        if !groups.contains_key(&key) {
+            order.push(key);
         }
-        groups.get_mut(&k).unwrap().push(lot.clone());
+        groups.entry(key).or_default().push(lot);
     }
 
-    let mut rows: Vec<Value> = Vec::new();
-    for k in &order {
-        let mut lots = groups.remove(k).unwrap();
-        lots.sort_by(|a, b| (a.date.clone(), a.when.clone()).cmp(&(b.date.clone(), b.when.clone())));
-        let (symbol, account, currency, direction) = k.clone();
-        let mult = option_multiplier(&symbol);
+    let mut rows: Vec<Position> = Vec::new();
+    for key in order {
+        let mut lots = groups.remove(&key).unwrap();
+        lots.sort_by(|a, b| (&a.date, &a.when).cmp(&(&b.date, &b.when)));
+        let (symbol, account, currency, direction) = key;
+        let first = lots[0];
+        let mult = option_multiplier(symbol);
         let qty: f64 = lots.iter().map(|l| l.qty).fsum();
         if qty <= 1e-9 {
             continue;
         }
         let cost: f64 = lots.iter().map(|l| l.qty * l.price * mult).fsum();
         let fees: f64 = lots.iter().map(|l| l.commission).fsum();
-        let sec_id = lots.iter().map(|l| l.security_id.clone()).find(|s| !s.is_empty()).unwrap_or_default();
+        let security_id = lots.iter().map(|l| &l.security_id).find(|s| !s.is_empty()).cloned().unwrap_or_default();
 
-        let last = last_prices.get(&symbol);
-        let mut last_px = match last {
-            Some(l) => num(get(l, "price"), 0.0),
+        // marked at its own last fill until a quote that fits its kind says otherwise
+        let mut last = match book.last_prices.get(symbol) {
+            Some(fill) => fill.price,
             None => if qty != 0.0 { cost / (qty * mult) } else { 0.0 },
         };
-        let mut price_source = "fill";
-
-        let mut quote = quotes.get(&symbol);
-        if let Some(q) = quote {
-            if !quote_fits(Some(q), &lots[0].kind) {
-                quote = None;
-            }
-        }
-        if let Some(q) = quote {
-            if let Some(p) = opt_num(get(q, "price")) {
-                if p != 0.0 {
-                    last_px = p;
-                    price_source = "quote";
-                }
-            }
+        let mut price_source = Mark::Fill;
+        let quote = quotes.get(symbol).filter(|q| q.fits(first.kind));
+        if let Some(price) = quote.and_then(|q| q.price).filter(|p| *p != 0.0) {
+            last = price;
+            price_source = Mark::Quote;
         }
 
-        let mv = qty * last_px * mult;
-        let unreal = if direction == "LONG" { mv - cost } else { cost - mv };
+        let mv = qty * last * mult;
+        let unreal = if direction == Direction::Long { mv - cost } else { cost - mv };
         let held: f64 = lots.iter().map(|l| l.qty * days_between(&l.date, today) as f64).fsum();
 
-        let mut ws_qty: Option<f64> = None;
-        if !sec_id.is_empty() {
-            if let Some(ids) = nick_ids.get(&account) {
-                let mut total = 0.0;
-                let mut found = false;
-                for aid in ids {
-                    if let Some(v) = bal.get(&(aid.clone(), sec_id.clone())) {
-                        total += *v;
-                        found = true;
-                    }
-                }
-                if found {
-                    ws_qty = Some(total);
-                }
-            }
-        }
+        let ws_qty = (!security_id.is_empty())
+            .then(|| ids_by_name.get(account))
+            .flatten()
+            .map(|ids| ids.iter().filter_map(|id| held_at_ws.get(&(*id, security_id.as_str()))).collect::<Vec<_>>())
+            .filter(|found| !found.is_empty())
+            .map(|found| found.into_iter().sum());
 
-        let legacy_pid = format!("pos:{}|{}|{}", account, symbol, currency);
-        let pid = lots[0].rt.clone().unwrap_or_else(|| legacy_pid.clone());
-        let entry_j = journal
-            .get(&pid)
-            .and_then(|v| v.as_object())
-            .or_else(|| journal.get(&legacy_pid).and_then(|v| v.as_object()))
-            .cloned()
-            .unwrap_or_default();
+        let legacy_id = format!("pos:{}|{}|{}", account, symbol, currency);
+        let id = first.rt.clone().unwrap_or_else(|| legacy_id.clone());
+        let said = journal.get(&id).or_else(|| journal.get(&legacy_id)).cloned().unwrap_or_default();
 
-        let price_change = quote.and_then(|q| opt_num(get(q, "priceChange")));
-        let percent_change = quote.and_then(|q| opt_num(get(q, "percentChange")));
+        let price_change = quote.and_then(|q| q.price_change);
+        let mut fills: Vec<Fill> = lots.iter().filter_map(|l| book.activity(&l.activity_id)).map(crate::trades::fill_row).collect();
+        fills.sort_by(|a, b| b.when.cmp(&a.when));
 
-        let mut fills: Vec<Value> = lots
-            .iter()
-            .filter_map(|l| acts_by_id.get(&l.activity_id))
-            .map(crate::trades::fill_row_public)
-            .collect();
-        fills.sort_by(|a, b| field_s(b, "when").cmp(&field_s(a, "when")));
-
-        let exchange = if lots[0].kind != "Crypto" { securities.exchange(&sec_id) } else { "Crypto".to_string() };
-        let fallback_name = if lots[0].name.is_empty() { symbol.clone() } else { lots[0].name.clone() };
-
-        rows.push(json!({
-            "id": pid,
-            "symbol": symbol,
-            "underlying": underlying_symbol(&symbol),
-            "name": securities.name(&sec_id, &fallback_name),
-            "exchange": exchange,
-            "kind": lots[0].kind,
-            "account": account,
-            "accountId": lots[0].account_id,
-            "currency": currency,
-            "securityId": sec_id,
-            "short": direction == "SHORT",
-            "qty": qty,
-            "mult": mult as i64,
-            "avg": if qty != 0.0 { cost / (qty * mult) } else { 0.0 },
-            "cost": cost,
-            "fees": fees,
-            "last": last_px,
-            "priceSource": price_source,
-            "priceChange": price_change,
-            "percentChange": percent_change,
-            // the day's move on the whole position, in its own currency
-            "dayChange": price_change.map(|pc| qty * pc * mult * if direction == "SHORT" { -1.0 } else { 1.0 }),
-            "mv": mv,
-            "unreal": unreal,
-            "unrealPct": if cost != 0.0 { json!(unreal / cost) } else { Value::Null },
-            "held": if qty != 0.0 { round_half_even(held / qty) } else { 0 },
-            "opened": lots[0].date,
-            "wsQty": ws_qty,
-            "rt": lots[0].rt,
-            "lots": lots.iter().map(|l| json!({
-                "opened": l.date,
-                "qty": l.qty,
-                "price": l.price,
-                "basis": l.qty * l.price * mult,
-                "held": days_between(&l.date, today),
-                "flags": l.flags,
-                "activityId": l.activity_id,
-            })).collect::<Vec<_>>(),
-            "fills": fills,
-            "grade": entry_j.get("grade").cloned().unwrap_or_else(|| json!("")),
-            "thesis": entry_j.get("thesis").cloned().unwrap_or_else(|| json!("")),
-            "tags": entry_j.get("tags").cloned().unwrap_or_else(|| json!([])),
-        }));
+        rows.push(Position {
+            id,
+            symbol: symbol.to_string(),
+            underlying: underlying_symbol(symbol),
+            name: book.securities.name(&security_id, if first.name.is_empty() { symbol } else { &first.name }),
+            exchange: if first.kind == Kind::Crypto { "Crypto".to_string() } else { book.securities.exchange(&security_id) },
+            kind: first.kind,
+            account: account.to_string(),
+            account_id: first.account_id.clone(),
+            currency: currency.to_string(),
+            security_id,
+            short: direction == Direction::Short,
+            qty,
+            mult: mult as i64,
+            avg: if qty != 0.0 { cost / (qty * mult) } else { 0.0 },
+            cost,
+            fees,
+            last,
+            price_source,
+            price_change,
+            percent_change: quote.and_then(|q| q.percent_change),
+            day_change: price_change.map(|pc| qty * pc * mult * if direction == Direction::Short { -1.0 } else { 1.0 }),
+            mv,
+            unreal,
+            unreal_pct: (cost != 0.0).then(|| unreal / cost),
+            held: if qty != 0.0 { round_half_even(held / qty) } else { 0 },
+            opened: first.date.clone(),
+            ws_qty,
+            rt: first.rt.clone(),
+            lots: lots
+                .iter()
+                .map(|l| OpenLot {
+                    opened: l.date.clone(),
+                    qty: l.qty,
+                    price: l.price,
+                    basis: l.qty * l.price * mult,
+                    held: days_between(&l.date, today),
+                    flags: l.flags.clone(),
+                    activity_id: l.activity_id.clone(),
+                })
+                .collect(),
+            fills: Some(Arc::new(fills)),
+            grade: said.grade,
+            thesis: said.thesis,
+            tags: said.tags,
+            alloc: 0.0,
+        });
     }
 
-    let book: f64 = rows.iter().map(|r| num(get(r, "cost"), 0.0).abs()).fsum();
+    let book_cost: f64 = rows.iter().map(|r| r.cost.abs()).fsum();
     for r in rows.iter_mut() {
-        let alloc = if book != 0.0 { num(get(r, "cost"), 0.0).abs() / book } else { 0.0 };
-        if let Value::Object(m) = r {
-            m.insert("alloc".into(), json!(alloc));
-        }
+        r.alloc = if book_cost != 0.0 { r.cost.abs() / book_cost } else { 0.0 };
     }
-    // A stable sort, descending on one key: `sort_by` with a reversed
-    // comparison.
-    rows.sort_by(|a, b| {
-        num(get(b, "alloc"), 0.0)
-            .partial_cmp(&num(get(a, "alloc"), 0.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // stable, largest share first
+    rows.sort_by(|a, b| b.alloc.partial_cmp(&a.alloc).unwrap_or(std::cmp::Ordering::Equal));
     rows
 }
 

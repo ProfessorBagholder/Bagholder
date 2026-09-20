@@ -62,7 +62,8 @@ fn either_val<'a>(act: &'a Value, camel: &str, snake: &str) -> Option<&'a Value>
 
 /// `trade_side`.
 pub fn trade_side(act: &Value) -> String {
-    bagholder_model::fifo::trade_side(act)
+    let side = bagholder_model::fifo::side_of(&either(act, "activitySubType", "activity_sub_type"), &either(act, "activityType", "activity_type"), bagholder_model::value::field_num(act, "quantity"));
+    side.map_or("", |s| s.as_str()).to_string()
 }
 
 fn key_date(act: &Value) -> String {

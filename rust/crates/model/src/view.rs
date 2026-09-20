@@ -15,9 +15,7 @@ use crate::filters::{
 };
 use crate::fx::to_cad;
 use crate::nav::{annualized, drawdown, series_json, yearly_returns};
-use crate::normalize::KINDS;
 use crate::stats::{by_symbol, grade_buckets, metrics, month_label, monthly, payments_per_year, review_queue, GRADES};
-use crate::trades::quote_fits;
 use crate::value::{FSum, field_s, get, num};
 
 fn opt_num(v: Option<&Value>) -> Option<f64> {
@@ -391,7 +389,11 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Value], margin_u
     let last_price = |p: &Value| -> (f64, &'static str) {
         let sym = field_s(p, "symbol");
         let q = base.quotes.get(&sym);
-        let q = match q { Some(q) if quote_fits(Some(q), &field_s(p, "kind")) => Some(q), _ => None };
+        let fits = |q: &Value| match (crate::activity::Kind::parse(&field_s(p, "kind")), serde_json::from_value::<crate::input::Quote>(q.clone())) {
+            (Some(kind), Ok(quote)) => quote.fits(kind),
+            _ => true,
+        };
+        let q = q.filter(|q| fits(q));
         if let Some(q) = q {
             if let Some(px) = opt_num(get(q, "price")) {
                 if px > 0.0 {
@@ -632,7 +634,7 @@ pub fn build_view(base: &Base, filters: Option<&Value>) -> Value {
     exchanges.sort();
     exchanges.dedup();
 
-    let kinds: Vec<&str> = KINDS
+    let kinds: Vec<&str> = crate::activity::Kind::ALL.map(|k| k.as_str())
         .iter()
         .copied()
         .filter(|k| {

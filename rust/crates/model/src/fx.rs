@@ -60,7 +60,7 @@ pub fn apply_fx(slices: &mut [Slice], fx: &Fx) {
         let exit_c = t.exit_commission;
         let entry_notional = t.entry_price * qty * mult;
         let exit_notional = t.exit_price * qty * mult;
-        t.pnl_cad = if t.open_direction == "SHORT" {
+        t.pnl_cad = if t.open_direction == crate::activity::Direction::Short {
             to_cad(fx, entry_notional - entry_c, &ccy, &t.entry_date)
                 - to_cad(fx, exit_notional + exit_c, &ccy, &t.exit_date)
         } else {

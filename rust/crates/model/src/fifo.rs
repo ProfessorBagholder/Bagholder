@@ -6,21 +6,19 @@
 //! leg it opened, so the quantity is carried forward in `rolled` and closed
 //! against later buy-backs.
 
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+use crate::activity::{mark, Activity, Direction, Flag, Kind, RawActivity, Side};
 use crate::dates::{days_between, option_expiry};
-use crate::normalize::{
-    book_key, fifo_account, is_close_only, is_multileg, kind_of, normalize_activity,
-    opening_direction, roll_key,
-};
+use crate::normalize::{book_key, fifo_account, fold_stkdis, is_close_only, is_multileg, normalize_all, opening_direction, roll_key, BookKey, RollKey};
 use crate::symbols::{is_option_symbol, option_multiplier, option_right, underlying_symbol};
-use crate::value::{compact, field_num, field_s, fmt8, get, s as vs, EPS};
+use crate::value::{fmt8, EPS};
 
 // --------------------------------------------------------------------------
 // the rows the matcher works with
 // --------------------------------------------------------------------------
 
+/// Quantity still open from one opening fill.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Lot {
@@ -29,19 +27,20 @@ pub struct Lot {
     pub date: String,
     pub when: String,
     pub commission: f64,
-    pub direction: String,
+    pub direction: Direction,
     pub account_id: String,
     pub account_type: String,
     pub symbol: String,
     pub name: String,
     pub currency: String,
-    pub kind: String,
+    pub kind: Kind,
     pub activity_id: String,
     pub security_id: String,
     pub rt: Option<String>,
-    pub flags: Vec<String>,
+    pub flags: Vec<Flag>,
 }
 
+/// One closed piece of a lot against one fill.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Slice {
@@ -53,8 +52,9 @@ pub struct Slice {
     pub symbol: String,
     pub name: String,
     pub currency: String,
-    pub kind: String,
-    pub side: String,
+    pub kind: Kind,
+    /// The closing fill's side.
+    pub side: Side,
     pub quantity: f64,
     pub entry_price: f64,
     pub exit_price: f64,
@@ -68,22 +68,23 @@ pub struct Slice {
     pub exit_commission: f64,
     pub pnl: f64,
     pub pnl_cad: f64,
-    pub open_direction: String,
+    pub open_direction: Direction,
     pub buy_activity_id: String,
     pub sell_activity_id: String,
     pub security_id: String,
-    pub flags: Vec<String>,
+    pub flags: Vec<Flag>,
     /// Filled in by `apply_fx`; absent until then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fees_cad: Option<f64>,
 }
 
+/// A fill that closed more than the book held and cannot open anything.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Unmatched {
     pub symbol: String,
     pub currency: String,
-    pub side: String,
+    pub side: Side,
     pub quantity: f64,
     pub price: f64,
     pub date: String,
@@ -93,19 +94,17 @@ pub struct Unmatched {
     pub activity_id: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 struct Fill {
-    a: Value,
-    side: String,
+    a: Activity,
+    side: Side,
     qty: f64,
-    roll_direction: Option<String>,
+    roll_direction: Option<Direction>,
     rt_before: Option<String>,
-    /// Where this row came from in the caller's list, when it came from one.
-    /// The inference rewrites a multileg row's quantity, price and sub-type,
-    /// and the fill stands for the very row the activity list holds, so the
-    /// rewrite has to land back there too: `actsById` feeds the fill rows the
-    /// page prints under a trade.
+    /// Where this row is in the caller's list, when it is one of them. The
+    /// inference rewrites a multileg row's quantity, price and sub-type, and the
+    /// fill stands for the very row the activity list holds, so the rewrite has
+    /// to land back there too: those rows are what a trade's fills print.
     src: Option<usize>,
 }
 
@@ -119,8 +118,7 @@ pub struct Matched {
 // identity
 // --------------------------------------------------------------------------
 
-/// `stable_trade_id`: stable from the first fill, so a journal entry
-/// survives later exits.
+/// Stable from the first fill, so a journal entry survives later exits.
 pub fn stable_trade_id(t: &Slice) -> String {
     [
         t.account_id.clone(),
@@ -131,104 +129,108 @@ pub fn stable_trade_id(t: &Slice) -> String {
         fmt8(t.quantity),
         fmt8(t.entry_price),
         fmt8(t.exit_price),
-        t.side.clone(),
+        t.side.as_str().to_string(),
     ]
     .join("|")
 }
 
-/// `trade_side`: which way a row goes, read from the sub-type, then the
-/// type, then the sign of the quantity.
-pub fn trade_side(a: &Value) -> String {
-    let sub = {
-        let v = field_s(a, "activitySubType");
-        if v.is_empty() { field_s(a, "activity_sub_type") } else { v }
-    };
-    let c = compact(&sub);
-    if matches!(c.as_str(), "BUY" | "BUYTOOPEN" | "BTO" | "BUYTOCLOSE" | "BTC") || c.starts_with("BUY") {
-        return "BUY".into();
-    }
-    if matches!(c.as_str(), "SELL" | "SELLTOOPEN" | "STO" | "SELLTOCLOSE" | "STC") || c.starts_with("SELL") {
-        return "SELL".into();
-    }
-    let typ = {
-        let v = field_s(a, "activityType");
-        if v.is_empty() { field_s(a, "activity_type") } else { v }
-    };
-    let t = compact(&typ);
-    if t.starts_with("BUY") { return "BUY".into(); }
-    if t.starts_with("SELL") { return "SELL".into(); }
-    let qty = field_num(a, "quantity");
-    if qty > 0.0 { return "BUY".into(); }
-    if qty < 0.0 { return "SELL".into(); }
-    String::new()
+/// Which way a row goes, read from the sub-type, then the type, then the sign
+/// of the quantity.
+pub fn trade_side(a: &Activity) -> Option<Side> {
+    side_of(&a.activity_sub_type, &a.activity_type, a.quantity)
 }
 
-fn flags_of(a: &Value) -> Vec<String> {
-    match get(a, "flags") {
-        Some(Value::Array(xs)) => xs.iter().map(|x| vs(Some(x))).collect(),
-        _ => vec![],
+/// The same reading for a row that is not a working row yet (the store, keying
+/// an incoming row).
+pub fn side_of(sub_type: &str, activity_type: &str, quantity: f64) -> Option<Side> {
+    let sub = crate::value::compact(sub_type);
+    if sub.starts_with("BUY") || sub == "BTO" || sub == "BTC" {
+        return Some(Side::Buy);
     }
-}
-
-fn has_flag(a: &Value, f: &str) -> bool { flags_of(a).iter().any(|x| x == f) }
-
-fn set_num(a: &mut Value, key: &str, v: f64) {
-    if let Value::Object(m) = a {
-        m.insert(key.into(), serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null));
+    if sub.starts_with("SELL") || sub == "STO" || sub == "STC" {
+        return Some(Side::Sell);
     }
-}
-
-fn set_str(a: &mut Value, key: &str, v: &str) {
-    if let Value::Object(m) = a { m.insert(key.into(), Value::String(v.into())); }
+    let kind = crate::value::compact(activity_type);
+    if kind.starts_with("BUY") {
+        return Some(Side::Buy);
+    }
+    if kind.starts_with("SELL") {
+        return Some(Side::Sell);
+    }
+    if quantity > 0.0 {
+        Some(Side::Buy)
+    } else if quantity < 0.0 {
+        Some(Side::Sell)
+    } else {
+        None
+    }
 }
 
 // --------------------------------------------------------------------------
 // fill ordering
 // --------------------------------------------------------------------------
 
-/// `_fill_rank`: within a day, opens come before closes so a same-day
-/// round trip matches against its own entry rather than an older lot.
+/// Within a day, opens come before closes so a same-day round trip matches
+/// against its own entry rather than an older lot.
 fn fill_rank(f: &Fill) -> u8 {
-    let t = compact(&field_s(&f.a, "activityType"));
-    let s = compact(&field_s(&f.a, "activitySubType"));
+    let (t, s) = (f.a.type_c(), f.a.sub_type_c());
     let blob = format!("{}{}", t, s);
-    if (blob.contains("TOOPEN") || t == "STO" || s == "STO") && f.side == "SELL" { return 0; }
-    if is_close_only(&f.a) && f.side == "BUY" { return 1; }
-    if f.side == "BUY" { return 2; }
-    if blob.contains("TOCLOSE") || t == "STC" || s == "STC" { return 3; }
+    if (blob.contains("TOOPEN") || t == "STO" || s == "STO") && f.side == Side::Sell {
+        return 0;
+    }
+    if is_close_only(&f.a) && f.side == Side::Buy {
+        return 1;
+    }
+    if f.side == Side::Buy {
+        return 2;
+    }
+    if blob.contains("TOCLOSE") || t == "STC" || s == "STC" {
+        return 3;
+    }
     4
 }
 
 fn fill_sort_key(f: &Fill) -> (String, u8, String, String) {
-    (field_s(&f.a, "transactionDate"), fill_rank(f), field_s(&f.a, "occurredAt"), field_s(&f.a, "id"))
+    (f.a.transaction_date.clone(), fill_rank(f), f.a.occurred_at.clone(), f.a.id.clone())
 }
 
 // --------------------------------------------------------------------------
 // slices
 // --------------------------------------------------------------------------
 
-/// `_make_slice`: one closed piece of a lot against one fill.
-fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, symbol: Option<&str>) -> Slice {
-    let exit_commission = if fill_qty > 0.0 { field_num(a, "commission") * (matched / fill_qty) } else { 0.0 };
+/// What a slice takes from the row that closed it.
+struct Exit<'a> {
+    id: &'a str,
+    unit_price: f64,
+    commission: f64,
+    date: &'a str,
+    when: &'a str,
+    name: &'a str,
+    security_id: &'a str,
+    flags: &'a [Flag],
+}
+
+impl<'a> From<&'a Activity> for Exit<'a> {
+    fn from(a: &'a Activity) -> Exit<'a> {
+        Exit { id: &a.id, unit_price: a.unit_price, commission: a.commission, date: &a.transaction_date, when: &a.occurred_at, name: &a.name, security_id: &a.security_id, flags: &a.flags }
+    }
+}
+
+/// One closed piece of a lot against one fill.
+fn make_slice(lot: &Lot, fill_qty: f64, side: Side, exit: &Exit, matched: f64, symbol: Option<&str>) -> Slice {
+    let exit_commission = if fill_qty > 0.0 { exit.commission * (matched / fill_qty) } else { 0.0 };
     let entry_commission = if lot.qty > 0.0 { lot.commission * (matched / lot.qty) } else { 0.0 };
     let commission = entry_commission + exit_commission;
     let sym = symbol.unwrap_or(&lot.symbol).to_string();
     let mult = option_multiplier(&sym);
-    let exit_px = field_num(a, "unitPrice");
-    let raw_pnl = if lot.direction == "LONG" {
-        (exit_px - lot.price) * matched * mult
-    } else {
-        (lot.price - exit_px) * matched * mult
+    let raw_pnl = match lot.direction {
+        Direction::Long => (exit.unit_price - lot.price) * matched * mult,
+        Direction::Short => (lot.price - exit.unit_price) * matched * mult,
     };
     // A carried symbol takes the fill's name; the lot's own name otherwise.
-    let name = if symbol.is_some() {
-        let n = field_s(a, "name");
-        if n.is_empty() { lot.name.clone() } else { n }
-    } else {
-        lot.name.clone()
-    };
-    let security_id = if !lot.security_id.is_empty() { lot.security_id.clone() } else { field_s(a, "securityId") };
-    let mut flags: Vec<String> = lot.flags.iter().cloned().chain(flags_of(a)).collect();
+    let name = if symbol.is_some() && !exit.name.is_empty() { exit.name.to_string() } else { lot.name.clone() };
+    let security_id = if !lot.security_id.is_empty() { lot.security_id.clone() } else { exit.security_id.to_string() };
+    let mut flags: Vec<Flag> = lot.flags.iter().chain(exit.flags).cloned().collect();
     flags.sort();
     flags.dedup();
     let mut t = Slice {
@@ -240,24 +242,24 @@ fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, sym
         symbol: sym,
         name,
         currency: lot.currency.clone(),
-        kind: lot.kind.clone(),
-        side: side.to_string(),
+        kind: lot.kind,
+        side,
         quantity: matched,
         entry_price: lot.price,
-        exit_price: exit_px,
+        exit_price: exit.unit_price,
         entry_date: lot.date.clone(),
-        exit_date: field_s(a, "transactionDate"),
+        exit_date: exit.date.to_string(),
         entry_when: lot.when.clone(),
-        exit_when: field_s(a, "occurredAt"),
-        hold_days: days_between(&lot.date, &field_s(a, "transactionDate")),
+        exit_when: exit.when.to_string(),
+        hold_days: days_between(&lot.date, exit.date),
         commission,
         entry_commission,
         exit_commission,
         pnl: raw_pnl - commission,
         pnl_cad: raw_pnl - commission,
-        open_direction: lot.direction.clone(),
+        open_direction: lot.direction,
         buy_activity_id: lot.activity_id.clone(),
-        sell_activity_id: field_s(a, "id"),
+        sell_activity_id: exit.id.to_string(),
         security_id,
         flags,
         fees_cad: None,
@@ -266,16 +268,18 @@ fn make_slice(lot: &Lot, fill_qty: f64, side: &str, a: &Value, matched: f64, sym
     t
 }
 
-/// `_dust`: a sale that exceeds the lots by a residue is rounding, not a
-/// short. Crypto quantities come back net of in-kind fees, so 1% of the fill
-/// is tolerated there; elsewhere only float noise or under a cent of value.
-fn dust(remaining: f64, fill_qty: f64, a: &Value) -> bool {
-    let qty = fill_qty;
-    let px = field_num(a, "unitPrice").abs();
-    if remaining <= 1e-6 * f64::max(1.0, qty) { return true; }
-    let kind = { let k = field_s(a, "kind"); if k.is_empty() { kind_of(a) } else { k } };
-    if kind == "Crypto" && remaining <= 0.01 * qty { return true; }
-    px > 0.0 && remaining * px * option_multiplier(&field_s(a, "symbol")) < 0.01
+/// A sale that exceeds the lots by a residue is rounding, not a short. Crypto
+/// quantities come back net of in-kind fees, so 1% of the fill is tolerated
+/// there; elsewhere only float noise or under a cent of value.
+fn dust(remaining: f64, fill_qty: f64, a: &Activity) -> bool {
+    if remaining <= 1e-6 * f64::max(1.0, fill_qty) {
+        return true;
+    }
+    if a.kind == Kind::Crypto && remaining <= 0.01 * fill_qty {
+        return true;
+    }
+    let px = a.unit_price.abs();
+    px > 0.0 && remaining * px * option_multiplier(&a.symbol) < 0.01
 }
 
 // --------------------------------------------------------------------------
@@ -304,181 +308,175 @@ fn infer_standalone_option_qty(cash: f64) -> f64 {
     1.0
 }
 
+/// Quantity by direction.
 #[derive(Default, Clone, Copy)]
-struct Dirs { long: f64, short: f64 }
-
-impl Dirs {
-    fn get(&self, d: &str) -> f64 { if d == "LONG" { self.long } else { self.short } }
-    fn add(&mut self, d: &str, v: f64) { if d == "LONG" { self.long += v } else { self.short += v } }
-    fn sub(&mut self, d: &str, v: f64) { self.add(d, -v) }
+struct Dirs {
+    long: f64,
+    short: f64,
 }
 
-fn set_fill_side(f: &mut Fill, side: &str, sub: &str) {
-    f.side = side.into();
-    set_str(&mut f.a, "activitySubType", sub);
-    let q = field_num(&f.a, "quantity").abs();
-    if q > 0.0 {
-        set_num(&mut f.a, "quantity", if side == "SELL" { -q } else { q });
+impl Dirs {
+    fn get(&self, d: Direction) -> f64 {
+        match d {
+            Direction::Long => self.long,
+            Direction::Short => self.short,
+        }
+    }
+    fn add(&mut self, d: Direction, v: f64) {
+        match d {
+            Direction::Long => self.long += v,
+            Direction::Short => self.short += v,
+        }
+    }
+    fn sub(&mut self, d: Direction, v: f64) {
+        self.add(d, -v)
     }
 }
 
-/// `_resolve_option_fill_side`: an expiry or assignment row does not say
-/// which way it goes, so it is read from what the book still holds.
+fn set_fill_side(f: &mut Fill, side: Side, sub: &str) {
+    f.side = side;
+    f.a.activity_sub_type = sub.into();
+    let q = f.a.quantity.abs();
+    if q > 0.0 {
+        f.a.quantity = if side == Side::Sell { -q } else { q };
+    }
+}
+
+/// An expiry or assignment row does not say which way it goes, so it is read
+/// from what the book still holds.
 fn resolve_option_fill_side(f: &mut Fill, rem: &Dirs) {
-    let raw = format!("{}{}", compact(&field_s(&f.a, "rawType")), compact(&field_s(&f.a, "activityType")));
-    let expirish = raw.contains("EXPIR") || raw.contains("ASSIGN") || raw.contains("EXERCISE");
-    if expirish {
+    let raw = format!("{}{}", f.a.raw_type_c(), f.a.type_c());
+    if raw.contains("EXPIR") || raw.contains("ASSIGN") || raw.contains("EXERCISE") {
         if raw.contains("ASSIGN") || raw.contains("SHORTEXPIR") {
             let sub = if raw.contains("ASSIGN") { "BUYTOCLOSE" } else { "BUY" };
-            set_fill_side(f, "BUY", sub);
+            set_fill_side(f, Side::Buy, sub);
         } else if raw.contains("EXPIR") && !raw.contains("SHORT") {
-            set_fill_side(f, "SELL", "SELL");
-        } else if f.side == "BUY" && rem.long > EPS && rem.short <= EPS {
-            set_fill_side(f, "SELL", "SELL");
-        } else if f.side == "SELL" && rem.short > EPS && rem.long <= EPS {
-            set_fill_side(f, "BUY", "BUY");
+            set_fill_side(f, Side::Sell, "SELL");
+        } else if f.side == Side::Buy && rem.long > EPS && rem.short <= EPS {
+            set_fill_side(f, Side::Sell, "SELL");
+        } else if f.side == Side::Sell && rem.short > EPS && rem.long <= EPS {
+            set_fill_side(f, Side::Buy, "BUY");
         }
         return;
     }
-    if !(raw.contains("MULTILEG") || is_close_only(&f.a)) { return; }
-    if f.side == "BUY" {
-        set_str(&mut f.a, "activitySubType", if rem.short > EPS { "BUYTOCLOSE" } else { "BUYTOOPEN" });
-    } else if f.side == "SELL" {
-        set_str(&mut f.a, "activitySubType", if rem.long > EPS { "SELLTOCLOSE" } else { "SELLTOOPEN" });
+    if !(raw.contains("MULTILEG") || is_close_only(&f.a)) {
+        return;
     }
+    f.a.activity_sub_type = match f.side {
+        Side::Buy => if rem.short > EPS { "BUYTOCLOSE" } else { "BUYTOOPEN" },
+        Side::Sell => if rem.long > EPS { "SELLTOCLOSE" } else { "SELLTOOPEN" },
+    }
+    .into();
 }
 
-/// `infer_zero_qty_option_fills`: fills in the quantity a multileg row
-/// left at zero, and decides which direction a roll is closing, by walking the
-/// fills in order and tracking what each book and each roll chain still holds.
-fn infer_zero_qty_option_fills(fills: &mut Vec<Fill>) {
-    let mut remaining: HashMap<String, Dirs> = HashMap::new();
-    let mut pools: HashMap<(String, String, &'static str), Dirs> = HashMap::new();
-    let mut zeros_by_book: HashMap<String, Vec<usize>> = HashMap::new();
+/// The contract count behind a quantity-zero row: the smallest count that gives
+/// a clean price and fits what is open, or what is open when nothing later
+/// needs a share of it.
+fn inferred_qty(cash: f64, open_sz: f64, whole_if_alone: f64, upcoming: usize, floor: f64) -> f64 {
+    if whole_if_alone > floor && upcoming == 0 {
+        return whole_if_alone;
+    }
+    if open_sz > floor {
+        let cap = i64::max(1, (open_sz + 1e-9) as i64);
+        let picked = (1..=cap).map(|q| q as f64).find(|q| is_clean_option_qty(cash, *q));
+        return f64::min(picked.unwrap_or_else(|| infer_standalone_option_qty(cash)), open_sz);
+    }
+    infer_standalone_option_qty(cash)
+}
+
+/// Fills in the quantity a multileg row left at zero, and decides which
+/// direction a roll is closing, by walking the fills in order and tracking what
+/// each book and each roll chain still holds.
+fn infer_zero_qty_option_fills(fills: &mut [Fill]) {
+    let mut remaining: HashMap<BookKey, Dirs> = HashMap::new();
+    let mut pools: HashMap<RollKey, Dirs> = HashMap::new();
+    let mut zeros_by_book: HashMap<BookKey, Vec<usize>> = HashMap::new();
 
     for (i, f) in fills.iter().enumerate() {
-        let qty = field_num(&f.a, "quantity").abs();
-        let cash = field_num(&f.a, "netCashAmount");
-        if !is_option_symbol(&field_s(&f.a, "symbol")) || f.side.is_empty() { continue; }
-        if qty == 0.0 && cash.abs() > 1e-9 {
+        if is_option_symbol(&f.a.symbol) && f.a.quantity.abs() == 0.0 && f.a.net_cash_amount.abs() > 1e-9 {
             zeros_by_book.entry(book_key(&f.a)).or_default().push(i);
         }
     }
 
     for i in 0..fills.len() {
-        if fills[i].side.is_empty() { continue; }
-        let a_snapshot = fills[i].a.clone();
-        let key = book_key(&a_snapshot);
-        let rkey = roll_key(&a_snapshot);
-        let is_opt = is_option_symbol(&field_s(&a_snapshot, "symbol"));
+        let key = book_key(&fills[i].a);
+        let rkey = roll_key(&fills[i].a);
+        let is_opt = is_option_symbol(&fills[i].a.symbol);
         let rem_now = *remaining.entry(key.clone()).or_default();
+        let upcoming = zeros_by_book.get(&key).map_or(0, |v| v.iter().filter(|j| **j > i).count());
 
-        if is_opt && is_multileg(&a_snapshot) {
+        if is_opt && is_multileg(&fills[i].a) {
             // A roll: this row closes what the contract holds (or what an
             // earlier roll carried forward), and the same quantity moves to
             // the next contract, which the broker never posts.
             let pool = *pools.entry(rkey.clone()).or_default();
-            let direction: String = if rem_now.short > EPS {
-                "SHORT".into()
+            let direction = if rem_now.short > EPS {
+                Direction::Short
             } else if rem_now.long > EPS {
-                "LONG".into()
+                Direction::Long
             } else if pool.short >= pool.long {
-                "SHORT".into()
+                Direction::Short
             } else {
-                "LONG".into()
+                Direction::Long
             };
-            let open_sz = rem_now.get(&direction) + pool.get(&direction);
-            let mut qty = field_num(&a_snapshot, "quantity").abs();
-            let cash = field_num(&a_snapshot, "netCashAmount");
+            let open_sz = rem_now.get(direction) + pool.get(direction);
+            let mut qty = fills[i].a.quantity.abs();
+            let cash = fills[i].a.net_cash_amount;
             if qty == 0.0 {
-                let upcoming = zeros_by_book.get(&key).map_or(0, |v| v.iter().filter(|j| **j > i).count());
-                if rem_now.get(&direction) > EPS && upcoming == 0 {
-                    qty = rem_now.get(&direction);
-                } else if open_sz > EPS {
-                    let cap = i64::max(1, (open_sz + 1e-9) as i64);
-                    let mut picked = 0.0;
-                    for q in 1..=cap {
-                        if is_clean_option_qty(cash, q as f64) { picked = q as f64; break; }
-                    }
-                    qty = if picked > 0.0 { picked } else { infer_standalone_option_qty(cash) };
-                    if qty > open_sz { qty = open_sz; }
-                } else {
-                    qty = infer_standalone_option_qty(cash);
-                }
-                let px = if qty > 0.0 { cash.abs() / (qty * 100.0) } else { 0.0 };
-                set_num(&mut fills[i].a, "unitPrice", px);
+                qty = inferred_qty(cash, open_sz, rem_now.get(direction), upcoming, EPS);
+                fills[i].a.unit_price = if qty > 0.0 { cash.abs() / (qty * 100.0) } else { 0.0 };
             }
-            fills[i].side = if direction == "SHORT" { "BUY".into() } else { "SELL".into() };
-            let sub = if direction == "SHORT" { "BUYTOCLOSE" } else { "SELLTOCLOSE" };
-            set_str(&mut fills[i].a, "activitySubType", sub);
-            set_num(&mut fills[i].a, "quantity", if direction == "SHORT" { qty } else { -qty });
+            fills[i].side = direction.closed_by();
+            fills[i].a.activity_sub_type = if direction == Direction::Short { "BUYTOCLOSE" } else { "SELLTOCLOSE" }.into();
+            fills[i].a.quantity = if direction == Direction::Short { qty } else { -qty };
             fills[i].qty = qty;
-            fills[i].roll_direction = Some(direction.clone());
+            fills[i].roll_direction = Some(direction);
 
-            let closed = f64::min(qty, rem_now.get(&direction));
-            let r = remaining.entry(key.clone()).or_default();
-            r.sub(&direction, closed);
+            let closed = f64::min(qty, rem_now.get(direction));
+            remaining.entry(key.clone()).or_default().sub(direction, closed);
             let p = pools.entry(rkey.clone()).or_default();
-            p.sub(&direction, f64::min(qty - closed, p.get(&direction)));
-            if closed > EPS || qty > EPS { p.add(&direction, qty); }
+            p.sub(direction, f64::min(qty - closed, p.get(direction)));
+            if closed > EPS || qty > EPS {
+                p.add(direction, qty);
+            }
             continue;
         }
 
         if is_opt {
-            let rem_copy = rem_now;
-            resolve_option_fill_side(&mut fills[i], &rem_copy);
+            resolve_option_fill_side(&mut fills[i], &rem_now);
         }
-        let a_now = fills[i].a.clone();
-        let mut qty = field_num(&a_now, "quantity").abs();
-        let cash = field_num(&a_now, "netCashAmount");
-        if is_opt && qty == 0.0 {
-            let closing_dir = if fills[i].side == "BUY" { "SHORT" } else { "LONG" };
-            let open_sz = rem_now.get(closing_dir);
+        let closing = fills[i].side.closes();
+        if is_opt && fills[i].a.quantity.abs() == 0.0 {
+            let cash = fills[i].a.net_cash_amount;
+            let open_sz = rem_now.get(closing);
+            let mut qty = 0.0;
             if cash.abs() > 1e-9 {
-                let upcoming = zeros_by_book.get(&key).map_or(0, |v| v.iter().filter(|j| **j > i).count());
-                if open_sz > 0.0 && upcoming == 0 {
-                    qty = open_sz;
-                } else if open_sz > 0.0 {
-                    let cap = i64::max(1, (open_sz + 1e-9) as i64);
-                    let mut picked = 0.0;
-                    for q in 1..=cap {
-                        if is_clean_option_qty(cash, q as f64) { picked = q as f64; break; }
-                    }
-                    qty = if picked > 0.0 { picked } else { infer_standalone_option_qty(cash) };
-                    if qty > open_sz { qty = open_sz; }
-                } else {
-                    qty = infer_standalone_option_qty(cash);
-                }
-                let px = if qty > 0.0 { cash.abs() / (qty * 100.0) } else { 0.0 };
-                set_num(&mut fills[i].a, "unitPrice", px);
-            } else if open_sz > 0.0 && is_close_only(&a_now) {
+                qty = inferred_qty(cash, open_sz, open_sz, upcoming, 0.0);
+                fills[i].a.unit_price = if qty > 0.0 { cash.abs() / (qty * 100.0) } else { 0.0 };
+            } else if open_sz > 0.0 && is_close_only(&fills[i].a) {
                 qty = open_sz;
-                set_num(&mut fills[i].a, "unitPrice", 0.0);
+                fills[i].a.unit_price = 0.0;
             }
             if qty > 0.0 {
-                let signed = if fills[i].side == "SELL" { -qty } else { qty };
-                set_num(&mut fills[i].a, "quantity", signed);
+                fills[i].a.quantity = if fills[i].side == Side::Sell { -qty } else { qty };
                 fills[i].qty = qty;
             }
         }
-        if is_opt && (compact(&field_s(&a_now, "rawType")).contains("ASSIGN")
-            || compact(&field_s(&a_now, "activityType")).contains("ASSIGN"))
-        {
-            set_num(&mut fills[i].a, "unitPrice", 0.0);
+        if is_opt && (fills[i].a.raw_type_c().contains("ASSIGN") || fills[i].a.type_c().contains("ASSIGN")) {
+            fills[i].a.unit_price = 0.0;
         }
         if fills[i].qty > 0.0 {
-            let closing_dir = if fills[i].side == "BUY" { "SHORT" } else { "LONG" };
-            let side = fills[i].side.clone();
-            let opening = opening_direction(&fills[i].a, &side);
+            let closing = fills[i].side.closes();
+            let opening = opening_direction(&fills[i].a, fills[i].side);
             let mut left = fills[i].qty;
             let r = remaining.entry(key.clone()).or_default();
-            let close_amt = f64::min(left, r.get(closing_dir));
-            r.sub(closing_dir, close_amt);
+            let close_amt = f64::min(left, r.get(closing));
+            r.sub(closing, close_amt);
             left -= close_amt;
             if left > EPS && is_opt {
                 let p = pools.entry(rkey.clone()).or_default();
-                let pooled = f64::min(left, p.get(closing_dir));
-                p.sub(closing_dir, pooled);
+                let pooled = f64::min(left, p.get(closing));
+                p.sub(closing, pooled);
                 left -= pooled;
             }
             if left > EPS {
@@ -494,94 +492,94 @@ fn infer_zero_qty_option_fills(fills: &mut Vec<Fill>) {
 // corporate actions
 // --------------------------------------------------------------------------
 
-/// `replacement_index`: per (account, symbol, currency), the first date
-/// the ticker was removed and the dates of real trades, so the sale of a
-/// renamed holding can find the old book.
+/// Per (account, symbol, currency), the first date the ticker was removed and
+/// the dates of real trades, so the sale of a renamed holding can find the old
+/// book.
 struct Replacement {
-    removed: HashMap<(String, String, String), String>,
-    trades: HashMap<(String, String, String), Vec<String>>,
+    removed: HashMap<BookKey, String>,
+    trades: HashMap<BookKey, Vec<String>>,
 }
 
 fn removal_marker(raw: &str) -> bool {
-    ["CODECHANGE", "SYMBOLCHANGE", "TICKERCHANGE", "LISTINGSTATUS", "SECURITYSWAP"]
-        .iter()
-        .any(|m| raw.contains(m))
+    ["CODECHANGE", "SYMBOLCHANGE", "TICKERCHANGE", "LISTINGSTATUS", "SECURITYSWAP"].iter().any(|m| raw.contains(m))
 }
 
-fn replacement_index(activities: &[Value]) -> Replacement {
-    let mut removed: HashMap<(String, String, String), String> = HashMap::new();
-    let mut trades: HashMap<(String, String, String), Vec<String>> = HashMap::new();
+fn replacement_index(activities: &[Activity]) -> Replacement {
+    let mut removed: HashMap<BookKey, String> = HashMap::new();
+    let mut trades: HashMap<BookKey, Vec<String>> = HashMap::new();
+    let mut removed_on = |key: &BookKey, day: &str| {
+        if !day.is_empty() && removed.get(key).map_or(true, |known| day < known.as_str()) {
+            removed.insert(key.clone(), day.to_string());
+        }
+    };
     for a in activities {
-        let key = (fifo_account(a), field_s(a, "symbol"), field_s(a, "currency"));
-        let t = compact(&field_s(a, "activityType"));
-        let d = field_s(a, "transactionDate");
-        if t == "STKDIS" {
-            let sub = compact(&field_s(a, "activitySubType"));
-            if sub == "SELL" || field_num(a, "quantity") < 0.0 {
-                if !d.is_empty() && removed.get(&key).map_or(true, |o| d < *o) {
-                    removed.insert(key.clone(), d.clone());
-                }
+        let key = book_key(a);
+        let day = &a.transaction_date;
+        if a.type_c() == "STKDIS" {
+            if a.sub_type_c() == "SELL" || a.quantity < 0.0 {
+                removed_on(&key, day);
             }
             continue;
         }
-        let raw = format!("{}{}", compact(&field_s(a, "rawType")), compact(&field_s(a, "aftType")));
-        if removal_marker(&raw) && !d.is_empty() && removed.get(&key).map_or(true, |o| d < *o) {
-            removed.insert(key.clone(), d.clone());
+        if removal_marker(&format!("{}{}", a.raw_type_c(), crate::value::compact(&a.aft_type))) {
+            removed_on(&key, day);
         }
-        let cat = field_s(a, "category");
-        if (cat == "trade" || cat == "option_event") && !trade_side(a).is_empty() {
-            trades.entry(key).or_default().push(d);
+        if a.category.is_fill() && trade_side(a).is_some() {
+            trades.entry(key).or_default().push(day.clone());
         }
     }
     Replacement { removed, trades }
 }
 
-/// `ticker_was_replaced`: the ticker went away before this date and
-/// nothing has traded in it since.
-fn ticker_was_replaced(ix: &Replacement, account: &str, symbol: &str, currency: &str, by_date: &str) -> bool {
-    let key = (account.to_string(), symbol.to_string(), currency.to_string());
-    let removed_on = match ix.removed.get(&key) { Some(d) if !d.is_empty() => d, _ => return false };
-    if *removed_on > by_date.to_string() { return false; }
-    !ix.trades.get(&key).map_or(false, |ds| ds.iter().any(|d| d > removed_on))
+/// The ticker went away before this date and nothing has traded in it since.
+fn ticker_was_replaced(ix: &Replacement, book: &BookKey, by_date: &str) -> bool {
+    let removed_on = match ix.removed.get(book) {
+        Some(d) if !d.is_empty() => d,
+        _ => return false,
+    };
+    if removed_on.as_str() > by_date {
+        return false;
+    }
+    !ix.trades.get(book).map_or(false, |days| days.iter().any(|d| d > removed_on))
 }
 
-/// `split_markers`: Wealthsimple posts a share split as a quantity-zero
-/// corporate action with no ratio, so the ratio is inferred from the median
-/// fill price on either side of it. Lot quantities are multiplied by the
-/// factor and prices divided by it.
-fn split_markers(activities: &[Value]) -> HashMap<(String, String, String), f64> {
+/// Wealthsimple posts a share split as a quantity-zero corporate action with no
+/// ratio, so the ratio is inferred from the median fill price on either side of
+/// it. Lot quantities are multiplied by the factor and prices divided by it.
+/// Keyed by (account, symbol, day).
+fn split_markers(activities: &[Activity]) -> HashMap<(String, String, String), f64> {
     let mut out = HashMap::new();
-    let mut by_book: HashMap<(String, String), Vec<&Value>> = HashMap::new();
+    let mut by_book: HashMap<(String, String), Vec<&Activity>> = HashMap::new();
     for a in activities {
-        let cat = field_s(a, "category");
-        if (cat != "trade" && cat != "option_event") || field_s(a, "symbol").is_empty() { continue; }
-        by_book.entry((fifo_account(a), field_s(a, "symbol"))).or_default().push(a);
+        if a.category.is_fill() && !a.symbol.is_empty() {
+            by_book.entry((fifo_account(a), a.symbol.clone())).or_default().push(a);
+        }
     }
     for a in activities {
-        if compact(&field_s(a, "activityType")) != "STKDIS" { continue; }
-        if compact(&field_s(a, "rawType")) != "CORPORATEACTION" { continue; }
-        if field_num(a, "quantity").abs() > EPS { continue; }
-        let day = field_s(a, "transactionDate");
+        if a.type_c() != "STKDIS" || a.raw_type_c() != "CORPORATEACTION" || a.quantity.abs() > EPS {
+            continue;
+        }
+        let day = &a.transaction_date;
         // the marker's currency does not always match the fills'; key on account+symbol
-        let key = (fifo_account(a), field_s(a, "symbol"));
-        let mut priced: Vec<&&Value> = by_book
-            .get(&key)
-            .map(|v| v.iter().filter(|x| field_num(x, "unitPrice") > 0.0 && compact(&field_s(x, "activityType")) != "STKDIS").collect())
-            .unwrap_or_default();
-        priced.sort_by(|x, y| {
-            (field_s(x, "transactionDate"), field_s(x, "occurredAt"))
-                .cmp(&(field_s(y, "transactionDate"), field_s(y, "occurredAt")))
-        });
-        let mut before: Vec<f64> = priced.iter().filter(|x| field_s(x, "transactionDate") < day).map(|x| field_num(x, "unitPrice")).collect();
-        let mut after: Vec<f64> = priced.iter().filter(|x| field_s(x, "transactionDate") >= day).map(|x| field_num(x, "unitPrice")).collect();
-        if before.len() > 3 { before = before.split_off(before.len() - 3); }
+        let key = (fifo_account(a), a.symbol.clone());
+        let mut priced: Vec<&Activity> = by_book.get(&key).map(|v| v.iter().copied().filter(|x| x.unit_price > 0.0 && x.type_c() != "STKDIS").collect()).unwrap_or_default();
+        priced.sort_by(|x, y| (&x.transaction_date, &x.occurred_at).cmp(&(&y.transaction_date, &y.occurred_at)));
+        let mut before: Vec<f64> = priced.iter().filter(|x| x.transaction_date < *day).map(|x| x.unit_price).collect();
+        let mut after: Vec<f64> = priced.iter().filter(|x| x.transaction_date >= *day).map(|x| x.unit_price).collect();
+        if before.len() > 3 {
+            before = before.split_off(before.len() - 3);
+        }
         after.truncate(3);
-        if before.is_empty() || after.is_empty() { continue; }
+        if before.is_empty() || after.is_empty() {
+            continue;
+        }
         before.sort_by(|p, q| p.partial_cmp(q).unwrap());
         after.sort_by(|p, q| p.partial_cmp(q).unwrap());
         let pre = before[before.len() / 2];
         let post = after[after.len() / 2];
-        if !(pre > 0.0) || !(post > 0.0) { continue; }
+        if !(pre > 0.0) || !(post > 0.0) {
+            continue;
+        }
         let ratio = post / pre;
         let (n, factor) = if ratio >= 1.5 {
             let n = ratio.round();
@@ -592,8 +590,10 @@ fn split_markers(activities: &[Value]) -> HashMap<(String, String, String), f64>
         } else {
             continue;
         };
-        if n < 2.0 || (ratio - (1.0 / factor)).abs() / (1.0 / factor) > 0.35 { continue; }
-        out.insert((fifo_account(a), field_s(a, "symbol"), day), factor);
+        if n < 2.0 || (ratio - (1.0 / factor)).abs() / (1.0 / factor) > 0.35 {
+            continue;
+        }
+        out.insert((key.0, key.1, day.clone()), factor);
     }
     out
 }
@@ -606,19 +606,42 @@ fn split_markers(activities: &[Value]) -> HashMap<(String, String, String), f64>
 /// first book that matches.
 #[derive(Default)]
 struct Books {
-    keys: Vec<String>,
-    map: HashMap<String, Vec<Lot>>,
+    keys: Vec<BookKey>,
+    map: HashMap<BookKey, Vec<Lot>>,
+    /// The round trip each book's open lots belong to.
+    rt_open: HashMap<BookKey, Option<String>>,
 }
 
 impl Books {
-    fn ensure(&mut self, key: &str) {
+    fn ensure(&mut self, key: &BookKey) {
         if !self.map.contains_key(key) {
-            self.keys.push(key.to_string());
-            self.map.insert(key.to_string(), Vec::new());
+            self.keys.push(key.clone());
+            self.map.insert(key.clone(), Vec::new());
         }
     }
-    fn get(&self, key: &str) -> &[Lot] { self.map.get(key).map(|v| v.as_slice()).unwrap_or(&[]) }
-    fn at(&mut self, key: &str) -> &mut Vec<Lot> { self.ensure(key); self.map.get_mut(key).unwrap() }
+    fn get(&self, key: &BookKey) -> &[Lot] {
+        self.map.get(key).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+    fn at(&mut self, key: &BookKey) -> &mut Vec<Lot> {
+        self.ensure(key);
+        self.map.get_mut(key).unwrap()
+    }
+    fn rt(&self, key: &BookKey) -> Option<String> {
+        self.rt_open.get(key).cloned().flatten()
+    }
+    /// The round trip a lot opened on this book now joins: the one already
+    /// open, or a new one named for the fill that starts it.
+    fn rt_for_opening(&mut self, key: &BookKey, fill_id: &str) -> Option<String> {
+        if self.get(key).is_empty() || self.rt(key).is_none() {
+            self.rt_open.insert(key.clone(), Some(format!("rt:{}", fill_id)));
+        }
+        self.rt(key)
+    }
+    fn closed_out(&mut self, key: &BookKey) {
+        if self.get(key).is_empty() {
+            self.rt_open.insert(key.clone(), None);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -629,237 +652,229 @@ struct RollPool {
 }
 
 impl RollPool {
-    fn side(&mut self, d: &str) -> &mut Vec<Lot> { if d == "LONG" { &mut self.long } else { &mut self.short } }
-    fn is_empty(&self) -> bool { self.long.is_empty() && self.short.is_empty() }
+    fn side(&mut self, d: Direction) -> &mut Vec<Lot> {
+        match d {
+            Direction::Long => &mut self.long,
+            Direction::Short => &mut self.short,
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.long.is_empty() && self.short.is_empty()
+    }
 }
 
-fn lot_from(a: &Value, qty: f64, price: f64, direction: &str, commission: f64, kind: &str, rt: Option<String>, flags: Vec<String>) -> Lot {
+type Rolled = Vec<(RollKey, RollPool)>;
+
+fn pool_of<'a>(rolled: &'a mut Rolled, k: &RollKey) -> &'a mut RollPool {
+    if let Some(i) = rolled.iter().position(|(rk, _)| rk == k) {
+        return &mut rolled[i].1;
+    }
+    rolled.push((k.clone(), RollPool::default()));
+    let n = rolled.len() - 1;
+    &mut rolled[n].1
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lot_from(a: &Activity, qty: f64, price: f64, direction: Direction, commission: f64, kind: Kind, rt: Option<String>, flags: Vec<Flag>) -> Lot {
     Lot {
         qty,
         price,
-        date: field_s(a, "transactionDate"),
-        when: field_s(a, "occurredAt"),
+        date: a.transaction_date.clone(),
+        when: a.occurred_at.clone(),
         commission,
-        direction: direction.to_string(),
-        account_id: field_s(a, "accountId"),
+        direction,
+        account_id: a.account_id.clone(),
         account_type: fifo_account(a),
-        symbol: field_s(a, "symbol"),
-        name: field_s(a, "name"),
-        currency: field_s(a, "currency"),
-        kind: kind.to_string(),
-        activity_id: field_s(a, "id"),
-        security_id: field_s(a, "securityId"),
+        symbol: a.symbol.clone(),
+        name: a.name.clone(),
+        currency: a.currency.clone(),
+        kind,
+        activity_id: a.id.clone(),
+        security_id: a.security_id.clone(),
         rt,
         flags,
     }
 }
 
-/// `match_fifo`.
-pub fn match_fifo(activities: &[Value]) -> Matched {
-    let mut owned = activities.to_vec();
-    match_fifo_in_place(&mut owned)
+/// The match over stored rows, each normalized first.
+pub fn match_fifo(rows: &[RawActivity]) -> Matched {
+    match_fifo_in_place(&mut normalize_all(rows))
 }
 
-/// `match_fifo`, writing the inference back into `activities`.
-///
-/// A row that already carries `flags` is one the caller normalized, and the
-/// fill stands for that same row, so what the inference decides about it --
-/// the contract count behind a quantity-zero multileg, the price that implies,
-/// which way it closes -- is visible to the caller afterwards. A row this
-/// function normalizes itself is a fresh copy, and is left alone.
-pub fn match_fifo_in_place(activities: &mut Vec<Value>) -> Matched {
-    let prepared: Vec<(Option<usize>, Value)> = activities
-        .iter()
-        .enumerate()
-        .map(|(i, a)| if a.get("flags").is_some() { (Some(i), a.clone()) } else { (None, normalize_activity(a)) })
-        .filter(|(_, a)| !has_flag(a, "pending-distribution"))
-        .collect();
-    let normalized: Vec<Value> = prepared.iter().map(|(_, a)| a.clone()).collect();
-    let folded = crate::normalize::fold_stkdis_indexed(&prepared);
+/// The match over working rows, writing the inference back into them: what it
+/// decides about a row -- the contract count behind a quantity-zero multileg,
+/// the price that implies, which way it closes -- is what that row says
+/// afterwards.
+pub fn match_fifo_in_place(activities: &mut Vec<Activity>) -> Matched {
+    let live: Vec<(Option<usize>, Activity)> =
+        activities.iter().enumerate().filter(|(_, a)| !a.has(&Flag::PendingDistribution)).map(|(i, a)| (Some(i), a.clone())).collect();
+    let normalized: Vec<Activity> = live.iter().map(|(_, a)| a.clone()).collect();
 
     let mut fills: Vec<Fill> = Vec::new();
-    for (src, a) in &folded {
-        let cat = field_s(a, "category");
-        if (cat != "trade" && cat != "option_event") || field_s(a, "symbol").is_empty() { continue; }
-        let side = trade_side(a);
-        if side.is_empty() { continue; }
-        fills.push(Fill { a: a.clone(), side, qty: field_num(a, "quantity").abs(), roll_direction: None, rt_before: None, src: *src });
+    for (src, a) in fold_stkdis(live) {
+        if !a.category.is_fill() || a.symbol.is_empty() {
+            continue;
+        }
+        let Some(side) = trade_side(&a) else { continue };
+        fills.push(Fill { qty: a.quantity.abs(), a, side, roll_direction: None, rt_before: None, src });
     }
     fills.sort_by(|x, y| fill_sort_key(x).cmp(&fill_sort_key(y)));
     infer_zero_qty_option_fills(&mut fills);
     // What the inference decided stands even for a fill it left at zero.
     for f in &fills {
-        if let Some(i) = f.src { activities[i] = f.a.clone(); }
+        if let Some(i) = f.src {
+            activities[i] = f.a.clone();
+        }
     }
     let usable: Vec<Fill> = fills.into_iter().filter(|f| f.qty > 0.0).collect();
-    let mut rewritten: Vec<(usize, Value)> = Vec::new();
 
     let mut books = Books::default();
-    let mut rt_open: HashMap<String, Option<String>> = HashMap::new();
     let mut closed: Vec<Slice> = Vec::new();
     let mut unmatched: Vec<Unmatched> = Vec::new();
-    let mut rolled: Vec<((String, String, &'static str), RollPool)> = Vec::new();
-    let mut rolled_keys: HashSet<(String, String, &'static str)> = HashSet::new();
+    let mut rolled: Rolled = Vec::new();
+    let mut rolled_keys: HashSet<RollKey> = HashSet::new();
 
     let replaced = replacement_index(&normalized);
-    let splits = split_markers(&normalized);
-    let mut pending_splits: HashMap<String, Vec<(String, f64)>> = HashMap::new();
-    for ((acct, sym, day), factor) in &splits {
-        pending_splits.entry(format!("{}::{}", acct, sym)).or_default().push((day.clone(), *factor));
+    let mut pending_splits: HashMap<(String, String), Vec<(String, f64)>> = HashMap::new();
+    for ((account, symbol, day), factor) in split_markers(&normalized) {
+        pending_splits.entry((account, symbol)).or_default().push((day, factor));
     }
 
-    for fi in 0..usable.len() {
-        let mut fill = usable[fi].clone();
-        let a_key = book_key(&fill.a);
-        books.ensure(&a_key);
-        apply_splits(&mut books, &mut pending_splits, &a_key, &field_s(&fill.a, "transactionDate"));
+    for mut fill in usable {
+        let key = book_key(&fill.a);
+        books.ensure(&key);
+        apply_splits(&mut books, &mut pending_splits, &key, &fill.a.transaction_date);
+        let sym = fill.a.symbol.clone();
 
-        let sym = field_s(&fill.a, "symbol");
-        if is_option_symbol(&sym) && is_multileg(&fill.a) && fill.roll_direction.is_some() {
+        if let (true, Some(direction)) = (is_option_symbol(&sym) && is_multileg(&fill.a), fill.roll_direction) {
             // Roll: close this contract (its book, then the legs an earlier
             // roll carried forward) and carry the same quantity to the leg the
             // broker never posted. A debit belongs to the closed leg's exit, a
             // credit to the new leg's entry.
-            let direction = fill.roll_direction.clone().unwrap();
-            let cash = field_num(&fill.a, "netCashAmount");
+            let cash = fill.a.net_cash_amount;
             let per = if fill.qty > 0.0 { cash.abs() / (fill.qty * 100.0) } else { 0.0 };
             let debit = cash < 0.0;
-            let exit_px = if (direction == "SHORT") == debit { per } else { 0.0 };
-            let entry_px = if (direction == "SHORT") != debit { per } else { 0.0 };
-            set_num(&mut fill.a, "unitPrice", exit_px);
+            let short = direction == Direction::Short;
+            let exit_px = if short == debit { per } else { 0.0 };
+            let entry_px = if short != debit { per } else { 0.0 };
+            fill.a.unit_price = exit_px;
             let before = closed.len();
-            fill.rt_before = if books.get(&a_key).is_empty() { None } else { rt_open.get(&a_key).cloned().flatten() };
-            let mut remaining = close_against(&mut books, &mut rt_open, &a_key, &fill, &fill.a.clone(), fill.qty, None, &mut closed);
-            remaining = close_rolled(&mut books, &mut rt_open, &mut rolled, &rolled_keys, &fill, &direction, remaining, &mut closed);
+            fill.rt_before = if books.get(&key).is_empty() { None } else { books.rt(&key) };
+            let mut remaining = close_against(&mut books, &key, &fill, fill.qty, None, &mut closed);
+            remaining = close_rolled(&mut books, &mut rolled, &rolled_keys, &fill, direction, remaining, &mut closed);
             let moved = fill.qty - remaining;
             let rk = roll_key(&fill.a);
             rolled_keys.insert(rk.clone());
             if moved > EPS {
                 for s in closed[before..].iter_mut() {
-                    if !s.flags.iter().any(|f| f == "rolled") { s.flags.push("rolled".into()); }
+                    mark(&mut s.flags, Flag::Rolled);
                 }
-                let chain_rt = fill
-                    .rt_before
-                    .clone()
-                    .or_else(|| pool_of(&mut rolled, &rk).rt.clone())
-                    .or_else(|| closed.get(before).and_then(|s| s.rt.clone()));
+                let chain_rt = fill.rt_before.clone().or_else(|| pool_of(&mut rolled, &rk).rt.clone()).or_else(|| closed.get(before).and_then(|s| s.rt.clone()));
                 let pool = pool_of(&mut rolled, &rk);
                 pool.rt = chain_rt.clone();
-                let mut lot = lot_from(&fill.a, moved, entry_px, &direction, 0.0, "Options", chain_rt, vec!["rolled-in".into()]);
+                let mut lot = lot_from(&fill.a, moved, entry_px, direction, 0.0, Kind::Options, chain_rt, vec![Flag::RolledIn]);
                 lot.security_id = String::new();
-                pool.side(&direction).push(lot);
+                pool.side(direction).push(lot);
             }
             if remaining > EPS {
                 // nothing to roll: this multileg simply opened a position
-                let opening = if debit { "LONG" } else { "SHORT" };
-                set_num(&mut fill.a, "unitPrice", per);
-                fill.side = if opening == "LONG" { "BUY".into() } else { "SELL".into() };
-                if books.get(&a_key).is_empty() || rt_open.get(&a_key).cloned().flatten().is_none() {
-                    rt_open.insert(a_key.clone(), Some(format!("rt:{}", field_s(&fill.a, "id"))));
-                }
-                let rt = rt_open.get(&a_key).cloned().flatten();
-                let lot = lot_from(&fill.a, remaining, per, opening, 0.0, "Options", rt, flags_of(&fill.a));
-                books.at(&a_key).push(lot);
+                let opening = if debit { Direction::Long } else { Direction::Short };
+                fill.a.unit_price = per;
+                fill.side = opening.opened_by();
+                let rt = books.rt_for_opening(&key, &fill.a.id);
+                let lot = lot_from(&fill.a, remaining, per, opening, 0.0, Kind::Options, rt, fill.a.flags.clone());
+                books.at(&key).push(lot);
             }
-            if let Some(i) = fill.src { rewritten.push((i, fill.a.clone())); }
+            if let Some(i) = fill.src {
+                activities[i] = fill.a.clone();
+            }
             continue;
         }
 
-        if has_flag(&fill.a, "transfer-out") {
+        if fill.a.has(&Flag::TransferOut) {
             // Coins sent out of the account leave at cost: off the open lots
             // first in first out, no slice, no P&L, not a fill of the trade.
             let mut remaining = fill.qty;
-            let book = books.at(&a_key);
-            while remaining > EPS && !book.is_empty() && book[0].direction == "LONG" {
+            let book = books.at(&key);
+            while remaining > EPS && !book.is_empty() && book[0].direction == Direction::Long {
                 let matched = f64::min(book[0].qty, remaining);
-                if book[0].qty > 0.0 {
-                    book[0].commission *= (book[0].qty - matched) / book[0].qty;
-                } else {
-                    book[0].commission = 0.0;
-                }
+                book[0].commission *= if book[0].qty > 0.0 { (book[0].qty - matched) / book[0].qty } else { 0.0 };
                 book[0].qty -= matched;
                 remaining -= matched;
-                if book[0].qty <= EPS { book.remove(0); }
+                if book[0].qty <= EPS {
+                    book.remove(0);
+                }
             }
-            if book.is_empty() { rt_open.insert(a_key.clone(), None); }
+            books.closed_out(&key);
             continue;
         }
 
-        fill.rt_before = if books.get(&a_key).is_empty() { None } else { rt_open.get(&a_key).cloned().flatten() };
-        let a_clone = fill.a.clone();
-        let mut remaining = close_against(&mut books, &mut rt_open, &a_key, &fill, &a_clone, fill.qty, None, &mut closed);
+        fill.rt_before = if books.get(&key).is_empty() { None } else { books.rt(&key) };
+        let mut remaining = close_against(&mut books, &key, &fill, fill.qty, None, &mut closed);
         if remaining > EPS && is_option_symbol(&sym) {
-            let dir = if fill.side == "BUY" { "SHORT" } else { "LONG" };
-            remaining = close_rolled(&mut books, &mut rt_open, &mut rolled, &rolled_keys, &fill, dir, remaining, &mut closed);
+            remaining = close_rolled(&mut books, &mut rolled, &rolled_keys, &fill, fill.side.closes(), remaining, &mut closed);
         }
-        if remaining > EPS && fill.side == "SELL" {
+        if remaining > EPS && fill.side == Side::Sell {
             // A holding whose ticker was renamed still sells: find the old book.
-            let day = field_s(&fill.a, "transactionDate");
-            let acct = fifo_account(&fill.a);
-            let cur = field_s(&fill.a, "currency");
-            let candidates: Vec<String> = books.keys.clone();
-            for dk in candidates {
-                if dk == a_key || books.get(&dk).is_empty() { continue; }
-                let bits: Vec<&str> = dk.split("::").collect();
-                if bits.len() < 3 || bits[0] != acct || bits[2] != cur { continue; }
-                if !ticker_was_replaced(&replaced, bits[0], bits[1], bits[2], &day) { continue; }
-                remaining = close_against(&mut books, &mut rt_open, &dk, &fill, &a_clone, remaining, Some(&sym), &mut closed);
-                if remaining <= EPS { break; }
+            for old in books.keys.clone() {
+                if old == key || books.get(&old).is_empty() || old.account != key.account || old.currency != key.currency {
+                    continue;
+                }
+                if !ticker_was_replaced(&replaced, &old, &fill.a.transaction_date) {
+                    continue;
+                }
+                remaining = close_against(&mut books, &old, &fill, remaining, Some(&sym), &mut closed);
+                if remaining <= EPS {
+                    break;
+                }
             }
         }
-        if remaining > EPS && fill.side == "SELL" && opening_direction(&fill.a, &fill.side).is_none() && dust(remaining, fill.qty, &fill.a) {
+        let opening = opening_direction(&fill.a, fill.side);
+        if remaining > EPS && fill.side == Side::Sell && opening.is_none() && dust(remaining, fill.qty, &fill.a) {
             remaining = 0.0;
         }
         if remaining > EPS {
-            match opening_direction(&fill.a, &fill.side) {
+            match opening {
                 Some(opening) => {
-                    if books.get(&a_key).is_empty() || rt_open.get(&a_key).cloned().flatten().is_none() {
-                        rt_open.insert(a_key.clone(), Some(format!("rt:{}", field_s(&fill.a, "id"))));
-                    }
-                    let rt = rt_open.get(&a_key).cloned().flatten();
-                    let commission = if fill.qty > 0.0 { field_num(&fill.a, "commission") * (remaining / fill.qty) } else { 0.0 };
-                    let kind = { let k = field_s(&fill.a, "kind"); if k.is_empty() { kind_of(&fill.a) } else { k } };
-                    let lot = lot_from(&fill.a, remaining, field_num(&fill.a, "unitPrice"), opening, commission, &kind, rt, flags_of(&fill.a));
-                    books.at(&a_key).push(lot);
+                    let rt = books.rt_for_opening(&key, &fill.a.id);
+                    let commission = if fill.qty > 0.0 { fill.a.commission * (remaining / fill.qty) } else { 0.0 };
+                    let lot = lot_from(&fill.a, remaining, fill.a.unit_price, opening, commission, fill.a.kind, rt, fill.a.flags.clone());
+                    books.at(&key).push(lot);
                 }
                 None => unmatched.push(Unmatched {
-                    symbol: field_s(&fill.a, "symbol"),
-                    currency: field_s(&fill.a, "currency"),
-                    side: fill.side.clone(),
+                    symbol: fill.a.symbol.clone(),
+                    currency: fill.a.currency.clone(),
+                    side: fill.side,
                     quantity: remaining,
-                    price: field_num(&fill.a, "unitPrice"),
-                    date: field_s(&fill.a, "transactionDate"),
-                    description: field_s(&fill.a, "description"),
-                    account_id: field_s(&fill.a, "accountId"),
+                    price: fill.a.unit_price,
+                    date: fill.a.transaction_date.clone(),
+                    description: fill.a.description.clone(),
+                    account_id: fill.a.account_id.clone(),
                     account: fifo_account(&fill.a),
-                    activity_id: field_s(&fill.a, "id"),
+                    activity_id: fill.a.id.clone(),
                 }),
             }
         }
     }
 
-    for (i, a) in rewritten { activities[i] = a; }
-
-    let all_keys: Vec<String> = books.keys.clone();
-    for key in &all_keys {
-        apply_splits(&mut books, &mut pending_splits, key, "9999-12-31");
+    for key in books.keys.clone() {
+        apply_splits(&mut books, &mut pending_splits, &key, "9999-12-31");
     }
 
     // The closing leg of each carried-forward roll was never posted; the credit
     // (or nothing, for a debit roll) is what it earned.
-    for (_, dirs) in rolled.iter_mut() {
-        for direction in ["LONG", "SHORT"] {
-            for lot in dirs.side(direction).iter_mut() {
-                if lot.qty <= EPS { continue; }
-                let pseudo = serde_json::json!({
-                    "id": format!("roll-out:{}", lot.activity_id),
-                    "unitPrice": 0.0, "commission": 0.0,
-                    "transactionDate": lot.date, "occurredAt": lot.when,
-                    "name": lot.name, "securityId": "", "flags": ["rolled-out"],
-                });
-                let side = if direction == "SHORT" { "BUY" } else { "SELL" };
-                if lot.rt.is_none() { lot.rt = Some(format!("rt:{}", lot.activity_id)); }
-                let mut s = make_slice(lot, lot.qty, side, &pseudo, lot.qty, None);
+    for (_, pool) in rolled.iter_mut() {
+        for direction in Direction::BOTH {
+            for lot in pool.side(direction).iter_mut() {
+                if lot.qty <= EPS {
+                    continue;
+                }
+                if lot.rt.is_none() {
+                    lot.rt = Some(format!("rt:{}", lot.activity_id));
+                }
+                let id = format!("roll-out:{}", lot.activity_id);
+                let never_posted = Exit { id: &id, unit_price: 0.0, commission: 0.0, date: &lot.date, when: &lot.when, name: &lot.name, security_id: "", flags: &[Flag::RolledOut] };
+                let mut s = make_slice(lot, lot.qty, direction.closed_by(), &never_posted, lot.qty, None);
                 s.sell_activity_id = String::new();
                 s.id = stable_trade_id(&s);
                 closed.push(s);
@@ -869,180 +884,145 @@ pub fn match_fifo_in_place(activities: &mut Vec<Value>) -> Matched {
 
     let mut open_lots: Vec<Lot> = Vec::new();
     for key in &books.keys {
-        for lot in books.map.get(key).unwrap() {
-            if lot.qty <= 1e-6 { continue; }
+        for lot in books.get(key) {
             // crypto residue from in-kind fees: a lot worth under a dollar is not a position
-            if lot.kind == "Crypto" && lot.qty * lot.price < 1.0 { continue; }
+            if lot.qty <= 1e-6 || (lot.kind == Kind::Crypto && lot.qty * lot.price < 1.0) {
+                continue;
+            }
             open_lots.push(lot.clone());
         }
     }
-    closed.sort_by(|x, y| (x.exit_date.clone(), x.id.clone()).cmp(&(y.exit_date.clone(), y.id.clone())));
+    closed.sort_by(|x, y| (&x.exit_date, &x.id).cmp(&(&y.exit_date, &y.id)));
     crate::fold::fold_option_rolls(&mut closed, &mut open_lots);
     Matched { closed, open: open_lots, unmatched }
 }
 
-fn pool_of<'a>(
-    rolled: &'a mut Vec<((String, String, &'static str), RollPool)>,
-    k: &(String, String, &'static str),
-) -> &'a mut RollPool {
-    if let Some(i) = rolled.iter().position(|(rk, _)| rk == k) { return &mut rolled[i].1; }
-    rolled.push((k.clone(), RollPool::default()));
-    let n = rolled.len() - 1;
-    &mut rolled[n].1
-}
-
-/// `match_fifo.apply_splits`: every split on this book dated on or
-/// before the day is applied to the open lots, once.
-fn apply_splits(
-    books: &mut Books,
-    pending: &mut HashMap<String, Vec<(String, f64)>>,
-    key: &str,
-    day: &str,
-) {
-    let skey = key.split("::").take(2).collect::<Vec<_>>().join("::");
-    let todo = match pending.get(&skey) { Some(v) if !v.is_empty() => v.clone(), _ => return };
-    let mut sorted = todo;
-    sorted.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+/// Every split on this book dated on or before the day is applied to the open
+/// lots, once.
+fn apply_splits(books: &mut Books, pending: &mut HashMap<(String, String), Vec<(String, f64)>>, key: &BookKey, day: &str) {
+    let skey = (key.account.clone(), key.symbol.clone());
+    let mut todo = match pending.get(&skey) {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => return,
+    };
+    todo.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     let mut keep = Vec::new();
-    for (split_day, factor) in sorted {
-        if split_day.as_str() <= day {
-            let label = if factor < 1.0 {
-                format!("split 1:{}", (1.0 / factor).round() as i64)
-            } else {
-                format!("split {}:1", factor.round() as i64)
-            };
-            for lot in books.at(key).iter_mut() {
-                lot.qty *= factor;
-                lot.price /= factor;
-                if !lot.flags.iter().any(|f| *f == label) { lot.flags.push(label.clone()); }
-            }
-        } else {
+    for (split_day, factor) in todo {
+        if split_day.as_str() > day {
             keep.push((split_day, factor));
+            continue;
+        }
+        let label = if factor < 1.0 { Flag::ReverseSplit((1.0 / factor).round() as i64) } else { Flag::Split(factor.round() as i64) };
+        for lot in books.at(key).iter_mut() {
+            lot.qty *= factor;
+            lot.price /= factor;
+            mark(&mut lot.flags, label.clone());
         }
     }
-    if keep.is_empty() { pending.remove(&skey); } else { pending.insert(skey, keep); }
+    if keep.is_empty() {
+        pending.remove(&skey);
+    } else {
+        pending.insert(skey, keep);
+    }
 }
 
-/// `match_fifo.close_against`: take quantity off the front of a book.
-#[allow(clippy::too_many_arguments)]
-fn close_against(
-    books: &mut Books,
-    rt_open: &mut HashMap<String, Option<String>>,
-    key: &str,
-    fill: &Fill,
-    a: &Value,
-    mut remaining: f64,
-    symbol_override: Option<&str>,
-    closed: &mut Vec<Slice>,
-) -> f64 {
-    let closing_dir = if fill.side == "BUY" { "SHORT" } else { "LONG" };
+/// Take quantity off the front of a book.
+fn close_against(books: &mut Books, key: &BookKey, fill: &Fill, mut remaining: f64, symbol_override: Option<&str>, closed: &mut Vec<Slice>) -> f64 {
+    let closing = fill.side.closes();
     loop {
         let book = books.at(key);
-        if !(remaining > EPS) || book.is_empty() || book[0].direction != closing_dir { break; }
+        if !(remaining > EPS) || book.is_empty() || book[0].direction != closing {
+            break;
+        }
         let matched = f64::min(book[0].qty, remaining);
-        let lot = book[0].clone();
-        closed.push(make_slice(&lot, fill.qty, &fill.side, a, matched, symbol_override));
-        let book = books.at(key);
+        closed.push(make_slice(&book[0], fill.qty, fill.side, &Exit::from(&fill.a), matched, symbol_override));
         book[0].commission *= if book[0].qty > 0.0 { (book[0].qty - matched) / book[0].qty } else { 0.0 };
         book[0].qty -= matched;
         remaining -= matched;
-        if book[0].qty <= EPS { book.remove(0); }
+        if book[0].qty <= EPS {
+            book.remove(0);
+        }
     }
-    if books.get(key).is_empty() { rt_open.insert(key.to_string(), None); }
+    books.closed_out(key);
     remaining
 }
 
-/// `match_fifo.close_rolled`: close the legs an earlier roll carried
-/// forward; they take this contract's symbol. Once a chain has been rolled, a
-/// buy-back beyond the known shorts also closes the chain's older contracts,
-/// nearest expiry first -- those are the legs the rolls moved here without
-/// ever being posted.
-#[allow(clippy::too_many_arguments)]
-fn close_rolled(
-    books: &mut Books,
-    rt_open: &mut HashMap<String, Option<String>>,
-    rolled: &mut Vec<((String, String, &'static str), RollPool)>,
-    rolled_keys: &HashSet<(String, String, &'static str)>,
-    fill: &Fill,
-    closing_dir: &str,
-    mut remaining: f64,
-    closed: &mut Vec<Slice>,
-) -> f64 {
+/// Close the legs an earlier roll carried forward; they take this contract's
+/// symbol. Once a chain has been rolled, a buy-back beyond the known shorts also
+/// closes the chain's older contracts, nearest expiry first -- those are the
+/// legs the rolls moved here without ever being posted.
+fn close_rolled(books: &mut Books, rolled: &mut Rolled, rolled_keys: &HashSet<RollKey>, fill: &Fill, closing: Direction, mut remaining: f64, closed: &mut Vec<Slice>) -> f64 {
     let a = &fill.a;
     let rk = roll_key(a);
     let key = book_key(a);
-    let sym = field_s(a, "symbol");
 
     // A rolled chain is one position from the first short to the last
     // buy-back: everything this fill closes shares one round trip, the
     // contract's own if it has lots, otherwise the chain's.
     let rt = {
         let pool = pool_of(rolled, &rk);
-        fill.rt_before
-            .clone()
-            .or_else(|| pool.rt.clone())
-            .or_else(|| {
-                pool.side(closing_dir)
-                    .first()
-                    .map(|l| l.rt.clone().unwrap_or_else(|| format!("rt:{}", l.activity_id)))
-            })
+        fill.rt_before.clone().or_else(|| pool.rt.clone()).or_else(|| pool.side(closing).first().map(|l| l.rt.clone().unwrap_or_else(|| format!("rt:{}", l.activity_id))))
     };
-    if rt.is_some() { pool_of(rolled, &rk).rt = rt.clone(); }
+    if rt.is_some() {
+        pool_of(rolled, &rk).rt = rt.clone();
+    }
 
     loop {
-        let pool = pool_of(rolled, &rk);
-        let lots = pool.side(closing_dir);
-        if !(remaining > EPS) || lots.is_empty() { break; }
-        lots[0].symbol = sym.clone();
+        let lots = pool_of(rolled, &rk).side(closing);
+        if !(remaining > EPS) || lots.is_empty() {
+            break;
+        }
+        lots[0].symbol = a.symbol.clone();
         let fallback = format!("rt:{}", lots[0].activity_id);
         lots[0].rt = rt.clone().or_else(|| lots[0].rt.clone()).or(Some(fallback));
         let matched = f64::min(lots[0].qty, remaining);
-        let lot = lots[0].clone();
-        closed.push(make_slice(&lot, fill.qty, &fill.side, a, matched, None));
-        let pool = pool_of(rolled, &rk);
-        let lots = pool.side(closing_dir);
+        closed.push(make_slice(&lots[0], fill.qty, fill.side, &Exit::from(a), matched, None));
         lots[0].qty -= matched;
         remaining -= matched;
-        if lots[0].qty <= EPS { lots.remove(0); }
+        if lots[0].qty <= EPS {
+            lots.remove(0);
+        }
     }
 
     if remaining > EPS && rolled_keys.contains(&rk) {
-        let acct = fifo_account(a);
-        let cur = field_s(a, "currency");
-        let under = underlying_symbol(&sym);
-        let right = option_right(&sym);
-        let mut others: Vec<(String, String)> = Vec::new();
-        for k2 in books.keys.clone() {
-            if k2 == key || books.get(&k2).is_empty() { continue; }
-            let bits: Vec<&str> = k2.split("::").collect();
-            if bits.len() < 3 || bits[0] != acct || bits[2] != cur { continue; }
-            if !is_option_symbol(bits[1]) || underlying_symbol(bits[1]) != under || option_right(bits[1]) != right { continue; }
-            others.push((option_expiry(bits[1]), k2.clone()));
-        }
-        others.sort();
-        for (_, k2) in others {
+        let under = underlying_symbol(&a.symbol);
+        let right = option_right(&a.symbol);
+        let mut others: Vec<(String, BookKey)> = books
+            .keys
+            .iter()
+            .filter(|k| **k != key && !books.get(k).is_empty() && k.account == key.account && k.currency == key.currency)
+            .filter(|k| is_option_symbol(&k.symbol) && underlying_symbol(&k.symbol) == under && option_right(&k.symbol) == right)
+            .map(|k| (option_expiry(&k.symbol), k.clone()))
+            .collect();
+        others.sort_by(|x, y| (&x.0, &x.1.account, &x.1.symbol, &x.1.currency).cmp(&(&y.0, &y.1.account, &y.1.symbol, &y.1.currency)));
+        for (_, other) in others {
             loop {
-                let b2 = books.at(&k2);
-                if !(remaining > EPS) || b2.is_empty() || b2[0].direction != closing_dir { break; }
-                let matched = f64::min(b2[0].qty, remaining);
-                let lot = b2[0].clone();
-                let mut s = make_slice(&lot, fill.qty, &fill.side, a, matched, Some(&sym));
-                if !s.flags.iter().any(|f| f == "rolled-in") { s.flags.push("rolled-in".into()); }
+                let book = books.at(&other);
+                if !(remaining > EPS) || book.is_empty() || book[0].direction != closing {
+                    break;
+                }
+                let matched = f64::min(book[0].qty, remaining);
+                let mut s = make_slice(&book[0], fill.qty, fill.side, &Exit::from(a), matched, Some(&a.symbol));
+                mark(&mut s.flags, Flag::RolledIn);
                 s.flags.sort();
                 s.flags.dedup();
-                if rt.is_some() { s.rt = rt.clone(); }
+                if rt.is_some() {
+                    s.rt = rt.clone();
+                }
                 s.id = stable_trade_id(&s);
                 closed.push(s);
-                let b2 = books.at(&k2);
-                b2[0].qty -= matched;
+                book[0].qty -= matched;
                 remaining -= matched;
-                if b2[0].qty <= EPS { b2.remove(0); }
+                if book[0].qty <= EPS {
+                    book.remove(0);
+                }
             }
-            if books.get(&k2).is_empty() { rt_open.insert(k2.clone(), None); }
+            books.closed_out(&other);
         }
     }
 
-    let pool = pool_of(rolled, &rk);
-    if pool.is_empty() && books.get(&key).is_empty() { pool_of(rolled, &rk).rt = None; }
+    if pool_of(rolled, &rk).is_empty() && books.get(&key).is_empty() {
+        pool_of(rolled, &rk).rt = None;
+    }
     remaining
 }

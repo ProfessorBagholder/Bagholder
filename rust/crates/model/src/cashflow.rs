@@ -3,78 +3,58 @@
 //! Dividends, interest, withholding tax and interest charges, each in its own
 //! currency with the CAD value converted on the day it was paid.
 
-use serde_json::{json, Value};
-
+use crate::activity::{Activity, Category};
 use crate::clock::when_parts;
 use crate::fx::{to_cad, Fx};
 use crate::securities::Securities;
-use crate::value::{compact, field_num, field_s, norm_account_name, EPS};
+use crate::value::EPS;
+use crate::wire::{CashflowRow, Payment};
 
-pub fn build_cashflow(activities: &[Value], securities: &Securities, fx: &Fx) -> Vec<Value> {
-    let mut rows: Vec<Value> = Vec::new();
+fn payment(a: &Activity) -> Option<Payment> {
+    let is = |name: &str| a.raw_type_c() == name || a.type_c() == name;
+    match a.category {
+        Category::Dividend => Some(Payment::Dividend),
+        Category::Interest => Some(Payment::Interest),
+        _ if is("WITHHOLDINGTAX") => Some(Payment::WithholdingTax),
+        _ if is("INTERESTCHARGE") => Some(Payment::InterestCharge),
+        _ => None,
+    }
+}
+
+pub fn build_cashflow(activities: &[Activity], securities: &Securities, fx: &Fx) -> Vec<CashflowRow> {
+    let mut rows: Vec<CashflowRow> = Vec::new();
     for a in activities {
-        let cat = field_s(a, "category");
-        let raw = compact(&field_s(a, "rawType"));
-        let at = compact(&field_s(a, "activityType"));
-        let cash = field_num(a, "netCashAmount");
-
-        let kind = if cat == "dividend" {
-            "Dividend"
-        } else if cat == "interest" {
-            "Interest"
-        } else if raw == "WITHHOLDINGTAX" || at == "WITHHOLDINGTAX" {
-            "Withholding tax"
-        } else if raw == "INTERESTCHARGE" || at == "INTERESTCHARGE" {
-            "Interest charge"
-        } else {
-            continue;
-        };
+        let Some(kind) = payment(a) else { continue };
+        let cash = a.net_cash_amount;
         if cash.abs() < EPS {
             continue;
         }
-
-        let occurred = { let o = field_s(a, "occurredAt"); if o.is_empty() { field_s(a, "transactionDate") } else { o } };
-        let (day, clock) = when_parts(&occurred);
-        let raw_symbol = field_s(a, "symbol").trim().to_string();
-        let symbol = if !raw_symbol.is_empty() {
-            raw_symbol
-        } else if kind == "Interest" || kind == "Interest charge" {
-            "Cash".to_string()
+        let (day, clock) = when_parts(a.when());
+        let ticker = a.symbol.trim();
+        let symbol = if !ticker.is_empty() {
+            ticker
+        } else if matches!(kind, Payment::Interest | Payment::InterestCharge) {
+            "Cash"
         } else {
-            String::new()
+            ""
         };
-
-        let name_field = field_s(a, "name");
-        let fallback = if name_field != symbol { name_field } else { String::new() };
-        let account = {
-            let n = norm_account_name(&field_s(a, "accountType"));
-            if n.is_empty() { field_s(a, "accountId") } else { n }
-        };
-        let date = { let d = field_s(a, "transactionDate"); if d.is_empty() { day } else { d } };
-        let currency = { let c = field_s(a, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-
-        // a zero reads as nothing to show
-        let qty = field_num(a, "quantity");
-        let per = field_num(a, "unitPrice");
-
-        rows.push(json!({
-            "id": field_s(a, "id"),
-            "date": date,
-            "time": clock,
-            "symbol": if symbol.is_empty() { "—".to_string() } else { symbol.clone() },
-            "name": securities.name(&field_s(a, "securityId"), &fallback),
-            "kind": kind,
-            "account": account,
-            "accountId": field_s(a, "accountId"),
-            "qty": if qty == 0.0 { Value::Null } else { json!(qty) },
-            "per": if per == 0.0 { Value::Null } else { json!(per) },
-            "amount": cash,
-            "currency": currency,
-            "amountCad": to_cad(fx, cash, &field_s(a, "currency"), &field_s(a, "transactionDate")),
-        }));
+        rows.push(CashflowRow {
+            id: a.id.clone(),
+            date: if a.transaction_date.is_empty() { day } else { a.transaction_date.clone() },
+            time: clock,
+            symbol: if symbol.is_empty() { "—" } else { symbol }.to_string(),
+            name: securities.name(&a.security_id, if a.name != symbol { &a.name } else { "" }),
+            kind,
+            account: if a.account_name.is_empty() { a.account_id.clone() } else { a.account_name.clone() },
+            account_id: a.account_id.clone(),
+            // a zero reads as nothing to show
+            qty: (a.quantity != 0.0).then_some(a.quantity),
+            per: (a.unit_price != 0.0).then_some(a.unit_price),
+            amount: cash,
+            currency: if a.currency.is_empty() { "CAD".to_string() } else { a.currency.clone() },
+            amount_cad: to_cad(fx, cash, &a.currency, &a.transaction_date),
+        });
     }
-    rows.sort_by(|a, b| {
-        (field_s(b, "date"), field_s(b, "id")).cmp(&(field_s(a, "date"), field_s(a, "id")))
-    });
+    rows.sort_by(|a, b| (&b.date, &b.id).cmp(&(&a.date, &a.id)));
     rows
 }

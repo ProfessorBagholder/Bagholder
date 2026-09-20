@@ -693,7 +693,7 @@ fn test_a_filled_order_is_booked_as_one_local_sell_that_closes_the_position() {
     assert_eq!(st(b, "transactionDate"), "2026-09-10");
     assert!(b.get("canonicalId").map_or(true, |v| v.is_null()), "a local row, not a fabricated Wealthsimple row");
     assert!(!bagholder_store::activities::looks_like_homemade_id(&st(b, "id")));
-    let res = bagholder_model::fifo::match_fifo(&activities());
+    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
     assert!(res.open.is_empty(), "the 5 shares are gone once the fill is on the book");
     assert_eq!(n(&get_order(&oid), "fillBookedQty"), 5.0);
 }
@@ -712,7 +712,7 @@ fn test_the_real_wealthsimple_sell_collapses_with_the_booked_row() {
     let rows: Vec<Value> = activities().into_iter().filter(|a| bagholder_store::activities::trade_side(a) == "SELL" && st(a, "symbol") == "QNC").collect();
     assert_eq!(rows.len(), 1);
     assert_eq!(st(&rows[0], "canonicalId"), "ws-sell-9");
-    let res = bagholder_model::fifo::match_fifo(&activities());
+    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
     assert!(res.open.is_empty());
     assert_eq!(res.closed.iter().map(|t| t.quantity).sum::<f64>(), 5.0);
     apply_ws(&[ws_sell("ws-sell-9", 5.0, 1.6374, "QNC", "SELL", "Trade")]);
@@ -740,7 +740,7 @@ fn test_a_partial_fill_reduces_the_position_it_does_not_close_it() {
     let bk = booked("QNC");
     assert_eq!(bk.len(), 1);
     assert_eq!(n(&bk[0], "quantity"), -5.0, "the filled quantity, never the ordered quantity");
-    let res = bagholder_model::fifo::match_fifo(&activities());
+    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
     assert_eq!(res.open.len(), 1);
     assert_eq!(res.open[0].qty, 5.0, "five shares still held");
 }
@@ -764,7 +764,7 @@ fn test_an_option_fill_nets_with_the_hundred_times_multiplier() {
     let b = &bk[0];
     assert_eq!((n(b, "quantity"), n(b, "unitPrice")), (-2.0, 1.50));
     assert!((n(b, "netCashAmount") - 300.0).abs() < 1e-7, "the 100x multiplier is in the cash");
-    let res = bagholder_model::fifo::match_fifo(&activities());
+    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
     assert!(res.open.is_empty(), "the two contracts are closed");
     assert!((res.closed.iter().map(|t| t.pnl).sum::<f64>() - 100.0).abs() < 1e-7);
     let before = bagholder_store::activities::activity_count(&conn()).unwrap();

@@ -154,13 +154,13 @@ pub fn migrate_legacy_notes(closed: &[Slice], saved_groups: &[Value], notes: &Ma
             }
         };
         let mut cur: Vec<&Slice> = Vec::new();
-        let mut direction: Option<String> = None;
+        let mut direction: Option<crate::activity::Direction> = None;
         for s in members {
-            if direction.as_deref().map(|d| d != s.open_direction).unwrap_or(false) {
+            if direction.map(|d| d != s.open_direction).unwrap_or(false) {
                 flush(&cur, &mut out);
                 cur.clear();
             }
-            direction = Some(s.open_direction.clone());
+            direction = Some(s.open_direction);
             cur.push(s);
         }
         flush(&cur, &mut out);

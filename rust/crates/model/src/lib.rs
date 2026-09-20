@@ -8,6 +8,10 @@
 //! ```
 
 pub mod value;
+pub mod lenient;
+pub mod activity;
+pub mod input;
+pub mod wire;
 pub mod symbols;
 pub mod normalize;
 pub mod dates;
