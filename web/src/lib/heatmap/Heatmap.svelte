@@ -88,7 +88,19 @@
     full = false
     cycling = false
   }
+
+  // Escape leaves the full-page heatmap (the reference does this from its route).
+  // Capture phase so it runs before App's global Escape cascade, and stop there.
+  function onKeyCapture(e: KeyboardEvent) {
+    if (full && e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeFull()
+    }
+  }
 </script>
+
+<svelte:window onkeydowncapture={onKeyCapture} />
 
 {#snippet header(isFull: boolean)}
   <div style="display:flex;align-items:center;gap:14px{isFull ? '' : ';margin-bottom:12px'}">
