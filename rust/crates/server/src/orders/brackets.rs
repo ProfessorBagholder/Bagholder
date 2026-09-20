@@ -147,18 +147,24 @@ pub(super) fn trail_distance(b: &Bracket, price: f64) -> Option<f64> {
     Some(if b.sl_trail_unit == TrailUnit::Pct { price * t / 100.0 } else { t })
 }
 
-pub(super) fn exit_body(b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> Result<(Value, Value), String> {
-    let mut body = json!({"symbol": b.symbol, "securityId": b.security_id, "accountId": b.account_id, "side": "SELL", "type": kind.as_str(), "tif": BRACKET_TIF,
-        "quantity": jo(b.quantity), "currency": b.currency});
-    if kind == OrderType::Limit {
-        set(&mut body, "limitPrice", jo(price));
-    }
-    if kind == OrderType::Stop {
-        set(&mut body, "stopPrice", jo(price));
-    }
-    let (mut row, req) = order_request(&body)?;
-    set(&mut row, "role", json!(role.as_str()));
-    set(&mut row, "parentId", json!(b.order_id));
+/// The sell a bracket places for a leg: the order, and what Wealthsimple is sent.
+pub(super) fn exit_body(b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> Result<(Order, Value), String> {
+    let ticket = Ticket {
+        symbol: b.symbol.clone(),
+        security_id: b.security_id.clone(),
+        account_id: b.account_id.clone(),
+        side: "SELL".into(),
+        kind: kind.as_str().into(),
+        tif: Some(BRACKET_TIF.into()),
+        quantity: b.quantity,
+        limit_price: if kind == OrderType::Limit { price } else { None },
+        stop_price: if kind == OrderType::Stop { price } else { None },
+        currency: Some(b.currency.clone()),
+        ..Ticket::default()
+    };
+    let (mut row, req) = ticket_order(&ticket)?;
+    row.role = role;
+    row.parent_id = b.order_id.clone();
     Ok((row, req))
 }
 

@@ -320,138 +320,218 @@ pub fn order_tick(price: Option<f64>) -> Option<f64> {
     price.map(|p| round_half_even(p, if p >= 1.0 { 2 } else { 4 }))
 }
 
-/// (row, request) or the error.
-pub fn order_request(body: &Value) -> Result<(Value, Value), String> {
-    let empty = json!({});
-    let b = if body.is_object() { body } else { &empty };
-    let side = f(b, "side").to_uppercase();
-    if side != "BUY" && side != "SELL" {
+/// A number as the page sends it: a number, or the text of one; nothing for what is not.
+fn page_num<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(num(Some(&v), None))
+}
+
+/// Text as the page sends it: `null` is no text, and a number is its digits -- a ticket is
+/// refused for what is wrong with it, in words, never for how a field was spelled.
+fn page_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(s(Some(&v)))
+}
+
+/// The stop an entry asks for, as the ticket sends it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TicketStop {
+    pub kind: Option<String>,
+    #[serde(deserialize_with = "page_num")]
+    pub price: Option<f64>,
+    #[serde(deserialize_with = "page_num")]
+    pub trail: Option<f64>,
+    pub trail_unit: Option<String>,
+}
+
+/// The target an entry asks for.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TicketTarget {
+    #[serde(deserialize_with = "page_num")]
+    pub price: Option<f64>,
+}
+
+/// A leg that is there: an object with something in it. `null`, `{}` and anything that
+/// is not an object say the entry has no such leg.
+fn leg<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(if v.as_object().map_or(false, |m| !m.is_empty()) { serde_json::from_value(v).ok() } else { None })
+}
+
+/// `POST /api/order`: the order ticket, as the page sends it. Nothing here is trusted:
+/// `ticket_order` checks every field and says what is wrong with the first that is.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Ticket {
+    #[serde(deserialize_with = "page_text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "page_text")]
+    pub security_id: String,
+    #[serde(deserialize_with = "page_text")]
+    pub account_id: String,
+    #[serde(deserialize_with = "page_text")]
+    pub side: String,
+    #[serde(rename = "type", deserialize_with = "page_text")]
+    pub kind: String,
+    pub tif: Option<String>,
+    #[serde(deserialize_with = "page_num")]
+    pub quantity: Option<f64>,
+    #[serde(deserialize_with = "page_num")]
+    pub limit_price: Option<f64>,
+    #[serde(deserialize_with = "page_num")]
+    pub stop_price: Option<f64>,
+    pub currency: Option<String>,
+    #[serde(deserialize_with = "leg")]
+    pub stop_loss: Option<TicketStop>,
+    #[serde(deserialize_with = "leg")]
+    pub take_profit: Option<TicketTarget>,
+}
+
+#[cfg(test)]
+impl Ticket {
+    /// A ticket from a JSON body; one that is not an object is an empty ticket, which
+    /// `ticket_order` refuses at its first field.
+    pub fn from_json(body: &Value) -> Ticket {
+        serde_json::from_value(body.clone()).unwrap_or_default()
+    }
+}
+
+/// The order a ticket asks for, and what Wealthsimple is sent for it; or what is wrong
+/// with the ticket, in the words the ticket shows.
+pub fn ticket_order(t: &Ticket) -> Result<(Order, Value), String> {
+    let side = Side::parse(&t.side.to_uppercase());
+    if !side.is_set() {
         return Err("Side must be Buy or Sell.".into());
     }
-    let exec_type = f(b, "type").to_uppercase();
-    if !ORDER_EXEC_TYPES.contains(&exec_type.as_str()) {
+    let kind = OrderType::parse(&t.kind.to_uppercase());
+    if !kind.is_set() {
         return Err("Order type must be Market, Limit, Stop or Stop limit.".into());
     }
-    let tif = s(or_v(b.get("tif"), Some(&json!("DAY")))).to_uppercase();
+    let tif = t.tif.clone().filter(|x| !x.is_empty()).unwrap_or_else(|| "DAY".into()).to_uppercase();
     if !ORDER_TIFS.contains(&tif.as_str()) {
         return Err("Time in force must be Day or Good till cancelled.".into());
     }
-    let qty = num(b.get("quantity"), Some(0.0)).unwrap_or(0.0);
-    if qty == 0.0 || qty <= 0.0 {
+    let positive = |p: Option<f64>| p.map_or(false, |x| x > 0.0);
+    let qty = t.quantity.unwrap_or(0.0);
+    if !positive(Some(qty)) {
         return Err("Quantity must be more than zero.".into());
     }
-    let limit_price = order_tick(on(b, "limitPrice"));
-    let stop_price = order_tick(on(b, "stopPrice"));
-    let positive = |p: Option<f64>| p.map_or(false, |x| x != 0.0 && x > 0.0);
-    if (exec_type == "LIMIT" || exec_type == "STOP_LIMIT") && !positive(limit_price) {
+    let limit_price = order_tick(t.limit_price);
+    let stop_price = order_tick(t.stop_price);
+    let (has_limit, has_stop) = (matches!(kind, OrderType::Limit | OrderType::StopLimit), matches!(kind, OrderType::Stop | OrderType::StopLimit));
+    if has_limit && !positive(limit_price) {
         return Err("A limit price is required.".into());
     }
-    if (exec_type == "STOP" || exec_type == "STOP_LIMIT") && !positive(stop_price) {
+    if has_stop && !positive(stop_price) {
         return Err("A stop price is required.".into());
     }
-    let acct = match order_accounts(None).into_iter().find(|a| f(a, "id") == f(b, "accountId")) {
+    let acct = match order_accounts(None).into_iter().find(|a| f(a, "id") == t.account_id) {
         Some(a) => a,
         None => return Err("Choose an account.".into()),
     };
-    let sec = match resolve_security(&f(b, "symbol"), &f(b, "securityId")) {
+    let sec = match resolve_security(&t.symbol, &t.security_id) {
         Some(s) => s,
-        None => return Err(format!("No listing stored for {}.", f(b, "symbol"))),
+        None => return Err(format!("No listing stored for {}.", t.symbol)),
     };
-    let mut sl = b.get("stopLoss").filter(|v| v.is_object()).cloned();
-    let mut tp = b.get("takeProfit").filter(|v| v.is_object()).cloned();
-    if side == "SELL" {
-        sl = None;
-        tp = None;
-    }
-    let sl_row = match sl.filter(|v| truthy(Some(v))) {
-        None => Value::Null,
-        Some(sl) => {
-            let kind = s(or_v(sl.get("kind"), Some(&json!("stop")))).to_lowercase();
-            if kind != "stop" && kind != "trail" {
+    // exits are an entry's: a sale has none
+    let (mut stop_loss, mut take_profit) = (None, None);
+    if side == Side::Buy {
+        if let Some(sl) = &t.stop_loss {
+            let sl_kind = SlKind::parse(&sl.kind.clone().filter(|k| !k.is_empty()).unwrap_or_else(|| "stop".into()).to_lowercase());
+            if !sl_kind.is_set() {
                 return Err("Stop loss type must be Stop or Trailing stop.".into());
             }
-            if kind == "stop" && !(num(sl.get("price"), Some(0.0)).unwrap_or(0.0) > 0.0) {
+            if sl_kind == SlKind::Stop && !positive(sl.price) {
                 return Err("A stop loss price is required.".into());
             }
-            if kind == "trail" && !(num(sl.get("trail"), Some(0.0)).unwrap_or(0.0) > 0.0) {
+            if sl_kind == SlKind::Trail && !positive(sl.trail) {
                 return Err("A trail is required.".into());
             }
-            json!({"kind": kind, "price": jo(order_tick(on(&sl, "price"))), "trail": jo(on(&sl, "trail")),
-                   "trailUnit": if f(&sl, "trailUnit").to_lowercase() == "amt" { "amt" } else { "pct" }})
+            let trail_unit = if sl.trail_unit.as_deref().map_or(false, |u| u.to_lowercase() == "amt") { TrailUnit::Amt } else { TrailUnit::Pct };
+            stop_loss = Some(StopLoss { kind: sl_kind, price: order_tick(sl.price), trail: sl.trail, trail_unit });
         }
-    };
-    let tp_row = match tp.filter(|v| truthy(Some(v))) {
-        None => Value::Null,
-        Some(tp) => {
-            if !(num(tp.get("price"), Some(0.0)).unwrap_or(0.0) > 0.0) {
+        if let Some(tp) = &t.take_profit {
+            if !positive(tp.price) {
                 return Err("A take profit price is required.".into());
             }
-            json!({"price": jo(order_tick(on(&tp, "price")))})
+            take_profit = Some(TakeProfit { price: order_tick(tp.price) });
         }
-    };
+    }
     let oid = format!("order-{}", uuid4());
     let mut req = json!({
         "canonicalAccountId": f(&acct, "id"),
         "externalId": oid,
-        "executionType": exec_type,
+        "executionType": kind.as_str(),
         "orderType": format!("{}_QUANTITY", side),
         "quantity": qty,
         "securityId": f(&sec, "id"),
         "timeInForce": tif,
     });
-    if exec_type == "LIMIT" || exec_type == "STOP_LIMIT" {
+    if has_limit {
         set(&mut req, "limitPrice", jo(limit_price));
     }
-    if exec_type == "STOP" || exec_type == "STOP_LIMIT" {
+    if has_stop {
         set(&mut req, "stopPrice", jo(stop_price));
     }
-    let row = json!({
-        "id": oid,
-        "createdAt": now_iso(),
-        "accountId": f(&acct, "id"),
-        "account": f(&acct, "name"),
-        "securityId": f(&sec, "id"),
-        "symbol": f(&sec, "symbol"),
-        "currency": s(or_v(b.get("currency"), sec.get("currency"))).to_uppercase(),
-        "side": side,
-        "type": exec_type,
-        "quantity": qty,
-        "limitPrice": gv(&req, "limitPrice"),
-        "stopPrice": gv(&req, "stopPrice"),
-        "tif": tif,
-        "stopLoss": sl_row,
-        "takeProfit": tp_row,
-        "status": "",
-        "wsOrderId": "",
-        "error": "",
-        "request": req.clone(),
-    });
-    Ok((row, req))
+    let currency = t.currency.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| f(&sec, "currency")).to_uppercase();
+    let order = Order {
+        id: oid,
+        created_at: now_iso(),
+        account_id: f(&acct, "id"),
+        account: f(&acct, "name"),
+        security_id: f(&sec, "id"),
+        symbol: f(&sec, "symbol"),
+        currency,
+        side,
+        kind,
+        quantity: Some(qty),
+        limit_price: if has_limit { limit_price } else { None },
+        stop_price: if has_stop { stop_price } else { None },
+        tif,
+        stop_loss,
+        take_profit,
+        request: req.clone(),
+        ..Order::default()
+    };
+    Ok((order, req))
 }
 
-pub fn submit_order(row: &mut Value, req: &Value) -> Value {
-    let id = f(row, "id");
+/// `ticket_order`, from JSON and to it: how the tests ask.
+#[cfg(test)]
+pub fn order_request(body: &Value) -> Result<(Value, Value), String> {
+    ticket_order(&Ticket::from_json(body)).map(|(o, req)| (serde_json::to_value(&o).unwrap_or(Value::Null), req))
+}
+
+/// Write the order, then send it; what became of it is written over what was written.
+/// With orders off it is written as `dry` and nothing is sent.
+pub fn submit_order(row: &mut Order, req: &Value) -> Value {
+    let id = row.id.clone();
+    let now_is = |status: OrderStatus, error: &str| {
+        patch_order(&id, OrderPatch { status: Some(status), error: Some(error.into()), ..OrderPatch::default() });
+    };
     if !orders_live() {
-        set(row, "status", json!("dry"));
-        insert_order(row);
+        row.status = OrderStatus::Dry;
+        must(so::typed::insert_order(&db(), row, &now_iso()));
         log(&format!("bagholder order (dry run, not sent): {}", bagholder_store::tables::json_text_sorted(req)));
-        return json!({"ok": true, "id": id, "status": "dry", "order": row.clone()});
+        return json!({"ok": true, "id": id, "status": "dry", "order": row});
     }
     let sess = match ticket_session() {
         Some(s) => s,
         None => return json!({"ok": false, "error": "Not connected."}),
     };
-    set(row, "status", json!("sending"));
-    insert_order(row);
+    row.status = OrderStatus::Sending;
+    must(so::typed::insert_order(&db(), row, &now_iso()));
     let data = match gql(&sess, "SoOrdersOrderCreate", json!({"input": req})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => {
-            update_order(&id, json!({"status": "failed", "error": "Wealthsimple refused the session."}));
+            now_is(OrderStatus::Failed, "Wealthsimple refused the session.");
             return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again.", "id": id});
         }
         Err(e) => {
             let msg = err_text(&e);
-            update_order(&id, json!({"status": "failed", "error": msg}));
+            now_is(OrderStatus::Failed, &msg);
             log(&format!("bagholder order: {} failed: {}", id, msg));
             return json!({"ok": false, "error": format!("Order failed: {}", msg), "id": id});
         }
@@ -459,13 +539,12 @@ pub fn submit_order(row: &mut Value, req: &Value) -> Value {
     let empty = json!({});
     let result = data.get("soOrdersCreateOrder").filter(|v| truthy(Some(v))).unwrap_or(&empty);
     if let Some(msg) = result.get("errors").filter(|v| truthy(Some(v))).and_then(first_error) {
-        update_order(&id, json!({"status": "rejected", "error": msg}));
+        now_is(OrderStatus::Rejected, &msg);
         log(&format!("bagholder order: {} rejected: {}", id, msg));
         return json!({"ok": false, "error": format!("Wealthsimple rejected the order: {}", msg), "id": id});
     }
-    let order = result.get("order").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    let ws_id = f(order, "orderId");
-    update_order(&id, json!({"status": "sent", "wsOrderId": ws_id}));
+    let ws_id = f(result.get("order").filter(|v| truthy(Some(v))).unwrap_or(&empty), "orderId");
+    patch_order(&id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
     log(&format!("bagholder order: {} sent, Wealthsimple order {}", id, ws_id));
     let rid = id.clone();
     spawn("bagholder-order-refresh", move || {
@@ -474,15 +553,18 @@ pub fn submit_order(row: &mut Value, req: &Value) -> Value {
     json!({"ok": true, "id": id, "status": "sent", "wsOrderId": ws_id})
 }
 
-pub fn place_order(body: &Value) -> Value {
-    let (mut row, req) = match order_request(body) {
+/// Place what a ticket asks for. A sale first takes its shares out from under any
+/// bracket guarding them -- the bracket ended, or kept on what is left -- so that the
+/// bracket's own exits and this sale never sell the same shares twice.
+pub fn place_ticket(t: &Ticket) -> Value {
+    let (mut row, req) = match ticket_order(t) {
         Ok(x) => x,
         Err(e) => return json!({"ok": false, "error": e}),
     };
-    if f(&row, "side") == "SELL" {
-        let mut left = or0(&row, "quantity");
+    if row.side == Side::Sell {
+        let mut left = row.quantity.unwrap_or(0.0);
         for b in live_brackets() {
-            if b.account_id != f(&row, "accountId") || b.security_id != f(&row, "securityId") || matches!(b.status, BracketStatus::Waiting | BracketStatus::Closing) {
+            if b.account_id != row.account_id || b.security_id != row.security_id || matches!(b.status, BracketStatus::Waiting | BracketStatus::Closing) {
                 continue;
             }
             let held = b.quantity.unwrap_or(0.0);
@@ -498,11 +580,16 @@ pub fn place_order(body: &Value) -> Value {
         }
     }
     let mut r = submit_order(&mut row, &req);
-    if tr(&r, "ok") && (tr(&row, "stopLoss") || tr(&row, "takeProfit")) {
-        // the row as the store now has it: what was sent, under the id it was given
-        let entry: Order = serde_json::from_value(row.clone()).unwrap_or_default();
-        let b = create_bracket(&entry);
+    if tr(&r, "ok") && (row.stop_loss.is_some() || row.take_profit.is_some()) {
+        let b = create_bracket(&row);
         set(&mut r, "bracketId", json!(b.id));
     }
     r
 }
+
+/// `place_ticket`, from JSON: how the tests ask.
+#[cfg(test)]
+pub fn place_order(body: &Value) -> Value {
+    place_ticket(&Ticket::from_json(body))
+}
+

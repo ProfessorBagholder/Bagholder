@@ -54,11 +54,10 @@ async fn quote(Params(q): Params<QuoteOf>) -> Api {
     answer(move || orders::ticket_quote(&q.symbol, &q.security, &q.account, &q.exchange)).await
 }
 
-/// `POST /api/order`. The ticket is validated field by field by `place_order`,
-/// which answers each refusal in words; it takes the ticket as it was sent until
-/// the order types are typed with the rest of the domain (stage 5).
-async fn place(Body(ticket): Body<Map<String, Value>>) -> Api {
-    answer(move || orders::place_order(&Value::Object(ticket))).await
+/// `POST /api/order`. The body is read as a ticket; `place_ticket` checks it field by
+/// field and answers each refusal in the words the ticket shows.
+async fn place(Body(ticket): Body<orders::Ticket>) -> Api {
+    answer(move || orders::place_ticket(&ticket)).await
 }
 
 #[derive(Deserialize, Default)]

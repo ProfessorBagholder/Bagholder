@@ -32,11 +32,6 @@ pub(super) fn on(v: &Value, k: &str) -> Option<f64> {
     num(v.get(k), None)
 }
 
-/// `x.get(k) or 0.0`.
-pub(super) fn or0(v: &Value, k: &str) -> f64 {
-    on(v, k).unwrap_or(0.0)
-}
-
 /// The first value that is present and non-zero.
 pub(super) fn or_f(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     match a {
@@ -215,6 +210,10 @@ pub(super) fn orders_all() -> Vec<Order> {
 
 pub(super) fn order(id: &str) -> Option<Order> {
     must(so::typed::get_order(&db(), id))
+}
+
+pub(super) fn patch_order(id: &str, patch: OrderPatch) {
+    must(so::typed::update_order(&db(), id, &patch, &now_iso()))
 }
 
 pub(super) fn live_brackets() -> Vec<Bracket> {

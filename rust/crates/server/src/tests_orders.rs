@@ -1266,3 +1266,17 @@ fn test_a_stop_that_expires_is_placed_again_good_till_cancelled() {
     e.tick(None);
     assert_eq!(st(&get_bracket(&id), "status"), "done");
 }
+
+#[test]
+fn test_a_ticket_is_refused_in_words_however_its_fields_are_spelled() {
+    let _g = setup();
+    // what the page never sends, but anything may: nulls, numbers for text, text for numbers, a leg that is not one
+    let odd = json!({"symbol": "QNC", "securityId": null, "accountId": "acct-margin", "side": null, "type": 7, "quantity": "abc", "stopLoss": "yes", "takeProfit": []});
+    let t: o::Ticket = serde_json::from_value(odd).expect("a ticket is read whatever its fields hold");
+    assert_eq!(o::ticket_order(&t).err().as_deref(), Some("Side must be Buy or Sell."));
+    let t: o::Ticket = serde_json::from_value(json!({"side": "buy", "type": "limit", "quantity": "25", "limitPrice": "165.40", "symbol": "QNC", "securityId": "sec-s-us", "accountId": "acct-margin", "stopLoss": {}, "takeProfit": null})).unwrap();
+    let (order, req) = o::ticket_order(&t).expect("numbers typed as text are numbers");
+    assert_eq!((order.quantity, order.limit_price, order.stop_loss.is_none(), order.take_profit.is_none()), (Some(25.0), Some(165.4), true, true));
+    assert_eq!(req["orderType"], json!("BUY_QUANTITY"));
+    assert!(serde_json::from_value::<o::Ticket>(json!("not a ticket")).is_err());
+}

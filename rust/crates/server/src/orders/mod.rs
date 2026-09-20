@@ -15,7 +15,8 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use bagholder_store::orders as so;
-use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderStatus, OrderType, Role, SlKind, SlMode, TrailUnit};
+use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, SlMode, StopLoss, TakeProfit, TrailUnit};
+use serde::Deserialize;
 use bagholder_ws::session::{identity_from, CallError};
 // the one real caller is compiled out of test builds, where no call reaches the network
 #[cfg(not(test))]
