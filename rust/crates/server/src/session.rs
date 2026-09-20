@@ -514,45 +514,6 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
     ok
 }
 
-pub fn refresh_nav_only(allow_refresh: bool) -> Value {
-    let sess = match load_session() { Some(s) if !f(&s, "access_token").is_empty() => s, _ => return json!({"ok": false, "error": "not connected"}) };
-    let mut identity = identity_from(&sess);
-    if identity.is_empty() {
-        identity = identity_from(&token_info(&sess));
-    }
-    if identity.is_empty() {
-        return json!({"ok": false, "error": "no identity"});
-    }
-    let conn = match app().open() { Ok(c) => c, Err(e) => return json!({"ok": false, "error": e.to_string()}) };
-    let accounts = bagholder_store::tables::accounts(&conn).unwrap_or_default();
-    if accounts.is_empty() {
-        return json!({"ok": false, "error": "no accounts stored"});
-    }
-    let home = app().ws_home();
-    let client = Client { home: &home };
-    let last_by = bagholder_store::tables::nav_last_dates(&conn).unwrap_or_default();
-    let since = last_by.get("").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let history = match fetch::fetch_nav_history(&client, &sess, &identity, since.as_deref(), &today_utc()) {
-        Ok(h) => h,
-        Err(CallError::NotAuthorized) => {
-            let mut s = load_session().unwrap_or(json!({}));
-            if allow_refresh && refresh_session(&mut s, true) {
-                return refresh_nav_only(false);
-            }
-            return json!({"ok": false, "error": "Session expired. Connect again."});
-        }
-        Err(_) => vec![],
-    };
-    let mut combined: Vec<Value> = history.into_iter().map(|r| { let mut m = crate::app::obj(r); m.insert("accountId".into(), json!("")); Value::Object(m) }).collect();
-    let (pts, errors) = fetch_nickname_nav_history(&client, &sess, &accounts, &conn);
-    combined.extend(pts);
-    let _ = bagholder_store::tables::upsert_nav(&conn, &combined);
-    let mut nicks: Vec<String> = combined.iter().map(|p| f(p, "accountId")).filter(|a| !a.is_empty()).collect();
-    nicks.sort();
-    nicks.dedup();
-    json!({"ok": true, "allDays": combined.iter().filter(|p| f(p, "accountId").is_empty()).count(), "accounts": nicks.len(), "errors": errors})
-}
-
 /// Net liquidation values, balances and buying
 /// power read again between syncs.
 pub fn refresh_portfolio() -> Value {

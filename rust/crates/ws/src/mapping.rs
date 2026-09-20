@@ -369,7 +369,7 @@ fn g(v: f64) -> String {
 }
 
 /// What the row is called in the ledger.
-fn human_desc(item: &Value, typ: &str, sub: &str, symbol: &str, qty: f64, px: f64, _cash: f64) -> String {
+fn human_desc(_item: &Value, typ: &str, sub: &str, symbol: &str, qty: f64, px: f64, _cash: f64) -> String {
     let t = typ.to_uppercase().replace('-', "_");
     let s = sub.to_uppercase().replace('-', "_");
     let csub = compact(sub);
@@ -521,9 +521,9 @@ pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
         unit_price = if is_opt { amount_abs / (qty_abs * 100.0) } else { amount_abs / qty_abs };
     }
 
-    let mut activity_type = "Other".to_string();
-    let mut activity_sub = if sub.is_empty() { typ.clone() } else { sub.clone() };
-    let mut category = "other".to_string();
+    let activity_type: String;
+    let activity_sub: String;
+    let category: String;
     let mut quantity = qty_abs;
 
     if typ == "DIY_BUY" {

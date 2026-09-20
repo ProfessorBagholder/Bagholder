@@ -3,7 +3,7 @@
 //! and the small tools every part of the server shares.
 
 use rusqlite::Connection;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
@@ -279,15 +279,6 @@ pub fn obj(v: Value) -> Map<String, Value> {
     }
 }
 
-/// A patch for the store's row updaters.
-pub fn patch(pairs: Vec<(&str, Value)>) -> Value {
-    let mut m = Map::new();
-    for (k, v) in pairs {
-        m.insert(k.to_string(), v);
-    }
-    Value::Object(m)
-}
-
 pub fn log(line: &str) {
     eprintln!("{}", line);
 }
@@ -302,8 +293,3 @@ pub fn qty_text(q: f64) -> String {
     }
 }
 
-pub fn ok(pairs: Value) -> Value {
-    let mut m = obj(pairs);
-    m.shift_insert(0, "ok".into(), json!(true));
-    Value::Object(m)
-}
