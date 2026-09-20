@@ -136,14 +136,20 @@
   }
 
   // ---- derived views ----
-  // The book's own symbol matches first, then the field values the text names (an
-  // account, a grade, a tag), then the listings found outside the book. Field matches
-  // sit above the found listings so one like an account stays in view rather than being
-  // pushed below a long run of same-named companies and out of the scroll box.
+  // The book's symbols the text is a ticker of, then the values it names (an account, a
+  // grade, a tag), then everything matched by a company's name: the book's own first, the
+  // listings found outside it after. A name is the weakest match, so a holding whose name
+  // merely contains the text never stands above the account the text spells, and a run of
+  // same-named companies never pushes that account out of the scroll box.
   const fieldsQ = $derived(fieldQuery == null ? filters.search : fieldQuery)
   const syms = $derived(fieldsQ ? symbolRows(fieldsQ) : [])
-  const bookSyms = $derived(syms.filter((r) => r.book))
-  const extSyms = $derived(syms.filter((r) => !r.book))
+  const byTicker = (r: MergedSym, q: string) => {
+    const Q = q.trim().toUpperCase()
+    const S = r.sym.toUpperCase()
+    return r.rank !== 2 || S.indexOf(Q) >= 0 || S.indexOf(bareSymbol(Q)) >= 0
+  }
+  const bookSyms = $derived(syms.filter((r) => r.book && byTicker(r, fieldsQ)))
+  const extSyms = $derived(syms.filter((r) => r.book && !byTicker(r, fieldsQ)).concat(syms.filter((r) => !r.book)))
   const others = $derived(fieldMatches(fieldsQ).filter((m) => m.key !== 'symbol'))
   const matchTotal = $derived(bookSyms.length + others.length + extSyms.length)
   const hasMatches = $derived(!!fieldsQ && matchTotal > 0)
@@ -222,7 +228,7 @@
       toggleList(m.key, m.value)
     } else {
       const r = extSyms[i - bookSyms.length - others.length]
-      listingOpen(r.sym, r.exchange)
+      listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange)
     }
   }
   function onFieldsKey(e: KeyboardEvent) {
@@ -284,7 +290,12 @@
             <button class="pop-row{(on ? ' on' : '') + (bookSyms.length + i === valueHi ? ' hi' : '')}" tabindex="-1" onclick={() => toggleList(m.key, m.value)}>{m.value}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{m.label}</span></button>
           {/each}
           {#each extSyms as r, i (r.sym + '|' + r.exchange + '#' + i)}
-            {@render extRow(r, bookSyms.length + others.length + i === valueHi ? ' hi' : '')}
+            {@const hi = bookSyms.length + others.length + i === valueHi ? ' hi' : ''}
+            {#if r.book}
+              {@render symbolRow(bareSymbol(r.sym), r.name, r.exchange, r.sym, (filters.lists.symbol.indexOf(r.sym) >= 0 ? ' on' : '') + hi, () => listingOpen(bareSymbol(r.sym), r.exchange), undefined, true)}
+            {:else}
+              {@render extRow(r, hi)}
+            {/if}
           {/each}
         </div>
       {:else}
