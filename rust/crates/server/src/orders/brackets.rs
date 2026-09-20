@@ -12,8 +12,6 @@ pub(super) const BRACKET_RETRY_SEC: [i64; 4] = [60, 300, 900, 3600];
 pub(super) const TRAIL_MIN_MOVE: f64 = 0.005;
 pub(super) const TARGET_BACK_OFF: f64 = 0.01;
 pub const BRACKET_LIVE: [&str; 6] = ["waiting", "armed", "firing", "target_placed", "stopping", "closing"];
-pub(super) const BRACKET_RESTING: [&str; 2] = ["sent", "pending"];
-pub(super) const BRACKET_INFLIGHT: [&str; 3] = ["sent", "pending", "cancelling"];
 pub(super) const BRACKET_ROLL_SEC: f64 = 7.0 * 86400.0;
 pub(super) const BRACKET_ROLL_LAST_SEC: f64 = 2.0 * 86400.0;
 pub(super) const GTC_DAYS: i64 = 90;
@@ -32,57 +30,87 @@ pub fn stop_allowed_cache() -> &'static Mutex<HashMap<String, bool>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The statuses of `BRACKET_LIVE`, as what they are.
+pub(super) const BRACKET_LIVE_ST: [BracketStatus; 6] =
+    [BracketStatus::Waiting, BracketStatus::Armed, BracketStatus::Firing, BracketStatus::TargetPlaced, BracketStatus::Stopping, BracketStatus::Closing];
+
+/// Resting at Wealthsimple: it can still fill, and it can be cancelled.
+pub(super) fn resting(o: &Order) -> bool {
+    matches!(o.status, OrderStatus::Sent | OrderStatus::Pending)
+}
+
+/// Resting, or on its way out: not yet known to be gone.
+pub(super) fn in_flight(o: &Order) -> bool {
+    o.status.is_live()
+}
+
+/// A bracket whose exits may be working: past waiting, and not yet winding down.
+pub(super) fn in_play(b: &Bracket) -> bool {
+    matches!(b.status, BracketStatus::Armed | BracketStatus::Firing | BracketStatus::TargetPlaced | BracketStatus::Stopping)
+}
+
 pub(super) fn st_in(o: &Value, set: &[&str]) -> bool {
     set.contains(&f(o, "status").as_str())
 }
 
-pub(super) fn release_shares(b: &Value, sold: f64) {
-    let remaining = round_half_even(or0(b, "quantity") - sold, 6);
-    for k in ["slOrderId", "tpOrderId"] {
-        let oid = f(b, k);
-        let err = cancel_exit(&oid);
+pub(super) fn release_shares(b: &Bracket, sold: f64) {
+    let remaining = round_half_even(b.quantity.unwrap_or(0.0) - sold, 6);
+    for oid in [&b.sl_order_id, &b.tp_order_id] {
+        let err = cancel_exit(oid);
         if !err.is_empty() {
-            log(&format!("bagholder bracket: {} for {}: cancel of {} refused: {}", f(b, "id"), f(b, "symbol"), if oid.is_empty() { "None".into() } else { oid }, err));
+            log(&format!("bagholder bracket: {} for {}: cancel of {} refused: {}", b.id, b.symbol, if oid.is_empty() { "None" } else { oid.as_str() }, err));
         }
     }
-    update_bracket(&f(b, "id"), json!({"quantity": remaining, "slOrderId": "", "tpOrderId": "", "status": "armed", "error": "", "attempts": 0}));
+    patch_bracket(&b.id, BracketPatch {
+        quantity: Some(Some(remaining)), sl_order_id: Some(String::new()), tp_order_id: Some(String::new()),
+        status: Some(BracketStatus::Armed), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default()
+    });
     log(&format!(
         "bagholder bracket: {} for {}: {} of its shares sold from the ticket; the stop is placed again on the {} left",
-        f(b, "id"), f(b, "symbol"), qty_text(sold), qty_text(remaining)
+        b.id, b.symbol, qty_text(sold), qty_text(remaining)
     ));
 }
 
-pub(super) fn await_cancels(b: &Value, seconds: u32) {
+pub(super) fn await_cancels(b: &Bracket, seconds: u32) {
     if !orders_live() {
         return;
     }
     for _ in 0..seconds {
-        let open: Vec<Value> = own_exit_rows(b).into_iter().filter(|o| st_in(o, &BRACKET_INFLIGHT)).collect();
+        let open: Vec<Order> = own_exit_rows(b).into_iter().filter(in_flight).collect();
         if open.is_empty() {
             return;
         }
         for o in &open {
-            refresh_orders(&f(o, "id"));
+            refresh_orders(&o.id);
         }
         #[cfg(not(test))]
         std::thread::sleep(Duration::from_secs(1));
     }
 }
 
-pub fn create_bracket(order_row: &Value) -> Value {
-    let empty = json!({});
-    let sl = order_row.get("stopLoss").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    let tp = order_row.get("takeProfit").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    let id = format!("bracket-{}", uuid4());
-    let unit = if tr(sl, "trailUnit") { f(sl, "trailUnit") } else { "pct".into() };
-    let b = json!({
-        "id": id, "orderId": f(order_row, "id"), "accountId": f(order_row, "accountId"), "securityId": f(order_row, "securityId"),
-        "symbol": f(order_row, "symbol"), "currency": f(order_row, "currency"), "quantity": gv(order_row, "quantity"), "tif": BRACKET_TIF,
-        "slKind": f(sl, "kind"), "slPrice": gv(sl, "price"), "slTrail": gv(sl, "trail"), "slTrailUnit": unit,
-        "tpPrice": gv(tp, "price"), "status": "waiting",
-    });
-    must(so::insert_bracket(&db(), &b, &now_iso()));
-    get_bracket(&id).unwrap_or(b)
+/// The bracket an entry asked for, waiting for the entry to fill.
+pub fn create_bracket(entry: &Order) -> Bracket {
+    let sl = entry.stop_loss.clone().unwrap_or_default();
+    let tp = entry.take_profit.clone().unwrap_or_default();
+    let b = Bracket {
+        id: format!("bracket-{}", uuid4()),
+        order_id: entry.id.clone(),
+        account_id: entry.account_id.clone(),
+        security_id: entry.security_id.clone(),
+        symbol: entry.symbol.clone(),
+        currency: entry.currency.clone(),
+        quantity: entry.quantity,
+        tif: BRACKET_TIF.into(),
+        sl_kind: sl.kind,
+        sl_price: sl.price,
+        sl_trail: sl.trail,
+        sl_trail_unit: if sl.trail_unit.is_set() { sl.trail_unit } else { TrailUnit::Pct },
+        tp_price: tp.price,
+        status: BracketStatus::Waiting,
+        ..Bracket::default()
+    };
+    must(so::typed::insert_bracket(&db(), &b, &now_iso()));
+    bracket(&b.id).unwrap_or(b)
 }
 
 /// Bracket test seams: `stop_allowed`, `cancel_order`, the said lines and the caches.
@@ -110,38 +138,39 @@ pub(super) fn say_once(key: String, line: &str) {
     log(line);
 }
 
-pub(super) fn trail_distance(b: &Value, price: f64) -> Option<f64> {
-    if f(b, "slKind") != "trail" || !tr(b, "slTrail") {
+/// How far under the high a trailing stop sits, at `price`.
+pub(super) fn trail_distance(b: &Bracket, price: f64) -> Option<f64> {
+    if b.sl_kind != SlKind::Trail || !some(b.sl_trail) {
         return None;
     }
-    let t = or0(b, "slTrail");
-    Some(if f(b, "slTrailUnit") == "pct" { price * t / 100.0 } else { t })
+    let t = b.sl_trail.unwrap_or(0.0);
+    Some(if b.sl_trail_unit == TrailUnit::Pct { price * t / 100.0 } else { t })
 }
 
-pub(super) fn exit_body(b: &Value, exec_type: &str, price: Option<f64>, role: &str) -> Result<(Value, Value), String> {
-    let mut body = json!({"symbol": gv(b, "symbol"), "securityId": gv(b, "securityId"), "accountId": gv(b, "accountId"), "side": "SELL", "type": exec_type, "tif": BRACKET_TIF,
-        "quantity": gv(b, "quantity"), "currency": gv(b, "currency")});
-    if exec_type == "LIMIT" {
+pub(super) fn exit_body(b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> Result<(Value, Value), String> {
+    let mut body = json!({"symbol": b.symbol, "securityId": b.security_id, "accountId": b.account_id, "side": "SELL", "type": kind.as_str(), "tif": BRACKET_TIF,
+        "quantity": jo(b.quantity), "currency": b.currency});
+    if kind == OrderType::Limit {
         set(&mut body, "limitPrice", jo(price));
     }
-    if exec_type == "STOP" {
+    if kind == OrderType::Stop {
         set(&mut body, "stopPrice", jo(price));
     }
     let (mut row, req) = order_request(&body)?;
-    set(&mut row, "role", json!(role));
-    set(&mut row, "parentId", gv(b, "orderId"));
+    set(&mut row, "role", json!(role.as_str()));
+    set(&mut row, "parentId", json!(b.order_id));
     Ok((row, req))
 }
 
 /// (order id, error).
-pub(super) fn place_exit(b: &Value, exec_type: &str, price: Option<f64>, role: &str) -> (String, String) {
-    let (mut row, req) = match exit_body(b, exec_type, price, role) {
+pub(super) fn place_exit(b: &Bracket, kind: OrderType, price: Option<f64>, role: Role) -> (String, String) {
+    let (mut row, req) = match exit_body(b, kind, price, role) {
         Ok(x) => x,
         Err(e) => return (String::new(), e),
     };
     if !orders_live() {
-        let key = format!("{}|{}|{}", f(b, "id"), role, rp(price.map(|p| round_half_even(p, 4))));
-        say_once(key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, exec_type, f(b, "symbol"), bagholder_store::tables::json_text_sorted(&req)));
+        let key = format!("{}|{}|{}", b.id, role, rp(price.map(|p| round_half_even(p, 4))));
+        say_once(key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, kind, b.symbol, bagholder_store::tables::json_text_sorted(&req)));
         return (String::new(), String::new());
     }
     let r = submit_order(&mut row, &req);
@@ -152,12 +181,13 @@ pub(super) fn place_exit(b: &Value, exec_type: &str, price: Option<f64>, role: &
     (f(&r, "id"), String::new())
 }
 
+/// Cancel an exit that rests; nothing to do, and no error, for one that does not.
 pub(super) fn cancel_exit(order_id: &str) -> String {
     if order_id.is_empty() {
         return String::new();
     }
-    match get_order(order_id) {
-        Some(row) if st_in(&row, &BRACKET_RESTING) => {}
+    match order(order_id) {
+        Some(row) if resting(&row) => {}
         _ => return String::new(),
     }
     let r = cancel_order(order_id);
@@ -172,32 +202,27 @@ pub(super) fn cancel_exit(order_id: &str) -> String {
     }
 }
 
-pub(super) fn exit_row(b: &Value, role: &str) -> Option<Value> {
-    let held = f(b, if role == "stop" { "slOrderId" } else { "tpOrderId" });
+/// The order a bracket holds for a leg; failing that, the newest it ever placed for it.
+pub(super) fn exit_row(b: &Bracket, role: Role) -> Option<Order> {
+    let held = if role == Role::Stop { &b.sl_order_id } else { &b.tp_order_id };
     if !held.is_empty() {
-        if let Some(row) = get_order(&held) {
+        if let Some(row) = order(held) {
             return Some(row);
         }
     }
-    let parent = f(b, "orderId");
-    list_orders().into_iter().find(|o| f(o, "parentId") == parent && f(o, "role") == role)
-}
-
-pub(super) fn attempts_of(b: &Value) -> i64 {
-    or0(b, "attempts") as i64
+    orders_all().into_iter().find(|o| o.parent_id == b.order_id && o.role == role)
 }
 
 pub(super) fn retry_wait(attempts: i64) -> i64 {
     BRACKET_RETRY_SEC[(attempts.min(BRACKET_RETRY_SEC.len() as i64) - 1).max(0) as usize]
 }
 
-pub(super) fn may_retry(b: &Value) -> bool {
-    let attempts = attempts_of(b);
-    if attempts == 0 {
+pub(super) fn may_retry(b: &Bracket) -> bool {
+    if b.attempts == 0 {
         return true;
     }
-    let wait = retry_wait(attempts);
-    match parse_z(&f(b, "updatedAt")) {
+    let wait = retry_wait(b.attempts);
+    match parse_z(&b.updated_at) {
         Some(t) => now_unix() - t as f64 >= wait as f64,
         None => true,
     }
@@ -217,87 +242,89 @@ pub(super) fn capitalized(t: &str) -> String {
     }
 }
 
-pub(super) fn fail(b: &Value, msg: &str) {
-    let attempts = attempts_of(b) + 1;
-    update_bracket(&f(b, "id"), json!({"error": msg, "attempts": attempts}));
-    log(&format!("bagholder bracket: {} for {}: {} (attempt {}; next in {} s)", f(b, "id"), f(b, "symbol"), msg, attempts, retry_wait(attempts)));
+/// " · <account>" for the entry's account, when it is known.
+fn account_tail(b: &Bracket) -> String {
+    let acct = order(&b.order_id).map(|e| e.account).unwrap_or_default();
+    if acct.is_empty() { String::new() } else { format!(" · {}", acct) }
+}
+
+pub(super) fn fail(b: &Bracket, msg: &str) {
+    let attempts = b.attempts + 1;
+    patch_bracket(&b.id, BracketPatch { error: Some(msg.into()), attempts: Some(attempts), ..BracketPatch::default() });
+    log(&format!("bagholder bracket: {} for {}: {} (attempt {}; next in {} s)", b.id, b.symbol, msg, attempts, retry_wait(attempts)));
     if attempts == 1 {
-        let entry = get_order(&f(b, "orderId")).unwrap_or(json!({}));
-        let acct = f(&entry, "account");
         emit(
             "problems",
-            &format!("bracket:{}:fail:{}", f(b, "id"), md5_8(msg)),
-            &format!("Bracket · {}", f(b, "symbol")),
-            &format!("{} · trying again in a minute{}", capitalized(msg), if acct.is_empty() { String::new() } else { format!(" · {}", acct) }),
+            &format!("bracket:{}:fail:{}", b.id, md5_8(msg)),
+            &format!("Bracket · {}", b.symbol),
+            &format!("{} · trying again in a minute{}", capitalized(msg), account_tail(b)),
         );
     }
 }
 
-pub(super) fn arm_step(b: &Value, entry: Option<&Value>) {
+pub(super) fn arm_step(b: &Bracket, entry: Option<&Order>) {
     let mut b = b.clone();
-    let bid = f(&b, "id");
-    if f(&b, "status") == "waiting" {
+    if b.status == BracketStatus::Waiting {
         let entry = match entry {
             None => {
-                update_bracket(&bid, json!({"status": "cancelled", "outcome": "entry not found"}));
+                patch_bracket(&b.id, BracketPatch { status: Some(BracketStatus::Cancelled), outcome: Some("entry not found".into()), ..BracketPatch::default() });
                 return;
             }
             Some(e) => e,
         };
-        let est = f(entry, "status");
-        if ["pending", "sent", "cancelling", "dry"].contains(&est.as_str()) {
+        let est = entry.status;
+        if matches!(est, OrderStatus::Pending | OrderStatus::Sent | OrderStatus::Cancelling | OrderStatus::Dry) {
             return;
         }
-        let mut filled = or0(entry, "filledQty");
-        if est == "filled" && filled == 0.0 {
-            filled = or0(entry, "quantity");
+        let mut filled = entry.filled_qty.unwrap_or(0.0);
+        if est == OrderStatus::Filled && filled == 0.0 {
+            filled = entry.quantity.unwrap_or(0.0);
         }
         if filled == 0.0 || filled <= 0.0 {
-            update_bracket(&bid, json!({"status": "cancelled", "outcome": format!("entry {}", est)}));
-            log(&format!("bagholder bracket: {} for {} off: entry {} without a fill", bid, f(&b, "symbol"), est));
+            patch_bracket(&b.id, BracketPatch { status: Some(BracketStatus::Cancelled), outcome: Some(format!("entry {}", est)), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {} off: entry {} without a fill", b.id, b.symbol, est));
             return;
         }
-        let armed_at = now_iso();
-        set(&mut b, "quantity", json!(filled));
-        set(&mut b, "status", json!("armed"));
-        set(&mut b, "armedAt", json!(armed_at));
-        let mut patch = json!({"quantity": filled, "status": "armed", "armedAt": armed_at});
-        if f(&b, "slKind") == "trail" {
-            let high = or_f(or_f(on(entry, "avgFill"), on(entry, "limitPrice")), on(&b, "slPrice"));
+        let mut patch = BracketPatch { quantity: Some(Some(filled)), status: Some(BracketStatus::Armed), armed_at: Some(now_iso()), ..BracketPatch::default() };
+        patch.apply(&mut b);
+        if b.sl_kind == SlKind::Trail {
+            let high = or_f(or_f(entry.avg_fill, entry.limit_price), b.sl_price);
             if let Some(high) = high.filter(|h| *h != 0.0) {
                 let sl_price = round_half_even(high - trail_distance(&b, high).unwrap_or(0.0), 2);
-                set(&mut patch, "highWater", json!(high));
-                set(&mut patch, "slPrice", json!(sl_price));
-                set(&mut b, "highWater", json!(high));
-                set(&mut b, "slPrice", json!(sl_price));
+                patch.high_water = Some(Some(high));
+                patch.sl_price = Some(Some(sl_price));
+                patch.apply(&mut b);
             }
         }
-        update_bracket(&bid, patch);
-        log(&format!("bagholder bracket: {} armed for {} x {}", bid, qty_text(filled), f(&b, "symbol")));
+        patch_bracket(&b.id, patch);
+        log(&format!("bagholder bracket: {} armed for {} x {}", b.id, qty_text(filled), b.symbol));
     }
-    if f(&b, "status") != "armed" || !tr(&b, "slKind") || tr(&b, "slOrderId") {
+    if b.status != BracketStatus::Armed || !b.sl_kind.is_set() || !b.sl_order_id.is_empty() {
         return;
     }
     if !nothing_resting(&b) {
         return;
     }
-    let native = stop_allowed(&f(&b, "securityId"));
+    let native = stop_allowed(&b.security_id);
     if !native {
-        if f(&b, "slMode") != "watched" {
-            update_bracket(&bid, json!({"slMode": "watched", "slNative": false}));
-            log(&format!("bagholder bracket: {} for {}: Wealthsimple takes no stop order for it; the stop is watched here", bid, f(&b, "symbol")));
+        if b.sl_mode != SlMode::Watched {
+            patch_bracket(&b.id, BracketPatch { sl_mode: Some(SlMode::Watched), sl_native: Some(false), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: Wealthsimple takes no stop order for it; the stop is watched here", b.id, b.symbol));
         }
         return;
     }
     if !may_retry(&b) {
         return;
     }
-    let (oid, err) = place_exit(&b, "STOP", on(&b, "slPrice"), "stop");
+    let (oid, err) = place_exit(&b, OrderType::Stop, b.sl_price, Role::Stop);
     if !err.is_empty() {
         fail(&b, &format!("stop not placed: {}", err));
     } else if !oid.is_empty() {
-        update_bracket(&bid, json!({"slOrderId": oid, "slNative": true, "slMode": "native", "error": "", "attempts": 0, "movedAt": now_iso()}));
-        log(&format!("bagholder bracket: {} stop placed at {} for {}", bid, rp(on(&b, "slPrice")), f(&b, "symbol")));
+        patch_bracket(&b.id, BracketPatch {
+            sl_order_id: Some(oid), sl_native: Some(true), sl_mode: Some(SlMode::Native), error: Some(String::new()), attempts: Some(0), moved_at: Some(now_iso()),
+            ..BracketPatch::default()
+        });
+        log(&format!("bagholder bracket: {} stop placed at {} for {}", b.id, rp(b.sl_price), b.symbol));
     }
 }
 
@@ -324,136 +351,149 @@ pub(super) fn stop_allowed(security_id: &str) -> bool {
     ok
 }
 
-pub(super) fn own_exit_rows(b: &Value) -> Vec<Value> {
-    let parent = f(b, "orderId");
-    list_orders().into_iter().filter(|o| f(o, "parentId") == parent && (f(o, "role") == "stop" || f(o, "role") == "target")).collect()
+/// Every exit order this bracket has placed, whatever became of it.
+pub(super) fn own_exit_rows(b: &Bracket) -> Vec<Order> {
+    orders_all().into_iter().filter(|o| o.parent_id == b.order_id && matches!(o.role, Role::Stop | Role::Target)).collect()
 }
 
-pub(super) fn end_bracket(b: &Value, outcome: &str, note: &str) -> String {
+/// End a bracket: cancel what it has resting, and say why it ended. It is `closing`
+/// until Wealthsimple confirms nothing rests, then `done`.
+pub(super) fn end_bracket(b: &Bracket, outcome: &str, note: &str) -> BracketStatus {
     let mut pending = false;
     for o in own_exit_rows(b) {
-        if st_in(&o, &BRACKET_RESTING) {
-            let err = cancel_exit(&f(&o, "id"));
+        if resting(&o) {
+            let err = cancel_exit(&o.id);
             if !err.is_empty() {
-                log(&format!("bagholder bracket: {} for {}: cancel of {} refused: {}; tried again on the next check", f(b, "id"), f(b, "symbol"), f(&o, "id"), err));
+                log(&format!("bagholder bracket: {} for {}: cancel of {} refused: {}; tried again on the next check", b.id, b.symbol, o.id, err));
             }
             pending = true;
-        } else if f(&o, "status") == "cancelling" {
+        } else if o.status == OrderStatus::Cancelling {
             pending = true;
         }
     }
-    let status = if pending { "closing" } else { "done" };
-    update_bracket(&f(b, "id"), json!({"status": status, "outcome": outcome, "error": note, "slOrderId": "", "tpOrderId": ""}));
-    log(&format!("bagholder bracket: {} for {}: {}{}", f(b, "id"), f(b, "symbol"), outcome, if pending { "; its resting exit is being cancelled" } else { "" }));
+    let status = if pending { BracketStatus::Closing } else { BracketStatus::Done };
+    patch_bracket(&b.id, BracketPatch {
+        status: Some(status), outcome: Some(outcome.into()), error: Some(note.into()), sl_order_id: Some(String::new()), tp_order_id: Some(String::new()),
+        ..BracketPatch::default()
+    });
+    log(&format!("bagholder bracket: {} for {}: {}{}", b.id, b.symbol, outcome, if pending { "; its resting exit is being cancelled" } else { "" }));
     if !BRACKET_ENDED_QUIETLY.contains(&outcome) {
-        let entry = get_order(&f(b, "orderId")).unwrap_or(json!({}));
-        let acct = f(&entry, "account");
-        emit(
-            "problems",
-            &format!("bracket:{}:off", f(b, "id")),
-            &format!("Bracket off · {}", f(b, "symbol")),
-            &format!("{}{}", capitalized(outcome), if acct.is_empty() { String::new() } else { format!(" · {}", acct) }),
-        );
+        emit("problems", &format!("bracket:{}:off", b.id), &format!("Bracket off · {}", b.symbol), &format!("{}{}", capitalized(outcome), account_tail(b)));
     }
-    status.to_string()
+    status
 }
 
-pub(super) fn closing_step(b: &Value) {
-    let open: Vec<Value> = own_exit_rows(b).into_iter().filter(|o| st_in(o, &BRACKET_INFLIGHT)).collect();
-    for o in &open {
-        if st_in(o, &BRACKET_RESTING) {
-            let err = cancel_exit(&f(o, "id"));
-            if !err.is_empty() {
-                log(&format!("bagholder bracket: {} for {}: cancel of {} refused again: {}", f(b, "id"), f(b, "symbol"), f(o, "id"), err));
-            }
+pub(super) fn closing_step(b: &Bracket) {
+    let open: Vec<Order> = own_exit_rows(b).into_iter().filter(in_flight).collect();
+    for o in open.iter().filter(|o| resting(o)) {
+        let err = cancel_exit(&o.id);
+        if !err.is_empty() {
+            log(&format!("bagholder bracket: {} for {}: cancel of {} refused again: {}", b.id, b.symbol, o.id, err));
         }
     }
     if open.is_empty() {
-        update_bracket(&f(b, "id"), json!({"status": "done"}));
-        log(&format!("bagholder bracket: {} for {}: nothing rests at Wealthsimple; done", f(b, "id"), f(b, "symbol")));
+        patch_bracket(&b.id, BracketPatch { status: Some(BracketStatus::Done), ..BracketPatch::default() });
+        log(&format!("bagholder bracket: {} for {}: nothing rests at Wealthsimple; done", b.id, b.symbol));
     }
 }
 
+/// An exit resting at Wealthsimple that no live bracket holds is cancelled: it would
+/// sell shares nothing is watching.
 pub(super) fn sweep_exits() {
-    for o in list_orders() {
-        let role = f(&o, "role");
-        if (role != "stop" && role != "target") || !st_in(&o, &BRACKET_RESTING) {
+    for o in orders_all() {
+        if !matches!(o.role, Role::Stop | Role::Target) || !resting(&o) {
             continue;
         }
-        let b = must(so::bracket_for_order(&db(), &f(&o, "parentId")));
-        let held_by = b.as_ref().map_or(false, |b| {
-            st_in(b, &BRACKET_LIVE) && (f(b, "status") == "closing" || f(&o, "id") == f(b, "slOrderId") || f(&o, "id") == f(b, "tpOrderId"))
-        });
+        let b = must(so::typed::bracket_for_order(&db(), &o.parent_id));
+        let held_by = b.as_ref().map_or(false, |b| b.status.is_live() && (b.status == BracketStatus::Closing || o.id == b.sl_order_id || o.id == b.tp_order_id));
         if held_by {
             continue;
         }
-        let err = cancel_exit(&f(&o, "id"));
+        let err = cancel_exit(&o.id);
         say_once(
-            format!("{}|orphan", f(&o, "id")),
+            format!("{}|orphan", o.id),
             &format!(
                 "bagholder bracket: {} for {} rests at Wealthsimple with no bracket holding it; cancelled{}\n",
-                f(&o, "id"),
-                if o.get("symbol").map_or(true, |v| v.is_null()) { "None".into() } else { f(&o, "symbol") },
+                o.id,
+                o.symbol,
                 if err.is_empty() { String::new() } else { format!(" (refused: {})", err) }
             ),
         );
     }
 }
 
-pub(super) fn nothing_resting(b: &Value) -> bool {
-    !own_exit_rows(b).iter().any(|o| st_in(o, &BRACKET_INFLIGHT))
+pub(super) fn nothing_resting(b: &Bracket) -> bool {
+    !own_exit_rows(b).iter().any(in_flight)
 }
 
-pub(super) fn closed_elsewhere(b: &Value) -> String {
-    if !["armed", "firing", "target_placed", "stopping"].contains(&f(b, "status").as_str()) || !tr(b, "armedAt") || !nothing_resting(b) {
+/// Why the position this bracket guards is gone, when it was closed somewhere other
+/// than through the bracket; empty while it stands. The sale must be in the activity
+/// feed, or the position missing from two balance reads after one that showed it: a
+/// single read that lacks it decides nothing.
+pub(super) fn closed_elsewhere(b: &Bracket) -> String {
+    if !in_play(b) || b.armed_at.is_empty() || !nothing_resting(b) {
         return String::new();
     }
     let conn = db();
-    let armed_at = f(b, "armedAt");
-    let sold = must(bagholder_store::feeds::sold_since(&conn, &f(b, "accountId"), &f(b, "securityId"), &armed_at, &f(b, "symbol")));
-    if sold != 0.0 && sold >= or0(b, "quantity") {
+    let sold = must(bagholder_store::feeds::sold_since(&conn, &b.account_id, &b.security_id, &b.armed_at, &b.symbol));
+    if sold != 0.0 && sold >= b.quantity.unwrap_or(0.0) {
         return format!("sold: {} shares in the activity feed", qty_text(sold));
     }
     let read_at = must(bagholder_store::tables::get_meta(&conn, "balances_read_at", ""));
-    if read_at.is_empty() || read_at <= armed_at {
+    if read_at.is_empty() || read_at <= b.armed_at {
         return String::new();
     }
-    let held = must(bagholder_store::feeds::position_quantity(&conn, &f(b, "accountId"), &f(b, "securityId")));
-    if let Some(h) = held {
-        if h > 0.0 {
-            if !tr(b, "seenHeld") || tr(b, "missedAt") {
-                update_bracket(&f(b, "id"), json!({"seenHeld": true, "missedAt": ""}));
-            }
-            return String::new();
+    let held = must(bagholder_store::feeds::position_quantity(&conn, &b.account_id, &b.security_id));
+    if held.map_or(false, |h| h > 0.0) {
+        if !b.seen_held || !b.missed_at.is_empty() {
+            patch_bracket(&b.id, BracketPatch { seen_held: Some(true), missed_at: Some(String::new()), ..BracketPatch::default() });
         }
-    }
-    if !tr(b, "seenHeld") {
         return String::new();
     }
-    let missed = f(b, "missedAt");
-    if missed.is_empty() {
-        update_bracket(&f(b, "id"), json!({"missedAt": read_at}));
-        log(&format!("bagholder bracket: {} for {}: the balances read at {} does not list the position; a second read decides", f(b, "id"), f(b, "symbol"), read_at));
+    if !b.seen_held {
         return String::new();
     }
-    if read_at > missed {
-        return format!("position gone: two balance reads without it ({}, {})", missed, read_at);
+    if b.missed_at.is_empty() {
+        patch_bracket(&b.id, BracketPatch { missed_at: Some(read_at.clone()), ..BracketPatch::default() });
+        log(&format!("bagholder bracket: {} for {}: the balances read at {} does not list the position; a second read decides", b.id, b.symbol, read_at));
+        return String::new();
+    }
+    if read_at > b.missed_at {
+        return format!("position gone: two balance reads without it ({}, {})", b.missed_at, read_at);
     }
     String::new()
 }
 
-pub(super) fn expires_in(row: &Value, now: f64) -> Option<f64> {
-    let mut exp = parse_utc(row.get("expiresAt"));
-    if exp.is_none() && f(row, "tif").to_uppercase() == "UNTIL_CANCEL" {
-        let sub = parse_utc(or_v(row.get("submittedAt"), row.get("createdAt")));
-        exp = sub.map(|t| t + GTC_DAYS * 86400);
+/// Seconds until Wealthsimple lets a resting order lapse: its own expiry, or ninety
+/// days from when a good-till-cancelled one was sent.
+pub(super) fn expires_in(row: &Order, now: f64) -> Option<f64> {
+    let mut exp = parse_utc_text(&row.expires_at);
+    if exp.is_none() && row.tif.to_uppercase() == "UNTIL_CANCEL" {
+        let sent = if row.submitted_at.is_empty() { &row.created_at } else { &row.submitted_at };
+        exp = parse_utc_text(sent).map(|t| t + GTC_DAYS * 86400);
     }
     exp.map(|e| e as f64 - now)
 }
 
-pub(super) fn roll_due(row: Option<&Value>, quote: Option<&Value>, now: f64) -> bool {
+/// What the engine reads of a quote.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Tape {
+    pub last: Option<f64>,
+    pub bid: Option<f64>,
+    pub open: bool,
+}
+
+impl Tape {
+    pub(super) fn of(q: &Value) -> Tape {
+        Tape { last: on(q, "last"), bid: on(q, "bid"), open: f(q, "marketStatus").to_uppercase() == "OPEN" }
+    }
+}
+
+/// A resting exit is placed again before it lapses: within a week of it while the
+/// market is closed, within two days whatever the market is doing.
+pub(super) fn roll_due(row: Option<&Order>, tape: Option<Tape>, now: f64) -> bool {
     let row = match row {
-        Some(r) if st_in(r, &["sent", "pending"]) => r,
+        Some(r) if resting(r) => r,
         _ => return false,
     };
     let left = match expires_in(row, now) {
@@ -463,233 +503,224 @@ pub(super) fn roll_due(row: Option<&Value>, quote: Option<&Value>, now: f64) -> 
     if left <= BRACKET_ROLL_LAST_SEC {
         return true;
     }
-    quote.map(|q| f(q, "marketStatus").to_uppercase()).unwrap_or_default() != "OPEN"
+    !tape.map_or(false, |t| t.open)
 }
 
-pub(super) fn roll_step(b: &Value, quote: Option<&Value>) {
+pub(super) fn roll_step(b: &Bracket, tape: Option<Tape>) {
     let now = now_unix().floor();
-    let now_s = now_iso();
-    let bid = f(b, "id");
-    let status = f(b, "status");
-    if status == "armed" && f(b, "slMode") == "native" && tr(b, "slOrderId") {
-        let row = get_order(&f(b, "slOrderId"));
-        if roll_due(row.as_ref(), quote, now) {
-            let err = cancel_exit(&f(b, "slOrderId"));
+    if b.status == BracketStatus::Armed && b.sl_mode == SlMode::Native && !b.sl_order_id.is_empty() {
+        if roll_due(order(&b.sl_order_id).as_ref(), tape, now) {
+            let err = cancel_exit(&b.sl_order_id);
             if !err.is_empty() {
                 fail(b, &format!("stop not rolled: {}", err));
                 return;
             }
-            update_bracket(&bid, json!({"slOrderId": "", "movedAt": now_s, "error": ""}));
-            log(&format!("bagholder bracket: {} for {}: stop at {} nears Wealthsimple's ninety days; cancelled, placed again at the same level", bid, f(b, "symbol"), rp(on(b, "slPrice"))));
+            patch_bracket(&b.id, BracketPatch { sl_order_id: Some(String::new()), moved_at: Some(now_iso()), error: Some(String::new()), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: stop at {} nears Wealthsimple's ninety days; cancelled, placed again at the same level", b.id, b.symbol, rp(b.sl_price)));
         }
-    } else if status == "target_placed" {
-        if tr(b, "tpOrderId") {
-            let row = get_order(&f(b, "tpOrderId"));
-            if roll_due(row.as_ref(), quote, now) {
-                let err = cancel_exit(&f(b, "tpOrderId"));
+    } else if b.status == BracketStatus::TargetPlaced {
+        if !b.tp_order_id.is_empty() {
+            if roll_due(order(&b.tp_order_id).as_ref(), tape, now) {
+                let err = cancel_exit(&b.tp_order_id);
                 if !err.is_empty() {
                     fail(b, &format!("target not rolled: {}", err));
                     return;
                 }
-                update_bracket(&bid, json!({"tpOrderId": "", "movedAt": now_s, "error": ""}));
-                log(&format!("bagholder bracket: {} for {}: target at {} nears Wealthsimple's ninety days; cancelled, placed again", bid, f(b, "symbol"), rp(on(b, "tpPrice"))));
+                patch_bracket(&b.id, BracketPatch { tp_order_id: Some(String::new()), moved_at: Some(now_iso()), error: Some(String::new()), ..BracketPatch::default() });
+                log(&format!("bagholder bracket: {} for {}: target at {} nears Wealthsimple's ninety days; cancelled, placed again", b.id, b.symbol, rp(b.tp_price)));
             }
-        } else if let Some(tp_row) = exit_row(b, "target") {
-            if st_in(&tp_row, &["cancelled", "expired"]) {
-                fire_target(b);
-            }
+        } else if exit_row(b, Role::Target).map_or(false, |r| matches!(r.status, OrderStatus::Cancelled | OrderStatus::Expired)) {
+            fire_target(b);
         }
     }
 }
 
-pub(super) fn reconcile_step(b: &Value, _entry: Option<&Value>) -> &'static str {
+/// Why a leg that Wealthsimple no longer holds ends the bracket.
+fn leg_gone(leg: &str, row: &Order) -> String {
+    if row.status == OrderStatus::Cancelled {
+        format!("{} cancelled at Wealthsimple by hand", leg)
+    } else {
+        format!("{} {} at Wealthsimple{}", leg, row.status, if row.error.is_empty() { String::new() } else { format!(": {}", row.error) })
+    }
+}
+
+/// Bring a bracket in line with what became of its orders. True when it ended.
+pub(super) fn reconcile_step(b: &Bracket) -> bool {
     let mut b = b.clone();
-    let bid = f(&b, "id");
-    if f(&b, "status") == "closing" {
+    if b.status == BracketStatus::Closing {
         closing_step(&b);
-        return "done";
+        return true;
     }
-    let (stop_row, tp_row) = (exit_row(&b, "stop"), exit_row(&b, "target"));
-    if stop_row.as_ref().map_or(false, |r| f(r, "status") == "filled") {
+    let (stop_row, tp_row) = (exit_row(&b, Role::Stop), exit_row(&b, Role::Target));
+    if stop_row.as_ref().map_or(false, |r| r.status == OrderStatus::Filled) {
         end_bracket(&b, "stopped", "");
-        return "done";
+        return true;
     }
-    if tp_row.as_ref().map_or(false, |r| f(r, "status") == "filled") {
+    if tp_row.as_ref().map_or(false, |r| r.status == OrderStatus::Filled) {
         end_bracket(&b, "target", "");
-        return "done";
+        return true;
     }
+    let moved = |theirs: Option<f64>, ours: Option<f64>| some(theirs) && some(ours) && (theirs.unwrap_or(0.0) - ours.unwrap_or(0.0)).abs() > 0.005;
     if let Some(sr) = &stop_row {
-        if tr(&b, "slOrderId") && st_in(sr, &BRACKET_RESTING) && tr(sr, "stopPrice") && tr(&b, "slPrice") && (or0(sr, "stopPrice") - or0(&b, "slPrice")).abs() > 0.005 {
-            update_bracket(&bid, json!({"slPrice": gv(sr, "stopPrice")}));
-            log(&format!("bagholder bracket: {} for {}: stop moved by hand to {}; the bracket follows", bid, f(&b, "symbol"), rp(on(sr, "stopPrice"))));
-            set(&mut b, "slPrice", gv(sr, "stopPrice"));
+        if !b.sl_order_id.is_empty() && resting(sr) && moved(sr.stop_price, b.sl_price) {
+            patch_bracket(&b.id, BracketPatch { sl_price: Some(sr.stop_price), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: stop moved by hand to {}; the bracket follows", b.id, b.symbol, rp(sr.stop_price)));
+            b.sl_price = sr.stop_price;
         }
     }
     if let Some(tp) = &tp_row {
-        if tr(&b, "tpOrderId") && st_in(tp, &BRACKET_RESTING) && tr(tp, "limitPrice") && tr(&b, "tpPrice") && (or0(tp, "limitPrice") - or0(&b, "tpPrice")).abs() > 0.005 {
-            update_bracket(&bid, json!({"tpPrice": gv(tp, "limitPrice")}));
-            log(&format!("bagholder bracket: {} for {}: target moved by hand to {}; the bracket follows", bid, f(&b, "symbol"), rp(on(tp, "limitPrice"))));
+        if !b.tp_order_id.is_empty() && resting(tp) && moved(tp.limit_price, b.tp_price) {
+            patch_bracket(&b.id, BracketPatch { tp_price: Some(tp.limit_price), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: target moved by hand to {}; the bracket follows", b.id, b.symbol, rp(tp.limit_price)));
         }
     }
-    let status = f(&b, "status");
-    let native_stop = status == "armed" && f(&b, "slMode") == "native" && tr(&b, "slOrderId");
-    if native_stop && stop_row.as_ref().map_or(false, |r| f(r, "status") == "expired") {
-        update_bracket(&bid, json!({"slOrderId": "", "error": ""}));
-        log(&format!("bagholder bracket: {} for {}: stop expired at Wealthsimple; placed again", bid, f(&b, "symbol")));
-    } else if let Some(sr) = stop_row.as_ref().filter(|r| native_stop && st_in(r, &["cancelled", "rejected", "failed"])) {
-        let why = if f(sr, "status") == "cancelled" {
-            "stop cancelled at Wealthsimple by hand".to_string()
-        } else {
-            format!("stop {} at Wealthsimple{}", f(sr, "status"), if tr(sr, "error") { format!(": {}", f(sr, "error")) } else { String::new() })
-        };
-        end_bracket(&b, &why, "");
-        return "done";
+    let gone = |r: &&Order| matches!(r.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Failed);
+    let native_stop = b.status == BracketStatus::Armed && b.sl_mode == SlMode::Native && !b.sl_order_id.is_empty();
+    if native_stop && stop_row.as_ref().map_or(false, |r| r.status == OrderStatus::Expired) {
+        patch_bracket(&b.id, BracketPatch { sl_order_id: Some(String::new()), error: Some(String::new()), ..BracketPatch::default() });
+        log(&format!("bagholder bracket: {} for {}: stop expired at Wealthsimple; placed again", b.id, b.symbol));
+    } else if let Some(sr) = stop_row.as_ref().filter(|r| native_stop && gone(r)) {
+        end_bracket(&b, &leg_gone("stop", sr), "");
+        return true;
     }
-    let tp_placed = status == "target_placed" && tr(&b, "tpOrderId");
-    if tp_placed && tp_row.as_ref().map_or(false, |r| f(r, "status") == "expired") {
-        update_bracket(&bid, json!({"tpOrderId": "", "error": ""}));
-        log(&format!("bagholder bracket: {} for {}: target expired at Wealthsimple; placed again", bid, f(&b, "symbol")));
-    } else if let Some(tp) = tp_row.as_ref().filter(|r| tp_placed && st_in(r, &["cancelled", "rejected", "failed"])) {
-        let why = if f(tp, "status") == "cancelled" {
-            "target cancelled at Wealthsimple by hand".to_string()
-        } else {
-            format!("target {} at Wealthsimple{}", f(tp, "status"), if tr(tp, "error") { format!(": {}", f(tp, "error")) } else { String::new() })
-        };
-        end_bracket(&b, &why, "");
-        return "done";
+    let tp_placed = b.status == BracketStatus::TargetPlaced && !b.tp_order_id.is_empty();
+    if tp_placed && tp_row.as_ref().map_or(false, |r| r.status == OrderStatus::Expired) {
+        patch_bracket(&b.id, BracketPatch { tp_order_id: Some(String::new()), error: Some(String::new()), ..BracketPatch::default() });
+        log(&format!("bagholder bracket: {} for {}: target expired at Wealthsimple; placed again", b.id, b.symbol));
+    } else if let Some(tp) = tp_row.as_ref().filter(|r| tp_placed && gone(r)) {
+        end_bracket(&b, &leg_gone("target", tp), "");
+        return true;
     }
     let why = closed_elsewhere(&b);
     if !why.is_empty() {
         end_bracket(&b, &why, "");
-        return "done";
+        return true;
     }
-    ""
+    false
 }
 
-pub(super) fn watch_step(b: &Value, quote: Option<&Value>) {
-    let quote = match quote {
-        Some(q) if f(q, "marketStatus").to_uppercase() == "OPEN" => q,
+/// Act on the price: trail the stop, fire a watched stop, place the target when it is
+/// reached, and swap the two when the price turns while one of them rests. Only while
+/// the market is open, and only on a quote that has a last price.
+pub(super) fn watch_step(b: &Bracket, tape: Option<Tape>) {
+    let (tape, last) = match tape {
+        Some(t) if t.open => match t.last {
+            Some(l) => (t, l),
+            None => return,
+        },
         _ => return,
     };
-    let (last, bid_px) = (on(quote, "last"), on(quote, "bid"));
-    let last = match last {
-        Some(l) => l,
-        None => return,
-    };
     let mut b = b.clone();
-    let id = f(&b, "id");
-    let sym = f(&b, "symbol");
     let now_s = now_iso();
-    let trigger = bid_px.unwrap_or(last);
-    let at_target = tr(&b, "tpPrice") && trigger >= or0(&b, "tpPrice");
-    let status = f(&b, "status");
-    if f(&b, "slKind") == "trail" && (status == "target_placed" || (status == "armed" && !at_target)) {
-        let hw = on(&b, "highWater");
-        let hw0 = or_f(hw, Some(0.0)).unwrap_or(0.0);
+    let trigger = tape.bid.unwrap_or(last);
+    let (has_stop, has_target) = (b.sl_kind.is_set(), some(b.tp_price));
+    let (sl_price, tp_price) = (b.sl_price.unwrap_or(0.0), b.tp_price.unwrap_or(0.0));
+    let at_target = has_target && trigger >= tp_price;
+    let status = b.status;
+    if b.sl_kind == SlKind::Trail && (status == BracketStatus::TargetPlaced || (status == BracketStatus::Armed && !at_target)) {
+        let hw0 = or_f(b.high_water, Some(0.0)).unwrap_or(0.0);
         let high = if last > hw0 { last } else { hw0 };
-        if Some(high) != hw {
-            update_bracket(&id, json!({"highWater": high}));
+        if Some(high) != b.high_water {
+            patch_bracket(&b.id, BracketPatch { high_water: Some(Some(high)), ..BracketPatch::default() });
         }
         let new_stop = round_half_even(high - trail_distance(&b, high).unwrap_or(0.0), 2);
-        let cur = or0(&b, "slPrice");
-        if new_stop > cur + f64::max(0.01, cur * TRAIL_MIN_MOVE) {
-            if tr(&b, "slOrderId") {
-                let err = cancel_exit(&f(&b, "slOrderId"));
+        if new_stop > sl_price + f64::max(0.01, sl_price * TRAIL_MIN_MOVE) {
+            if !b.sl_order_id.is_empty() {
+                let err = cancel_exit(&b.sl_order_id);
                 if !err.is_empty() {
                     fail(&b, &format!("stop not moved: {}", err));
                     return;
                 }
             }
-            update_bracket(&id, json!({"slPrice": new_stop, "slOrderId": "", "movedAt": now_s}));
-            log(&format!("bagholder bracket: {} for {}: stop moves to {} (high {})", id, sym, rp(Some(new_stop)), rp(Some(high))));
-            set(&mut b, "slPrice", json!(new_stop));
-            set(&mut b, "slOrderId", json!(""));
+            patch_bracket(&b.id, BracketPatch { sl_price: Some(Some(new_stop)), sl_order_id: Some(String::new()), moved_at: Some(now_s), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: stop moves to {} (high {})", b.id, b.symbol, rp(Some(new_stop)), rp(Some(high))));
+            b.sl_price = Some(new_stop);
+            b.sl_order_id.clear();
         }
     }
-    if status == "armed" && tr(&b, "slKind") && f(&b, "slMode") == "watched" && !tr(&b, "slOrderId") && tr(&b, "slPrice") {
-        if trigger <= or0(&b, "slPrice") {
-            if !may_retry(&b) {
-                return;
-            }
-            let (oid, err) = place_exit(&b, "MARKET", on(&b, "slPrice"), "stop");
-            if !err.is_empty() {
-                fail(&b, &format!("stop not placed: {}", err));
-            } else if !oid.is_empty() {
-                update_bracket(&id, json!({"slOrderId": oid, "status": "firing", "error": ""}));
-                log(&format!("bagholder bracket: {} for {}: stop hit at {}, market sell placed", id, sym, rp(Some(trigger))));
-            }
+    // the stop's level may just have moved
+    let sl_price = b.sl_price.unwrap_or(0.0);
+    if status == BracketStatus::Armed && has_stop && b.sl_mode == SlMode::Watched && b.sl_order_id.is_empty() && some(b.sl_price) && trigger <= sl_price {
+        if !may_retry(&b) {
             return;
         }
+        let (oid, err) = place_exit(&b, OrderType::Market, b.sl_price, Role::Stop);
+        if !err.is_empty() {
+            fail(&b, &format!("stop not placed: {}", err));
+        } else if !oid.is_empty() {
+            patch_bracket(&b.id, BracketPatch { sl_order_id: Some(oid), status: Some(BracketStatus::Firing), error: Some(String::new()), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: stop hit at {}, market sell placed", b.id, b.symbol, rp(Some(trigger))));
+        }
+        return;
     }
-    if status == "armed" && tr(&b, "tpPrice") && trigger >= or0(&b, "tpPrice") {
-        if tr(&b, "slOrderId") {
-            let err = cancel_exit(&f(&b, "slOrderId"));
+    if status == BracketStatus::Armed && at_target {
+        if !b.sl_order_id.is_empty() {
+            let err = cancel_exit(&b.sl_order_id);
             if !err.is_empty() {
                 fail(&b, &format!("stop not cancelled for the target: {}", err));
                 return;
             }
-            update_bracket(&id, json!({"status": "firing", "error": ""}));
-            log(&format!("bagholder bracket: {} for {}: target reached at {}, stop cancel sent", id, sym, rp(Some(trigger))));
+            patch_bracket(&b.id, BracketPatch { status: Some(BracketStatus::Firing), error: Some(String::new()), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: target reached at {}, stop cancel sent", b.id, b.symbol, rp(Some(trigger))));
             return;
         }
         fire_target(&b);
     }
-    if status == "firing" && tr(&b, "tpPrice") && !tr(&b, "tpOrderId") {
-        if exit_row(&b, "stop").map_or(false, |r| f(&r, "status") == "cancelled") {
-            fire_target(&b);
-        }
+    if status == BracketStatus::Firing && has_target && b.tp_order_id.is_empty() && exit_row(&b, Role::Stop).map_or(false, |r| r.status == OrderStatus::Cancelled) {
+        fire_target(&b);
     }
-    if status == "target_placed" && tr(&b, "slKind") && tr(&b, "slPrice") && tr(&b, "tpOrderId") {
-        if trigger <= or0(&b, "slPrice") {
-            let err = cancel_exit(&f(&b, "tpOrderId"));
+    if status == BracketStatus::TargetPlaced && has_stop && some(b.sl_price) && !b.tp_order_id.is_empty() {
+        if trigger <= sl_price {
+            let err = cancel_exit(&b.tp_order_id);
             if !err.is_empty() {
                 fail(&b, &format!("target not cancelled for the stop: {}", err));
                 return;
             }
-            update_bracket(&id, json!({"status": "stopping", "tpOrderId": "", "error": "", "attempts": 0}));
+            patch_bracket(&b.id, BracketPatch { status: Some(BracketStatus::Stopping), tp_order_id: Some(String::new()), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
             log(&format!(
                 "bagholder bracket: {} for {}: stop level {} reached at {} while the limit sell rested; its cancel sent, market sell follows",
-                id, sym, rp(on(&b, "slPrice")), rp(Some(trigger))
+                b.id, b.symbol, rp(b.sl_price), rp(Some(trigger))
             ));
             return;
         }
-        if tr(&b, "tpPrice") && trigger < or0(&b, "tpPrice") * (1.0 - TARGET_BACK_OFF) {
-            let err = cancel_exit(&f(&b, "tpOrderId"));
+        if has_target && trigger < tp_price * (1.0 - TARGET_BACK_OFF) {
+            let err = cancel_exit(&b.tp_order_id);
             if !err.is_empty() {
                 fail(&b, &format!("target not cancelled for the stop: {}", err));
                 return;
             }
-            update_bracket(&id, json!({"status": "armed", "tpOrderId": "", "slOrderId": "", "error": "", "attempts": 0}));
-            log(&format!("bagholder bracket: {} for {}: target out of reach at {}; the limit sell's cancel sent, the stop order goes back", id, sym, rp(Some(trigger))));
+            patch_bracket(&b.id, BracketPatch {
+                status: Some(BracketStatus::Armed), tp_order_id: Some(String::new()), sl_order_id: Some(String::new()), error: Some(String::new()), attempts: Some(0),
+                ..BracketPatch::default()
+            });
+            log(&format!("bagholder bracket: {} for {}: target out of reach at {}; the limit sell's cancel sent, the stop order goes back", b.id, b.symbol, rp(Some(trigger))));
             return;
         }
     }
-    if status == "stopping" {
-        if exit_row(&b, "target").map_or(false, |r| st_in(&r, &["cancelled", "expired"])) {
-            if !may_retry(&b) || !nothing_resting(&b) {
-                return;
-            }
-            let (oid, err) = place_exit(&b, "MARKET", on(&b, "slPrice"), "stop");
-            if !err.is_empty() {
-                fail(&b, &format!("stop not placed: {}", err));
-            } else if !oid.is_empty() {
-                update_bracket(&id, json!({"slOrderId": oid, "status": "firing", "error": "", "attempts": 0}));
-                log(&format!("bagholder bracket: {} for {}: market sell placed at the stop", id, sym));
-            }
+    if status == BracketStatus::Stopping && exit_row(&b, Role::Target).map_or(false, |r| matches!(r.status, OrderStatus::Cancelled | OrderStatus::Expired)) {
+        if !may_retry(&b) || !nothing_resting(&b) {
+            return;
+        }
+        let (oid, err) = place_exit(&b, OrderType::Market, b.sl_price, Role::Stop);
+        if !err.is_empty() {
+            fail(&b, &format!("stop not placed: {}", err));
+        } else if !oid.is_empty() {
+            patch_bracket(&b.id, BracketPatch { sl_order_id: Some(oid), status: Some(BracketStatus::Firing), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
+            log(&format!("bagholder bracket: {} for {}: market sell placed at the stop", b.id, b.symbol));
         }
     }
 }
 
-pub(super) fn fire_target(b: &Value) {
+pub(super) fn fire_target(b: &Bracket) {
     if !may_retry(b) || !nothing_resting(b) {
         return;
     }
-    let (oid, err) = place_exit(b, "LIMIT", on(b, "tpPrice"), "target");
+    let (oid, err) = place_exit(b, OrderType::Limit, b.tp_price, Role::Target);
     if !err.is_empty() {
         fail(b, &format!("target not placed: {}", err));
     } else if !oid.is_empty() {
-        update_bracket(&f(b, "id"), json!({"tpOrderId": oid, "status": "target_placed", "error": "", "attempts": 0}));
-        log(&format!("bagholder bracket: {} for {}: limit sell at {} placed", f(b, "id"), f(b, "symbol"), rp(on(b, "tpPrice"))));
+        patch_bracket(&b.id, BracketPatch { tp_order_id: Some(oid), status: Some(BracketStatus::TargetPlaced), error: Some(String::new()), attempts: Some(0), ..BracketPatch::default() });
+        log(&format!("bagholder bracket: {} for {}: limit sell at {} placed", b.id, b.symbol, rp(b.tp_price)));
     }
 }
 
@@ -714,45 +745,43 @@ pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
             log(&format!("bagholder bracket: sweep failed: {}", panic_text(&*e)));
         }
     };
-    let live = brackets(&BRACKET_LIVE);
+    let live = live_brackets();
     if live.is_empty() {
         sweep();
         return json!({"ok": true, "brackets": 0});
     }
     if orders_live() {
+        // what the engine is about to decide on is read from Wealthsimple first
         for b in &live {
-            let st = f(b, "status");
-            let prev_in_flight = |role: &str| {
-                if let Some(prev) = exit_row(b, role) {
-                    if st_in(&prev, &["sent", "pending", "cancelling"]) {
-                        refresh_orders(&f(&prev, "id"));
-                    }
+            let prev_in_flight = |role: Role| {
+                if let Some(prev) = exit_row(b, role).filter(in_flight) {
+                    refresh_orders(&prev.id);
                 }
             };
-            if st == "waiting" {
-                refresh_orders(&f(b, "orderId"));
-            } else if st == "firing" && tr(b, "slOrderId") && !tr(b, "tpOrderId") {
-                refresh_orders(&f(b, "slOrderId"));
-            } else if st == "armed" && tr(b, "slKind") && !tr(b, "slOrderId") {
-                prev_in_flight("stop");
-            } else if st == "target_placed" && !tr(b, "tpOrderId") {
-                prev_in_flight("target");
-            } else if st == "stopping" {
-                prev_in_flight("target");
-            } else if st == "closing" {
-                for o in own_exit_rows(b) {
-                    if f(&o, "status") == "cancelling" {
-                        refresh_orders(&f(&o, "id"));
+            match b.status {
+                BracketStatus::Waiting => {
+                    refresh_orders(&b.order_id);
+                }
+                BracketStatus::Firing if !b.sl_order_id.is_empty() && b.tp_order_id.is_empty() => {
+                    refresh_orders(&b.sl_order_id);
+                }
+                BracketStatus::Armed if b.sl_kind.is_set() && b.sl_order_id.is_empty() => prev_in_flight(Role::Stop),
+                BracketStatus::TargetPlaced if b.tp_order_id.is_empty() => prev_in_flight(Role::Target),
+                BracketStatus::Stopping => prev_in_flight(Role::Target),
+                BracketStatus::Closing => {
+                    for o in own_exit_rows(b).iter().filter(|o| o.status == OrderStatus::Cancelling) {
+                        refresh_orders(&o.id);
                     }
                 }
+                _ => {}
             }
         }
     }
-    let orders: HashMap<String, Value> = list_orders().into_iter().map(|o| (f(&o, "id"), o)).collect();
+    let orders: HashMap<String, Order> = orders_all().into_iter().map(|o| (o.id.clone(), o)).collect();
     let quotes = match quotes {
         Some(q) => q,
         None => {
-            let mut ids: Vec<String> = live.iter().filter(|b| st_in(b, &["armed", "firing", "target_placed", "stopping"])).map(|b| f(b, "securityId")).collect();
+            let mut ids: Vec<String> = live.iter().filter(|b| in_play(b)).map(|b| b.security_id.clone()).collect();
             ids.sort();
             ids.dedup();
             let mut q = HashMap::new();
@@ -767,24 +796,25 @@ pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
             q
         }
     };
+    let tapes: HashMap<&String, Tape> = quotes.iter().map(|(id, q)| (id, Tape::of(q))).collect();
     for b in &live {
+        // each step reads the bracket afresh: the one before it may have changed it
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let bid = f(b, "id");
-            let entry = orders.get(&f(b, "orderId"));
-            if reconcile_step(b, entry) == "done" {
+            let entry = orders.get(&b.order_id);
+            if reconcile_step(b) {
                 return;
             }
-            let Some(b) = get_bracket(&bid) else { return };
-            roll_step(&b, quotes.get(&f(&b, "securityId")));
-            let Some(b) = get_bracket(&bid) else { return };
+            let Some(b) = bracket(&b.id) else { return };
+            roll_step(&b, tapes.get(&b.security_id).copied());
+            let Some(b) = bracket(&b.id) else { return };
             arm_step(&b, entry);
-            let Some(b) = get_bracket(&bid) else { return };
-            if st_in(&b, &["armed", "firing", "target_placed", "stopping"]) {
-                watch_step(&b, quotes.get(&f(&b, "securityId")));
+            let Some(b) = bracket(&b.id) else { return };
+            if in_play(&b) {
+                watch_step(&b, tapes.get(&b.security_id).copied());
             }
         }));
         if let Err(e) = r {
-            log(&format!("bagholder bracket: {} tick failed: {}", f(b, "id"), panic_text(&*e)));
+            log(&format!("bagholder bracket: {} tick failed: {}", b.id, panic_text(&*e)));
         }
     }
     sweep();
@@ -797,11 +827,8 @@ pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
 /// one, and then keeps its cadence -- a stop is watched every few seconds for as
 /// long as it exists, exactly as before.
 pub(super) fn bracket_work() -> bool {
-    catch_unwind(|| {
-        !brackets(&BRACKET_LIVE).is_empty()
-            || list_orders().iter().any(|o| { let r = f(o, "role"); (r == "stop" || r == "target") && st_in(o, &BRACKET_RESTING) })
-    })
-    .unwrap_or(true) // could not tell: tick, rather than miss a stop
+    catch_unwind(|| !live_brackets().is_empty() || orders_all().iter().any(|o| matches!(o.role, Role::Stop | Role::Target) && resting(o)))
+        .unwrap_or(true) // could not tell: tick, rather than miss a stop
 }
 
 pub fn bracket_loop() {
@@ -819,13 +846,13 @@ pub fn bracket_loop() {
 }
 
 pub fn cancel_bracket(bracket_id: &str) -> Value {
-    let b = match get_bracket(bracket_id) {
+    let b = match bracket(bracket_id) {
         Some(b) => b,
         None => return json!({"ok": false, "error": "No such bracket."}),
     };
-    if !st_in(&b, &BRACKET_LIVE) {
+    if !b.status.is_live() {
         return json!({"ok": false, "error": "That bracket is not live."});
     }
     end_bracket(&b, "cancelled by the user", "");
-    json!({"ok": true, "id": gv(&b, "id")})
+    json!({"ok": true, "id": b.id})
 }

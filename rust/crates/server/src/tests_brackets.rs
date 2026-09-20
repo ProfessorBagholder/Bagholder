@@ -732,3 +732,104 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     let ids: Vec<String> = od::orders_payload(false)["brackets"].as_array().unwrap().iter().map(|x| sv(x, "id")).collect();
     assert_eq!(ids, vec![id]);
 }
+
+// --- a resting exit is placed again before Wealthsimple lets it lapse ---
+
+/// The time `days` from now, as Wealthsimple writes one.
+fn in_days(days: f64) -> String {
+    let t = (crate::app::now_unix() + days * 86400.0) as i64;
+    let (y, m, d) = bagholder_model::dates::from_days(t.div_euclid(86400));
+    let s = t.rem_euclid(86400);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z", y, m, d, s / 3600, s % 3600 / 60, s % 60)
+}
+
+/// An armed bracket whose stop rests at Wealthsimple, lapsing in `days`.
+fn armed_with_stop_lapsing_in(days: f64) -> (Value, String) {
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let b = get_bracket(&sv(&b, "id"));
+    let stop = sv(&b, "slOrderId");
+    update_order(&stop, json!({"expiresAt": in_days(days)}));
+    clear();
+    (b, stop)
+}
+
+#[test]
+fn test_a_stop_far_from_lapsing_is_left_alone() {
+    let _g = setup();
+    let (b, stop) = armed_with_stop_lapsing_in(30.0);
+    tick(Some(q(170.0, None, "CLOSED")));
+    tq(170.0, 170.0);
+    assert!(ops().is_empty(), "{:?}", ops());
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "slOrderId"), stop);
+}
+
+#[test]
+fn test_a_stop_within_a_week_of_lapsing_is_rolled_while_the_market_is_closed_not_while_it_trades() {
+    let _g = setup();
+    let (b, stop) = armed_with_stop_lapsing_in(5.0);
+    tq(170.0, 170.0);
+    assert!(ops().is_empty(), "with days in hand, the stop is not taken off a trading market: {:?}", ops());
+    tick(Some(q(170.0, None, "CLOSED")));
+    assert_eq!(cancels(), vec![stop.clone()]);
+    let after = get_bracket(&sv(&b, "id"));
+    assert_eq!((sv(&after, "status"), sv(&after, "slOrderId"), fv(&after, "slPrice")), ("armed".into(), "".into(), 157.13));
+    assert!(creates().is_empty(), "not placed again while the old one's cancel is still in the air");
+    // Wealthsimple confirms the cancel: the stop goes back at the same level, and the bracket stands
+    update_order(&stop, json!({"status": "cancelled"}));
+    clear();
+    tick(Some(q(170.0, None, "CLOSED")));
+    let c = creates();
+    assert_eq!(c.len(), 1, "{:?}", ops());
+    assert_eq!((sv(&c[0], "executionType"), c[0]["stopPrice"].as_f64()), ("STOP".into(), Some(157.13)));
+    let again = get_bracket(&sv(&b, "id"));
+    assert_eq!(sv(&again, "status"), "armed");
+    assert!(sv(&again, "slOrderId").starts_with("order-") && sv(&again, "slOrderId") != stop);
+}
+
+#[test]
+fn test_a_stop_within_two_days_of_lapsing_is_rolled_whatever_the_market_is_doing() {
+    let _g = setup();
+    let (_b, stop) = armed_with_stop_lapsing_in(1.5);
+    tq(170.0, 170.0);
+    assert_eq!(cancels(), vec![stop]);
+}
+
+#[test]
+fn test_a_good_till_cancelled_stop_with_no_expiry_given_lapses_ninety_days_from_when_it_was_sent() {
+    let _g = setup();
+    let (oid, b) = entry(json!({}));
+    filled(&oid);
+    t0();
+    let stop = sv(&get_bracket(&sv(&b, "id")), "slOrderId");
+    // sent eighty-nine days ago, and Wealthsimple has not said when it lapses
+    update_order(&stop, json!({"submittedAt": in_days(-89.0), "expiresAt": ""}));
+    clear();
+    tq(170.0, 170.0);
+    assert_eq!(cancels(), vec![stop]);
+}
+
+#[test]
+fn test_a_resting_target_is_rolled_too_and_placed_again() {
+    let _g = setup();
+    let (oid, b) = entry(json!({"stopLoss": null}));
+    filled(&oid);
+    t0();
+    tq(182.0, 182.0);
+    let placed = get_bracket(&sv(&b, "id"));
+    assert_eq!(sv(&placed, "status"), "target_placed");
+    let target = sv(&placed, "tpOrderId");
+    update_order(&target, json!({"expiresAt": in_days(1.0)}));
+    clear();
+    tq(181.0, 181.0);
+    assert_eq!(cancels(), vec![target.clone()]);
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "tpOrderId"), "");
+    update_order(&target, json!({"status": "cancelled"}));
+    clear();
+    tq(181.0, 181.0);
+    let c = creates();
+    assert_eq!(c.len(), 1, "{:?}", ops());
+    assert_eq!((sv(&c[0], "executionType"), c[0]["limitPrice"].as_f64()), ("LIMIT".into(), Some(181.94)));
+    assert_eq!(sv(&get_bracket(&sv(&b, "id")), "status"), "target_placed");
+}

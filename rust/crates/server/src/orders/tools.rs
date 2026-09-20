@@ -147,15 +147,6 @@ pub(super) fn parse_z(t: &str) -> Option<i64> {
     t.strip_suffix('Z').and_then(parse_ymdhms)
 }
 
-pub(super) fn parse_utc(v: Option<&Value>) -> Option<i64> {
-    let t = s(v);
-    let t = t.trim();
-    if t.is_empty() {
-        return None;
-    }
-    parse_ymdhms(&t.chars().take(19).collect::<String>())
-}
-
 pub(super) fn gql(sess: &Value, op: &str, vars: Value) -> Result<Value, CallError> {
     if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
         return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
@@ -216,12 +207,40 @@ pub(super) fn brackets(statuses: &[&str]) -> Vec<Value> {
     must(so::list_brackets(&db(), &st))
 }
 
-pub(super) fn get_bracket(id: &str) -> Option<Value> {
-    must(so::get_bracket(&db(), id))
+// --- the same store, as what the rows are ---
+
+pub(super) fn orders_all() -> Vec<Order> {
+    must(so::typed::list_orders(&db(), 200))
 }
 
-pub(super) fn update_bracket(id: &str, patch: Value) {
-    must(so::update_bracket(&db(), id, &patch, &now_iso()))
+pub(super) fn order(id: &str) -> Option<Order> {
+    must(so::typed::get_order(&db(), id))
+}
+
+pub(super) fn live_brackets() -> Vec<Bracket> {
+    must(so::typed::list_brackets(&db(), &BRACKET_LIVE_ST))
+}
+
+pub(super) fn bracket(id: &str) -> Option<Bracket> {
+    must(so::typed::get_bracket(&db(), id))
+}
+
+pub(super) fn patch_bracket(id: &str, patch: BracketPatch) {
+    must(so::typed::update_bracket(&db(), id, &patch, &now_iso()))
+}
+
+/// A number that is there and is not zero: what the engine means by "has a price".
+pub(super) fn some(v: Option<f64>) -> bool {
+    v.map_or(false, |x| x != 0.0)
+}
+
+/// A time Wealthsimple gives (`2026-09-10T14:00:00.123Z`), in seconds.
+pub(super) fn parse_utc_text(t: &str) -> Option<i64> {
+    let t = t.trim();
+    if t.is_empty() {
+        return None;
+    }
+    parse_ymdhms(&t.chars().take(19).collect::<String>())
 }
 
 pub(super) fn emit(kind: &str, key: &str, title: &str, body: &str) {

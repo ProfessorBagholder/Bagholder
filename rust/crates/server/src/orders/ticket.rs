@@ -481,12 +481,11 @@ pub fn place_order(body: &Value) -> Value {
     };
     if f(&row, "side") == "SELL" {
         let mut left = or0(&row, "quantity");
-        for b in brackets(&BRACKET_LIVE) {
-            let st = f(&b, "status");
-            if f(&b, "accountId") != f(&row, "accountId") || f(&b, "securityId") != f(&row, "securityId") || st == "waiting" || st == "closing" {
+        for b in live_brackets() {
+            if b.account_id != f(&row, "accountId") || b.security_id != f(&row, "securityId") || matches!(b.status, BracketStatus::Waiting | BracketStatus::Closing) {
                 continue;
             }
-            let held = or0(&b, "quantity");
+            let held = b.quantity.unwrap_or(0.0);
             if left >= held {
                 end_bracket(&b, "sold from the ticket", "");
                 await_cancels(&b, 8);
@@ -500,8 +499,10 @@ pub fn place_order(body: &Value) -> Value {
     }
     let mut r = submit_order(&mut row, &req);
     if tr(&r, "ok") && (tr(&row, "stopLoss") || tr(&row, "takeProfit")) {
-        let b = create_bracket(&row);
-        set(&mut r, "bracketId", gv(&b, "id"));
+        // the row as the store now has it: what was sent, under the id it was given
+        let entry: Order = serde_json::from_value(row.clone()).unwrap_or_default();
+        let b = create_bracket(&entry);
+        set(&mut r, "bracketId", json!(b.id));
     }
     r
 }

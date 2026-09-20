@@ -66,10 +66,9 @@ pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Optio
         patch.insert("quantity".into(), jo(q));
     }
     update_order(&id, Value::Object(patch));
-    if let Some(b) = must(so::bracket_for_order(&db(), &id)) {
-        if f(&b, "status") == "waiting" && inp_map.contains_key("newQuantity") {
-            update_bracket(&f(&b, "id"), json!({"quantity": jo(q)}));
-        }
+    // a bracket still waiting on this entry guards the size the entry now has
+    if let Some(b) = must(so::typed::bracket_for_order(&db(), &id)).filter(|b| b.status == BracketStatus::Waiting && inp_map.contains_key("newQuantity")) {
+        patch_bracket(&b.id, BracketPatch { quantity: Some(q), ..BracketPatch::default() });
     }
     let shown: Map<String, Value> = inp_map.iter().filter(|(k, _)| *k != "externalId").map(|(k, v)| (k.clone(), v.clone())).collect();
     log(&format!("bagholder orders: modify {} accepted: {}", id, bagholder_store::tables::json_text_sorted(&Value::Object(shown))));
@@ -80,100 +79,94 @@ pub fn modify_order(order_id: &str, quantity: Option<&Value>, limit_price: Optio
     json!({"ok": true, "id": id})
 }
 
+/// Move a leg of a live bracket, give a trailing stop another trail, or take a leg off.
+/// A leg that rests at Wealthsimple is cancelled first, and the engine places it again
+/// at the new level; a bracket left with no leg is over.
 pub fn adjust_bracket(bracket_id: &str, leg: &str, price: Option<&Value>, trail: Option<&Value>, remove: bool) -> Value {
-    let b = match get_bracket(bracket_id) {
+    let refused = |e: String| json!({"ok": false, "error": e});
+    let b = match bracket(bracket_id) {
         Some(b) => b,
-        None => return json!({"ok": false, "error": "No such bracket."}),
+        None => return refused("No such bracket.".into()),
     };
-    if !st_in(&b, &BRACKET_LIVE) {
-        return json!({"ok": false, "error": "That bracket is not live."});
+    if !b.status.is_live() {
+        return refused("That bracket is not live.".into());
     }
-    let leg = leg.to_lowercase();
-    if leg != "sl" && leg != "tp" {
-        return json!({"ok": false, "error": "Which leg?"});
-    }
-    let id = f(&b, "id");
-    let sym = f(&b, "symbol");
+    let stop_leg = match leg.to_lowercase().as_str() {
+        "sl" => true,
+        "tp" => false,
+        _ => return refused("Which leg?".into()),
+    };
+    let positive = |v: Option<&Value>| num(v, None).filter(|x| *x > 0.0);
+    let both_removed = |p: &mut BracketPatch| {
+        p.status = Some(BracketStatus::Cancelled);
+        p.outcome = Some("both legs removed".into());
+    };
+    let mut patch = BracketPatch { error: Some(String::new()), ..BracketPatch::default() };
     if remove {
-        if leg == "sl" {
-            let err = cancel_exit(&f(&b, "slOrderId"));
-            if !err.is_empty() {
-                return json!({"ok": false, "error": err});
-            }
-            let mut patch = json!({"slKind": "", "slOrderId": "", "slMode": "", "error": ""});
-            if !tr(&b, "tpPrice") {
-                set(&mut patch, "status", json!("cancelled"));
-                set(&mut patch, "outcome", json!("both legs removed"));
-            }
-            update_bracket(&id, patch);
-        } else {
-            let err = cancel_exit(&f(&b, "tpOrderId"));
-            if !err.is_empty() {
-                return json!({"ok": false, "error": err});
-            }
-            let mut patch = json!({"tpPrice": null, "tpOrderId": "", "error": ""});
-            if f(&b, "status") == "target_placed" {
-                set(&mut patch, "status", json!("armed"));
-            }
-            if !tr(&b, "slKind") {
-                set(&mut patch, "status", json!("cancelled"));
-                set(&mut patch, "outcome", json!("both legs removed"));
-            }
-            update_bracket(&id, patch);
-        }
-        log(&format!("bagholder bracket: {} for {}: {} removed by the user", id, sym, if leg == "sl" { "stop loss" } else { "take profit" }));
-        return json!({"ok": true, "id": id});
-    }
-    if leg == "sl" {
-        if !tr(&b, "slKind") {
-            return json!({"ok": false, "error": "This bracket has no stop loss."});
-        }
-        let mut patch;
-        if f(&b, "slKind") == "trail" {
-            let t = match num(trail, None) {
-                Some(t) if t != 0.0 && t > 0.0 => t,
-                _ => return json!({"ok": false, "error": "A trail is required."}),
-            };
-            let high = or_f(or_f(on(&b, "highWater"), on(&b, "slPrice")), Some(0.0)).unwrap_or(0.0);
-            let mut nb = b.clone();
-            set(&mut nb, "slTrail", json!(t));
-            let new_price = if high != 0.0 { json!(round_half_even(high - trail_distance(&nb, high).unwrap_or(0.0), 2)) } else { gv(&b, "slPrice") };
-            patch = json!({"slTrail": t, "slPrice": new_price});
-        } else {
-            let p = match num(price, None) {
-                Some(p) if p != 0.0 && p > 0.0 => p,
-                _ => return json!({"ok": false, "error": "A stop price is required."}),
-            };
-            patch = json!({"slPrice": p});
-        }
-        if tr(&b, "slOrderId") && f(&b, "status") == "armed" {
-            let err = cancel_exit(&f(&b, "slOrderId"));
-            if !err.is_empty() {
-                return json!({"ok": false, "error": err});
-            }
-            set(&mut patch, "slOrderId", json!(""));
-            set(&mut patch, "movedAt", json!(now_iso()));
-        }
-        set(&mut patch, "error", json!(""));
-        let shown = rp(on(&patch, "slPrice"));
-        update_bracket(&id, patch);
-        log(&format!("bagholder bracket: {} for {}: stop moved to {} by the user", id, sym, shown));
-        return json!({"ok": true, "id": id});
-    }
-    let p = match num(price, None) {
-        Some(p) if p != 0.0 && p > 0.0 => p,
-        _ => return json!({"ok": false, "error": "A limit price is required."}),
-    };
-    let mut patch = json!({"tpPrice": p, "error": ""});
-    if f(&b, "status") == "target_placed" && tr(&b, "tpOrderId") {
-        let err = cancel_exit(&f(&b, "tpOrderId"));
+        let err = cancel_exit(if stop_leg { &b.sl_order_id } else { &b.tp_order_id });
         if !err.is_empty() {
-            return json!({"ok": false, "error": err});
+            return refused(err);
         }
-        set(&mut patch, "tpOrderId", json!(""));
-        set(&mut patch, "status", json!("armed"));
+        if stop_leg {
+            patch.sl_kind = Some(SlKind::Unset);
+            patch.sl_order_id = Some(String::new());
+            patch.sl_mode = Some(SlMode::Unset);
+            if !some(b.tp_price) {
+                both_removed(&mut patch);
+            }
+        } else {
+            patch.tp_price = Some(None);
+            patch.tp_order_id = Some(String::new());
+            if b.status == BracketStatus::TargetPlaced {
+                patch.status = Some(BracketStatus::Armed);
+            }
+            if !b.sl_kind.is_set() {
+                both_removed(&mut patch);
+            }
+        }
+        patch_bracket(&b.id, patch);
+        log(&format!("bagholder bracket: {} for {}: {} removed by the user", b.id, b.symbol, if stop_leg { "stop loss" } else { "take profit" }));
+        return json!({"ok": true, "id": b.id});
     }
-    update_bracket(&id, patch);
-    log(&format!("bagholder bracket: {} for {}: target moved to {} by the user", id, sym, rp(Some(p))));
-    json!({"ok": true, "id": id})
+    if stop_leg {
+        if !b.sl_kind.is_set() {
+            return refused("This bracket has no stop loss.".into());
+        }
+        let new_price;
+        if b.sl_kind == SlKind::Trail {
+            let Some(t) = positive(trail) else { return refused("A trail is required.".into()) };
+            let high = or_f(or_f(b.high_water, b.sl_price), Some(0.0)).unwrap_or(0.0);
+            let retrailed = Bracket { sl_trail: Some(t), ..b.clone() };
+            new_price = if high != 0.0 { Some(round_half_even(high - trail_distance(&retrailed, high).unwrap_or(0.0), 2)) } else { b.sl_price };
+            patch.sl_trail = Some(Some(t));
+        } else {
+            let Some(p) = positive(price) else { return refused("A stop price is required.".into()) };
+            new_price = Some(p);
+        }
+        patch.sl_price = Some(new_price);
+        if !b.sl_order_id.is_empty() && b.status == BracketStatus::Armed {
+            let err = cancel_exit(&b.sl_order_id);
+            if !err.is_empty() {
+                return refused(err);
+            }
+            patch.sl_order_id = Some(String::new());
+            patch.moved_at = Some(now_iso());
+        }
+        patch_bracket(&b.id, patch);
+        log(&format!("bagholder bracket: {} for {}: stop moved to {} by the user", b.id, b.symbol, rp(new_price)));
+        return json!({"ok": true, "id": b.id});
+    }
+    let Some(p) = positive(price) else { return refused("A limit price is required.".into()) };
+    patch.tp_price = Some(Some(p));
+    if b.status == BracketStatus::TargetPlaced && !b.tp_order_id.is_empty() {
+        let err = cancel_exit(&b.tp_order_id);
+        if !err.is_empty() {
+            return refused(err);
+        }
+        patch.tp_order_id = Some(String::new());
+        patch.status = Some(BracketStatus::Armed);
+    }
+    patch_bracket(&b.id, patch);
+    log(&format!("bagholder bracket: {} for {}: target moved to {} by the user", b.id, b.symbol, rp(Some(p))));
+    json!({"ok": true, "id": b.id})
 }
