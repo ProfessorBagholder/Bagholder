@@ -81,6 +81,34 @@ jobs:
       - name: The bundle builds
         run: npm run build
 
+  # The page driven in a real browser against the real server, on a made-up book
+  # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          shared-key: browser
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: The browser the tests drive
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: The server and the made-up book
+        run: cargo build --bin bagholder --bin demo-book
+        working-directory: rust
+      - name: The browser tests
+        run: npm run e2e
+        working-directory: web
+
   go:
     runs-on: ubuntu-latest
     steps:

@@ -288,6 +288,12 @@ impl Response {
     }
 }
 
+/// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
+pub fn offline() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| !std::env::var("BAGHOLDER_OFFLINE").unwrap_or_default().trim().is_empty())
+}
+
 /// One request, following redirects, with the connection given back when the
 /// host is willing to keep it open.
 pub fn request(
@@ -319,6 +325,12 @@ fn send(
     for _ in 0..=REDIRECT_MAX {
         let u = parse_url(&url)?;
         let key = format!("{}:{}", u.host, u.port);
+        // BAGHOLDER_OFFLINE=1: nothing leaves this machine. The browser tests run the
+        // real server on a made-up book this way, so they read the same on any
+        // machine and ask nothing of anyone.
+        if offline() && !matches!(u.host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+            return Err(Error::Transport("offline: BAGHOLDER_OFFLINE is set".into()));
+        }
         // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
         // asked for while nobody is looking" is checked on a running app. The query
         // is left out, so nothing a URL carries reaches a log.

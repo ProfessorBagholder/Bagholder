@@ -76,6 +76,9 @@ impl Session {
     /// None where the helper is not there to start, and the source that needs
     /// it is then simply unknown.
     pub fn new() -> Option<Session> {
+        if crate::client::offline() {
+            return None;
+        }
         let mut child = Command::new(helper())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
