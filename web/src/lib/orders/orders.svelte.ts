@@ -182,13 +182,6 @@ function ordersScope(): string[] { return filters.lists.account || [] }
 export function inOrdersScope(account: string): boolean { const s = ordersScope(); return !s.length || s.indexOf(account) >= 0 }
 export function ordersScopeLabel(): string { const s = ordersScope(); return s.length ? s.join(', ') : 'All Accounts' }
 
-// The header badge count: live orders (not stop/target legs) plus armed brackets.
-export function openOrdersCount(): number {
-  const d = ordersStore.data
-  if (!d) return 0
-  return d.orders.filter((o) => o.role !== 'stop' && o.role !== 'target' && ORDER_LIVE[o.status]).length + (d.brackets || []).filter((b) => BRACKET_LIVE[b.status] && b.status !== 'waiting').length
-}
-
 // --- actions ---
 export function editOrder(id: string) { panel.orderEdit = { id, error: '', qty: null, limit: null }; panel.bracketEdit = null }
 export function cancelOrderEdit() { panel.orderEdit = null }

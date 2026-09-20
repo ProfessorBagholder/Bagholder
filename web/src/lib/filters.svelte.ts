@@ -33,7 +33,16 @@ export function emptyFilters(): Filters {
   }
 }
 
-export const filters = $state<Filters>(emptyFilters())
+// The benchmark is not a filter but travels with them; the choice is remembered on this machine.
+function rememberedBenchmark(): string {
+  try {
+    return localStorage.getItem('bh2.benchmark') || 'SP500'
+  } catch {
+    return 'SP500'
+  }
+}
+
+export const filters = $state<Filters>({ ...emptyFilters(), benchmark: rememberedBenchmark() })
 
 export function activeCount(): number {
   let n = 0
