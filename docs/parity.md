@@ -39,11 +39,11 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 ### Markets
 - [ ] The heatmap on its own has an address, `#heatmap/<universes>/<size>/<secs>`: bookmark, wall display, scope list and dwell, `replaceState` (`L:4699-4708`, `L:4911-4913`); arrow keys must not move the tabs beneath it.
 - [ ] **Unsure:** two sectors each folding to `Other (2)` give heat tiles the same key (`HeatBox.svelte:62`); drive it.
-- [ ] Enter adds the banded watchlist suggestion (`L:5146`).
-- [ ] Esc in the News box clears the words, then the chip; Esc in the Shorts box clears its words (`L:5134-5137`).
-- [ ] News reads `Reading…` while a pass is reading the scope, not only for a chip lookup (`newsPassReads`, `L:3618`).
+- [x] Enter adds the banded watchlist suggestion (`L:5146`).
+- [x] Esc in the News box clears the words, then the chip; Esc in the Shorts box clears its words (`L:5134-5137`).
+- [x] News reads `Reading…` while a pass is reading the scope, not only for a chip lookup (`newsPassReads`, `L:3618`).
 - [ ] The Shorts feed refreshes on an open page. *(Design: by event, stage 6.)*
-- [ ] Esc closes the tile picker and the watchlist add row wherever focus is (`L:5133`).
+- [x] Esc closes the tile picker and the watchlist add row wherever focus is (`L:5133`).
 
 ### Order ticket and Orders panel
 - [ ] The page behind an open panel does not scroll (`panel-open`, `L:4648`).

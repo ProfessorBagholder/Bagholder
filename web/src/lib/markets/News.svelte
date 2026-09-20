@@ -16,6 +16,7 @@
   import GridHead from './GridHead.svelte'
   import { request } from '../api'
   import { searchSymbols } from '../api'
+  import { escapable } from '../escape'
 
   let { news }: { news: NewsItem[] } = $props()
 
@@ -40,6 +41,16 @@
   let kind = $state((() => { try { const k = localStorage.getItem('bh2.newsKind'); return k === 'disc' || k === 'releases' ? k : 'stories' } catch { return 'stories' } })())
   let query = $state('')
   let sym = $state<Chip | null>(null)
+  // Escape clears what narrows the card: the words typed in its box first, while the box
+  // has the focus (which it keeps, so a second press clears the chip), then the chip
+  let box = $state<HTMLInputElement>()
+  $effect(() =>
+    escapable(() => {
+      if (query && document.activeElement === box) { query = ''; return true }
+      if (sym) { newsChip(null); return true }
+      return false
+    }),
+  )
   let kindChosen: string | null = null
   let reading = $state('')
 
@@ -241,7 +252,21 @@
   }
   const chgColor = (v: number | null) => (v == null ? 'var(--ink55)' : v >= 0 ? 'var(--pos)' : 'var(--neg)')
 
-  const passReading = $derived(sym && reading === sym.symbol)
+  // `Reading…` stands where `No news.` would while something is still reading for what
+  // the card shows: the chip's own lookup, or the server's pass with a listing in the
+  // card's scope (or the chip) still to read (the status names them; `*` is the market's feed)
+  const passReading = $derived.by(() => {
+    if (sym && reading === sym.symbol) return true
+    const left = store.model?.status?.newsReading ?? []
+    if (!left.length) return false
+    const has = (s: string) => left.includes(bareSymbol(s).toUpperCase())
+    if (sym) return has(sym.symbol)
+    const held = (store.model?.positions ?? []).map((p) => p.symbol)
+    const watched = (store.model?.markets.watchlist ?? []).map((w) => w.symbol)
+    if (scope === 'holdings') return held.some(has)
+    if (scope === 'watchlist') return watched.some(has)
+    return kind === 'releases' ? held.concat(watched).some(has) : left.includes('*')
+  })
 </script>
 
 <div class="card elev-sm" style="padding:14px 16px 12px;display:flex;flex-direction:column;min-height:0">
@@ -253,7 +278,7 @@
       <span class="chip"><span class="cf">Symbol</span><span class="cv" style="cursor:default">{symText(sym.symbol)}</span><button class="cx" aria-label="Show every listing" onclick={() => newsChip(null)}>×</button></span>
     {/if}
     <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-      <input bind:value={query} placeholder={kind === 'disc' ? 'Search symbol or filing' : 'Search symbol or headline'} aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
+      <input bind:this={box} bind:value={query} placeholder={kind === 'disc' ? 'Search symbol or filing' : 'Search symbol or headline'} aria-label="Search the news" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
     </div>
   </div>
 

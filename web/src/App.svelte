@@ -28,6 +28,7 @@
   import NotesPanel from './lib/notes/NotesPanel.svelte'
   import { isListingId, listingAsTrade, loadListing } from './lib/listing.svelte'
   import { PROTOCOL } from './lib/protocol'
+  import { dismissInnermost } from './lib/escape'
   import Empty from './lib/Empty.svelte'
   import { notesStore, showNotifications } from './lib/notes/notes.svelte'
 
@@ -130,6 +131,8 @@
       return
     }
     if (e.key === 'Escape') {
+      // whatever a card has open or narrowed, innermost first
+      if (dismissInnermost()) return
       if (ui.confirm) { ui.confirm = ''; return }
       if (ui.modal) { ui.modal = ''; return }
       if (filterOpen || ui.menuOpen) { filterOpen = false; filterField = undefined; ui.menuOpen = false; return }

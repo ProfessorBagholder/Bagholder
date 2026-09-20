@@ -8,6 +8,7 @@
   import { n2, signedPct } from './util'
   import { request } from '../api'
   import { focusOnMount } from '../actions/focus'
+  import { escapable } from '../escape'
 
   let { tiles: propTiles, instruments }: { tiles: MarketTile[]; instruments: MarketInstrument[] } = $props()
 
@@ -21,6 +22,10 @@
 
   let tilesOpen = $state((() => { try { return localStorage.getItem('bh2.tilesOpen') === '1' } catch { return false } })())
   let tileAdd = $state(false)
+  // Escape closes the picker wherever the focus is
+  $effect(() => {
+    if (tileAdd) return escapable(() => { tileAdd = false; return true })
+  })
   let tileQuery = $state('')
   let dragSym = $state<string | null>(null)
 
@@ -169,7 +174,7 @@
     <div class="pop elev-md">
       <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:8px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
         <Icon d={ICONS.search} />
-        <input bind:value={tileQuery} placeholder="Index, future, commodity, rate or pair" aria-label="Search instruments" use:focusOnMount style="flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font:400 12.5px var(--font);outline:none" onkeydown={(e) => { if (e.key === 'Escape') tileAdd = false }} />
+        <input bind:value={tileQuery} placeholder="Index, future, commodity, rate or pair" aria-label="Search instruments" use:focusOnMount style="flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font:400 12.5px var(--font);outline:none" />
         <span style="font-size:10px;color:rgba(var(--ink-rgb),.4)">ESC</span>
       </div>
       <div class="lbl" style="padding:2px 7px 7px">{tileQuery.trim() ? 'Matches' : 'Market instruments'}</div>

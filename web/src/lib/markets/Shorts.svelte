@@ -13,6 +13,7 @@
   import { request } from '../api'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
+  import { escapable } from '../escape'
 
   const SCOPE_OPTS = [['all', 'All'], ['holdings', 'Holdings'], ['watchlist', 'Watchlist']] as const
   const SHORTS_COLS = [
@@ -27,6 +28,15 @@
 
   let scope = $state((() => { try { return localStorage.getItem('bh2.shorts') || 'all' } catch { return 'all' } })())
   let query = $state('')
+  // Escape clears the words typed in the box while it has the focus
+  let box = $state<HTMLInputElement>()
+  $effect(() =>
+    escapable(() => {
+      if (!query || document.activeElement !== box) return false
+      query = ''
+      return true
+    }),
+  )
 
   // The table is shown only while this card is, so it is sent only then: whole once,
   // and after that each listing's row as the sweep reads it, and the word that a read
@@ -95,7 +105,7 @@
     <h5>Short interest</h5>
     <Mseg options={SCOPE_OPTS} cur={scope} onpick={pickScope} />
     <div style="margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 9px;width:200px;border-radius:6px;background:var(--field);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-      <input bind:value={query} placeholder="Search any symbol" aria-label="Search short interest" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
+      <input bind:this={box} bind:value={query} placeholder="Search any symbol" aria-label="Search short interest" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
     </div>
   </div>
   {#if rows.length}

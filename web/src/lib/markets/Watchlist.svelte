@@ -15,6 +15,7 @@
   import { searchSymbols } from '../api'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
+  import { escapable } from '../escape'
 
   let { watchlist }: { watchlist: WatchItem[] } = $props()
 
@@ -108,6 +109,17 @@
     if (query.trim()) sugQuoteSchedule(suggestions)
   })
 
+  // Escape closes the add row wherever the focus is
+  $effect(() => {
+    if (adding) return escapable(() => { toggleAdd(); return true })
+  })
+  // Enter adds the suggestion the band is on
+  function onAddKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    if (suggestions.length) pick(suggestions[0])
+  }
+
   function toggleAdd() {
     adding = !adding
     query = ''
@@ -139,7 +151,7 @@
   {#if adding}
     <div class="wl-field">
       <Icon d={ICONS.search} />
-      <input bind:this={input} bind:value={query} placeholder="Search symbol..." aria-label="Search symbol" onkeydown={(e) => { if (e.key === 'Escape') toggleAdd() }} />
+      <input bind:this={input} bind:value={query} placeholder="Search symbol..." aria-label="Search symbol" onkeydown={onAddKey} />
       <span class="esc">ESC</span>
     </div>
     <div class="lbl" style="padding:0 0 6px">{query.trim() ? 'Matches' : 'From Holdings'}</div>

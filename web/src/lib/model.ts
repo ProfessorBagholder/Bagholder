@@ -61,6 +61,8 @@ export interface Status {
   updateBy: string
   updating: string
   updateError: string
+  /** the listings the server's news pass has still to read (`*` is the market's feed) */
+  newsReading: string[]
   protocol: string
   notify: Notify
   [k: string]: unknown
