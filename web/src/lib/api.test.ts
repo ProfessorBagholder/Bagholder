@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { get, post, query, searchSymbols } from './api'
+import { get, lookup, post, query, searchSymbols } from './api'
 
 const sources = import.meta.glob('/src/**/*.{ts,svelte}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 
@@ -15,6 +15,31 @@ describe('the one way to the server', () => {
       .filter(([path, text]) => !path.endsWith('.test.ts') && /new EventSource\(/.test(text))
       .map(([path]) => path)
     expect(streams).toEqual(['/src/lib/live.ts'])
+  })
+
+  // A timer is kept only where there is nothing to wait for instead, and each is argued
+  // for in docs/architecture.md under "Timers that remain". None of these asks the server
+  // anything: the page is told (live.ts), it does not look.
+  it('waits on a clock only where that is accounted for', () => {
+    const allowed: Record<string, number> = {
+      '/src/lib/ui.svelte.ts': 2, // how long a notice stays in the header; the sign-in's three-minute deadline
+      '/src/lib/clock.svelte.ts': 1, // the minute, while something on screen says "… ago"
+      '/src/lib/scrollbars.ts': 1, // a scrollbar lingers after its list stops: Safari has no scrollend
+      '/src/lib/TradeDetail.svelte': 1, // the thesis is saved a moment after typing stops
+      '/src/lib/FilterPopover.svelte': 2, // a lookup and a range wait for the typing to pause
+      '/src/lib/markets/News.svelte': 1, // a lookup waits for the typing to pause
+      '/src/lib/markets/Shorts.svelte': 1, // a lookup waits for the typing to pause
+      '/src/lib/markets/Watchlist.svelte': 2, // a lookup waits for the typing to pause; the added row's tint decays
+      '/src/lib/trade/Disclosures.svelte': 1, // "Opening…" on a row whose document opens in another tab, which tells the page nothing
+      '/src/lib/heatmap/Heatmap.svelte': 1, // the slideshow's dwell: the reader's own figure
+    }
+    const found: Record<string, number> = {}
+    for (const [path, text] of Object.entries(sources)) {
+      if (path.endsWith('.test.ts')) continue
+      const n = (text.match(/\b(setTimeout|setInterval)\(/g) || []).length
+      if (n) found[path] = n
+    }
+    expect(found).toEqual(allowed)
   })
 
   it('leaves out of a query what is empty', () => {
@@ -47,5 +72,85 @@ describe('the one way to the server', () => {
     expect((await searchSymbols('plt')).map((m) => m.symbol)).toEqual(['PLTR'])
     expect((await searchSymbols(' PLT ')).map((m) => m.symbol)).toEqual(['PLTR'])
     expect(fetched).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('what is looked up on demand', () => {
+  // a fetch that answers when told to, and knows when it was dropped
+  function slowFetch() {
+    const calls: { path: string; signal: AbortSignal; answer: (body: unknown) => void }[] = []
+    vi.stubGlobal('fetch', (path: string, opts: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const signal = opts.signal as AbortSignal
+        signal.addEventListener('abort', () => reject(new DOMException('dropped', 'AbortError')))
+        calls.push({ path, signal, answer: (body) => resolve(new Response(JSON.stringify(body))) })
+      }))
+    return calls
+  }
+
+  it('asks once for the same thing asked twice at once, and keeps a good answer', async () => {
+    const calls = slowFetch()
+    const bars = lookup<{ n?: number }>()
+    const a = bars.read('/api/history?x=1')
+    const b = bars.read('/api/history?x=1')
+    expect(calls.length).toBe(1)
+    calls[0].answer({ ok: true, n: 3 })
+    expect(await a).toEqual({ ok: true, n: 3 })
+    expect(await b).toEqual({ ok: true, n: 3 })
+    expect(await bars.read('/api/history?x=1')).toEqual({ ok: true, n: 3 })
+    expect(calls.length).toBe(1)
+    bars.forget()
+    void bars.read('/api/history?x=1')
+    expect(calls.length).toBe(2)
+  })
+
+  it('never keeps a failure, nor an answer its rule says is not final', async () => {
+    const calls = slowFetch()
+    const bars = lookup<{ pending?: boolean }>({ keep: (a) => !a.pending })
+    const first = bars.read('/p')
+    calls[0].answer({ ok: false, error: 'no' })
+    expect((await first).ok).toBe(false)
+    const second = bars.read('/p')
+    calls[1].answer({ ok: true, pending: true })
+    await second
+    void bars.read('/p')
+    expect(calls.length).toBe(3)
+  })
+
+  it('keeps an answer only as long as it is good for', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls = slowFetch()
+      const shorts = lookup({ keepMs: 30 * 60_000 })
+      const first = shorts.read('/s')
+      calls[0].answer({ ok: true })
+      await first
+      vi.advanceTimersByTime(29 * 60_000)
+      await shorts.read('/s')
+      expect(calls.length).toBe(1)
+      vi.advanceTimersByTime(2 * 60_000)
+      void shorts.read('/s')
+      expect(calls.length).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops a request when the last reader stops waiting, and not before', async () => {
+    const calls = slowFetch()
+    const bars = lookup()
+    const one = new AbortController()
+    const two = new AbortController()
+    const a = bars.read('/h', { signal: one.signal })
+    const b = bars.read('/h', { signal: two.signal })
+    one.abort()
+    expect(await a).toEqual({ ok: false, error: 'aborted' })
+    expect(calls[0].signal.aborted).toBe(false)
+    two.abort()
+    expect(await b).toEqual({ ok: false, error: 'aborted' })
+    expect(calls[0].signal.aborted).toBe(true)
+    // and the next reader asks afresh
+    void bars.read('/h')
+    expect(calls.length).toBe(2)
   })
 })

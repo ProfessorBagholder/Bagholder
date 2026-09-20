@@ -17,7 +17,7 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, loginInput, updateNow } from './lib/ui.svelte'
+  import { cancelConnect, followConnect, loginInput, updateNow } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
@@ -252,11 +252,13 @@
     const stopNotes = showNotifications()
     const stopCutTip = startCutTip()
     const stopScrollbars = startScrollbars()
+    const stopConnect = followConnect()
     return () => {
       stopRouter()
       stopNotes()
       stopCutTip()
       stopScrollbars()
+      stopConnect()
       disconnect()
     }
   })

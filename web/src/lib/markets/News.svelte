@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keyed } from '../keys'
   // The News card (newsCardHtml): the tabbed card — Stories / Releases /
   // Disclosures — with a scope segment, a symbol chip, a search box, and one line
   // per item. Stories and releases come from the model's news feed; releases also
@@ -290,7 +291,7 @@
     {:else if discView.rows.length}
       <div class="nw-head nw-disc"><GridHead table="ndisc" cols={NDISC_COLS} /></div>
       <div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">
-        {#each discView.rows as f, i (f.id + '#' + i)}
+        {#each keyed(discView.rows, (r) => r.id) as { row: f, key } (key)}
           <div class="nw-row nw-disc" role="button" tabindex="-1" onclick={() => openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url })} onkeydown={(e) => { if (e.key === 'Enter') openDisc({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) }}>
             <div class="tab" style="font-size:11px;color:var(--ink55)">{discDate(f)}</div>
             <div>
@@ -307,7 +308,7 @@
   {:else if storyRows.length}
     <div class="nw-head" class:nw-bare={bare}><GridHead table="news" cols={bare ? NEWS_COLS.slice(0, 2) : NEWS_COLS} /></div>
     <div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">
-      {#each storyRows as n, i (n.id + '#' + i)}
+      {#each keyed(storyRows, (r) => r.id) as { row: n, key } (key)}
         <div class="nw-row" class:nw-bare={bare} role="button" tabindex="-1" onclick={() => openStory(n)} onkeydown={(e) => { if (e.key === 'Enter') openStory(n) }}>
           <div class="tab" style="font-size:11px;color:var(--ink55)">{newsWhen(n.publishedAt)}</div>
           <div>

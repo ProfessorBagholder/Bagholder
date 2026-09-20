@@ -3,7 +3,7 @@
 // card/leg/foot builders, the in-place editors, cancel and adjust.
 
 import { filters } from '../filters.svelte'
-import { ui } from '../ui.svelte'
+import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live'
 import { draftStore } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
@@ -36,11 +36,6 @@ export const panel = $state<{
   busy: string
 }>({ tab: 'pending', orderEdit: null, bracketEdit: null, busy: '' })
 
-function flash(msg: string, kind: 'ok' | 'err', ms: number) {
-  ui.notice = msg
-  ui.noticeKind = kind
-  setTimeout(() => { if (ui.notice === msg) { ui.notice = ''; ui.noticeKind = '' } }, ms)
-}
 
 export const ORDER_LIVE: Record<string, number> = { sent: 1, pending: 1, cancelling: 1 }
 export const BRACKET_LIVE: Record<string, number> = { waiting: 1, armed: 1, firing: 1, target_placed: 1, stopping: 1, closing: 1 }

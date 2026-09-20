@@ -1,6 +1,6 @@
 import { store } from '../state.svelte'
 import type { Position } from '../model'
-import { ui } from '../ui.svelte'
+import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
@@ -165,11 +165,6 @@ function notice(v: ReturnType<typeof computeVals>, sent: boolean) {
   return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qtyN) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
     (v.slOn ? ', stop ' + px(v.slPrice) : '') + (v.tpOn ? ', target ' + px(v.tpPrice) : '')
 }
-function flash(msg: string, ms: number) {
-  ui.notice = msg
-  ui.noticeKind = 'ok'
-  setTimeout(() => { if (ui.notice === msg) { ui.notice = ''; ui.noticeKind = '' } }, ms)
-}
 
 export async function submit() {
   const t = ticketStore.t
@@ -195,7 +190,7 @@ export async function submit() {
     cur.submitError = (r && (r.error as string)) || 'Could not submit the order.'
     return
   }
-  flash(notice(v, r.status === 'sent'), 10000) // longer than the other notices: it names the whole order
+  flash(notice(v, r.status === 'sent'), 'ok', 10000) // longer than the other notices: it names the whole order
   closeTicket(true)
 }
 

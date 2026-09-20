@@ -3,7 +3,7 @@
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
 import type { Trade, ShortsResp } from '../model'
 import { listingTicker } from './chart'
-import { get } from '../api'
+import { lookup, query, type Answer } from '../api'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -12,8 +12,6 @@ export interface ShortsRec extends ShortsResp {
 }
 
 export const shortsStore = $state<Record<string, ShortsRec>>({})
-const _pending: Record<string, boolean> = {}
-const _trend: Record<string, boolean> = {}
 
 const SHORTS_KEEP_MS = 30 * 60 * 1000
 
@@ -24,31 +22,29 @@ export function shortsKey(t: Trade): string {
   return discSymbol(t) + '|' + String(t.exchange || '').toUpperCase()
 }
 
-export function ensureShorts(t: Trade): void {
+// a reading is good for half an hour; the run of past reports for as long as the page is open
+const readings = lookup<ShortsResp>({ keepMs: SHORTS_KEEP_MS })
+const trends = lookup<ShortsResp>()
+// the answer each shown reading was made from, to tell a new reading from the one shown
+const shownFrom = new Map<string, Answer<ShortsResp>>()
+
+export async function ensureShorts(t: Trade): Promise<void> {
   const sym = discSymbol(t)
   const key = shortsKey(t)
-  const held = shortsStore[key]
-  if (!sym || _pending[key] || (held && Date.now() - held.at < SHORTS_KEEP_MS)) return
-  _pending[key] = true
-  const q =
-    'symbol=' + encodeURIComponent(sym) +
-    (t.exchange ? '&exchange=' + encodeURIComponent(t.exchange) : '') +
-    (t.currency ? '&currency=' + encodeURIComponent(t.currency) : '')
-  get('/api/shorts?' + q)
-    .then((d: any) => {
-      delete _pending[key]
-      shortsStore[key] = Object.assign({ at: Date.now() }, d && d.ok ? d : { ok: false })
-      // the run of past reports comes free with a US listing's answer; a Canadian
-      // one is a file per reporting date, asked for once the figures are on screen
-      if (d && d.ok && d.covered && !((d.shorts || {}).series || []).length && !_trend[key]) {
-        _trend[key] = true
-        get('/api/shorts?' + q + '&trend=1')
-          .then((more: any) => {
-            const rec = shortsStore[key]
-            if (more && more.ok && more.covered && rec && rec.shorts) rec.shorts.series = (more.shorts || {}).series || []
-          })
-      }
-    })
+  if (!sym) return
+  const q = query({ symbol: sym, exchange: t.exchange, currency: t.currency })
+  const d = await readings.read('/api/shorts?' + q, { key })
+  // the reading already shown: nothing to write, and its trend stays on it
+  if (shortsStore[key] && shownFrom.get(key) === d) return
+  shownFrom.set(key, d)
+  shortsStore[key] = Object.assign({ at: Date.now() }, d.ok ? structuredClone(d) : { ok: false }) as ShortsRec
+  // the run of past reports comes free with a US listing's answer; a Canadian one is a
+  // file per reporting date, asked for once the figures are on screen
+  if (d.ok && d.covered && !(d.shorts?.series || []).length) {
+    const more = await trends.read('/api/shorts?' + q + '&trend=1', { key })
+    const rec = shortsStore[key]
+    if (more.ok && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
+  }
 }
 
 export function shortDay(iso: string | null | undefined): string {

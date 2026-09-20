@@ -8,7 +8,7 @@
 // (`/api/listing`); its price, where the watchlist carries it, is the model's own and
 // moves with it.
 
-import { get } from './api'
+import { lookup, query } from './api'
 import { bareSymbol } from './sym'
 import type { Fill, Model, Trade } from './model'
 
@@ -26,7 +26,9 @@ interface Known {
 
 const LISTING_DAYS = 365
 const known = $state<Record<string, Known>>({})
-const asked = new Set<string>()
+// asked once while the page is open; a failed lookup is asked again the next time the page opens
+const listings = lookup<Partial<Known> & { positionId?: string | null }>()
+const applied = new Set<string>()
 
 export function listingId(o: { symbol?: string; exchange?: string | null }): string {
   return 'listing:' + bareSymbol(String(o.symbol || '')).toUpperCase() + '@' + String(o.exchange || '').toUpperCase()
@@ -84,16 +86,16 @@ export function listingAsTrade(id: string, model: Model | null): Trade | null {
  * its page is the holding's.
  */
 export async function loadListing(id: string, held: (positionId: string) => void): Promise<void> {
-  if (!isListingId(id) || asked.has(id)) return
-  asked.add(id)
+  if (!isListingId(id)) return
   const l = entry(id)
-  const d = await get<Partial<Known> & { positionId?: string | null }>('/api/listing', { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name })
+  const d = await listings.read('/api/listing?' + query({ symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name }), { key: id })
   if (!d.ok) {
     l.fills = []
-    asked.delete(id) // a failed lookup is asked again the next time the page opens
     return
   }
   if (d.positionId) return held(d.positionId)
+  if (applied.has(id)) return
+  applied.add(id)
   for (const k of ['exchange', 'currency', 'name', 'kind', 'securityId'] as const) {
     if (!l[k] && d[k]) l[k] = d[k] as string
   }

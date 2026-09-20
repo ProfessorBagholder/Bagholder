@@ -13,6 +13,7 @@
   import GridHead from './GridHead.svelte'
   import { request } from '../api'
   import { searchSymbols } from '../api'
+  import { focusOnMount } from '../actions/focus'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
   import { escapable } from '../escape'
@@ -123,7 +124,6 @@
   function toggleAdd() {
     adding = !adding
     query = ''
-    if (adding) setTimeout(() => input?.focus(), 0)
   }
   function pick(w: SymbolMatch) {
     const key = bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase()
@@ -151,7 +151,7 @@
   {#if adding}
     <div class="wl-field">
       <Icon d={ICONS.search} />
-      <input bind:this={input} bind:value={query} placeholder="Search symbol..." aria-label="Search symbol" onkeydown={onAddKey} />
+      <input bind:this={input} use:focusOnMount bind:value={query} placeholder="Search symbol..." aria-label="Search symbol" onkeydown={onAddKey} />
       <span class="esc">ESC</span>
     </div>
     <div class="lbl" style="padding:0 0 6px">{query.trim() ? 'Matches' : 'From Holdings'}</div>

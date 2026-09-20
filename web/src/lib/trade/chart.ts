@@ -5,7 +5,7 @@
 // them verbatim.
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
-import { get } from '../api'
+import { lookup } from '../api'
 
 export interface Bar {
   date?: string | null
@@ -74,10 +74,18 @@ function chartSpan(t: Trade): { from: string; to: string } {
   return { from, to }
 }
 
-const _histCache: Record<string, History> = {}
+interface HistoryAnswer {
+  reason?: string
+  bars?: Bar[]
+  available?: string[]
+  chartSymbol?: string
+  pending?: boolean
+}
+// bars still being read are not the answer: asked again when they are in
+const histories = lookup<HistoryAnswer>({ keep: (a) => !a.pending })
 /** A server started again may have other bars, or a source it did not have: ask it. */
 export function forgetHistory(): void {
-  for (const k of Object.keys(_histCache)) delete _histCache[k]
+  histories.forget()
 }
 /** The chart's own question, as the server is asked it; also names what it watches while the answer is pending. */
 export function historyQuery(t: Trade, tf: string): string {
@@ -91,22 +99,17 @@ export function historyQuery(t: Trade, tf: string): string {
   )
 }
 
-export function loadHistory(t: Trade, tf: string): Promise<History> {
-  const key = t.id + '|' + tf
-  if (_histCache[key]) return Promise.resolve(_histCache[key])
-  const q = historyQuery(t, tf)
-  return get('/api/history?' + q)
-    .then((r: any) => {
-      const out: History = {
-        reason: (r && r.ok && r.reason) || '',
-        bars: (r && r.ok && r.bars) || [],
-        available: (r && r.ok && r.available) || [],
-        chartSymbol: (r && r.ok && r.chartSymbol) || t.symbol,
-        pending: !!(r && r.ok && r.pending),
-      }
-      if (!out.pending) _histCache[key] = out
-      return out
-    })
+/** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
+export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
+  const r = await histories.read('/api/history?' + historyQuery(t, tf), { key: t.id + '|' + tf, signal })
+  const ok = !!r.ok
+  return {
+    reason: (ok && r.reason) || '',
+    bars: (ok && r.bars) || [],
+    available: (ok && r.available) || [],
+    chartSymbol: (ok && r.chartSymbol) || t.symbol,
+    pending: ok && !!r.pending,
+  }
 }
 
 export function underlyingOf(t: Trade): string {

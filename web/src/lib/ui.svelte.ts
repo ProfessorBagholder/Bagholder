@@ -154,7 +154,13 @@ export function connect(): void {
     connectDeadline = setTimeout(() => ui.connecting && endConnect(NO_SESSION), 180000)
   })
 }
-$effect.root(() => {
+/**
+ * Follow a sign-in to its end from the status the server sends. Started by the page
+ * when it mounts, not when this file is read: a file read first in a cycle of imports
+ * would meet a store that is not there yet.
+ */
+export function followConnect(): () => void {
+  return $effect.root(() => {
   $effect(() => {
     const st = store.model?.status
     if (!ui.connecting || !st) return
@@ -168,7 +174,8 @@ $effect.root(() => {
       endConnect((st.error as string) || NO_SESSION)
     }
   })
-})
+  })
+}
 function closeLoginView(): void {
   ui.loginView = false
 }

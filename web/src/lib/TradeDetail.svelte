@@ -35,9 +35,10 @@
     void server.restarts // a server started again is asked again
     const wanted = wantedTf || chartTfFor(t)
     let cancelled = false
+    const closing = new AbortController() // bars nobody is waiting for any more are not read
     let stopWatching: (() => void) | undefined
     const mount = async (want: string) => {
-      const h = await loadHistory(t, want)
+      const h = await loadHistory(t, want, closing.signal)
       if (cancelled) return
       const available = h.available
       const tf = chartTfFor(t, available)
@@ -47,7 +48,7 @@
       }
       if (h.pending) {
         if (available.indexOf('1d') >= 0) {
-          const d = await loadHistory(t, '1d')
+          const d = await loadHistory(t, '1d', closing.signal)
           if (!cancelled) loaded = { tf: '1d', hist: d, provisional: true }
         }
         // the minute bars are being read: be told when they are in, and ask once more
@@ -71,6 +72,7 @@
     mount(wanted)
     return () => {
       cancelled = true
+      closing.abort()
       stopWatching?.()
     }
   })
