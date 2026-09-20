@@ -1,6 +1,7 @@
 import type { Model } from './model'
 import { filters } from './filters.svelte'
-import { connect, disconnect, onChange } from './live'
+import { connect, disconnect, onChange, onRestart } from './live'
+import { forgetHistory } from './trade/chart'
 import { get, post } from './api'
 import { leaveSub, route } from './router.svelte'
 import { flash } from './ui.svelte'
@@ -34,25 +35,37 @@ export function resync(): void {
 }
 
 // The legs and fills of the trade or holding that is open: asked for once when it
-// opens, and again only when a change touched that very row.
-let _detailFor = ''
+// opens, and again only when a change touched that very row or the whole view came
+// again. They are kept beside the model, not in its row: the view never carries them,
+// so a view arriving again (the filters changed, the connection was made again) would
+// take them off the row and blank the open chart.
+export const detail = $state<{ id: string; legs: unknown[]; fills: unknown[] | undefined }>({ id: '', legs: [], fills: undefined })
 export async function loadDetail(id: string | null): Promise<void> {
-  _detailFor = id ?? ''
+  if (id !== detail.id) Object.assign(detail, { id: id ?? '', legs: [], fills: undefined })
   if (!id) return
   try {
     const d = await get<{ legs?: unknown[]; fills?: unknown[] }>('/api/trade', { id })
-    if (!d.ok || _detailFor !== id) return
-    const m = store.model
-    for (const row of [m?.trades.find((t) => t.id === id), m?.positions?.find((p) => p.id === id)]) {
-      if (row) Object.assign(row, { legs: d.legs ?? [], fills: d.fills ?? [] })
-    }
+    if (!d.ok || detail.id !== id) return
+    const next = { legs: d.legs ?? [], fills: d.fills ?? [] }
+    // the same answer is not a change: the chart and the executions stand as they are
+    if (detail.fills && JSON.stringify(next) === JSON.stringify({ legs: detail.legs, fills: detail.fills })) return
+    Object.assign(detail, next)
   } catch {
     /* the rest of the page stands; the detail is asked for again when the row next changes */
   }
 }
 onChange((touched) => {
-  if (_detailFor && touched.has(_detailFor)) loadDetail(_detailFor)
+  if (detail.id && (touched === 'all' || touched.has(detail.id))) loadDetail(detail.id)
 })
+
+// The server this page talks to was started again: the chart's kept bars are forgotten,
+// and a chart that is open asks again.
+export const server = $state({ restarts: 0 })
+onRestart(() => {
+  forgetHistory()
+  server.restarts++
+})
+
 
 // Switch the benchmark the annualized-returns card compares against: persist it,
 // send it on the next model load (spR is computed server-side for it), reload.

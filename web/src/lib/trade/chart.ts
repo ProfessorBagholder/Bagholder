@@ -75,6 +75,10 @@ function chartSpan(t: Trade): { from: string; to: string } {
 }
 
 const _histCache: Record<string, History> = {}
+/** A server started again may have other bars, or a source it did not have: ask it. */
+export function forgetHistory(): void {
+  for (const k of Object.keys(_histCache)) delete _histCache[k]
+}
 /** The chart's own question, as the server is asked it; also names what it watches while the answer is pending. */
 export function historyQuery(t: Trade, tf: string): string {
   const sp = chartSpan(t)

@@ -10,7 +10,7 @@
   import { symText } from './sym'
   import { ICONS } from './icons'
   import { sort, toggleSort, sortRows } from './sort.svelte'
-  import { store, saveJournal } from './state.svelte'
+  import { store, saveJournal, server, detail } from './state.svelte'
   import { openTicket } from './ticket/ticket.svelte'
   import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyQuery, TIMEFRAMES, type Bar, type History } from './trade/chart'
   import { watchDoc } from './live'
@@ -24,12 +24,15 @@
 
   // ---- the chart: mount the wanted timeframe, falling back a step coarser when a
   // timeframe is not offered, and showing the daily chart while minute data loads.
+  // a listing brings its own fills (none); a trade's or a holding's are asked for when it opens
+  const fills = $derived((trade.fills ?? (detail.id === trade.id ? detail.fills : undefined)) as Fill[] | undefined)
   let loaded = $state<{ tf: string; hist: History; provisional: boolean } | null>(null)
   let wantedTf = $state('')
 
   $effect(() => {
     const t = trade
-    if (t.fills === undefined) return // the trade's fills are still on their way
+    if (fills === undefined) return // the trade's fills are still on their way
+    void server.restarts // a server started again is asked again
     const wanted = wantedTf || chartTfFor(t)
     let cancelled = false
     let stopWatching: (() => void) | undefined
@@ -73,7 +76,7 @@
   })
 
   const candles = $derived(!!loaded && loaded.hist.bars.length > 0 && loaded.hist.bars.every((b: Bar) => b.open != null && b.high != null && b.low != null))
-  const chartFills = $derived((trade.fills || []) as Fill[])
+  const chartFills = $derived(fills || [])
   const pillsAvailable = $derived(loaded ? loaded.hist.available : [])
 
   function pickTf(tf: string) {
@@ -98,7 +101,7 @@
     { key: 'price', label: 'Price', align: 'right' },
     { key: 'amount', label: 'Amount', align: 'right', padRight: '0' },
   ] as { key: string; label: string; align?: string; padLeft?: string; padRight?: string }[]
-  const execs = $derived(sortRows((trade.fills || []) as Fill[], sort.execs.key, sort.execs.dir, execSortValue))
+  const execs = $derived(sortRows(fills || [], sort.execs.key, sort.execs.dir, execSortValue))
 
   // ---- ticket buttons (ticketButtonsHtml) ----
   interface TkBtn { side: 'BUY' | 'SELL'; on: boolean; open?: () => void }
@@ -283,7 +286,7 @@
           {@render fact('Hold', hold(trade.holdDays))}
           {@render fact('Account', trade.account)}
         </div>
-        <div style="display:flex;align-items:baseline;gap:8px;margin:14px 0 6px"><span class="lbl">Executions{trade.fills ? ' (' + execs.length + ')' : ''}</span></div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin:14px 0 6px"><span class="lbl">Executions{fills ? ' (' + execs.length + ')' : ''}</span></div>
         <div class="scroll" style="flex:1;min-height:0">
           <table class="table" style="font-size:12.5px;width:100%">
             <thead><tr>

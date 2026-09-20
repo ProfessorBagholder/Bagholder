@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { spaceAxis } from './actions/spaceAxis'
   import { roll } from './actions/roll'
   import type { Model, EquityPoint } from './model'
   import { money, money0, pct, pctPlain, cls, color, stamp, stampDay, hold, shortMoney } from './fmt'
@@ -263,7 +264,7 @@
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column">
       <div style="display:flex;align-items:baseline;gap:12px"><h5>Monthly P&amp;L</h5></div>
       <div style="display:flex;gap:10px;flex:1;min-height:150px;margin-top:12px">
-        <div class="tab" style="position:relative;width:56px;flex:none;font-size:10px;color:var(--ink55)">
+        <div data-axis use:spaceAxis={mo.ticks} class="tab" style="position:relative;width:56px;flex:none;font-size:10px;color:var(--ink55)">
           {#each mo.ticks as t (t[0])}<span style="position:absolute;left:0;top:{t[0].toFixed(1)}%;transform:translateY(-50%)">{moTick(t[1])}</span>{/each}
         </div>
         <div style="position:relative;flex:1;min-width:0;display:flex;gap:5px;align-items:stretch" role="presentation" onmouseleave={() => (moHover = null)}>

@@ -22,18 +22,18 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Tab ring: box → Done → Clear all → box, Shift+Tab backwards (`L:4820-4824`, `L:5149-5155`).
 - [x] The highlight scrolls into view (`L:5163`); focus returns to the box after a click toggle (`L:4956`); ⌘K with the popover open on a field returns to the fields view.
 - [x] Filtering while a trade is open returns to the list (`L:843-847`).
-- [ ] Cashflow names the filters it ignored (SPEC §5; in neither page yet).
+- [x] Cashflow names the filters it ignored (SPEC §5; in neither page yet). *(Found done in both pages; now driven by a test.)*
 
 ### Dashboard
-- [ ] Value-axis labels that collide are hidden (`spaceAxisLabels`, `L:2399-2412`).
+- [x] Value-axis labels that collide are hidden (`spaceAxisLabels`, `L:2399-2412`).
 
 ### Trade, holding and listing detail
 - [x] **The listing page** for a ticker the book does not hold: route `markets/listing:SYMBOL@VENUE`, `/api/listing`, `listingAsTrade` (`L:710-749`). Every click on an unheld ticker (watchlist, shorts, heatmap, ⌘K, a notification) depends on it.
 - [x] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
 - [x] A journal save that fails says so in the header (`L:909`).
-- [ ] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`).
+- [x] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`). *(Design: the server's document reader wakes on `localmodel::on_change` and sends the rows; the page waits for nothing.)*
 - [x] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
-- [ ] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
+- [x] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
 - [ ] **Unsure:** the short-interest reading expiring after 30 minutes on an open page.
 
 ### Markets
@@ -66,6 +66,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Every write carries the `X-Bagholder` header (several rely on the browser's `Sec-Fetch-Site` today).
 
 ### States
+- [x] **Found while testing:** a view arriving again (reconnect, filters) took the open trade's fills off its row and blanked its chart; the detail is now held beside the model and refreshed when the whole view comes again.
 - [x] Per-tab loading skeletons with the cross-fade (`L:4367-4431`).
 - [x] The digit roll on tile values (`L:4442-4500`); an action on each tile's figure (`actions/roll.ts`), ended by the last wheel's `transitionend`.
 - [x] The cut-text hover (`#cutTip`, `L:3379-3395`, `L:5259`).

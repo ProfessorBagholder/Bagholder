@@ -140,11 +140,18 @@ let url = ''
 let streamId = 0
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void }>()
 
-/** What runs after a change to the model is written, with the ids it touched (the open trade refreshes its fills). */
-let afterChange: (touched: Set<string>) => void = () => {}
-export function onChange(fn: (touched: Set<string>) => void): void {
+/** What runs after a change to the model is written, with the ids it touched, or 'all' for the whole view again (the open trade refreshes its fills). */
+let afterChange: (touched: Set<string> | 'all') => void = () => {}
+export function onChange(fn: (touched: Set<string> | 'all') => void): void {
   afterChange = fn
 }
+
+/** What runs when the view arrives from a server started since the one that sent the last: what was kept of its answers is no longer its word. */
+let afterRestart: () => void = () => {}
+export function onRestart(fn: () => void): void {
+  afterRestart = fn
+}
+const startedAt = (m: unknown): unknown => (isObj(m) && isObj(m.status) ? m.status.startedAt : undefined)
 
 // Tell the server what this page is showing beyond the model: once per turn of the
 // page however many things opened and closed in it, and not at all when the set is
@@ -205,8 +212,12 @@ export function connect(sink: Sink, filters: unknown): void {
   es.addEventListener('snapshot', (e) => {
     const { doc, data } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown }
     if (doc === 'model') {
+      const shown = !!sink.model
+      const was = startedAt(sink.model)
       if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj)
       else sink.model = data as Model
+      if (was && startedAt(data) && was !== startedAt(data)) afterRestart()
+      if (shown) afterChange('all') // a view over the one shown: anything in it may have moved while away
       sink.error = null
       sink.loading = false
       return
