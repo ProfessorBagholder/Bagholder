@@ -174,6 +174,24 @@ pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
     Ok(clean)
 }
 
+/// Seconds from `now_unix` until the next pull window opens (the next weekday's
+/// pull time, local). What the sync loop sleeps until, instead of asking every half
+/// minute whether it is time yet. Zero when the zone is unknown.
+pub fn seconds_until_pull_window(now_unix: i64) -> i64 {
+    let (y, m, d, hh, mm) = match local_parts(now_unix) { Some(p) => p, None => return 0 };
+    let minute_now = (hh * 60 + mm) as i64;
+    let window = (ACTIVITY_PULL_HOUR * 60 + ACTIVITY_PULL_MINUTE) as i64;
+    let today = weekday_of(y, m, d) as i64; // 0 = Monday
+    for ahead in 0..8 {
+        let weekday = (today + ahead) % 7;
+        let minutes = ahead * 1440 + window - minute_now;
+        if weekday <= 4 && minutes > 0 {
+            return minutes * 60 - now_unix.rem_euclid(60);
+        }
+    }
+    0
+}
+
 /// `activity_pull_due`: due at 2:00 PM Mountain, Monday to Friday, after
 /// the market has closed, and once per weekday.
 pub fn activity_pull_due(conn: &Connection, now_unix: i64) -> Result<bool> {

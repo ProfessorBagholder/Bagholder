@@ -57,6 +57,11 @@ pub fn settings(conn: &Connection) -> Result<Map<String, Value>> {
     Ok(setting_keys().into_iter().map(|k| (k.to_string(), json!(crate::app::truthy(m.get(k))))).collect())
 }
 
+/// Whether any Releases notification set is on.
+pub fn any_release_scope(conn: &Connection) -> bool {
+    !scopes(conn, &RELEASE_SCOPES, "releases").is_empty()
+}
+
 fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Vec<String> {
     let on = settings(conn).unwrap_or_default();
     keys.iter().filter(|k| on.get(**k).and_then(|v| v.as_bool()).unwrap_or(false)).map(|k| k[prefix.len()..].to_lowercase()).collect()

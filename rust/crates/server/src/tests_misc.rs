@@ -441,3 +441,55 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
     assert_eq!(update::cargo_dir(), app().root.join("rust"));
     assert!(update::cargo_dir().join("Cargo.toml").is_file());
 }
+
+/// Every place the code waits on a clock, by file, with why it may. A wait that is
+/// not here fails the build: a new one is either replaced by waiting for the thing
+/// itself (`events::park_until`, a deadline that is known) or argued for in
+/// docs/architecture.md, "Timers that remain", and then counted here.
+const TIMED_WAITS: [(&str, usize, &str); 15] = [
+    ("market/src/edgar.rs", 1, "the SEC's request rate: a turn taken, waited for outside the lock"),
+    ("market/src/exposure.rs", 1, "a host's request rate"),
+    ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
+    ("market/src/news.rs", 1, "a host's request rate: a turn taken, waited for outside the lock"),
+    ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
+    ("market/src/quotes.rs", 3, "Yahoo's request rate, waited for outside the lock"),
+    ("market/src/sedar.rs", 1, "SEDAR+'s request rate on its one session"),
+    ("server/src/app.rs", 1, "`wait` itself"),
+    ("server/src/events.rs", 8, "`park_until_or` itself, the 40 ms gather, the 15 s keepalive, midnight; three in its tests"),
+    ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
+    ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 6); a test"),
+    ("server/src/orders.rs", 3, "Wealthsimple offers no order push: read only while an order is live or shown"),
+    ("server/src/session.rs", 2, "the portfolio while a page is open; the token and pull deadlines"),
+    ("server/src/update.rs", 3, "child processes with a deadline: std has no wait with one"),
+];
+
+#[test]
+fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let timed = |line: &str| {
+        let l = line.trim_start();
+        !l.starts_with("//") && [".wait(Duration", "thread::sleep", "park_until_or(", "wait_timeout"].iter().any(|p| l.contains(p))
+    };
+    let mut found: Vec<(String, usize)> = Vec::new();
+    let mut dirs = vec![crates.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if p.is_dir() {
+                if name != "tests" && name != "target" {
+                    dirs.push(p);
+                }
+            } else if name.ends_with(".rs") && !name.starts_with("tests_") {
+                let n = std::fs::read_to_string(&p).unwrap().lines().filter(|l| timed(l)).count();
+                if n > 0 {
+                    found.push((p.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/"), n));
+                }
+            }
+        }
+    }
+    found.sort();
+    let want: Vec<(String, usize)> = TIMED_WAITS.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
+    assert_eq!(found, want, "a wait on a clock was added or removed: see docs/architecture.md, \"Timers that remain\"");
+}

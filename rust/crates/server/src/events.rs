@@ -54,12 +54,55 @@ struct Watching;
 impl Watching {
     fn new() -> Watching {
         WATCHERS.fetch_add(1, Ordering::SeqCst);
+        signal(); // work that waits for someone to look can start
         Watching
     }
 }
 impl Drop for Watching {
     fn drop(&mut self) {
         WATCHERS.fetch_sub(1, Ordering::SeqCst);
+        signal();
+    }
+}
+
+/// Sleep until `ready` says so, looking again only when something signals: no
+/// clock is consulted while it waits. False when the app is stopping instead. What
+/// background work that has nothing to do parks on -- a loop with no one watching
+/// its data, an engine with nothing armed.
+pub fn park_until(ready: impl Fn() -> bool) -> bool {
+    let (m, c) = bell();
+    loop {
+        if app().stopping() {
+            return false;
+        }
+        let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
+        if ready() {
+            return true;
+        }
+        let g = m.lock().unwrap_or_else(|e| e.into_inner());
+        drop(c.wait_while(g, |n| *n == seen && !app().stopping()));
+    }
+}
+
+/// As `park_until`, but no longer than `most`: true when `ready`, false when the
+/// time ran out or the app is stopping.
+pub fn park_until_or(most: Duration, ready: impl Fn() -> bool) -> bool {
+    let (m, c) = bell();
+    let until = std::time::Instant::now() + most;
+    loop {
+        if app().stopping() {
+            return false;
+        }
+        let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
+        if ready() {
+            return true;
+        }
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let g = m.lock().unwrap_or_else(|e| e.into_inner());
+        drop(c.wait_timeout_while(g, left, |n| *n == seen && !app().stopping()));
     }
 }
 
@@ -232,4 +275,43 @@ pub fn signal_at_each_midnight() {
         }
         signal();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    /// Work that waits for someone to look does nothing until a page connects, and
+    /// starts the moment one does.
+    #[test]
+    fn test_parked_work_starts_when_a_page_connects_and_not_before() {
+        let _g = crate::tests_common::guard();
+        let ran = Arc::new(AtomicBool::new(false));
+        let t = {
+            let ran = ran.clone();
+            std::thread::spawn(move || {
+                if park_until(|| watchers() > 0) {
+                    ran.store(true, Ordering::SeqCst);
+                }
+            })
+        };
+        std::thread::sleep(Duration::from_millis(150));
+        signal(); // a change with nobody watching wakes it to look, and it parks again
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!ran.load(Ordering::SeqCst), "nobody is looking: nothing runs");
+        let page = Watching::new();
+        t.join().unwrap();
+        assert!(ran.load(Ordering::SeqCst));
+        drop(page);
+        assert_eq!(watchers(), 0);
+    }
+
+    #[test]
+    fn test_a_bounded_park_gives_up_at_its_deadline() {
+        let _g = crate::tests_common::guard();
+        let started = std::time::Instant::now();
+        assert!(!park_until_or(Duration::from_millis(80), || false));
+        assert!(started.elapsed() >= Duration::from_millis(80));
+    }
 }

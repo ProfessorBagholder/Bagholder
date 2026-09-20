@@ -171,6 +171,15 @@ pub fn available() -> bool {
     !endpoint().is_empty()
 }
 
+/// Whether a model is up now, as already known: asks nothing and starts nothing,
+/// so it can be consulted as often as anyone likes.
+pub fn is_ready() -> bool {
+    if let Some(r) = hooks::AVAILABLE.with(|h| h.borrow().as_ref().map(|f| f())) {
+        return r;
+    }
+    !state().lock().unwrap().endpoint.is_empty()
+}
+
 /// Wait at most `seconds` for a model that is coming
 /// up right now. A download is never waited for.
 pub fn wait_ready(seconds: f64) -> bool {
@@ -207,6 +216,8 @@ pub fn endpoint() -> String {
         st.endpoint = url.clone();
         st.model = model;
         st.phase = "ready";
+        drop(st);
+        changed();
         return url;
     }
     ensure();
@@ -228,10 +239,27 @@ pub fn ensure() {
     let _ = std::thread::Builder::new().name("bagholder-localmodel".into()).spawn(provision);
 }
 
+static ON_CHANGE: OnceLock<fn()> = OnceLock::new();
+
+/// Called whenever the model's phase changes (coming up, ready, failed): how whoever
+/// waits for a model learns of it without asking again and again.
+pub fn on_change(f: fn()) {
+    let _ = ON_CHANGE.set(f);
+}
+
+fn changed() {
+    if let Some(f) = ON_CHANGE.get() {
+        f();
+    }
+}
+
 fn set(phase: &'static str, detail: &str) {
-    let mut st = state().lock().unwrap();
-    st.phase = phase;
-    st.detail = detail.to_string();
+    {
+        let mut st = state().lock().unwrap();
+        st.phase = phase;
+        st.detail = detail.to_string();
+    }
+    changed();
 }
 
 fn provision() {
@@ -240,6 +268,8 @@ fn provision() {
         st.endpoint = url;
         st.model = model;
         st.phase = "ready";
+        drop(st);
+        changed();
         return;
     }
     let path = llamafile_path();
@@ -261,6 +291,8 @@ fn provision() {
         st.endpoint = format!("http://{}:{}", MANAGED_HOST, managed_port());
         st.model = "local".into();
         st.phase = "ready";
+        drop(st);
+        changed();
     } else {
         set("failed", "server did not start");
     }

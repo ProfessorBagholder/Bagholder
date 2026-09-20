@@ -2211,8 +2211,24 @@ pub fn bracket_tick(quotes: Option<HashMap<String, Value>>) -> Value {
     json!({"ok": true, "brackets": live.len()})
 }
 
+/// Whether the bracket engine has anything to do: a bracket in play, or an exit
+/// order resting at Wealthsimple that a tick may have to cancel. With neither, a
+/// tick reads two tables and returns; so the engine sleeps until a commit gives it
+/// one, and then keeps its cadence -- a stop is watched every few seconds for as
+/// long as it exists, exactly as before.
+fn bracket_work() -> bool {
+    catch_unwind(|| {
+        !brackets(&BRACKET_LIVE).is_empty()
+            || list_orders().iter().any(|o| { let r = f(o, "role"); (r == "stop" || r == "target") && st_in(o, &BRACKET_RESTING) })
+    })
+    .unwrap_or(true) // could not tell: tick, rather than miss a stop
+}
+
 pub fn bracket_loop() {
-    while !app().wait(Duration::from_secs(BRACKET_POLL_SEC)) {
+    while crate::events::park_until(bracket_work) {
+        if app().wait(Duration::from_secs(BRACKET_POLL_SEC)) {
+            return;
+        }
         if !connected_not_syncing() {
             continue;
         }

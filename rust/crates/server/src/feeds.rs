@@ -46,7 +46,6 @@ fn sha1_hex12(text: &str) -> String {
 // exposure
 // ---------------------------------------------------------------------------
 
-pub const EXPOSURE_CHECK_SEC: u64 = 30 * 60;
 pub const EXPOSURE_FIRST_SEC: u64 = 20;
 pub const EXPOSURE_WORKERS: usize = 4;
 
@@ -167,10 +166,20 @@ pub fn refresh_exposures() -> Value {
 
 /// Soon after start and every half hour.
 pub fn exposure_loop() {
-    let mut wait = EXPOSURE_FIRST_SEC;
-    while !app().wait(Duration::from_secs(wait)) {
-        wait = EXPOSURE_CHECK_SEC;
+    // What a fund holds changes over months. The records are looked over shortly after
+    // start, then when the set of listings they are kept for changes (a trade, a
+    // watchlist row), and otherwise a few times a day -- not every half hour for ever.
+    let listed = || conn().and_then(|c| bagholder_store::gens::all(&c).ok()).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"])).unwrap_or_default();
+    if app().wait(Duration::from_secs(EXPOSURE_FIRST_SEC)) {
+        return;
+    }
+    loop {
+        let before = listed();
         refresh_exposures();
+        crate::events::park_until_or(Duration::from_secs(6 * 3600), || listed() != before);
+        if app().stopping() {
+            return;
+        }
     }
 }
 
@@ -344,8 +353,15 @@ pub fn refresh_news() -> usize {
 }
 
 /// At start, then every five minutes, each listing read once per fifteen.
+/// Whether anyone is owed the news: a page is open to show it, or a Releases
+/// notification set is on and must hear of a release with no page open.
+fn news_wanted() -> bool {
+    crate::events::watchers() > 0 || conn().map_or(false, |c| crate::notify::any_release_scope(&c))
+}
+
 pub fn news_loop() {
-    while !app().stopping() {
+    // no wire pushes, so the sources are read; but only while someone is owed them
+    while crate::events::park_until(news_wanted) {
         refresh_news();
         if app().wait(Duration::from_secs(300)) {
             return;
@@ -1062,29 +1078,53 @@ fn url_quote(t: &str) -> String {
 }
 
 pub fn filings_sweep_loop() {
-    while !app().wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
+    // The regulators publish no feed to subscribe to, so telling someone of a new
+    // filing means asking; but only while they have asked to be told. With no
+    // Disclosures or Releases set on, this waits for one to be switched on.
+    let wanted = || conn().map_or(false, |c| !notify::disclosure_scopes(&c).is_empty() || !notify::release_scopes(&c).is_empty());
+    while crate::events::park_until(wanted) {
         sweep_filings();
+        if app().wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
+            return;
+        }
     }
 }
 
 /// How long the reader waits between documents, and after a pass that found
 /// nothing left to read.
 pub const READ_GAP_SEC: u64 = 2;
-pub const READ_IDLE_SEC: u64 = 120;
 
 /// Documents the app reads on its own, newest first, for the listings it
 /// follows: a title and a sentence cost a download and a reading each, and a
 /// list is no use standing still while someone waits for them. One at a time,
 /// paced, and only while a model is up to do the reading.
 pub fn disclosure_read_loop() {
-    app().wait(Duration::from_secs(20));
-    while !app().stopping() {
-        let read = if bagholder_market::enrich::summary_available() { read_one_unread() } else { false };
-        if app().wait(Duration::from_secs(if read { READ_GAP_SEC } else { READ_IDLE_SEC })) {
+    // Reads while there is something unread and a model to read it; otherwise waits
+    // for one of the two to change -- a filing stored (`FILINGS_STORED`) or the
+    // model coming up (`localmodel::on_change`) -- and consults nothing in between.
+    use bagholder_market::enrich::{summary_ensure, summary_ready};
+    loop {
+        let stored = FILINGS_STORED.load(Ordering::SeqCst);
+        summary_ensure();
+        if !crate::events::park_until(|| summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
+            return;
+        }
+        if !summary_ready() {
+            continue; // more was stored and there is still no model: try bringing one up again
+        }
+        while read_one_unread() {
+            if app().wait(Duration::from_secs(READ_GAP_SEC)) {
+                return;
+            }
+        }
+        if !crate::events::park_until(|| FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
             return;
         }
     }
 }
+
+/// Counts the times filings were stored: what the reading loop waits on.
+static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The listing whose disclosures were asked for last: the one someone is
 /// looking at, and so the one whose documents are read first.
@@ -1185,6 +1225,8 @@ pub fn refresh_filings_in(c: &Connection, sym: &str, name: Option<&str>, exchang
             }
         }
         let _ = sf::mark_filings_fetched(c, &sym, &profile_no, &now);
+        FILINGS_STORED.fetch_add(1, Ordering::SeqCst);
+        crate::events::signal(); // the reading loop has something to look at
         let _ = set_meta(c, &format!("filings_sources:{}", sym), &json_text(&Value::Object(sources)));
         if any_reached { total } else { -1 }
     }
@@ -1492,7 +1534,6 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
 
 pub const FEAR_STALE_MIN: f64 = 15.0;
 pub const FEAR_VERSION: i64 = 1;
-pub const FEAR_SWEEP_EVERY_SEC: u64 = 900;
 
 /// One index read from its publisher and kept.
 pub fn read_fear(index: &str) -> Value {
@@ -1540,28 +1581,37 @@ pub fn fear_payload(index: &str) -> Value {
     if truthy(Some(&rec)) { json!({"ok": true, "gauge": rec}) } else { json!({"ok": false, "error": "the index did not answer"}) }
 }
 
-/// Keep both meters current.
-pub fn sweep_fear() -> usize {
-    let mut done = 0;
-    for which in fear::INDEXES {
-        let held = conn().and_then(|c| sf::gauge(&c, which).ok().flatten());
-        if has_score(&held) && !fear_stale(held.as_ref().unwrap()) {
-            continue;
-        }
-        if truthy(Some(&read_fear(which))) {
-            done += 1;
-        }
+/// The meter as it is held, never waiting on its publisher: what a page showing it is
+/// sent (`docs`).
+pub fn fear_stored(index: &str) -> Value {
+    let which = index.trim().to_lowercase();
+    match conn().and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
+        Some(g) if has_score(&Some(g.clone())) => json!({"ok": true, "gauge": g}),
+        _ => json!({"ok": true, "gauge": Value::Null}),
     }
-    done
 }
 
-pub fn fear_sweep_loop() {
-    loop {
-        sweep_fear();
-        if app().wait(Duration::from_secs(FEAR_SWEEP_EVERY_SEC)) {
-            return;
-        }
+/// A page has started showing the meter `index`: read it when it is missing or
+/// stale, and again as it goes stale, for as long as some page still shows it. The
+/// publishers push nothing; with no page showing a meter, nothing reads one.
+pub fn fear_shown(doc: String, index: String) {
+    let which = index.trim().to_lowercase();
+    if !fear::INDEXES.contains(&which.as_str()) {
+        return;
     }
+    spawn("bagholder-fear-shown", move || {
+        app().single_flight(&doc.clone(), (), || {
+            while crate::events::watched(&doc) && !app().stopping() {
+                let held = conn().and_then(|c| sf::gauge(&c, &which).ok().flatten());
+                if !(has_score(&held) && !fear_stale(held.as_ref().unwrap())) {
+                    read_fear(&which);
+                }
+                if app().wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {
+                    return;
+                }
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,7 +1875,9 @@ pub fn sweep_shorts() -> usize {
 }
 
 pub fn shorts_sweep_loop() {
-    loop {
+    // the short-interest table is the only reader of a sweep: it runs while some page
+    // shows that table, starting the moment one does
+    while crate::events::park_until(|| crate::events::watched("shorts")) {
         sweep_shorts();
         if app().wait(Duration::from_secs(SHORTS_SWEEP_EVERY_SEC)) {
             return;
@@ -1856,17 +1908,22 @@ pub fn refresh_universes() -> Vec<String> {
 /// At start, then every thirty minutes, or sooner
 /// when the page asks.
 pub fn universe_loop() {
-    while !app().stopping() {
-        *universe_kick().0.lock().unwrap() = false;
-        refresh_universes();
-        let (lock, cv) = universe_kick();
-        let until = Instant::now() + Duration::from_secs(1800);
-        let mut kicked = lock.lock().unwrap();
-        while !*kicked && Instant::now() < until && !app().stopping() {
-            let left = (until - Instant::now()).min(Duration::from_secs(1));
-            kicked = cv.wait_timeout(kicked, left).unwrap().0;
+    // The index constituents feed the heatmap and nothing else: sixty-odd requests a
+    // pass. They are read when a page asks for the heatmap (the kick), and again each
+    // half hour only while a page is still connected -- not at start, and not through
+    // a night with nobody there.
+    loop {
+        let kicked = || *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner());
+        if !crate::events::park_until(kicked) {
+            return;
         }
-        drop(kicked);
+        loop {
+            *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            refresh_universes();
+            if !crate::events::park_until_or(Duration::from_secs(1800), kicked) && (app().stopping() || crate::events::watchers() == 0) {
+                break;
+            }
+        }
         if app().stopping() {
             return;
         }
@@ -1950,7 +2007,6 @@ pub fn archive_intraday_bars(limit: Option<usize>) -> Vec<String> {
 pub const ARCHIVE_DUTY: f64 = 1.0;
 pub const ARCHIVE_PASS_SEC: f64 = 1.0;
 pub const ARCHIVE_MIN_SEC: f64 = 0.5;
-pub const ARCHIVE_IDLE_SEC: f64 = 5.0 * 60.0;
 
 /// The calling thread's processor time, or the
 /// monotonic clock where the platform has no such counter.
@@ -1988,7 +2044,27 @@ pub fn archive_loop() {
         let worked = archive_intraday_bars(Some(batch));
         let spent = (cpu_clock() - started).max(0.0);
         if worked.is_empty() {
-            delay = ARCHIVE_IDLE_SEC;
+            // Nothing is due. The next top-up falls due at a known moment (a stored
+            // read passing its age), and new work can otherwise only come from the
+            // book gaining a listing: wait for whichever is first.
+            let was = base();
+            let due = match (conn(), was.as_ref()) {
+                (Some(c), Some(b)) => {
+                    let recs = bagholder_model::symbols_of::intraday_archive_symbols(b);
+                    let (today_s, now, _) = bagholder_market::clock_now();
+                    history::archive_next_due_secs(&c, &recs, &today_s, now)
+                }
+                _ => None,
+            };
+            let moved = || match (base(), was.as_ref()) {
+                (Some(now), Some(was)) => !Arc::ptr_eq(&now.book, &was.book),
+                (now, was) => now.is_some() != was.is_some(),
+            };
+            match due {
+                Some(secs) => { crate::events::park_until_or(Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
+                None => { crate::events::park_until(moved); }
+            }
+            delay = 0.0;
             batch = history::ARCHIVE_BATCH;
             continue;
         }
@@ -2006,9 +2082,14 @@ pub fn quote_loop() {
     // The exchanges offer no push, so prices are asked for; but only while a page is
     // open to show them. With nobody looking, nothing is fetched; a page that opens
     // asks for fresh quotes itself (`/api/events` -> the model's own kick).
-    while !app().wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
-        if crate::events::watchers() > 0 {
-            refresh_quotes();
+    // Parked, at no cost, until a page connects; then read at once (a page that opens
+    // after hours away gets fresh prices) and each minute while one stays. Which
+    // listings are asked is narrowed again by whether their market can have moved
+    // (`market::quotes::can_have_moved`).
+    while crate::events::park_until(|| crate::events::watchers() > 0) {
+        refresh_quotes();
+        if app().wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
+            return;
         }
     }
 }
@@ -2036,9 +2117,15 @@ pub fn scan_watched_folder() -> Option<Value> {
 }
 
 pub fn watch_loop() {
-    scan_watched_folder();
-    while !app().wait(Duration::from_secs(WATCH_SCAN_SEC)) {
+    // Only while a folder is set to be watched; until one is, this waits for the
+    // setting. The folder itself is looked at on a period: the standard library has
+    // no file-system notification (docs/architecture.md, "Timers that remain").
+    let set = || conn().and_then(|c| bagholder_store::csvimport::watch_folder(&c).ok()).map_or(false, |f| !f.is_empty());
+    while crate::events::park_until(set) {
         scan_watched_folder();
+        if app().wait(Duration::from_secs(WATCH_SCAN_SEC)) {
+            return;
+        }
     }
 }
 

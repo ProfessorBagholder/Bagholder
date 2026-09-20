@@ -319,6 +319,13 @@ fn send(
     for _ in 0..=REDIRECT_MAX {
         let u = parse_url(&url)?;
         let key = format!("{}:{}", u.host, u.port);
+        // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
+        // asked for while nobody is looking" is checked on a running app. The query
+        // is left out, so nothing a URL carries reaches a log.
+        static LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *LOGGED.get_or_init(|| !std::env::var("BAGHOLDER_LOG_REQUESTS").unwrap_or_default().trim().is_empty()) {
+            eprintln!("outbound {} {}{}", method, u.host, u.path.split('?').next().unwrap_or(""));
+        }
 
         // the port is part of the Host whenever it is not the scheme's own: a
         // server that builds URLs from it (DevTools does) needs it

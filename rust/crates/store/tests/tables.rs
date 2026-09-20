@@ -209,3 +209,15 @@ fn test_the_row_is_the_default_until_saved_and_then_what_was_saved() {
     admin::save_tiles(&d.conn, &[]).unwrap();
     assert_eq!(tiles(&d), json!([]), "an emptied row stays empty");
 }
+
+/// The sync loop sleeps until the pull window opens: the next weekday, 2:00 PM Mountain.
+#[test]
+fn test_the_next_pull_window_is_a_known_moment() {
+    use bagholder_store::admin::seconds_until_pull_window;
+    // Wednesday 2026-09-16, 10:00 Mountain: today's window, four hours on
+    assert_eq!(seconds_until_pull_window(1_789_574_400), 4 * 3600);
+    // Friday 2026-09-18, 15:00 Mountain: past today's, so Monday's, 71 hours on
+    assert_eq!(seconds_until_pull_window(1_789_765_200), 71 * 3600);
+    // part-way through a minute: to the second
+    assert_eq!(seconds_until_pull_window(1_789_574_400 + 25), 4 * 3600 - 25);
+}

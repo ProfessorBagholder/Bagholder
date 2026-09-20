@@ -10,7 +10,6 @@ use bagholder_ws::session::{identity_from, CallError, Client};
 
 use crate::app::{app, f, log, now_iso, now_unix, spawn, today_utc};
 
-pub const TOKEN_CHECK: Duration = Duration::from_secs(30);
 pub const PORTFOLIO_REFRESH_MINUTES: u64 = 5;
 /// A sync that has failed this many times in a row is told, once.
 pub const SYNC_FAILS_TOLD: i64 = 3;
@@ -563,9 +562,13 @@ pub fn refresh_portfolio() -> Value {
 }
 
 pub fn portfolio_loop() {
-    refresh_portfolio();
-    while !app().wait(Duration::from_secs(60 * PORTFOLIO_REFRESH_MINUTES)) {
+    // balances, net liquidation values and buying power: read when a page connects and
+    // each few minutes while one stays. Nothing else reads them between syncs.
+    while crate::events::park_until(|| crate::events::watchers() > 0) {
         refresh_portfolio();
+        if app().wait(Duration::from_secs(60 * PORTFOLIO_REFRESH_MINUTES)) {
+            return;
+        }
     }
 }
 
@@ -592,25 +595,64 @@ pub fn refresh_now() -> Value {
 /// The token kept fresh, and the weekday pull when
 /// it is due, backing off on failure.
 pub fn auto_sync_loop() {
-    let mut delay = TOKEN_CHECK;
-    let mut fail_delay = TOKEN_CHECK;
-    while !app().wait(delay) {
-        if let Some(s) = load_session() {
-            if !f(&s, "refresh_token").is_empty() {
-                ensure_fresh_token(Some(s));
+    // Two things are waited for, and both are known ahead: the token coming up for
+    // refresh, and the next pull window opening. The loop sleeps until the nearer --
+    // hours, usually -- and wakes early only when the session changes under it (a
+    // sign-in, a disconnect). It used to wake every thirty seconds to read the
+    // session file and ask the database whether it was time yet. Only a failure is
+    // retried on a period, doubling from `RETRY_FIRST` to half an hour.
+    const RETRY_FIRST: Duration = Duration::from_secs(30);
+    const RETRY_MOST: Duration = Duration::from_secs(1800);
+    let has_login = || load_session().map_or(false, |s| !f(&s, "refresh_token").is_empty());
+    let mut retry: Option<Duration> = None;
+    loop {
+        let now = now_unix();
+        let connected = app().state.lock().unwrap().connected;
+        let login = has_login();
+        let sleep = match retry {
+            Some(d) => d,
+            None if !login => Duration::MAX, // nothing to keep fresh until someone signs in
+            None => {
+                let token = load_session().map_or(0.0, |s| bagholder_ws::sync::seconds_until_token_refresh(&s, now));
+                let due = app().open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now as i64).ok()).unwrap_or(false);
+                let pull = if due { 0 } else { bagholder_store::admin::seconds_until_pull_window(now as i64) };
+                Duration::from_secs_f64(token.min(pull as f64).max(0.0))
             }
+        };
+        let was = (connected, login);
+        let changed = || (app().state.lock().unwrap().connected, has_login()) != was;
+        if sleep == Duration::MAX {
+            if !crate::events::park_until(changed) {
+                return;
+            }
+        } else if !sleep.is_zero() {
+            crate::events::park_until_or(sleep, changed);
         }
-        let (connected, syncing) = { let st = app().state.lock().unwrap(); (st.connected, st.syncing) };
+        if app().stopping() {
+            return;
+        }
+        if !has_login() {
+            retry = None;
+            continue;
+        }
+        if !ensure_fresh_token(None) {
+            retry = Some(retry.map_or(RETRY_FIRST, |d| (d * 2).min(RETRY_MOST)));
+            continue;
+        }
+        let syncing = app().state.lock().unwrap().syncing;
         let due = app().open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now_unix() as i64).ok()).unwrap_or(false);
-        if connected && !syncing && due {
+        if due && !syncing {
             let ok = run_sync(true, true);
             crate::feeds::refresh_market_data();
-            fail_delay = if ok { TOKEN_CHECK } else { (fail_delay.max(TOKEN_CHECK) * 2).min(Duration::from_secs(1800)) };
-            delay = fail_delay;
-        } else {
-            delay = TOKEN_CHECK;
-            fail_delay = TOKEN_CHECK;
+            if !ok {
+                retry = Some(retry.map_or(RETRY_FIRST, |d| (d * 2).min(RETRY_MOST)));
+                continue;
+            }
+        } else if due {
+            // a pull the user started is running; it marks the window done when it ends
+            crate::events::park_until(|| !app().state.lock().unwrap().syncing);
         }
+        retry = None;
     }
 }
 

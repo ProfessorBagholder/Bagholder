@@ -28,6 +28,17 @@ fn local_parts(unix: i64) -> Option<(i64, u32, u32, u32, u32)> {
     Some((y, m, d, (secs / 3600) as u32, ((secs % 3600) / 60) as u32))
 }
 
+/// The civil day and minute an instant falls on in a named zone: `(days since
+/// 1970-01-01, minute of the day)`. The zone's rules come from the system's tzdata.
+pub fn civil_in(zone_name: &str, unix: i64) -> Option<(i64, u32)> {
+    static ZONES: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<tz::TimeZone>>>> = OnceLock::new();
+    let zones = ZONES.get_or_init(Default::default);
+    let mut z = zones.lock().unwrap_or_else(|e| e.into_inner());
+    let tz = z.entry(zone_name.to_string()).or_insert_with(|| tz::TimeZone::from_posix_tz(zone_name).ok()).as_ref()?;
+    let local = unix + tz.find_local_time_type(unix).ok()?.ut_offset() as i64;
+    Some((local.div_euclid(86400), (local.rem_euclid(86400) / 60) as u32))
+}
+
 /// Seconds from now until the local day turns.
 pub fn seconds_until_local_midnight() -> u64 {
     let now = Utc::now().timestamp();

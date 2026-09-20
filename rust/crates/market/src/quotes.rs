@@ -306,6 +306,56 @@ pub fn quote_source(rec: &Value) -> Option<(String, String)> {
 
 /// The held instruments whose quote is
 /// older than the refresh interval, each with its source and key.
+// --- when a price can have moved -----------------------------------------------
+//
+// The exchanges offer no push, so prices are asked for. But a share's price moves
+// only while its market trades: a quote read after the close is still the quote at
+// midnight, on Saturday, and until the next open, and asking again every minute
+// through the night fetches the same number some nine hundred times. So a listing
+// is asked again only while its market is open, or when what is held was read
+// before the last close (so the close itself is never missed). A coin trades always.
+// Both countries' exchanges keep New York hours. A market holiday is not known
+// here and is treated as a trading day: a wasted day's reads, never a stale price.
+
+const MARKET_ZONE: &str = "America/New_York";
+const OPEN_MINUTE: u32 = 9 * 60 + 30;
+/// Twenty minutes past the bell, for the closing print to be published.
+const SETTLED_MINUTE: u32 = 16 * 60 + 20;
+
+fn weekday(days_since_epoch: i64) -> i64 {
+    (days_since_epoch + 3).rem_euclid(7) // 0 = Monday; 1970-01-01 was a Thursday
+}
+
+/// Whether the share markets are trading at `now_unix` (or the close is still settling).
+pub fn markets_open(now_unix: f64) -> bool {
+    match bagholder_model::clock::civil_in(MARKET_ZONE, now_unix as i64) {
+        Some((day, minute)) => weekday(day) < 5 && (OPEN_MINUTE..SETTLED_MINUTE).contains(&minute),
+        None => true, // no zone data: ask, rather than show a stale price
+    }
+}
+
+/// The moment the last session's closing print was settled, before `now_unix`.
+fn last_settled(now_unix: f64) -> Option<f64> {
+    let (day, minute) = bagholder_model::clock::civil_in(MARKET_ZONE, now_unix as i64)?;
+    let mut back = if weekday(day) < 5 && minute >= SETTLED_MINUTE { 0 } else { 1 };
+    while weekday(day - back) >= 5 {
+        back += 1;
+    }
+    let local_midnight = now_unix - (minute as f64) * 60.0 - (now_unix % 60.0);
+    Some(local_midnight - (back as f64) * 86400.0 + (SETTLED_MINUTE as f64) * 60.0)
+}
+
+/// Whether a quote from `source`, last read at `last`, can be different now.
+pub fn can_have_moved(source: &str, last: Option<f64>, now_unix: f64) -> bool {
+    if source == "coinbase" || markets_open(now_unix) {
+        return true;
+    }
+    match (last, last_settled(now_unix)) {
+        (Some(read), Some(settled)) => read < settled,
+        _ => true,
+    }
+}
+
 pub fn quote_symbols_needing_refresh(
     conn: &rusqlite::Connection,
     symbols: &[Value],
@@ -328,11 +378,9 @@ pub fn quote_symbols_needing_refresh(
         }
         seen.push(sym.clone());
         let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let age_ok = match instant_secs(&last) {
-            Some(then) => (now_unix - then) <= max_age_minutes * 60.0,
-            None => false,
-        };
-        if !age_ok {
+        let read = instant_secs(&last);
+        let age_ok = read.map_or(false, |then| (now_unix - then) <= max_age_minutes * 60.0);
+        if !age_ok && can_have_moved(&source, read, now_unix) {
             out.push((sym, source, key));
         }
     }

@@ -38,16 +38,19 @@ pub fn available() -> bool {
 }
 
 fn pace() {
-    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
-    let mut last = LAST.lock().unwrap();
-    if let Some(t) = *last {
-        let next = t + PACE;
-        let now = Instant::now();
-        if next > now {
-            std::thread::sleep(next - now);
-        }
+    // Each caller takes the next turn and waits for it with the lock released: two
+    // callers wait side by side for their own turns, not one behind the other's sleep.
+    static NEXT: Mutex<Option<Instant>> = Mutex::new(None);
+    let now = Instant::now();
+    let turn = {
+        let mut next = NEXT.lock().unwrap();
+        let turn = next.map_or(now, |t| t.max(now));
+        *next = Some(turn + PACE);
+        turn
+    };
+    if turn > now {
+        std::thread::sleep(turn - now);
     }
-    *last = Some(Instant::now());
 }
 
 /// The standard reason phrase for an HTTP status, for failure messages.

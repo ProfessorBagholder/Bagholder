@@ -5,11 +5,11 @@
   // guarded by a request id so it cannot overwrite a newer selection.
   import type { FearGauge } from '../model'
   import { relTime } from '../fmt'
-  import { n2, shortDay, api } from './util'
+  import { n2, shortDay } from './util'
+  import { watchDoc } from '../live'
   import { store } from '../state.svelte'
   import Mseg from './Mseg.svelte'
 
-  const FEAR_KEEP_MS = 5 * 60 * 1000
   const INDEX_OPTS = [['stocks', 'Stocks'], ['crypto', 'Crypto']] as const
   const FEAR_BANDS: [number, number, string, string][] = [
     [0, 25, 'Extreme fear', 'var(--heat-n4)'],
@@ -27,30 +27,21 @@
   }
 
   let fearIndex = $state((() => { try { return localStorage.getItem('bh2.fear') || 'stocks' } catch { return 'stocks' } })())
-  interface Held { loading: boolean; at: number; rec: FearGauge | null }
-  const cache = $state<Record<string, Held>>({})
-  const seq: Record<string, number> = {}
-
-  function ensureFear(ix: string) {
-    const held = cache[ix]
-    if (held && (held.loading || Date.now() - held.at < FEAR_KEEP_MS)) return
-    cache[ix] = { loading: true, at: held?.at ?? 0, rec: held?.rec ?? null }
-    const my = (seq[ix] = (seq[ix] || 0) + 1)
-    api<{ ok: boolean; gauge?: FearGauge }>('GET', '/api/fear?index=' + encodeURIComponent(ix)).then((d) => {
-      if (my !== seq[ix]) return // a newer request for this index has since gone out
-      cache[ix] = { loading: false, at: Date.now(), rec: (d && d.ok && d.gauge) || (held && held.rec) || null }
-    })
-  }
+  // The meter is sent while this card shows it: what is held at once, and the fresh
+  // reading when the server has it -- it reads the publisher only while some page
+  // shows the meter.
+  const docs = $state<Record<string, { data: { ok: boolean; gauge: FearGauge | null } | null }>>({})
   $effect(() => {
-    ensureFear(fearIndex)
+    const ix = fearIndex
+    if (!docs[ix]) docs[ix] = { data: null }
+    return watchDoc('fear:' + ix, {}, docs[ix])
   })
   function pickIndex(ix: string) {
     fearIndex = ix
     try { localStorage.setItem('bh2.fear', ix) } catch { /* ignore */ }
-    ensureFear(ix)
   }
 
-  const held = $derived(cache[fearIndex] || { loading: true, at: 0, rec: null })
+  const held = $derived({ loading: !docs[fearIndex]?.data, rec: docs[fearIndex]?.data?.gauge ?? null })
   const g = $derived(held.rec)
   const today = $derived(String((store.model as unknown as { today?: string } | null)?.today || ''))
   const when = $derived.by(() => {

@@ -422,7 +422,7 @@ pub fn request_restart() {
     app().exit_code.store(RESTART_CODE, std::sync::atomic::Ordering::SeqCst);
     spawn("bagholder-restart", || {
         std::thread::sleep(Duration::from_millis(500));
-        app().stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        app().request_stop();
     });
 }
 
@@ -579,13 +579,20 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
         };
         let mut pending = marker.exists();
         let started = Instant::now();
+        // The child is simply waited for. Only in the window after an update is it
+        // looked at while it runs, to tell "alive past the window" from "died in it";
+        // the standard library has no wait with a deadline, so that window -- and
+        // nothing after it -- is the one place the supervisor looks again.
         let status = loop {
+            if !pending {
+                break child.wait().ok();
+            }
             match child.try_wait() {
                 Ok(Some(st)) => break Some(st),
                 Ok(None) => {}
                 Err(_) => break None,
             }
-            if pending && started.elapsed() >= Duration::from_secs(healthy_sec) {
+            if started.elapsed() >= Duration::from_secs(healthy_sec) {
                 // alive past the window: the update took
                 let _ = std::fs::remove_file(&marker);
                 let _ = std::fs::remove_dir_all(home.join("previous"));

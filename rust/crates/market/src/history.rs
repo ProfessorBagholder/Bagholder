@@ -1134,31 +1134,75 @@ fn age_hours(last: &Value, now_unix: f64) -> Option<f64> {
     crate::quotes::instant_secs_public(&field_s(last, "fetchedAt")).map(|then| (now_unix - then) / 3600.0)
 }
 
+/// Hours since the archive last asked for `sym`'s intraday bars, whether it got any
+/// or not. A listing its source has no bars for is never stamped as fetched -- only
+/// as missed -- and one that is asked again on every pass for that reason is asked
+/// without end: a miss is a read, and the next is due when any other would be.
+fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &str, now_unix: f64) -> Option<f64> {
+    let fetched = age_hours(&bagholder_store::market::bar_fetch(conn, sym, "1h").unwrap_or(Value::Null), now_unix);
+    let missed = crate::quotes::instant_secs_public(&bagholder_store::tables::get_meta(conn, &miss_key(sym, "1h"), "").unwrap_or_default())
+        .map(|then| (now_unix - then) / 3600.0);
+    match (fetched, missed) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Keep the intraday bars of recently traded or
 /// held instruments for good, a few per call -- those never fetched first,
 /// then those whose copy is older than a day. Returns the symbols worked.
 pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
+    let mut todo = archive_intraday_due(conn, recs, today, now_unix);
+    todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let mut done = Vec::new();
+    for (_, sym, rec) in todo.into_iter().take(limit) {
+        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
+        let _ = ensure_intraday(conn, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false);
+        // however that went, it was asked: never the same listing again on the next pass
+        if archive_read_age_hours(conn, &sym, now_unix).map_or(true, |age| age > ARCHIVE_TOPUP_HOURS) {
+            record_intraday_miss(conn, &sym, "1h", now_stamp);
+        }
+        done.push(sym);
+    }
+    done
+}
+
+/// The listings whose intraday bars the archive should ask for now: never asked
+/// first (0), then those last asked more than `ARCHIVE_TOPUP_HOURS` ago (1).
+pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64) -> Vec<(u8, String, Value)> {
     let mut todo: Vec<(u8, String, Value)> = Vec::new();
     for rec in recs {
         let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
         if sym.is_empty() || intraday_reach(rec, today).is_empty() {
             continue;
         }
-        let last = bagholder_store::market::bar_fetch(conn, &sym, "1h").unwrap_or(Value::Null);
-        if last.is_null() {
-            todo.push((0, sym, rec.clone()));
-        } else if age_hours(&last, now_unix).map(|a| a > ARCHIVE_TOPUP_HOURS).unwrap_or(true) {
-            todo.push((1, sym, rec.clone()));
+        match archive_read_age_hours(conn, &sym, now_unix) {
+            None => todo.push((0, sym, rec.clone())),
+            Some(age) if age > ARCHIVE_TOPUP_HOURS => todo.push((1, sym, rec.clone())),
+            Some(_) => {}
         }
     }
-    todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    let mut done = Vec::new();
-    for (_, sym, rec) in todo.into_iter().take(limit) {
-        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
-        let _ = ensure_intraday(conn, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false);
-        done.push(sym);
+    todo
+}
+
+/// Seconds until the archive next has something to top up: the moment the oldest
+/// stored read among `recs` passes `ARCHIVE_TOPUP_HOURS`. `None` when nothing is
+/// archived at all -- then only a change to the book can make work. What the
+/// archive waits for, in place of asking every five minutes.
+pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64) -> Option<f64> {
+    let mut soonest: Option<f64> = None;
+    for rec in recs {
+        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        if sym.is_empty() || intraday_reach(rec, today).is_empty() {
+            continue;
+        }
+        let left = match archive_read_age_hours(conn, &sym, now_unix) {
+            Some(age) => ((ARCHIVE_TOPUP_HOURS - age) * 3600.0).max(0.0),
+            None => 0.0,
+        };
+        soonest = Some(soonest.map_or(left, |s: f64| s.min(left)));
     }
-    done
+    soonest
 }
 
 /// Keep daily bars for instruments whose source forgets

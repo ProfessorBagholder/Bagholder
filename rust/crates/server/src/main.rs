@@ -19,7 +19,6 @@ mod versions;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response, Server};
@@ -849,6 +848,7 @@ fn serve() -> i32 {
     // on any connection, every write to the app's state, the day turning
     bagholder_store::on_commit(events::signal);
     events::signal_at_each_midnight();
+    bagholder_market::localmodel::on_change(events::signal);
     spawn("bagholder-auto-sync", session::auto_sync_loop);
     spawn("bagholder-market", || {
         feeds::refresh_market_data();
@@ -880,7 +880,6 @@ fn serve() -> i32 {
     spawn("bagholder-filings-sweep", feeds::filings_sweep_loop);
     spawn("bagholder-disclosure-reader", feeds::disclosure_read_loop);
     spawn("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
-    spawn("bagholder-fear-sweep", feeds::fear_sweep_loop);
 
     let url = format!("http://127.0.0.1:{}", port);
     println!("Bagholder  {}", url);
@@ -908,7 +907,7 @@ fn serve() -> i32 {
     {
         let server = server.clone();
         spawn("bagholder-stop-watch", move || {
-            while !app().wait(Duration::from_secs(3600)) {}
+            app().wait_stop();
             server.unblock();
         });
     }

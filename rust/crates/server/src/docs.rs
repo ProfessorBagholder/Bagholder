@@ -53,6 +53,8 @@ pub fn read(key: &str, _params: &Value) -> Option<Value> {
             Some(feed)
         }
         // `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the first answer
+        // `fear:<index>`: the fear and greed meter
+        k if k.starts_with("fear:") => Some(crate::feeds::fear_stored(&k["fear:".len()..])),
         k if k.starts_with("quote:") => quotes().lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned(),
         k if k.starts_with("history:") => Some(serde_json::json!({"pending": crate::feeds::history_pending(&k["history:".len()..])})),
         _ => None,
@@ -65,6 +67,7 @@ pub fn opened(key: &str) {
         "orders" => {
             crate::orders::kick_orders_refresh();
         }
+        k if k.starts_with("fear:") => crate::feeds::fear_shown(k.to_string(), k["fear:".len()..].to_string()),
         k if k.starts_with("quote:") => quote_shown(k.to_string()),
         k if k.starts_with("filings:") => {
             let q = &k["filings:".len()..];

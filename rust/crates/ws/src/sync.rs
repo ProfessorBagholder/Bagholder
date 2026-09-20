@@ -183,6 +183,14 @@ fn parse_instant(s: &str) -> Option<f64> {
     Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss - offset)
 }
 
+/// Seconds from `now` until the token should be refreshed; zero when it already should.
+pub fn seconds_until_token_refresh(sess: &Value, now: f64) -> f64 {
+    match expires_at_unix(sess) {
+        None => 0.0,
+        Some(exp) => (exp - TOKEN_REFRESH_MARGIN_SEC - now).max(0.0),
+    }
+}
+
 pub fn token_refresh_needed(sess: &Value, now: f64) -> bool {
     match expires_at_unix(sess) {
         None => true,

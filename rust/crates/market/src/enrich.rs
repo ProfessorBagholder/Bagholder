@@ -188,6 +188,16 @@ pub fn summary_available() -> bool {
     crate::localmodel::available()
 }
 
+/// As `summary_available`, from what is already known: no probe, nothing started.
+pub fn summary_ready() -> bool {
+    crate::localmodel::is_ready()
+}
+
+/// Start bringing a model up, if one is not up or coming already.
+pub fn summary_ensure() {
+    crate::localmodel::ensure()
+}
+
 pub fn wait_for_summary(seconds: f64) -> bool {
     crate::localmodel::wait_ready(seconds)
 }

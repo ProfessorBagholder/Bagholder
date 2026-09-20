@@ -97,6 +97,7 @@ pub struct App {
     pub started_at: String,
     pub state: Watched<State>,
     pub stop: AtomicBool,
+    stop_bell: (Mutex<()>, std::sync::Condvar),
     pub exit_code: AtomicI32,
     model: crate::model_cache::ModelCache,
     jobs: Mutex<HashMap<String, Job>>,
@@ -117,6 +118,7 @@ pub fn init(home: PathBuf, root: PathBuf, bind_host: String) -> &'static App {
         started_at: now_iso(),
         state: Watched::new(State::default()),
         stop: AtomicBool::new(false),
+        stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
         exit_code: AtomicI32::new(0),
         model: crate::model_cache::ModelCache::new(),
         jobs: Mutex::new(HashMap::new()),
@@ -142,16 +144,31 @@ impl App {
         self.stop.load(Ordering::SeqCst)
     }
 
-    /// Sleep that ends early when the app stops; true when it stopped.
+    /// Wait `d`, or until the app stops: true when it stopped. The thread sleeps in
+    /// the kernel until one or the other -- it does not wake to look. (It used to
+    /// sleep in quarter-second slices to check a flag, and with some seventeen loops
+    /// waiting that was about seventy wake-ups a second from an app doing nothing.)
     pub fn wait(&self, d: Duration) -> bool {
-        let until = Instant::now() + d;
-        while Instant::now() < until {
-            if self.stopping() {
-                return true;
-            }
-            std::thread::sleep((until - Instant::now()).min(Duration::from_millis(250)));
-        }
+        let (m, c) = &self.stop_bell;
+        let g = m.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = c.wait_timeout_while(g, d, |_| !self.stopping());
         self.stopping()
+    }
+
+    /// Wait until the app stops, however long that is.
+    pub fn wait_stop(&self) {
+        let (m, c) = &self.stop_bell;
+        let g = m.lock().unwrap_or_else(|e| e.into_inner());
+        drop(c.wait_while(g, |_| !self.stopping()));
+    }
+
+    /// Stop: every waiter wakes at once.
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _g = self.stop_bell.0.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_bell.1.notify_all();
+        drop(_g);
+        crate::events::signal(); // the streams and anything parked on a change, too
     }
 
     /// The model as it stands: each layer rebuilt only when something it reads
