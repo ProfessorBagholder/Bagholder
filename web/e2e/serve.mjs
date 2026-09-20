@@ -19,7 +19,7 @@ const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
   env: {
     ...process.env,
     BAGHOLDER_HOME: home,
-    BAGHOLDER_PORT: '8791',
+    BAGHOLDER_PORT: process.env.E2E_PORT || '8791',
     BAGHOLDER_CHILD: '1', // no supervisor: this script is what starts and stops it
     BAGHOLDER_NO_BROWSER: '1',
     BAGHOLDER_DRY_ORDERS: '1',

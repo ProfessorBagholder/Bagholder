@@ -4,13 +4,15 @@ import { defineConfig } from '@playwright/test'
 // book, driven in a real browser. `e2e/serve.mjs` makes the book and starts the
 // server; nothing leaves the machine (BAGHOLDER_OFFLINE) and no order can be
 // placed (BAGHOLDER_DRY_ORDERS).
-export const PORT = 8791
+// (E2E_PORT: a second run beside the first, each with its own server and book)
+export const PORT = Number(process.env.E2E_PORT) || 8791
 
 export default defineConfig({
   testDir: 'e2e',
   fullyParallel: false, // one server, one book: tests that write would cross
   workers: 1,
   reporter: [['list']],
+  outputDir: process.env.E2E_PORT ? `test-results-${process.env.E2E_PORT}` : 'test-results',
   timeout: 30_000,
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
