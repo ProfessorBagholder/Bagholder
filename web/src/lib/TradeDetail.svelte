@@ -3,6 +3,8 @@
   import { tradeChart, type Bar, type Fill } from './actions/tradeChart'
   import { price, money, pct, num } from './fmt'
   import { go } from './router.svelte'
+  import TradeJournal from './trade/TradeJournal.svelte'
+  import Disclosures from './trade/Disclosures.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
@@ -136,10 +138,17 @@
       </table>
     </div>
   </div>
+
+  <div class="two">
+    <TradeJournal {trade} />
+    <Disclosures {trade} />
+  </div>
 </div>
 
 <style>
   .detail { display: flex; flex-direction: column; gap: 16px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
   .back { align-self: flex-start; background: none; border: 0; color: #8b93a7; font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
   .back:hover { color: #e6e9ef; }
   .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }

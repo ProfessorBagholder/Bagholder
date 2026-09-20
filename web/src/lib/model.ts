@@ -173,8 +173,23 @@ export interface Trade {
   pnl: number
   pnlPct: number
   grade: string | null
+  thesis: string
   tags: string[]
   flags: string[]
+}
+
+export interface Filing {
+  id: string
+  source: string
+  category: string
+  type: string
+  title: string
+  subject: string
+  summary: string
+  date: string
+  dateText: string
+  size: string
+  url: string
 }
 
 // --- Markets tab ---

@@ -26,3 +26,22 @@ export async function loadModel(): Promise<void> {
     store.loading = false
   }
 }
+
+// A journal edit: mutate the one trade optimistically (so the UI reflects it at
+// once and nothing else re-renders), then persist. On failure, surface it and
+// reload the authoritative model. This is the "update exactly what changed,
+// nothing else affected" pattern the reconciler could never guarantee.
+export async function saveJournal(id: string, patch: { thesis?: string; grade?: string; tags?: string[] }): Promise<void> {
+  const t = store.model?.trades.find((x) => x.id === id)
+  if (!t) return
+  Object.assign(t, patch)
+  const body = { id, thesis: t.thesis ?? '', tags: t.tags ?? [], grade: t.grade ?? '' }
+  try {
+    const r = await fetch('/api/journal', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const d = await r.json()
+    if (!d.ok) throw new Error('save failed')
+  } catch {
+    store.error = 'Could not save journal entry.'
+    loadModel()
+  }
+}
