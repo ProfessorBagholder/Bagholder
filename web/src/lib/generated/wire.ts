@@ -7,6 +7,8 @@ export type Side = "BUY" | "SELL";
 
 export type Direction = "LONG" | "SHORT";
 
+export type FillSide = "BUY" | "SELL" | "";
+
 export type ExitSide = "SELL" | "COVER";
 
 export type Mark = "fill" | "quote";
@@ -37,11 +39,7 @@ export type Leg = {
  */
 key: string, qty: number, entry: number, exit: number, entryDate: string, exitDate: string, pnl: number, pnlCad: number, fees: number, buyActivityId: string, sellActivityId: string, flags: Array<string>, };
 
-export type Fill = { id: string, when: string, date: string, time: string, 
-/**
- * `BUY`, `SELL`, or nothing when the row does not say.
- */
-side: "BUY" | "SELL" | "", 
+export type Fill = { id: string, when: string, date: string, time: string, side: FillSide, 
 /**
  * Under a trade, what the fill did in it (`BUY TO OPEN`, `SELL (close +
  * open)`); under a holding, the broker's own sub-type.

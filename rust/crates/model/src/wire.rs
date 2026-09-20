@@ -61,10 +61,7 @@ pub struct Fill {
     pub when: String,
     pub date: String,
     pub time: String,
-    /// `BUY`, `SELL`, or nothing when the row does not say.
-    #[serde(serialize_with = "side_or_blank")]
-    #[ts(type = r#""BUY" | "SELL" | """#)]
-    pub side: Option<Side>,
+    pub side: FillSide,
     /// Under a trade, what the fill did in it (`BUY TO OPEN`, `SELL (close +
     /// open)`); under a holding, the broker's own sub-type.
     pub sub: String,
@@ -78,8 +75,25 @@ pub struct Fill {
     pub flags: Vec<Flag>,
 }
 
-fn side_or_blank<S: serde::Serializer>(side: &Option<Side>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(side.map_or("", Side::as_str))
+/// Which way a fill went: `BUY`, `SELL`, or blank when the row does not say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub enum FillSide {
+    #[serde(rename = "BUY")]
+    Buy,
+    #[serde(rename = "SELL")]
+    Sell,
+    #[serde(rename = "")]
+    Unsaid,
+}
+
+impl From<Option<Side>> for FillSide {
+    fn from(side: Option<Side>) -> FillSide {
+        match side {
+            Some(Side::Buy) => FillSide::Buy,
+            Some(Side::Sell) => FillSide::Sell,
+            None => FillSide::Unsaid,
+        }
+    }
 }
 
 /// How much was opened or closed, at what average, in how many fills.

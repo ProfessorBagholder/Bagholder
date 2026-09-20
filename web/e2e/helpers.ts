@@ -5,9 +5,10 @@ import type { APIRequestContext, Page } from '@playwright/test'
  * server's own stream is stood in for by one snapshot: what a status the test cannot
  * bring about for real (an update on offer, a server of another protocol) looks like.
  */
-export async function openWithStatus(page: Page, request: APIRequestContext, status: Record<string, unknown>, hash = ''): Promise<void> {
+export async function openWithStatus(page: Page, request: APIRequestContext, status: Record<string, unknown>, hash = '', change: (model: Record<string, unknown>) => void = () => {}): Promise<void> {
   const model = await (await request.get('/api/model')).json()
   model.status = { ...model.status, ...status }
+  change(model)
   const body = `event: hello\ndata: {"id":1}\n\nevent: snapshot\ndata: ${JSON.stringify({ doc: 'model', data: model })}\n\n`
   await page.route('**/api/events?*', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body }))
   await page.goto('/' + hash)

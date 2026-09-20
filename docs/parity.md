@@ -57,7 +57,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [ ] A row arriving while the panel is open reads at once; the stream opens with `?after=`; the server's returned settings are adopted (`L:1071`, `L:1133`, `L:1114`).
 
 ### Connect, sync, data
-- [ ] **The first-run page**: "No activity yet" / "Pulling your history", its button, the full sync error (`L:4329`).
+- [x] **The first-run page**: "No activity yet" / "Pulling your history", its button, the full sync error (`L:4329`).
 - [ ] Enter submits Add trade and the folder path (`L:5180-5181`).
 
 ### Keyboard and navigation

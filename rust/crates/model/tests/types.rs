@@ -21,7 +21,7 @@ fn declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![
-        Kind, Side, Direction, ExitSide, Mark, Payment, RateSource, Priced, Op,
+        Kind, Side, Direction, FillSide, ExitSide, Mark, Payment, RateSource, Priced, Op,
         Range, Lists, Ranges, Filters,
         Leg, Fill, Tally, Trade, OpenLot, Position, TradeDetail,
         Kpi, BySymbolRow, MonthlyBar, GradeBucket, Grades, QueueRow,

@@ -28,6 +28,7 @@
   import NotesPanel from './lib/notes/NotesPanel.svelte'
   import { isListingId, listingAsTrade, loadListing } from './lib/listing.svelte'
   import { PROTOCOL } from './lib/protocol'
+  import Empty from './lib/Empty.svelte'
   import { notesStore, showNotifications } from './lib/notes/notes.svelte'
 
   let filterOpen = $state(false)
@@ -144,6 +145,8 @@
           null
       : null,
   )
+  // nothing to show yet: every tab is the first-run page, which carries a sync error itself
+  const showingEmpty = $derived(!!store.model && !store.model.activityCount)
   // a listing the book does not hold: its own page, under Markets
   const listing = $derived(route.tab === 'markets' && isListingId(route.sub) ? listingAsTrade(route.sub!, store.model) : null)
   $effect(() => {
@@ -159,7 +162,7 @@
     const s = status
     if (!s) return ''
     if (s.syncing) return s.syncStep || 'Syncing…'
-    if (s.error) return s.error.length > 60 ? s.error.slice(0, 57) + '…' : s.error
+    if (s.error && !showingEmpty) return s.error.length > 60 ? s.error.slice(0, 57) + '…' : s.error
     if (!s.connected) return 'Not connected'
     return 'Synced ' + (relTime(s.lastSync) || '—')
   }
@@ -242,7 +245,7 @@
         {:else if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
         {:else if ui.busy === 'refresh'}<span class="spin"></span>Refreshing session…
         {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
-        {:else if status?.error}<span class="status-err">{status.error.length > 60 ? status.error.slice(0, 57) + '…' : status.error}</span>
+        {:else if status?.error && !showingEmpty}<span class="status-err">{status.error.length > 60 ? status.error.slice(0, 57) + '…' : status.error}</span>
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
       </span>
@@ -296,7 +299,9 @@
 
   <!-- page -->
   <div id="page">
-    {#if route.tab === 'dashboard'}
+    {#if showingEmpty}
+      <Empty status={store.model.status} />
+    {:else if route.tab === 'dashboard'}
       <Dashboard model={store.model} />
     {:else if route.tab === 'cashflow'}
       <Cashflow model={store.model} />

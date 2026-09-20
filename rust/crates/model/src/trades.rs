@@ -15,7 +15,7 @@ use crate::fifo::{trade_side, Slice};
 use crate::input::{Journal, LastFill, TradeGroup};
 use crate::symbols::{option_multiplier, underlying_symbol};
 use crate::value::{fmt8, FSum};
-use crate::wire::{ExitSide, Fill, Leg, Tally, Trade};
+use crate::wire::{ExitSide, Fill, FillSide, Leg, Tally, Trade};
 
 /// What a saved group names its members by.
 pub fn slice_member_key(t: &Slice) -> String {
@@ -65,7 +65,7 @@ pub fn fill_row(a: &Activity) -> Fill {
         when: a.when().to_string(),
         date: if day.is_empty() { a.transaction_date.clone() } else { day },
         time: clock,
-        side,
+        side: side.into(),
         sub: a.activity_sub_type.clone(),
         qty: if side == Some(Side::Sell) { -qty } else { qty },
         price: a.unit_price,
@@ -118,7 +118,7 @@ pub fn collapse_trade(gid: &str, slices: &[Slice], locked: bool, book: &Book, jo
     let closed_ids: HashSet<&String> = slices.iter().map(|s| &s.sell_activity_id).collect();
     for f in fills.iter_mut() {
         let (opened, closed) = (opened_ids.contains(&f.id), closed_ids.contains(&f.id));
-        let side = if f.side == Some(Side::Buy) { "BUY" } else { "SELL" };
+        let side = if f.side == FillSide::Buy { "BUY" } else { "SELL" };
         f.sub = match (t0.kind, opened, closed) {
             (Kind::Options, false, true) => format!("{} TO CLOSE", side),
             (Kind::Options, true, false) => format!("{} TO OPEN", side),
@@ -129,7 +129,7 @@ pub fn collapse_trade(gid: &str, slices: &[Slice], locked: bool, book: &Book, jo
     }
     fills.sort_by(|a, b| b.when.cmp(&a.when));
 
-    let opens = fills.iter().filter(|f| f.side == Some(t0.open_direction.opened_by())).count();
+    let opens = fills.iter().filter(|f| f.side == Some(t0.open_direction.opened_by()).into()).count();
     let closes = fills.len() - opens;
 
     let mut flags: Vec<Flag> = slices.iter().flat_map(|s| s.flags.iter().cloned()).collect();
