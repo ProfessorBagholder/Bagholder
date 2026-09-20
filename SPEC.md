@@ -435,8 +435,9 @@ The header's counts — activities, accounts, last sync — are read as counts. 
 2. The page is rendered against a copy of real data at 1200, 1340, 1440 and 1680 px. On every page, including a trade detail, no table overflows its container and no cell content is clipped at 1340 px and above.
 3. Header boxes are measured to be at one height, and centred headers at zero offset from their column's centre.
 4. Any lookup between tables uses ids, and is exercised with a synthetic duplicate symbol in a second account.
-5. `python3 -m unittest discover -s python/tests -t python` passes, and `cargo test --workspace` in `rust/` passes.
-6. If any step fails, nothing is committed and the finding is reported first.
+5. Every interaction and keyboard behaviour this file gives — not only what renders — is exercised by actually driving it: each button, tab, field, drag, sort and drill-down clicked; each shortcut pressed (⌘/Ctrl+O the Orders panel, ⌘/Ctrl+K the filter, Left/Right the tabs and the Orders panel's own tabs, the Escape cascade); the filter's fields-search listing book *and* external (Yahoo) symbols, including tickers with two listings on different exchanges (AMZN, CNQ, ENB), and Enter committing free text; the menu's items (theme, notifications, connect, disconnect, clear, export, import, folder); and the Connecting flow (§4). "It renders correctly" is not "it works": a screen that looks right can still have a dead control, a dropped shortcut, or a keyed `{#each}` that crashes on a duplicate key — all of which pass a figures-and-widths check and fail a real click-through. A reimplementation on another framework is verified this way against §4 and §5 before it is called done.
+6. `python3 -m unittest discover -s python/tests -t python` passes, and `cargo test --workspace` in `rust/` passes.
+7. If any step fails, nothing is committed and the finding is reported first.
 
 For the phone apps the equivalent is in `CLAUDE.md` ("How changes land", step 6) and `MOBILE.md`: both platforms in the same PR, every screen captured on both from the same seeded rows and compared.
 

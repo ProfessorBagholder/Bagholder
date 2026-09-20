@@ -42,27 +42,42 @@
     return { securityId: (t?.securityId as string) || '', kind: (t?.kind as string) || '', hasPosition: !!pos }
   }
 
-  // ---- external symbol search: debounced, kept per distinct text for the session ----
-  const extCache = $state<Record<string, SymRow[]>>({})
+  // ---- external symbol search ----
+  // When the typed text matches nothing in the book, the reference page looks the
+  // ticker up at Yahoo (never at Wealthsimple) and lists what it finds. The lookup
+  // is scheduled imperatively from the input handler (extSchedule, like ledger.html)
+  // — deterministic per keystroke — and the results land in flat $state tagged with
+  // the query they belong to, so the rows derived tracks them and shows the matches.
+  const extCache = new Map<string, SymRow[]>() // a plain cache, not reactive
+  let extResults = $state<{ q: string; rows: SymRow[] }>({ q: '', rows: [] })
   let extTimer: ReturnType<typeof setTimeout> | undefined
-  function extSchedule(q: string) {
+  function extSchedule(v: string) {
     clearTimeout(extTimer)
-    const key = q.trim().toUpperCase()
-    if (!key || extCache[key]) return
+    const q = v.trim().toUpperCase()
+    if (!q) {
+      extResults = { q: '', rows: [] }
+      return
+    }
+    if (extCache.has(q)) {
+      extResults = { q, rows: extCache.get(q)! }
+      return
+    }
     extTimer = setTimeout(async () => {
       try {
-        const r = await fetch('/api/symbols/search?q=' + encodeURIComponent(key))
+        const r = await fetch('/api/symbols/search?q=' + encodeURIComponent(q))
         const d = await r.json()
-        if (!d || !d.ok) return
-        extCache[key] = d.matches ?? []
+        if (d && d.ok) {
+          extCache.set(q, d.matches ?? [])
+          extResults = { q, rows: d.matches ?? [] }
+        }
       } catch { /* a failed lookup is not remembered */ }
     }, 300)
   }
   function extRows(q: string): SymRow[] {
     const Q = q.trim().toUpperCase()
-    if (!Q) return []
+    if (!Q || extResults.q !== Q) return []
     const held = new Set((options.symbols ?? []).map((v) => bareSymbol(v) + '|' + String(options.listings?.[v]?.exchange ?? '').toUpperCase()))
-    return (extCache[Q] ?? []).filter((r) => !held.has(bareSymbol((r.symbol ?? r.sym) as string) + '|' + String(r.exchange ?? '').toUpperCase()))
+    return extResults.rows.filter((r) => !held.has(bareSymbol((r.symbol ?? r.sym) as string) + '|' + String(r.exchange ?? '').toUpperCase()))
   }
 
   interface SymRow { book?: boolean; sym?: string; symbol?: string; name?: string; exchange?: string; currency?: string; kind?: string; rank?: number; sub?: string }
@@ -250,7 +265,7 @@
     <div>
       {#if hasMatches}
         <div class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">
-          {#each syms as r, i (r.sym)}
+          {#each syms as r, i (r.sym + '|' + r.exchange + '#' + i)}
             {@const on = filters.lists.symbol.indexOf(r.sym) >= 0}
             {@const cls = (on ? ' on' : '') + (i === valueHi ? ' hi' : '')}
             {@const contract = OPTION_RE.test(r.sym)}

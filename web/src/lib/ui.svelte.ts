@@ -49,6 +49,8 @@ export const ui = $state<{
   folderPath: string
   folderError: string
   watch: { watching: boolean; path: string; lastScan?: string; files?: { file: string; format?: string; added: number; duplicates: number }[] } | null
+  connecting: boolean
+  loginView: boolean
 }>({
   menuOpen: false,
   modal: '',
@@ -61,6 +63,8 @@ export const ui = $state<{
   folderPath: '',
   folderError: '',
   watch: null,
+  connecting: false,
+  loginView: false,
 })
 
 function api(method: string, path: string, body?: unknown): Promise<{ ok?: boolean; error?: string; [k: string]: unknown }> {
@@ -104,10 +108,65 @@ export function refreshSession(): void {
   })
 }
 
+// Connect to Wealthsimple, ported from ledger.html connect(): start the login
+// browser, show the in-app sign-in window if the server streams one, then poll
+// status until the session lands (then sync) or the attempt ends/times out.
 export function connect(): void {
   ui.menuOpen = false
-  // Sign-in streams into a login view; open the endpoint the legacy connect() used.
-  api('POST', '/api/connect')
+  ui.connecting = true
+  const s = store.model?.status
+  if (s) s.error = ''
+  api('POST', '/api/login/start').then((res) => {
+    if (!res || !res.ok) {
+      ui.connecting = false
+      const st = store.model?.status
+      if (st) st.error = (res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.'
+      return
+    }
+    if (store.model?.status?.loginView) ui.loginView = true
+    const t0 = Date.now()
+    const tick = () =>
+      api('GET', '/api/status').then((st) => {
+        if (!ui.connecting) return // cancelled meanwhile
+        if (store.model && st && st.ok) store.model.status = st as unknown as typeof store.model.status
+        if (st && st.connected) {
+          ui.connecting = false
+          closeLoginView()
+          syncNow()
+          return
+        }
+        if (st && !st.capturing) {
+          ui.connecting = false
+          closeLoginView()
+          const cur = store.model?.status
+          if (cur) cur.error = (st.error as string) || 'No session yet. Finish login in the Chrome window, then try Sync now.'
+          return
+        }
+        if (Date.now() - t0 > 180000) {
+          ui.connecting = false
+          closeLoginView()
+          const cur = store.model?.status
+          if (cur) cur.error = 'No session yet. Finish login in the Chrome window, then try Sync now.'
+          return
+        }
+        setTimeout(tick, 500)
+      })
+    tick()
+  })
+}
+function closeLoginView(): void {
+  ui.loginView = false
+}
+export function cancelConnect(): void {
+  ui.connecting = false
+  closeLoginView()
+  const cur = store.model?.status
+  if (cur) cur.error = ''
+  api('POST', '/api/login/cancel').then(() => loadModel())
+}
+// One login input event (click/key/wheel/text), forwarded to the streamed browser.
+export function loginInput(ev: unknown): void {
+  api('POST', '/api/login/input', ev)
 }
 
 export function disconnect(): void {

@@ -16,12 +16,15 @@
   import FilterPopover from './lib/FilterPopover.svelte'
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
+  import LoginView from './lib/LoginView.svelte'
+  import { cancelConnect, loginInput } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
   import { ticketStore, closeTicket } from './lib/ticket/ticket.svelte'
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
+  import { panel as ordersPanel } from './lib/orders/orders.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
   import { notesStore, startNotesStream } from './lib/notes/notes.svelte'
 
@@ -61,7 +64,15 @@
   // ⌘/Ctrl+O toggles Orders, ⌘/Ctrl+K opens the filter popover, ←/→ move between
   // tabs, and Escape unwinds whatever is open (ticket → notes → orders → menu →
   // filter → modal → confirm → back out of a trade → clear filters).
+  const LOGIN_KEYS = ['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'Home', 'End']
   function onKey(e: KeyboardEvent) {
+    if (ui.loginView) {
+      // forward keystrokes to the streamed sign-in browser (ledger loginKey)
+      if (e.metaKey || e.ctrlKey) return // paste arrives as its own event
+      if (e.key.length === 1) { e.preventDefault(); loginInput({ kind: 'text', text: e.key }) }
+      else if (LOGIN_KEYS.includes(e.key)) { e.preventDefault(); loginInput({ kind: 'key', key: e.key }) }
+      return
+    }
     if (ticketStore.t) {
       if (e.key === 'Escape') { e.preventDefault(); closeTicket(); return }
       const t = e.target as HTMLElement | null
@@ -78,7 +89,25 @@
       if (e.key === 'Escape') { e.preventDefault(); notesOpen = false; return }
     }
     if (ordersOpen && !ui.confirm && !filterOpen) {
-      if (e.key === 'Escape') { e.preventDefault(); ordersOpen = false; return }
+      // Esc closes an open editor first, then the panel; ←/→ move between tabs
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        if (ordersPanel.orderEdit || ordersPanel.bracketEdit) {
+          ordersPanel.orderEdit = null
+          ordersPanel.bracketEdit = null
+        } else ordersOpen = false
+        return
+      }
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !isFieldFocused()) {
+        const tabs = ['pending', 'filled', 'cancelled'] as const
+        const j = tabs.indexOf(ordersPanel.tab) + (e.key === 'ArrowRight' ? 1 : -1)
+        if (j >= 0 && j < tabs.length) {
+          e.preventDefault()
+          ordersPanel.tab = tabs[j]
+          ordersPanel.orderEdit = null
+          ordersPanel.bracketEdit = null
+        }
+      }
       return
     }
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
@@ -192,7 +221,11 @@
       {#if status?.version}<span class="muted" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
-      <span style="font-size:12px;color:var(--ink55)">{#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>{:else}{syncLine()}{/if}</span>
+      <span style="font-size:12px;color:var(--ink55)">
+        {#if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
+        {:else if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>
+        {:else}{syncLine()}{/if}
+      </span>
       <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ordersOpen = true)}>
         <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.receipt} /></svg>
         {#if status?.openOrders}<span class="od-badge quiet">{status.openOrders}</span>{/if}
@@ -261,6 +294,7 @@
   {#if ticketStore.t}<OrderTicket />{/if}
   {#if ordersOpen}<OrdersPanel onclose={() => (ordersOpen = false)} />{/if}
   {#if notesOpen}<NotesPanel onclose={() => (notesOpen = false)} />{/if}
+  {#if ui.loginView}<LoginView />{/if}
   {#if ui.confirm}<ConfirmDialog />{/if}
   {#if ui.modal}<Modals />{/if}
 {:else if store.error}
