@@ -6660,14 +6660,21 @@ def _source_status(sym):
     out = {}
     for p in disclosures.PROVIDERS:
         try:
-            avail = bool(p.available())
+            dep = bool(p.available())
         except Exception:
-            avail = False
+            dep = False
         st = stored_status.get(p.SOURCE) or {}
+        # "available" is whether the last read actually reached the source, not merely
+        # whether its dependency is installed: a stored outcome that recorded the source
+        # unavailable (an outage, a maintenance page) means it could not be reached even
+        # with the dependency present. The error it left travels with it, so the card can
+        # say the source is unavailable rather than assert the listing has no filer.
+        reached = bool(st.get("available")) if "available" in st else dep
         out[p.SOURCE] = {
-            "available": avail,
+            "available": dep and reached,
             "matched": p.SOURCE in have,
             "filer": bool(st.get("filer") or p.SOURCE in have),
+            "error": st.get("error") or "",
         }
     return out
 

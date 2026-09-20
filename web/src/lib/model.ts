@@ -361,6 +361,9 @@ export interface Filing {
 export interface FilingsSource {
   available?: boolean
   filer?: boolean
+  matched?: boolean
+  // set when the source was tried and could not be reached (an outage, a maintenance page)
+  error?: string
 }
 export interface FilingsPayload {
   ok: boolean

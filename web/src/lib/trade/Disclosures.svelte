@@ -63,8 +63,13 @@
     const srcStatus = p.sources || {}
     const availNames = Object.keys(srcStatus).filter((k) => srcStatus[k].available)
     const anyFiler = Object.keys(srcStatus).some((k) => srcStatus[k].filer)
+    // a source that was tried and could not be reached (an outage, a maintenance page)
+    // carries an error; it is unavailable, not proof the listing has no filer
+    const downNames = Object.keys(srcStatus).filter((k) => srcStatus[k].error)
     if (!all.length) {
-      const msg = anyFiler ? 'Nothing filed.' : 'No regulatory filer for this listing.'
+      const msg = anyFiler ? 'Nothing filed.'
+        : downNames.length ? downNames.join(' · ') + (downNames.length > 1 ? ' are unavailable.' : ' is unavailable.')
+        : 'No regulatory filer for this listing.'
       const names = anyFiler ? availNames.join(' · ') : ''
       const right = [names, p.fetchedAt ? 'read ' + relTime(p.fetchedAt) : ''].filter(Boolean).join(' · ')
       return { state: 'empty' as const, right, msg }

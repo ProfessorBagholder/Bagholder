@@ -1202,12 +1202,23 @@ fn source_status(c: &Connection, sym: &str) -> Value {
         .unwrap_or_default();
     let have: HashSet<String> = sf::filings_for(c, sym).unwrap_or_default().iter().map(|r| f(r, "source")).collect();
     let mut out = Map::new();
-    for (source, avail) in [(sedar::SOURCE, sedar::available()), (edgar::SOURCE, edgar::available())] {
+    for (source, dep) in [(sedar::SOURCE, sedar::available()), (edgar::SOURCE, edgar::available())] {
         let st = stored.get(source).cloned().unwrap_or(json!({}));
+        // "available" is whether the last read actually reached the source, not merely
+        // whether its dependency is installed: a stored outcome that recorded the source
+        // unavailable (an outage, a maintenance page) means it could not be reached even
+        // with the dependency present. The error it left travels with it, so the card can
+        // say the source is unavailable rather than assert the listing has no filer.
+        let reached = match st.get("available") {
+            Some(v) => v.as_bool().unwrap_or(false),
+            None => dep,
+        };
+        let error = st.get("error").and_then(|v| v.as_str()).unwrap_or("");
         out.insert(source.into(), json!({
-            "available": avail,
+            "available": dep && reached,
             "matched": have.contains(source),
             "filer": is_true(&st, "filer") || have.contains(source),
+            "error": error,
         }));
     }
     Value::Object(out)
@@ -2200,6 +2211,23 @@ mod tests {
         assert_eq!(srcs, ["SEC"]);
         assert_eq!(out["sources"]["SEC"]["matched"], true);
         assert_eq!(out["sources"]["SEDAR+"]["matched"], false);
+    }
+
+    #[test]
+    fn test_an_unreachable_source_reads_unavailable_and_carries_its_error() {
+        // SEDAR+ could not be reached (an outage, a maintenance page); SEC answered.
+        // The failed source must read as unavailable and carry its reason, so the card
+        // can say it is unavailable rather than assert the listing has no filer.
+        let c = store();
+        let fetch = stub(
+            json!([item("SEC", 1, "")]),
+            json!({"SEDAR+": {"available": false, "matched": false, "count": 0, "error": "SEDAR+ did not return the searchReportingIssuers form"},
+                   "SEC": {"available": true, "matched": true, "count": 1, "error": ""}}),
+        );
+        let out = payload(&c, "SHOP", &fetch);
+        assert_eq!(out["sources"]["SEDAR+"]["available"], false, "a source that failed to answer is unavailable, whatever its dependency");
+        assert_eq!(out["sources"]["SEDAR+"]["error"], "SEDAR+ did not return the searchReportingIssuers form");
+        assert_eq!(out["sources"]["SEC"]["error"], "", "the source that answered carries no error");
     }
 
     #[test]
