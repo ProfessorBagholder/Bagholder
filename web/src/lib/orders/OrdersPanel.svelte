@@ -16,6 +16,14 @@
   import { px, money, qty as qtyFmt } from '../fmt'
   import { symText } from '../sym'
   import { ICONS } from '../icons'
+  import { focusOnMount } from '../actions/focus'
+
+  // Enter in an editor's box saves it
+  function saveOnEnter(e: KeyboardEvent, save: () => void) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    save()
+  }
 
   let { onclose }: { onclose: () => void } = $props()
 
@@ -149,9 +157,9 @@
                 {#if editing && panel.orderEdit}
                   <div class="od-edit">
                     <div class="tk-grid">
-                      <label class="tk-f"><span class="tk-l">Shares</span><input class="tk-in num" id="od-qty" inputmode="decimal" autocomplete="off" value={panel.orderEdit.qty ?? qtyFmt(o.quantity)} oninput={(e) => (panel.orderEdit!.qty = (e.target as HTMLInputElement).value)} /></label>
+                      <label class="tk-f"><span class="tk-l">Shares</span><input class="tk-in num" id="od-qty" use:focusOnMount onkeydown={(e) => saveOnEnter(e, () => orderEditSave(o.id))} inputmode="decimal" autocomplete="off" value={panel.orderEdit.qty ?? qtyFmt(o.quantity)} oninput={(e) => (panel.orderEdit!.qty = (e.target as HTMLInputElement).value)} /></label>
                       {#if orderHasLimit(o)}
-                        <label class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="od-limit" inputmode="decimal" autocomplete="off" value={panel.orderEdit.limit ?? px(o.limitPrice)} oninput={(e) => (panel.orderEdit!.limit = (e.target as HTMLInputElement).value)} /></label>
+                        <label class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="od-limit" onkeydown={(e) => saveOnEnter(e, () => orderEditSave(o.id))} inputmode="decimal" autocomplete="off" value={panel.orderEdit.limit ?? px(o.limitPrice)} oninput={(e) => (panel.orderEdit!.limit = (e.target as HTMLInputElement).value)} /></label>
                       {:else}<div></div>{/if}
                     </div>
                     <div class="od-edit-btns"><button class="od-link muted" onclick={cancelOrderEdit}>Cancel</button><button class="tk-go od-save" disabled={panel.busy === 'orders'} onclick={() => orderEditSave(o.id)}>{panel.busy === 'orders' ? 'Saving…' : 'Save'}</button></div>
@@ -175,10 +183,10 @@
                   <div class="od-edit">
                     <div class="tk-grid">
                       {#if b.slKind}
-                        <div class="tk-f"><span class="tk-l">{bed.slLabel}</span><input class="tk-in num" id="od-sl" inputmode="decimal" autocomplete="off" value={panel.bracketEdit.sl ?? bed.slCur} oninput={(e) => (panel.bracketEdit!.sl = (e.target as HTMLInputElement).value)} /><button class="od-link neg od-remove" onclick={() => bracketRemove(b.id, 'sl')}>Remove stop loss</button></div>
+                        <div class="tk-f"><span class="tk-l">{bed.slLabel}</span><input class="tk-in num" id="od-sl" use:focusOnMount onkeydown={(e) => saveOnEnter(e, () => bracketEditSave(b.id))} inputmode="decimal" autocomplete="off" value={panel.bracketEdit.sl ?? bed.slCur} oninput={(e) => (panel.bracketEdit!.sl = (e.target as HTMLInputElement).value)} /><button class="od-link neg od-remove" onclick={() => bracketRemove(b.id, 'sl')}>Remove stop loss</button></div>
                       {:else}<div></div>{/if}
                       {#if b.tpPrice}
-                        <div class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="od-tp" inputmode="decimal" autocomplete="off" value={panel.bracketEdit.tp ?? px(b.tpPrice)} oninput={(e) => (panel.bracketEdit!.tp = (e.target as HTMLInputElement).value)} /><button class="od-link neg od-remove" onclick={() => bracketRemove(b.id, 'tp')}>Remove take profit</button></div>
+                        <div class="tk-f"><span class="tk-l">Limit price</span><input class="tk-in num" id="od-tp" onkeydown={(e) => saveOnEnter(e, () => bracketEditSave(b.id))} inputmode="decimal" autocomplete="off" value={panel.bracketEdit.tp ?? px(b.tpPrice)} oninput={(e) => (panel.bracketEdit!.tp = (e.target as HTMLInputElement).value)} /><button class="od-link neg od-remove" onclick={() => bracketRemove(b.id, 'tp')}>Remove take profit</button></div>
                       {:else}<div></div>{/if}
                     </div>
                     <div class="od-edit-btns"><button class="od-link muted" onclick={cancelBracketEdit}>Cancel</button><button class="tk-go od-save" disabled={panel.busy === 'orders'} onclick={() => bracketEditSave(b.id)}>{panel.busy === 'orders' ? 'Saving…' : 'Save'}</button></div>

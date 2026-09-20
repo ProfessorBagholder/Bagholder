@@ -21,7 +21,9 @@
     </div>
 
     {#if ui.modal === 'trade'}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <!-- Enter in any of its boxes adds the trade -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" onkeydown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); saveTrade(accounts) } }}>
         <div><div class="lbl" style="margin-bottom:5px">Date</div><input class="input" type="date" bind:value={f.date} /></div>
         <div><div class="lbl" style="margin-bottom:5px">Account</div>
           <select class="input" bind:value={f.account}>
@@ -68,7 +70,7 @@
 
     {:else}
       <div class="dim" style="font-size:12.5px;line-height:1.5;margin-bottom:10px">Every CSV at the top level of this folder is imported, and the folder is checked every 10 minutes while the app runs. Files that haven't changed are not re-read.</div>
-      <input class="input" bind:value={ui.folderPath} placeholder="/Users/you/Downloads/wealthsimple" spellcheck="false" />
+      <input class="input" bind:value={ui.folderPath} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); watchFolder() } }} placeholder="/Users/you/Downloads/wealthsimple" spellcheck="false" />
       {#if ui.folderError}<div class="status-err" style="font-size:12px;margin-top:8px">{ui.folderError}</div>{/if}
       <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
         {#if w && w.watching}

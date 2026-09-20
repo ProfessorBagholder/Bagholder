@@ -3,6 +3,7 @@ import { filters } from './filters.svelte'
 import { connect, disconnect, onChange } from './live'
 import { get, post } from './api'
 import { leaveSub, route } from './router.svelte'
+import { flash } from './ui.svelte'
 
 // The reactive store. This is the whole point of the migration: state lives in
 // one $state rune and the UI derives from it — no manual coreVersion/dataVersion
@@ -93,7 +94,8 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
     const d = await post('/api/journal', body)
     if (!d.ok) throw new Error('save failed')
   } catch {
-    store.error = 'Could not save journal entry.'
+    // said in the header, and the row put back as the server has it
+    flash('Could not save journal entry.', 'err')
     resync()
   }
 }

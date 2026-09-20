@@ -333,7 +333,7 @@
             {#each trade.tags || [] as tg (tg)}
               <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 5px 3px 9px;border-radius:6px;background:var(--chip-bg);color:var(--chip-fg)">{tg}<button onclick={(e) => { e.stopPropagation(); removeTag(tg) }} aria-label="Remove tag" style="display:grid;place-items:center;width:15px;height:15px;padding:0;border:0;border-radius:4px;background:rgba(var(--ink-rgb),.1);color:var(--chip-fg);cursor:pointer;font-size:11px;line-height:1">×</button></span>
             {/each}
-            <input bind:this={tagEl} bind:value={tagDraft} oninput={() => (tagHi = 0)} onkeydown={tagKey} placeholder={(trade.tags || []).length ? 'Add another…' : 'Add a tag…'} aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off" />
+            <input id="tagInput" bind:this={tagEl} bind:value={tagDraft} oninput={() => (tagHi = 0)} onkeydown={tagKey} placeholder={(trade.tags || []).length ? 'Add another…' : 'Add a tag…'} aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off" />
           </div>
           {#if tagDraft.trim() && tagMatches.length}
             {@const hiI = Math.min(tagHi, tagMatches.length - 1)}

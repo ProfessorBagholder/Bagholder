@@ -30,7 +30,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 ### Trade, holding and listing detail
 - [x] **The listing page** for a ticker the book does not hold: route `markets/listing:SYMBOL@VENUE`, `/api/listing`, `listingAsTrade` (`L:710-749`). Every click on an unheld ticker (watchlist, shorts, heatmap, ⌘K, a notification) depends on it.
 - [x] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
-- [ ] A journal save that fails says so in the header (`L:909`).
+- [x] A journal save that fails says so in the header (`L:909`).
 - [ ] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`).
 - [ ] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
 - [ ] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
@@ -46,9 +46,9 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Esc closes the tile picker and the watchlist add row wherever focus is (`L:5133`).
 
 ### Order ticket and Orders panel
-- [ ] The page behind an open panel does not scroll (`panel-open`, `L:4648`).
+- [x] The page behind an open panel does not scroll (`panel-open`, `L:4648`).
 - [x] ⌘K works over the Orders panel (`L:5104`).
-- [ ] Enter saves an order editor; the editor takes focus when it opens (`L:4992-4995`, `L:5113`).
+- [x] Enter saves an order editor; the editor takes focus when it opens (`L:4992-4995`, `L:5113`).
 - [ ] **Unsure:** the cards' pixel grammar against the original, line by line.
 
 ### Notifications
@@ -58,11 +58,11 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 
 ### Connect, sync, data
 - [x] **The first-run page**: "No activity yet" / "Pulling your history", its button, the full sync error (`L:4329`).
-- [ ] Enter submits Add trade and the folder path (`L:5180-5181`).
+- [x] Enter submits Add trade and the folder path (`L:5180-5181`).
 
 ### Keyboard and navigation
 - [x] `#positions` is an alias of `#portfolio` in the router (`L:4699`).
-- [ ] Esc in the tag box does not navigate back (the guard looks for an id no element has).
+- [x] Esc in the tag box does not navigate back (the guard looks for an id no element has).
 - [x] Every write carries the `X-Bagholder` header (several rely on the browser's `Sec-Fetch-Site` today).
 
 ### States

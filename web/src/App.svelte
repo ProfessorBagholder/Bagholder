@@ -152,6 +152,10 @@
           null
       : null,
   )
+  // the wheel over an open panel must not move the page behind it
+  $effect(() => {
+    document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ordersOpen || notesOpen))
+  })
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
   const showingEmpty = $derived(!!store.model && !store.model.activityCount)
   // a listing the book does not hold: its own page, under Markets

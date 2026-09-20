@@ -69,7 +69,8 @@ export const ui = $state<{
 })
 
 
-function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
+/** Say something in the header's status line for a while. */
+export function flash(msg: string, kind: '' | 'ok' | 'err' = 'ok', ms = 4000) {
   ui.notice = msg
   ui.noticeKind = kind
   setTimeout(() => {
