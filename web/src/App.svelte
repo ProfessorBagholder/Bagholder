@@ -14,10 +14,15 @@
   import CommandPalette from './lib/CommandPalette.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
   import { ticketStore } from './lib/ticket/ticket.svelte'
+  import OrdersPanel from './lib/orders/OrdersPanel.svelte'
+  import NotesPanel from './lib/notes/NotesPanel.svelte'
+  import { notesStore, startNotesStream } from './lib/notes/notes.svelte'
   import { activeCount } from './lib/filters.svelte'
 
   let filterOpen = $state(false)
   let paletteOpen = $state(false)
+  let ordersOpen = $state(false)
+  let notesOpen = $state(false)
 
   function onGlobalKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -29,9 +34,11 @@
   onMount(() => {
     loadModel()
     const stopRouter = startRouter()
+    const stopNotes = startNotesStream()
     const id = setInterval(loadModel, 30_000)
     return () => {
       stopRouter()
+      stopNotes()
       clearInterval(id)
     }
   })
@@ -44,6 +51,10 @@
     <span class="brand">Bagholder</span>
     <span class="v3">/v3 · Svelte</span>
     <button class="search" onclick={() => (paletteOpen = true)} aria-label="Search">Search <kbd>⌘K</kbd></button>
+    <button class="icon" onclick={() => (ordersOpen = true)} aria-label="Orders">Orders</button>
+    <button class="icon bell" onclick={() => (notesOpen = true)} aria-label="Notifications">
+      🔔{#if notesStore.unread}<span class="bcount">{notesStore.unread}</span>{/if}
+    </button>
     <button class="filter" class:on={activeCount() > 0} onclick={() => (filterOpen = true)} aria-label="Filters">
       ⚲ Filter{#if activeCount()}<span class="fcount">{activeCount()}</span>{/if}
     </button>
@@ -57,6 +68,12 @@
   {/if}
   {#if ticketStore.t}
     <OrderTicket />
+  {/if}
+  {#if ordersOpen}
+    <OrdersPanel onclose={() => (ordersOpen = false)} />
+  {/if}
+  {#if notesOpen}
+    <NotesPanel onclose={() => (notesOpen = false)} />
   {/if}
 
   <TabBar />
@@ -96,6 +113,9 @@
   .search { margin-left: auto; background: #141924; border: 1px solid #1c2230; color: #8b93a7; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
   .search:hover { border-color: #2a3242; color: #c4cbd8; }
   .search kbd { background: #1c2230; border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: inherit; }
+  .icon { background: #141924; border: 1px solid #1c2230; color: #c4cbd8; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; position: relative; }
+  .icon:hover { border-color: #2a3242; }
+  .bcount { position: absolute; top: -5px; right: -5px; background: #f0616d; color: #fff; border-radius: 9px; padding: 0 5px; font-size: 10px; }
   .filter { background: #141924; border: 1px solid #1c2230; color: #c4cbd8; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
   .filter:hover { border-color: #2a3242; }
   .filter.on { border-color: #3ecf8e; color: #3ecf8e; }
