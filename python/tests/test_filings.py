@@ -142,6 +142,20 @@ class FilingsPayloadTest(unittest.TestCase):
         self.assertTrue(out["sources"]["SEC"]["matched"])
         self.assertFalse(out["sources"]["SEDAR+"]["matched"])
 
+    def test_an_unreachable_source_reads_unavailable_and_carries_its_error(self):
+        # SEDAR+ could not be reached (an outage, a maintenance page); SEC answered. The
+        # failed source must read as unavailable and carry its reason, so the card can
+        # say it is unavailable rather than assert the listing has no filer.
+        self.stub(
+            [item("SEC", i=1)],
+            {"SEDAR+": {"available": False, "matched": False, "count": 0, "error": "SEDAR+ did not return the searchReportingIssuers form"},
+             "SEC": {"available": True, "matched": True, "count": 1, "error": ""}},
+        )
+        out = bagholder.filings_payload("SHOP", refresh=True)
+        self.assertFalse(out["sources"]["SEDAR+"]["available"], "a source that failed to answer is unavailable, whatever its dependency")
+        self.assertEqual(out["sources"]["SEDAR+"]["error"], "SEDAR+ did not return the searchReportingIssuers form")
+        self.assertEqual(out["sources"]["SEC"]["error"], "", "the source that answered carries no error")
+
     def test_all_sources_unreachable_is_reported(self):
         self.stub([], {"SEDAR+": {"available": False, "matched": False, "count": 0, "error": "curl_cffi missing"},
                        "SEC": {"available": False, "matched": False, "count": 0, "error": "network"}})
