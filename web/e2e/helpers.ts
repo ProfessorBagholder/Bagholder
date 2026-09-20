@@ -1,4 +1,9 @@
-import type { APIRequestContext, Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Page } from '@playwright/test'
+
+/** The page has its model and has finished arriving: the shell alone is there before that. */
+export async function ready(page: Page): Promise<void> {
+  await expect(page.locator('#page > [data-arrived]')).toBeVisible()
+}
 
 /**
  * Open the page on the real book, with the header's status changed as given. The

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { roll } from './actions/roll'
   import type { Model } from './model'
   import { money0, signedMoney, pct, pctPlain, px, cls, color } from './fmt'
   import { symText } from './sym'
@@ -122,7 +123,7 @@
   <!-- tiles -->
   <div style="display:grid;grid-template-columns:repeat({pf.hasMargin ? 6 : 5},minmax(0,1fr));gap:14px">
     {#each tiles as t (t.label)}
-      <div class="card elev-sm kpi"><div class="lbl">{t.label}</div><div class="v {t.vcls}">{t.value}</div><div class="s">{t.sub}</div></div>
+      <div class="card elev-sm kpi"><div class="lbl">{t.label}</div><div class="v {t.vcls}" use:roll={t.value}></div><div class="s">{t.sub}</div></div>
     {/each}
   </div>
 

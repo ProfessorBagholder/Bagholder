@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { ready } from './helpers'
 
 // SPEC §3, navigation: addresses, where a page opens and where Back returns to.
 
@@ -10,7 +11,7 @@ test('an old address for the holdings still opens them', async ({ page }) => {
 test('a trade opens at its top, and Back returns to the list where it was scrolled to', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 500 })
   await page.goto('/#trades')
-  await expect(page.locator('#page')).toContainText('Trades')
+  await ready(page)
   await page.evaluate(() => window.scrollTo(0, 300))
   const y = await page.evaluate(() => window.scrollY)
   expect(y).toBeGreaterThan(100)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { store, refilter, loadDetail } from './lib/state.svelte'
+  import { store, refilter, resync, loadDetail } from './lib/state.svelte'
   import { disconnect } from './lib/live'
   import { route, startRouter, go, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
@@ -30,6 +30,10 @@
   import { PROTOCOL } from './lib/protocol'
   import { dismissInnermost } from './lib/escape'
   import Empty from './lib/Empty.svelte'
+  import Skeleton from './lib/Skeleton.svelte'
+  import { minuteNow } from './lib/clock.svelte'
+  import { startCutTip } from './lib/cuttip'
+  import { startScrollbars } from './lib/scrollbars'
   import { notesStore, showNotifications } from './lib/notes/notes.svelte'
 
   let filterOpen = $state(false)
@@ -92,6 +96,7 @@
     // the popover already open on one field, returns it to the search
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
       e.preventDefault()
+      if (!store.model) return // nothing to search yet
       ui.menuOpen = false
       filterField = 'fields'
       filterOpen = true
@@ -173,7 +178,28 @@
     if (s.syncing) return s.syncStep || 'Syncing…'
     if (s.error && !showingEmpty) return s.error.length > 60 ? s.error.slice(0, 57) + '…' : s.error
     if (!s.connected) return 'Not connected'
+    minuteNow() // said again as the minutes pass
     return 'Synced ' + (relTime(s.lastSync) || '—')
+  }
+
+  // The skeleton is not swapped for the page; it is lifted over it and faded out while
+  // the page arrives underneath, so there is never a frame with nothing on screen and
+  // never a hard cut.
+  function lift(node: HTMLElement) {
+    node.classList.add('bh-skfade')
+    return { duration: 300, css: (t: number) => `opacity:${t}` }
+  }
+  // the arriving page settles in once; the class goes when it has, so nothing fixed
+  // inside the page is left positioned against an animated ancestor
+  function arrive(node: HTMLElement) {
+    node.classList.add('bh-skin')
+    const done = (e: AnimationEvent) => {
+      if (e.target !== node) return
+      node.classList.remove('bh-skin')
+      node.dataset.arrived = ''
+    }
+    node.addEventListener('animationend', done)
+    return { destroy: () => node.removeEventListener('animationend', done) }
   }
 
   const notesUnread = $derived(notesStore.unread || status?.notify?.unread || 0)
@@ -214,9 +240,13 @@
     refilter()
     const stopRouter = startRouter()
     const stopNotes = showNotifications()
+    const stopCutTip = startCutTip()
+    const stopScrollbars = startScrollbars()
     return () => {
       stopRouter()
       stopNotes()
+      stopCutTip()
+      stopScrollbars()
       disconnect()
     }
   })
@@ -230,8 +260,7 @@
 
 <svelte:window onkeydown={onKey} onpointerdown={onDocPointerDown} />
 
-{#if store.model}
-  <!-- header -->
+  <!-- header: drawn before the model is, so the app is there at once -->
   <div id="hdr" style="display:flex;align-items:center;gap:22px;padding:12px 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
     <div style="display:flex;align-items:center;gap:9px;margin-right:8px">
       <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
@@ -271,7 +300,7 @@
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
-        {#if filterOpen}{#key filterOpened}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
+        {#if filterOpen && store.model}{#key filterOpened}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
       </div>
       <div style="position:relative" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>
@@ -307,7 +336,15 @@
   </div>
 
   <!-- page -->
-  <div id="page">
+  <div id="page" style="position:relative">
+    {#if !store.model}
+      {#if store.error}
+        <div class="empty"><div class="status-err">{store.error}</div><button class="btn btn-secondary" onclick={resync}>Retry</button></div>
+      {:else}
+        <div out:lift><Skeleton tab={route.tab} /></div>
+      {/if}
+    {:else}
+    <div use:arrive>
     {#if showingEmpty}
       <Empty status={store.model.status} />
     {:else if route.tab === 'dashboard'}
@@ -321,6 +358,8 @@
     {:else if route.tab === 'markets'}
       {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else}<Markets markets={store.model.markets} />{/if}
     {/if}
+    </div>
+    {/if}
   </div>
 
   {#if ticketStore.t}<OrderTicket />{/if}
@@ -329,8 +368,3 @@
   {#if ui.loginView}<LoginView />{/if}
   {#if ui.confirm}<ConfirmDialog />{/if}
   {#if ui.modal}<Modals />{/if}
-{:else if store.error}
-  <div class="empty muted" style="padding:80px 20px">Could not load model: {store.error}</div>
-{:else}
-  <div class="empty muted" style="padding:80px 20px"><span class="spin"></span>Loading…</div>
-{/if}

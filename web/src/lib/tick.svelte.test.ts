@@ -89,7 +89,9 @@ describe('one holding\'s price moves', () => {
     expect(seen.length).toBeGreaterThan(0)
     expect(veqtRow.textContent).toContain('63.10')
     // no element was added or removed anywhere: values were written, nothing was rebuilt
-    const structural = seen.filter((m) => m.type === 'childList' && [...m.addedNodes, ...m.removedNodes].some((n) => n.nodeType === Node.ELEMENT_NODE))
+    // (a tile's figure rolls to its new value: wheels inside that one figure, and nowhere else)
+    const rolling = (m: MutationRecord) => m.target instanceof Element && m.target.matches('.kpi .v')
+    const structural = seen.filter((m) => m.type === 'childList' && !rolling(m) && [...m.addedNodes, ...m.removedNodes].some((n) => n.nodeType === Node.ELEMENT_NODE))
     expect(structural).toEqual([])
     // and not one mutation landed in any other holding's row
     const strays = seen.filter((m) => { const r = rowOf(m.target); return r !== null && r !== veqtRow })

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { roll } from '../actions/roll'
   // The market-tiles row (marketTilesHtml): draggable KPI tiles, a plus cell that
   // opens the instrument picker, and a "more" expander. Order is persisted through
   // /api/tiles/set exactly as the reference page does.
@@ -144,7 +145,7 @@
       <div class="mt-cell" data-sym={t.symbol}>
         <div class="card elev-sm kpi mt-tile" class:mt-drag={dragSym === t.symbol} data-sym={t.symbol} data-ex={t.exchange} onpointerdown={(e) => onPointerDown(e, t.symbol)}>
           <div class="lbl">{t.label}</div>
-          <div class="v">{t.rate != null ? n2(t.rate, 2) + '%' : t.last == null ? '—' : n2(t.last, t.decimals)}</div>
+          <div class="v" use:roll={t.rate != null ? n2(t.rate, 2) + '%' : t.last == null ? '—' : n2(t.last, t.decimals)}></div>
           {#if t.rate != null}
             {@const m = t.rateChange}
             <div class="s" style="color:var(--ink55)">{t.last == null ? '—' : n2(t.last, t.decimals)}{#if m != null} <span style="color:var(--{m < 0 ? 'neg' : 'pos'})">({m < 0 ? '−' : '+'}{n2(Math.abs(m), t.decimals)})</span>{/if}</div>

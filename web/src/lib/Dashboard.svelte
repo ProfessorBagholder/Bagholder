@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { roll } from './actions/roll'
   import type { Model, EquityPoint } from './model'
   import { money, money0, pct, pctPlain, cls, color, stamp, stampDay, hold, shortMoney } from './fmt'
   import { symText } from './sym'
@@ -184,12 +185,12 @@
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
   <!-- KPI row -->
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
-    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}">{money(k.realized)}</div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v">{k.winRate == null ? '—' : pctPlain(k.winRate)}</div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v">{pf}</div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v">{k.expectancy == null ? '—' : money(k.expectancy)}</div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}">{dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}</div><div class="s">{dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs ?? 0)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Avg annualized</div><div class="v {ann.rate == null ? '' : cls(ann.rate)}">{ann.rate == null ? '—' : pct(ann.rate)}</div><div class="s">{ann.rate == null ? 'No NAV history' : 'Over ' + ann.count + (ann.count === 1 ? ' year' : ' years')}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v" use:roll={pf}></div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v" use:roll={k.expectancy == null ? '—' : money(k.expectancy)}></div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}" use:roll={dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}></div><div class="s">{dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs ?? 0)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Avg annualized</div><div class="v {ann.rate == null ? '' : cls(ann.rate)}" use:roll={ann.rate == null ? '—' : pct(ann.rate)}></div><div class="s">{ann.rate == null ? 'No NAV history' : 'Over ' + ann.count + (ann.count === 1 ? ' year' : ' years')}</div></div>
   </div>
 
   <!-- equity + annualized returns -->

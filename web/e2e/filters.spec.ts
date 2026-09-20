@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test'
+import { ready } from './helpers'
 
 // SPEC §3, Filters: the popover is driven from its search box.
 
 const open = async (page: import('@playwright/test').Page) => {
   await page.goto('/#trades')
+  await ready(page)
   await page.keyboard.press('ControlOrMeta+k')
   await expect(page.getByLabel('Search', { exact: true })).toBeFocused()
 }

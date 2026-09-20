@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { roll } from './actions/roll'
   import type { Model, Cashflow, CashflowHolding, CashflowRow } from './model'
   import { money, money0, signedMoney, pctPlain, qty, px, color } from './fmt'
   import { symText } from './sym'
@@ -118,11 +119,11 @@
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     {#each c.tiles as t (t.label)}
       {#if 'marginUsed' in t}
-        <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v">{money0(t.marginUsed)}</div><div class="s">{money0(t.interestPerMonth)}/mo margin interest</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v" use:roll={money0(t.marginUsed)}></div><div class="s">{money0(t.interestPerMonth)}/mo margin interest</div></div>
       {:else if 'yield' in t}
-        <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)">{t.yield == null ? '—' : pctPlain(t.yield, 2)}</div><div class="s">{money0(t.projected)}/mo</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)" use:roll={t.yield == null ? '—' : pctPlain(t.yield, 2)}></div><div class="s">{money0(t.projected)}/mo</div></div>
       {:else}
-        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v">{money0(t.total)}</div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v" use:roll={money0(t.total)}></div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}</div></div>
       {/if}
     {/each}
   </div>

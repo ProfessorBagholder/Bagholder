@@ -66,11 +66,11 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Every write carries the `X-Bagholder` header (several rely on the browser's `Sec-Fetch-Site` today).
 
 ### States
-- [ ] Per-tab loading skeletons with the cross-fade (`L:4367-4431`).
-- [ ] The digit roll on tile values (`L:4442-4500`); the CSS is there, the script is not.
-- [ ] The cut-text hover (`#cutTip`, `L:3379-3395`, `L:5259`).
-- [ ] **Scrollbars appear while scrolling** (`scrolling` class, `L:5270-5277`); today their thumbs are transparent and never show.
-- [ ] A model reply with `ok:false` is handled; the error state offers a retry (`L:787`, action `reload`).
+- [x] Per-tab loading skeletons with the cross-fade (`L:4367-4431`).
+- [x] The digit roll on tile values (`L:4442-4500`); an action on each tile's figure (`actions/roll.ts`), ended by the last wheel's `transitionend`.
+- [x] The cut-text hover (`#cutTip`, `L:3379-3395`, `L:5259`).
+- [x] **Scrollbars appear while scrolling** (`scrolling` class, `L:5270-5277`); `scrollbars.ts`.
+- [x] A model reply with `ok:false` is handled; the error state offers a retry (`L:787`, action `reload`).
 - [x] A quote tick fetches only live figures (`L:803-818`). *(Design: carried by the event, stage 6.)*
 
 ## Found done (each still owed its browser test)
