@@ -287,9 +287,22 @@ export interface Markets {
   news: NewsItem[]
 }
 
+export interface Options {
+  accounts: string[]
+  symbols: string[]
+  tags: string[]
+  exchanges: string[]
+  kinds: string[]
+  grades: string[]
+  sides: string[]
+  results: string[]
+  years: string[]
+}
+
 export interface Model {
   ok: boolean
   currency: string
+  options: Options
   kpi: Kpi
   equity: { label: string; series: EquityPoint[]; annualized: number | null; drawdown: number | null }
   monthly: MonthlyBar[]

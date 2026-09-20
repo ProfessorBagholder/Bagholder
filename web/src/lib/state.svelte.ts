@@ -1,4 +1,5 @@
 import type { Model } from './model'
+import { filters } from './filters.svelte'
 
 // The reactive store. This is the whole point of the migration: state lives in
 // one $state rune and the UI derives from it — no manual coreVersion/dataVersion
@@ -16,7 +17,8 @@ export const store = $state<{ model: Model | null; error: string | null; loading
 export async function loadModel(): Promise<void> {
   store.loading = true
   try {
-    const r = await fetch('/api/model')
+    const q = encodeURIComponent(JSON.stringify(filters))
+    const r = await fetch('/api/model?filters=' + q, { headers: { 'X-Bagholder': '1' } })
     if (!r.ok) throw new Error('HTTP ' + r.status)
     store.model = (await r.json()) as Model
     store.error = null
