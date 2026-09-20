@@ -18,10 +18,11 @@ macro_rules! words {
     // `$first` is what a row that does not say is: the word the store itself would write
     ($(#[$doc:meta])* $name:ident, $first:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ts_rs::TS)]
         pub enum $name {
+            #[ts(rename = "")]
             Unset,
-            $($variant),+
+            $(#[ts(rename = $text)] $variant),+
         }
         impl Default for $name {
             fn default() -> $name { $name::$first }
@@ -124,7 +125,7 @@ pub(crate) fn lenient_num<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Opti
 
 /// One order: a ticket written here before it was sent, or an order read back from
 /// Wealthsimple that was placed elsewhere.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Order {
     pub id: String,
@@ -151,6 +152,7 @@ pub struct Order {
     pub ws_order_id: String,
     pub error: String,
     /// What was sent to Wealthsimple, kept as sent.
+    #[ts(type = "unknown")]
     pub request: Value,
     pub updated_at: String,
     pub source: Source,
@@ -168,7 +170,7 @@ pub struct Order {
 }
 
 /// The stop an entry asked for.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StopLoss {
     pub kind: SlKind,
@@ -180,7 +182,7 @@ pub struct StopLoss {
 }
 
 /// The target an entry asked for.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TakeProfit {
     #[serde(deserialize_with = "lenient_num")]
@@ -218,7 +220,7 @@ impl OrderPatch {
 
 /// The exits held for an entry: a stop, a target, or both, placed once the entry fills
 /// and kept to the shares it filled.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Bracket {
     pub id: String,

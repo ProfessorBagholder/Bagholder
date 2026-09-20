@@ -389,3 +389,5 @@ mod tests_brackets;
 
 #[cfg(test)]
 mod tests_orders;
+#[cfg(test)]
+mod tests_types;

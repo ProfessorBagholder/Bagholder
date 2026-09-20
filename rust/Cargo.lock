@@ -211,6 +211,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "ts-rs",
 ]
 
 [[package]]
@@ -223,6 +224,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
 ]
 
 [[package]]

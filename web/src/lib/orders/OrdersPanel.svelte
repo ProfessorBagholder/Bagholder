@@ -97,7 +97,7 @@
   const waitingLegs = (o: Order) => { const w = orderLive(o) ? bracketOf(o) : null; return w && w.status === 'waiting' ? bracketLegs(w) : [] }
 
   const bracketTitle = (b: Bracket) => { const e = orderById(b.orderId); return (e && e.exchange ? e.exchange + ': ' : '') + symText(b.symbol) }
-  const bracketValue = (b: Bracket) => { const e = orderById(b.orderId); return e && e.avgFill ? money(b.quantity * e.avgFill * orderMultiplier(e), '', 2) : '' }
+  const bracketValue = (b: Bracket) => { const e = orderById(b.orderId); return e && e.avgFill ? money((b.quantity ?? 0) * e.avgFill * orderMultiplier(e), '', 2) : '' }
   const bracketLive = (b: Bracket) => !!BRACKET_LIVE[b.status]
   const bracketWhen = (b: Bracket) => orderWhenWord(bracketLive(b) ? (b.armedAt || b.createdAt) : (b.updatedAt || b.armedAt || b.createdAt))
   const bracketEditData = (b: Bracket) => {

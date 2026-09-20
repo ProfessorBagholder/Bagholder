@@ -482,7 +482,7 @@ pub fn cancel_order(order_id: &str) -> Value {
 }
 
 /// An order as the Orders panel shows it: the order, and the venue its listing trades on.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct OrderCard {
     #[serde(flatten)]
     pub order: Order,
@@ -490,7 +490,7 @@ pub struct OrderCard {
 }
 
 /// The `orders` document: what the Orders panel is sent, and sent again as it changes.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct OrdersDoc {
     pub ok: bool,

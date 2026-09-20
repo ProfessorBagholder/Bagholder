@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
+# model's are: the two sides of the wire cannot drift
+ts-rs = "12.0.1"
 bagholder-model = { path = "../model" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }

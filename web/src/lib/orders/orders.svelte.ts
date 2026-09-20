@@ -13,20 +13,12 @@ import { request } from '../api'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-export interface Order {
-  id: string; createdAt: string; updatedAt?: string; accountId?: string; account: string; symbol: string; currency: string
-  side: string; type: string; quantity: number; limitPrice: number | null; stopPrice: number | null
-  tif: string; status: string; filledQty: number | null; avgFill: number | null; role: string; exchange: string
-  parentId?: string; error?: string; securityId?: string
-}
-export interface Bracket {
-  id: string; orderId: string; symbol: string; quantity: number
-  slKind: string; slPrice: number | null; slTrail: number | null; slTrailUnit: string; slOrderId?: string; slMode?: string
-  tpPrice: number | null; tpOrderId?: string
-  status: string; outcome: string; error?: string; attempts?: number
-  createdAt?: string; armedAt?: string; updatedAt?: string
-}
-export interface OrdersResp { ok: boolean; orders: Order[]; brackets: Bracket[]; live?: boolean; refreshedAt?: string }
+// the server's own types (rust/crates/store/src/orders/types.rs), generated
+import type { Bracket, OrderCard, OrdersDoc } from '../generated/orders'
+export type { Bracket } from '../generated/orders'
+/** An order as the panel shows it: the order, and the venue its listing trades on. */
+export type Order = OrderCard
+export type OrdersResp = OrdersDoc
 
 export const ordersStore = $state<{ data: OrdersResp | null; error: string; loaded: boolean }>({ data: null, error: '', loaded: false })
 export const panel = $state<{
@@ -92,13 +84,13 @@ export function orderTitle(o: Order): string { return (o.exchange ? o.exchange +
 export function orderFillLine(o: Order): string {
   const filled = o.filledQty || 0
   if (o.status === 'rejected' || o.status === 'failed') return o.error || ''
-  if (o.status !== 'filled' && filled && filled < o.quantity) return qtyFmt(filled) + ' of ' + qtyFmt(o.quantity) + ' filled' + (o.avgFill ? ' at ' + px(o.avgFill) : '')
+  if (o.status !== 'filled' && filled && filled < (o.quantity ?? 0)) return qtyFmt(filled) + ' of ' + qtyFmt(o.quantity) + ' filled' + (o.avgFill ? ' at ' + px(o.avgFill) : '')
   return ''
 }
 export function orderPill(o: Order): [string, string] {
   const filled = o.filledQty || 0
   switch (o.status) {
-    case 'pending': return filled && filled < o.quantity ? ['Partially filled', 'accent'] : ['Pending', 'accent']
+    case 'pending': return filled && filled < (o.quantity ?? 0) ? ['Partially filled', 'accent'] : ['Pending', 'accent']
     case 'sent': return ['Pending', 'accent']
     case 'cancelling': return ['Cancelling', 'accent']
     case 'filled': return ['Filled', 'pos']
@@ -123,13 +115,13 @@ export function orderWhenWord(iso: string | undefined): string {
 export function orderMultiplier(o: Order): number { return /\s\d{2}[A-Z]{3}\d{2}\s[\d.]+\s(CALL|PUT)$/.test(o.symbol || '') ? 100 : 1 }
 export function orderValue(o: Order): string {
   const mult = orderMultiplier(o)
-  if (o.status === 'filled' && o.avgFill) return money((o.filledQty || o.quantity) * o.avgFill * mult, '', 2)
+  if (o.status === 'filled' && o.avgFill) return money((o.filledQty || o.quantity || 0) * o.avgFill * mult, '', 2)
   const price = o.type === 'MARKET' ? o.avgFill : o.type === 'STOP' ? o.stopPrice : o.limitPrice
   if (!(price != null && price > 0)) return ''
-  return (o.type === 'MARKET' ? '≈ ' : '') + money(o.quantity * price * mult, '', 2)
+  return (o.type === 'MARKET' ? '≈ ' : '') + money((o.quantity ?? 0) * price * mult, '', 2)
 }
+// (a bracket does not fail: a leg Wealthsimple refuses is tried again for as long as it lives)
 export function bracketEndWord(b: Bracket): [string, string] {
-  if (b.status === 'failed') return ['Failed', 'neg']
   return b.outcome === 'cancelled by the user' || b.outcome === 'both legs removed' ? ['Cancelled', ''] : ['Off', '']
 }
 export function bracketExited(b: Bracket): boolean { return b.status === 'done' && (b.outcome === 'stopped' || b.outcome === 'target') }
@@ -141,11 +133,11 @@ export function bracketLegs(b: Bracket): Leg[] {
   const entry = orderById(b.orderId)
   const mult = entry ? orderMultiplier(entry) : 1
   const stopOrder = b.slOrderId ? orderById(b.slOrderId) : null, tpOrder = b.tpOrderId ? orderById(b.tpOrderId) : null
-  const done = b.status === 'done', off = b.status === 'cancelled' || b.status === 'failed'
+  const done = b.status === 'done', off = b.status === 'cancelled'
   const cancelling = (role: string) => all.some((o) => o.parentId === b.orderId && o.role === role && o.status === 'cancelling')
   const amount = (price: number | null) => (price && b.quantity ? money(b.quantity * price * mult, '', 2) : '')
   const exited = (role: string) => all.find((o) => o.parentId === b.orderId && o.role === role && o.status === 'filled') || null
-  const went = (o: Order) => ({ line: 'Filled ' + qtyFmt(o.filledQty || b.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : ''), amount: o.avgFill ? money((o.filledQty || b.quantity) * o.avgFill * mult, '', 2) : '' })
+  const went = (o: Order) => ({ line: 'Filled ' + qtyFmt(o.filledQty || b.quantity) + (o.avgFill ? ' at ' + px(o.avgFill) : ''), amount: o.avgFill ? money((o.filledQty || b.quantity || 0) * o.avgFill * mult, '', 2) : '' })
   if (b.slKind) {
     let line = qtyFmt(b.quantity) + ' at ' + px(b.slPrice) + (b.slKind === 'trail' ? ' · trailing ' + (b.slTrailUnit === 'amt' ? px(b.slTrail) : plain(b.slTrail) + '%') : '')
     let amt = amount(b.slPrice)
@@ -154,7 +146,7 @@ export function bracketLegs(b: Bracket): Leg[] {
     else if (b.status === 'stopping') note = b.attempts ? 'Retrying · ' + (b.error || '') : 'Placing'
     else if (b.status === 'closing') note = b.outcome === 'stopped' ? 'Filled' : stopOrder || cancelling('stop') ? 'Cancelling' : 'Cancelled'
     else if (done) { const f = b.outcome === 'stopped' ? exited('stop') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'stopped' ? 'Filled' : 'Cancelled' }
-    else if (off) note = b.status === 'failed' ? 'Failed' : 'Off'
+    else if (off) note = 'Off'
     legs.push({ key: 'sl', label: 'Stop loss', tone: 'neg', line, amount: amt, note })
   }
   if (b.tpPrice) {
@@ -166,7 +158,7 @@ export function bracketLegs(b: Bracket): Leg[] {
     else if (b.status === 'stopping') note = 'Cancelling'
     else if (b.status === 'closing') note = b.outcome === 'target' ? 'Filled' : cancelling('target') ? 'Cancelling' : 'Cancelled'
     else if (done) { const f = b.outcome === 'target' ? exited('target') : null; if (f) { const w = went(f); line = w.line; amt = w.amount } else note = b.outcome === 'target' ? 'Filled' : 'Cancelled' }
-    else if (off) note = b.status === 'failed' ? 'Failed' : 'Off'
+    else if (off) note = 'Off'
     legs.push({ key: 'tp', label: 'Take profit', tone: 'pos', line, amount: amt, note })
   }
   return legs
