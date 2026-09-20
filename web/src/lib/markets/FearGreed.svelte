@@ -1,129 +1,196 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  // The Fear & Greed card (fearCardHtml): the dial, the "where it stood" and
+  // "what it is made of" reading rows, and the history line with its hover. The
+  // gauge is read from /api/fear?index=…, cached per index, and a slow response is
+  // guarded by a request id so it cannot overwrite a newer selection.
   import type { FearGauge } from '../model'
-  import { equityChart } from '../actions/equityChart'
+  import { relTime } from '../fmt'
+  import { n2, shortDay, api } from './util'
+  import { store } from '../state.svelte'
+  import Mseg from './Mseg.svelte'
 
-  const BANDS: [number, number, string, string][] = [
-    [0, 25, 'Extreme fear', '#d4586f'],
-    [25, 45, 'Fear', '#a8455a'],
-    [45, 56, 'Neutral', '#3a4152'],
-    [56, 76, 'Greed', '#2f9e6b'],
-    [76, 100, 'Extreme greed', '#4fc98d'],
+  const FEAR_KEEP_MS = 5 * 60 * 1000
+  const INDEX_OPTS = [['stocks', 'Stocks'], ['crypto', 'Crypto']] as const
+  const FEAR_BANDS: [number, number, string, string][] = [
+    [0, 25, 'Extreme fear', 'var(--heat-n4)'],
+    [25, 45, 'Fear', 'var(--heat-n3)'],
+    [45, 56, 'Neutral', 'rgba(var(--ink-rgb),.22)'],
+    [56, 76, 'Greed', 'var(--heat-p3)'],
+    [76, 100, 'Extreme greed', 'var(--heat-p4)'],
   ]
-  const bandColor = (score: number) => (BANDS.find(([lo, hi]) => score >= lo && score < hi) ?? BANDS[4])[3]
+  function fearBand(score: number | null) {
+    return score == null ? null : FEAR_BANDS.find((b) => score < b[1]) || FEAR_BANDS[FEAR_BANDS.length - 1]
+  }
+  function fearInk(score: number | null) {
+    const b = fearBand(score)
+    return !b || b[2] === 'Neutral' ? 'var(--ink75)' : b[3]
+  }
 
-  let index = $state<'stocks' | 'crypto'>('stocks')
-  let gauge = $state<FearGauge | null>(null)
-  let loading = $state(true)
+  let fearIndex = $state((() => { try { return localStorage.getItem('bh2.fear') || 'stocks' } catch { return 'stocks' } })())
+  interface Held { loading: boolean; at: number; rec: FearGauge | null }
+  const cache = $state<Record<string, Held>>({})
+  const seq: Record<string, number> = {}
 
-  // Guard against a stale response overwriting a newer one: only the latest
-  // request applies. Without this, a slow initial stocks fetch can land after
-  // a crypto toggle and clobber it.
-  let reqId = 0
-  async function load(idx: string) {
-    const my = ++reqId
-    loading = true
-    try {
-      const r = await fetch('/api/fear?index=' + idx)
-      const d = await r.json()
-      if (my !== reqId) return
-      gauge = d.ok ? d.gauge : null
-    } catch {
-      if (my === reqId) gauge = null
+  function ensureFear(ix: string) {
+    const held = cache[ix]
+    if (held && (held.loading || Date.now() - held.at < FEAR_KEEP_MS)) return
+    cache[ix] = { loading: true, at: held?.at ?? 0, rec: held?.rec ?? null }
+    const my = (seq[ix] = (seq[ix] || 0) + 1)
+    api<{ ok: boolean; gauge?: FearGauge }>('GET', '/api/fear?index=' + encodeURIComponent(ix)).then((d) => {
+      if (my !== seq[ix]) return // a newer request for this index has since gone out
+      cache[ix] = { loading: false, at: Date.now(), rec: (d && d.ok && d.gauge) || (held && held.rec) || null }
+    })
+  }
+  $effect(() => {
+    ensureFear(fearIndex)
+  })
+  function pickIndex(ix: string) {
+    fearIndex = ix
+    try { localStorage.setItem('bh2.fear', ix) } catch { /* ignore */ }
+    ensureFear(ix)
+  }
+
+  const held = $derived(cache[fearIndex] || { loading: true, at: 0, rec: null })
+  const g = $derived(held.rec)
+  const today = $derived(String((store.model as unknown as { today?: string } | null)?.today || ''))
+  const when = $derived.by(() => {
+    if (!g || !g.asOf) return ''
+    return String(g.asOf).slice(0, 10) === today ? relTime(g.asOf) : shortDay(String(g.asOf).slice(0, 10))
+  })
+  const parts = $derived(g?.parts || [])
+
+  // --- the dial ---
+  const W = 280, H = 150, cx = 140, cy = 140, r = 104
+  function at(v: number, rad: number): [number, number] {
+    const a = ((180 - Math.max(0, Math.min(100, v)) * 1.8) * Math.PI) / 180
+    return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)]
+  }
+  function fearArc(from: number, to: number): string {
+    const a = ((180 - from * 1.8) * Math.PI) / 180
+    const b = ((180 - to * 1.8) * Math.PI) / 180
+    const x1 = cx + r * Math.cos(a), y1 = cy - r * Math.sin(a)
+    const x2 = cx + r * Math.cos(b), y2 = cy - r * Math.sin(b)
+    return 'M' + x1.toFixed(1) + ' ' + y1.toFixed(1) + ' A' + r + ' ' + r + ' 0 0 1 ' + x2.toFixed(1) + ' ' + y2.toFixed(1)
+  }
+  const needle = $derived.by(() => {
+    if (!g || g.score == null) return null
+    const [tx, ty] = at(g.score, 16)
+    const [nx, ny] = at(g.score, 88)
+    return { tx, ty, nx, ny }
+  })
+
+  // --- the history ---
+  const HW = 880, HH = 96, TOP = 6, BOT = HH - 6
+  const hpts = $derived((g?.series || []).filter((p) => p && p.score != null))
+  const hy = (v: number) => TOP + (1 - v / 100) * (BOT - TOP)
+  const hx = (i: number) => (i / Math.max(1, hpts.length - 1)) * HW
+  const histLine = $derived(hpts.map((p, i) => (i ? 'L' : 'M') + hx(i).toFixed(1) + ' ' + hy(p.score).toFixed(1)).join(' '))
+  function fearDay(iso: string): string {
+    const day = String(iso || '')
+    return day.slice(0, 4) === today.slice(0, 4) ? shortDay(day) : shortDay(day) + ' ' + day.slice(0, 4)
+  }
+
+  // history hover (ledger's lineLayer/lineHover, local to this chart)
+  let plot = $state<HTMLElement | null>(null)
+  let hi = $state<number | null>(null)
+  function onMove(e: MouseEvent) {
+    if (!plot || !hpts.length) return
+    const rect = plot.getBoundingClientRect()
+    if (!rect.width) return
+    hi = Math.max(0, Math.min(hpts.length - 1, Math.round(((e.clientX - rect.left) / rect.width) * (hpts.length - 1))))
+  }
+  function onLeave() { hi = null }
+  const hoverRead = $derived.by(() => {
+    if (hi == null || !hpts[hi]) return null
+    const p = hpts[hi]
+    const xPct = (hi / Math.max(1, hpts.length - 1)) * 100
+    return {
+      xPct,
+      topPct: (hy(p.score) / HH) * 100,
+      value: n2(p.score, 0),
+      color: fearInk(p.score),
+      label: (fearBand(p.score) || ['', '', ''])[2] + ' · ' + fearDay(p.date),
+      shift: hi < hpts.length * 0.1 ? '0%' : hi > hpts.length * 0.9 ? '-100%' : '-50%',
     }
-    if (my === reqId) loading = false
-  }
-  function pick(idx: 'stocks' | 'crypto') {
-    if (idx === index && gauge) return
-    index = idx
-    load(idx)
-  }
-  onMount(() => load('stocks'))
-
-  const cx = 110, cy = 110, R = 85
-  const pt = (score: number, r: number) => {
-    const a = Math.PI * (1 - score / 100)
-    return [cx + r * Math.cos(a), cy - r * Math.sin(a)]
-  }
-  const arc = (s0: number, s1: number, r: number) => {
-    const [x0, y0] = pt(s0, r), [x1, y1] = pt(s1, r)
-    return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`
-  }
-  const needle = $derived(gauge ? pt(gauge.score, R - 20) : [cx, cy - (R - 20)])
-  const seriesPoints = $derived(gauge ? gauge.series.map((p) => ({ d: p.date, v: p.score, dep: 0 })) : [])
+  })
 </script>
 
-<div class="card">
-  <div class="head">
+<div class="card elev-sm" style="padding:14px 16px 12px">
+  <div style="display:flex;align-items:center;gap:14px;min-height:28px;margin-bottom:8px">
     <h5>Fear &amp; Greed</h5>
-    <div class="seg">
-      <button class:on={index === 'stocks'} onclick={() => pick('stocks')}>Stocks</button>
-      <button class:on={index === 'crypto'} onclick={() => pick('crypto')}>Crypto</button>
-    </div>
-    {#if gauge}<span class="src">{gauge.source} · {gauge.asOf.slice(0, 10)}</span>{/if}
+    <Mseg options={INDEX_OPTS} cur={fearIndex} onpick={pickIndex} />
+    {#if g}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{g.source || ''}{when ? ' · ' + when : ''}</span>{/if}
   </div>
 
-  {#if loading}
-    <p class="msg">Reading…</p>
-  {:else if !gauge}
-    <p class="msg">No reading available.</p>
+  {#if !g}
+    <div class="muted" style="font-size:12px">{held.loading ? 'Reading…' : 'The index did not answer.'}</div>
   {:else}
-    <div class="body">
-      <div class="dial">
-        <svg viewBox="0 0 220 130">
-          {#each BANDS as [s0, s1, , color]}
-            <path d={arc(s0, s1, R)} fill="none" stroke={color} stroke-width="14" />
+    <div style="display:grid;grid-template-columns:280px minmax(0,1fr){parts.length ? ' minmax(0,1.15fr)' : ''};gap:26px;align-items:start">
+      <!-- dial -->
+      <div style="width:{W}px;max-width:100%">
+        <svg viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block" aria-hidden="true">
+          {#each FEAR_BANDS as b (b[0])}
+            <path d={fearArc(b[0] + (b[0] ? 0.8 : 0), b[1] - (b[1] < 100 ? 0.8 : 0))} fill="none" stroke={b[3]} stroke-width="15" />
           {/each}
-          <line x1={cx} y1={cy} x2={needle[0]} y2={needle[1]} stroke={bandColor(gauge.score)} stroke-width="3" stroke-linecap="round" />
-          <circle cx={cx} cy={cy} r="5" fill={bandColor(gauge.score)} />
+          {#if needle}
+            <line x1={needle.tx.toFixed(1)} y1={needle.ty.toFixed(1)} x2={needle.nx.toFixed(1)} y2={needle.ny.toFixed(1)} stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round" />
+            <circle cx={cx} cy={cy} r="6" fill="var(--ink)" /><circle cx={cx} cy={cy} r="2.5" fill="var(--card)" />
+          {/if}
         </svg>
-        <div class="score" style="color: {bandColor(gauge.score)}">{Math.round(gauge.score)}</div>
-        <div class="rating" style="color: {bandColor(gauge.score)}">{gauge.rating}</div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding:2px 4px 0"><span>Extreme fear</span><span>Extreme greed</span></div>
+        <div style="text-align:center;margin-top:10px">
+          <div class="tab" style="font-size:34px;font-weight:500;line-height:1;color:{fearInk(g.score)}">{g.score == null ? '—' : n2(g.score, 0)}</div>
+          <div style="font-size:12.5px;margin-top:5px;color:var(--ink75)">{g.rating || ''}</div>
+        </div>
       </div>
 
-      <div class="cols">
-        <div class="col">
-          <h6>Where it stood</h6>
-          {#each gauge.previous as p (p.label)}
-            <div class="row"><span>{p.label}</span><b style="color: {bandColor(p.score)}">{Math.round(p.score)}</b><span class="rt">{p.rating}</span></div>
+      <!-- where it stood -->
+      {#if (g.previous || []).length}
+        <div style="min-width:0;max-width:460px">
+          <div class="lbl" style="margin-bottom:8px">Where it stood</div>
+          {#each g.previous as row (row.label)}
+            <div style="display:flex;align-items:baseline;gap:10px;padding:5px 0">
+              <span style="font-size:12.5px;color:var(--ink75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{row.label}</span>
+              <span class="tab" style="margin-left:auto;font-size:12.5px">{row.score == null ? '—' : n2(row.score, 0)}</span>
+              <span style="font-size:11px;width:82px;text-align:right;color:{fearInk(row.score)}">{row.rating || ''}</span>
+            </div>
           {/each}
         </div>
-        {#if gauge.parts.length}
-          <div class="col">
-            <h6>What it is made of</h6>
-            {#each gauge.parts as p (p.name)}
-              <div class="row"><span>{p.name}</span><b style="color: {bandColor(p.score)}">{Math.round(p.score)}</b><span class="rt">{p.rating}</span></div>
-            {/each}
-          </div>
-        {/if}
-      </div>
+      {/if}
+
+      <!-- what it is made of -->
+      {#if parts.length}
+        <div style="min-width:0;max-width:460px">
+          <div class="lbl" style="margin-bottom:8px">What it is made of</div>
+          {#each parts as row (row.name)}
+            <div style="display:flex;align-items:baseline;gap:10px;padding:5px 0">
+              <span style="font-size:12.5px;color:var(--ink75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{row.name}</span>
+              <span class="tab" style="margin-left:auto;font-size:12.5px">{row.score == null ? '—' : n2(row.score, 0)}</span>
+              <span style="font-size:11px;width:82px;text-align:right;color:{fearInk(row.score)}">{row.rating || ''}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
 
-    {#if seriesPoints.length >= 10}
-      {#key index}<div class="foot" use:equityChart={seriesPoints}></div>{/key}
+    {#if hpts.length >= 3}
+      <div style="margin-top:12px">
+        <div bind:this={plot} style="position:relative" role="presentation" onmousemove={onMove} onmouseleave={onLeave}>
+          {#if hoverRead}
+            <div class="xline" style="left:{hoverRead.xPct.toFixed(2)}%"></div>
+            <div class="line-dot" style="left:{hoverRead.xPct.toFixed(2)}%;top:{hoverRead.topPct.toFixed(2)}%;background:{hoverRead.color}"></div>
+            <div class="tip" style="left:{hoverRead.xPct.toFixed(2)}%;transform:translateX({hoverRead.shift})"><div class="tv" style="color:{hoverRead.color}">{hoverRead.value}</div><div class="tl">{hoverRead.label}</div></div>
+          {/if}
+          <svg viewBox="0 0 {HW} {HH}" preserveAspectRatio="none" style="width:100%;height:{HH}px;display:block">
+            <defs><linearGradient id="bhFg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--accent);stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--accent);stop-opacity:0" /></linearGradient></defs>
+            {#each [25, 50, 75] as v (v)}<line x1="0" y1={hy(v).toFixed(1)} x2={HW} y2={hy(v).toFixed(1)} style="stroke:var(--grid)" />{/each}
+            <line x1="0" y1={BOT} x2={HW} y2={BOT} style="stroke:var(--hair)" />
+            <path d={histLine + ' L' + HW + ' ' + BOT + ' L0 ' + BOT + ' Z'} fill="url(#bhFg)" />
+            <path d={histLine} fill="none" style="stroke:var(--accent)" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+          </svg>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink55);padding-top:4px"><span>{fearDay(hpts[0].date)}</span><span>{fearDay(hpts[hpts.length - 1].date)}</span></div>
+      </div>
     {/if}
   {/if}
 </div>
-
-<style>
-  .card { background: #141924; border: 1px solid #1c2230; border-radius: 12px; padding: 14px 16px; }
-  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-  .head h5 { margin: 0; font-size: 14px; font-weight: 600; }
-  .seg { display: inline-flex; background: #1c2230; border-radius: 7px; padding: 2px; }
-  .seg button { background: none; border: 0; color: #8b93a7; font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
-  .seg button.on { background: #2a3242; color: #e6e9ef; }
-  .src { margin-left: auto; color: #8b93a7; font-size: 11px; }
-  .msg { color: #8b93a7; font-size: 13px; }
-  .body { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
-  .dial { position: relative; width: 220px; text-align: center; }
-  .dial svg { width: 220px; height: 130px; }
-  .score { font-size: 30px; font-weight: 700; margin-top: -10px; }
-  .rating { font-size: 13px; }
-  .cols { display: flex; gap: 24px; flex: 1; min-width: 260px; }
-  .col { flex: 1; }
-  .col h6 { margin: 0 0 6px; color: #8b93a7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 500; }
-  .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; font-size: 12px; padding: 2px 0; align-items: baseline; }
-  .row span { color: #c4cbd8; } .row .rt { color: #8b93a7; font-size: 11px; text-align: right; min-width: 70px; }
-  .row b { font-variant-numeric: tabular-nums; }
-  .foot { width: 100%; height: 120px; margin-top: 12px; }
-</style>

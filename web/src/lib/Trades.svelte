@@ -1,132 +1,102 @@
 <script lang="ts">
   import type { Trade } from './model'
-  import { price, money, pct, num } from './fmt'
+  import { money, pct, px, qty as fqty, hold, cls, color } from './fmt'
+  import { symText } from './sym'
+  import { sort, toggleSort, sortRows } from './sort.svelte'
   import { goSub } from './router.svelte'
+  import { resetFilters } from './filters.svelte'
+  import { loadModel } from './state.svelte'
 
   let { trades }: { trades: Trade[] } = $props()
 
-  type Col = { key: string; label: string; align?: 'right' | 'center' }
-  const cols: Col[] = [
-    { key: 'entryDate', label: 'Open' },
-    { key: 'exitDate', label: 'Close' },
-    { key: 'symbol', label: 'Symbol' },
-    { key: 'exchange', label: 'Exchange' },
-    { key: 'qty', label: 'Qty', align: 'right' },
-    { key: 'entry', label: 'Entry', align: 'right' },
-    { key: 'exit', label: 'Exit', align: 'right' },
-    { key: 'currency', label: 'FX', align: 'center' },
-    { key: 'pnl', label: 'P&L', align: 'right' },
-    { key: 'pnlPct', label: 'P&L %', align: 'right' },
-    { key: 'holdDays', label: 'Hold', align: 'right' },
-    { key: 'grade', label: 'Grade' },
+  const cols: { key: string; label: string; align?: string; width?: string; padLeft?: string }[] = [
+    { key: 'entryDate', label: 'Open', width: '8%' },
+    { key: 'exitDate', label: 'Close', width: '8%' },
+    { key: 'symbol', label: 'Symbol', width: '15.5%' },
+    { key: 'exchange', label: 'Exchange', width: '8%' },
+    { key: 'qty', label: 'Qty', align: 'right', width: '7.5%' },
+    { key: 'entry', label: 'Entry', align: 'right', width: '7%' },
+    { key: 'exit', label: 'Exit', align: 'right', width: '7%' },
+    { key: 'currency', label: 'FX', align: 'center', width: '5%' },
+    { key: 'pnl', label: 'P&L', align: 'right', width: '8%' },
+    { key: 'pnlPct', label: 'P&L %', align: 'right', width: '7%' },
+    { key: 'holdDays', label: 'Hold', align: 'right', width: '5%' },
+    { key: 'grade', label: 'Grade', padLeft: '50px', width: '7.5%' },
     { key: 'tags', label: 'Tags' },
   ]
 
-  // Client-side sort — instant, no refetch (the rich-client behaviour). Newest
-  // close first by default.
-  let sort = $state<{ key: string; dir: 1 | -1 }>({ key: 'exitDate', dir: -1 })
-
-  const GRADE_RANK: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, F: 5 }
-  function sortValue(t: Trade, key: string): number | string {
-    if (key === 'tags') return (t.tags && t.tags[0]) || ''
-    return (t as unknown as Record<string, number | string>)[key] ?? ''
+  function tradeSortValue(t: Trade, key: string): unknown {
+    if (key === 'tags') return t.tags && t.tags.length ? t.tags.slice().sort()[0] : '￿'
+    if (key === 'grade') {
+      const i = ['F', 'C', 'B', 'A'].indexOf(t.grade)
+      return i < 0 ? null : i
+    }
+    if (key === 'pnl') return t.pnlCad
+    return (t as unknown as Record<string, unknown>)[key]
   }
+  const rows = $derived(sortRows(trades || [], sort.trades.key, sort.trades.dir, tradeSortValue))
 
-  const rows = $derived.by(() => {
-    const { key, dir } = sort
-    const arr = [...trades]
-    arr.sort((a, b) => {
-      // Grade: A first ascending, F first descending, ungraded always last.
-      if (key === 'grade') {
-        const ra = a.grade ? GRADE_RANK[a.grade] ?? 98 : 99
-        const rb = b.grade ? GRADE_RANK[b.grade] ?? 98 : 99
-        if (ra === 99 || rb === 99) return ra - rb // ungraded to the end either way
-        return (ra - rb) * dir
-      }
-      const va = sortValue(a, key)
-      const vb = sortValue(b, key)
-      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
-      return String(va).localeCompare(String(vb)) * dir
-    })
-    return arr
-  })
-
-  function toggle(key: string) {
-    if (sort.key === key) sort = { key, dir: sort.dir === 1 ? -1 : 1 }
-    else sort = { key, dir: key === 'grade' ? 1 : -1 }
+  function gradeClass(g: string): string {
+    return g === 'A' || g === 'B' ? 'g-ab' : g === 'F' ? 'g-f' : g === 'C' ? 'g-c' : 'g-none'
   }
-  const qtyFmt = (q: number) => (Number.isInteger(q) ? num(q, 0) : String(q))
-  const isDeposit = (t: Trade) => (t.flags || []).includes('basis-unknown')
+  function clearAll(e: Event) {
+    e.preventDefault()
+    resetFilters()
+    loadModel()
+  }
 </script>
 
-<div class="card">
-  <div class="head"><h5>Trades</h5><span class="count">{trades.length}</span></div>
-  <div class="scroll">
-    <table>
-      <thead>
-        <tr>
+<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">
+  <div class="card elev-sm" style="min-width:0;padding:14px 16px 8px;display:flex;flex-direction:column;min-height:0;max-height:620px">
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px"><h5>Trades</h5></div>
+    <div class="scroll-xy" style="flex:1;min-height:0">
+      <table class="table" style="min-width:1150px;table-layout:fixed">
+        <thead><tr>
           {#each cols as c (c.key)}
-            <th class={c.align ?? 'l'} onclick={() => toggle(c.key)}>
-              {c.label}{#if sort.key === c.key}<span class="arr">{sort.dir === 1 ? '▲' : '▼'}</span>{/if}
+            {@const on = sort.trades.key === c.key}
+            {@const right = c.align === 'right'}
+            {@const center = c.align === 'center'}
+            <th
+              style="white-space:nowrap;text-align:{c.align || 'left'};cursor:pointer;position:sticky;top:0;z-index:1;color:{on ? 'var(--ink)' : 'rgba(var(--ink-rgb),.6)'}{c.padLeft ? ';padding-left:' + c.padLeft : ''}{c.width ? ';width:' + c.width : ''}"
+              onclick={() => toggleSort('trades', c.key)}>
+              <span class="th-in" style="flex-direction:{right ? 'row-reverse' : 'row'}">{c.label}<span class="arrow" style="color:{on ? 'var(--accent)' : 'transparent'}{center ? ';position:absolute;left:100%;margin-left:4px' : ''}">{on && sort.trades.dir === 'asc' ? '▲' : '▼'}</span></span>
             </th>
           {/each}
-        </tr>
-      </thead>
-      <tbody>
-        {#each rows as t (t.id)}
-          <tr class="click" onclick={() => goSub('trades', t.id)}>
-            <td class="l dim">{t.entryDate}</td>
-            <td class="l dim">{t.exitDate}</td>
-            <td class="l sym">{t.symbol}</td>
-            <td class="l dim">{t.exchange || '—'}</td>
-            <td class="r">{qtyFmt(t.qty)}</td>
-            <td class="r">{price(t.entry)}</td>
-            <td class="r">{price(t.exit)}</td>
-            <td class="c dim">{t.currency}</td>
-            {#if isDeposit(t)}
-              <td class="r dim">—</td><td class="r dim">deposited</td>
-            {:else}
-              <td class="r {t.pnl >= 0 ? 'pos' : 'neg'}">{money(t.pnl, t.currency)}</td>
-              <td class="r {t.pnl >= 0 ? 'pos' : 'neg'}">{pct(t.pnlPct)}</td>
-            {/if}
-            <td class="r dim">{t.holdDays}d</td>
-            <td class="l">
-              {#if t.grade}<span class="grade g{t.grade}">{t.grade}</span>{:else}<span class="dim">—</span>{/if}
-            </td>
-            <td class="l">
-              {#if t.tags && t.tags.length}<span class="tag">{t.tags[0]}</span>{#if t.tags.length > 1}<span class="more">+{t.tags.length - 1}</span>{/if}{:else}<span class="dim">—</span>{/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+        </tr></thead>
+        <tbody>
+          {#each rows as t (t.id)}
+            <tr class="tab" style="cursor:pointer" onclick={() => goSub('trades', t.id)}>
+              <td class="dim" style="white-space:nowrap;padding-right:12px">{t.entryDate}</td>
+              <td class="dim" style="white-space:nowrap">{t.exitDate}</td>
+              <td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{symText(t.symbol)}</td>
+              <td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{t.exchange || '—'}</td>
+              <td style="text-align:right">{fqty(t.qty)}</td>
+              <td style="text-align:right">{px(t.entry)}</td>
+              <td style="text-align:right">{px(t.exit)}</td>
+              <td class="dim" style="font-variant-numeric:normal;text-align:center">{t.currency}</td>
+              {#if (t.flags || []).indexOf('basis-unknown') >= 0}
+                <td style="text-align:right" class="dim">—</td>
+                <td style="text-align:right" class="dim">deposited</td>
+              {:else}
+                <td style="text-align:right;font-weight:500;color:{color(t.pnl)}">{money(t.pnl, t.currency)}</td>
+                <td style="text-align:right;color:{color(t.pnl)}">{pct(t.pnlPct)}</td>
+              {/if}
+              <td style="text-align:right" class="dim">{hold(t.holdDays)}</td>
+              <td style="white-space:nowrap;padding-left:50px"><span class="grade {gradeClass(t.grade)}">{t.grade || '—'}</span></td>
+              <td style="font-variant-numeric:normal">
+                {#if t.tags && t.tags.length}
+                  <span class="tagchip">{t.tags[0]}</span>{#if t.tags.length > 1}<span class="muted" style="font-size:10.5px;margin-left:4px">+{t.tags.length - 1}</span>{/if}
+                {:else}
+                  <span style="color:rgba(var(--ink-rgb),.5)">—</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if !rows.length}
+        <div class="muted" style="padding:26px 4px;font-size:12px">No trades match these filters. <a href="#" onclick={clearAll}>Reset all</a></div>
+      {/if}
+    </div>
   </div>
 </div>
-
-<style>
-  .card { background: #141924; border: 1px solid #1c2230; border-radius: 12px; padding: 14px 16px; }
-  .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-  .head h5 { margin: 0; font-size: 14px; font-weight: 600; }
-  .count { color: #8b93a7; font-size: 12px; }
-  .scroll { overflow: auto; max-height: 640px; }
-  table { width: 100%; min-width: 1150px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; table-layout: fixed; }
-  th { position: sticky; top: 0; background: #141924; color: #8b93a7; font-weight: 500; padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid #1c2230; cursor: pointer; user-select: none; }
-  th.r { text-align: right; } th.c { text-align: center; } th.l { text-align: left; }
-  th:hover { color: #c4cbd8; }
-  .arr { font-size: 9px; margin-left: 3px; }
-  td { padding: 7px 10px; white-space: nowrap; border-bottom: 1px solid #12161f; overflow: hidden; text-overflow: ellipsis; }
-  td.r { text-align: right; } td.c { text-align: center; } td.l { text-align: left; }
-  .sym { font-weight: 500; }
-  .dim { color: #8b93a7; }
-  tr.click { cursor: pointer; }
-  tr:hover td { background: #171d29; }
-  .pos { color: #3ecf8e; } .neg { color: #f0616d; }
-  .grade { display: inline-block; min-width: 18px; text-align: center; border-radius: 4px; padding: 1px 5px; font-weight: 600; font-size: 11px; }
-  .gA { background: rgba(62,207,142,0.18); color: #3ecf8e; }
-  .gB { background: rgba(120,199,120,0.16); color: #86c682; }
-  .gC { background: rgba(242,163,65,0.16); color: #f2a341; }
-  .gD { background: rgba(240,140,90,0.16); color: #f08c5a; }
-  .gF { background: rgba(240,97,109,0.16); color: #f0616d; }
-  .tag { background: #232a38; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
-  .more { color: #8b93a7; font-size: 10px; margin-left: 4px; }
-</style>

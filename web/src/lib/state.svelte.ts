@@ -11,22 +11,56 @@ export const store = $state<{ model: Model | null; error: string | null; loading
   loading: true,
 })
 
+// The detail id in the address (trades/<id> or portfolio/<id>): the open trade's
+// legs and fills travel only for it, exactly as the legacy loadModel did.
+function detailParam(): string {
+  if (typeof location === 'undefined') return ''
+  const parts = location.hash.replace(/^#\/?/, '').split('/')
+  const page = parts[0] === 'positions' ? 'portfolio' : parts[0]
+  const id = parts.slice(1).join('/')
+  if ((page === 'trades' || page === 'portfolio') && id) return '&trade=' + encodeURIComponent(decodeURIComponent(id))
+  return ''
+}
+
 // The data layer, behavior-equivalent to the legacy loadModel(): fetch the
-// server-derived model and hand it to the store. (loadLive / status polling
-// come in later phases; the spike proves the full-model path.)
+// server-derived model (filters + benchmark + the open trade's detail) and hand
+// it to the store. Svelte tracks what each component reads.
+let _loadSeq = 0
 export async function loadModel(): Promise<void> {
+  const seq = ++_loadSeq
   store.loading = true
   try {
     const q = encodeURIComponent(JSON.stringify(filters))
-    const r = await fetch('/api/model?filters=' + q, { headers: { 'X-Bagholder': '1' } })
+    const r = await fetch('/api/model?filters=' + q + detailParam(), { headers: { 'X-Bagholder': '1' } })
     if (!r.ok) throw new Error('HTTP ' + r.status)
-    store.model = (await r.json()) as Model
+    const m = (await r.json()) as Model
+    if (seq !== _loadSeq) return
+    store.model = m
     store.error = null
   } catch (e) {
+    if (seq !== _loadSeq) return
     store.error = e instanceof Error ? e.message : String(e)
   } finally {
-    store.loading = false
+    if (seq === _loadSeq) store.loading = false
   }
+}
+
+// Switch the benchmark the annualized-returns card compares against: persist it,
+// send it on the next model load (spR is computed server-side for it), reload.
+export function setBenchmark(key: string): void {
+  filters.benchmark = key
+  try {
+    localStorage.setItem('bh2.benchmark', key)
+  } catch {
+    /* ignore */
+  }
+  loadModel()
+}
+
+// Apply a partial filter change and recompute the model, like the legacy setFilters().
+export function setFilters(patch: Partial<typeof filters>): void {
+  Object.assign(filters, patch)
+  loadModel()
 }
 
 // A journal edit: mutate the one trade optimistically (so the UI reflects it at
@@ -34,10 +68,19 @@ export async function loadModel(): Promise<void> {
 // reload the authoritative model. This is the "update exactly what changed,
 // nothing else affected" pattern the reconciler could never guarantee.
 export async function saveJournal(id: string, patch: { thesis?: string; grade?: string; tags?: string[] }): Promise<void> {
-  const t = store.model?.trades.find((x) => x.id === id)
+  const t = store.model?.trades.find((x) => x.id === id) ?? store.model?.positions?.find((p) => p.id === id)
   if (!t) return
   Object.assign(t, patch)
-  const body = { id, thesis: t.thesis ?? '', tags: t.tags ?? [], grade: t.grade ?? '' }
+  // a new tag joins the book's known tags so it offers as a suggestion at once
+  if (patch.tags && store.model?.options) {
+    const opts = store.model.options
+    for (const x of patch.tags)
+      if (opts.tags.indexOf(x) < 0) {
+        opts.tags.push(x)
+        opts.tags.sort()
+      }
+  }
+  const body = { id, thesis: (t as { thesis?: string }).thesis ?? '', tags: (t as { tags?: string[] }).tags ?? [], grade: (t as { grade?: string }).grade ?? '' }
   try {
     const r = await fetch('/api/journal', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const d = await r.json()

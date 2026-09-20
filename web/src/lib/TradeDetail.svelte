@@ -1,180 +1,341 @@
 <script lang="ts">
-  import type { Trade } from './model'
-  import { tradeChart, type Bar, type Fill } from './actions/tradeChart'
-  import { price, money, pct, num } from './fmt'
-  import { go } from './router.svelte'
-  import TradeJournal from './trade/TradeJournal.svelte'
-  import Disclosures from './trade/Disclosures.svelte'
+  // The trade / holding / listing detail — the largest screen. A faithful port of
+  // ledger.html's tradeDetailHtml + listingDetailHtml: the header card (symbol,
+  // name·exchange, ticket buttons, the big P&L or a listing's price), the
+  // timeframe pills + candlestick chart with the executions marked, a two-column
+  // grid of the facts + executions table and the thesis / grade / tags card, then
+  // the short-interest cards and the disclosures list.
+  import type { Trade, Fill } from './model'
+  import { money, money0, pct, px, qty, hold, color } from './fmt'
+  import { symText } from './sym'
+  import { ICONS } from './icons'
+  import { sort, toggleSort, sortRows } from './sort.svelte'
+  import { store, saveJournal } from './state.svelte'
+  import { openTicket } from './ticket/ticket.svelte'
+  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { tradeChart } from './actions/tradeChart'
   import ShortInterest from './trade/ShortInterest.svelte'
+  import Disclosures from './trade/Disclosures.svelte'
 
   let { trade }: { trade: Trade } = $props()
 
-  interface DetailFill { id: string; date: string; time: string; side: string; sub: string; qty: number; price: number | null; amount: number; currency: string }
+  const signedPct = (v: number | null | undefined) => (v == null || !isFinite(v) ? '—' : (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%')
 
-  const TIMEFRAMES: [string, string][] = [['1h', '1H'], ['4h', '4H'], ['1d', '1D'], ['1w', '1W'], ['1M', '1M']]
-  function defaultTf(days: number): string {
-    if (days <= 2) return '1h'
-    if (days <= 10) return '4h'
-    if (days <= 180) return '1d'
-    if (days <= 1095) return '1w'
-    return '1M'
-  }
+  // ---- the chart: mount the wanted timeframe, falling back a step coarser when a
+  // timeframe is not offered, and showing the daily chart while minute data loads.
+  let loaded = $state<{ tf: string; hist: History; provisional: boolean } | null>(null)
+  let wantedTf = $state('')
 
-  let fills = $state<DetailFill[]>([])
-  let bars = $state<Bar[]>([])
-  let available = $state<string[]>([])
-  // Default timeframe from the trade's length, computed once at mount (the
-  // component is keyed per trade id, so it remounts for a different trade).
-  // svelte-ignore state_referenced_locally
-  let tf = $state(defaultTf(trade.holdDays))
-  let reason = $state('')
-  let loadingBars = $state(true)
-
-  const day = 86400000
-  function span() {
-    const from = new Date(Date.parse(trade.entryDate) - 10 * day).toISOString().slice(0, 10)
-    const end = trade.exitDate ? Math.min(Date.now(), Date.parse(trade.exitDate) + 10 * day) : Date.now()
-    return { from, to: new Date(end).toISOString().slice(0, 10) }
-  }
-
-  async function loadFills() {
-    try {
-      const r = await fetch('/api/trade?id=' + encodeURIComponent(trade.id))
-      const d = await r.json()
-      if (d.ok) fills = d.fills ?? []
-    } catch {
-      /* leave empty */
-    }
-  }
-  async function loadBars(which: string) {
-    loadingBars = true
-    const sp = span()
-    const q = new URLSearchParams({ symbol: trade.symbol, exchange: trade.exchange || '', currency: trade.currency || '', kind: trade.kind || '', from: sp.from, to: sp.to, tf: which })
-    try {
-      const r = await fetch('/api/history?' + q.toString())
-      const d = await r.json()
-      if (d.ok) {
-        bars = d.bars ?? []
-        available = d.available ?? []
-        reason = d.reason ?? ''
-      } else {
-        bars = []
-        reason = d.error ?? ''
+  $effect(() => {
+    const t = trade
+    if (t.fills === undefined) return // the trade's fills are still on their way
+    const wanted = wantedTf || chartTfFor(t)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const mount = async (want: string) => {
+      const h = await loadHistory(t, want)
+      if (cancelled) return
+      const available = h.available
+      const tf = chartTfFor(t, available)
+      if (tf && tf !== want) {
+        mount(tf)
+        return
       }
-    } catch {
-      bars = []
-      reason = 'Could not reach the history source.'
+      if (h.pending) {
+        if (available.indexOf('1d') >= 0) {
+          const d = await loadHistory(t, '1d')
+          if (!cancelled) loaded = { tf: '1d', hist: d, provisional: true }
+        }
+        timer = setTimeout(() => {
+          if (!cancelled && chartTfFor(t) === want) mount(want)
+        }, 3000)
+        return
+      }
+      loaded = { tf, hist: h, provisional: false }
     }
-    loadingBars = false
+    mount(wanted)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  })
+
+  const candles = $derived(!!loaded && loaded.hist.bars.length > 0 && loaded.hist.bars.every((b: Bar) => b.open != null && b.high != null && b.low != null))
+  const chartFills = $derived((trade.fills || []) as Fill[])
+  const pillsAvailable = $derived(loaded ? loaded.hist.available : [])
+
+  function pickTf(tf: string) {
+    setChartTf(trade.id, tf)
+    wantedTf = tf
   }
 
-  $effect(() => {
-    loadFills()
-  })
-  $effect(() => {
-    loadBars(tf)
+  // ---- executions ----
+  function execSortValue(e: Fill, key: string): unknown {
+    if (key === 'when') return e.when
+    if (key === 'side') return e.side
+    if (key === 'qty') return e.qty
+    if (key === 'currency') return e.currency
+    if (key === 'price') return e.price
+    return e.amount
+  }
+  const ecols = [
+    { key: 'when', label: 'When', padLeft: '0' },
+    { key: 'side', label: 'Side' },
+    { key: 'qty', label: 'Qty', align: 'right' },
+    { key: 'currency', label: 'FX', align: 'center', padLeft: '18px', padRight: '18px' },
+    { key: 'price', label: 'Price', align: 'right' },
+    { key: 'amount', label: 'Amount', align: 'right', padRight: '0' },
+  ] as { key: string; label: string; align?: string; padLeft?: string; padRight?: string }[]
+  const execs = $derived(sortRows((trade.fills || []) as Fill[], sort.execs.key, sort.execs.dir, execSortValue))
+
+  // ---- ticket buttons (ticketButtonsHtml) ----
+  interface TkBtn { side: 'BUY' | 'SELL'; on: boolean; open?: () => void }
+  const tkButtons = $derived.by<TkBtn[] | null>(() => {
+    if (String(trade.kind || 'Shares') !== 'Shares') return null
+    if (trade.listing) {
+      return [
+        { side: 'BUY', on: true, open: () => openTicket(trade.symbol, 'BUY', trade.exchange || '') },
+        { side: 'SELL', on: false },
+      ]
+    }
+    const m = store.model
+    const pos = (m?.positions || []).find((p) => p.symbol === trade.symbol) || null
+    const found = pos || (m?.trades || []).find((x) => x.symbol === trade.symbol) || null
+    const share = (found ? found.kind : '') === 'Shares'
+    return [
+      { side: 'BUY', on: share, open: () => openTicket(trade.symbol, 'BUY') },
+      { side: 'SELL', on: share && !!pos, open: () => openTicket(trade.symbol, 'SELL') },
+    ]
   })
 
-  const chartFills = $derived(fills.map((f) => ({ date: f.date, qty: f.qty, price: f.price })) as Fill[])
-  const listingTicker = $derived((trade.symbol || '').replace(/\.(TO|V|CN|NE)$/i, ''))
-  const sideText = (f: DetailFill) => (f.sub && f.sub !== f.side ? f.sub.replace(/([A-Z])(TO)([A-Z])/, '$1 $2 $3').replace(/_/g, ' ') : f.side)
+  // ---- journal: thesis, grade, tags ----
+  // svelte-ignore state_referenced_locally
+  let thesisDraft = $state(trade.thesis || '')
+  let thesisTimer: ReturnType<typeof setTimeout> | undefined
+  // svelte-ignore state_referenced_locally
+  let lastId = trade.id
+  $effect(() => {
+    if (trade.id !== lastId) {
+      lastId = trade.id
+      thesisDraft = trade.thesis || ''
+    }
+  })
+  function thesisInput() {
+    clearTimeout(thesisTimer)
+    thesisTimer = setTimeout(() => {
+      if (trade.thesis !== thesisDraft) saveJournal(trade.id, { thesis: thesisDraft })
+    }, 600)
+  }
+  function thesisBlur() {
+    clearTimeout(thesisTimer)
+    if (trade.thesis !== thesisDraft) saveJournal(trade.id, { thesis: thesisDraft })
+  }
+  function setGrade(g: string) {
+    saveJournal(trade.id, { grade: trade.grade === g ? '' : g })
+  }
+  function removeTag(tag: string) {
+    saveJournal(trade.id, { tags: (trade.tags || []).filter((x) => x !== tag) })
+    tagEl?.focus()
+  }
+
+  let tagDraft = $state('')
+  let tagHi = $state(0)
+  let tagEl = $state<HTMLInputElement | null>(null)
+  const tagMatches = $derived.by(() => {
+    const draft = tagDraft.trim().toLowerCase()
+    if (!draft) return [] as string[]
+    return ((store.model?.options?.tags || []) as string[])
+      .filter((x) => (trade.tags || []).indexOf(x) < 0 && x.toLowerCase().indexOf(draft) >= 0)
+      .sort((a, b) => a.toLowerCase().indexOf(draft) - b.toLowerCase().indexOf(draft) || a.length - b.length)
+      .slice(0, 6)
+  })
+  function addTag(tag: string) {
+    if ((trade.tags || []).indexOf(tag) < 0) saveJournal(trade.id, { tags: [...(trade.tags || []), tag] })
+    tagDraft = ''
+    tagHi = 0
+    tagEl?.focus()
+  }
+  function commitTag() {
+    const v = tagDraft.trim().replace(/,$/, '')
+    tagDraft = ''
+    if (v && (trade.tags || []).indexOf(v) < 0) {
+      saveJournal(trade.id, { tags: [...(trade.tags || []), v] })
+      tagEl?.focus()
+    }
+  }
+  function tagKey(e: KeyboardEvent) {
+    const matches = tagMatches
+    if (e.key === 'Backspace' && (e.target as HTMLInputElement).value === '') {
+      const tags = trade.tags || []
+      if (tags.length) {
+        e.preventDefault()
+        removeTag(tags[tags.length - 1])
+      }
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!matches.length) return
+      e.preventDefault()
+      tagHi = (Math.min(tagHi, matches.length - 1) + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') {
+      if (matches.length && e.key !== ',') {
+        e.preventDefault()
+        addTag(matches[Math.min(tagHi, matches.length - 1)])
+        return
+      }
+      if (e.key !== 'Tab') e.preventDefault()
+      commitTag()
+    }
+  }
+
+  const colors = $derived(chartColors())
 </script>
 
-<div class="detail">
-  <button class="back" onclick={() => go('trades')}>← Trades</button>
-
-  <div class="header">
-    <div>
-      <div class="sym">{trade.symbol}</div>
-      <div class="name">{trade.name} · {trade.exchange}: {listingTicker}</div>
-    </div>
-    <div class="pnl {trade.pnl >= 0 ? 'pos' : 'neg'}">
-      {money(trade.pnl, trade.currency)} ({pct(trade.pnlPct)})
-    </div>
-  </div>
-
-  <div class="card chartcard">
-    <div class="tfrow">
-      {#each TIMEFRAMES as [key, label] (key)}
-        {#if available.includes(key) || key === tf}
-          <button class="pill" class:on={tf === key} onclick={() => (tf = key)}>{label}</button>
+{#snippet tkbtns()}
+  {#if tkButtons}
+    <span class="tk-rowbtns">
+      {#each tkButtons as b (b.side)}
+        {#if b.on}
+          <button class="tk-rowbtn {b.side.toLowerCase()}" aria-label="{b.side === 'BUY' ? 'Buy' : 'Sell'} {symText(trade.symbol)}" onclick={b.open}><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={b.side === 'BUY' ? ICONS.plus : ICONS.minus} /></svg></button>
+        {:else}
+          <span class="tk-rowbtn off" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={b.side === 'BUY' ? ICONS.plus : ICONS.minus} /></svg></span>
         {/if}
       {/each}
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet fact(l: string, v: string)}
+  <div><div class="lbl">{l}</div><div class="tab" style="font-size:13px">{v}</div></div>
+{/snippet}
+
+<div style="display:flex;flex-direction:column;gap:14px">
+  <!-- header + chart card -->
+  <div class="card elev-sm" style="padding:16px 18px 12px">
+    <div style="display:flex;align-items:flex-start;gap:14px;margin:0 0 14px">
+      <div style="min-width:0">
+        <h4>{symText(trade.symbol)}</h4>
+        <div class="dim" style="font-size:11.5px;margin-top:2px">{trade.name || trade.symbol}{trade.exchange ? ' · ' + trade.exchange + ': ' + listingTicker(trade) : ''}</div>
+      </div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+        {@render tkbtns()}
+        {#if trade.listing}
+          <div style="text-align:right">
+            <div class="tab" style="font-size:24px;font-weight:500;line-height:1.1">{trade.last == null ? '—' : px(trade.last)}</div>
+            <div class="tab" style="font-size:12px;margin-top:2px;color:{trade.percentChange == null ? 'var(--ink55)' : color(trade.percentChange)}">{signedPct(trade.percentChange)}</div>
+          </div>
+        {:else}
+          <div style="text-align:right">
+            <div class="tab" style="font-size:24px;font-weight:500;line-height:1.1;color:{color(trade.pnl)}">{money(trade.pnl, trade.currency)}</div>
+            <div class="tab" style="font-size:12px;color:{color(trade.pnl)};margin-top:2px">{pct(trade.pnlPct)}</div>
+          </div>
+        {/if}
+      </div>
     </div>
-    {#if bars.length}
-      {#key tf}
-        <div class="chart" use:tradeChart={{ bars, fills: chartFills }}></div>
-      {/key}
+    <div style="display:flex;gap:4px;justify-content:flex-end;margin:0 0 8px">
+      {#if pillsAvailable.length}
+        {#each TIMEFRAMES as [k, label] (k)}
+          {#if pillsAvailable.indexOf(k) >= 0}
+            <button class="pill" class:on={loaded?.tf === k} onclick={() => pickTf(k)} style="padding:2px 8px;font-size:11px;width:auto">{label}</button>
+          {/if}
+        {/each}
+      {/if}
+    </div>
+    {#if loaded && candles}
+      <div use:tradeChart={{ bars: loaded.hist.bars, fills: chartFills, tf: loaded.tf, colors, rangeKey: trade.id + '|' + loaded.tf, provisional: loaded.provisional }} style="position:relative;height:300px"></div>
     {:else}
-      <div class="empty">{loadingBars ? 'Loading bars…' : reason || 'No bars for this span.'}</div>
+      <div style="position:relative;height:300px">
+        {#if loaded}<div class="muted empty" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:12px;text-align:center;padding:0 24px">{loaded.hist.reason || 'No price history for this span.'}</div>{/if}
+      </div>
     {/if}
   </div>
 
-  <div class="facts">
-    <div><span>Open</span>{trade.entryDate}</div>
-    <div><span>Close</span>{trade.exitDate || '—'}</div>
-    <div><span>Entry</span>{price(trade.entry)}</div>
-    <div><span>Exit</span>{price(trade.exit)}</div>
-    <div><span>Hold</span>{trade.holdDays}d</div>
-    <div><span>Account</span>{trade.account ?? '—'}</div>
-  </div>
+  {#if !trade.listing}
+    <!-- facts + executions | thesis/grade/tags -->
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch;height:372px">
+      <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
+        <div class="rule-b" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 0 14px">
+          {#if trade.holding}
+            {@render fact('Qty', qty(trade.qty))}
+            {@render fact('Avg', px(trade.avg ?? null))}
+            {@render fact('Book', money0(trade.cost ?? null, trade.currency))}
+            {@render fact('Market', money0(trade.mv ?? null, trade.currency))}
+          {:else}
+            {@render fact('Open', trade.entryDate)}
+            {@render fact('Close', trade.exitDate)}
+            {@render fact('Entry', px(trade.entry))}
+            {@render fact('Exit', px(trade.exit))}
+          {/if}
+          {@render fact('Hold', hold(trade.holdDays))}
+          {@render fact('Account', trade.account)}
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin:14px 0 6px"><span class="lbl">Executions{trade.fills ? ' (' + execs.length + ')' : ''}</span></div>
+        <div class="scroll" style="flex:1;min-height:0">
+          <table class="table" style="font-size:12.5px;width:100%">
+            <thead><tr>
+              {#each ecols as c (c.key)}
+                {@const on = sort.execs.key === c.key}
+                {@const right = c.align === 'right'}
+                {@const center = c.align === 'center'}
+                <th onclick={() => toggleSort('execs', c.key)} style="white-space:nowrap;text-align:{c.align || 'left'};cursor:pointer;position:sticky;top:0;z-index:1;color:{on ? 'var(--ink)' : 'rgba(var(--ink-rgb),.6)'}{c.padLeft ? ';padding-left:' + c.padLeft : ''}{c.padRight ? ';padding-right:' + c.padRight : ''}">
+                  <span class="th-in" style="flex-direction:{right ? 'row-reverse' : 'row'}">{c.label}<span class="arrow" style="color:{on ? 'var(--accent)' : 'transparent'}{center ? ';position:absolute;left:100%;margin-left:4px' : ''}">{on && sort.execs.dir === 'asc' ? '▲' : '▼'}</span></span>
+                </th>
+              {/each}
+            </tr></thead>
+            <tbody>
+              {#each execs as e (e.id)}
+                <tr class="tab">
+                  <td style="padding-left:0;color:var(--ink75);white-space:nowrap">{e.date} <span class="dim">{e.time}</span></td>
+                  <td style="padding-inline:6px;font-size:11.5px;letter-spacing:.03em;color:var(--ink60)">{e.sub || e.side}</td>
+                  <td style="text-align:right;padding-inline:6px">{qty(e.qty)}</td>
+                  <td class="dim" style="text-align:center;padding:7px 18px;font-variant-numeric:normal">{e.currency}</td>
+                  <td style="text-align:right;padding-inline:6px;color:var(--ink75)">{px(e.price)}</td>
+                  <td style="text-align:right;padding-right:0;color:rgba(var(--ink-rgb),.85)">{money(e.amount, e.currency)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-  <div class="card">
-    <h5>Executions</h5>
-    <div class="scroll">
-      <table>
-        <thead><tr><th class="l">When</th><th class="l">Side</th><th>Qty</th><th class="c">FX</th><th>Price</th><th>Amount</th></tr></thead>
-        <tbody>
-          {#each fills as f (f.id)}
-            <tr>
-              <td class="l dim">{f.date} {f.time}</td>
-              <td class="l">{sideText(f)}</td>
-              <td class="r">{num(f.qty, 0)}</td>
-              <td class="c dim">{f.currency}</td>
-              <td class="r">{f.price != null ? price(f.price) : '—'}</td>
-              <td class="r">{money(f.amount, f.currency)}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
+        <div class="lbl" style="margin:0 0 6px">Thesis / notes</div>
+        <textarea class="input" bind:value={thesisDraft} oninput={thesisInput} onblur={thesisBlur} placeholder="Why did you take this trade?" style="flex:1;min-height:96px;height:auto;font-size:13px"></textarea>
+        <div style="display:flex;gap:10px;margin-top:16px;align-items:center">
+          <div style="flex:1">
+            <div class="lbl" style="margin-bottom:5px">Grade</div>
+            <div class="seg">
+              {#each ['A', 'B', 'C', 'F'] as g (g)}
+                <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_label_has_associated_control -->
+                <label class="seg-opt" class:on={trade.grade === g} onclick={() => setGrade(g)}>{g}</label>
+              {/each}
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:14px;position:relative">
+          <div class="lbl" style="margin-bottom:6px">Tags</div>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          <div class="input" onclick={() => tagEl?.focus()} style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:36px;height:auto;padding:6px 8px;cursor:text">
+            {#each trade.tags || [] as tg (tg)}
+              <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 5px 3px 9px;border-radius:6px;background:var(--chip-bg);color:var(--chip-fg)">{tg}<button onclick={(e) => { e.stopPropagation(); removeTag(tg) }} aria-label="Remove tag" style="display:grid;place-items:center;width:15px;height:15px;padding:0;border:0;border-radius:4px;background:rgba(var(--ink-rgb),.1);color:var(--chip-fg);cursor:pointer;font-size:11px;line-height:1">×</button></span>
+            {/each}
+            <input bind:this={tagEl} bind:value={tagDraft} oninput={() => (tagHi = 0)} onkeydown={tagKey} placeholder={(trade.tags || []).length ? 'Add another…' : 'Add a tag…'} aria-label="Add tag" style="flex:1;min-width:90px;border:0;background:transparent;font:400 12.5px Inter,system-ui;color:var(--ink);outline:none" autocomplete="off" />
+          </div>
+          {#if tagDraft.trim() && tagMatches.length}
+            {@const hiI = Math.min(tagHi, tagMatches.length - 1)}
+            <div style="position:absolute;left:0;right:0;bottom:100%;margin-bottom:4px;z-index:5;border-radius:8px;background:var(--n900);box-shadow:var(--shadow-md);padding:5px;display:flex;flex-direction:column;gap:1px">
+              {#each tagMatches as tg, i (tg)}
+                <button onmousedown={(e) => { e.preventDefault(); addTag(tg) }} style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;border:0;font:400 12.5px Inter,system-ui;padding:6px 8px;border-radius:6px;background:{i === hiI ? 'var(--chip-hi)' : 'transparent'};color:{i === hiI ? 'var(--chip-fg)' : 'rgba(var(--ink-rgb),.85)'}">{tg}<span class="muted" style="margin-left:auto;font-size:10px">{i === hiI ? 'Tab ↵' : ''}</span></button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
     </div>
-  </div>
-
-  <div class="two">
-    <TradeJournal {trade} />
-    <Disclosures {trade} />
-  </div>
+  {/if}
 
   <ShortInterest {trade} />
+  <Disclosures {trade} />
 </div>
-
-<style>
-  .detail { display: flex; flex-direction: column; gap: 16px; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
-  .back { align-self: flex-start; background: none; border: 0; color: #8b93a7; font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
-  .back:hover { color: #e6e9ef; }
-  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-  .sym { font-size: 22px; font-weight: 700; }
-  .name { color: #8b93a7; font-size: 13px; margin-top: 2px; }
-  .pnl { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .card { background: #141924; border: 1px solid #1c2230; border-radius: 12px; padding: 16px 18px; }
-  .card h5 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
-  .chartcard { display: flex; flex-direction: column; gap: 10px; }
-  .tfrow { display: flex; gap: 6px; }
-  .pill { background: #1c2230; border: 0; color: #8b93a7; border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
-  .pill.on { background: #2a3242; color: #e6e9ef; }
-  .chart { width: 100%; height: 340px; }
-  .empty { height: 340px; display: flex; align-items: center; justify-content: center; color: #8b93a7; font-size: 13px; }
-  .facts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; background: #141924; border: 1px solid #1c2230; border-radius: 12px; padding: 14px 18px; }
-  .facts div { display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-variant-numeric: tabular-nums; }
-  .facts span { color: #8b93a7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .scroll { overflow: auto; max-height: 320px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
-  th { position: sticky; top: 0; background: #141924; color: #8b93a7; font-weight: 500; text-align: right; padding: 6px 10px; border-bottom: 1px solid #1c2230; }
-  td { text-align: right; padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid #12161f; }
-  th.l, td.l { text-align: left; } th.c, td.c { text-align: center; }
-  .dim { color: #8b93a7; }
-  .r { text-align: right; }
-  .pos { color: #3ecf8e; } .neg { color: #f0616d; }
-</style>

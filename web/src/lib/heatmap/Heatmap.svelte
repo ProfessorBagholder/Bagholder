@@ -1,117 +1,143 @@
 <script lang="ts">
+  // The heatmap card (heatmapCardHtml) and, expanded, the full-page view
+  // (heatmapFullHtml at #heatFull). The reference page reaches the full view by a
+  // route; because this migration may not add routes, the expander opens it as a
+  // fixed overlay instead — the same #heatFull markup, the same controls.
   import type { Markets } from '../model'
-  import { heatmapLayout, heatColor, type Tile } from './treemap'
+  import type { Tile } from './treemap'
+  import { heatColor } from './treemap'
+  import { ICONS } from '../icons'
+  import Mseg from '../markets/Mseg.svelte'
+  import Icon from '../markets/Icon.svelte'
+  import HeatBox from './HeatBox.svelte'
+  import { api } from '../markets/util'
 
   let { markets }: { markets: Markets } = $props()
 
   const MARKET_U: Record<string, string> = { ca: 'Canada', us: 'US', intl: 'International' }
-  const UNIVERSES: [string, string][] = [['holdings', 'Holdings'], ['watchlist', 'Watchlist'], ['both', 'Both'], ['ca', 'Canada'], ['us', 'US'], ['intl', 'International']]
+  const HEAT_UNIVERSES = ['holdings', 'watchlist', 'both', 'ca', 'us', 'intl']
+  const UNIVERSE_OPTS = [['holdings', 'Holdings'], ['watchlist', 'Watchlist'], ['both', 'Both'], '|', ['ca', 'Canada'], ['us', 'US'], ['intl', 'International']] as const
+  const SIZE_OPTS = [['value', 'Market value'], ['equal', 'Equal']] as const
+  const LEGEND = [-3, -2, -1, -0.2, 0.2, 1, 2, 3]
 
-  // Per-viewer convenience, remembered in localStorage (wrapped — it can throw).
   function load(): { universe: string; size: string } {
     try {
-      return { universe: 'holdings', size: 'value', ...JSON.parse(localStorage.getItem('bh3.heat') || '{}') }
-    } catch { return { universe: 'holdings', size: 'value' } }
+      return { universe: 'holdings', size: 'value', ...JSON.parse(localStorage.getItem('bh2.heatmap') || '{}') }
+    } catch {
+      return { universe: 'holdings', size: 'value' }
+    }
   }
   let heat = $state(load())
-  function save() { try { localStorage.setItem('bh3.heat', JSON.stringify(heat)) } catch { /* ignore */ } }
+  function save() {
+    try {
+      localStorage.setItem('bh2.heatmap', JSON.stringify(heat))
+    } catch {
+      /* ignore */
+    }
+  }
 
-  const tiles = $derived.by<Tile[]>(() => {
-    const held = markets.holdings || []
+  let full = $state(false)
+  let cycling = $state(false)
+
+  // ledger's heatTiles: the tiles for the chosen universe
+  function heatTilesFor(h: { universe: string; size: string }): Tile[] {
+    const held = (markets.holdings || []) as Tile[]
     const watched = (markets.watchlist || []).filter((w) => !w.positionId)
-    let out: Tile[]
-    if (MARKET_U[heat.universe]) {
-      out = ((markets.universes as Record<string, Tile[]>)[heat.universe] || []).slice()
+    let tiles: Tile[]
+    if (MARKET_U[h.universe]) {
+      tiles = ((markets.universes as Record<string, Tile[]>)[h.universe] || []).slice()
     } else {
       const minHeld = held.length ? Math.min(...held.map((t) => t.value)) : 1
-      const w: Tile[] = watched.map((x) => ({ id: null, symbol: x.symbol, exchange: x.exchange, value: heat.universe === 'both' ? minHeld : 1, percentChange: x.percentChange, sector: x.sector }))
-      out = heat.universe === 'holdings' ? (held as Tile[]).slice() : heat.universe === 'watchlist' ? w : (held as Tile[]).concat(w)
+      const w: Tile[] = watched.map((x) => ({ id: null, symbol: x.symbol, exchange: x.exchange, value: h.universe === 'both' ? minHeld : 1, percentChange: x.percentChange, sector: x.sector }))
+      tiles = h.universe === 'holdings' ? held.slice() : h.universe === 'watchlist' ? w : held.concat(w)
     }
-    if (heat.size === 'equal') out = out.map((t) => ({ ...t, value: 1 }))
-    return out
-  })
-
-  let W = $state(0)
-  let H = $state(0)
-  const layout = $derived(W > 0 && H > 0 && tiles.length ? heatmapLayout(tiles, W, H) : { blocks: [], cells: [] })
-
-  let hover = $state<number | null>(null)
+    if (h.size === 'equal') tiles = tiles.map((t) => ({ ...t, value: 1 }))
+    return tiles
+  }
+  const tiles = $derived(heatTilesFor(heat))
   const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? 'Not read yet.' : 'No open positions.')
 
-  function seg(u: string) { heat = { ...heat, universe: u }; save() }
-  function sizeSeg(s: string) { heat = { ...heat, size: s }; save() }
-  const pctText = (c: number | null) => (c == null ? '' : (c >= 0 ? '+' : '') + c.toFixed(2) + '%')
+  function pick(patch: Partial<typeof heat>) {
+    if ('universe' in patch && cycling) cycling = false // a scope picked by hand ends the cycling
+    heat = { ...heat, ...patch }
+    save()
+    // a market universe never read: ask for it now
+    if (MARKET_U[heat.universe] && !((markets.universes as Record<string, unknown[]>)[heat.universe] || []).length) api('POST', '/api/markets/refresh', {})
+  }
+
+  // the slideshow: every 20s, the next scope with something to show
+  $effect(() => {
+    if (!cycling || !full) return
+    const id = setInterval(() => {
+      const i = Math.max(0, HEAT_UNIVERSES.indexOf(heat.universe))
+      for (let k = 1; k <= HEAT_UNIVERSES.length; k++) {
+        const u = HEAT_UNIVERSES[(i + k) % HEAT_UNIVERSES.length]
+        const next = { ...heat, universe: u }
+        if (MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length) api('POST', '/api/markets/refresh', {})
+        if (heatTilesFor(next).length) {
+          heat = next
+          save()
+          break
+        }
+      }
+    }, 20000)
+    return () => clearInterval(id)
+  })
+
+  function closeFull() {
+    full = false
+    cycling = false
+  }
 </script>
 
-<div class="card">
-  <div class="head">
+{#snippet header(isFull: boolean)}
+  <div style="display:flex;align-items:center;gap:14px{isFull ? '' : ';margin-bottom:12px'}">
     <h5>Heatmap</h5>
-    <div class="seg">
-      {#each UNIVERSES as [u, label] (u)}
-        <button class:on={heat.universe === u} onclick={() => seg(u)}>{label}</button>
-      {/each}
-    </div>
-    <div class="seg">
-      <button class:on={heat.size === 'value'} onclick={() => sizeSeg('value')}>Market value</button>
-      <button class:on={heat.size === 'equal'} onclick={() => sizeSeg('equal')}>Equal</button>
-    </div>
-    <div class="legend">
+    <Mseg options={UNIVERSE_OPTS} cur={heat.universe} onpick={(u) => pick({ universe: u })} />
+    <Mseg options={SIZE_OPTS} cur={heat.size} onpick={(s) => pick({ size: s })} />
+    <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink55)">
       <span>−3%</span>
-      {#each [-3, -2, -1, -0.2, 0.2, 1, 2, 3] as c}<i style="background: {heatColor(c)}"></i>{/each}
+      {#each LEGEND as c (c)}<span style="width:16px;height:9px;border-radius:2px;background:{heatColor(c)}"></span>{/each}
       <span>+3%</span>
-    </div>
-  </div>
-
-  <div class="box" bind:clientWidth={W} bind:clientHeight={H}>
-    {#if !tiles.length}
-      <div class="empty">{emptyWord}</div>
+    </span>
+    {#if isFull}
+      <button class="heat-ghost" aria-label={cycling ? 'Stop cycling' : 'Cycle through the scopes'} onclick={() => (cycling = !cycling)}><Icon d={cycling ? ICONS.pause : ICONS.play} size={14} /></button>
+      <button class="heat-ghost" aria-label="Back to Markets" onclick={closeFull}><Icon d={ICONS.x} size={14} /></button>
     {:else}
-      {#each layout.blocks as b (b.label)}
-        <div class="block" style="left:{b.x}px; top:{b.y}px; width:{b.w}px; height:{b.h}px"></div>
-        <div class="blabel" style="left:{b.x + 6}px; top:{b.y + 3}px; max-width:{b.w - 12}px">{b.label}</div>
-      {/each}
-      {#each layout.cells as c, i (i)}
-        <div
-          class="cell"
-          class:big={c.big}
-          style="left:{c.x}px; top:{c.y}px; width:{c.w}px; height:{c.h}px; background:{heatColor(c.percentChange)}"
-          role="presentation"
-          onmouseenter={() => (hover = i)}
-          onmouseleave={() => (hover = null)}
-        >
-          {#if c.mid || c.big}
-            <div class="csym">{c.symbol}</div>
-            <div class="cpct">{pctText(c.percentChange)}</div>
-          {/if}
-        </div>
-      {/each}
-      {#if hover != null && layout.cells[hover]}
-        {@const c = layout.cells[hover]}
-        <div class="tip" style="left:{c.x + c.w / 2}px; top:{c.y}px">
-          <b>{c.symbol}</b> {pctText(c.percentChange)}
-        </div>
-      {/if}
+      <button class="heat-ghost" aria-label="Heatmap on its own" onclick={() => (full = true)}><Icon d={ICONS.arrowsOut} size={14} /></button>
     {/if}
   </div>
+{/snippet}
+
+<div class="card elev-sm" style="padding:14px 16px 16px">
+  {@render header(false)}
+  {#if tiles.length}
+    <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
+  {:else}
+    <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+  {/if}
 </div>
 
+{#if full}
+  <div class="heat-full-scrim">
+    <div id="heatFull">
+      {@render header(true)}
+      {#if tiles.length}
+        <HeatBox {tiles} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
+      {:else}
+        <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 <style>
-  .card { background: #141924; border: 1px solid #1c2230; border-radius: 12px; padding: 14px 16px; }
-  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
-  .head h5 { margin: 0; font-size: 14px; font-weight: 600; }
-  .seg { display: inline-flex; background: #1c2230; border-radius: 7px; padding: 2px; }
-  .seg button { background: none; border: 0; color: #8b93a7; font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 5px; cursor: pointer; }
-  .seg button.on { background: #2a3242; color: #e6e9ef; }
-  .legend { margin-left: auto; display: flex; align-items: center; gap: 3px; font-size: 11px; color: #8b93a7; }
-  .legend i { width: 16px; height: 9px; border-radius: 2px; display: inline-block; }
-  .box { position: relative; width: 100%; height: 430px; }
-  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #8b93a7; font-size: 12px; }
-  .block { position: absolute; border: 1px solid #0b0e14; border-radius: 4px; }
-  .blabel { position: absolute; color: #c4cbd8; font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-  .cell { position: absolute; border: 1px solid #0b0e14; border-radius: 3px; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; }
-  .csym { font-size: 12px; font-weight: 600; }
-  .big .csym { font-size: 16px; }
-  .cpct { font-size: 10px; opacity: 0.9; font-variant-numeric: tabular-nums; }
-  .cell:hover { filter: brightness(1.12); }
-  .tip { position: absolute; transform: translate(-50%, -110%); background: #0b0e14; border: 1px solid #2a3242; border-radius: 6px; padding: 4px 8px; font-size: 11px; white-space: nowrap; pointer-events: none; z-index: 5; }
+  /* the reference page renders #heatFull as its own route; here it is an overlay
+     over the app, on the page's own background */
+  .heat-full-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: var(--bg);
+  }
 </style>

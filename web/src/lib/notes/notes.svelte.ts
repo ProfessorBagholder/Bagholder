@@ -1,12 +1,29 @@
 // Notifications: loaded once, then kept live over the SSE stream. Newest first.
 
+// A notification's `extra`: the symbol/exchange it is about, the moment it
+// happened (`at`, a day or a full timestamp), and its link (a filed document id
+// with its source, or an external url). Drives the timestamp word and the click
+// target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
+export interface NoteExtra {
+  symbol?: string
+  exchange?: string
+  at?: string
+  doc?: string
+  source?: string
+  url?: string
+  [k: string]: unknown
+}
+
 export interface Note {
   id: string
   kind: string
+  key?: string
   title: string
   body?: string
   at: string
   readAt?: string | null
+  seenAt?: string | null
+  extra?: NoteExtra
   href?: string
 }
 

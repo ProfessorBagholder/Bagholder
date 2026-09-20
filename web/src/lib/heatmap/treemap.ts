@@ -109,13 +109,11 @@ export function heatmapLayout(tiles: Tile[], W: number, H: number): { blocks: Bl
   return { blocks, cells }
 }
 
-const HEAT: Record<string, string> = {
-  p1: '#2b3a36', p2: '#2c6b51', p3: '#2f9e6b', p4: '#4fc98d',
-  n1: '#3a2b31', n2: '#6e2f3d', n3: '#a8455a', n4: '#d4586f',
-}
-export function heatColor(chg: number | null): string {
-  if (chg == null || !isFinite(chg)) return 'rgba(139,147,167,0.10)'
+// ledger's heatColor: the design-system heat tokens, never hardcoded hex, so the
+// map reads correctly in every theme. Absent change is the faint ink wash.
+export function heatColor(chg: number | null | undefined): string {
+  if (chg == null || !isFinite(chg)) return 'rgba(var(--ink-rgb),.10)'
   const a = Math.abs(chg)
   const step = a < 0.35 ? 1 : a < 1 ? 2 : a < 2.5 ? 3 : 4
-  return HEAT[(chg >= 0 ? 'p' : 'n') + step]
+  return 'var(--heat-' + (chg >= 0 ? 'p' : 'n') + step + ')'
 }

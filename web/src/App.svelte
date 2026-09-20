@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { store, loadModel } from './lib/state.svelte'
-  import { route, startRouter } from './lib/router.svelte'
-  import TabBar from './lib/TabBar.svelte'
+  import { route, startRouter, go, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
+  import { ICONS } from './lib/icons'
+  import { symText } from './lib/sym'
+  import { relTime } from './lib/fmt'
+  import { activeCount, chips, clearField } from './lib/filters.svelte'
   import Dashboard from './lib/Dashboard.svelte'
   import Cashflow from './lib/Cashflow.svelte'
   import Portfolio from './lib/Portfolio.svelte'
@@ -11,23 +14,80 @@
   import Markets from './lib/Markets.svelte'
   import Placeholder from './lib/Placeholder.svelte'
   import FilterPopover from './lib/FilterPopover.svelte'
-  import CommandPalette from './lib/CommandPalette.svelte'
+  import Menu from './lib/Menu.svelte'
+  import ConfirmDialog from './lib/ConfirmDialog.svelte'
+  import Modals from './lib/Modals.svelte'
+  import { ui } from './lib/ui.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
   import { ticketStore } from './lib/ticket/ticket.svelte'
   import OrdersPanel from './lib/orders/OrdersPanel.svelte'
   import NotesPanel from './lib/notes/NotesPanel.svelte'
   import { notesStore, startNotesStream } from './lib/notes/notes.svelte'
-  import { activeCount } from './lib/filters.svelte'
 
   let filterOpen = $state(false)
-  let paletteOpen = $state(false)
+  let filterField = $state<string | undefined>(undefined)
+
+  function editChip(key: string) {
+    filterField = key === 'search' ? 'fields' : key
+    filterOpen = true
+  }
+  function removeChip(key: string) {
+    clearField(key)
+    loadModel()
+  }
   let ordersOpen = $state(false)
   let notesOpen = $state(false)
 
-  function onGlobalKey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault()
-      paletteOpen = true
+  const status = $derived(store.model?.status ?? null)
+  const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
+
+  const sel = $derived(
+    DETAIL_PAGES.includes(route.tab) && route.sub && store.model
+      ? store.model.trades.find((t) => t.id === route.sub) ??
+          store.model.positions?.find((p) => p.id === route.sub) ??
+          null
+      : null,
+  )
+
+  function syncLine(): string {
+    const s = status
+    if (!s) return ''
+    if (s.syncing) return s.syncStep || 'Syncing…'
+    if (s.error) return s.error.length > 60 ? s.error.slice(0, 57) + '…' : s.error
+    if (!s.connected) return 'Not connected'
+    return 'Synced ' + (relTime(s.lastSync) || '—')
+  }
+
+  const notesUnread = $derived(notesStore.unread || status?.notify?.unread || 0)
+
+  // The 2px bar under the active tab slides and resizes rather than jumping,
+  // driven by the active button's own measurements (placeTabIndicator).
+  function tabIndicator(bar: HTMLElement) {
+    const place = () => {
+      const parent = bar.parentElement
+      const on = parent?.querySelector('.tabbtn.on') as HTMLElement | null
+      if (!on) {
+        bar.style.opacity = '0'
+        return
+      }
+      bar.style.left = on.offsetLeft + 'px'
+      bar.style.width = on.offsetWidth + 'px'
+      bar.style.opacity = '1'
+    }
+    place()
+    const ro = new ResizeObserver(place)
+    ro.observe(bar.parentElement!)
+    if (document.fonts?.ready) document.fonts.ready.then(place)
+    const mo = new MutationObserver(place)
+    mo.observe(bar.parentElement!, { attributes: true, subtree: true, attributeFilter: ['class'] })
+    window.addEventListener('resize', place)
+    return {
+      update: place,
+      destroy() {
+        ro.disconnect()
+        mo.disconnect()
+        window.removeEventListener('resize', place)
+      },
     }
   }
 
@@ -42,85 +102,105 @@
       clearInterval(id)
     }
   })
+
+  // Selecting a trade or holding (or leaving one) changes the &trade= detail the
+  // model is fetched with — its fills/legs travel only for the open item — so
+  // reload when the drill-down id changes. (Runs once on mount too; harmless.)
+  let lastSub: string | null = null
+  $effect(() => {
+    const sub = route.sub
+    if (sub !== lastSub) {
+      lastSub = sub
+      loadModel()
+    }
+  })
 </script>
 
-<svelte:window onkeydown={onGlobalKey} />
+{#if store.model}
+  <!-- header -->
+  <div id="hdr" style="display:flex;align-items:center;gap:22px;padding:12px 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
+    <div style="display:flex;align-items:center;gap:9px;margin-right:8px">
+      <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
+      <span style="font-size:15px;font-weight:600;letter-spacing:var(--brand-spacing);color:var(--brand-color);text-transform:var(--brand-transform)">Bagholder</span>
+      {#if status?.version}<span class="muted" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+      <span style="font-size:12px;color:var(--ink55)">{#if ui.notice}<span class={ui.noticeKind === 'err' ? 'status-err' : ''}>{ui.notice}</span>{:else}{syncLine()}{/if}</span>
+      <button class="btn btn-icon btn-secondary" aria-label="Orders" style="position:relative" onclick={() => (ordersOpen = true)}>
+        <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.receipt} /></svg>
+        {#if status?.openOrders}<span class="od-badge quiet">{status.openOrders}</span>{/if}
+      </button>
+      <button class="btn btn-icon btn-secondary" aria-label="Notifications" style="position:relative" onclick={() => (notesOpen = true)}>
+        <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.bell} /></svg>
+        {#if notesUnread}<span class="od-badge">{notesUnread}</span>{/if}
+      </button>
+      <div style="position:relative">
+        <button class="btn btn-icon btn-secondary" aria-label="Filters" onclick={() => (filterOpen = !filterOpen)}>
+          <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
+        </button>
+        {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
+        {#if filterOpen}<FilterPopover options={store.model.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/if}
+      </div>
+      <div style="position:relative">
+        <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>
+          <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.menu} /></svg>
+        </button>
+        {#if ui.menuOpen}
+          <div class="mt-scrim" role="presentation" onclick={() => (ui.menuOpen = false)}></div>
+          <Menu />
+        {/if}
+      </div>
+    </div>
+  </div>
 
-<main>
-  <header>
-    <span class="brand">Bagholder</span>
-    <span class="v3">/v3 · Svelte</span>
-    <button class="search" onclick={() => (paletteOpen = true)} aria-label="Search">Search <kbd>⌘K</kbd></button>
-    <button class="icon" onclick={() => (ordersOpen = true)} aria-label="Orders">Orders</button>
-    <button class="icon bell" onclick={() => (notesOpen = true)} aria-label="Notifications">
-      🔔{#if notesStore.unread}<span class="bcount">{notesStore.unread}</span>{/if}
-    </button>
-    <button class="filter" class:on={activeCount() > 0} onclick={() => (filterOpen = true)} aria-label="Filters">
-      ⚲ Filter{#if activeCount()}<span class="fcount">{activeCount()}</span>{/if}
-    </button>
-  </header>
+  <!-- tabs -->
+  <div class="tabbar" style="display:flex;gap:22px;padding:0 20px;background:var(--bg);box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.08)">
+    <div class="tabind" use:tabIndicator></div>
+    {#each TABS as tab (tab)}
+      <button
+        class="tabbtn"
+        class:on={route.tab === tab && !(DETAIL_PAGES.includes(tab) && sel)}
+        onclick={() => go(tab)}>{TAB_LABEL[tab]}</button>
+    {/each}
+    {#if sel}
+      <div style="display:flex;align-items:center;gap:6px;flex:none;min-width:0;white-space:nowrap;margin-left:6px">
+        <span style="font-size:13px;color:rgba(var(--ink-rgb),.4)">›</span>
+        <span style="font:500 13px Inter,system-ui;padding:11px 0;max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)">{symText(sel.symbol)}</span>
+      </div>
+    {/if}
+    <div style="margin-left:auto;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 0">
+      <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;overflow-x:auto;padding-bottom:1px">
+        {#each chips() as c (c.key)}
+          <span class="chip"><span class="cf">{c.field}</span><button class="cv" onclick={() => editChip(c.key)}>{c.value}</button><button class="cx" aria-label="Remove filter" onclick={() => removeChip(c.key)}>×</button></span>
+        {/each}
+      </div>
+    </div>
+  </div>
 
-  {#if filterOpen && store.model}
-    <FilterPopover options={store.model.options} onclose={() => (filterOpen = false)} />
-  {/if}
-  {#if paletteOpen}
-    <CommandPalette onclose={() => (paletteOpen = false)} />
-  {/if}
-  {#if ticketStore.t}
-    <OrderTicket />
-  {/if}
-  {#if ordersOpen}
-    <OrdersPanel onclose={() => (ordersOpen = false)} />
-  {/if}
-  {#if notesOpen}
-    <NotesPanel onclose={() => (notesOpen = false)} />
-  {/if}
-
-  <TabBar />
-
-  <section class="page">
-    {#if store.error}
-      <p class="msg err">Could not load model: {store.error}</p>
-    {:else if !store.model}
-      <p class="msg">Loading…</p>
-    {:else if route.tab === 'dashboard'}
+  <!-- page -->
+  <div id="page">
+    {#if route.tab === 'dashboard'}
       <Dashboard model={store.model} />
     {:else if route.tab === 'cashflow'}
-      <Cashflow cashflow={store.model.cashflow} />
+      <Cashflow model={store.model} />
     {:else if route.tab === 'portfolio'}
       <Portfolio model={store.model} />
     {:else if route.tab === 'trades'}
-      {#if route.sub}
-        {@const sel = store.model.trades.find((t) => t.id === route.sub)}
-        {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
-      {:else}
-        <Trades trades={store.model.trades} />
-      {/if}
+      {#if sel}{#key sel.id}<TradeDetail trade={sel as import('./lib/model').Trade} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
     {:else if route.tab === 'markets'}
       <Markets markets={store.model.markets} />
     {:else}
       <Placeholder tab={route.tab} />
     {/if}
-  </section>
-</main>
+  </div>
 
-<style>
-  :global(body) { margin: 0; background: #0b0e14; color: #e6e9ef; font-family: system-ui, -apple-system, sans-serif; }
-  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 60px; }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
-  .brand { font-size: 20px; font-weight: 700; }
-  .v3 { color: #8b93a7; font-size: 12px; }
-  .search { margin-left: auto; background: #141924; border: 1px solid #1c2230; color: #8b93a7; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-  .search:hover { border-color: #2a3242; color: #c4cbd8; }
-  .search kbd { background: #1c2230; border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: inherit; }
-  .icon { background: #141924; border: 1px solid #1c2230; color: #c4cbd8; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; position: relative; }
-  .icon:hover { border-color: #2a3242; }
-  .bcount { position: absolute; top: -5px; right: -5px; background: #f0616d; color: #fff; border-radius: 9px; padding: 0 5px; font-size: 10px; }
-  .filter { background: #141924; border: 1px solid #1c2230; color: #c4cbd8; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-  .filter:hover { border-color: #2a3242; }
-  .filter.on { border-color: #3ecf8e; color: #3ecf8e; }
-  .fcount { background: #3ecf8e; color: #08110b; border-radius: 10px; padding: 0 6px; font-size: 11px; }
-  .page { margin-top: 16px; }
-  .msg { color: #8b93a7; }
-  .err { color: #f0616d; }
-</style>
+  {#if ticketStore.t}<OrderTicket />{/if}
+  {#if ordersOpen}<OrdersPanel onclose={() => (ordersOpen = false)} />{/if}
+  {#if notesOpen}<NotesPanel onclose={() => (notesOpen = false)} />{/if}
+  {#if ui.confirm}<ConfirmDialog />{/if}
+  {#if ui.modal}<Modals />{/if}
+{:else if store.error}
+  <div class="empty muted" style="padding:80px 20px">Could not load model: {store.error}</div>
+{:else}
+  <div class="empty muted" style="padding:80px 20px"><span class="spin"></span>Loading…</div>
+{/if}

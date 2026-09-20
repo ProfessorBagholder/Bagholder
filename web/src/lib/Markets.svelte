@@ -1,26 +1,25 @@
 <script lang="ts">
+  // The Markets tab (marketsHtml): the tile row, Fear & Greed, the heatmap, then a
+  // row of News and Watchlist, then ranked short interest. The listing-detail
+  // branch of marketsHtml is handled elsewhere (TradeDetail), not here.
   import type { Markets } from './model'
   import MarketTiles from './markets/MarketTiles.svelte'
   import FearGreed from './markets/FearGreed.svelte'
   import Heatmap from './heatmap/Heatmap.svelte'
   import News from './markets/News.svelte'
   import Watchlist from './markets/Watchlist.svelte'
+  import Shorts from './markets/Shorts.svelte'
 
   let { markets }: { markets: Markets } = $props()
 </script>
 
-<div class="mk">
-  <MarketTiles tiles={markets.tiles} />
+<div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+  <MarketTiles tiles={markets.tiles} instruments={markets.instruments} />
   <FearGreed />
   <Heatmap {markets} />
-  <div class="split">
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">
     <News news={markets.news} />
     <Watchlist watchlist={markets.watchlist} />
   </div>
+  <Shorts />
 </div>
-
-<style>
-  .mk { display: flex; flex-direction: column; gap: 16px; }
-  .split { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
-</style>

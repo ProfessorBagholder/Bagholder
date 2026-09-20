@@ -1,91 +1,124 @@
 <script lang="ts">
-  import { pct } from './fmt'
+  // One donut for Allocation, Sectors, Regions and the Cashflow pie: the slices,
+  // the centre reading the label and total (or a hovered slice), and the legend
+  // as an aligned grid. Ported from ledger.html donutPieces/donutHover, with the
+  // hover expressed as reactive state instead of DOM mutation.
+  import { money0, pctPlain, qty } from './fmt'
+  import { symText } from './sym'
 
-  type Item = { label: string; value: number }
+  export interface DonutItem {
+    label: string
+    v: number
+    share: number
+    color: string
+    count?: number | null
+  }
   let {
     items,
-    centerLabel,
-    centerTotal,
-    cap = 0,
-    showValue = false,
-    valueFmt = (n: number) => String(n),
+    total = null,
+    centreLabel,
+    centreText = '',
+    side = 'l',
+    size = undefined,
+    symbols = false,
+    legendFirst = false,
   }: {
-    items: Item[]
-    centerLabel: string
-    centerTotal: string
-    cap?: number
-    showValue?: boolean
-    valueFmt?: (n: number) => string
+    items: DonutItem[]
+    total?: number | null
+    centreLabel: string
+    centreText?: string
+    side?: 'l' | 'r' | 'row'
+    size?: number | string
+    symbols?: boolean
+    // Render the legend before the ring (the exposure card's Sectors donut puts
+    // its legend at the far-left grid column, ring to its right).
+    legendFirst?: boolean
   } = $props()
 
-  const PALETTE = ['#3ecf8e', '#4b9fff', '#b78bff', '#f2a341', '#f0616d', '#3ec9c9', '#e26fb0', '#a3c644', '#e8c34a', '#7c8aff', '#d98cff']
-  const GREY = '#5b6474'
+  const R = 44, W = 14, C = 60, SIZE = typeof size === 'number' ? size : 264
 
-  const slices = $derived.by(() => {
-    const pos = items.filter((i) => i.value > 0 && i.label !== 'Not classified')
-    const nc = items.find((i) => i.label === 'Not classified' && i.value > 0)
-    pos.sort((a, b) => b.value - a.value)
-    let shown: Item[] = pos
-    if (cap > 0 && pos.length > cap) {
-      const head = pos.slice(0, cap)
-      const restCount = pos.length - cap
-      const restSum = pos.slice(cap).reduce((s, i) => s + i.value, 0)
-      shown = [...head, { label: `Other (${restCount})`, value: restSum }]
-    }
-    const total = items.reduce((s, i) => s + (i.value > 0 ? i.value : 0), 0) || 1
-    const out = shown.map((i, idx) => ({ ...i, share: i.value / total, color: i.label.startsWith('Other (') ? GREY : PALETTE[idx % PALETTE.length] }))
-    if (nc) out.push({ label: 'Not classified', value: nc.value, share: nc.value / total, color: GREY })
+  const arcs = $derived.by(() => {
     let acc = 0
-    return out.map((s) => { const withOff = { ...s, offset: acc }; acc += s.share; return withOff })
+    return items.map((x) => {
+      const a0 = acc * 2 * Math.PI - Math.PI / 2
+      const a1 = (acc + x.share) * 2 * Math.PI - Math.PI / 2
+      acc += x.share
+      const full = x.share >= 0.9999
+      const large = x.share > 0.5 ? 1 : 0
+      const d = full
+        ? ''
+        : 'M' + (C + R * Math.cos(a0)).toFixed(2) + ' ' + (C + R * Math.sin(a0)).toFixed(2) + ' A' + R + ' ' + R + ' 0 ' + large + ' 1 ' + (C + R * Math.cos(a1)).toFixed(2) + ' ' + (C + R * Math.sin(a1)).toFixed(2)
+      return { full, d, color: x.color }
+    })
   })
 
-  const R = 60
-  const C = 2 * Math.PI * R
-  let hover = $state<number | null>(null)
-  const active = $derived(hover != null && slices[hover] ? slices[hover] : null)
+  let hover = $state<number>(-1)
+  const label = (x: DonutItem) => (symbols ? symText(x.label) : x.label)
+
+  const ringWidth = typeof size === 'string' ? size : size ? SIZE + 'px' : 'max(200px, min(' + SIZE + 'px, 100% - 140px))'
 </script>
 
-<div class="donut-wrap">
-  <svg viewBox="0 0 160 160" class="donut">
-    <g transform="rotate(-90 80 80)">
-      {#each slices as s, i (i)}
-        <circle
-          cx="80" cy="80" r={R} fill="none"
-          stroke={s.color} stroke-width={hover === i ? 22 : 18}
-          stroke-dasharray="{s.share * C} {C}" stroke-dashoffset={-s.offset * C}
-          opacity={hover == null || hover === i ? 1 : 0.35}
-          role="presentation"
-          onmouseenter={() => (hover = i)} onmouseleave={() => (hover = null)}
-        />
-      {/each}
-    </g>
-    <text x="80" y="74" text-anchor="middle" class="c-label">{active ? active.label : centerLabel}</text>
-    <text x="80" y="92" text-anchor="middle" class="c-value">{active ? (showValue ? valueFmt(active.value) : pct(active.share)) : centerTotal}</text>
-    {#if active}<text x="80" y="106" text-anchor="middle" class="c-share">{showValue ? pct(active.share) : ''}</text>{/if}
-  </svg>
-  <div class="legend">
-    {#each slices as s, i (i)}
-      <div class="row" class:hi={hover === i} class:dim={hover != null && hover !== i} role="presentation" onmouseenter={() => (hover = i)} onmouseleave={() => (hover = null)}>
-        <span class="dot" style="background: {s.color}"></span>
-        <span class="lbl">{s.label}</span>
-        {#if showValue}<span class="val">{valueFmt(s.value)}</span>{/if}
-        <span class="shr">{pct(s.share)}</span>
-      </div>
+{#if legendFirst}{@render legend()}{@render ring()}{:else}{@render ring()}{@render legend()}{/if}
+
+{#snippet ring()}
+<!-- ring -->
+<div style="position:relative;flex:none;width:{ringWidth};aspect-ratio:1/1">
+  <svg viewBox="0 0 120 120" style="width:100%;height:100%;display:block">
+    {#each arcs as a, i (i)}
+      {#if a.full}
+        <circle cx={C} cy={C} r={R} fill="none" stroke={a.color} stroke-width={W} style="opacity:{hover < 0 || hover === i ? 1 : 0.35}" role="presentation" onmouseenter={() => (hover = i)} onmouseleave={() => (hover = -1)} />
+      {:else}
+        <path d={a.d} fill="none" stroke={a.color} stroke-width={W} style="cursor:default;opacity:{hover < 0 || hover === i ? 1 : 0.35}" role="presentation" onmouseenter={() => (hover = i)} onmouseleave={() => (hover = -1)} />
+      {/if}
     {/each}
+  </svg>
+  <div style="position:absolute;inset:21%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none">
+    {#if hover >= 0 && items[hover]}
+      {@const x = items[hover]}
+      {#if total == null}
+        <div class="lbl">{label(x)}</div>
+        <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{#if x.count == null}{pctPlain(x.share)}{:else}<span style="font-size:15px;letter-spacing:-.01em">{qty(x.count)}</span>{/if}</div>
+        {#if x.count != null}<div class="muted" style="font-size:11px;margin-top:3px">{pctPlain(x.share)}</div>{/if}
+      {:else}
+        <div class="lbl">{label(x)}</div>
+        <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{money0(x.v)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">{pctPlain(x.share)}</div>
+      {/if}
+    {:else}
+      <div class="lbl">{centreLabel}</div>
+      <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{total == null ? centreText : money0(total)}</div>
+    {/if}
   </div>
 </div>
+{/snippet}
 
-<style>
-  .donut-wrap { display: flex; gap: 16px; align-items: center; flex: 1; min-height: 0; }
-  .donut { width: 190px; height: 190px; flex-shrink: 0; }
-  .c-label { fill: #8b93a7; font-size: 9px; }
-  .c-value { fill: #e6e9ef; font-size: 12px; font-weight: 600; }
-  .c-share { fill: #8b93a7; font-size: 9px; }
-  .legend { flex: 1; overflow-y: auto; max-height: 100%; display: grid; grid-template-columns: auto 1fr auto auto; gap: 3px 8px; align-content: center; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .row { display: contents; cursor: default; }
-  .dot { width: 9px; height: 9px; border-radius: 2px; align-self: center; }
-  .lbl { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .val, .shr { text-align: right; color: #8b93a7; }
-  .row.hi .lbl, .row.hi .val, .row.hi .shr { color: #e6e9ef; }
-  .row.dim { opacity: 0.5; }
-</style>
+{#snippet legend()}
+<!-- legend -->
+{#if side === 'row'}
+  <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px 24px;font-size:12.5px">
+    {#each items as x, i (i)}
+      <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap;opacity:{hover < 0 || hover === i ? 1 : 0.45}" role="presentation" onmouseenter={() => (hover = i)} onmouseleave={() => (hover = -1)}>
+        <span style="width:9px;height:9px;border-radius:2px;background:{x.color}"></span>
+        <span style="font-weight:500">{label(x)}</span>
+        <span class="tab" style="color:var(--ink55)">{pctPlain(x.share)}</span>
+      </span>
+    {/each}
+  </div>
+{:else}
+  <div class="scroll" style="flex:0 1 auto;min-width:0;min-height:0;max-height:100%;justify-self:{side === 'r' ? 'end' : 'start'};display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;row-gap:9px;align-content:center;align-items:center;font-size:12.5px">
+    {#each items as x, i (i)}
+      <span style="display:contents;opacity:{hover < 0 || hover === i ? 1 : 0.45}" role="presentation" onmouseenter={() => (hover = i)} onmouseleave={() => (hover = -1)}>
+        {#if side === 'r'}
+          <span class="tab" style="text-align:left;white-space:nowrap;opacity:{hover < 0 || hover === i ? 1 : 0.45}">{pctPlain(x.share)}</span>
+          <span style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;opacity:{hover < 0 || hover === i ? 1 : 0.45}">{label(x)}</span>
+          <span style="width:9px;height:9px;border-radius:2px;background:{x.color};opacity:{hover < 0 || hover === i ? 1 : 0.45}"></span>
+        {:else}
+          <span style="width:9px;height:9px;border-radius:2px;background:{x.color};opacity:{hover < 0 || hover === i ? 1 : 0.45}"></span>
+          <span style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:{hover < 0 || hover === i ? 1 : 0.45}">{label(x)}</span>
+          <span class="tab" style="text-align:right;white-space:nowrap;opacity:{hover < 0 || hover === i ? 1 : 0.45}">{pctPlain(x.share)}</span>
+        {/if}
+      </span>
+    {/each}
+  </div>
+{/if}
+{/snippet}

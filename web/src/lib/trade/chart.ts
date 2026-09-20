@@ -1,0 +1,144 @@
+// Trade-chart data helpers, ported from ledger.html (chartSpan, loadHistory,
+// chartTfFor/autoTf, chartColors, fillMarkers, listingTicker/underlyingOf,
+// localTime and the TIMEFRAMES/step tables). Pure functions + two caches, kept
+// out of the component so the `use:tradeChart` action and the component share
+// them verbatim.
+import type { Trade, Fill } from '../model'
+import { qty, px } from '../fmt'
+
+export interface Bar {
+  date?: string | null
+  time?: number
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+}
+export interface History {
+  reason: string
+  bars: Bar[]
+  available: string[]
+  chartSymbol: string
+  pending: boolean
+}
+export interface ChartColors {
+  text: string
+  grid: string
+  up: string
+  down: string
+  line: string
+}
+
+export const TIMEFRAMES: [string, string][] = [
+  ['1h', '1H'],
+  ['4h', '4H'],
+  ['1d', '1D'],
+  ['1w', '1W'],
+  ['1M', '1M'],
+]
+export const STEP: Record<string, number> = { '1h': 3600, '4h': 14400 }
+
+// The timeframe a user picks is kept for that trade while the page is open.
+const _tfByTrade: Record<string, string> = {}
+export function setChartTf(id: string, tf: string): void {
+  if (id) _tfByTrade[id] = tf
+}
+
+// The default timeframe follows the trade's length so the whole trade fits the view.
+function autoTf(t: Trade): string {
+  if (t.listing) return '1d'
+  const days = Math.max(1, Math.round((Date.parse(t.exitDate) - Date.parse(t.entryDate)) / 86400000) + 1)
+  return days <= 2 ? '1h' : days <= 10 ? '4h' : days <= 180 ? '1d' : days <= 1100 ? '1w' : '1M'
+}
+export function chartTfFor(t: Trade, available?: string[]): string {
+  const order = TIMEFRAMES.map((x) => x[0])
+  const want = _tfByTrade[t.id] || autoTf(t)
+  if (!available) return want
+  if (available.indexOf(want) >= 0) return want
+  const from = order.indexOf(want)
+  const coarser = order.slice(from + 1).find((x) => available.indexOf(x) >= 0)
+  return coarser || available[available.length - 1] || ''
+}
+
+export function chartColors(): ChartColors {
+  const cs = getComputedStyle(document.documentElement)
+  const v = (n: string) => cs.getPropertyValue(n).trim()
+  return { text: v('--ink60'), grid: v('--grid'), up: v('--pos'), down: v('--neg'), line: 'rgba(' + v('--ink-rgb') + ',.55)' }
+}
+
+function chartSpan(t: Trade): { from: string; to: string } {
+  const day = 86400000
+  const from = new Date(Date.parse(t.entryDate) - 10 * day).toISOString().slice(0, 10)
+  const to = new Date(t.exitDate ? Math.min(Date.now(), Date.parse(t.exitDate) + 10 * day) : Date.now()).toISOString().slice(0, 10)
+  return { from, to }
+}
+
+const _histCache: Record<string, History> = {}
+export function loadHistory(t: Trade, tf: string): Promise<History> {
+  const key = t.id + '|' + tf
+  if (_histCache[key]) return Promise.resolve(_histCache[key])
+  const sp = chartSpan(t)
+  const q =
+    'symbol=' + encodeURIComponent(t.symbol) +
+    '&exchange=' + encodeURIComponent(t.exchange || '') +
+    '&currency=' + encodeURIComponent(t.currency || '') +
+    '&kind=' + encodeURIComponent(t.kind || '') +
+    '&from=' + sp.from + '&to=' + sp.to + '&tf=' + tf
+  return fetch('/api/history?' + q, { headers: { 'X-Bagholder': '1' } })
+    .then((r) => r.json())
+    .catch(() => ({ ok: false }))
+    .then((r: any) => {
+      const out: History = {
+        reason: (r && r.ok && r.reason) || '',
+        bars: (r && r.ok && r.bars) || [],
+        available: (r && r.ok && r.available) || [],
+        chartSymbol: (r && r.ok && r.chartSymbol) || t.symbol,
+        pending: !!(r && r.ok && r.pending),
+      }
+      if (!out.pending) _histCache[key] = out
+      return out
+    })
+}
+
+export function underlyingOf(t: Trade): string {
+  return t.underlying || String(t.symbol || '').split(' ')[0]
+}
+export function listingTicker(t: Trade): string {
+  return (t.kind === 'Options' ? underlyingOf(t) : String(t.symbol || '')).replace(/\.(TO|V|CN|NE)$/i, '')
+}
+export function localTime(ts: number): number {
+  return ts - new Date(ts * 1000).getTimezoneOffset() * 60
+}
+
+export interface FillMarker {
+  time: number | string
+  position: 'aboveBar' | 'belowBar'
+  shape: 'arrowUp' | 'arrowDown'
+  color: string
+  text: string
+}
+// A fill sits on the bar that contains it: by date on daily and coarser bars, by
+// bucket on intraday ones.
+export function fillMarkers(fills: Fill[], bars: Bar[], c: ChartColors): FillMarker[] {
+  const keys = bars.map((b) => (b.date != null ? (b.date as string | number) : (b.time as number)))
+  const keyOf = (f: Fill) => (bars.length && bars[0].date != null ? f.date : Math.round(Date.parse(f.when) / 1000))
+  const onBar = (k: string | number) => {
+    let best: string | number | null = null
+    for (const x of keys) {
+      if (x <= k) best = x
+      else break
+    }
+    return best != null ? best : keys.length ? keys[0] : k
+  }
+  const shown = (t: string | number) => (typeof t === 'number' ? localTime(t) : t)
+  return fills.map((f) => ({
+    time: shown(bars.length ? onBar(keyOf(f)) : Math.round(Date.parse(f.when) / 1000)),
+    position: (f.side === 'BUY' ? 'belowBar' : 'aboveBar') as 'aboveBar' | 'belowBar',
+    shape: (f.side === 'BUY' ? 'arrowUp' : 'arrowDown') as 'arrowUp' | 'arrowDown',
+    color: f.side === 'BUY' ? c.up : c.down,
+    text:
+      (f.side === 'BUY' ? '+' : '−') +
+      qty(Math.abs(f.qty)) +
+      ((f.price ?? 0) > 0 ? ' @ ' + px(f.price) : f.flags && f.flags.indexOf('reward') >= 0 ? ' reward' : ''),
+  }))
+}

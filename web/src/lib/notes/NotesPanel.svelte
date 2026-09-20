@@ -1,71 +1,79 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy } from 'svelte'
   import { notesStore, markAllRead, clearNotes, type Note } from './notes.svelte'
+  import { ICONS } from '../icons'
+  import { bareSymbol } from '../sym'
+  import { goSub } from '../router.svelte'
 
   let { onclose }: { onclose: () => void } = $props()
 
-  // Opening the panel marks what is shown as read.
-  onMount(() => { markAllRead() })
+  // Closing is having looked: every row reads read, the badge clears. Faithful to
+  // ledger.html closeNotes() — read on close, so the unread dots stay while open.
+  onDestroy(() => { markAllRead() })
 
-  function ago(iso: string): string {
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+  function orderWhenWord(iso: string): string {
     const t = Date.parse(iso)
-    if (!t) return ''
-    const mins = Math.round((Date.now() - t) / 60000)
-    if (mins < 1) return 'now'
-    if (mins < 60) return mins + 'm'
-    const hrs = Math.round(mins / 60)
-    if (hrs < 24) return hrs + 'h'
-    return Math.round(hrs / 24) + 'd'
+    if (!isFinite(t)) return '—'
+    const d = new Date(t), now = new Date()
+    const h = d.getHours() % 12 || 12, m = String(d.getMinutes()).padStart(2, '0'), ap = d.getHours() < 12 ? 'AM' : 'PM'
+    const time = h + ':' + m + ' ' + ap
+    if (d.toDateString() === now.toDateString()) return 'Today ' + time
+    return MON[d.getMonth()] + ' ' + d.getDate() + (d.getFullYear() !== now.getFullYear() ? ' ' + d.getFullYear() : '') + ', ' + time
   }
-  function open(n: Note) { if (n.href) window.open(n.href, '_blank', 'noopener') }
+  // When the thing happened, which is what a reader wants: the release's own moment,
+  // the filing's own day. The app is told at some later moment, and that is its business.
+  function noteWhenWord(n: Note): string {
+    const at = (n.extra || {}).at
+    if (!at) return orderWhenWord(n.at)
+    const day = at.length === 10
+    const when = orderWhenWord(day ? at + 'T12:00:00' : at)
+    if (when === '—') return orderWhenWord(n.at)
+    return day ? when.replace(/,? \d{1,2}:\d{2} (AM|PM)$/, '').replace(/^Today$/, 'Today') : when
+  }
+
+  function notesClose() { onclose() }
+
+  // Every row leads to the thing it is about: a filed document or a release opens
+  // where it is published, in a new tab; a row carrying a ticker opens that listing.
+  // (An order notice's Orders-panel target is a gap — see report.)
+  function noteOpen(n: Note) {
+    const x = n.extra || {}
+    if (x.doc && x.source !== 'SEC') { window.open('/api/filings/doc?symbol=' + encodeURIComponent(x.symbol || '') + '&id=' + encodeURIComponent(x.doc), '_blank', 'noopener'); return }
+    if (x.url) { window.open(x.url, '_blank', 'noopener'); return }
+    if (x.symbol) {
+      onclose()
+      goSub('markets', 'listing:' + bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase())
+    }
+  }
 </script>
 
-<div class="scrim" role="presentation" onclick={onclose}></div>
-<div class="panel" role="dialog" aria-label="Notifications">
-  <div class="hd">
-    <span class="title">Notifications</span>
-    <div class="actions">
-      {#if notesStore.rows.length}<button class="clear" onclick={clearNotes}>Clear</button>{/if}
-      <button class="x" onclick={onclose} aria-label="Close">×</button>
+<div id="ntWrap">
+  <div class="tk-scrim" role="presentation" onclick={notesClose}></div>
+  <div class="tk" role="dialog" aria-label="Notifications">
+    <div class="tk-hd">
+      <span class="tk-title">Notifications</span>
+      <button class="tk-x" aria-label="Close" onclick={notesClose}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg></button>
+    </div>
+    <div class="tk-body" data-keep-scroll="notes" style="gap:16px">
+      <div class="od-head">
+        <span class="od-group">History</span>
+        {#if notesStore.rows.length}<button class="od-link muted" onclick={clearNotes}>Clear</button>{/if}
+      </div>
+      <div class="od-list">
+        {#if notesStore.rows.length}
+          {#each notesStore.rows as n (n.id)}
+            <div class="od-card nt-card" role="presentation" onclick={() => noteOpen(n)}>
+              <div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">{#if !n.readAt}<span class="nt-dot"></span>{/if}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{n.title}</span></span></div>
+              {#if n.body}{#each String(n.body).split('\n') as line}<div class="od-row2"><span class="od-line">{line}</span></div>{/each}{/if}
+              <div class="od-foot"><span class="od-when">{noteWhenWord(n)}</span></div>
+            </div>
+          {/each}
+        {:else}
+          <div class="dim" style="font-size:12px">Nothing yet.</div>
+        {/if}
+      </div>
     </div>
   </div>
-  <div class="body">
-    {#if !notesStore.loaded}
-      <p class="msg">Reading…</p>
-    {:else if !notesStore.rows.length}
-      <p class="msg">No activity yet.</p>
-    {:else}
-      {#each notesStore.rows as n (n.id)}
-        <div class="row" class:link={!!n.href} role="presentation" onclick={() => open(n)}>
-          <div class="r1">
-            {#if !n.readAt}<span class="dot"></span>{/if}
-            <span class="t">{n.title}</span>
-            <span class="time">{ago(n.at)}</span>
-          </div>
-          {#if n.body}{#each n.body.split('\n') as line}<div class="b">{line}</div>{/each}{/if}
-        </div>
-      {/each}
-    {/if}
-  </div>
 </div>
-
-<style>
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 60; }
-  .panel { position: fixed; top: 0; right: 0; height: 100vh; width: 360px; max-width: 92vw; background: #0b0e14; border-left: 1px solid #1c2230; z-index: 61; display: flex; flex-direction: column; }
-  .hd { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid #1c2230; }
-  .title { font-size: 15px; font-weight: 600; }
-  .actions { display: flex; align-items: center; gap: 10px; }
-  .clear { background: none; border: 0; color: #8b93a7; font: inherit; font-size: 12px; cursor: pointer; }
-  .clear:hover { color: #e6e9ef; }
-  .x { background: none; border: 0; color: #8b93a7; font-size: 20px; cursor: pointer; line-height: 1; }
-  .body { flex: 1; overflow-y: auto; padding: 8px 0; }
-  .msg { color: #8b93a7; font-size: 13px; padding: 12px 18px; }
-  .row { padding: 10px 18px; border-bottom: 1px solid #12161f; }
-  .row.link { cursor: pointer; }
-  .row.link:hover { background: #141924; }
-  .r1 { display: flex; align-items: center; gap: 8px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #3ecf8e; flex: none; }
-  .t { font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .time { color: #8b93a7; font-size: 11px; }
-  .b { color: #8b93a7; font-size: 12px; margin-top: 3px; padding-left: 15px; }
-</style>
