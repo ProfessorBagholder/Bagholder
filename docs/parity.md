@@ -34,7 +34,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`). *(Design: the server's document reader wakes on `localmodel::on_change` and sends the rows; the page waits for nothing.)*
 - [x] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
 - [x] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
-- [ ] **Unsure:** the short-interest reading expiring after 30 minutes on an open page.
+- [x] The short-interest reading expiring after 30 minutes: asked again when the card is shown or the reader returns to the tab with an older one. The original re-asked from its 30-second redraw; no clock runs here, since the exchanges report twice a month.
 
 ### Markets
 - [x] The heatmap on its own has an address, `#heatmap/<universes>/<size>/<secs>`: bookmark, wall display, scope list and dwell, `replaceState` (`L:4699-4708`, `L:4911-4913`); arrow keys must not move the tabs beneath it.
@@ -49,7 +49,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] The page behind an open panel does not scroll (`panel-open`, `L:4648`).
 - [x] ⌘K works over the Orders panel (`L:5104`).
 - [x] Enter saves an order editor; the editor takes focus when it opens (`L:4992-4995`, `L:5113`).
-- [ ] **Unsure:** the cards' pixel grammar against the original, line by line.
+- [ ] The cards' pixel grammar against the original, line by line: belongs to stage 8's pixel comparison, which runs both pages on the same orders.
 
 ### Notifications
 - [x] The browser channel: `new Notification`, `/api/notifications/seen`, the banner's click (`L:1137-1149`).

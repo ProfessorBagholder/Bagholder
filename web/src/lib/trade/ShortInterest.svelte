@@ -13,8 +13,17 @@
 
   const n2 = (v: number, dp: number) => Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
 
+  // Asked for when the card is shown, and again when the reader comes back to the tab
+  // with a reading more than thirty minutes old (ensureShorts keeps a younger one). No
+  // clock runs on an open card: the exchanges report short interest twice a month.
   $effect(() => {
-    ensureShorts(trade)
+    const t = trade
+    ensureShorts(t)
+    const back = () => {
+      if (!document.hidden) ensureShorts(t)
+    }
+    document.addEventListener('visibilitychange', back)
+    return () => document.removeEventListener('visibilitychange', back)
   })
 
   const rec = $derived(shortsStore[shortsKey(trade)])

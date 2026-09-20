@@ -83,3 +83,19 @@ test('an open trade keeps its executions when the view arrives again, and a trad
   expect(await rows.count()).toBe(n)
   expect(await first.evaluate((el) => (el as unknown as { mark?: number }).mark)).toBe(1)
 })
+
+test('short interest is asked for again when the reader returns to a reading over thirty minutes old, and not before', async ({ page }) => {
+  await page.clock.install()
+  let asked = 0
+  page.on('request', (r) => { if (r.url().includes('/api/shorts?') && !r.url().includes('trend=1')) asked++ })
+  await openFirstTrade(page)
+  await expect.poll(() => asked).toBe(1)
+  const comeBack = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await page.clock.fastForward(10 * 60_000)
+  await comeBack()
+  await page.clock.fastForward(1000)
+  expect(asked).toBe(1)
+  await page.clock.fastForward(25 * 60_000)
+  await comeBack()
+  await expect.poll(() => asked).toBe(2)
+})
