@@ -1,0 +1,318 @@
+{
+  "expect": {
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "bySymbol": [
+      {
+        "avgHold": 31.0,
+        "legs": 1,
+        "n": 1,
+        "pnl": 50.0,
+        "symbol": "BTC",
+        "winRate": 1.0
+      }
+    ],
+    "cashflowCount": 0,
+    "cashflowHoldings": [],
+    "cashflowMonths": [],
+    "cashflowSkipped": [],
+    "cashflowTiles": [
+      {
+        "count": 0,
+        "label": "2024",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2025",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2026 YTD",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "All time",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "Last 12 months",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "book": 0,
+        "earned": 0,
+        "label": "Yield on cost",
+        "projected": 0.0,
+        "yield": null
+      }
+    ],
+    "cashflowTotal": 0,
+    "equity": {
+      "annualized": {
+        "count": 0,
+        "first": "",
+        "last": "",
+        "rate": null,
+        "years": 0.0
+      },
+      "drawdown": {
+        "abs": null,
+        "at": "",
+        "pct": null,
+        "peakAt": ""
+      },
+      "label": "All accounts",
+      "series": []
+    },
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0
+        }
+      ],
+      "graded": 0,
+      "ungraded": 1
+    },
+    "kpi": {
+      "avgHold": 31.0,
+      "avgLoss": 0.0,
+      "avgWin": 50.0,
+      "breakeven": 0,
+      "count": 1,
+      "expectancy": 50.0,
+      "grossLoss": 0,
+      "grossWin": 50.0,
+      "losses": 0,
+      "profitFactor": null,
+      "realized": 50.0,
+      "winRate": 1.0,
+      "wins": 1
+    },
+    "monthly": [
+      {
+        "count": 1,
+        "key": "2026-02",
+        "label": "Feb '26",
+        "value": 50.0
+      }
+    ],
+    "options": {
+      "accounts": [
+        "Crypto"
+      ],
+      "exchanges": [
+        "Crypto"
+      ],
+      "kinds": [
+        "Crypto"
+      ],
+      "symbols": [
+        "BTC"
+      ],
+      "tags": [],
+      "years": [
+        "2026"
+      ]
+    },
+    "portfolio": {
+      "accountCount": 0,
+      "allocation": [],
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "cash": 0,
+      "cashPct": null,
+      "costBasis": 0,
+      "dayChange": null,
+      "dayChangePct": null,
+      "hasMargin": false,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "marketValue": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "positionCount": 0,
+      "unrealized": 0,
+      "unrealizedPct": null
+    },
+    "positions": [],
+    "positionsSummary": {
+      "book": 0,
+      "count": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "queue": [
+      {
+        "date": "2026-02-01",
+        "id": "rt:cb",
+        "missing": "no grade or thesis",
+        "pnl": 50.0,
+        "symbol": "BTC"
+      }
+    ],
+    "trades": [
+      {
+        "account": "Crypto",
+        "currency": "CAD",
+        "entry": 100.0,
+        "entryDate": "2026-01-01",
+        "exchange": "Crypto",
+        "exit": 150.0,
+        "exitDate": "2026-02-01",
+        "fees": 0.0,
+        "fills": [
+          "BUY",
+          "SELL"
+        ],
+        "grade": "",
+        "holdDays": 31,
+        "id": "rt:cb",
+        "kind": "Crypto",
+        "mult": 1,
+        "pnl": 50.0,
+        "pnlCad": 50.0,
+        "pnlPct": 0.5,
+        "qty": 1.0,
+        "side": "SELL",
+        "status": "closed",
+        "symbol": "BTC",
+        "tags": []
+      },
+      {
+        "account": "Crypto",
+        "currency": "CAD",
+        "entry": null,
+        "entryDate": "2026-01-05",
+        "exchange": "Crypto",
+        "exit": 150.0,
+        "exitDate": "2026-02-01",
+        "fees": 0.0,
+        "fills": [
+          "BUY",
+          "SELL"
+        ],
+        "grade": "",
+        "holdDays": 27,
+        "id": "rt:dep|nobasis",
+        "kind": "Crypto",
+        "mult": 1,
+        "pnl": null,
+        "pnlCad": null,
+        "pnlPct": null,
+        "qty": 1.0,
+        "side": "SELL",
+        "status": "closed",
+        "symbol": "BTC",
+        "tags": []
+      }
+    ],
+    "years": []
+  },
+  "filters": {},
+  "journal": {},
+  "market": {
+    "benchmark": {},
+    "fx": {}
+  },
+  "snapshot": {
+    "accounts": [],
+    "activities": [
+      {
+        "accountId": "acct-1",
+        "accountType": "Crypto",
+        "activitySubType": "MARKET_ORDER",
+        "activityType": "CRYPTO_BUY",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "cb",
+        "name": "LUNR",
+        "netCashAmount": 100,
+        "occurredAt": "2026-01-01T15:00:00+00:00",
+        "quantity": 1,
+        "rawType": "CRYPTO_BUY",
+        "securityId": "",
+        "symbol": "BTC",
+        "transactionDate": "2026-01-01",
+        "unitPrice": 100
+      },
+      {
+        "accountId": "acct-1",
+        "accountType": "Crypto",
+        "activitySubType": "TRANSFER_IN",
+        "activityType": "CRYPTO_TRANSFER",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "direction": "CREDIT",
+        "id": "dep",
+        "name": "LUNR",
+        "netCashAmount": 100,
+        "occurredAt": "2026-01-05T15:00:00+00:00",
+        "quantity": 1,
+        "rawType": "CRYPTO_TRANSFER",
+        "securityId": "",
+        "symbol": "BTC",
+        "transactionDate": "2026-01-05",
+        "unitPrice": 100.0
+      },
+      {
+        "accountId": "acct-1",
+        "accountType": "Crypto",
+        "activitySubType": "MARKET_ORDER",
+        "activityType": "CRYPTO_SELL",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "cs",
+        "name": "LUNR",
+        "netCashAmount": 300,
+        "occurredAt": "2026-02-01T15:00:00+00:00",
+        "quantity": 2,
+        "rawType": "CRYPTO_SELL",
+        "securityId": "",
+        "symbol": "BTC",
+        "transactionDate": "2026-02-01",
+        "unitPrice": 150
+      }
+    ],
+    "balances": [],
+    "margin": [],
+    "navByAccount": {},
+    "navHistory": [],
+    "notes": {},
+    "securities": [],
+    "syncedAt": "",
+    "tradeGroups": []
+  },
+  "today": "2026-03-01"
+}

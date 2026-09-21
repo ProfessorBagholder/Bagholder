@@ -543,7 +543,7 @@ const state = {
   theme: "nocturne",
 };
 const THEMES = [["nocturne", "Nocturne", "#161826"], ["midnight", "Midnight", "#0b0d12"], ["light", "Light", "#eef0f5"]];
-const PROTOCOL = "2026-09-17.1"; // must match bagholder.PROTOCOL
+const PROTOCOL = "2026-09-19.1"; // must match bagholder.PROTOCOL
 const TIMEFRAMES = [["1h", "1H"], ["4h", "4H"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"]];
 // The default timeframe follows the trade's length so the whole trade fits the
 // view; a timeframe the user picks is kept for that trade while the page is open.
@@ -793,6 +793,30 @@ function loadModel() {
     })
     .catch((e) => { if (seq !== _loadSeq) return; state.loading = false; state.loadError = String(e); render(); });
 }
+// A quote tick moved prices and nothing else. Rather than refetch the whole book,
+// pull only the sections a price can change — the open positions and what is priced
+// off them — merge them into the model in hand, and redraw (which now patches only
+// the cells that moved). The closed trades, equity curve, KPIs and options lists are
+// left exactly as the last full load returned them.
+let _liveSeq = 0;
+const MODEL_LIVE_KEYS = ["market", "positions", "positionsSummary", "portfolio"];
+function loadLive() {
+  if (!state.model) { loadModel(); return; }
+  const seq = ++_liveSeq;
+  const q = encodeURIComponent(JSON.stringify(Object.assign({}, state.filters, { benchmark: benchmarkPref() })));
+  // the heatmap/markets view is large and priced live only while it is on screen;
+  // every other page reads its live figures off the positions, so it asks for those alone
+  const wantsMarkets = state.page === "markets" || state.page === "heatmap";
+  fetch("/api/model?only=live" + (wantsMarkets ? "&markets=1" : "") + "&filters=" + q, { headers: { "X-Bagholder": "1" } })
+    .then((r) => r.json())
+    .then((m) => {
+      if (seq !== _liveSeq || !state.model || !m || !m.ok) return;   // a full load overtook this tick
+      MODEL_LIVE_KEYS.forEach((k) => { if (k in m) state.model[k] = m[k]; });
+      if ("markets" in m) state.model.markets = m.markets;
+      render();
+    })
+    .catch(() => {});
+}
 // A trade opened from a list has no legs or fills yet: fetch them once and
 // put them on the row, so the chart and the executions draw from the same
 // object the lists hold.
@@ -831,16 +855,27 @@ function applyStatus(st) {
   const prev = state.status.lastSync;
   const prevCount = state.status.activityCount;
   const prevVersion = state.status.dataVersion;
+  const prevCore = state.status.coreVersion;
   state.status = Object.assign({}, state.status, st);
   discSummaryReady(st.summaryReady);
-  const changed = (st.lastSync && st.lastSync !== prev && prev !== undefined) || (st.activityCount !== prevCount && prevCount) ||
+  const lastSyncChanged = (st.lastSync && st.lastSync !== prev && prev !== undefined);
+  const changed = lastSyncChanged || (st.activityCount !== prevCount && prevCount) ||
     (st.dataVersion && prevVersion && st.dataVersion !== prevVersion);
+  // Everything the model reads except the quotes is the core version. When the
+  // data version moved but the core did not, only prices ticked: fetch just the
+  // live figures and let the redraw patch the cells that moved. Anything else —
+  // new activity, FX, a distribution, a sync, the first load — is a full reload.
+  const structural = !prevCore || lastSyncChanged || (st.activityCount !== prevCount && prevCount) ||
+    (st.coreVersion && prevCore && st.coreVersion !== prevCore);
   if (changed && !state.status.syncing) {
-    // Quotes, distributions, FX and new activity all change the version. Reload
-    // now, unless a trade is open or a note is being typed: then on the next page change.
-    const el = document.activeElement;
-    const typing = !!(el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT"));
-    if (typing || state.sel) state.derivedStale = true; else loadModel();
+    if (structural) {
+      // Reload now, unless a trade is open or a note is being typed: then on the next page change.
+      const el = document.activeElement;
+      const typing = !!(el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT"));
+      if (typing || state.sel) state.derivedStale = true; else loadModel();
+    } else {
+      loadLive();   // a quote tick: safe to apply under an open trade or a typed note, the redraw touches only moved cells
+    }
   }
 }
 let _pollTimer = 0;
@@ -985,12 +1020,22 @@ function notesUnread() { return state.notesLoaded ? state.notes.filter((n) => !n
 function notesPanelHtml() {
   const card = (n) => '<div class="od-card nt-card" data-act="noteOpen" data-arg=\'' + attr({ id: n.id }) + "'>" +
     '<div class="od-row1"><span class="od-title" style="display:flex;align-items:center;gap:8px;min-width:0">' + (n.readAt ? "" : '<span class="nt-dot"></span>') + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(n.title) + "</span></span></div>" +
-    (n.body ? '<div class="od-row2"><span class="od-line">' + esc(n.body) + "</span></div>" : "") +
-    '<div class="od-foot"><span class="od-when">' + esc(orderWhenWord(n.at)) + "</span></div></div>";
+    (n.body ? String(n.body).split("\n").map((line) => '<div class="od-row2"><span class="od-line">' + esc(line) + "</span></div>").join("") : "") +
+    '<div class="od-foot"><span class="od-when">' + esc(noteWhenWord(n)) + "</span></div></div>";
   return '<div id="ntWrap"><div class="tk-scrim" data-act="notesClose"></div><div class="tk" role="dialog" aria-label="Notifications">' +
     '<div class="tk-hd"><span class="tk-title">Notifications</span><button class="tk-x" aria-label="Close" data-act="notesClose"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d="' + ICONS.x + '"/></svg></button></div>' +
     '<div class="tk-body" data-keep-scroll="notes" style="gap:16px"><div class="od-head"><span class="od-group">History</span>' + (state.notes.length ? '<button class="od-link muted" data-act="notesClear">Clear</button>' : "") + "</div>" +
     '<div class="od-list">' + (state.notes.length ? state.notes.map(card).join("") : '<div class="dim" style="font-size:12px">Nothing yet.</div>') + "</div></div></div></div>";
+}
+// When the thing happened, which is what a reader wants from a notification: the release's own
+// moment, the filing's own day. The app is told at some later moment, and that is its business.
+function noteWhenWord(n) {
+  const at = (n.extra || {}).at;
+  if (!at) return orderWhenWord(n.at);
+  const day = at.length === 10;
+  const when = orderWhenWord(day ? at + "T12:00:00" : at);
+  if (when === "—") return orderWhenWord(n.at);
+  return day ? when.replace(/,? \d{1,2}:\d{2} (AM|PM)$/, "").replace(/^Today$/, "Today") : when;
 }
 function renderNotes() {
   const old = document.getElementById("ntWrap");
@@ -1005,10 +1050,16 @@ function closeNotes() {
   render();
 }
 function notesClear() { state.notes = []; api("POST", "/api/notifications/clear", {}); render(); }
+// Every row leads to the thing it is about: a release or a filed document opens where it is published,
+// in a new tab, the way the News card's rows do; an order notice opens the Orders panel at the tab it
+// belongs to; a row that carries only a ticker opens that listing's page, held or merely watched.
 function noteOpen(id) {
   const n = state.notes.find((x) => x.id === id); if (!n) return;
-  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); }
-  else if (n.kind === "disclosures" && n.extra && n.extra.symbol) { const p = (state.model && state.model.positions || []).find((x) => x.symbol === n.extra.symbol); if (p) { closeNotes(); openHolding(p.id); } }
+  const x = n.extra || {};
+  if (n.kind === "fills" || n.kind === "problems") { closeNotes(); state.ordersTab = n.kind === "fills" ? "filled" : "cancelled"; openOrders(); return; }
+  if (x.doc && x.source !== "SEC") { window.open("/api/filings/doc?symbol=" + encodeURIComponent(x.symbol || "") + "&id=" + encodeURIComponent(x.doc), "_blank", "noopener"); return; }
+  if (x.url) { window.open(x.url, "_blank", "noopener"); return; }
+  if (x.symbol) { closeNotes(); openListing({ symbol: x.symbol, exchange: x.exchange || "", name: "", currency: "" }); }
 }
 function notifyLoad() {
   api("GET", "/api/notifications").then((r) => {
@@ -1441,16 +1492,27 @@ function popFieldsBodyHtml() {
   const f = state.filters;
   const q = state.fieldQuery == null ? f.search : state.fieldQuery;
   const syms = q ? symbolRows(q) : [];
+  // The book's symbols the text is a ticker of, then the values it names (an account, a
+  // grade, a tag), then everything matched by a company's name: the book's own first, the
+  // listings found outside it after. A name is the weakest match, so a holding whose name
+  // merely contains the text never stands above the account the text spells, and a run of
+  // same-named companies never pushes that account out of the scroll box.
+  const Q = (q || "").trim().toUpperCase();
+  const byTicker = (r) => r.rank !== 2 || String(r.sym).toUpperCase().indexOf(Q) >= 0 || String(r.sym).toUpperCase().indexOf(bareSymbol(Q)) >= 0;
+  const book = syms.filter((r) => r.book && byTicker(r));
+  const ext = syms.filter((r) => r.book && !byTicker(r)).concat(syms.filter((r) => !r.book));
   const others = fieldMatches(q).filter((m) => m.key !== "symbol");
-  if (q && (syms.length || others.length)) {
-    const hi = Math.min(state.valueHi || 0, syms.length + others.length - 1);
+  if (q && (book.length || others.length || ext.length)) {
+    const hi = Math.min(state.valueHi || 0, book.length + others.length + ext.length - 1);
+    const symHtml = (r, i) => r.book
+      ? symbolRowHtml(OPTION_RE.test(r.sym) ? r.sym : bareSymbol(r.sym), r.name, r.exchange, symbolRowButtons(r.sym, r.sym), (f.lists.symbol.indexOf(r.sym) >= 0 ? " on" : "") + (i === hi ? " hi" : ""),
+                      OPTION_RE.test(r.sym) ? "toggleList" : "listingOpen",
+                      OPTION_RE.test(r.sym) ? { key: "symbol", value: r.sym } : { symbol: bareSymbol(r.sym), exchange: r.exchange || "", name: r.name || "" })
+      : extRowHtml(r, i === hi ? " hi" : "");
     return '<div id="popMatches" class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">' +
-      syms.map((r, i) => r.book
-        ? symbolRowHtml(OPTION_RE.test(r.sym) ? r.sym : bareSymbol(r.sym), r.name, r.exchange, symbolRowButtons(r.sym, r.sym), (f.lists.symbol.indexOf(r.sym) >= 0 ? " on" : "") + (i === hi ? " hi" : ""),
-                        OPTION_RE.test(r.sym) ? "toggleList" : "listingOpen",
-                        OPTION_RE.test(r.sym) ? { key: "symbol", value: r.sym } : { symbol: bareSymbol(r.sym), exchange: r.exchange || "", name: r.name || "" })
-        : extRowHtml(r, i === hi ? " hi" : "")).join("") +
-      others.map((m, i) => popRowHtml(m.key, m.value, (f.lists[m.key].indexOf(m.value) >= 0 ? " on" : "") + (syms.length + i === hi ? " hi" : ""), m.label)).join("") + "</div>";
+      book.map((r, i) => symHtml(r, i)).join("") +
+      others.map((m, i) => popRowHtml(m.key, m.value, (f.lists[m.key].indexOf(m.value) >= 0 ? " on" : "") + (book.length + i === hi ? " hi" : ""), m.label)).join("") +
+      ext.map((r, i) => symHtml(r, book.length + others.length + i)).join("") + "</div>";
   }
   return (q ? '<div class="muted" style="padding:2px 7px 8px;font-size:12px">No match.</div>' : "") +
     '<div class="lbl" style="padding:2px 7px 7px">Filter by</div><div class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">' +
@@ -2411,10 +2473,12 @@ function queueCardHtml(m) {
     "</div></div>";
 }
 function dashboardHtml(m) {
-  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + kpiHtml(m) +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + equityCardHtml(m) + yearsCardHtml(m) + "</div>" +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + monthlyCardHtml(m) + gradeCardHtml(m) + "</div>" +
-    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px;height:342px">' + bySymbolCardHtml(m) + queueCardHtml(m) + "</div></div>";
+  // every dashboard card reads closed-trade figures only (no live key), so each is a core
+  // tile keyed off coreVersion — untouched on a quote tick, rebuilt on a sync or filter.
+  return '<div style="padding:20px;display:flex;flex-direction:column;gap:14px">' + tile("d-kpi", coreKey(), () => kpiHtml(m)) +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + tile("d-equity", coreKey(), () => equityCardHtml(m)) + tile("d-years", coreKey(), () => yearsCardHtml(m)) + "</div>" +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">' + tile("d-monthly", coreKey(), () => monthlyCardHtml(m)) + tile("d-grade", coreKey(), () => gradeCardHtml(m)) + "</div>" +
+    '<div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px;height:342px">' + tile("d-bysym", coreKey(state.sort.bySymbol.key + state.sort.bySymbol.dir), () => bySymbolCardHtml(m)) + tile("d-queue", coreKey(), () => queueCardHtml(m)) + "</div></div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -2447,7 +2511,9 @@ function tradesTableHtml(m) {
       '<td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(symText(t.symbol)) + "</td>" +
       '<td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.exchange || "—") + "</td>" +
       '<td style="text-align:right">' + qty(t.qty) + '</td><td style="text-align:right">' + px(t.entry) + '</td><td style="text-align:right">' + px(t.exit) + '</td><td class="dim" style="font-variant-numeric:normal;text-align:center">' + esc(t.currency) + "</td>" +
-      '<td style="text-align:right;font-weight:500;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</td><td style="text-align:right;color:' + color(t.pnl) + '">' + pct(t.pnlPct) + "</td>" +
+      ((t.flags || []).indexOf("basis-unknown") >= 0
+        ? '<td style="text-align:right" class="dim">—</td><td style="text-align:right" class="dim">deposited</td>'
+        : '<td style="text-align:right;font-weight:500;color:' + color(t.pnl) + '">' + money(t.pnl, t.currency) + '</td><td style="text-align:right;color:' + color(t.pnl) + '">' + pct(t.pnlPct) + "</td>") +
       '<td style="text-align:right" class="dim">' + hold(t.holdDays) + '</td><td style="white-space:nowrap;padding-left:50px">' + gradeChip(t) + "</td>" +
       '<td style="font-variant-numeric:normal">' + (t.tags && t.tags.length ? '<span class="tagchip">' + esc(t.tags[0]) + "</span>" + (t.tags.length > 1 ? '<span class="muted" style="font-size:10.5px;margin-left:4px">+' + (t.tags.length - 1) + "</span>" : "") : '<span style="color:rgba(var(--ink-rgb),.5)">—</span>') + "</td></tr>").join("") +
     "</tbody></table>" + (rows.length ? "" : '<div class="muted" style="padding:26px 4px;font-size:12px">No trades match these filters. <a href="#" data-act="clearAll">Reset all</a></div>') + "</div></div>";
@@ -2767,6 +2833,14 @@ function _discStillOpen(sym) {
   return !!(open && discSymbol(open) === sym) || !!(state.page === "markets" && state.newsSymbol && state.newsSymbol.symbol === sym && state.newsKind !== "stories");
 }
 function _discPreparing(f) { return f.summaryStatus === "downloading" || f.summaryStatus === "starting"; }
+// Whether a row's title is still on its way: it is being read, it has not been
+// read yet, the read found no model up, or the reader is still being fetched.
+// A row that says so wears the shimmer instead of standing in its own form's code.
+function discTitleComing(f, sym) {
+  if (f.subject) return false;
+  return !!(_discEnrichLoading[f.id] || _discSweepActive(sym, f) || !_discEnrichTried[f.id] ||
+            _discEnrichTried[f.id] === "waiting" || _discPreparing(f));
+}
 // One rule for every card that reads documents, because they share this record of what has
 // been read. A row is finished when it has both a title and a summary; anything less is read
 // again. What bounds the reading is not how many times the document was asked for but how
@@ -2892,9 +2966,14 @@ function disclosuresCardHtml(t) {
   const p = rec.payload || {}, all = p.filings || [], srcStatus = p.sources || {};
   const availNames = Object.keys(srcStatus).filter((s) => srcStatus[s].available);
   const anyFiler = Object.keys(srcStatus).some((s) => srcStatus[s].filer);
+  // a source that was tried and could not be reached (an outage, a maintenance page)
+  // carries an error; it is unavailable, not proof the listing has no filer
+  const downNames = Object.keys(srcStatus).filter((s) => srcStatus[s].error);
 
   if (!all.length) {
-    const msg = anyFiler ? "Nothing filed." : "No regulatory filer for this listing.";
+    const msg = anyFiler ? "Nothing filed."
+      : downNames.length ? downNames.join(" · ") + (downNames.length > 1 ? " are unavailable." : " is unavailable.")
+      : "No regulatory filer for this listing.";
     const names = anyFiler ? availNames.join(" · ") : "";
     const right = [names, p.fetchedAt ? "read " + relTime(p.fetchedAt) : ""].filter(Boolean).join(" · ");
     return _discCard(_discHeader(sym, "", right ? '<span>' + esc(right) + "</span>" : "") +
@@ -2932,7 +3011,7 @@ function disclosuresCardHtml(t) {
   const row = (f) => {
     const enriching = _discEnrichLoading[f.id] || _discSweepActive(sym, f);
     const exp = state.discExpanded === f.id;
-    const titleCell = f.subject ? esc(f.subject) : (enriching || !_discEnrichTried[f.id] ? skel("70%") : "");   // still to be read, or being read: the shimmer
+    const titleCell = f.subject ? esc(f.subject) : (enriching || discTitleComing(f, sym) ? skel("70%") : "");   // still to be read, or being read: the shimmer
     const sum = f.summary ? esc(f.summary)
       : (enriching || _discPreparing(f)) ? skel("90%") : "";
     return '<div class="dc-row' + (exp ? " on" : "") + '" data-act="discExpand" data-arg=\'' + attr({ id: f.id }) + '\' style="grid-template-columns:' + tmpl + '">' +
@@ -3027,7 +3106,10 @@ function tagMatches() {
 }
 function tradesHtml(m) {
   const t = state.sel ? tradeById(state.sel) : null;
-  return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + (t ? tradeDetailHtml(t, m) : tradesTableHtml(m)) + "</div>";
+  // the trades list is closed-trade data (no live key): a core tile, so a quote tick
+  // never rebuilds it. Keyed also by its sort, since that reorders the rows.
+  const st = state.sort.trades;
+  return '<div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">' + (t ? tradeDetailHtml(t, m) : tile("trades-table", coreKey(st.key + st.dir), () => tradesTableHtml(m))) + "</div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -3629,9 +3711,10 @@ function newsDiscBodyHtml(scope, only, q) {
   }
   const s = state.sort.ndisc;
   rows = sortRows(rows, s.key, s.dir, (f, k) => k === "when" ? f.date : k === "news" ? String(f.subject || f.type || "").toLowerCase() : String(f.symbol || "").toLowerCase());
+  const skel = (w) => '<span class="dc-skel" style="width:' + w + '"></span>';
   const row = (f) => '<div class="nw-row nw-disc" data-act="discOpen" data-arg=\'' + attr({ id: f.id, sym: f.symbol, source: f.source, url: f.url }) + "'>" +
     '<div class="tab" style="font-size:11px;color:var(--ink55)">' + esc(discDate(f)) + "</div>" +
-    '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + esc(f.subject || f.type || "") + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
+    '<div><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis">' + (discTitleComing(f, f.symbol) ? skel("70%") : esc(f.subject || f.type || "")) + '</div><div style="font-size:11px;color:var(--ink55);overflow:hidden;text-overflow:ellipsis">' + esc((f.subject || discTitleComing(f, f.symbol) ? String(f.type || "") + " · " : "") + String(f.source || "")) + "</div></div>" +
     '<div style="text-align:right"><button class="nw-sym go" data-act="newsSym" data-arg=\'' + attr({ symbol: f.symbol, exchange: f.exchange || "" }) + "'>" + esc(f.symbol) + "</button></div></div>";
   return rows.length ? '<div class="nw-head nw-disc">' + gridTh("ndisc", NDISC_COLS) + '</div><div class="scroll nw-list" style="flex:1;min-height:0;max-height:436px">' + rows.map(row).join("") + "</div>"
     : '<div class="muted" style="font-size:12px">' + empty + "</div>";
@@ -4460,6 +4543,83 @@ function mountReels() {
   });
 }
 const _keptScroll = {};
+// A quote tick moves a handful of cells, but the page used to answer it by
+// throwing away the whole DOM (root.innerHTML = …) and building it again —
+// reparsing, relaying out and, on a modest machine, stalling. morph() applies
+// the freshly-built markup by updating only the nodes that actually differ,
+// leaving everything else — and its scroll, focus, canvas and heatmap — in
+// place. Event handling is delegated (data-act), so nothing loses a listener.
+// Nodes that own content the page mounts outside the HTML string (the chart
+// canvas, the heatmap, the login frame, the tab bar) are matched by id and
+// their subtrees are left untouched.
+const MORPH_SKIP = new Set(["tradeChart", "chartTf", "heatBox", "loginFrame", "tabInd"]);
+function morph(root, html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  morphChildren(root, tmp);
+}
+function _sameType(a, b) {
+  if (a.nodeType !== b.nodeType) return false;
+  return a.nodeType === 1 ? a.nodeName === b.nodeName : true;
+}
+function morphChildren(oldParent, newParent) {
+  let o = oldParent.firstChild, n = newParent.firstChild;
+  while (n) {
+    const nextNew = n.nextSibling;
+    if (!o) { oldParent.appendChild(n); n = nextNew; continue; }
+    const nextOld = o.nextSibling;
+    if (_sameType(o, n)) morphNode(o, n);
+    else oldParent.replaceChild(n, o);   // takes n out of newParent; nextNew already held
+    o = nextOld; n = nextNew;
+  }
+  while (o) { const next = o.nextSibling; oldParent.removeChild(o); o = next; }
+}
+function morphNode(oldN, newN) {
+  if (oldN.nodeType !== 1) { if (oldN.nodeValue !== newN.nodeValue) oldN.nodeValue = newN.nodeValue; return; }
+  // Externally-mounted content — the chart, the heatmap, the login stream, the tab-bar
+  // indicator — is left entirely alone, its own attributes included. Its position, opacity
+  // and children are managed by JS (placeTabIndicator, the chart mount, the login stream),
+  // so morph must not touch them: stripping the indicator's inline opacity is what made the
+  // selected tab's underline re-fade in on every redraw. Only skip when the new node IS that
+  // same element (same id): morph pairs nodes by position, so on a page change the heatBox
+  // can land opposite an ordinary card (Sectors, Cashflow Positions) — skipping there would
+  // strand the markets treemap on that page instead of replacing it with the card.
+  if (oldN.id && MORPH_SKIP.has(oldN.id)) return newN.id === oldN.id ? undefined : oldN.parentNode.replaceChild(newN, oldN);
+  // A memoized tile that did not change carries the same data-tile and data-key it did last
+  // render; its markup is identical by construction, so skip its whole subtree. Require the
+  // data-tile marker, so an element that merely carries a data-key (the filter popover) is
+  // never mistaken for a tile and wrongly skipped.
+  const dt = newN.getAttribute("data-tile");
+  if (dt !== null && dt === oldN.getAttribute("data-tile") && newN.getAttribute("data-key") === oldN.getAttribute("data-key")) return;
+  const oldA = oldN.attributes;
+  for (let i = oldA.length - 1; i >= 0; i--) { if (!newN.hasAttribute(oldA[i].name)) oldN.removeAttribute(oldA[i].name); }
+  const newA = newN.attributes;
+  for (let i = 0; i < newA.length; i++) { if (oldN.getAttribute(newA[i].name) !== newA[i].value) oldN.setAttribute(newA[i].name, newA[i].value); }
+  if (oldN === document.activeElement && (oldN.tagName === "INPUT" || oldN.tagName === "TEXTAREA")) return;
+  morphChildren(oldN, newN);
+}
+// Tile memoization. A card or table is wrapped in tile(id, key, build): while its key is
+// unchanged, build() is not called and its cached markup is reused, and the reconciler
+// skips its subtree too (see the data-key fast-path in morphNode). The key names exactly
+// what the tile reads. coreKey() covers the model's non-quote data (coreVersion), the
+// active filters and the benchmark — everything a "closed" figure depends on — so a quote
+// tick never rebuilds a core tile. liveKey() adds dataVersion, so a tile that shows a live
+// price refreshes on the tick. render() still walks the page, but the expensive per-row
+// markup is generated only where the data actually moved — on a tick, a sync or a filter.
+const _tileCache = {};
+function coreKey(extra) {
+  const s = state.status;
+  return (s.coreVersion || 0) + "|" + JSON.stringify(state.filters) + "|" + benchmarkPref() + (extra != null ? "|" + extra : "");
+}
+function liveKey(extra) { return (state.status.dataVersion || 0) + "~" + coreKey(extra); }
+function tile(id, key, build) {
+  const c = _tileCache[id];
+  if (c && c.key === key) return c.html;
+  let h = build();
+  if (h) h = h.replace(/^(\s*<[a-zA-Z][\w-]*)/, '$1 data-tile="' + id + '" data-key="' + String(key).replace(/"/g, "&quot;") + '"');
+  _tileCache[id] = { key: key, html: h };
+  return h;
+}
 function render() {
   const root = document.getElementById("app");
   const scrollY = window.scrollY;
@@ -4477,15 +4637,24 @@ function render() {
   // nodes holding them outlive the redraw
   const keepHeat = state.page === "markets" || state.page === "heatmap" ? document.getElementById("heatBox") : null;
   const keepTab = document.getElementById("tabInd");
+  // the sign-in window's image is the live stream itself: a new element would
+  // open a new stream and show nothing until its first frame, so the redraw
+  // puts the one already showing back in its place
+  const keepLogin = state.loginView ? document.getElementById("loginFrame") : null;
   // A panel already on screen is redrawn with the rest of the page whenever the
   // model reloads. It should not slide in again every time, so only a panel that
   // was not there a moment ago plays its entrance.
   const standing = ["tkWrap", "odWrap", "ntWrap", "confirmDlg"].filter((id) => document.getElementById(id));
-  const leavingSkeleton = document.getElementById("pageSkel");
+  // The cross-fade fades a detached copy of the skeleton over the new content.
+  // With the reconciler the skeleton's own node is reused as that content, so
+  // fading the live node would remove the page — clone it, and fade the clone.
+  const leavingSkeletonNode = document.getElementById("pageSkel");
+  const leavingSkeleton = leavingSkeletonNode ? leavingSkeletonNode.cloneNode(true) : null;
   const alone = state.page === "heatmap";   // the heatmap on its own: no header, no tabs, no frame
   document.documentElement.classList.toggle("display-heat", alone);
-  root.innerHTML = (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : "");
-  if (state.loginView) loginFrameLoop();   // a redraw makes a new image element: reattach the stream
+  morph(root, (alone ? "" : headerHtml() + tabsHtml()) + '<div id="page" class="bh-skwrap">' + pageHtml() + "</div>" + (state.confirmOpen ? confirmDialogHtml() : "") + (state.loginView ? loginViewHtml() : "") + (state.modal === "trade" ? tradeModalHtml() : state.modal === "import" ? importModalHtml() : state.modal === "folder" ? folderModalHtml() : "") + (state.ordersOpen ? ordersPanelHtml() : "") + (state.notesOpen ? notesPanelHtml() : "") + (state.ticket ? ticketHtml() : ""));
+  if (keepLogin && keepLogin.getAttribute("src")) { const fresh = document.getElementById("loginFrame"); if (fresh) fresh.replaceWith(keepLogin); }
+  if (state.loginView) loginFrameLoop();   // a first draw (or one without a stream yet) attaches the stream
   if (state.ordersOpen && !_ordersTimer) ordersPoll(); else if (!state.ordersOpen && _ordersTimer) { clearTimeout(_ordersTimer); _ordersTimer = 0; }
   document.documentElement.classList.toggle("panel-open", !!(state.ticket || state.ordersOpen || state.notesOpen));   // the wheel over a panel must not move the page behind it
   window.scrollTo(0, scrollY);

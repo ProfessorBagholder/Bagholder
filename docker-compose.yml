@@ -1,12 +1,20 @@
 services:
   bagholder:
     # published on every release; update with: docker compose pull && docker compose up -d
+    # the Rust port is the same image tagged :rust; it takes its own host folder
+    # (./data-rust below), as each build keeps its own data folder
     image: ghcr.io/professorbagholder/bagholder:latest
     container_name: bagholder
-    # loopback only on the host, as the app itself binds: open http://127.0.0.1:8765/
+    # loopback only on the host, as the app itself binds. The port is the same
+    # inside and out, so the address the app prints is the one to open:
+    # BAGHOLDER_PORT=8766 docker compose up
+    environment:
+      - BAGHOLDER_PORT=${BAGHOLDER_PORT:-8765}
     ports:
-      - "127.0.0.1:8765:8765"
-    # the database and the login
+      - "127.0.0.1:${BAGHOLDER_PORT:-8765}:${BAGHOLDER_PORT:-8765}"
+    # the database and the login. ./data is the Python app's; the Rust port's is
+    # ./data-rust
     volumes:
       - ./data:/data
+      # - ./data-rust:/data
     restart: unless-stopped

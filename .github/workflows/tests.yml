@@ -1,0 +1,86 @@
+# Every suite, on every pull request and every push to master. Nothing ran on a pull request before
+# this: a branch was only ever as tested as whoever remembered to run it. The builds are one
+# product -- they share the page, the database and the version number -- so a pull request is green
+# only when both are. The Python app is the standard library, so there is nothing to install; its
+# suite refuses the network and writes only into a home of its own (python/tests/__init__.py), so a
+# red run here is the code, not the day.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # the floor the README promises, and the version most people will have
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # test_package reads the tracked file list
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      - name: The Python suite
+        env:
+          CI: "true"              # a missing tool is a failure here, never a skip
+        # -t python is what imports python/tests/__init__.py, the run's guards
+        run: python -m unittest discover -s python/tests -t python
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: The Rust suite
+        env:
+          CI: "true"
+        run: cargo test --workspace
+        working-directory: rust
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the packaging tests read the tracked file list
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"      # the page's script is parsed with node --check; CI fails without it
+      # the page is the repository's; the module embeds it, so it is brought in first
+      - name: The page the binary carries
+        run: go generate ./...
+        working-directory: go
+      - name: Vet
+        run: go vet ./...
+        working-directory: go
+      - name: The Go suite
+        env:
+          CI: "true"
+        run: go test ./...
+        working-directory: go

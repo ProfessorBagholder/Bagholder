@@ -222,7 +222,7 @@
         ],
         "grade": "",
         "holdDays": 27,
-        "id": "rt:ti",
+        "id": "rt:ti|nobasis",
         "kind": "Crypto",
         "mult": 1,
         "pnl": null,

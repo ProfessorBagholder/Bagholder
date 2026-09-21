@@ -17,13 +17,19 @@ stays in the News card. This is the issuer's own filed record.
 
 ## How it fits together
 
-- `disclosures.py` — the pipeline: the shared vocabulary (categories), the provider
+The Python app's modules are named below; the Rust port has the same pipeline in
+`rust/crates/market/src/` (`disclosures.rs`, `sedar.rs`, `edgar.rs`, `enrich.rs`,
+`localmodel.rs`, `pdftext.rs`), where SEDAR+ is reached through the `bagholder-browser`
+helper installed beside `bagholder` and PDF text comes from `pdftotext` or the
+`pdf-extract` crate.
+
+- `python/disclosures.py` — the pipeline: the shared vocabulary (categories), the provider
   registry, and the merge. It dispatches by the instrument's market, calls each
   covering provider, and returns one sorted list plus a per-source status.
-- `sedar.py` — the SEDAR+ provider. Reaches the site through `curl_cffi` (a browser
+- `python/sedar.py` — the SEDAR+ provider. Reaches the site through `curl_cffi` (a browser
   TLS fingerprint, the only client its Radware bot gate admits); resolves an issuer
   to its profile, lists filings, downloads a PDF. Needs the `curl_cffi` dependency.
-- `edgar.py` — the SEC provider. A documented JSON API, no gate, no key, standard
+- `python/edgar.py` — the SEC provider. A documented JSON API, no gate, no key, standard
   library only, so US filings work even without `curl_cffi`. Set `BAGHOLDER_SEC_UA`
   to your own contact (SEC asks callers to identify themselves).
 
@@ -35,7 +41,7 @@ provider. It is cached per symbol and refreshed when asked for and older than a 
 
 ### 1. The running app's endpoint
 
-While `bagholder.py` is running (default `http://127.0.0.1:8765`):
+While either desktop app is running (default `http://127.0.0.1:8765`):
 
     GET /api/filings?symbol=SHOP            merged list from cache
     GET /api/filings?symbol=SHOP&refresh=1  fetch first, then return
@@ -48,34 +54,37 @@ The payload carries the merged `filings`, a per-source `sources` status
 
 ### 2. The MCP server (for Claude Desktop, Claude Code, any MCP client)
 
-`disclosures_mcp.py` exposes `disclosures_list`, `disclosures_document`, and
+`python/disclosures_mcp.py` (or the Rust port's `disclosures-mcp` binary) exposes `disclosures_list`, `disclosures_document`, and
 `sedar_resolve_profile` over stdio.
 
 Claude Code:
 
     claude mcp add disclosures -- python3 /full/path/to/disclosures_mcp.py
+    claude mcp add disclosures -- /full/path/to/disclosures-mcp
 
 Claude Desktop (Settings > Developer > Edit Config), under `mcpServers`:
 
     "disclosures": { "command": "python3", "args": ["/full/path/to/disclosures_mcp.py"] }
+    "disclosures": { "command": "/full/path/to/disclosures-mcp", "args": [] }
 
-To install it as a one-click Claude Desktop extension, pack `mcp/manifest.json`
+To install it as a one-click Claude Desktop extension, pack `python/mcp/manifest.json` (beside `disclosures_mcp.py`) or `rust/mcp/manifest.json` (beside the `disclosures-mcp` binary)
 with the `mcpb` CLI (`npx @anthropic-ai/mcpb pack`) and open the resulting
 `.mcpb` file.
 
 ### 3. The SEDAR+ command line
 
-`sedar.py` is a SEDAR-only utility for a shell or Claude Code:
+`python/sedar.py` is a SEDAR-only utility for a shell or Claude Code; the Rust port's
+`sedar` binary takes the same commands:
 
-    python3 sedar.py resolve "Shopify"           SEDAR+ profiles matching an issuer
-    python3 sedar.py filings "Shopify" 50         an issuer's SEDAR+ filings (JSON)
-    python3 sedar.py newest 30                    newest SEDAR+ filings, any issuer
-    python3 sedar.py get <profileNo> <id> out.pdf download one SEDAR+ document
+    python3 python/sedar.py resolve "Shopify"           SEDAR+ profiles matching an issuer
+    python3 python/sedar.py filings "Shopify" 50         an issuer's SEDAR+ filings (JSON)
+    python3 python/sedar.py newest 30                    newest SEDAR+ filings, any issuer
+    python3 python/sedar.py get <profileNo> <id> out.pdf download one SEDAR+ document
 
 ## What each filing is about
 
 A filing list tells you the type, date and source, not what a document contains.
-Two enrichments (`enrich.py`) fill that in, both local. When a filing list is shown
+Two enrichments (`python/enrich.py`) fill that in, both local. When a filing list is shown
 the rows are enriched on their own, top of the list first, one document at a time at
 SEDAR+'s pace (the issuer's document scope is cached for the run, so the list is read
 in one walk, not one per row), and every result is stored so a later visit is instant:
@@ -96,14 +105,14 @@ in one walk, not one per row), and every result is stored so a later visit is in
   ~1.1 GB llamafile, pinned and checksum-verified) into `~/.bagholder/models/` and
   runs it in the background. You install nothing and type no commands — the Summary
   cell shows a shimmer while the one-time download runs, then summaries appear.
-  `localmodel.py` manages this. The Summary column itself appears only once a summary
+  `python/localmodel.py` manages this. The Summary column itself appears only once a summary
   exists; where a document's text or the model is unavailable it stays absent rather
   than showing a wrong guess.
   - The model needs the document's text. SEC filings are HTML and summarize out of
     the box. SEDAR+ documents are PDFs whose subsetted fonts a naive reader cannot
-    decode, so their text comes from `pdftext.py`: a system `pdftotext` (poppler) when
+    decode, so their text comes from `python/pdftext.py`: a system `pdftotext` (poppler) when
     present, otherwise `pdfminer.six`, which the app installs
-    for itself in the background at startup (`deps.py`), into `~/.bagholder/pylibs/`,
+    for itself in the background at startup (`python/deps.py`), into `~/.bagholder/pylibs/`,
     with nothing to run by hand. A summary that lands before the install finishes shows
     a shimmer, then fills. `BAGHOLDER_NO_PDF=1` turns extraction off.
   - Overrides: `BAGHOLDER_LLM_URL` (use your own local server), `BAGHOLDER_OLLAMA_MODEL`,

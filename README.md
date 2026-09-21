@@ -63,23 +63,50 @@ Also on iPhone and Android, as native apps written in Swift and Kotlin rather th
 
 Futures are not supported yet.
 
+## Two desktop apps
+
+The desktop app comes in three implementations that serve the same page and show the same figures: the Python app in `python/`, a Rust port in `rust/`, and a Go port in `go/`. Use any one of them. Each keeps its own data folder — `~/.bagholder` for the Python app, `~/.bagholder-rust` for the Rust port, `~/.bagholder-go` for the Go port — and no two ever share one.
+
 ## Requirements
 
-- Python 3.9 or newer
+- For the Python app: Python 3.9 or newer
+- For the Rust port: a release archive for your platform, or Rust (installed with [rustup](https://rustup.rs); the version is pinned in `rust/rust-toolchain.toml` and installed on the first build) to build from source
 - A Chromium-based browser — Google Chrome, Brave, Microsoft Edge, or Chromium — opened once so you can sign in to Wealthsimple
 
 ## Install
 
+The Python app, from a clone of this repository:
+
 ```
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r python/requirements.txt
 ```
 
-On Windows use `py` instead of `python3` throughout. The one dependency is `tzdata`, which Windows needs for time zones; macOS and Linux already have it.
+On Windows use `py` instead of `python3` throughout. The one dependency is `tzdata`, which Windows needs for time zones; macOS and Linux already have it. The release archive `bagholder-vX.Y.Z-web.zip` holds the same app unpacked flat; its dependency file is `requirements.txt`.
+
+The Rust port: download `bagholder-vX.Y.Z-rust-<platform>.tar.gz` (`.zip` on Windows) from the latest release and unpack it, or build a clone:
+
+```
+cd rust && cargo build --release
+```
 
 ## Run
 
+The Python app, from a clone or from the unpacked web archive:
+
 ```
 python3 bagholder.py
+```
+
+The Rust port, from the unpacked archive (`bagholder.exe` on Windows):
+
+```
+./bagholder
+```
+
+or from a clone:
+
+```
+cd rust && cargo run --release --bin bagholder
 ```
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
@@ -94,20 +121,26 @@ docker compose up -d
 
 Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release; moving to a new one is under Keeping up to date below.
 
-To build the image yourself instead, `docker build -t bagholder .` and point the compose file's `image` at `bagholder`.
+The compose file runs the Python app, `ghcr.io/professorbagholder/bagholder:latest`. The Rust port is the same image name tagged `:rust` (and `:rust-X.Y.Z` per release), the Go port `:go` (and `:go-X.Y.Z`); set the compose file's `image` to the one you want and its volume to a folder of its own, `./data-rust:/data` or `./data-go:/data`, to run it instead. Every image keeps its data in `/data`, on a host folder of its own.
+
+To build an image yourself, from the root of a clone, `docker build -f python/Dockerfile -t bagholder .` or `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
 
 ## Keeping up to date
 
-Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in `~/.bagholder`.
+Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in the data folder.
 
-- **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder/previous` until the next update.
-- **Cloned with git:** the same button runs `git pull` on `master` and restarts. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
+- **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release's archive for the app you run, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder/previous` until the next update.
+- **Cloned with git:** the same button runs `git pull` on `master` and restarts; the Rust port first builds the new sources with `cargo build --release --bins` in `rust/`, and a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
 
   ```
   git pull
   ```
 
-  then start `python3 bagholder.py` again.
+  then start `python3 bagholder.py` again, or build and start the Rust port:
+
+  ```
+  cd rust && cargo run --release --bin bagholder
+  ```
 - **Docker:** the container has no update button. The header shows `vX.Y.Z image available` with a link to the release, and the update is the pull above:
 
   ```
@@ -136,6 +169,6 @@ Per-trade figures are in the trade's currency. Anything that adds trades togethe
 
 ## Data
 
-Everything lives in `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows): the database `bagholder.db` and the Wealthsimple session. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
+Everything lives in the data folder: the database `bagholder.db` and the Wealthsimple session. The Python app's is `~/.bagholder/` (`%USERPROFILE%\.bagholder` on Windows), the Rust port's is `~/.bagholder-rust/`; `BAGHOLDER_HOME` points either one elsewhere. Back up by copying the folder. **Clear data** in the menu deletes the data and keeps the login; **Disconnect** removes the login and keeps the data.
 
 Market data the app needs but Wealthsimple does not provide is fetched over HTTPS and cached in the same database: USD/CAD rates from the Bank of Canada, S&P 500 closes from FRED, S&P/TSX Composite closes from TMX Money, prices and declared distributions from TMX Money, Cboe Canada prices from cboe.com, crypto prices from Coinbase, US option prices from Cboe's delayed chains, and daily price history for the trade chart from TMX Money, Cboe Canada and CoinGecko. The trade chart is drawn with TradingView's open-source Lightweight Charts, bundled with the app.

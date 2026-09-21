@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /** The shared model cases in ../../tests/cases, run through the Kotlin model.
- * The same files run through the Python (tests/test_cases.py) and Swift
+ * The same files run through the Python (python/tests/test_cases.py) and Swift
  * (ModelCasesTests) models; a rule changed in one place fails here.
  * tests/README.md describes the format: `expect` is the view for the
  * case's filters, floats rounded to six places. */

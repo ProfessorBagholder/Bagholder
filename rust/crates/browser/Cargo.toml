@@ -1,0 +1,18 @@
+[package]
+name = "bagholder-browser"
+version.workspace = true
+edition.workspace = true
+
+# Yahoo's statistics and SEDAR+ gate on a browser's TLS handshake, which
+# neither OpenSSL nor the platform stack presents. wreq carries a browser's handshake
+# over BoringSSL. BoringSSL and the OpenSSL the market client links export the
+# same symbols, so this is its own process: the market crate talks to it over
+# a pipe, one request per line, and the session's cookies live here.
+[dependencies]
+# the compression features are not optional: without them no Accept-Encoding
+# goes out and the TLS extensions differ, and SEDAR+'s gate turns the session
+# away
+wreq = { version = "=6.0.0-rc.31", features = ["cookies", "gzip", "brotli", "zstd", "deflate"] }
+wreq-util = { version = "=3.0.0-rc.14", features = ["emulation", "emulation-compression"] }
+tokio = { version = "1", features = ["rt"] }
+serde_json = { version = "1", features = ["preserve_order"] }

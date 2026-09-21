@@ -1,0 +1,7 @@
+query FetchSecurityMarketData($id: ID!) {
+  security(id: $id) {
+    id
+    allowedOrderSubtypes
+    marginRates { clientMarginRate }
+  }
+}

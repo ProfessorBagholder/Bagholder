@@ -1,0 +1,429 @@
+package model
+
+import (
+	"bytes"
+	"encoding/json"
+	"sync"
+
+	"github.com/ProfessorBagholder/Bagholder/internal/py"
+	"github.com/ProfessorBagholder/Bagholder/internal/store"
+)
+
+type inputs struct {
+	accounts []store.Account
+	balances []store.Balance
+	journal  map[string]store.JournalEntry
+}
+
+type Model struct {
+	st      *store.Store
+	mu      sync.Mutex
+	buildMu sync.Mutex
+	rw      sync.RWMutex
+	version string
+	core    string
+	base    *Base
+	inputs  *inputs
+	bookKey string
+	book    *Book
+
+	viewMu   sync.Mutex
+	viewBase *Base
+	views    map[string]viewEntry
+}
+
+func New(st *store.Store) *Model {
+	return &Model{st: st}
+}
+
+func (m *Model) BaseModel(force bool) *Base {
+	today := TodayLocal()
+	full, core := m.st.Versions()
+	version := full + "|" + today
+	coreKey := core + "|" + today
+	m.mu.Lock()
+	if !force && m.base != nil && m.version == version {
+		b := m.base
+		m.mu.Unlock()
+		return b
+	}
+	m.mu.Unlock()
+	m.buildMu.Lock()
+	defer m.buildMu.Unlock()
+	m.mu.Lock()
+	if !force && m.base != nil && m.version == version {
+		b := m.base
+		m.mu.Unlock()
+		return b
+	}
+	var marked *Base
+	var markedInputs *inputs
+	if !force && m.base != nil && m.core == coreKey {
+		marked, markedInputs = m.base, m.inputs
+	}
+	m.mu.Unlock()
+	if marked != nil {
+		return m.remark(marked, markedInputs, today, version, coreKey)
+	}
+	bookKey := m.st.BookVersion() + "|" + today
+	m.mu.Lock()
+	var book *Book
+	if !force && m.bookKey == bookKey {
+		book = m.book
+	}
+	m.mu.Unlock()
+	snapshot := m.st.Snapshot(book == nil)
+	market := m.st.MarketData()
+	journal := m.st.Journal()
+	if book == nil {
+		book = BuildBook(&snapshot, today)
+	}
+	if len(journal) == 0 && len(snapshot.Notes) > 0 {
+		probe := BuildBase(&snapshot, &market, map[string]store.JournalEntry{}, today, book)
+		migrated := MigrateLegacyNotes(probe.Closed, snapshot.TradeGroups, snapshot.Notes)
+		if len(migrated) > 0 {
+			journal = m.st.SaveJournal(migrated)
+			version = m.st.DataVersion() + "|" + today
+		}
+	}
+	base := BuildBase(&snapshot, &market, journal, today, book)
+	m.mu.Lock()
+	m.version = version
+	m.core = coreKey
+	m.base = base
+	m.inputs = &inputs{accounts: snapshot.Accounts, balances: snapshot.Balances, journal: journal}
+	m.bookKey = bookKey
+	m.book = book
+	m.mu.Unlock()
+	return base
+}
+
+func (m *Model) remark(base *Base, in *inputs, today, version, coreKey string) *Base {
+	quotes := m.st.MarketData().Quotes
+	if quotes == nil {
+		quotes = map[string]store.Quote{}
+	}
+	fresh := *base
+	fresh.Quotes = quotes
+	fresh.Positions = BuildPositions(base.OpenLots, base.LastPrices, in.balances, in.accounts, base.Securities, in.journal, today, quotes, base.ActsByID)
+	m.mu.Lock()
+	m.version = version
+	m.core = coreKey
+	m.base = &fresh
+	m.mu.Unlock()
+	return &fresh
+}
+
+func (m *Model) Base() *Base { return m.BaseModel(false) }
+
+const ViewCacheMax = 16
+
+type viewEntry struct {
+	data  []byte
+	stamp int
+}
+
+func (m *Model) View(filters any, detail, page string) []byte {
+	m.rw.RLock()
+	defer m.rw.RUnlock()
+	base := m.BaseModel(false)
+	f := CleanFilters(filters)
+	keyRaw, _ := json.Marshal(f)
+	key := string(keyRaw) + "\x00" + detail + "\x00" + page
+	m.viewMu.Lock()
+	if m.viewBase == base {
+		if e, ok := m.views[key]; ok {
+			m.viewMu.Unlock()
+			out := append([]byte{}, e.data...)
+			if e.stamp >= 0 {
+				copy(out[e.stamp:], py.NowStamp())
+			}
+			return out
+		}
+	}
+	m.viewMu.Unlock()
+	out := marshalView(BuildView(base, filters), detail, page)
+	stamp := -1
+	if i := bytes.Index(out, []byte(`"generated":"`)); i >= 0 && i+len(`"generated":"`)+20 <= len(out) {
+		stamp = i + len(`"generated":"`)
+	}
+	m.viewMu.Lock()
+	if m.viewBase != base || m.views == nil || len(m.views) >= ViewCacheMax {
+		m.viewBase = base
+		m.views = map[string]viewEntry{}
+	}
+	m.views[key] = viewEntry{data: out, stamp: stamp}
+	m.viewMu.Unlock()
+	return append([]byte{}, out...)
+}
+
+type viewOut struct {
+	*View
+	Trades    []any `json:"trades"`
+	Positions []any `json:"positions"`
+}
+
+var TradeCols = []string{"id", "status", "locked", "symbol", "underlying", "name", "exchange", "kind", "currency", "account", "accountId", "securityId", "side", "qty", "entry", "exit", "entryDate", "exitDate", "holdDays", "pnl", "pnlCad", "fees", "pnlPct", "grade", "thesis", "tags"}
+
+func tradeRow(t *TradeCore) []any {
+	tags := t.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return []any{t.ID, t.Status, t.Locked, t.Symbol, t.Underlying, t.Name, t.Exchange, t.Kind, t.Currency, t.Account, t.AccountID, t.SecurityID, t.Side, t.Qty, t.Entry, t.Exit, t.EntryDate, t.ExitDate, t.HoldDays, t.Pnl, t.PnlCad, t.Fees, t.PnlPct, t.Grade, t.Thesis, tags}
+}
+
+var PageSections = map[string][]string{
+	"dashboard": {"kpi", "equity", "years", "benchmark", "monthly", "bySymbol", "grades", "queue"},
+	"trades":    {"trades"},
+	"portfolio": {"positions", "positionsSummary", "portfolio"},
+	"markets":   {"markets", "positions"},
+	"cashflow":  {"cashflow", "positions"},
+}
+
+func positionsOut(v *View, detail string) []any {
+	out := make([]any, len(v.Positions))
+	for i, p := range v.Positions {
+		if detail != "" && p.ID == detail {
+			out[i] = &positionFull{p.PositionCore, nonNilFills(p.Fills)}
+		} else {
+			out[i] = &p.PositionCore
+		}
+	}
+	return out
+}
+
+func marshalView(v *View, detail, page string) []byte {
+	sections, scoped := PageSections[page]
+	if !scoped {
+		out := viewOut{View: v, Trades: make([]any, len(v.Trades)), Positions: positionsOut(v, detail)}
+		for i, t := range v.Trades {
+			if detail != "" && t.ID == detail {
+				out.Trades[i] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
+			} else {
+				out.Trades[i] = &t.TradeCore
+			}
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	}
+	out := map[string]any{
+		"ok": v.OK, "generated": v.Generated, "today": v.Today, "syncedAt": v.SyncedAt, "currency": v.Currency, "market": v.Market,
+		"filters": v.Filters, "options": v.Options, "tradeCount": v.TradeCount, "tradeTotal": v.TradeTotal, "unmatched": v.Unmatched,
+		"accounts": v.Accounts, "activityCount": v.ActivityCount, "page": page,
+	}
+	for _, s := range sections {
+		switch s {
+		case "kpi":
+			out[s] = v.KPI
+		case "equity":
+			out[s] = v.Equity
+		case "years":
+			out[s] = v.Years
+		case "benchmark":
+			out[s] = v.Benchmark
+		case "monthly":
+			out[s] = v.Monthly
+		case "bySymbol":
+			out[s] = v.BySymbol
+		case "grades":
+			out[s] = v.Grades
+		case "queue":
+			out[s] = v.Queue
+		case "trades":
+			rows := make([][]any, len(v.Trades))
+			for i, t := range v.Trades {
+				rows[i] = tradeRow(&t.TradeCore)
+				if detail != "" && t.ID == detail {
+					out["tradeDetail"] = &tradeFull{t.TradeCore, nonNil(t.Legs), nonNilFills(t.Fills)}
+				}
+			}
+			out["tradeCols"] = TradeCols
+			out["tradeRows"] = rows
+		case "positions":
+			out[s] = positionsOut(v, detail)
+		case "positionsSummary":
+			out[s] = v.PositionsSummary
+		case "portfolio":
+			out[s] = v.Portfolio
+		case "markets":
+			out[s] = v.Markets
+		case "cashflow":
+			out[s] = v.Cashflow
+		}
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+type Detail struct {
+	ID    string      `json:"id"`
+	Legs  []SlimSlice `json:"legs"`
+	Fills []Fill      `json:"fills"`
+	Trade *TradeCore  `json:"trade,omitempty"`
+}
+
+func TradeDetail(base *Base, tradeID string) *Detail {
+	for _, t := range base.Trades {
+		if t.ID == tradeID {
+			return &Detail{ID: tradeID, Legs: nonNil(t.Legs), Fills: nonNilFills(t.Fills), Trade: &t.TradeCore}
+		}
+	}
+	for _, p := range base.Positions {
+		if p.ID == tradeID {
+			return &Detail{ID: tradeID, Legs: []SlimSlice{}, Fills: nonNilFills(p.Fills)}
+		}
+	}
+	return nil
+}
+
+type HeldSymbol struct {
+	Symbol   string `json:"symbol"`
+	Exchange string `json:"exchange"`
+	Currency string `json:"currency"`
+	Kind     string `json:"kind"`
+}
+
+func HeldSymbols(base *Base) []HeldSymbol {
+	out := []HeldSymbol{}
+	seen := map[string]bool{}
+	for _, p := range base.Positions {
+		if seen[p.Symbol] {
+			continue
+		}
+		seen[p.Symbol] = true
+		out = append(out, HeldSymbol{p.Symbol, p.Exchange, p.Currency, p.Kind})
+	}
+	return out
+}
+
+type ArchiveSymbol struct {
+	Symbol   string `json:"symbol"`
+	Exchange string `json:"exchange"`
+	Currency string `json:"currency"`
+	Kind     string `json:"kind"`
+	Start    string `json:"start"`
+}
+
+func IntradayArchiveSymbols(base *Base, since string) []ArchiveSymbol {
+	since = cut(since, 10)
+	if since == "" {
+		since = shiftDate(base.Today, -365)
+	}
+	out := map[string]ArchiveSymbol{}
+	want := func(rec HeldSymbol, start string) {
+		cur, ok := out[rec.Symbol]
+		if !ok || start < cur.Start {
+			out[rec.Symbol] = ArchiveSymbol{rec.Symbol, rec.Exchange, rec.Currency, rec.Kind, start}
+		}
+	}
+	charted := func(rec HeldSymbol) HeldSymbol {
+		if rec.Kind == "Options" {
+			under := underlying(rec.Symbol)
+			if under != "" && under != "—" {
+				return HeldSymbol{under, rec.Exchange, rec.Currency, "Shares"}
+			}
+		}
+		return rec
+	}
+	for _, t := range base.Trades {
+		if t.ExitDate >= since {
+			start := t.EntryDate
+			if since > start {
+				start = since
+			}
+			want(charted(HeldSymbol{t.Symbol, t.Exchange, t.Currency, t.Kind}), start)
+		}
+	}
+	for _, p := range base.Positions {
+		start := p.Opened
+		if start == "" {
+			start = since
+		}
+		if since > start {
+			start = since
+		}
+		want(charted(HeldSymbol{p.Symbol, p.Exchange, p.Currency, p.Kind}), start)
+	}
+	rows := []ArchiveSymbol{}
+	for _, k := range store.SortedKeys(out) {
+		rows = append(rows, out[k])
+	}
+	return rows
+}
+
+type PayerSymbol struct {
+	Symbol   string `json:"symbol"`
+	Exchange string `json:"exchange"`
+	Currency string `json:"currency"`
+}
+
+func PayerSymbols(base *Base) []PayerSymbol {
+	payers := map[string]bool{}
+	for _, r := range base.Cashflow {
+		if r.Kind == "Dividend" {
+			payers[r.Symbol] = true
+		}
+	}
+	out := []PayerSymbol{}
+	seen := map[string]bool{}
+	for _, p := range base.Positions {
+		if payers[p.Symbol] && !seen[p.Symbol] && !p.Short {
+			seen[p.Symbol] = true
+			ex := p.Exchange
+			if ex == "Crypto" {
+				ex = ""
+			}
+			out = append(out, PayerSymbol{p.Symbol, ex, p.Currency})
+		}
+	}
+	return out
+}
+
+func (m *Model) ApplyJournal(entries map[string]store.JournalEntry) {
+	m.rw.Lock()
+	defer m.rw.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	base := m.base
+	if base == nil {
+		return
+	}
+	if entries == nil {
+		entries = map[string]store.JournalEntry{}
+	}
+	for _, t := range base.Trades {
+		t.Grade, t.Thesis, t.Tags = journalOf(entries, t.ID)
+	}
+	for _, p := range base.Positions {
+		p.Grade, p.Thesis, p.Tags = journalOf(entries, p.ID)
+	}
+	if m.inputs != nil {
+		m.inputs.journal = entries
+	}
+	full, core := m.st.Versions()
+	m.version = full
+	m.core = core + "|" + base.Today
+	m.viewMu.Lock()
+	m.views = nil
+	m.viewMu.Unlock()
+}
+
+func (m *Model) Invalidate(book bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.version = ""
+	m.core = ""
+	m.base = nil
+	m.inputs = nil
+	if book {
+		m.bookKey = ""
+		m.book = nil
+	}
+}

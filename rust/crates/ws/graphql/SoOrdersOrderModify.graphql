@@ -1,0 +1,5 @@
+mutation SoOrdersOrderModify($input: SoOrders_ModifyOrderInput!) {
+  soOrdersModifyOrder(input: $input) {
+    errors { code message }
+  }
+}

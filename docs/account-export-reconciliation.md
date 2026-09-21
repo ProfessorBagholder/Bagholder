@@ -1,108 +1,124 @@
-# Complete account export reconciliation
+# Python data reconciliation
 
-The Python server accepts complete Wealthsimple activity CSVs with
-`effective_date` through `POST /api/import` with `reconcile: true`, `name`, and
-`text`. Select exports containing every activity type for the chosen accounts
-and period; filtered files cannot establish a complete replacement window.
-The existing ordinary import continues to handle legacy/statement formats.
-This PR does not add a menu action or change the page's appearance.
+This contribution updates the Python reference only, with reusable data fixtures.
+It ports missing data fixes from JUBUSINESS `67c22f9` onto upstream `f8965f6`,
+including the corrections discovered after the first version of PR #232.
+No account database, personal export, statement correction rule, credentials,
+branding, styling, portfolio sleeves or deployment configuration is included.
 
-Reconciliation retains the original synced database rows. Each export replaces
-the effective activity history only for its mapped account and the inclusive
-first/last dates present in the file. Other accounts and dates remain intact.
-Repeated imports replace the same interval without accumulating duplicates.
-The HTTP import accepts `reconcile: true`; an optional `accountMap` maps custodian
-account numbers to broker account IDs when automatic matching is ambiguous.
-Automatic mapping uses broker balance identifiers, then unambiguous historical
-trade matches. Unknown account mappings stop the import before any writes.
+## Compared with current upstream
 
-Corporate actions use signed, dated event legs rather than permanent ticker
-aliases. Unambiguous rename, listing-swap and split pairs move FIFO lots and
-their carrying costs without realizing a sale. Chains such as OLD → MID → NEW
-are supported, and buying OLD again later creates a separate holding. Internal
-account transfers move lots to the destination account. A single subdivision
-delta adjusts units while preserving cost. Ambiguous pairs do not borrow cost
-from an unrelated ticker; missing source basis is reported.
+| Area | Current upstream | This contribution |
+| --- | --- | --- |
+| Deposited crypto | `40298cb` already excludes unknown acquisition basis from scoring and separates deposited/bought portions | Preserves that separation; withholds unknown public P&L and basis-dependent filters/grades; custody quantities remain visible without claiming zero cost |
+| Quotes and cached model | Has source-kind collision protection, pooled connections, cached FIFO books and quote-only refresh | Preserves these paths; broker-only shares also reject coin quotes; import, detail, FX and statement-rule changes invalidate the correct cache |
+| Exact option and swap executions | Still maps summary activities without the private order-detail layer | Reads verified order legs; validates units, fees, identities and currencies; rejects incomplete swaps; stores each parent/leg group atomically |
+| Option ordering and results | Same-day roll folding and inferred split behavior remain | Uses execution time and stable broker IDs; unrelated contracts retain their own results; unknown split ratios are not guessed from prices |
+| Transfers and corporate actions | Does not have the private detail reader or inventory engine | Reads linked funding details and corporate child activities; carries quantity, original cost, dates and fees through transfers, rename chains, consolidations and listing conversions |
+| Ticker suffixes | No dated transfer-detail reconciliation | Same broker ID and currency plus a suffix-only difference can link AAA to AAA.TO; unrelated renames are not inferred |
+| Broker-only holdings | Builds positions from activity lots | Identified current share/ETF balances remain visible when destination acquisition history is absent; basis remains unknown |
+| Complete-account CSV exports | Ordinary append/import path | Explicit, idempotent account/date replacement windows, mapping validation, option units, signed legs and preserved raw sync history |
+| Manual asset movements | Aggregate feed valuation cannot establish the transferred securities | Optional validated statement evidence supplies exact quantities for exact events; rules persist through clear/resync and never supply invented prices or costs |
+| Broker realized-return report | No equivalent private report reader | Validates complete CAD pagination and totals, retries inconsistent reads once and retains the last complete report as stale on failure; stays separate from FIFO |
+| Read failures | No shared private DNS cooldown | Paces read-only broker/market requests and backs off DNS failure; order mutations bypass retries |
 
-DLR and DLR.U are the only built-in reciprocal pair. Either leg of a standalone
-listing-swap record can establish the other, and an explicit two-leg event is
-applied once. Synced DLR `JOURNAL_SHARES` records also move into the reciprocal
-listing. Cross-currency carrying costs use the historical FX cache.
+Upstream's language-folder restructuring, data-home isolation, test guards,
+packaging, other features and existing crypto protections are retained.
 
-Option symbols are normalized from OCC to the existing contract format. Export
-prices are per contract, so they are divided by 100 for the model's per-share
-premium representation. Explicit LONG/SHORT directions and expiry signs bypass
-the feed's missing-leg inference. Exported option rolls retain each contract's
-own cost instead of folding earlier realized results into a new contract.
-Crypto movements are combined by coin, converting USD valuations to CAD using
-the supplied FX rate or historical cache. Transfer valuations are not treated
-as cash deposits, sales or original purchase costs.
+## Execution and inventory semantics
 
-Reconciled export quantities drive non-crypto positions when cached broker
-balances disagree; the disagreement is exposed as `balanceMismatch` in the model response. Crypto still uses the broker's quantity because exports
-can omit in-kind transfer fees. Missing transfer/distribution basis is exposed
-through `basisWarnings`; portfolio cost and unrealized totals are withheld when
-current basis is incomplete. This does not establish tax cost or verify all
-historical performance calculations.
+`sync_details.py` reads order details using read-only Wealthsimple queries.
+A summary can label DOGE while containing BTC units: it cannot establish a
+DOGE sale price. Verified swaps create separate signed disposal/acquisition
+legs, including outgoing-coin fees. Cash is not misclassified as a deposit.
+Option prices are per share with the contract multiplier; exported prices per
+contract are normalized. First sync backfills details; unresolved orders retry.
 
-The implementation targets the Python server/web importer. Raw export rows are
-not a promise of equivalent interpretation by independent mobile model ports.
+`ws_reconcile.py` reads linked in-kind transfers and corporate-action children.
+Only unambiguous dated legs move inventory. DLR and DLR.U are the explicit
+reciprocal listing pair; carrying cost is converted using historical FX.
+A missing source lot or unresolved spin-off allocation remains unknown.
+Option assignment/exercise closes the contract at zero; strike cash and
+applicable delivery fees belong to the stock leg.
 
-Validation includes synthetic rename chains, ticker reuse, ambiguous pairs,
-forward/reverse DLR conversions, explicit versus synthesized legs, split deltas,
-account transfers, option units and direction, crypto currency normalization,
-stale balances, mapping rejection, preserved raw sync data and idempotent
-reimport. Personal CSVs are used only for private integration checks and are
-not checked into the repository.
+Broker-reported quantity is authoritative only after a successful balance read.
+Security-ID and symbol fallback handle retired identities. Complete export
+history remains authoritative for non-crypto quantities when a cached balance
+disagrees, with `balanceMismatch` exposed. Mixed-direction books are not reduced
+to a guessed single holding. Broker-only fallback excludes cash, derivatives,
+closed accounts and unidentified listings.
 
-## Execution order and realized option results
+Unknown basis is marked in the data rather than converted into profit. Public
+trade P&L and unknown holding cost/average/unrealized fields are null. Such trades
+are excluded from performance statistics and cannot pass profit/entry filters;
+known and unknown portions stay separate. Raw executions remain inspectable.
 
-The Python model orders dated executions by timestamp before side, including
-raw synced trades. Side priority is only a tie-breaker. Ordinary contracts keep
-their execution prices and realized results: another contract on the same
-underlying and day is not evidence of a roll. The former same-day folding
-heuristic could redistribute results, mutate IDs while tracking removed rows,
-and inflate reported profits. It is removed for both synced and exported rows.
-Explicit incomplete multileg feed inference remains separate; read-only order-detail enrichment supplies verified executions when the API provides them. Native model ports have not been updated by this Python-server correction;
-changed shared fixtures identify the expected new results and require native
-parity before a cross-platform release.
+## Complete-account import API
 
-CryptoSwap export rows retain separate signed disposal/acquisition quantities.
-Both valuations are converted to CAD together, the disposal realizes the
-outgoing coin's FIFO result, and the acquisition establishes the incoming
-coin's basis. Their cash amounts cancel; they are not deposits or withdrawals.
-Raw SWAP_MARKET_ORDER rows with only one quantity are excluded from fills and
-reported as missing swap legs in the model response. In
-particular, the feed can label DOGE while carrying BTC units: dividing its CAD
-amount by those units must not create a DOGE sale at the BTC price.
+`POST /api/import` accepts `name`, CSV `text`, and `reconcile: true` for complete
+Wealthsimple activity exports with `effective_date`. Ordinary legacy/statement
+CSV import keeps its existing behavior. No menu or visual redesign is included.
 
-Closed trades that include missing original transfer basis now publish null
-entry/P&L fields . They remain visible with executions, but
-are excluded from win/loss, monthly, symbol and grade performance statistics.
-They also cannot pass a winner/loser/breakeven filter or export a fabricated
-profit. This does not reconstruct the original acquisition cost.
+The export must contain every activity type for its accounts and period. A file
+filtered to one security or activity type is not a complete replacement source.
+The replacement interval is the inclusive first/last date actually in the file;
+other accounts and dates remain intact. Parsed export rows are retained apart
+from the original broker records, and repeated imports do not double count.
+Unparsed rows or ambiguous account mapping stop reconciliation before writes.
+`accountMap` can supply custodian-account to broker-account mapping explicitly.
 
-## Upstream comparison and integration
+## Persistent statement-confirmed corrections
 
-Ported onto upstream `e48a605` from the private fork's data commits:
-`b9a79e1`, `51a0423`, `2811802`, `20b3331`, `e133a55`, `620147c`,
-`09a1ec6`, `8e456e0`, and `55d6b81`. These fixes were absent from that base.
+`store.save_statement_corrections(rules)` saves approved evidence under
+`statement_transfer_corrections_v1`. Each rule names an exact manual broker
+event, date, source/destination accounts, currency, evidence description and
+complete security list (symbol, broker ID and positive quantity). No rule ships
+with the code. Price, cost and profit fields are rejected.
 
-Upstream already has crypto transfer-out-at-cost handling, quote-source
-collision protection, pooled SQLite connections, cached matched books, and
-wildcard Python-module packaging. Those newer paths are preserved or adapted:
-custody movements now also flag unknown incoming basis; transactions use the
-connection pool's rollback semantics; import/detail/FX changes invalidate the
-matched book; quote-only refreshes retain authoritative balance reconciliation.
-No Dockerfile change is needed for the new modules.
+Only matching source and destination web records activate a rule. The effective
+snapshot overlays paired inventory movements; the database keeps the original
+broker records and aggregate valuations. The ordinary inventory engine carries
+existing cost/dates/fees. Missing source cost remains unknown. Changed records
+block the rule; broker-supplied linked legs take precedence to avoid duplication.
+The model and book API expose audit status under `statementCorrections`.
 
-Order-detail sync is read-only at Wealthsimple. First sync backfills details;
-unresolved orders retry on subsequent syncs. Verified legs replace summary
-interpretation atomically and retain stored identities. Incomplete details are
-excluded rather than assigned inferred profits. There are no CSV inputs in
-that sync path, and no production clear/resync is required.
+All clear-data options preserve this evidence configuration. A later web sync
+recreates the matching broker records and reapplies the correction. Replace the
+validated ruleset to amend evidence, or save `[]` to remove all corrections.
+The clear/rebuild regression uses synthetic rules, never a customer statement.
 
-This contribution contains no branding, layout, colours, portfolio sleeves,
-deployment settings, credentials, database snapshots or personal exports.
-Native Swift/Kotlin models are a separate implementation and are not ported
-here. This PR is a desktop/Python integration draft pending that parity review.
+## Broker reporting and presentation scope
+
+`brokerPerformance` contains the broker-adjusted all-account/all-time CAD report,
+its by-security/monthly breakdown and freshness state. It is suppressed when
+trade filters apply. It does not overwrite Trading P&L: average-cost accounting,
+return of capital, broker adjustments and FX may differ from journal FIFO.
+`inventoryWarnings` and `statementCorrections` expose unresolved evidence.
+This PR changes data/API behavior, not the page's layout or new report panels.
+
+## Regression contracts and platform scope
+
+The existing Python tests plus synthetic sync/import/statement cases cover
+atomic rollback, partial reads, repeat sync, account clear/rebuild, stable broker
+identities, suffix matching, cache invalidation and preserved upstream behavior.
+Four additional shared JSON cases specify hand-checkable results:
+
+- Transfer 10 shares bought at 20 with fee 2; sell at 30 with fee 3: realized 95.
+- Consolidate 100 shares with total cost 200 into 10; sell at 30: realized 100.
+- Transfer 10 shares without acquisition history then sell: public P&L null,
+  zero scored trades, no invented 300 profit.
+- Exercise a 10-strike call purchased for 100: option result -100 and 100 shares
+  with carrying cost 1000; delivery cash is not option profit.
+
+The JSON schema is `today`, `snapshot`, `market`, `filters`, `journal`, `expect`.
+Files live in `tests/cases`; generator: `python/tests/make_cases.py`. Existing
+option-roll and crypto fixtures also record corrected expectations. These are
+reference contracts for reuse by Rust, Go, Swift and Kotlin, **not a claim those
+implementations are updated or pass them**. Cross-port implementation/testing is
+outside the contributor's expressly requested Python scope.
+
+Private fix inventory reviewed: the earlier crypto/options/import commits through
+`55d6b81`, then `80619b5` (broker-only holdings portion), `ab78fca`, `2820f50`
+(read pacing portion), `14fc341`, `fa61565` (data warning portion), `9a2c5cb`,
+`7a90f3b` (inventory/partial-trade data portion) and `67c22f9`. Presentation,
+sleeve and unrelated performance changes were excluded.

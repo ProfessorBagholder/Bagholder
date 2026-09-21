@@ -1,0 +1,308 @@
+{
+  "expect": {
+    "benchmark": {
+      "key": "SP500",
+      "label": "S&P 500"
+    },
+    "bySymbol": [
+      {
+        "avgHold": 2.0,
+        "legs": 1,
+        "n": 1,
+        "pnl": 95.0,
+        "symbol": "AAA",
+        "winRate": 1.0
+      }
+    ],
+    "cashflowCount": 0,
+    "cashflowHoldings": [],
+    "cashflowMonths": [],
+    "cashflowSkipped": [],
+    "cashflowTiles": [
+      {
+        "count": 0,
+        "label": "2024",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2025",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "2026 YTD",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "All time",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "count": 0,
+        "label": "Last 12 months",
+        "perMonth": 0.0,
+        "total": 0
+      },
+      {
+        "book": 0,
+        "earned": 0,
+        "label": "Yield on cost",
+        "projected": 0.0,
+        "yield": null
+      }
+    ],
+    "cashflowTotal": 0,
+    "equity": {
+      "annualized": {
+        "count": 0,
+        "first": "",
+        "last": "",
+        "rate": null,
+        "years": 0.0
+      },
+      "drawdown": {
+        "abs": null,
+        "at": "",
+        "pct": null,
+        "peakAt": ""
+      },
+      "label": "All accounts",
+      "series": []
+    },
+    "grades": {
+      "buckets": [
+        {
+          "grade": "A",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "B",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "C",
+          "n": 0,
+          "pnl": 0
+        },
+        {
+          "grade": "F",
+          "n": 0,
+          "pnl": 0
+        }
+      ],
+      "graded": 0,
+      "ungraded": 1
+    },
+    "kpi": {
+      "avgHold": 2.0,
+      "avgLoss": 0.0,
+      "avgWin": 95.0,
+      "breakeven": 0,
+      "count": 1,
+      "expectancy": 95.0,
+      "grossLoss": 0,
+      "grossWin": 95.0,
+      "losses": 0,
+      "profitFactor": null,
+      "realized": 95.0,
+      "winRate": 1.0,
+      "wins": 1
+    },
+    "monthly": [
+      {
+        "count": 1,
+        "key": "2026-01",
+        "label": "Jan '26",
+        "value": 95.0
+      }
+    ],
+    "options": {
+      "accounts": [
+        "Second"
+      ],
+      "exchanges": [],
+      "kinds": [
+        "Shares"
+      ],
+      "symbols": [
+        "AAA"
+      ],
+      "tags": [],
+      "years": [
+        "2026"
+      ]
+    },
+    "portfolio": {
+      "accountCount": 0,
+      "allocation": [],
+      "availableMargin": null,
+      "availableMarginUnavailable": [],
+      "cash": 0,
+      "cashPct": null,
+      "costBasis": 0,
+      "dayChange": null,
+      "dayChangePct": null,
+      "hasMargin": false,
+      "marginUsed": 0,
+      "marginUsedBy": {},
+      "marginUsedPct": null,
+      "marketValue": 0,
+      "nav": null,
+      "navAccounts": 0,
+      "positionCount": 0,
+      "unrealized": 0,
+      "unrealizedPct": null
+    },
+    "positions": [],
+    "positionsSummary": {
+      "book": 0,
+      "count": 0,
+      "mv": 0,
+      "unreal": 0
+    },
+    "queue": [
+      {
+        "date": "2026-01-03",
+        "id": "rt:purchase:move:transfer-in",
+        "missing": "no grade or thesis",
+        "pnl": 95.0,
+        "symbol": "AAA"
+      }
+    ],
+    "trades": [
+      {
+        "account": "Second",
+        "currency": "CAD",
+        "entry": 20.0,
+        "entryDate": "2026-01-01",
+        "exchange": "",
+        "exit": 30.0,
+        "exitDate": "2026-01-03",
+        "fees": 5.0,
+        "fills": [
+          "BUY",
+          "SELL"
+        ],
+        "grade": "",
+        "holdDays": 2,
+        "id": "rt:purchase:move:transfer-in",
+        "kind": "Shares",
+        "mult": 1,
+        "pnl": 95.0,
+        "pnlCad": 95.0,
+        "pnlPct": 0.475,
+        "qty": 10.0,
+        "side": "SELL",
+        "status": "closed",
+        "symbol": "AAA",
+        "tags": []
+      }
+    ],
+    "years": []
+  },
+  "filters": {},
+  "journal": {},
+  "market": {},
+  "snapshot": {
+    "accounts": [],
+    "activities": [
+      {
+        "accountId": "First",
+        "accountType": "First",
+        "activitySubType": "BUY",
+        "activityType": "Trade",
+        "category": "trade",
+        "commission": 2,
+        "currency": "CAD",
+        "id": "purchase",
+        "name": "LUNR",
+        "netCashAmount": -200,
+        "occurredAt": "2026-01-01T15:00:00+00:00",
+        "quantity": 10,
+        "rawType": "DIY_BUY",
+        "securityId": "",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-01",
+        "unitPrice": 20
+      },
+      {
+        "accountId": "First",
+        "accountType": "First",
+        "activitySubType": "transfer-one",
+        "activityType": "InternalSecurityTransfer",
+        "canonicalId": "transfer-out",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "transfer-out",
+        "name": "LUNR",
+        "netCashAmount": 0,
+        "occurredAt": "2026-01-02T12:00:00Z",
+        "quantity": -10,
+        "rawType": "WS_DETAIL_INVENTORY",
+        "securityId": "",
+        "source": "wealthsimple",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-02",
+        "unitPrice": 0
+      },
+      {
+        "accountId": "Second",
+        "accountType": "Second",
+        "activitySubType": "transfer-one",
+        "activityType": "InternalSecurityTransfer",
+        "canonicalId": "transfer-in",
+        "category": "other",
+        "commission": 0,
+        "currency": "CAD",
+        "id": "transfer-in",
+        "name": "LUNR",
+        "netCashAmount": 0,
+        "occurredAt": "2026-01-02T12:00:00Z",
+        "quantity": 10,
+        "rawType": "WS_DETAIL_INVENTORY",
+        "securityId": "",
+        "source": "wealthsimple",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-02",
+        "unitPrice": 0
+      },
+      {
+        "accountId": "Second",
+        "accountType": "Second",
+        "activitySubType": "SELL",
+        "activityType": "Trade",
+        "category": "trade",
+        "commission": 3,
+        "currency": "CAD",
+        "id": "sale",
+        "name": "LUNR",
+        "netCashAmount": 300,
+        "occurredAt": "2026-01-03T15:00:00+00:00",
+        "quantity": -10,
+        "rawType": "DIY_SELL",
+        "securityId": "",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-03",
+        "unitPrice": 30
+      }
+    ],
+    "balances": [],
+    "margin": [],
+    "navByAccount": {},
+    "navHistory": [],
+    "notes": {},
+    "securities": [],
+    "syncedAt": "",
+    "tradeGroups": []
+  },
+  "today": "2026-01-04"
+}

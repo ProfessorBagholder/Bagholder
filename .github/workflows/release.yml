@@ -1,0 +1,147 @@
+# Builds the archives a release carries and attaches each with its .sha256 to the
+# release the tag belongs to:
+# - bagholder-vX.Y.Z-web.zip, the Python app, flat: the file every installed copy's
+#   updater downloads (python/tools/web_archive.py);
+# - bagholder-vX.Y.Z-rust-<target>.tar.gz (.zip on Windows), the Rust port, one per
+#   platform: the server, its browser helper, the disclosures MCP server, the SEDAR+
+#   command, the page and its assets.
+name: Release archives
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v1.43.2"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: The app's version is the tag's
+        run: |
+          have="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' python/bagholder.py)"
+          test "$have" = "${TAG#v}" || { echo "python/bagholder.py says $have, the tag says $TAG"; exit 1; }
+      - name: Package
+        run: mkdir -p dist && python3 python/tools/web_archive.py "$TAG" --ref HEAD --out dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/bagholder-* --clobber
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: The app's version is the tag's
+        run: |
+          have="$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)"
+          test "$have" = "${TAG#v}" || { echo "rust/crates/server/src/app.rs says $have, the tag says $TAG"; exit 1; }
+      - name: Build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      - name: Build tools (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y nasm && vcpkg install openssl:x64-windows-static-md && echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+      - name: Package
+        run: |
+          name="bagholder-${TAG}-rust-${{ matrix.target }}"
+          mkdir -p dist/pkg
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          for b in bagholder bagholder-browser disclosures-mcp sedar; do cp "rust/target/release/$b$ext" dist/pkg/; done
+          cp ledger.html lightweight-charts.js favicon.png dist/pkg/
+          cd dist/pkg
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "../$name.zip" . >/dev/null; cd .. && sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "../$name.tar.gz" *; cd .. && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/bagholder-* --clobber
+
+  go:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, goos: darwin, goarch: arm64 }
+          - { os: ubuntu-22.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-22.04-arm, goos: linux, goarch: arm64 }
+          - { os: windows-2022, goos: windows, goarch: amd64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: The app's version is the tag's
+        run: |
+          have="$(sed -n 's/^\tAppVersion *= "\(.*\)"$/\1/p' go/internal/app/app.go)"
+          test "$have" = "${TAG#v}" || { echo "go/internal/app/app.go says $have, the tag says $TAG"; exit 1; }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      # the page is the repository's and the binary carries it, so the asset is one file
+      - name: The page the binary carries
+        run: go generate ./...
+        working-directory: go
+      - name: Build
+        working-directory: go
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          ext=""; [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          name="bagholder-${TAG}-go-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
+          mkdir -p ../dist
+          go build -trimpath -ldflags="-s -w" -o "../dist/$name" ./cmd/bagholder
+      - name: Checksum
+        run: |
+          ext=""; [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          name="bagholder-${TAG}-go-${{ matrix.goos }}-${{ matrix.goarch }}$ext"
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            sha256sum "$name" > "$name.sha256"
+          else
+            shasum -a 256 "$name" > "$name.sha256"
+          fi
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/bagholder-* --clobber
