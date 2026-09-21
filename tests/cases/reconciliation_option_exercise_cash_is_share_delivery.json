@@ -6,12 +6,12 @@
     },
     "bySymbol": [
       {
-        "avgHold": 31.0,
+        "avgHold": 1.0,
         "legs": 1,
         "n": 1,
-        "pnl": 50.0,
-        "symbol": "BTC",
-        "winRate": 1.0
+        "pnl": -100.0,
+        "symbol": "AAA",
+        "winRate": 0.0
       }
     ],
     "cashflowCount": 0,
@@ -102,40 +102,40 @@
       "ungraded": 1
     },
     "kpi": {
-      "avgHold": 31.0,
-      "avgLoss": 0.0,
-      "avgWin": 50.0,
+      "avgHold": 1.0,
+      "avgLoss": -100.0,
+      "avgWin": 0.0,
       "breakeven": 0,
       "count": 1,
-      "expectancy": 50.0,
-      "grossLoss": 0,
-      "grossWin": 50.0,
-      "losses": 0,
-      "profitFactor": null,
-      "realized": 50.0,
-      "winRate": 1.0,
-      "wins": 1
+      "expectancy": -100.0,
+      "grossLoss": 100.0,
+      "grossWin": 0,
+      "losses": 1,
+      "profitFactor": 0.0,
+      "realized": -100.0,
+      "winRate": 0.0,
+      "wins": 0
     },
     "monthly": [
       {
         "count": 1,
-        "key": "2026-02",
-        "label": "Feb '26",
-        "value": 50.0
+        "key": "2026-01",
+        "label": "Jan '26",
+        "value": -100.0
       }
     ],
     "options": {
       "accounts": [
-        "Crypto"
+        "Trading"
       ],
-      "exchanges": [
-        "Crypto"
-      ],
+      "exchanges": [],
       "kinds": [
-        "Crypto"
+        "Shares",
+        "Options"
       ],
       "symbols": [
-        "BTC"
+        "AAA",
+        "AAA 02JAN26 10.00 CALL"
       ],
       "tags": [],
       "years": [
@@ -143,95 +143,96 @@
       ]
     },
     "portfolio": {
-      "accountCount": 0,
-      "allocation": [],
+      "accountCount": 1,
+      "allocation": [
+        {
+          "account": "Trading",
+          "id": "rt:exercise-shares:exercise",
+          "share": 1.0,
+          "symbol": "AAA",
+          "value": 1000.0
+        }
+      ],
       "availableMargin": null,
       "availableMarginUnavailable": [],
       "cash": 0,
       "cashPct": null,
-      "costBasis": 0,
+      "costBasis": 1000.0,
       "dayChange": null,
       "dayChangePct": null,
       "hasMargin": false,
       "marginUsed": 0,
       "marginUsedBy": {},
-      "marginUsedPct": null,
-      "marketValue": 0,
+      "marginUsedPct": 0.0,
+      "marketValue": 1000.0,
       "nav": null,
       "navAccounts": 0,
-      "positionCount": 0,
-      "unrealized": 0,
-      "unrealizedPct": null
+      "positionCount": 1,
+      "unrealized": 0.0,
+      "unrealizedPct": 0.0
     },
-    "positions": [],
+    "positions": [
+      {
+        "account": "Trading",
+        "alloc": 1.0,
+        "avg": 10.0,
+        "cost": 1000.0,
+        "currency": "CAD",
+        "dayChange": null,
+        "exchange": "",
+        "fills": [
+          "BUY"
+        ],
+        "grade": "",
+        "held": 2,
+        "id": "rt:exercise-shares:exercise",
+        "kind": "Shares",
+        "qty": 100.0,
+        "short": false,
+        "symbol": "AAA"
+      }
+    ],
     "positionsSummary": {
-      "book": 0,
-      "count": 0,
-      "mv": 0,
-      "unreal": 0
+      "book": 1000.0,
+      "count": 1,
+      "mv": 1000.0,
+      "unreal": 0.0
     },
     "queue": [
       {
-        "date": "2026-02-01",
-        "id": "rt:cb",
+        "date": "2026-01-02",
+        "id": "rt:option-buy",
         "missing": "no grade or thesis",
-        "pnl": 50.0,
-        "symbol": "BTC"
+        "pnl": -100.0,
+        "symbol": "AAA 02JAN26 10.00 CALL"
       }
     ],
     "trades": [
       {
-        "account": "Crypto",
+        "account": "Trading",
         "currency": "CAD",
-        "entry": 100.0,
+        "entry": 1.0,
         "entryDate": "2026-01-01",
-        "exchange": "Crypto",
-        "exit": 150.0,
-        "exitDate": "2026-02-01",
+        "exchange": "",
+        "exit": 0.0,
+        "exitDate": "2026-01-02",
         "fees": 0.0,
         "fills": [
-          "BUY",
-          "SELL"
+          "BUY TO OPEN",
+          "SELL TO CLOSE"
         ],
         "grade": "",
-        "holdDays": 31,
-        "id": "rt:cb",
-        "kind": "Crypto",
-        "mult": 1,
-        "pnl": 50.0,
-        "pnlCad": 50.0,
-        "pnlPct": 0.5,
+        "holdDays": 1,
+        "id": "rt:option-buy",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": -100.0,
+        "pnlCad": -100.0,
+        "pnlPct": -1.0,
         "qty": 1.0,
         "side": "SELL",
         "status": "closed",
-        "symbol": "BTC",
-        "tags": []
-      },
-      {
-        "account": "Crypto",
-        "currency": "CAD",
-        "entry": null,
-        "entryDate": "2026-01-05",
-        "exchange": "Crypto",
-        "exit": 150.0,
-        "exitDate": "2026-02-01",
-        "fees": 0.0,
-        "fills": [
-          "BUY",
-          "SELL"
-        ],
-        "grade": "",
-        "holdDays": 27,
-        "id": "rt:dep|nobasis",
-        "kind": "Crypto",
-        "mult": 1,
-        "pnl": null,
-        "pnlCad": null,
-        "pnlPct": null,
-        "qty": 1.0,
-        "side": "SELL",
-        "status": "closed",
-        "symbol": "BTC",
+        "symbol": "AAA 02JAN26 10.00 CALL",
         "tags": []
       }
     ],
@@ -239,70 +240,47 @@
   },
   "filters": {},
   "journal": {},
-  "market": {
-    "benchmark": {},
-    "fx": {}
-  },
+  "market": {},
   "snapshot": {
     "accounts": [],
     "activities": [
       {
         "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "MARKET_ORDER",
-        "activityType": "CRYPTO_BUY",
-        "category": "other",
+        "accountType": "Trading",
+        "activitySubType": "BUYTOOPEN",
+        "activityType": "OPTIONS_BUY",
+        "category": "trade",
         "commission": 0,
         "currency": "CAD",
-        "id": "cb",
+        "id": "option-buy",
         "name": "LUNR",
-        "netCashAmount": 100,
+        "netCashAmount": -100,
         "occurredAt": "2026-01-01T15:00:00+00:00",
         "quantity": 1,
-        "rawType": "CRYPTO_BUY",
+        "rawType": "OPTIONS_BUY",
         "securityId": "",
-        "symbol": "BTC",
+        "symbol": "AAA 02JAN26 10.00 CALL",
         "transactionDate": "2026-01-01",
-        "unitPrice": 100
+        "unitPrice": 1
       },
       {
         "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "TRANSFER_IN",
-        "activityType": "CRYPTO_TRANSFER",
-        "category": "other",
+        "accountType": "Trading",
+        "activitySubType": "SELLTOCLOSE",
+        "activityType": "OPTIONS_EXERCISE",
+        "category": "option_event",
         "commission": 0,
         "currency": "CAD",
-        "direction": "CREDIT",
-        "id": "dep",
+        "id": "exercise",
         "name": "LUNR",
-        "netCashAmount": 100,
-        "occurredAt": "2026-01-05T15:00:00+00:00",
+        "netCashAmount": -1000,
+        "occurredAt": "2026-01-02T15:00:00+00:00",
         "quantity": 1,
-        "rawType": "CRYPTO_TRANSFER",
+        "rawType": "OPTIONS_EXERCISE",
         "securityId": "",
-        "symbol": "BTC",
-        "transactionDate": "2026-01-05",
-        "unitPrice": 100.0
-      },
-      {
-        "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "MARKET_ORDER",
-        "activityType": "CRYPTO_SELL",
-        "category": "other",
-        "commission": 0,
-        "currency": "CAD",
-        "id": "cs",
-        "name": "LUNR",
-        "netCashAmount": 300,
-        "occurredAt": "2026-02-01T15:00:00+00:00",
-        "quantity": 2,
-        "rawType": "CRYPTO_SELL",
-        "securityId": "",
-        "symbol": "BTC",
-        "transactionDate": "2026-02-01",
-        "unitPrice": 150
+        "symbol": "AAA 02JAN26 10.00 CALL",
+        "transactionDate": "2026-01-02",
+        "unitPrice": 10
       }
     ],
     "balances": [],
@@ -314,5 +292,5 @@
     "syncedAt": "",
     "tradeGroups": []
   },
-  "today": "2026-03-01"
+  "today": "2026-01-04"
 }

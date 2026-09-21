@@ -4,16 +4,7 @@
       "key": "SP500",
       "label": "S&P 500"
     },
-    "bySymbol": [
-      {
-        "avgHold": 31.0,
-        "legs": 1,
-        "n": 1,
-        "pnl": 50.0,
-        "symbol": "BTC",
-        "winRate": 1.0
-      }
-    ],
+    "bySymbol": [],
     "cashflowCount": 0,
     "cashflowHoldings": [],
     "cashflowMonths": [],
@@ -99,43 +90,34 @@
         }
       ],
       "graded": 0,
-      "ungraded": 1
+      "ungraded": 0
     },
     "kpi": {
-      "avgHold": 31.0,
+      "avgHold": null,
       "avgLoss": 0.0,
-      "avgWin": 50.0,
+      "avgWin": 0.0,
       "breakeven": 0,
-      "count": 1,
-      "expectancy": 50.0,
+      "count": 0,
+      "expectancy": null,
       "grossLoss": 0,
-      "grossWin": 50.0,
+      "grossWin": 0,
       "losses": 0,
-      "profitFactor": null,
-      "realized": 50.0,
-      "winRate": 1.0,
-      "wins": 1
+      "profitFactor": 0.0,
+      "realized": 0,
+      "winRate": null,
+      "wins": 0
     },
-    "monthly": [
-      {
-        "count": 1,
-        "key": "2026-02",
-        "label": "Feb '26",
-        "value": 50.0
-      }
-    ],
+    "monthly": [],
     "options": {
       "accounts": [
-        "Crypto"
+        "Second"
       ],
-      "exchanges": [
-        "Crypto"
-      ],
+      "exchanges": [],
       "kinds": [
-        "Crypto"
+        "Shares"
       ],
       "symbols": [
-        "BTC"
+        "AAA"
       ],
       "tags": [],
       "years": [
@@ -170,68 +152,33 @@
       "mv": 0,
       "unreal": 0
     },
-    "queue": [
-      {
-        "date": "2026-02-01",
-        "id": "rt:cb",
-        "missing": "no grade or thesis",
-        "pnl": 50.0,
-        "symbol": "BTC"
-      }
-    ],
+    "queue": [],
     "trades": [
       {
-        "account": "Crypto",
-        "currency": "CAD",
-        "entry": 100.0,
-        "entryDate": "2026-01-01",
-        "exchange": "Crypto",
-        "exit": 150.0,
-        "exitDate": "2026-02-01",
-        "fees": 0.0,
-        "fills": [
-          "BUY",
-          "SELL"
-        ],
-        "grade": "",
-        "holdDays": 31,
-        "id": "rt:cb",
-        "kind": "Crypto",
-        "mult": 1,
-        "pnl": 50.0,
-        "pnlCad": 50.0,
-        "pnlPct": 0.5,
-        "qty": 1.0,
-        "side": "SELL",
-        "status": "closed",
-        "symbol": "BTC",
-        "tags": []
-      },
-      {
-        "account": "Crypto",
+        "account": "Second",
         "currency": "CAD",
         "entry": null,
-        "entryDate": "2026-01-05",
-        "exchange": "Crypto",
-        "exit": 150.0,
-        "exitDate": "2026-02-01",
+        "entryDate": "2026-01-02",
+        "exchange": "",
+        "exit": 30.0,
+        "exitDate": "2026-01-03",
         "fees": 0.0,
         "fills": [
-          "BUY",
+          "TRANSFER IN",
           "SELL"
         ],
         "grade": "",
-        "holdDays": 27,
-        "id": "rt:dep|nobasis",
-        "kind": "Crypto",
+        "holdDays": 1,
+        "id": "rt:transfer-in|nobasis",
+        "kind": "Shares",
         "mult": 1,
         "pnl": null,
         "pnlCad": null,
         "pnlPct": null,
-        "qty": 1.0,
+        "qty": 10.0,
         "side": "SELL",
         "status": "closed",
-        "symbol": "BTC",
+        "symbol": "AAA",
         "tags": []
       }
     ],
@@ -239,70 +186,70 @@
   },
   "filters": {},
   "journal": {},
-  "market": {
-    "benchmark": {},
-    "fx": {}
-  },
+  "market": {},
   "snapshot": {
     "accounts": [],
     "activities": [
       {
-        "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "MARKET_ORDER",
-        "activityType": "CRYPTO_BUY",
+        "accountId": "First",
+        "accountType": "First",
+        "activitySubType": "transfer-one",
+        "activityType": "InternalSecurityTransfer",
+        "canonicalId": "transfer-out",
         "category": "other",
         "commission": 0,
         "currency": "CAD",
-        "id": "cb",
+        "id": "transfer-out",
         "name": "LUNR",
-        "netCashAmount": 100,
-        "occurredAt": "2026-01-01T15:00:00+00:00",
-        "quantity": 1,
-        "rawType": "CRYPTO_BUY",
+        "netCashAmount": 0,
+        "occurredAt": "2026-01-02T12:00:00Z",
+        "quantity": -10,
+        "rawType": "WS_DETAIL_INVENTORY",
         "securityId": "",
-        "symbol": "BTC",
-        "transactionDate": "2026-01-01",
-        "unitPrice": 100
+        "source": "wealthsimple",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-02",
+        "unitPrice": 0
       },
       {
-        "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "TRANSFER_IN",
-        "activityType": "CRYPTO_TRANSFER",
+        "accountId": "Second",
+        "accountType": "Second",
+        "activitySubType": "transfer-one",
+        "activityType": "InternalSecurityTransfer",
+        "canonicalId": "transfer-in",
         "category": "other",
         "commission": 0,
         "currency": "CAD",
-        "direction": "CREDIT",
-        "id": "dep",
+        "id": "transfer-in",
         "name": "LUNR",
-        "netCashAmount": 100,
-        "occurredAt": "2026-01-05T15:00:00+00:00",
-        "quantity": 1,
-        "rawType": "CRYPTO_TRANSFER",
+        "netCashAmount": 0,
+        "occurredAt": "2026-01-02T12:00:00Z",
+        "quantity": 10,
+        "rawType": "WS_DETAIL_INVENTORY",
         "securityId": "",
-        "symbol": "BTC",
-        "transactionDate": "2026-01-05",
-        "unitPrice": 100.0
+        "source": "wealthsimple",
+        "symbol": "AAA",
+        "transactionDate": "2026-01-02",
+        "unitPrice": 0
       },
       {
-        "accountId": "acct-1",
-        "accountType": "Crypto",
-        "activitySubType": "MARKET_ORDER",
-        "activityType": "CRYPTO_SELL",
-        "category": "other",
+        "accountId": "Second",
+        "accountType": "Second",
+        "activitySubType": "SELL",
+        "activityType": "Trade",
+        "category": "trade",
         "commission": 0,
         "currency": "CAD",
-        "id": "cs",
+        "id": "sale",
         "name": "LUNR",
         "netCashAmount": 300,
-        "occurredAt": "2026-02-01T15:00:00+00:00",
-        "quantity": 2,
-        "rawType": "CRYPTO_SELL",
+        "occurredAt": "2026-01-03T15:00:00+00:00",
+        "quantity": -10,
+        "rawType": "DIY_SELL",
         "securityId": "",
-        "symbol": "BTC",
-        "transactionDate": "2026-02-01",
-        "unitPrice": 150
+        "symbol": "AAA",
+        "transactionDate": "2026-01-03",
+        "unitPrice": 30
       }
     ],
     "balances": [],
@@ -314,5 +261,5 @@
     "syncedAt": "",
     "tradeGroups": []
   },
-  "today": "2026-03-01"
+  "today": "2026-01-04"
 }

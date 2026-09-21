@@ -99,7 +99,7 @@
         }
       ],
       "graded": 0,
-      "ungraded": 2
+      "ungraded": 1
     },
     "kpi": {
       "avgHold": 31.0,
@@ -173,13 +173,6 @@
     "queue": [
       {
         "date": "2026-02-01",
-        "id": "rt:cb|nobasis",
-        "missing": "no grade or thesis",
-        "pnl": 30.0,
-        "symbol": "ETH"
-      },
-      {
-        "date": "2026-02-01",
         "id": "rt:cb",
         "missing": "no grade or thesis",
         "pnl": 50.0,
@@ -217,7 +210,7 @@
       {
         "account": "Crypto",
         "currency": "CAD",
-        "entry": 120.0,
+        "entry": null,
         "entryDate": "2026-01-05",
         "exchange": "Crypto",
         "exit": 150.0,
@@ -229,12 +222,12 @@
         ],
         "grade": "",
         "holdDays": 27,
-        "id": "rt:cb|nobasis",
+        "id": "rt:ti|nobasis",
         "kind": "Crypto",
         "mult": 1,
-        "pnl": 30.0,
-        "pnlCad": 30.0,
-        "pnlPct": 0.25,
+        "pnl": null,
+        "pnlCad": null,
+        "pnlPct": null,
         "qty": 1.0,
         "side": "SELL",
         "status": "closed",

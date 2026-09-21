@@ -565,6 +565,47 @@ def expect(case):
     return expect_from(case_snapshot(case), case["market"], case["today"], case.get("filters") or {}, case.get("journal"))
 
 
+# Reusable data-only contracts for ports adopting Python reconciliation.
+def inventory_case_row(ident, symbol, quantity, day, account, event, typ="InternalSecurityTransfer"):
+    return act(id=ident, canonicalId=ident, source="wealthsimple", rawType="WS_DETAIL_INVENTORY",
+        activityType=typ, activitySubType=event, category="other", symbol=symbol,
+        quantity=quantity, unitPrice=0, netCashAmount=0, currency="CAD",
+        transactionDate=day, occurredAt=day+"T12:00:00Z", accountId=account, accountType=account)
+
+
+CASES.update({
+    "reconciliation_transfer_carries_cost_and_fees": {
+        "today": "2026-01-04", "market": {}, "activities": [
+            buy("purchase", "AAA", 10, 20, "2026-01-01", currency="CAD", accountId="First", accountType="First", commission=2),
+            inventory_case_row("transfer-out", "AAA", -10, "2026-01-02", "First", "transfer-one"),
+            inventory_case_row("transfer-in", "AAA", 10, "2026-01-02", "Second", "transfer-one"),
+            sell("sale", "AAA", 10, 30, "2026-01-03", currency="CAD", accountId="Second", accountType="Second", commission=3),
+        ]},
+    "reconciliation_consolidation_preserves_cost": {
+        "today": "2026-01-04", "market": {}, "activities": [
+            buy("purchase", "AAA", 100, 2, "2026-01-01", currency="CAD", accountId="First", accountType="First"),
+            inventory_case_row("consolidation-out", "AAA", -100, "2026-01-02", "First", "corporate-one", "CorporateAction"),
+            inventory_case_row("consolidation-in", "AAA", 10, "2026-01-02", "First", "corporate-one", "CorporateAction"),
+            sell("sale", "AAA", 10, 30, "2026-01-03", currency="CAD", accountId="First", accountType="First"),
+        ]},
+    "reconciliation_missing_transfer_basis_is_unknown": {
+        "today": "2026-01-04", "market": {}, "activities": [
+            inventory_case_row("transfer-out", "AAA", -10, "2026-01-02", "First", "transfer-one"),
+            inventory_case_row("transfer-in", "AAA", 10, "2026-01-02", "Second", "transfer-one"),
+            sell("sale", "AAA", 10, 30, "2026-01-03", currency="CAD", accountId="Second", accountType="Second"),
+        ]},
+    "reconciliation_option_exercise_cash_is_share_delivery": {
+        "today": "2026-01-04", "market": {}, "activities": [
+            act(id="option-buy", activityType="OPTIONS_BUY", rawType="OPTIONS_BUY", activitySubType="BUYTOOPEN",
+                category="trade", symbol="AAA 02JAN26 10.00 CALL", quantity=1, unitPrice=1,
+                netCashAmount=-100, currency="CAD", transactionDate="2026-01-01"),
+            act(id="exercise", activityType="OPTIONS_EXERCISE", rawType="OPTIONS_EXERCISE", activitySubType="SELLTOCLOSE",
+                category="option_event", symbol="AAA 02JAN26 10.00 CALL", quantity=1, unitPrice=10,
+                netCashAmount=-1000, currency="CAD", transactionDate="2026-01-02"),
+        ]},
+})
+
+
 def main():
     for name, case in CASES.items():
         doc = {"today": case["today"], "snapshot": case_snapshot(case), "market": case["market"], "filters": case.get("filters") or {},

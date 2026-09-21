@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, getproxies, proxy_bypass, urlopen
 
 import store
+import network_reads
+import socket
 
 BOC_URL = "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
@@ -259,6 +261,9 @@ def _fetch_once(url, ctx, headers, timeout, method="GET", body=None):
             conn.request(method, path, body=body, headers=hdrs)
             resp = conn.getresponse()
             body = resp.read()
+        except socket.gaierror:
+            _shut(conn)
+            raise  # shared reader applies the DNS cooldown before retrying
         except (http.client.HTTPException, OSError) as e:
             _shut(conn)
             last = e
@@ -287,7 +292,7 @@ def _fetch(url, ctx, headers, timeout, method="GET", payload=None):
 def _get_text(url, ssl_context=None, headers=None):
     ctx = ssl_context or default_ssl_context()
     try:
-        raw = _fetch(url, ctx, headers or {"User-Agent": UA, "Accept": "text/csv,application/json,*/*;q=0.8"}, TIMEOUT_SEC)
+        raw = network_reads.call(lambda: _fetch(url, ctx, headers or {"User-Agent": UA, "Accept": "text/csv,application/json,*/*;q=0.8"}, TIMEOUT_SEC))
     except Exception as e:
         if getattr(e, "code", None) != 404:   # a symbol a source does not carry is not the source failing
             note_source(source_of_url(url), False, e)
@@ -428,7 +433,7 @@ def _post_json(url, payload, ssl_context=None, headers=None):
     hdrs["Content-Length"] = str(len(body))
     ctx = ssl_context or default_ssl_context()
     try:
-        raw = _fetch(url, ctx, hdrs, TIMEOUT_SEC, method="POST", payload=body)
+        raw = network_reads.call(lambda: _fetch(url, ctx, hdrs, TIMEOUT_SEC, method="POST", payload=body))
     except Exception as e:
         note_source(source_of_url(url), False, e)
         raise

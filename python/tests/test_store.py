@@ -767,6 +767,8 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(store.activity_pull_due(now=tuesday_1400))
 
     def test_daily_path_does_not_page_whole_history_when_rows_exist(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
+        store.set_meta(bagholder.ws_reconcile.VERSION_KEY, bagholder.ws_reconcile.VERSION)
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
         bounds = bagholder.activity_sync_bounds()
         self.assertFalse(bounds["full_history"])
@@ -805,7 +807,10 @@ class StoreTest(unittest.TestCase):
         self.assertIn("startDate", cond)
         self.assertTrue(str(cond["startDate"]).startswith("2024-06-01"))
 
+
     def test_daily_window_reaches_back_past_rows_filed_under_a_later_day(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
+        store.set_meta(bagholder.ws_reconcile.VERSION_KEY, bagholder.ws_reconcile.VERSION)
         """2026-09-08: a card purchase from the evening of the 8th was stored under the 9th (UTC),
         so a window starting at the newest stored day skipped the dividend paid on the 8th."""
         late = _ws_item()
@@ -818,6 +823,7 @@ class StoreTest(unittest.TestCase):
         cond = bagholder.activity_fetch_condition("acct-1", start_date=bounds["start_date"])
         self.assertLess(cond["startDate"], "2026-09-08T04:00:00.000Z", "a dividend filed under the 8th is inside the window")
 
+
     def test_empty_table_full_history_omits_start_date(self):
         self.assertEqual(store.activity_count(), 0)
         bounds = bagholder.activity_sync_bounds()
@@ -827,6 +833,8 @@ class StoreTest(unittest.TestCase):
         self.assertNotIn("startDate", cond)
 
     def test_existing_rows_make_daily_sync_incremental(self):
+        store.set_meta(bagholder.sync_details.VERSION_KEY, bagholder.sync_details.VERSION)
+        store.set_meta(bagholder.ws_reconcile.VERSION_KEY, bagholder.ws_reconcile.VERSION)
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item())])
         store.insert_local(
             {
@@ -851,6 +859,7 @@ class StoreTest(unittest.TestCase):
         bounds = bagholder.activity_sync_bounds()
         self.assertFalse(bounds["full_history"])
         self.assertTrue(bounds["start_date"])
+
 
     def test_token_refresh_needed_uses_expires_at(self):
         now = 1_700_000_000
@@ -3349,6 +3358,7 @@ class FeedMatchingTest(_OrdersBase):
             r = bagholder.refresh_orders()
         self.assertEqual(r["added"], 0, "the same order under Wealthsimple's id, or under its own external id, is not a new row")
         self.assertEqual(len(store.list_orders()), 1)
+
 
     def test_an_option_order_from_the_feed_is_named_by_its_contract(self):
         store.apply_wealthsimple_mapped([bagholder.map_activity(_ws_item(canonicalId="ws-opt-1", type="OPTIONS_BUY", subType="BUYTOOPEN", assetSymbol="QNC 20NOV26 3.00 CALL", assetQuantity=5, amount=-150, occurredAt="2026-08-05T16:12:17.268Z", securityId="sec-o-1"))])

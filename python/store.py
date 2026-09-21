@@ -11,6 +11,7 @@ import sys
 import sqlite3
 import threading
 import uuid
+import statement_reconcile
 from datetime import timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -1298,6 +1299,10 @@ def _revise_wealthsimple_row(cid, row):
             stored = conn.execute("SELECT * FROM activities WHERE canonical_id = ?", (cid,)).fetchone()
             if not stored:
                 return False
+            # Summary feed records must never downgrade verified execution
+            # legs (the feed can expose the same vendor order ID separately).
+            if (stored["raw_type"] or "").startswith("WS_DETAIL_"):
+                return False
             changed = [c for c in _REVISABLE_COLUMNS if _differs(incoming[c], stored[c])]
             if not changed:
                 return False
@@ -1365,6 +1370,45 @@ def apply_wealthsimple_mapped(rows):
     return {"inserted": inserted, "linked": linked, "skipped": skipped, "revised": revised}
 
 
+def apply_wealthsimple_detail_groups(groups):
+    """Replace each summary and its verified legs together, retaining row IDs.
+
+    Empty legs mean unavailable details: exclude the summary and withdraw any
+    obsolete children. A later successful sync repairs the same parent.
+    """
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            for parent, legs in groups:
+                cid = parent["canonicalId"]
+                association = "WS_DETAIL:" + cid
+                wanted = {row["canonicalId"] for row in legs}
+                if cid in wanted or len(wanted) != len(legs):
+                    raise ValueError("Duplicate execution identity")
+                old = conn.execute("SELECT id, canonical_id FROM activities WHERE aft_type = ? AND source = 'wealthsimple'", (association,)).fetchall()
+                for row in old:
+                    if row["canonical_id"] not in wanted:
+                        conn.execute("DELETE FROM activities WHERE id = ?", (row["id"],))
+                for raw in [parent] + legs:
+                    row = dict(raw, source="wealthsimple")
+                    ident = row["canonicalId"]
+                    stored = conn.execute("SELECT * FROM activities WHERE canonical_id = ?", (ident,)).fetchone()
+                    if stored and stored["source"] != "wealthsimple":
+                        raise ValueError("Execution identity belongs to a local activity")
+                    values = _insert_params(row, stored["id"] if stored else _new_id(), ident)
+                    if stored:
+                        cols = _INSERT_COLUMNS[2:]
+                        conn.execute("UPDATE activities SET " + ", ".join(c + " = ?" for c in cols) + " WHERE canonical_id = ?", values[2:] + (ident,))
+                    else:
+                        conn.execute(_INSERT_SQL, values)
+            if groups:
+                conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('ws_execution_revision',?)", (_new_id(),))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def merge_local_rows(rows):
     """CSV / typed merge on date, account, symbol, quantity, price, cash — not id."""
     stored = []
@@ -1410,6 +1454,36 @@ def merge_local_rows(rows):
         stored.append(saved)
         added += 1
     return {"ok": True, "added": added, "duplicates": duplicates, "activities": stored}
+
+
+def reconcile_export(rows, windows):
+    """Atomically replace exported windows; retain raw synced activities."""
+    import export_history
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            prior = conn.execute("SELECT value FROM meta WHERE key=?", (export_history.META_KEY,)).fetchone()
+            saved = json.loads(prior[0]) if prior else []
+            old = {r["id"]: tuple(r) for r in conn.execute("SELECT * FROM activities WHERE source='ws-export'")}
+            for w in windows:
+                conn.execute("DELETE FROM activities WHERE source='ws-export' AND account_id=? AND transaction_date BETWEEN ? AND ?",
+                    (w["accountId"], w["first"], w["last"]))
+                if w not in saved:
+                    saved.append(w)
+            for a in rows:
+                conn.execute(_INSERT_SQL, _insert_params(a, a["id"], None))
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)",
+                (export_history.META_KEY, json.dumps(saved, sort_keys=True)))
+            import hashlib
+            digest = hashlib.sha256(json.dumps([tuple(r) for r in conn.execute(
+                "SELECT * FROM activities WHERE source='ws-export' ORDER BY id")], default=str).encode()).hexdigest()
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('activity_export_revision',?)", (digest,))
+            conn.commit()
+        finally:
+            conn.close()
+    added = sum(a["id"] not in old for a in rows)
+    return {"added": added, "duplicates": len(rows) - added, "reconciled": True, "windows": windows}
 
 
 def replace_accounts(accounts):
@@ -2291,7 +2365,23 @@ def save_journal_entry(key, entry):
     return current
 
 
-SYNC_META_KEYS = ("synced_at", "last_activity_pull", "security_id_backfill_done")
+SYNC_META_KEYS = ("synced_at", "last_activity_pull", "security_id_backfill_done",
+                  "ws_order_details_v1", "ws_order_details_version", "ws_execution_revision", "ws_inventory_details_v1", "ws_inventory_details_version", "ws_realized_report_v1")
+
+
+def save_statement_corrections(rules):
+    """Replace approved statement evidence; [] removes all saved corrections.
+
+    This configuration deliberately survives every clear-data option. It does
+    not write activities and only applies when the matching web event exists.
+    """
+    rules = statement_reconcile.validate(rules)
+    set_meta(statement_reconcile.META_KEY, json.dumps(rules, sort_keys=True))
+    return rules
+
+
+def statement_corrections():
+    return statement_reconcile.validate(json.loads(get_meta(statement_reconcile.META_KEY) or "[]"))
 
 
 def data_summary():
@@ -2317,6 +2407,7 @@ def data_summary():
                 "navDays": count("SELECT COUNT(*) FROM nav_history"),
                 "securities": count("SELECT COUNT(*) FROM securities"),
                 "journal": journal_n,
+                "statementCorrections": len(statement_corrections()),
                 "fxDays": count("SELECT COUNT(*) FROM fx_rates"),
                 "benchmarkDays": count("SELECT COUNT(*) FROM benchmark_prices"),
                 "filings": count("SELECT COUNT(*) FROM filings"),
@@ -2340,7 +2431,7 @@ def clear_synced_data(keep_journal=True, keep_market=True):
             _ready(conn)
             for table in ("activities", "accounts", "balances", "margin", "nav_history", "securities", "grouped_trades"):
                 conn.execute("DELETE FROM %s" % table)
-            keys = list(SYNC_META_KEYS) + ["trade_groups", "trade_notes"]
+            keys = list(SYNC_META_KEYS) + ["trade_groups", "trade_notes", "activity_export_windows", "activity_export_revision"]
             if not keep_journal:
                 keys.append(JOURNAL_META)
             conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in keys])
@@ -2367,9 +2458,13 @@ def book_version():
             for sql in (
                 "SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
                 "SELECT COUNT(*), MAX(fetched_at) FROM securities",
+                "SELECT COUNT(*), TOTAL(rate) FROM fx_rates",
             ):
                 row = conn.execute(sql).fetchone()
                 parts.append("%s:%s" % (row[0], row[1]))
+            for key in ("activity_export_windows", "activity_export_revision", "ws_execution_revision", statement_reconcile.META_KEY):
+                row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+                parts.append(str(row[0] if row else ""))
             return "|".join(parts)
         finally:
             conn.close()
@@ -2431,7 +2526,7 @@ def status_counts():
 _VERSION_SQL = (
     "SELECT COUNT(*), MAX(COALESCE(occurred_at, transaction_date)) FROM activities",
     "SELECT COUNT(*), MAX(date) FROM nav_history",
-    "SELECT COUNT(*), MAX(date) FROM fx_rates",
+    "SELECT COUNT(*), MAX(date) || ':' || TOTAL(rate) FROM fx_rates",
     "SELECT COUNT(*), MAX(date) FROM benchmark_prices",
     "SELECT COUNT(*), MAX(ex_date) FROM distributions",
     "SELECT COUNT(*), MAX(fetched_at) FROM securities",
@@ -2447,7 +2542,7 @@ _VERSION_SQL = (
 # the prices themselves, not only the stamp: two quotes written in the same
 # second used to leave the fingerprint unchanged, and the page kept the old price
 _QUOTES_SQL = "SELECT COUNT(*), MAX(fetched_at), TOTAL(price) FROM quotes"
-_VERSION_META = ("synced_at", "trade_groups", "trade_notes", JOURNAL_META, TILES_META)
+_VERSION_META = ("synced_at", "trade_groups", "trade_notes", JOURNAL_META, TILES_META, "activity_export_windows", "activity_export_revision", "balances_read_at", "ws_execution_revision", "ws_realized_report_v1", "ws_inventory_details_v1", statement_reconcile.META_KEY)
 
 
 def versions():
@@ -2583,6 +2678,31 @@ def missing_security_ids(ids):
             conn.close()
 
 
+def fill_crypto_detail_security_ids():
+    """Reuse unambiguous WS coin identities for incoming swap legs.
+
+    The swap API gives no incoming security ID. These generated leg IDs cannot
+    be found by paging the summary feed, so use its existing coin records first.
+    """
+    with _lock:
+        conn = _connect()
+        try:
+            _ready(conn)
+            known = conn.execute("""SELECT symbol, MIN(security_id) AS security_id
+                FROM activities WHERE source = 'wealthsimple'
+                AND (raw_type LIKE 'CRYPTO_%' OR raw_type = 'WS_DETAIL_CRYPTO')
+                AND IFNULL(security_id, '') != '' AND IFNULL(symbol, '') != ''
+                GROUP BY symbol HAVING COUNT(DISTINCT security_id) = 1""").fetchall()
+            for row in known:
+                conn.execute("""UPDATE activities SET security_id = ?
+                    WHERE source = 'wealthsimple' AND raw_type = 'WS_DETAIL_CRYPTO'
+                    AND symbol = ? AND IFNULL(security_id, '') = ''""",
+                    (row["security_id"], row["symbol"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def needs_security_id_backfill():
     with _lock:
         conn = _connect()
@@ -2592,6 +2712,7 @@ def needs_security_id_backfill():
                 "SELECT 1 AS n FROM activities "
                 "WHERE source = 'wealthsimple' "
                 "AND IFNULL(symbol, '') != '' "
+                "AND IFNULL(raw_type, '') NOT IN ('WS_DETAIL_CRYPTO', 'WS_DETAIL_INVENTORY', 'WS_DETAIL_PARENT', 'WS_DETAIL_MISSING_INVENTORY') "
                 "AND (security_id IS NULL OR security_id = '') "
                 "LIMIT 1"
             ).fetchone()
@@ -2607,6 +2728,10 @@ def snapshot(activities=True):
         try:
             _ready(conn)
             activities = _all_activities(conn) if activities else []
+            import export_history
+            windows = conn.execute("SELECT value FROM meta WHERE key=?", (export_history.META_KEY,)).fetchone()
+            if windows:
+                activities = export_history.select(activities, json.loads(windows[0]))
             accounts = []
             for r in conn.execute("SELECT * FROM accounts ORDER BY id").fetchall():
                 accounts.append(
@@ -2668,10 +2793,11 @@ def snapshot(activities=True):
                 _security_from_row(r)
                 for r in conn.execute("SELECT * FROM securities ORDER BY id").fetchall()
             ]
-            return {
+            return statement_reconcile.apply({
                 "activities": activities,
                 "accounts": accounts,
                 "balances": balances,
+                "balancesReadAt": get_meta("balances_read_at", ""),
             "margin": margin,
             "exposures": {r["key"]: _exposure_from_row(r) for r in conn.execute("SELECT * FROM exposures").fetchall()},
                 "watchlist": [_watch_from_row(r) for r in conn.execute("SELECT * FROM watchlist ORDER BY added_at, symbol").fetchall()],
@@ -2684,7 +2810,9 @@ def snapshot(activities=True):
                 "notes": notes,
                 "tiles": _tiles_from(get_meta(TILES_META)),
                 "securities": securities,
-            }
+                "brokerPerformance": json.loads(get_meta("ws_realized_report_v1") or "{}"),
+                "inventoryWarnings": json.loads(get_meta("ws_inventory_details_v1") or "{}").get("warnings", []),
+            }, statement_corrections())
         finally:
             conn.close()
 

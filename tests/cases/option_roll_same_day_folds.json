@@ -6,10 +6,10 @@
     },
     "bySymbol": [
       {
-        "avgHold": 108.0,
-        "legs": 1,
-        "n": 1,
-        "pnl": 484.0,
+        "avgHold": 167.0,
+        "legs": 2,
+        "n": 2,
+        "pnl": 490.0,
         "symbol": "ZZZ",
         "winRate": 1.0
       }
@@ -99,29 +99,35 @@
         }
       ],
       "graded": 0,
-      "ungraded": 1
+      "ungraded": 2
     },
     "kpi": {
-      "avgHold": 108.0,
+      "avgHold": 167.0,
       "avgLoss": 0.0,
-      "avgWin": 484.0,
+      "avgWin": 245.0,
       "breakeven": 0,
-      "count": 1,
-      "expectancy": 484.0,
+      "count": 2,
+      "expectancy": 245.0,
       "grossLoss": 0,
-      "grossWin": 484.0,
+      "grossWin": 490.0,
       "losses": 0,
       "profitFactor": null,
-      "realized": 484.0,
+      "realized": 490.0,
       "winRate": 1.0,
-      "wins": 1
+      "wins": 2
     },
     "monthly": [
       {
         "count": 1,
+        "key": "2026-08",
+        "label": "Aug '26",
+        "value": 282.0
+      },
+      {
+        "count": 1,
         "key": "2026-12",
         "label": "Dec '26",
-        "value": 484.0
+        "value": 208.0
       }
     ],
     "options": {
@@ -133,7 +139,8 @@
         "Options"
       ],
       "symbols": [
-        "ZZZ 15JAN27 12.00 CALL"
+        "ZZZ 15JAN27 12.00 CALL",
+        "ZZZ 21AUG26 10.00 CALL"
       ],
       "tags": [],
       "years": [
@@ -173,15 +180,49 @@
         "date": "2026-12-01",
         "id": "rt:jan-sto",
         "missing": "no grade or thesis",
-        "pnl": 484.0,
+        "pnl": 208.0,
         "symbol": "ZZZ 15JAN27 12.00 CALL"
+      },
+      {
+        "date": "2026-08-15",
+        "id": "rt:aug-sto",
+        "missing": "no grade or thesis",
+        "pnl": 282.0,
+        "symbol": "ZZZ 21AUG26 10.00 CALL"
       }
     ],
     "trades": [
       {
         "account": "Trading",
         "currency": "USD",
-        "entry": 4.0,
+        "entry": 3.0,
+        "entryDate": "2026-01-01",
+        "exchange": "",
+        "exit": 1.0,
+        "exitDate": "2026-08-15",
+        "fees": 0.0,
+        "fills": [
+          "SELL TO OPEN",
+          "BUY TO CLOSE"
+        ],
+        "grade": "",
+        "holdDays": 226,
+        "id": "rt:aug-sto",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": 200.0,
+        "pnlCad": 282.0,
+        "pnlPct": 0.666667,
+        "qty": 1.0,
+        "side": "COVER",
+        "status": "closed",
+        "symbol": "ZZZ 21AUG26 10.00 CALL",
+        "tags": []
+      },
+      {
+        "account": "Trading",
+        "currency": "USD",
+        "entry": 2.0,
         "entryDate": "2026-08-15",
         "exchange": "",
         "exit": 0.5,
@@ -196,9 +237,9 @@
         "id": "rt:jan-sto",
         "kind": "Options",
         "mult": 100,
-        "pnl": 350.0,
-        "pnlCad": 484.0,
-        "pnlPct": 0.875,
+        "pnl": 150.0,
+        "pnlCad": 208.0,
+        "pnlPct": 0.75,
         "qty": 1.0,
         "side": "COVER",
         "status": "closed",

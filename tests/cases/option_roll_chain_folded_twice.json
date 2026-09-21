@@ -6,12 +6,12 @@
     },
     "bySymbol": [
       {
-        "avgHold": 46.0,
-        "legs": 1,
-        "n": 1,
+        "avgHold": 21.0,
+        "legs": 3,
+        "n": 3,
         "pnl": 135.0,
         "symbol": "QQQ",
-        "winRate": 1.0
+        "winRate": 0.333333
       }
     ],
     "cashflowCount": 0,
@@ -99,29 +99,35 @@
         }
       ],
       "graded": 0,
-      "ungraded": 1
+      "ungraded": 3
     },
     "kpi": {
-      "avgHold": 46.0,
-      "avgLoss": 0.0,
-      "avgWin": 135.0,
+      "avgHold": 21.0,
+      "avgLoss": -135.0,
+      "avgWin": 405.0,
       "breakeven": 0,
-      "count": 1,
-      "expectancy": 135.0,
-      "grossLoss": 0,
-      "grossWin": 135.0,
-      "losses": 0,
-      "profitFactor": null,
+      "count": 3,
+      "expectancy": 45.0,
+      "grossLoss": 270.0,
+      "grossWin": 405.0,
+      "losses": 2,
+      "profitFactor": 1.5,
       "realized": 135.0,
-      "winRate": 1.0,
+      "winRate": 0.333333,
       "wins": 1
     },
     "monthly": [
       {
+        "count": 2,
+        "key": "2025-12",
+        "label": "Dec '25",
+        "value": -270.0
+      },
+      {
         "count": 1,
         "key": "2026-02",
         "label": "Feb '26",
-        "value": 135.0
+        "value": 405.0
       }
     ],
     "options": {
@@ -133,11 +139,14 @@
         "Options"
       ],
       "symbols": [
-        "QQQ 15MAY26 5.00 PUT"
+        "QQQ 15MAY26 5.00 PUT",
+        "QQQ 17APR26 5.00 PUT",
+        "QQQ 20MAR26 5.00 PUT"
       ],
       "tags": [],
       "years": [
-        "2026"
+        "2026",
+        "2025"
       ]
     },
     "portfolio": {
@@ -173,15 +182,83 @@
         "date": "2026-02-02",
         "id": "rt:s3",
         "missing": "no grade or thesis",
-        "pnl": 135.0,
+        "pnl": 405.0,
         "symbol": "QQQ 15MAY26 5.00 PUT"
+      },
+      {
+        "date": "2025-12-18",
+        "id": "rt:s2",
+        "missing": "no grade or thesis",
+        "pnl": -135.0,
+        "symbol": "QQQ 17APR26 5.00 PUT"
+      },
+      {
+        "date": "2025-12-15",
+        "id": "rt:s1",
+        "missing": "no grade or thesis",
+        "pnl": -135.0,
+        "symbol": "QQQ 20MAR26 5.00 PUT"
       }
     ],
     "trades": [
       {
         "account": "Trading",
         "currency": "USD",
+        "entry": 0.5,
+        "entryDate": "2025-12-01",
+        "exchange": "",
+        "exit": 1.5,
+        "exitDate": "2025-12-15",
+        "fees": 0.0,
+        "fills": [
+          "SELL TO OPEN",
+          "BUY TO CLOSE"
+        ],
+        "grade": "",
+        "holdDays": 14,
+        "id": "rt:s1",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": -100.0,
+        "pnlCad": -135.0,
+        "pnlPct": -2.0,
+        "qty": 1.0,
+        "side": "COVER",
+        "status": "closed",
+        "symbol": "QQQ 20MAR26 5.00 PUT",
+        "tags": []
+      },
+      {
+        "account": "Trading",
+        "currency": "USD",
         "entry": 2.0,
+        "entryDate": "2025-12-15",
+        "exchange": "",
+        "exit": 3.0,
+        "exitDate": "2025-12-18",
+        "fees": 0.0,
+        "fills": [
+          "SELL TO OPEN",
+          "BUY TO CLOSE"
+        ],
+        "grade": "",
+        "holdDays": 3,
+        "id": "rt:s2",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": -100.0,
+        "pnlCad": -135.0,
+        "pnlPct": -0.5,
+        "qty": 1.0,
+        "side": "COVER",
+        "status": "closed",
+        "symbol": "QQQ 17APR26 5.00 PUT",
+        "tags": []
+      },
+      {
+        "account": "Trading",
+        "currency": "USD",
+        "entry": 4.0,
         "entryDate": "2025-12-18",
         "exchange": "",
         "exit": 1.0,
@@ -196,9 +273,9 @@
         "id": "rt:s3",
         "kind": "Options",
         "mult": 100,
-        "pnl": 100.0,
-        "pnlCad": 135.0,
-        "pnlPct": 0.5,
+        "pnl": 300.0,
+        "pnlCad": 405.0,
+        "pnlPct": 0.75,
         "qty": 1.0,
         "side": "COVER",
         "status": "closed",

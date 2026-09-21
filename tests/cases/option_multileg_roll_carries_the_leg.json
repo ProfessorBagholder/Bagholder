@@ -6,12 +6,12 @@
     },
     "bySymbol": [
       {
-        "avgHold": 224.0,
-        "legs": 2,
-        "n": 1,
+        "avgHold": 134.0,
+        "legs": 3,
+        "n": 2,
         "pnl": -23508.9,
         "symbol": "LUNR",
-        "winRate": 0.0
+        "winRate": 0.5
       }
     ],
     "cashflowCount": 0,
@@ -99,29 +99,35 @@
         }
       ],
       "graded": 0,
-      "ungraded": 1
+      "ungraded": 2
     },
     "kpi": {
-      "avgHold": 224.0,
-      "avgLoss": -23508.9,
-      "avgWin": 0.0,
+      "avgHold": 134.0,
+      "avgLoss": -34033.5,
+      "avgWin": 10524.6,
       "breakeven": 0,
-      "count": 1,
-      "expectancy": -23508.9,
-      "grossLoss": 23508.9,
-      "grossWin": 0,
+      "count": 2,
+      "expectancy": -11754.45,
+      "grossLoss": 34033.5,
+      "grossWin": 10524.6,
       "losses": 1,
-      "profitFactor": 0.0,
+      "profitFactor": 0.309242,
       "realized": -23508.9,
-      "winRate": 0.0,
-      "wins": 0
+      "winRate": 0.5,
+      "wins": 1
     },
     "monthly": [
       {
         "count": 1,
+        "key": "2025-11",
+        "label": "Nov '25",
+        "value": 10524.6
+      },
+      {
+        "count": 1,
         "key": "2026-06",
         "label": "Jun '26",
-        "value": -23508.9
+        "value": -34033.5
       }
     ],
     "options": {
@@ -133,11 +139,13 @@
         "Options"
       ],
       "symbols": [
+        "LUNR 15JAN27 12.00 CALL",
         "LUNR 21JAN28 12.00 CALL"
       ],
       "tags": [],
       "years": [
-        "2026"
+        "2026",
+        "2025"
       ]
     },
     "portfolio": {
@@ -173,15 +181,49 @@
         "date": "2026-06-26",
         "id": "rt:sto2",
         "missing": "no grade or thesis",
-        "pnl": -23508.9,
+        "pnl": -34033.5,
         "symbol": "LUNR 21JAN28 12.00 CALL"
+      },
+      {
+        "date": "2025-11-14",
+        "id": "rt:sto",
+        "missing": "no grade or thesis",
+        "pnl": 10524.6,
+        "symbol": "LUNR 15JAN27 12.00 CALL"
       }
     ],
     "trades": [
       {
         "account": "Trading",
         "currency": "USD",
-        "entry": 5.384545,
+        "entry": 6.2225,
+        "entryDate": "2025-10-01",
+        "exchange": "",
+        "exit": 1.35,
+        "exitDate": "2025-11-14",
+        "fees": 0.0,
+        "fills": [
+          "SELL TO OPEN",
+          "BUY TO CLOSE"
+        ],
+        "grade": "",
+        "holdDays": 44,
+        "id": "rt:sto",
+        "kind": "Options",
+        "mult": 100,
+        "pnl": 7796.0,
+        "pnlCad": 10524.6,
+        "pnlPct": 0.783045,
+        "qty": 16.0,
+        "side": "COVER",
+        "status": "closed",
+        "symbol": "LUNR 15JAN27 12.00 CALL",
+        "tags": []
+      },
+      {
+        "account": "Trading",
+        "currency": "USD",
+        "entry": 1.840909,
         "entryDate": "2025-11-14",
         "exchange": "",
         "exit": 13.3,
@@ -197,9 +239,9 @@
         "id": "rt:sto2",
         "kind": "Options",
         "mult": 100,
-        "pnl": -17414.0,
-        "pnlCad": -23508.9,
-        "pnlPct": -1.470032,
+        "pnl": -25210.0,
+        "pnlCad": -34033.5,
+        "pnlPct": -6.224691,
         "qty": 22.0,
         "side": "COVER",
         "status": "closed",

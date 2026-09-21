@@ -28,6 +28,7 @@ later exits; whatever is still held shows under positions.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 import functools
 import re
 import threading
@@ -192,7 +193,7 @@ def fmt8(v):
 
 
 def is_crypto_activity(a):
-    return compact(a.get("rawType")).startswith("CRYPTO") or compact(a.get("activityType")).startswith("CRYPTO")
+    return compact(a.get("rawType")) == "WSDETAILCRYPTO" or compact(a.get("rawType")).startswith("CRYPTO") or compact(a.get("activityType")).startswith("CRYPTO")
 
 
 def kind_of(a):
@@ -243,6 +244,56 @@ def normalize_activity(activity):
     qty = abs(_num(a.get("quantity")))
     a["flags"] = []
 
+    if rt == "WSDETAILINVENTORY":
+        a["kind"] = kind_of(a)
+        return a
+    if rt == "WSDETAILMISSINGINVENTORY" or (rt == "CORPORATEACTION" and at == "STKDIS" and not qty):
+        a.update(category="other", kind=kind_of(a))
+        a["flags"].append("missing-corporate-action")
+        return a
+
+    if rt in ("WSDETAILPARENT", "WSDETAILMISSINGOPTION", "WSDETAILMISSINGCRYPTO"):
+        a["category"] = "other"
+        a["kind"] = "Crypto" if rt == "WSDETAILMISSINGCRYPTO" else kind_of(a)
+        if rt != "WSDETAILPARENT":
+            a["flags"].append("missing-swap-legs" if rt == "WSDETAILMISSINGCRYPTO" else "missing-option-legs")
+        return a
+    if rt in ("WSDETAILOPTION", "WSDETAILCRYPTO"):
+        a["kind"] = "Crypto" if rt == "WSDETAILCRYPTO" else "Options"
+        return a
+
+    if a.get("source") == "ws-export":
+        # These exports provide explicit signed event legs. Never apply the
+        # lossy feed's multileg inference or sign guesses to them.
+        a["kind"] = "Crypto" if rt == "CRYPTOEXPORT" else kind_of(a)
+        if at in ("OPTIONEXPIRY", "OPTIONASSIGN", "OPTIONEXERCISE"):
+            a["category"] = "option_event" if is_option_symbol(a.get("symbol")) else "trade"
+            a["activitySubType"] = "BUYTOCLOSE" if _num(a.get("quantity")) > 0 else "SELLTOCLOSE"
+            if a["category"] == "trade":
+                a["activityType"] = "Trade"
+                a["activitySubType"] = "BUY" if _num(a.get("quantity")) > 0 else "SELL"
+        if at == "CRYPTOSWAP":
+            a.update(category="trade", activitySubType="BUY" if _num(a.get("quantity")) > 0 else "SELL")
+            a["unitPrice"] = abs(cash) / qty if qty else 0.0
+            a["netCashAmount"] = -abs(cash) if _num(a.get("quantity")) > 0 else abs(cash)
+        if at == "CRYPTOSTAKINGREWARD":
+            a.update(category="trade", activitySubType="BUY", unitPrice=abs(cash)/qty if qty else 0.0)
+        if a.get("category") == "trade" and qty and not is_option_symbol(a.get("symbol")):
+            # Actual purchase cash includes fees; commissions remain separate
+            # in FIFO so use gross execution value here.
+            if at == "TRADE" and cash:
+                fee = _num(a.get("commission"))
+                a["unitPrice"] = (abs(cash) - fee if _num(a.get("quantity")) > 0 else abs(cash) + fee) / qty
+        return a
+
+    if (rt.startswith("CRYPTO") or at.startswith("CRYPTO")) and "SWAP" in compact(a.get("activitySubType")):
+        # Feed labels the outgoing coin but can supply the incoming coin's
+        # quantity. With only one quantity neither sale price nor both legs
+        # can be recovered reliably. Order-detail sync supplies the real legs.
+        a.update(category="other", kind="Crypto")
+        a["flags"].append("missing-swap-legs")
+        return a
+
     if rt == "CRYPTOBUY" or at == "CRYPTOBUY":
         a.update(category="trade", activityType="Trade", activitySubType="BUY", kind="Crypto")
         a["quantity"] = qty
@@ -254,21 +305,12 @@ def normalize_activity(activity):
         a["netCashAmount"] = abs(cash)
         return a
     if rt == "CRYPTOTRANSFER" or at == "CRYPTOTRANSFER":
-        sub = compact(a.get("activitySubType"))
-        a.update(category="trade", activityType="Trade", kind="Crypto")
+        # Wealthsimple's transfer rows are custody movements.  They do not
+        # represent a sale or purchase, and their amount is not a tradable
+        # fill price.  Treating an outgoing transfer as a sell manufactures a
+        # realized gain/loss from inventory that merely moved accounts.
+        a.update(category="transfer", activityType="Transfer", kind="Crypto")
         a["flags"].append("transfer")
-        if "OUT" in sub or cash < 0:
-            a["activitySubType"] = "SELL"
-            a["flags"].append("transfer-out")
-            a["quantity"] = -qty
-            a["netCashAmount"] = abs(cash)
-        else:
-            a["activitySubType"] = "BUY"
-            # a coin transferred in is a deposited asset, not a buy made here: its
-            # original cost is unknown, so a later sale is an unscoreable round-trip
-            a["flags"].append("basis-unknown")
-            a["quantity"] = qty
-            a["netCashAmount"] = -abs(cash)
         return a
     if rt == "CRYPTOSTAKINGREWARD" or at == "CRYPTOSTAKINGREWARD":
         a.update(category="trade", activityType="Trade", activitySubType="BUY", kind="Crypto")
@@ -313,7 +355,10 @@ def normalize_activity(activity):
         else:
             a["activityType"] = "EXERCISE"
             a["activitySubType"] = "SELL"
-        if "ASSIGN" in raw or abs(cash) < 1e-12:
+        if "ASSIGN" in raw or "EXERCISE" in raw:
+            a["deliveryCash"] = cash
+            a["netCashAmount"] = 0.0
+        if "ASSIGN" in raw or "EXERCISE" in raw or abs(cash) < 1e-12:
             a["unitPrice"] = 0.0
         if qty > 0:
             a["quantity"] = -qty if a["activitySubType"] == "SELL" else qty
@@ -323,6 +368,22 @@ def normalize_activity(activity):
 
 def normalize_activities(activities):
     return [normalize_activity(a) for a in activities or []]
+
+
+def export_currencies(activities, fx):
+    """One coin inventory, irrespective of the currency used to value a swap."""
+    rows = []
+    for raw in activities:
+        a = dict(raw)
+        if a.get("source") == "ws-export" and compact(a.get("rawType")) == "CRYPTOEXPORT":
+            if a.get("currency") == "USD":
+                quoted = re.search(r"FX Rate:\s*([0-9.]+)", a.get("description", ""))
+                rate = float(quoted.group(1)) if quoted else rate_on(fx, a["transactionDate"])
+                for field in ("unitPrice", "netCashAmount", "commission"):
+                    a[field] = _num(a.get(field)) * rate
+            a["currency"] = "CAD"
+        rows.append(a)
+    return rows
 
 
 def fold_stkdis(activities):
@@ -352,55 +413,6 @@ def fold_stkdis(activities):
             a.update(quantity=net, activitySubType="BUY", unitPrice=0.0, netCashAmount=0.0, category="trade")
             rest.append(a)
     return rest
-
-
-def split_markers(activities):
-    """Wealthsimple posts a share split as a CORPORATE_ACTION with quantity 0
-    and no ratio. Infer the ratio from the fill prices on either side and
-    return {(account, symbol, currency, date): factor}, where lot quantities
-    are multiplied by factor and prices divided by it (1/5 for a 1-for-5
-    reverse split, 4 for a 4-for-1 split)."""
-    out = {}
-    by_book = {}
-    for a in activities:
-        if a.get("category") not in ("trade", "option_event") or not a.get("symbol"):
-            continue
-        by_book.setdefault((fifo_account(a), _s(a.get("symbol"))), []).append(a)
-    for a in activities:
-        if compact(a.get("activityType")) != "STKDIS" or compact(a.get("rawType")) != "CORPORATEACTION":
-            continue
-        if abs(_num(a.get("quantity"))) > EPS:
-            continue
-        day = _s(a.get("transactionDate"))
-        # the marker's currency does not always match the fills'; key on account+symbol
-        key = (fifo_account(a), _s(a.get("symbol")))
-        priced = sorted(
-            (x for x in by_book.get(key, []) if _num(x.get("unitPrice")) > 0 and compact(x.get("activityType")) != "STKDIS"),
-            key=lambda x: (_s(x.get("transactionDate")), _s(x.get("occurredAt"))),
-        )
-        before = [_num(x.get("unitPrice")) for x in priced if _s(x.get("transactionDate")) < day][-3:]
-        after = [_num(x.get("unitPrice")) for x in priced if _s(x.get("transactionDate")) >= day][:3]
-        if not before or not after:
-            continue
-        before.sort()
-        after.sort()
-        pre = before[len(before) // 2]
-        post = after[len(after) // 2]
-        if not pre > 0 or not post > 0:
-            continue
-        ratio = post / pre
-        if ratio >= 1.5:
-            n = round(ratio)
-            factor = 1.0 / n
-        elif ratio <= 1 / 1.5:
-            n = round(1 / ratio)
-            factor = float(n)
-        else:
-            continue
-        if n < 2 or abs(ratio - (1 / factor)) / (1 / factor) > 0.35:
-            continue
-        out[(fifo_account(a), _s(a.get("symbol")), day)] = factor
-    return out
 
 
 def fifo_account(a):
@@ -540,6 +552,8 @@ def infer_zero_qty_option_fills(fills):
 
     for i, f in enumerate(fills):
         a = f["a"]
+        if a.get("source") == "ws-export":
+            continue
         if not f["side"]:
             continue
         rem = rem_of(a)
@@ -580,7 +594,7 @@ def infer_zero_qty_option_fills(fills):
             if closed > EPS or qty > EPS:
                 pool[direction] += qty
             continue
-        if is_option_symbol(a.get("symbol")):
+        if is_option_symbol(a.get("symbol")) and a.get("rawType") != "WS_DETAIL_OPTION":
             _resolve_option_fill_side(f, rem)
         qty = abs(_num(a.get("quantity")))
         cash = _num(a.get("netCashAmount"))
@@ -688,7 +702,7 @@ def _fill_rank(f):
 
 def _fill_sort_key(f):
     a = f["a"]
-    return (_s(a.get("transactionDate")), _fill_rank(f), _s(a.get("occurredAt")), _s(a.get("id")))
+    return (_s(a.get("transactionDate")), _s(a.get("occurredAt")), _fill_rank(f), _s(a.get("canonicalId") or a.get("id")))
 
 
 def _make_slice(lot, fill, a, matched, symbol=None):
@@ -727,7 +741,7 @@ def _make_slice(lot, fill, a, matched, symbol=None):
         "exitCommission": exit_commission,
         "pnl": raw_pnl - commission,
         "pnlCad": raw_pnl - commission,
-        "basisKnown": "basis-unknown" not in (lot.get("flags") or []),
+        "basisKnown": not any(f == "basis-unknown" or f.startswith("missing-") for f in lot.get("flags", [])),
         "openDirection": lot["direction"],
         "buyActivityId": lot["activityId"],
         "sellActivityId": _s(a.get("id")),
@@ -753,27 +767,46 @@ def _dust(remaining, fill, a):
     return px > 0 and remaining * px * option_multiplier(a.get("symbol")) < 0.01
 
 
-def match_fifo(activities):
+def match_fifo(activities, fx=None):
     """FIFO per (account, symbol, currency). Returns closed slices, open lots, unmatched."""
     activities = [a if "flags" in a else normalize_activity(a) for a in activities or []]
     normalized = [a for a in activities if "pending-distribution" not in (a.get("flags") or [])]
-    folded = fold_stkdis(normalized)
+    import inventory
+    folded = inventory.movements(fold_stkdis(normalized))
+    activity_identity = {a.get("id"): a.get("canonicalId") or a.get("id") for a in activities}
     fills = []
     for a in folded:
+        if a.get("category") == "inventory":
+            fills.append({"a": a, "side": "MOVE", "qty": abs(_num(a.get("quantity")))})
+            continue
         if a.get("category") not in ("trade", "option_event") or not a.get("symbol"):
             continue
         side = store.trade_side(a)
         if not side:
             continue
         fills.append({"a": a, "side": side, "qty": abs(_num(a.get("quantity")))})
-    fills.sort(key=_fill_sort_key)
+    # Execution time precedes side: a same-day sell can close an earlier buy.
+    # Inventory movements precede trades only when their timestamps tie.
+    explicit = any(a.get("source") == "ws-export" or a.get("rawType") == "WS_DETAIL_OPTION" for a in activities) or any(f["side"] == "MOVE" for f in fills)
+    fills.sort(key=lambda f: (_s(f["a"].get("transactionDate")),
+        _s(f["a"].get("occurredAt")), 0 if f["side"] == "MOVE" else 1,
+        _s(f["a"].get("canonicalId") or f["a"].get("id"))) if explicit else _fill_sort_key(f))
     infer_zero_qty_option_fills(fills)
     usable = [f for f in fills if f["qty"] > 0]
 
     books = {}
     rt_open = {}
     closed = []
-    unmatched = []
+    unmatched = [dict(symbol=a.get("symbol"), counterSymbol=a.get("counterSymbol"),
+        currency=a.get("currency"), side="INVENTORY" if "missing-corporate-action" in a["flags"] else "SWAP" if "missing-swap-legs" in a["flags"] else "OPTION", quantity=None, price=None,
+        date=a.get("transactionDate"), accountId=a.get("accountId"),
+        account=fifo_account(a), activityId=a.get("id"), reason=a["flags"][0],
+        description="Incomplete broker detail; retry sync or review the source event")
+        for a in activities if any(f in a.get("flags", []) for f in ("missing-swap-legs", "missing-option-legs", "missing-corporate-action"))]
+    unknown_actions = {}
+    for a in activities:
+        if "missing-corporate-action" in a.get("flags", []):
+            unknown_actions.setdefault((fifo_account(a), a.get("symbol")), []).append(a["transactionDate"])
     rolled = {}  # (account, underlying, right) -> {"LONG": [lots], "SHORT": [lots]}: legs Wealthsimple never posted
 
     def rolled_of(a):
@@ -789,6 +822,8 @@ def match_fifo(activities):
         symbol. When this chain has been rolled, a buy-back beyond the known
         shorts also closes the chain's older contracts (nearest expiry first):
         those are the legs the rolls moved here without posting."""
+        if a.get("rawType") == "WS_DETAIL_OPTION":
+            return remaining
         pool = rolled_of(a)
         lots = pool[closing_dir]
         key = book_key(a)
@@ -840,33 +875,6 @@ def match_fifo(activities):
         return remaining
 
     replaced = replacement_index(normalized)
-    splits = split_markers(normalized)
-    pending_splits = {}
-    for (acct, sym, day), factor in splits.items():
-        pending_splits.setdefault(acct + "::" + sym, []).append((day, factor))
-
-    def apply_splits(key, day):
-        skey = "::".join(key.split("::")[:2])
-        todo = pending_splits.get(skey)
-        if not todo:
-            return
-        keep = []
-        for split_day, factor in sorted(todo):
-            if split_day <= day:
-                for lot in books.get(key, []):
-                    lot["qty"] *= factor
-                    lot["price"] /= factor
-                    lot.setdefault("flags", [])
-                    label = "split %s" % ("1:%d" % round(1 / factor) if factor < 1 else "%d:1" % round(factor))
-                    if label not in lot["flags"]:
-                        lot["flags"].append(label)
-            else:
-                keep.append((split_day, factor))
-        if keep:
-            pending_splits[skey] = keep
-        else:
-            pending_splits.pop(skey, None)
-
     def close_against(book, key, fill, a, remaining, symbol_override=None):
         closing_dir = "SHORT" if fill["side"] == "BUY" else "LONG"
         while remaining > EPS and book and book[0]["direction"] == closing_dir:
@@ -886,7 +894,73 @@ def match_fifo(activities):
         a = fill["a"]
         key = book_key(a)
         book = books.setdefault(key, [])
-        apply_splits(key, _s(a.get("transactionDate")))
+        for lot in book:
+            if any(lot["date"] <= day <= a["transactionDate"] for day in unknown_actions.get((fifo_account(a), a.get("symbol")), [])):
+                lot["flags"] = sorted(set(lot.get("flags", [])) | {"missing-corporate-action"})
+        if a.get("category") == "inventory":
+            destination = a.get("_destination")
+            remaining = fill["qty"]
+            if not destination and compact(a.get("activitySubType")) in ("SUBDIVISION", "CONSOLIDATION"):
+                before = sum(l["qty"] for l in book if l["direction"] == "LONG")
+                after = before + _num(a["quantity"])
+                if before > EPS and after > EPS:
+                    for lot in book:
+                        if lot["direction"] == "LONG":
+                            lot["qty"] *= after / before
+                            lot["price"] *= before / after
+                    continue
+            if _num(a.get("quantity")) < 0:
+                for lot in list(book):
+                    if lot["direction"] != "LONG" or remaining <= EPS:
+                        continue
+                    moved = min(remaining, lot["qty"])
+                    fraction = moved / lot["qty"]
+                    if destination:
+                        target = book_key(destination)
+                        ratio = abs(_num(destination["quantity"])) / fill["qty"]
+                        carried = dict(lot, qty=moved * ratio, price=lot["price"] / ratio,
+                            commission=lot.get("commission", 0) * fraction,
+                            accountId=destination["accountId"], accountType=fifo_account(destination),
+                            symbol=destination["symbol"], currency=destination["currency"],
+                            securityId=destination.get("securityId", ""), name=destination.get("name", ""),
+                            flags=list(lot.get("flags") or []) + ["inventory-movement"])
+                        if a["accountId"] != destination["accountId"]:
+                            carried["rt"] = (lot.get("rt") or "rt:" + lot["activityId"]) + ":move:" + destination["id"]
+                        if a["currency"] != destination["currency"]:
+                            rate = rate_on(fx or {}, a["transactionDate"])
+                            if not fx:
+                                carried["flags"].append("missing-transfer-fx")
+                            factor = (rate if a["currency"] == "USD" else 1) / (rate if destination["currency"] == "USD" else 1)
+                            carried["price"] *= factor
+                            carried["commission"] *= factor
+                        books.setdefault(target, []).append(carried)
+                        books[target].sort(key=lambda l: (l["date"], l["when"], activity_identity.get(l["activityId"], l["activityId"])))
+                        rt_open[target] = carried.get("rt")
+                    lot["commission"] *= 1 - fraction
+                    lot["qty"] -= moved
+                    remaining -= moved
+                    if lot["qty"] <= EPS:
+                        book.remove(lot)
+                if not book:
+                    rt_open[key] = None
+            # Unpaired inbound movements lack proven historical basis. Do not
+            # turn their market valuation into a purchase or realized result.
+            if remaining > EPS and (_num(a.get("quantity")) > 0 or destination):
+                dst = destination or a
+                ratio = abs(_num(dst["quantity"])) / fill["qty"] if destination else 1
+                target = book_key(dst)
+                books.setdefault(target, []).append(dict(qty=remaining*ratio, price=0.0,
+                    date=a["transactionDate"], when=a["occurredAt"], commission=0.0,
+                    direction="LONG", accountId=dst["accountId"], accountType=fifo_account(dst),
+                    symbol=dst["symbol"], name=dst.get("name", ""), currency=dst["currency"],
+                    kind=dst.get("kind") or kind_of(dst), activityId=dst["id"],
+                    securityId=dst.get("securityId", ""), rt="rt:"+dst["id"], flags=["missing-transfer-basis"]))
+            if remaining > EPS:
+                unmatched.append(dict(symbol=a["symbol"], currency=a["currency"], side="MOVE",
+                    quantity=remaining, price=0.0, date=a["transactionDate"],
+                    description="Inventory movement has no matching source lots", accountId=a["accountId"],
+                    account=fifo_account(a), activityId=a["id"]))
+            continue
         if is_option_symbol(a.get("symbol")) and is_multileg(a) and fill.get("rollDirection"):
             # Roll: close this contract (book, then carried-forward legs) and carry
             # the same quantity to the unposted new leg. A debit belongs to the
@@ -1013,8 +1087,6 @@ def match_fifo(activities):
                     }
                 )
 
-    for key in list(books):
-        apply_splits(key, "9999-12-31")
     for (acct, under, right), dirs in rolled.items():
         for direction in ("LONG", "SHORT"):
             for lot in dirs[direction]:
@@ -1032,92 +1104,16 @@ def match_fifo(activities):
         for lot in book:
             if lot["qty"] <= 1e-6:
                 continue
+            if any(lot["date"] <= day for day in unknown_actions.get((fifo_account(lot), lot["symbol"]), [])):
+                lot["flags"] = sorted(set(lot.get("flags", [])) | {"missing-corporate-action"})
             # crypto residue from in-kind fees: a lot worth under a dollar is not a position
-            if lot["kind"] == "Crypto" and lot["qty"] * lot["price"] < 1.0:
+            if lot["kind"] == "Crypto" and lot["qty"] * lot["price"] < 1.0 and not any(f == "basis-unknown" or f.startswith("missing-") for f in lot.get("flags", [])):
                 continue
             open_lots.append(dict(lot))
     closed.sort(key=lambda t: (t["exitDate"], t["id"]))
-    fold_option_rolls(closed, open_lots)
+    # Each contract retains its actual execution basis. Sharing an underlying
+    # and trading day does not establish a roll or justify moving realized P&L.
     return {"closed": closed, "open": open_lots, "unmatched": unmatched}
-
-
-def fold_option_rolls(closed, open_lots):
-    """Same-day cover + new short on the same underlying is a roll: fold the
-    cover's P&L into the far contract's basis and drop the cover row."""
-    if not closed:
-        return
-
-    def roll_book(t):
-        return "::".join([_s(t.get("account") or t.get("accountType")), _s(t.get("currency")), underlying_symbol(t.get("symbol"))])
-
-    def day_of(s):
-        return _s(s)[:10]
-
-    covers = [t for t in closed if t["openDirection"] == "SHORT" and is_option_symbol(t["symbol"])]
-    covers.sort(key=lambda t: (day_of(t["entryDate"]), day_of(t["exitDate"]), _s(t["id"])))
-    drop = set()
-    for cover in covers:
-        if cover["id"] in drop:
-            continue
-        d = day_of(cover["exitDate"])
-        if not d:
-            continue
-        under = underlying_symbol(cover["symbol"])
-        if not under or under == "—":
-            continue
-        ck = roll_book(cover)
-        closed_cands = [
-            t
-            for t in closed
-            if t["id"] != cover["id"]
-            and t["id"] not in drop
-            and t["openDirection"] == "SHORT"
-            and is_option_symbol(t["symbol"])
-            and t["symbol"] != cover["symbol"]
-            and roll_book(t) == ck
-            and day_of(t["entryDate"]) == d
-        ]
-        open_cands = [
-            l
-            for l in open_lots
-            if l["direction"] == "SHORT"
-            and is_option_symbol(l["symbol"])
-            and l["symbol"] != cover["symbol"]
-            and "::".join([l["accountType"], l["currency"], underlying_symbol(l["symbol"])]) == ck
-            and day_of(l["date"]) == d
-        ]
-        kind = "closed" if closed_cands else "open"
-        cands = closed_cands if closed_cands else open_cands
-        if not cands:
-            continue
-        cq = abs(_num(cover["quantity"]))
-        qty_field = "quantity" if kind == "closed" else "qty"
-        cands.sort(key=lambda r: (abs(abs(_num(r[qty_field])) - cq), _s(r["symbol"])))
-        row = cands[0]
-        qty = abs(_num(row[qty_field]))
-        if not qty > 0:
-            continue
-        adj = _num(cover["pnl"]) / (qty * option_multiplier(row["symbol"]))
-        if kind == "closed":
-            row["entryPrice"] = _num(row["entryPrice"]) + adj
-            mult = option_multiplier(row["symbol"])
-            raw = (
-                (row["entryPrice"] - row["exitPrice"]) if row["openDirection"] == "SHORT" else (row["exitPrice"] - row["entryPrice"])
-            ) * qty * mult
-            row["pnl"] = raw - _num(row.get("commission"))
-            row["pnlCad"] = row["pnl"]
-            row["id"] = stable_trade_id(row)
-            row.setdefault("flags", [])
-            if "rolled" not in row["flags"]:
-                row["flags"].append("rolled")
-        else:
-            row["price"] = _num(row["price"]) + adj
-            row.setdefault("flags", [])
-            if "rolled" not in row["flags"]:
-                row["flags"].append("rolled")
-        drop.add(cover["id"])
-    if drop:
-        closed[:] = [t for t in closed if t["id"] not in drop]
 
 
 _EXPIRY_RE = re.compile(r"^\S+ (\d{2})([A-Z]{3})(\d{2}) ")
@@ -1136,13 +1132,11 @@ def option_expiry(symbol):
 
 
 def synthesize_assignment_shares(activities, securities):
-    """An assigned short option delivers shares, but Wealthsimple posts only
-    the option row (with the strike cash on it). Add the share leg: a call
-    assignment sells contracts x 100 shares at the strike, a put assignment
-    buys them."""
+    """Deliver the stock side of assignments and exercises, including fees."""
     out = []
     for a in activities:
-        if a.get("category") != "option_event" or compact(a.get("activityType")) != "ASSIGN":
+        event = compact(a.get("activityType"))
+        if a.get("source") == "ws-export" or a.get("category") != "option_event" or event not in ("ASSIGN", "EXERCISE"):
             continue
         symbol = _s(a.get("symbol"))
         if not is_option_symbol(symbol):
@@ -1151,22 +1145,22 @@ def synthesize_assignment_shares(activities, securities):
         if contracts <= 0:
             continue
         shares = contracts * 100
-        cash = _num(a.get("netCashAmount"))
-        strike = abs(cash) / shares if abs(cash) > EPS else 0.0
-        if strike <= 0:
-            m = re.search(r" (\d+(?:\.\d+)?) (CALL|PUT)$", _SPACE_RE.sub(" ", symbol.upper()))
-            strike = _num(m.group(1)) if m else 0.0
+        cash = _num(a.get("deliveryCash", a.get("netCashAmount")))
+        m = re.search(r" (\d+(?:\.\d+)?) (CALL|PUT)$", _SPACE_RE.sub(" ", symbol.upper()))
+        strike = _num(m.group(1)) if m else 0.0
         if strike <= 0:
             continue
         is_call = symbol.upper().rstrip().endswith("CALL") or symbol.upper().rstrip().endswith(" C")
-        sell = is_call if abs(cash) <= EPS else cash > 0
+        sell = is_call if event == "ASSIGN" else not is_call
+        gross = shares * strike
+        fee = max(0.0, (gross - abs(cash)) if sell else (abs(cash) - gross)) if cash else 0.0
         under = underlying_symbol(symbol)
         sec = securities.by_id.get(_s(a.get("securityId")))
         under_id = _s((sec or {}).get("underlyingId")) or None
         out.append(
             {
-                "id": "assign-shares:" + _s(a.get("id")),
-                "canonicalId": None,
+                "id": ("assign-shares:" if event == "ASSIGN" else "exercise-shares:") + _s(a.get("id")),
+                "canonicalId": ("delivery:" + a["canonicalId"]) if a.get("canonicalId") else None,
                 "occurredAt": _s(a.get("occurredAt")) or _s(a.get("transactionDate")) + "T21:30:00+00:00",
                 "transactionDate": _s(a.get("transactionDate")),
                 "settlementDate": _s(a.get("transactionDate")),
@@ -1176,24 +1170,24 @@ def synthesize_assignment_shares(activities, securities):
                 "accountType": a.get("accountType"),
                 "activityType": "Trade",
                 "activitySubType": "SELL" if sell else "BUY",
-                "description": ("Called away" if sell else "Put to you") + ": %s %s @ %s" % (shares, under, strike),
+                "description": ("Option assignment" if event == "ASSIGN" else "Option exercise") + ": %s %s @ %s" % (shares, under, strike),
                 "direction": "CREDIT" if sell else "DEBIT",
                 "symbol": under,
                 "name": under,
                 "currency": _s(a.get("currency")),
                 "quantity": -shares if sell else shares,
                 "unitPrice": strike,
-                "commission": 0.0,
-                "netCashAmount": shares * strike if sell else -shares * strike,
+                "commission": fee,
+                "netCashAmount": gross - fee if sell else -gross - fee,
                 "category": "trade",
                 "balance": None,
                 "source": "derived",
-                "rawType": "OPTIONS_ASSIGN_SHARES",
+                "rawType": "OPTIONS_ASSIGN_SHARES" if event == "ASSIGN" else "OPTIONS_EXERCISE_SHARES",
                 "aftType": "",
                 "counterSymbol": "",
                 "securityId": under_id,
                 "kind": "Shares",
-                "flags": ["assignment"],
+                "flags": ["assignment" if event == "ASSIGN" else "exercise"],
             }
         )
     return out
@@ -1431,18 +1425,32 @@ def _slim_slice(s):
 
 
 def _fill_row(a):
+    import inventory
     day, clock = when_parts(a.get("occurredAt") or a.get("transactionDate"))
     side = store.trade_side(a)
     qty = abs(_num(a.get("quantity")))
+    movement = (a.get("category") == "inventory" or a.get("rawType") == "WS_DETAIL_INVENTORY"
+                or (a.get("source") == "ws-export" and a.get("activityType") in inventory.TYPES))
+    sub = _s(a.get("activitySubType"))
+    if movement:
+        side = "IN" if _num(a.get("quantity")) > 0 else "OUT"
+        action = a.get("activityType")
+        label = ("TRANSFER" if action in ("InternalSecurityTransfer", "SecurityTransfer")
+                 else "REORGANIZATION" if action in ("CorporateAction", "LegacyCorporateAction")
+                 else "INVENTORY")
+        sub = label + " " + side
+        if a.get("source") == "statement-confirmed":
+            sub += " · STATEMENT-CONFIRMED"
     return {
         "id": _s(a.get("id")),
         "when": _s(a.get("occurredAt") or a.get("transactionDate")),
         "date": day or _s(a.get("transactionDate")),
         "time": clock,
         "side": side,
-        "sub": _s(a.get("activitySubType")),
-        "qty": -qty if side == "SELL" else qty,
-        "price": _num(a.get("unitPrice")),
+        "sub": sub,
+        "inventory": movement,
+        "qty": -qty if side in ("SELL", "OUT") else qty,
+        "price": None if movement else _num(a.get("unitPrice")),
         "amount": _num(a.get("netCashAmount")),
         "fees": _num(a.get("commission")),
         "currency": _s(a.get("currency")),
@@ -1481,6 +1489,8 @@ def collapse_trade(gid, slices, locked, status, acts_by_id, securities, journal)
     opened_ids = {s.get("buyActivityId") for s in slices}
     closed_ids = {s.get("sellActivityId") for s in slices}
     for f in fills:
+        if f["inventory"]:
+            continue
         opened, closed = f["id"] in opened_ids, f["id"] in closed_ids
         side = "BUY" if f["side"] == "BUY" else "SELL"
         if t0["kind"] != "Options":
@@ -1492,9 +1502,8 @@ def collapse_trade(gid, slices, locked, status, acts_by_id, securities, journal)
         elif opened and closed:
             f["sub"] = side + " (close + open)"
     fills.sort(key=lambda f: f["when"], reverse=True)
-    open_side = "BUY" if t0["openDirection"] == "LONG" else "SELL"
-    opens = [f for f in fills if f["side"] == open_side]
-    closes = [f for f in fills if f["side"] != open_side]
+    opens = [f for f in fills if f["id"] in opened_ids]
+    closes = [f for f in fills if f["id"] in closed_ids]
     flags = sorted({fl for s in slices for fl in s.get("flags", [])})
     entry_j = journal.get(gid) or {}
     return {
@@ -1603,7 +1612,7 @@ def quote_fits(quote, kind):
     return source not in ("coinbase", "cboe_options")
 
 
-def build_positions(open_lots, last_prices, balances, accounts, securities, journal, today, quotes=None, acts_by_id=None):
+def build_positions(open_lots, last_prices, balances, accounts, securities, journal, today, quotes=None, acts_by_id=None, balances_authoritative=False):
     quotes = quotes or {}
     acts_by_id = acts_by_id or {}
     nick_ids = {}
@@ -1611,8 +1620,19 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
         nick = norm_account_name(acc.get("nickname") or acc.get("unifiedAccountType") or acc.get("type"))
         nick_ids.setdefault(nick, set()).add(_s(acc.get("id")))
     bal = {}
+    bal_by_symbol = {}
     for b in balances or []:
-        bal[(_s(b.get("accountId")), _s(b.get("securityId")))] = bal.get((_s(b.get("accountId")), _s(b.get("securityId"))), 0.0) + _num(b.get("quantity"))
+        aid = _s(b.get("accountId"))
+        sid = _s(b.get("securityId"))
+        quantity = _num(b.get("quantity"))
+        bal[(aid, sid)] = bal.get((aid, sid), 0.0) + quantity
+        # Activity rows can retain a retired security id after a listing
+        # change. The broker's current inventory is also indexed by symbol so
+        # a stale id cannot keep a closed holding alive.
+        sec = securities.by_id.get(sid) or {}
+        sym = _s(sec.get("symbol")).upper()
+        if sym:
+            bal_by_symbol[(aid, sym)] = bal_by_symbol.get((aid, sym), 0.0) + quantity
 
     groups = {}
     order = []
@@ -1622,6 +1642,14 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
             groups[k] = []
             order.append(k)
         groups[k].append(lot)
+
+    # A balance is net of all the broker-side details the activity feed can
+    # omit or revise. Reconcile it only when one directional book owns the
+    # symbol, so an account deliberately holding both long and short lots is
+    # not collapsed to one net quantity.
+    directions = {}
+    for symbol, account, currency, direction in groups:
+        directions.setdefault((symbol, account, currency), set()).add(direction)
 
     rows = []
     for k in order:
@@ -1645,19 +1673,44 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
             last_px = _num(quote.get("price"))
             last_at = _s(quote.get("fetchedAt"))
             price_source = "quote"
-        mv = qty * last_px * mult
-        unreal = (mv - cost) if direction == "LONG" else (cost - mv)
-        held = sum(l["qty"] * days_between(l["date"], today) for l in lots)
         ws_qty = None
-        if sec_id and account in nick_ids:
+        if account in nick_ids:
             total = 0.0
             found = False
             for aid in nick_ids[account]:
                 if (aid, sec_id) in bal:
                     total += bal[(aid, sec_id)]
                     found = True
+                elif (aid, symbol.upper()) in bal_by_symbol:
+                    total += bal_by_symbol[(aid, symbol.upper())]
+                    found = True
+            # A broker-managed account has a complete current inventory after
+            # a successful balance refresh. No matching symbol therefore means
+            # the old activity lot is closed. Manual/import-only accounts have
+            # no broker id and stay activity-led.
+            if not found and balances_authoritative:
+                found = bool(nick_ids[account])
             if found:
                 ws_qty = total
+        balance_reconciled = False
+        raw_qty = qty
+        export_owned = bool(lots) and all(acts_by_id.get(l["activityId"], {}).get("source") == "ws-export" for l in lots)
+        if ws_qty is not None and len(directions[(symbol, account, currency)]) == 1 and (not export_owned or lots[0]["kind"] == "Crypto"):
+            # The current broker balance is authoritative for a holding's
+            # quantity. Activity rows can be delayed, missing, or represented
+            # in instrument-specific precision (notably crypto). Keep their
+            # cash basis, but use the reconciled quantity for market value.
+            tolerance = max(1e-8, abs(raw_qty) * 1e-6)
+            if abs(ws_qty - raw_qty) > tolerance:
+                qty = abs(ws_qty)
+                balance_reconciled = True
+            if ws_qty:
+                direction = "SHORT" if ws_qty < 0 else "LONG"
+        if qty <= 1e-9:
+            continue
+        mv = qty * last_px * mult
+        unreal = (mv - cost) if direction == "LONG" else (cost - mv)
+        held = sum(l["qty"] * days_between(l["date"], today) for l in lots)
         # A position and the trade it becomes when it closes share one journal
         # entry: both are keyed by the round trip that opened the position.
         legacy_pid = "pos:" + "|".join([account, symbol, currency])
@@ -1680,6 +1733,11 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
                 "securityId": sec_id,
                 "short": direction == "SHORT",
                 "qty": qty,
+                "rawQty": raw_qty if balance_reconciled else None,
+                "balanceReconciled": balance_reconciled,
+                "inventorySource": "export" if export_owned else "activity",
+                "balanceMismatch": ws_qty is not None and abs(ws_qty - qty * (-1 if direction == "SHORT" else 1)) > 1e-7,
+                "basisWarnings": sorted({flag for lot in lots for flag in lot.get("flags", []) if flag.startswith("missing-")}),
                 "mult": mult,
                 "avg": cost / (qty * mult) if qty else 0.0,
                 "cost": cost,
@@ -1716,6 +1774,52 @@ def build_positions(open_lots, last_prices, balances, accounts, securities, jour
                 "tags": list(entry_j.get("tags", [])),
             }
         )
+    # A security can move between CAD/USD subaccounts without the activity
+    # feed carrying its acquisition into the destination. Current inventory
+    # must remain visible even when there is no destination FIFO lot.
+    if balances_authoritative:
+        represented = {(r['accountId'], r['symbol'], r['currency']) for r in rows}
+        represented_ids = {(r['accountId'], r['securityId']) for r in rows}
+        cash_ids = securities.cash_currencies()
+        accounts_by_id = {_s(a.get('id')): a for a in accounts or []}
+        for (aid, sid), signed_qty in bal.items():
+            sec = securities.by_id.get(sid) or {}
+            acc = accounts_by_id.get(aid) or {}
+            symbol, currency = _s(sec.get('symbol')), _s(sec.get('currency'))
+            # Only identified share/ETF listings: cash, derivatives and unknown
+            # securities must not be guessed from an opaque balance id.
+            if (abs(signed_qty) <= EPS or sid in cash_ids or not symbol or not currency
+                    or not securities.exchange(sid) or sec.get('underlyingId') or is_option_symbol(symbol)
+                    or not acc or _s(acc.get('status')).lower() == 'closed'
+                    or (aid, symbol, currency) in represented or (aid, sid) in represented_ids):
+                continue
+            qty = abs(signed_qty)
+            short = signed_qty < 0
+            quote = (quotes or {}).get(symbol) or {}
+            if not quote_fits(quote, 'Shares'):
+                quote = {}
+            last_fill = last_prices.get(symbol) or {}
+            quoted = _num(quote.get('price'), None)
+            last = quoted if quoted is not None else _num(last_fill.get('price'))
+            change = _num(quote.get('priceChange'), None)
+            pid = 'inventory:' + '|'.join((aid, sid, currency))
+            entry_j = journal.get(pid) or {}
+            rows.append(dict(id=pid, symbol=symbol, underlying=underlying_symbol(symbol),
+                name=securities.name(sid, symbol), exchange=securities.exchange(sid), kind='Shares',
+                account=norm_account_name(acc.get('nickname') or acc.get('unifiedAccountType') or acc.get('type')),
+                accountId=aid, currency=currency, securityId=sid, short=short,
+                qty=qty, rawQty=None, balanceReconciled=True, inventorySource='broker',
+                balanceMismatch=False, basisWarnings=['missing-acquisition-history'],
+                mult=1, avg=0.0, cost=0.0, fees=0.0, last=last,
+                lastAt=_s(quote.get('fetchedAt')) if quoted is not None else _s(last_fill.get('date')),
+                priceSource='quote' if quoted is not None else ('fill' if last_fill else 'unavailable'),
+                priceChange=change, percentChange=_num(quote.get('percentChange'), None),
+                dayChange=qty * change * (-1 if short else 1) if change is not None else None,
+                mv=qty * last, unreal=0.0, unrealPct=None, held=0, opened='', wsQty=signed_qty,
+                rt=None, lots=[], fills=[], grade=entry_j.get('grade', ''),
+                thesis=entry_j.get('thesis', ''), tags=list(entry_j.get('tags', []))))
+            represented.add((aid, symbol, currency))
+            represented_ids.add((aid, sid))
     book = sum(abs(r["cost"]) for r in rows)
     for r in rows:
         r["alloc"] = (abs(r["cost"]) / book) if book else 0.0
@@ -2047,22 +2151,60 @@ def migrate_legacy_notes(closed, saved_groups, notes):
     return journal
 
 
-def build_book(snapshot, today):
+def inventory_warnings(snapshot):
+    warnings = list(snapshot.get("inventoryWarnings") or [])
+    for correction in snapshot.get("statementCorrections") or []:
+        if correction["status"] == "blocked":
+            warnings.append(dict(event=correction["event"], date=correction["date"], kind="transfer",
+                                 reason=correction["reason"], symbols=[a["symbol"] for a in correction["assets"]]))
+    seen = {w.get("event") for w in warnings}
+    for row in snapshot.get("activities") or []:
+        if row.get("rawType") != "ASSET_MOVEMENT" or _num(row.get("quantity")):
+            continue
+        # Manual movements currently expose only an aggregate valuation in
+        # the feed. Neither quantities nor original cost can be inferred.
+        event = _s(row.get("canonicalId"))
+        suffix = "-" + _s(row.get("accountId"))
+        if event.endswith(suffix):
+            event = event[:-len(suffix)]
+        if event not in seen:
+            warnings.append(dict(event=event, kind="transfer", symbol="", date=row.get("transactionDate") or "",
+                reason="Manual asset movement lacks security quantities in the web feed"))
+            seen.add(event)
+    return warnings
+
+
+def broker_performance_view(base, filters, scope=None):
+    report = base.get("brokerPerformance") or {}
+    # Never relabel an all-account, all-time broker number as a filtered result.
+    filtered = bool(scope or filters["search"] or filters["years"] or filters["from"] or filters["to"]
+        or filters["preset"] != "all" or any(filters["lists"].values())
+        or any(r.get("v") is not None for r in filters["ranges"].values()))
+    if filtered:
+        return {"status":"filtered", "scope":report.get("scope", "All investing accounts · all time")}
+    totals = defaultdict(float)
+    for row in report.get("securities", []):
+        totals[row["underlying"]] += row["pnl"]
+    return dict(report, bySymbol=[{"symbol":s, "pnl":round(v, 2)} for s,v in sorted(totals.items())])
+
+
+def build_book(snapshot, today, fx=None):
     """The matched book: every activity normalized (delivered shares and expiries
     added), the FIFO match, the securities. It depends on the activity rows, the
-    securities and the day only, so a quote tick can reuse it."""
+    securities, historical FX and the day, so a quote tick can reuse it."""
+    fx = fx or {}
     raw_acts = snapshot.get("activities") or []
-    acts = normalize_activities(raw_acts)
+    acts = normalize_activities(export_currencies(raw_acts, fx))
     securities = Securities(snapshot.get("securities") or [])
     delivered = synthesize_assignment_shares(acts, securities)
     if delivered:
         acts = acts + delivered
-    fifo = match_fifo(acts)
+    fifo = match_fifo(acts, fx)
     synthetic = synthesize_expiries(acts, fifo["open"], today)
     if synthetic:
         acts = acts + synthetic
-        fifo = match_fifo(acts)
-    return {"activities": acts, "actsById": {_s(a.get("id")): a for a in acts}, "securities": securities, "fifo": fifo, "rawCount": len(raw_acts)}
+        fifo = match_fifo(acts, fx)
+    return {"activities": acts, "actsById": {_s(a.get("id")): a for a in acts}, "securities": securities, "fifo": fifo, "rawCount": len(raw_acts), "statementCorrections": snapshot.get("statementCorrections") or []}
 
 
 def build_base(snapshot, market, journal, today=None, book=None):
@@ -2071,7 +2213,7 @@ def build_base(snapshot, market, journal, today=None, book=None):
     bench = market.get("benchmark") or {}
     benchmarks = dict(market.get("benchmarks") or {})
     benchmarks.setdefault("SP500", bench)
-    book = book or build_book(snapshot, today)
+    book = book or build_book(snapshot, today, fx)
     acts = book["activities"]
     acts_by_id = book["actsById"]
     securities = book["securities"]
@@ -2080,7 +2222,11 @@ def build_base(snapshot, market, journal, today=None, book=None):
     saved = snapshot.get("tradeGroups") or []
     trades = build_trades(fifo["closed"], fifo["open"], saved, acts_by_id, securities, journal)
     last_prices = last_fill_prices(acts)
-    positions = build_positions(fifo["open"], last_prices, snapshot.get("balances"), snapshot.get("accounts"), securities, journal, today, market.get("quotes") or {}, acts_by_id)
+    positions = build_positions(
+        fifo["open"], last_prices, snapshot.get("balances"), snapshot.get("accounts"), securities,
+        journal, today, market.get("quotes") or {}, acts_by_id,
+        balances_authoritative=bool(snapshot.get("balancesReadAt")),
+    )
     cashflow = build_cashflow(acts, securities, fx)
     equity = equity_series(snapshot.get("navHistory"))
     by_account = {}
@@ -2103,6 +2249,9 @@ def build_base(snapshot, market, journal, today=None, book=None):
         seen.add(nick)
     return {
         "today": today,
+        "brokerPerformance": snapshot.get("brokerPerformance") or {},
+        "inventoryWarnings": inventory_warnings(dict(snapshot, activities=acts, statementCorrections=book.get("statementCorrections") or [])),
+        "statementCorrections": book.get("statementCorrections") or [],
         "syncedAt": _s(snapshot.get("syncedAt")),
         "fx": fx,
         "benchmark": bench,
@@ -2209,6 +2358,32 @@ def in_date_scope(f, today, day):
     return True
 
 
+def trade_basis_known(trade):
+    return trade.get("basisKnown", True) and not any(flag == "basis-unknown" or flag.startswith("missing-") for flag in trade.get("flags", []))
+
+
+def public_trade(trade):
+    if trade_basis_known(trade):
+        return trade
+    result = dict(trade, basisIncomplete=True)
+    for key in ("entry", "pnl", "pnlCad", "pnlPct", "netCash"):
+        result[key] = None
+    result["opened"] = dict(trade["opened"], avg=None)
+    result["legs"] = [dict(leg, entry=None, pnl=None, pnlCad=None)
+                      if not trade_basis_known(leg) else leg for leg in trade["legs"]]
+    return result
+
+
+def public_position(position):
+    if not position.get("basisWarnings"):
+        return position
+    result = dict(position)
+    for key in ("avg", "cost", "unreal", "unrealPct", "alloc"):
+        result[key] = None
+    result["lots"] = [dict(lot, price=None, basis=None) for lot in position.get("lots", [])]
+    return result
+
+
 def trade_matches(t, f, today):
     s = f["search"].upper()
     if s and s not in t["symbol"].upper() and s not in t["underlying"].upper() and s not in _s(t.get("name")).upper():
@@ -2231,6 +2406,8 @@ def trade_matches(t, f, today):
     if L["side"] and t["side"] not in L["side"]:
         return False
     if L["result"]:
+        if not trade_basis_known(t):
+            return False
         res = "Winners" if t["pnlCad"] > 0 else ("Losers" if t["pnlCad"] < 0 else "Breakeven")
         if res not in L["result"]:
             return False
@@ -2239,6 +2416,8 @@ def trade_matches(t, f, today):
         r = R[key]
         if r["v"] is None:
             continue
+        if key in ("price", "pnl") and not trade_basis_known(t):
+            return False
         if r["op"] == ">" and not val > r["v"]:
             return False
         if r["op"] == "<" and not val < r["v"]:
@@ -2561,6 +2740,9 @@ def portfolio_view(base, f, positions):
     mv = sum(cad(p["mv"] if not p["short"] else -p["mv"], p["currency"]) for p in positions)
     cost = sum(cad(abs(p["cost"]), p["currency"]) for p in positions)
     unreal = sum(cad(p["unreal"], p["currency"]) for p in positions)
+    basis_incomplete = any(p.get("basisWarnings") for p in positions) or any(
+        u.get("reason") in ("missing-swap-legs", "missing-option-legs") and (not names or u.get("account") in names)
+        for u in base.get("unmatched", []))
     navs = [cad(a["nav"], a["currency"]) for a in accounts if a.get("nav") is not None]
     cash_ccy = base.get("cashCurrencies") or {}
     used = {}
@@ -2612,9 +2794,10 @@ def portfolio_view(base, f, positions):
         "sectors": sectors,
         "regions": regions,
         "marketValue": mv,
-        "costBasis": cost,
-        "unrealized": unreal,
-        "unrealizedPct": (unreal / cost) if cost else None,
+        "costBasis": None if basis_incomplete else cost,
+        "unrealized": None if basis_incomplete else unreal,
+        "unrealizedPct": (unreal / cost) if cost and not basis_incomplete else None,
+        "basisIncomplete": basis_incomplete,
         "positionCount": len(positions),
         "accountCount": len({p["account"] for p in positions}),
         "nav": sum(navs) if navs else None,
@@ -2906,8 +3089,8 @@ def cashflow_view(base, f, positions_all, margin_used=0.0, has_margin=True):
     holdings = []
     for p in held:
         r = rate_for(p["symbol"])
-        basis = p["cost"]
-        avg = p["avg"]
+        basis = None if p.get("basisWarnings") else p["cost"]
+        avg = None if p.get("basisWarnings") else p["avg"]
         last_px, price_source = last_price(p)
         holdings.append(
             {
@@ -2937,7 +3120,7 @@ def cashflow_view(base, f, positions_all, margin_used=0.0, has_margin=True):
             }
         )
     verified = [h for h in holdings if h["annual"] is not None]
-    basis_all = sum(h["cost"] for h in verified)
+    basis_all = None if any(h["cost"] is None for h in verified) else sum(h["cost"] for h in verified)
     earned_all = sum(h["ttm"] for h in verified)
     annual_all = sum(h["annual"] for h in verified)
     total = sum(r["amountCad"] for r in recs)
@@ -2992,7 +3175,7 @@ def build_view(base, filters=None):
     today = base["today"]
     trades_all = base["trades"]
     trades = [t for t in trades_all if trade_matches(t, f, today)]
-    scored = [t for t in trades if t.get("basisKnown", True)]  # a deposited coin has no known entry: not scoreable
+    measured_trades = [t for t in trades if trade_basis_known(t)]
     positions_all = base["positions"]
     positions = [p for p in positions_all if position_matches(p, f)]
 
@@ -3059,7 +3242,10 @@ def build_view(base, filters=None):
             "results": ["Winners", "Losers", "Breakeven"],
             "years": year_options,
         },
-        "kpi": metrics(scored),
+        "kpi": metrics(measured_trades),
+        "brokerPerformance": broker_performance_view(base, f),
+        "inventoryWarnings": base.get("inventoryWarnings") or [],
+        "statementCorrections": base.get("statementCorrections") or [],
         "equity": {
             "label": series_label,
             "series": shown,
@@ -3068,15 +3254,16 @@ def build_view(base, filters=None):
         },
         "years": years,
         "benchmark": {"key": bench_key, "label": BENCHMARK_LABELS[bench_key]},
-        "monthly": monthly(scored),
-        "bySymbol": by_symbol(scored),
-        "grades": grade_buckets(trades),
-        "queue": review_queue(trades),
-        "trades": trades,
+        "monthly": monthly(measured_trades),
+        "bySymbol": by_symbol(measured_trades),
+        "grades": grade_buckets(measured_trades),
+        "queue": review_queue(measured_trades),
+        "trades": [public_trade(t) for t in trades],
+        "incompleteTradeCount": len(trades) - len(measured_trades),
         "tradeCount": len(trades),
         "tradeTotal": len(trades_all),
-        "positions": positions,
-        "positionsSummary": {"count": len(positions), "book": book, "mv": mv, "unreal": unreal},
+        "positions": [public_position(p) for p in positions],
+        "positionsSummary": {"count": len(positions), "book": None if portfolio["basisIncomplete"] else book, "mv": mv, "unreal": None if portfolio["basisIncomplete"] else unreal},
         "portfolio": portfolio,
         "markets": markets_view(base, positions),
         "cashflow": cashflow_view(base, f, positions_all, portfolio["marginUsed"], portfolio["hasMargin"]),
@@ -3121,7 +3308,7 @@ def base_model(force=False):
     market = store.market_data()
     journal = store.journal()
     if book is None:
-        book = build_book(snapshot, today)
+        book = build_book(snapshot, today, market.get("fx") or {})
     if not journal and snapshot.get("notes"):
         probe = build_base(snapshot, market, {}, today, book=book)
         migrated = migrate_legacy_notes(probe["closed"], snapshot.get("tradeGroups"), snapshot.get("notes"))
@@ -3136,6 +3323,7 @@ def base_model(force=False):
         _cache["inputs"] = {
             "accounts": snapshot.get("accounts") or [],
             "balances": snapshot.get("balances") or [],
+            "balancesReadAt": snapshot.get("balancesReadAt"),
             "journal": journal,
         }
         _book["key"] = book_key
@@ -3161,6 +3349,7 @@ def _remark(base, inputs, today, version, core_key):
         today,
         quotes,
         base["actsById"],
+        balances_authoritative=bool(inputs.get("balancesReadAt")),
     )
     with _cache_lock:
         _cache["version"] = version
@@ -3193,6 +3382,8 @@ def trade_detail(trade_id, base=None):
     for key in ("trades", "positions"):
         for r in base[key]:
             if r.get("id") == trade_id:
+                if key == "trades":
+                    r = public_trade(r)
                 return {"id": trade_id, "legs": list(r.get("legs") or []), "fills": list(r.get("fills") or [])}
     return None
 

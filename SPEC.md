@@ -4,6 +4,24 @@ This file is the authority on what the app shows and how each figure is computed
 
 The desktop app has two implementations: the Python app in `python/`, the reference, and the Rust port in `rust/`, which serves the same page and endpoints and is held to the same figures. Module names in this file (`model.py`, `bagholder.py`, `store.py`, …) are the Python app's; their Rust counterparts are in `rust/crates`. The model is defined by `python/model.py`, the reference implementation; the Rust port (`rust/crates/model`) and the iOS and Android apps carry their own implementations of it (`ios/Bagholder/Model.swift` + `ModelView.swift`, `android/model`), and the shared cases in `tests/cases` hold all four to the same answers. On the desktop the model is served as JSON by `GET /api/model` and the page, `ledger.html`, only renders that JSON: no matching, no aggregation and no currency conversion of its own, the one exception being dividing an annual figure by twelve to show it per month. On a phone the same figures are computed on the device from the same rows. Sections 2 and 3 define the figures for every platform; sections 4 to 7 describe the web page; section 8 describes the phone.
 
+## Python reconciliation contract (PR #232)
+
+The Python reference now uses verified order legs and dated inventory events,
+not same-day profit folding or price-inferred split ratios. Transfers carry
+known FIFO cost/dates/fees; missing basis stays unknown and public P&L/basis
+fields are null. Assignment/exercise strike cash belongs to delivered shares.
+Complete-account exports replace explicit mapped date windows while preserving
+raw sync history. Optional exact-event statement evidence survives clear/resync.
+Broker-adjusted realized returns remain a separately scoped report and never
+replace journal FIFO. Deposited crypto remains unscoreable, preserving the
+existing separation of deposited and purchased portions.
+
+The detailed rules and comparison are in `docs/account-export-reconciliation.md`.
+These corrections supersede older heuristic descriptions below for Python.
+The contributor explicitly scoped this PR to Python plus reusable regression
+cases; Rust, Go, Swift and Kotlin implementations require their own parity work.
+No layout, styling or other aesthetic contract changes are made here.
+
 ## 1. Principles
 
 - **Accuracy over convenience.** A number on the page is either exactly what this file defines or it is not shown. A blank is rendered as an em dash.
