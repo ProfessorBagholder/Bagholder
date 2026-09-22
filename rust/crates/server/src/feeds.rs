@@ -815,23 +815,22 @@ pub fn distribution_detail(app: &Arc<App>, sym: &str) -> String {
 
 pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
     let key = sym.trim().to_uppercase();
-    let all = sf_market::distributions(c).unwrap_or_default();
-    let mut rows: Vec<Value> = all.get(&key).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let mut rows = sf_market::distributions(c).unwrap_or_default().remove(&key).unwrap_or_default();
     if rows.is_empty() {
         return String::new();
     }
-    rows.sort_by(|a, b| f(b, "exDate").cmp(&f(a, "exDate")));
-    let latest = rows[0].clone();
-    let amount = money_per_share(latest.get("amount").and_then(|v| v.as_f64()), &f(&latest, "currency"));
+    rows.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
+    let latest = &rows[0];
+    let amount = money_per_share(latest.amount, &latest.currency);
     if amount.is_empty() {
         return String::new();
     }
-    let when = stamp_day(&f(&latest, "exDate"));
-    let paid = stamp_day(&f(&latest, "payDate"));
+    let when = stamp_day(&latest.ex_date);
+    let paid = stamp_day(&latest.pay_date);
     let freq = sf_market::quotes(c)
         .unwrap_or_default()
-        .get(&key)
-        .map(|q| f(q, "dividendFrequency"))
+        .remove(&key)
+        .map(|q| q.quote.dividend_frequency)
         .unwrap_or_default()
         .trim()
         .to_lowercase();
@@ -845,10 +844,9 @@ pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
     if !paid.is_empty() {
         out += &format!(", paid {}", paid);
     }
-    if let Some(was) = rows[1..].iter().find(|r| r.get("amount").and_then(|v| v.as_f64()).is_some()) {
-        let (a, b) = (was.get("amount").and_then(|v| v.as_f64()), latest.get("amount").and_then(|v| v.as_f64()));
-        if a != b {
-            out += &format!(" · was {}", money_per_share(a, &f(was, "currency")));
+    if let Some(was) = rows[1..].iter().find(|r| r.amount.is_some()) {
+        if was.amount != latest.amount {
+            out += &format!(" · was {}", money_per_share(was.amount, &was.currency));
         }
     }
     out
@@ -1797,7 +1795,7 @@ pub fn listing_payload_in(
     exchange: &str,
     currency: &str,
     name: &str,
-    peek_quote: &dyn Fn(&bagholder_model::input::Listing) -> Option<Value>,
+    peek_quote: &dyn Fn(&bagholder_model::input::Listing) -> Option<bagholder_market::quotes::Glance>,
 ) -> Value {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
@@ -1844,9 +1842,9 @@ pub fn listing_payload_in(
     let mut out = json!({"ok": true, "symbol": sym, "exchange": ex, "currency": ccy, "kind": kind, "name": nm,
                          "securityId": known.security_id, "fills": fills, "price": null, "percentChange": null});
     if kind == "Shares" {
-        let q = peek_quote(&bagholder_model::input::Listing::new(sym.clone(), ex.clone(), ccy.clone(), kind.clone())).unwrap_or(json!({}));
-        out["price"] = q.get("price").cloned().unwrap_or(Value::Null);
-        out["percentChange"] = q.get("percentChange").cloned().unwrap_or(Value::Null);
+        let q = peek_quote(&bagholder_model::input::Listing::new(sym.clone(), ex.clone(), ccy.clone(), kind.clone())).unwrap_or_default();
+        out["price"] = json!(q.price);
+        out["percentChange"] = json!(q.percent_change);
     }
     out
 }
@@ -2718,7 +2716,9 @@ mod tests {
         let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect() };
         let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
         let c = store();
-        let quote = move |_: &bagholder_model::input::Listing| Some(json!({"price": q.0, "percentChange": q.1}));
+        let quote = move |_: &bagholder_model::input::Listing| {
+            Some(bagholder_market::quotes::Glance { price: Some(q.0), percent_change: Some(q.1), ..Default::default() })
+        };
         listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)
     }
 

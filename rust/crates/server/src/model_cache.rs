@@ -266,7 +266,7 @@ mod tests {
     fn test_a_quote_tick_reads_the_quotes_and_marks_the_positions_and_nothing_else() {
         let (_d, conn, cache) = seeded();
         let (before, _) = cache.base_and_work(&conn, TODAY).unwrap();
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.10}), "tmx", "2026-03-02T15:00:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:00:00Z").unwrap();
         let (after, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert_eq!(work, Work { read: vec!["quotes"], built: vec!["positions"] });
         // the match, the closed trades, the cashflow and the equity curve are the very same objects
@@ -282,9 +282,9 @@ mod tests {
     #[test]
     fn test_the_same_price_read_again_is_no_work_at_all() {
         let (_d, conn, cache) = seeded();
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.10}), "tmx", "2026-03-02T15:00:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:00:00Z").unwrap();
         let (a, _) = cache.base_and_work(&conn, TODAY).unwrap();
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.10}), "tmx", "2026-03-02T15:01:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:01:00Z").unwrap();
         let (b, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(work, Work::default());
@@ -300,7 +300,7 @@ mod tests {
         let winners = cache.view(&base, Some(&json!({"lists": {"result": ["Winners"]}})), None);
         assert!(!Arc::ptr_eq(&all, &winners));
         assert!(Arc::ptr_eq(&all, &cache.view(&base, None, None)), "and the first is still kept beside it");
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.10}), "tmx", "2026-03-02T15:00:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:00:00Z").unwrap();
         let ticked = cache.base(&conn, TODAY).unwrap();
         let after = cache.view(&ticked, None, None);
         assert!(!Arc::ptr_eq(&all, &after));
@@ -359,11 +359,11 @@ mod tests {
     fn test_the_layered_base_is_the_base_built_from_scratch() {
         // after a run of changes, what the cache holds is what a whole rebuild gives
         let (_d, conn, cache) = seeded();
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.10}), "tmx", "2026-03-02T15:00:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:00:00Z").unwrap();
         cache.base_and_work(&conn, TODAY).unwrap();
         book_of(&conn, &[act("b2", "BUY", 25.0, 1.95, "2026-02-25")]);
         cache.base_and_work(&conn, TODAY).unwrap();
-        market::upsert_quote(&conn, "QNC", &json!({"price": 2.25}), "tmx", "2026-03-02T15:05:00Z").unwrap();
+        market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.25), ..Default::default() }, "tmx", "2026-03-02T15:05:00Z").unwrap();
         let (layered, _) = cache.base_and_work(&conn, TODAY).unwrap();
 
         let snap = snapshot::snapshot(&conn, true).unwrap();

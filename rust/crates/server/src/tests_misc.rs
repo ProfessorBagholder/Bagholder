@@ -59,14 +59,14 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let v0 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     assert!(!v0.is_empty());
     let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
-    bagholder_store::market::upsert_quote(&conn, "RDDY", &json!({"price": price, "fetchedAt": "2026-09-07T15:00:00Z"}), "tmx", &app::now_iso()).unwrap();
+    bagholder_store::market::upsert_quote(&conn, "RDDY", &bagholder_store::market::QuoteRecord { price: Some(price), ..Default::default() }, "tmx", &app::now_iso()).unwrap();
     let v1 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     assert_ne!(v0, v1);
-    bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2026-09-30", "payDate": "2026-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
+    bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2026-09-30".into(), pay_date: "2026-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
     let v2 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     // the shared home may already hold this row: then a second, later one moves it
     if v1 == v2 {
-        bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2099-09-30", "payDate": "2099-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
+        bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2099-09-30".into(), pay_date: "2099-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
     }
     assert_ne!(v1, crate::status::payload(&app())["dataVersion"].as_str().unwrap());
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
@@ -196,9 +196,9 @@ fn test_history_endpoint_validates_and_serves_bars() {
 fn test_a_price_moves_the_version_but_not_the_core() {
     let d = db();
     let now = "2026-09-12T10:00:00Z";
-    bagholder_store::market::upsert_quote(&d.conn, "AAA", &json!({"price": 10.0, "currency": "CAD"}), "tmx", now).unwrap();
+    bagholder_store::market::upsert_quote(&d.conn, "AAA", &bagholder_store::market::QuoteRecord { price: Some(10.0), ..Default::default() }, "tmx", now).unwrap();
     let (full_before, core_before) = crate::versions::versions(&d.conn).unwrap();
-    bagholder_store::market::upsert_quote(&d.conn, "AAA", &json!({"price": 11.0, "currency": "CAD"}), "tmx", now).unwrap();
+    bagholder_store::market::upsert_quote(&d.conn, "AAA", &bagholder_store::market::QuoteRecord { price: Some(11.0), ..Default::default() }, "tmx", now).unwrap();
     let (full_after, core_after) = crate::versions::versions(&d.conn).unwrap();
     assert_ne!(full_before, full_after, "the page is told the price moved");
     assert_eq!(core_before, core_after, "but nothing else did, so the match is kept");

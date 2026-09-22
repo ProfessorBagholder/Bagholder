@@ -171,7 +171,7 @@ pub fn refresh_distributions(conn: &Connection, symbols: &[Listing], force: bool
         let cboe = ["CBOE CANADA", "NEO"].contains(&exchange.trim().to_uppercase().as_str());
         if let Some(q) = &quote {
             if !cboe {
-                let _ = bagholder_store::market::upsert_quote(conn, &sym, q, "tmx", &stamp);
+                let _ = bagholder_store::market::upsert_quote(conn, &sym, &q.quote, "tmx", &stamp);
             }
         }
         if !divs.is_empty() {

@@ -41,14 +41,14 @@ impl Pipe {
                 let sym = name.to_uppercase();
                 store(&self.conn, &sym, &q);
                 let seen = serde_json::to_value(&q).unwrap();
-                let mut stored = market::quotes(&self.conn).unwrap().remove(&sym).unwrap_or(Value::Null);
+                let mut stored = market::quotes(&self.conn).unwrap().remove(&sym).map_or(Value::Null, |q| serde_json::to_value(q).unwrap());
                 if let Value::Object(m) = &mut stored {
                     m.remove("source");
                     m.remove("fetchedAt");
                 }
                 let beside: Map<String, Value> = ["name", "exchange", "currency"]
                     .iter()
-                    .filter_map(|k| seen.get(*k).filter(|v| !v.is_null()).map(|v| (k.to_string(), v.clone())))
+                    .filter_map(|k| seen.get(*k).filter(|v| !v.is_null() && *v != "").map(|v| (k.to_string(), v.clone())))
                     .collect();
                 json!({"source": source, "stored": stored, "beside": beside})
             }
@@ -57,13 +57,13 @@ impl Pipe {
     }
 }
 
-fn store_rec(conn: &rusqlite::Connection, sym: &str, q: &Value, source: &str) {
-    market::upsert_quote(conn, sym, q, source, NOW).unwrap();
+fn store_rec(conn: &rusqlite::Connection, sym: &str, q: &quotes::SourceQuote, source: &str) {
+    market::upsert_quote(conn, sym, &q.quote, source, NOW).unwrap();
 }
 
 fn answers() -> Value {
     let mut p = Pipe::new();
-    let s = |source: &'static str| move |c: &rusqlite::Connection, sym: &str, q: &Value| store_rec(c, sym, q, source);
+    let s = |source: &'static str| move |c: &rusqlite::Connection, sym: &str, q: &quotes::SourceQuote| store_rec(c, sym, q, source);
 
     // TMX
     let tmx_full = json!({"data": {"getQuoteBySymbol": {
@@ -103,8 +103,7 @@ fn answers() -> Value {
     codes.sort();
     p.out.insert("options_chain_codes".into(), json!(codes));
     for code in ["AAPL260918C00200000", "AAPL260918P00150000", "AAPL260918P00100000", "AAPL260918P00050000", "AAPL260918C00300000", "MISSING"] {
-        let row = chain.get(code).cloned().unwrap_or(Value::Null);
-        p.put(&format!("option_{}", code), "cboe_options", parse::option_mark(&row), s("cboe_options"));
+        p.put(&format!("option_{}", code), "cboe_options", chain.get(code).and_then(parse::option_mark), s("cboe_options"));
     }
 
     // Coinbase
@@ -156,6 +155,6 @@ fn test_the_stamp_is_the_time_of_the_write() {
     let p = Pipe::new();
     store_rec(&p.conn, "abc", &tmx::parse_tmx_quote(&json!({"data": {"getQuoteBySymbol": {"price": 1.0}}})).unwrap(), "tmx");
     let q = market::quotes(&p.conn).unwrap().remove("ABC").unwrap();
-    assert_eq!(q["fetchedAt"], NOW);
-    assert_eq!(q["source"], "tmx");
+    assert_eq!(q.fetched_at, NOW);
+    assert_eq!(q.source, "tmx");
 }

@@ -952,12 +952,18 @@ mod tests {
         bagholder_store::market::upsert_distributions(
             &c,
             "RDDY",
-            &[json!({"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"}),
-              json!({"exDate": "2026-07-31", "payDate": "2026-08-06", "amount": 0.20, "currency": "CAD"})],
+            &[bagholder_store::market::DistributionRecord { ex_date: "2026-08-31".into(), pay_date: "2026-09-04".into(), amount: Some(0.15), currency: "CAD".into() },
+              bagholder_store::market::DistributionRecord { ex_date: "2026-07-31".into(), pay_date: "2026-08-06".into(), amount: Some(0.20), currency: "CAD".into() }],
             "test",
         )
         .unwrap();
-        bagholder_store::market::upsert_quote(&c, "RDDY", &json!({"price": 4.87, "dividendAmount": 0.15, "dividendFrequency": "Monthly", "exDividendDate": "2026-08-31"}), "tmx", "2026-09-15T14:00:00Z").unwrap();
+        bagholder_store::market::upsert_quote(&c, "RDDY", &bagholder_store::market::QuoteRecord {
+            price: Some(4.87),
+            dividend_amount: Some(0.15),
+            dividend_frequency: "Monthly".into(),
+            ex_dividend_date: "2026-08-31".into(),
+            ..Default::default()
+        }, "tmx", "2026-09-15T14:00:00Z").unwrap();
         let first = json!({"id": "tmx:7", "headline": "Harvest High Income Shares ETFs Announces August 2026 Distributions",
                            "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7",
                            "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"});
@@ -982,7 +988,7 @@ mod tests {
     #[test]
     fn test_a_release_that_announces_nothing_of_the_kind_carries_the_headline_alone() {
         let (_g, app, c) = setup();
-        bagholder_store::market::upsert_distributions(&c, "QNC", &[json!({"exDate": "2026-08-31", "payDate": "2026-09-04", "amount": 0.15, "currency": "CAD"})], "test").unwrap();
+        bagholder_store::market::upsert_distributions(&c, "QNC", &[bagholder_store::market::DistributionRecord { ex_date: "2026-08-31".into(), pay_date: "2026-09-04".into(), amount: Some(0.15), currency: "CAD".into() }], "test").unwrap();
         assert_eq!(
             crate::feeds::release_notice(&app, "QNC", &[json!({"id": "tmx:1", "headline": "Quantum eMotion Wins Certification", "publishedAt": "2026-09-15T13:00:00Z"})]),
             ("Press release · QNC".to_string(), "Quantum eMotion Wins Certification".to_string())

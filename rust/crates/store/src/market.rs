@@ -5,23 +5,47 @@
 //! the exception, because a source can hand back a bar for a session still in
 //! progress.
 
-use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
-use bagholder_model::value::{field_s, get, num};
+use rusqlite::{Connection, Result};
+use serde::Serialize;
+use serde_json::{json, Map, Value};
 
 use crate::bars::{BarFetch, DayBar, HistoryFetch, Ohlcv, TimeBar};
 
-/// A number that is absent rather than zero.
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) if s.is_empty() => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
+/// A price as a source answered it: what the store keeps of a quote.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteRecord {
+    pub price: Option<f64>,
+    pub price_change: Option<f64>,
+    pub percent_change: Option<f64>,
+    pub prev_close: Option<f64>,
+    /// The declared distribution, when the source states one; a source that
+    /// says nothing of it leaves what the store knew.
+    pub dividend_amount: Option<f64>,
+    pub dividend_frequency: String,
+    pub ex_dividend_date: String,
+}
+
+/// A stored quote: the record, where it came from and when.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredQuote {
+    #[serde(flatten)]
+    pub quote: QuoteRecord,
+    pub source: String,
+    pub fetched_at: String,
+}
+
+/// One declared distribution as a source files it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionRecord {
+    pub ex_date: String,
+    pub pay_date: String,
+    pub amount: Option<f64>,
+    pub currency: String,
 }
 
 fn sym_of(symbol: &str) -> String {
@@ -37,29 +61,25 @@ fn head10(s: &str) -> String {
 // --------------------------------------------------------------------------
 
 /// `distributions`: symbol -> the public record, newest first.
-pub fn distributions(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn distributions(conn: &Connection) -> Result<BTreeMap<String, Vec<DistributionRecord>>> {
     let mut stmt = conn.prepare("SELECT * FROM distributions ORDER BY symbol, ex_date DESC")?;
     let mut rows = stmt.query([])?;
-    let mut out: Map<String, Value> = Map::new();
+    let mut out: BTreeMap<String, Vec<DistributionRecord>> = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let rec = json!({
-            "exDate": r.get::<_, Option<String>>("ex_date")?.unwrap_or_default(),
-            "payDate": r.get::<_, Option<String>>("pay_date")?.unwrap_or_default(),
-            "amount": r.get::<_, Option<f64>>("amount")?,
-            "currency": r.get::<_, Option<String>>("currency")?.unwrap_or_default(),
-        });
-        out.entry(r.get::<_, String>("symbol")?)
-            .or_insert_with(|| Value::Array(vec![]))
-            .as_array_mut()
-            .unwrap()
-            .push(rec);
+        let rec = DistributionRecord {
+            ex_date: r.get::<_, Option<String>>("ex_date")?.unwrap_or_default(),
+            pay_date: r.get::<_, Option<String>>("pay_date")?.unwrap_or_default(),
+            amount: r.get::<_, Option<f64>>("amount")?,
+            currency: r.get::<_, Option<String>>("currency")?.unwrap_or_default(),
+        };
+        out.entry(r.get::<_, String>("symbol")?).or_default().push(rec);
     }
     Ok(out)
 }
 
 /// `upsert_distributions`: a record with no ex-date or no positive
 /// amount is not a distribution.
-pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], source: &str) -> Result<usize> {
+pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[DistributionRecord], source: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let sym = sym_of(symbol);
         if sym.is_empty() {
@@ -67,12 +87,11 @@ pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], sou
         }
         let mut clean: Vec<(String, Option<String>, f64, Option<String>)> = Vec::new();
         for r in rows {
-            let ex = head10(&field_s(r, "exDate"));
-            let amt = opt_num(get(r, "amount"));
-            match amt {
+            let ex = head10(&r.ex_date);
+            match r.amount {
                 Some(a) if ex.len() == 10 && a > 0.0 => {
-                    let pay = head10(&field_s(r, "payDate"));
-                    let ccy = field_s(r, "currency");
+                    let pay = head10(&r.pay_date);
+                    let ccy = r.currency.clone();
                     clean.push((
                         ex,
                         if pay.is_empty() { None } else { Some(pay) },
@@ -101,25 +120,27 @@ pub fn upsert_distributions(conn: &Connection, symbol: &str, rows: &[Value], sou
 // quotes
 // --------------------------------------------------------------------------
 
-/// `quotes`.
-pub fn quotes(conn: &Connection) -> Result<Map<String, Value>> {
+/// `quotes`: symbol (or `SYMBOL@EXCHANGE`) -> the stored quote.
+pub fn quotes(conn: &Connection) -> Result<BTreeMap<String, StoredQuote>> {
     let mut stmt = conn.prepare("SELECT * FROM quotes")?;
     let mut rows = stmt.query([])?;
-    let mut out = Map::new();
+    let mut out = BTreeMap::new();
     while let Some(r) = rows.next()? {
         out.insert(
             r.get::<_, String>("symbol")?,
-            json!({
-                "price": r.get::<_, Option<f64>>("price")?,
-                "priceChange": r.get::<_, Option<f64>>("price_change")?,
-                "percentChange": r.get::<_, Option<f64>>("percent_change")?,
-                "prevClose": r.get::<_, Option<f64>>("prev_close")?,
-                "dividendAmount": r.get::<_, Option<f64>>("dividend_amount")?,
-                "dividendFrequency": r.get::<_, Option<String>>("dividend_frequency")?.unwrap_or_default(),
-                "exDividendDate": r.get::<_, Option<String>>("ex_dividend_date")?.unwrap_or_default(),
-                "source": r.get::<_, Option<String>>("source")?.unwrap_or_default(),
-                "fetchedAt": r.get::<_, Option<String>>("fetched_at")?.unwrap_or_default(),
-            }),
+            StoredQuote {
+                quote: QuoteRecord {
+                    price: r.get("price")?,
+                    price_change: r.get("price_change")?,
+                    percent_change: r.get("percent_change")?,
+                    prev_close: r.get("prev_close")?,
+                    dividend_amount: r.get("dividend_amount")?,
+                    dividend_frequency: r.get::<_, Option<String>>("dividend_frequency")?.unwrap_or_default(),
+                    ex_dividend_date: r.get::<_, Option<String>>("ex_dividend_date")?.unwrap_or_default(),
+                },
+                source: r.get::<_, Option<String>>("source")?.unwrap_or_default(),
+                fetched_at: r.get::<_, Option<String>>("fetched_at")?.unwrap_or_default(),
+            },
         );
     }
     Ok(out)
@@ -128,12 +149,11 @@ pub fn quotes(conn: &Connection) -> Result<Map<String, Value>> {
 /// `upsert_quote`: the price fields are replaced outright, but a
 /// dividend figure already known is kept when the new quote does not carry
 /// one -- a price feed that says nothing about dividends must not erase them.
-pub fn upsert_quote(conn: &Connection, symbol: &str, rec: &Value, source: &str, now: &str) -> Result<()> {
+pub fn upsert_quote(conn: &Connection, symbol: &str, rec: &QuoteRecord, source: &str, now: &str) -> Result<()> {
     let sym = sym_of(symbol);
-    if sym.is_empty() || !rec.is_object() {
+    if sym.is_empty() {
         return Ok(());
     }
-    let fetched = { let f = field_s(rec, "fetchedAt"); if f.is_empty() { now.to_string() } else { f } };
     conn.execute(
         "INSERT INTO quotes(symbol, price, price_change, percent_change, prev_close, dividend_amount, dividend_frequency, ex_dividend_date, source, fetched_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
@@ -145,35 +165,34 @@ pub fn upsert_quote(conn: &Connection, symbol: &str, rec: &Value, source: &str, 
          source = excluded.source, fetched_at = excluded.fetched_at",
         rusqlite::params![
             sym,
-            opt_num(get(rec, "price")),
-            opt_num(get(rec, "priceChange")),
-            opt_num(get(rec, "percentChange")),
-            opt_num(get(rec, "prevClose")),
-            opt_num(get(rec, "dividendAmount")),
-            field_s(rec, "dividendFrequency"),
-            head10(&field_s(rec, "exDividendDate")),
+            rec.price,
+            rec.price_change,
+            rec.percent_change,
+            rec.prev_close,
+            rec.dividend_amount,
+            rec.dividend_frequency,
+            head10(&rec.ex_dividend_date),
             source,
-            fetched,
+            now,
         ],
     )?;
     Ok(())
 }
 
-fn stamp_map(conn: &Connection, sql: &str) -> Result<Map<String, Value>> {
+/// Symbol -> when it was fetched.
+pub type Stamps = BTreeMap<String, String>;
+
+fn stamp_map(conn: &Connection, sql: &str) -> Result<Stamps> {
     let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query([])?;
-    let mut out = Map::new();
-    while let Some(r) = rows.next()? {
-        out.insert(r.get::<_, String>(0)?, json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()));
-    }
-    Ok(out)
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))?;
+    rows.collect()
 }
 
-pub fn quote_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn quote_fetched_at(conn: &Connection) -> Result<Stamps> {
     stamp_map(conn, "SELECT symbol, fetched_at FROM quotes")
 }
 
-pub fn distributions_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn distributions_fetched_at(conn: &Connection) -> Result<Stamps> {
     stamp_map(conn, "SELECT symbol, fetched_at FROM distribution_fetches")
 }
 

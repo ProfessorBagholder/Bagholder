@@ -67,20 +67,15 @@ async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>)
 async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
     let app = state.app;
     answer(move || {
-        let mut out = json!({"ok": true, "price": null, "priceChange": null, "percentChange": null});
-        if l.symbol.is_empty() {
-            return out;
-        }
-        let rec = bagholder_model::input::Listing::new(l.symbol, l.exchange, l.currency, "Shares");
-        if let Ok(conn) = app.open() {
-            let (today, _, _) = bagholder_market::clock_now();
-            if let Some(Value::Object(q)) = bagholder_market::quotes::peek_quote(&conn, &rec, &today) {
-                for (k, v) in q {
-                    out[k] = v;
-                }
+        let mut glance = bagholder_market::quotes::Glance::default();
+        if !l.symbol.is_empty() {
+            let rec = bagholder_model::input::Listing::new(l.symbol, l.exchange, l.currency, "Shares");
+            if let Ok(conn) = app.open() {
+                let (today, _, _) = bagholder_market::clock_now();
+                glance = bagholder_market::quotes::peek_quote(&conn, &rec, &today).unwrap_or_default();
             }
         }
-        out
+        json!({"ok": true, "price": glance.price, "priceChange": glance.price_change, "percentChange": glance.percent_change})
     })
     .await
 }

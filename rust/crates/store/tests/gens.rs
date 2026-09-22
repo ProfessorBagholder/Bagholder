@@ -84,9 +84,9 @@ fn test_news_and_a_universe_read_again_unchanged_are_not_a_change() {
 #[test]
 fn test_a_quote_moves_its_own_counter_and_no_other() {
     let (_d, conn) = db();
-    market::upsert_quote(&conn, "QNC", &json!({"price": 1.75}), "tmx", "2026-09-20T10:00:00Z").unwrap();
+    market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(1.75), ..Default::default() }, "tmx", "2026-09-20T10:00:00Z").unwrap();
     let before = gens::all(&conn).unwrap();
-    market::upsert_quote(&conn, "QNC", &json!({"price": 1.76}), "tmx", "2026-09-20T10:01:00Z").unwrap();
+    market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(1.76), ..Default::default() }, "tmx", "2026-09-20T10:01:00Z").unwrap();
     let after = gens::all(&conn).unwrap();
     for (name, n) in &after {
         if name == "quotes" {
@@ -95,7 +95,7 @@ fn test_a_quote_moves_its_own_counter_and_no_other() {
             assert_eq!(n, &before[name], "{} did not", name);
         }
     }
-    market::upsert_quote(&conn, "QNC", &json!({"price": 1.76}), "tmx", "2026-09-20T10:02:00Z").unwrap();
+    market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(1.76), ..Default::default() }, "tmx", "2026-09-20T10:02:00Z").unwrap();
     assert_eq!(gens::all(&conn).unwrap()["quotes"], after["quotes"], "the same price read again is the same quote");
 }
 

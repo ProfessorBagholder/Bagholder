@@ -28,9 +28,7 @@
       "exDividendDate": ""
     },
     "beside": {
-      "name": "",
-      "exchange": "TSX Venture Exchange",
-      "currency": ""
+      "exchange": "TSX Venture Exchange"
     }
   },
   "tmx_no_price": {
@@ -46,8 +44,7 @@
     },
     "beside": {
       "name": "Halted",
-      "exchange": "CSE",
-      "currency": ""
+      "exchange": "CSE"
     }
   },
   "tmx_empty": null,
@@ -81,7 +78,6 @@
       "exDividendDate": ""
     },
     "beside": {
-      "name": "",
       "currency": "CAD"
     }
   },
@@ -97,7 +93,6 @@
       "exDividendDate": ""
     },
     "beside": {
-      "name": "",
       "currency": "CAD"
     }
   },
@@ -250,9 +245,7 @@
       "exDividendDate": ""
     },
     "beside": {
-      "name": "Long Only",
-      "exchange": "",
-      "currency": ""
+      "name": "Long Only"
     }
   },
   "yahoo_prev_zero": {
@@ -266,11 +259,7 @@
       "dividendFrequency": "",
       "exDividendDate": ""
     },
-    "beside": {
-      "name": "",
-      "exchange": "",
-      "currency": ""
-    }
+    "beside": {}
   },
   "yahoo_no_price": null,
   "yahoo_not_object": null,
@@ -286,11 +275,7 @@
       "dividendFrequency": "Monthly",
       "exDividendDate": "2026-09-30"
     },
-    "beside": {
-      "name": "",
-      "exchange": "",
-      "currency": ""
-    }
+    "beside": {}
   },
   "replaced_dividend": {
     "source": "tmx",
@@ -303,10 +288,6 @@
       "dividendFrequency": "Quarterly",
       "exDividendDate": "2026-12-30"
     },
-    "beside": {
-      "name": "",
-      "exchange": "",
-      "currency": ""
-    }
+    "beside": {}
   }
 }

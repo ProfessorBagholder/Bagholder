@@ -6,16 +6,40 @@
 //! whose quote is stamped to the second. A coin is Coinbase's, in the
 //! position's own currency. A US-listed option is Cboe's delayed chain.
 
-use serde_json::{json, Map, Value};
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::http::{get_text, UA};
-use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_rec, parse_cboe_options, opt};
+use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_rec, parse_cboe_options, OptionChain};
 use crate::tmx;
 use bagholder_model::input::Listing;
+use bagholder_model::lenient;
 use bagholder_model::value::{field_s, get, num};
 use bagholder_store::bars::{Ohlcv, SourceBar};
+use bagholder_store::market::QuoteRecord;
+
+/// A source's answer for one listing: the price the store keeps, and what the
+/// source says of the listing beside it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceQuote {
+    #[serde(flatten)]
+    pub quote: QuoteRecord,
+    pub currency: String,
+    pub name: String,
+    pub exchange: String,
+}
+
+/// A listing's price and day change, for a glance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Glance {
+    pub price: Option<f64>,
+    pub price_change: Option<f64>,
+    pub percent_change: Option<f64>,
+}
 
 pub const QUOTE_REFRESH_MINUTES: f64 = 1.0;
 
@@ -168,33 +192,53 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<SourceBar> {
     out
 }
 
+/// A chart's `meta`, as far as a quote reads it.
+#[derive(serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooMeta {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    regular_market_price: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    chart_previous_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    currency: String,
+    #[serde(deserialize_with = "lenient::text")]
+    short_name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    long_name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    exchange_name: String,
+}
+
 /// The chart's meta read as a quote.
-pub fn parse_yahoo_quote(text: &str) -> Option<Value> {
+pub fn parse_yahoo_quote(text: &str) -> Option<SourceQuote> {
     let d: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text }).ok()?;
     let results = d.get("chart")?.get("result")?.as_array()?;
     let meta = results.first()?.get("meta")?;
     if !meta.is_object() || get(meta, "regularMarketPrice").is_none() {
         return None;
     }
-    let last = opt(get(meta, "regularMarketPrice"));
-    let prev = opt(get(meta, "chartPreviousClose")).or_else(|| opt(get(meta, "previousClose")));
+    let m = YahooMeta::deserialize(meta).ok()?;
+    let last = m.regular_market_price;
+    let prev = m.chart_previous_close.or(m.previous_close);
     let change = match (last, prev) {
         (Some(l), Some(p)) if p != 0.0 => Some(l - p),
         _ => None,
     };
-    let name = {
-        let s = field_s(meta, "shortName");
-        if s.is_empty() { field_s(meta, "longName") } else { s }
-    };
-    Some(json!({
-        "price": last,
-        "priceChange": change,
-        "percentChange": match (change, prev) { (Some(c), Some(p)) if p != 0.0 => Some(c / p * 100.0), _ => None },
-        "prevClose": prev,
-        "currency": field_s(meta, "currency"),
-        "name": name,
-        "exchange": field_s(meta, "exchangeName"),
-    }))
+    Some(SourceQuote {
+        quote: QuoteRecord {
+            price: last,
+            price_change: change,
+            percent_change: match (change, prev) { (Some(c), Some(p)) if p != 0.0 => Some(c / p * 100.0), _ => None },
+            prev_close: prev,
+            ..QuoteRecord::default()
+        },
+        currency: m.currency,
+        name: if m.short_name.is_empty() { m.long_name } else { m.short_name },
+        exchange: m.exchange_name,
+    })
 }
 
 pub fn percent_encode(s: &str) -> String {
@@ -211,7 +255,7 @@ pub fn percent_encode(s: &str) -> String {
 
 /// A one-day chart, whose stated previous close is
 /// yesterday's -- a longer range states the close before the range.
-pub fn fetch_yahoo_quote(code: &str) -> Option<Value> {
+pub fn fetch_yahoo_quote(code: &str) -> Option<SourceQuote> {
     let url = format!("{}{}?range=1d&interval=1d", YAHOO_CHART_URL, percent_encode(code));
     parse_yahoo_quote(&yahoo_get(&url)?)
 }
@@ -381,8 +425,8 @@ pub fn quote_symbols_needing_refresh(
             continue;
         }
         seen.push(sym.clone());
-        let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let read = instant_secs(&last);
+        let last = fetched.get(&sym).map_or("", String::as_str);
+        let read = instant_secs(last);
         let age_ok = read.map_or(false, |then| (now_unix - then) <= max_age_minutes * 60.0);
         if !age_ok && can_have_moved(&source, read, now_unix) {
             out.push((sym, source, key));
@@ -406,16 +450,16 @@ fn instant_secs(s: &str) -> Option<f64> {
     Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss)
 }
 
-pub fn fetch_cboe_ca_quote(sym: &str) -> Option<Value> {
+pub fn fetch_cboe_ca_quote(sym: &str) -> Option<SourceQuote> {
     let url = CBOE_CA_URL.replace("{}", &percent_encode(sym));
     parse_cboe_ca_quote(&get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]).ok()?)
 }
 
-pub fn fetch_cboe_option_chain(root: &str) -> Map<String, Value> {
+pub fn fetch_cboe_option_chain(root: &str) -> OptionChain {
     let url = CBOE_OPTIONS_URL.replace("{}", &percent_encode(root));
     match get_text(&url, &[("User-Agent", UA), ("Accept", "application/json")]) {
         Ok(t) => parse_cboe_options(&t),
-        Err(_) => Map::new(),
+        Err(_) => OptionChain::new(),
     }
 }
 
@@ -483,7 +527,7 @@ pub fn float_repr(x: f64) -> String {
 
 /// The spot price, with the day's change against
 /// the previous UTC day's close when Coinbase has a market to take it from.
-pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<Value> {
+pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<SourceQuote> {
     let url = COINBASE_URL.replace("{}", pair);
     let rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
     Some(match coinbase_prev_close(conn, pair, today, now_unix) {
@@ -493,11 +537,11 @@ pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str,
 }
 
 /// A spot price with its day's change against the previous close.
-pub fn with_prev_close(mut rec: Value, prev: f64) -> Value {
-    let price = rec["price"].as_f64().unwrap_or(0.0);
-    rec["prevClose"] = json!(prev);
-    rec["priceChange"] = json!(price - prev);
-    rec["percentChange"] = json!((price - prev) / prev * 100.0);
+pub fn with_prev_close(mut rec: SourceQuote, prev: f64) -> SourceQuote {
+    let price = rec.quote.price.unwrap_or(0.0);
+    rec.quote.prev_close = Some(prev);
+    rec.quote.price_change = Some(price - prev);
+    rec.quote.percent_change = Some((price - prev) / prev * 100.0);
     rec
 }
 
@@ -517,8 +561,8 @@ pub fn fetch_for(
     source: &str,
     key: &str,
     today: &str,
-    chains: &mut Map<String, Value>,
-) -> Option<Value> {
+    chains: &mut std::collections::HashMap<String, OptionChain>,
+) -> Option<SourceQuote> {
     match source {
         "tmx" => tmx::fetch_tmx_quote(conn, key, today),
         "cboe_ca" => fetch_cboe_ca_quote(key),
@@ -529,11 +573,8 @@ pub fn fetch_for(
         "yahoo_quote" => fetch_yahoo_quote(key),
         "cboe_options" => {
             let root = occ_root(key);
-            if !chains.contains_key(&root) {
-                chains.insert(root.clone(), Value::Object(fetch_cboe_option_chain(&root)));
-            }
-            let row = chains.get(&root)?.get(key)?.clone();
-            option_mark(&row)
+            let chain = chains.entry(root.clone()).or_insert_with(|| fetch_cboe_option_chain(&root));
+            option_mark(chain.get(key)?)
         }
         _ => None,
     }
@@ -547,13 +588,11 @@ pub fn refresh_quotes(
     now_stamp: &str,
 ) -> rusqlite::Result<usize> {
     let mut done = 0usize;
-    let mut chains = Map::new();
+    let mut chains = std::collections::HashMap::new();
     for (sym, source, key) in quote_symbols_needing_refresh(conn, symbols, now_unix, QUOTE_REFRESH_MINUTES)? {
         if let Some(rec) = fetch_for(conn, &source, &key, today, &mut chains) {
-            if get(&rec, "price").is_some() {
-                let mut with_source = rec.as_object().cloned().unwrap_or_default();
-                with_source.insert("source".into(), json!(source));
-                crate::market::upsert_quote(conn, &sym, &Value::Object(with_source), &source, now_stamp)?;
+            if rec.quote.price.is_some() {
+                crate::market::upsert_quote(conn, &sym, &rec.quote, &source, now_stamp)?;
                 done += 1;
             }
         }
@@ -580,8 +619,8 @@ pub fn stale_symbols(
         if sym.is_empty() || !tmx::is_canadian_listing(&rec.exchange, &rec.currency) {
             continue;
         }
-        let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let fresh = match instant_secs(&last) {
+        let last = fetched.get(&sym).map_or("", String::as_str);
+        let fresh = match instant_secs(last) {
             Some(then) => (now_unix - then) <= stale_hours * 3600.0,
             None => false,
         };
@@ -629,26 +668,20 @@ pub const PEEK_SECONDS: u64 = 60;
 
 /// A listing's price and day change for a glance, from
 /// the source a watched listing uses, not stored, remembered for a minute.
-pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Option<Value> {
-    static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = std::sync::OnceLock::new();
+pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Option<Glance> {
+    static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Glance)>>> = std::sync::OnceLock::new();
     let (source, key) = quote_source(rec)?;
     let k = format!("{}@{}", rec.symbol.clone().trim().to_uppercase(), rec.exchange.clone().trim().to_uppercase());
     let cache = PEEK.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if let Some((at, q)) = cache.lock().unwrap().get(&k) {
         if at.elapsed() < Duration::from_secs(PEEK_SECONDS) {
-            return Some(q.clone());
+            return Some(*q);
         }
     }
-    let mut chains = Map::new();
-    let q = fetch_for(conn, &source, &key, today, &mut chains)?;
-    if get(&q, "price").is_none() {
-        return None;
-    }
-    let out = json!({
-        "price": q.get("price").cloned().unwrap_or(Value::Null),
-        "priceChange": q.get("priceChange").cloned().unwrap_or(Value::Null),
-        "percentChange": q.get("percentChange").cloned().unwrap_or(Value::Null),
-    });
-    cache.lock().unwrap().insert(k, (Instant::now(), out.clone()));
+    let mut chains = std::collections::HashMap::new();
+    let q = fetch_for(conn, &source, &key, today, &mut chains)?.quote;
+    q.price?;
+    let out = Glance { price: q.price, price_change: q.price_change, percent_change: q.percent_change };
+    cache.lock().unwrap().insert(k, (Instant::now(), out));
     Some(out)
 }

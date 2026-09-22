@@ -31,7 +31,7 @@ pub mod xls;
 
 /// When each quote was stored, re-exported so the quote loop can ask when each
 /// symbol was last priced.
-pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<serde_json::Map<String, serde_json::Value>> {
+pub fn market_fetched(conn: &rusqlite::Connection) -> rusqlite::Result<bagholder_store::market::Stamps> {
     bagholder_store::market::quote_fetched_at(conn)
 }
 
