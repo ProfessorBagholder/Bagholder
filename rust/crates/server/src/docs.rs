@@ -16,9 +16,9 @@ use crate::app::App;
 /// a ticket is open its quote is asked for again every few seconds -- here, by the
 /// server, for as long as some page shows that ticket and not a moment longer. The
 /// page is sent only what moved in it (usually the bid, the ask and the last).
-fn quotes() -> &'static std::sync::Mutex<std::collections::HashMap<String, Value>> {
-    static Q: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Value>>> = std::sync::OnceLock::new();
-    Q.get_or_init(Default::default)
+#[derive(Default)]
+pub struct DocsState {
+    quotes: std::sync::Mutex<std::collections::HashMap<String, Value>>,
 }
 
 const QUOTE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -27,15 +27,15 @@ fn quote_shown(app: Arc<App>, key: String) {
     crate::app::spawn("bagholder-ticket-quote", move || {
         app.clone().single_flight(&key.clone(), (), || {
             let q = &key["quote:".len()..];
-            while crate::events::watched(&key) && !app.stopping() {
+            while app.events.watched(&key) && !app.stopping() {
                 let v = crate::orders::ticket_quote(&app, &one(q, "symbol"), &one(q, "security"), &one(q, "account"), &one(q, "exchange"));
-                quotes().lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), v);
-                crate::events::signal();
+                app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), v);
+                app.events.signal();
                 if app.wait(QUOTE_EVERY) {
                     break;
                 }
             }
-            quotes().lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
         });
     });
 }
@@ -68,7 +68,7 @@ pub fn read(app: &Arc<App>, key: &str, _params: &Value) -> Option<Value> {
         // `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the first answer
         // `fear:<index>`: the fear and greed meter
         k if k.starts_with("fear:") => Some(crate::feeds::fear_stored(app, &k["fear:".len()..])),
-        k if k.starts_with("quote:") => quotes().lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned(),
+        k if k.starts_with("quote:") => app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned(),
         k if k.starts_with("history:") => Some(serde_json::json!({"pending": crate::feeds::history_pending(app, &k["history:".len()..])})),
         _ => None,
     }

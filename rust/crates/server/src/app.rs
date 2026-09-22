@@ -49,20 +49,24 @@ struct Job {
 /// A lock whose guard says when it was written through: the page shows this state
 /// (the sync step, connected, an update's progress), so a write to it is a change
 /// the page is told of, and no writer has to remember to say so. A read is silent.
-pub struct Watched<T>(Mutex<T>);
+pub struct Watched<T> {
+    inner: Mutex<T>,
+    bus: Arc<crate::events::Bus>,
+}
 
 pub struct WatchedGuard<'a, T> {
     guard: std::sync::MutexGuard<'a, T>,
+    bus: &'a crate::events::Bus,
     written: bool,
 }
 
 impl<T> Watched<T> {
-    pub fn new(v: T) -> Watched<T> {
-        Watched(Mutex::new(v))
+    pub fn new(v: T, bus: Arc<crate::events::Bus>) -> Watched<T> {
+        Watched { inner: Mutex::new(v), bus }
     }
     /// Never fails: a writer that panicked left a state still worth showing.
     pub fn lock(&self) -> Result<WatchedGuard<'_, T>, std::convert::Infallible> {
-        Ok(WatchedGuard { guard: self.0.lock().unwrap_or_else(|e| e.into_inner()), written: false })
+        Ok(WatchedGuard { guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()), bus: &self.bus, written: false })
     }
 }
 
@@ -83,7 +87,7 @@ impl<T> std::ops::DerefMut for WatchedGuard<'_, T> {
 impl<T> Drop for WatchedGuard<'_, T> {
     fn drop(&mut self) {
         if self.written {
-            crate::events::signal();
+            self.bus.signal();
         }
     }
 }
@@ -99,28 +103,49 @@ pub struct App {
     stop_bell: (Mutex<()>, std::sync::Condvar),
     pub exit_code: AtomicI32,
     model: crate::model_cache::ModelCache,
-    store: bagholder_store::pool::Pool,
+    store: Arc<bagholder_store::pool::Pool>,
     jobs: Mutex<HashMap<String, Job>>,
-    /// The one thread that shows this app's notifications, started with the first.
-    pub(crate) notify_worker: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<(String, String, String)>>>,
+    /// Every page's live connection to this app: what changed, who is looking,
+    /// what each open stream is showing.
+    pub events: Arc<crate::events::Bus>,
+    /// The open ticket's quote, kept while some page shows it.
+    pub docs: crate::docs::DocsState,
+    /// The streamed Wealthsimple login window: the socket to it and its casts.
+    pub login: crate::login::LoginState,
+    /// The market-data loops' own state: what they are reading now, and for whom.
+    pub feeds: crate::feeds::FeedsState,
+    /// The one thread that shows this app's notifications, and what wakes it.
+    pub notify: crate::notify::NotifyState,
+    /// The order loops' own state: brackets in flight, and the last readback.
+    pub orders: crate::orders::OrdersState,
 }
 
 impl App {
     pub fn new(home: PathBuf, root: PathBuf, bind_host: String) -> Arc<App> {
+        let events = Arc::new(crate::events::Bus::new());
+        let hook = {
+            let events = events.clone();
+            std::sync::Arc::new(move || events.signal()) as std::sync::Arc<dyn Fn() + Send + Sync>
+        };
         Arc::new(App {
-            store: bagholder_store::pool::Pool::new(&home.join("bagholder.db")),
+            store: Arc::new(bagholder_store::pool::Pool::with_hook(&home.join("bagholder.db"), hook)),
             home,
             root,
             bind_host,
             port: Mutex::new(0),
             started_at: now_iso(),
-            state: Watched::new(State::default()),
+            state: Watched::new(State::default(), events.clone()),
             stop: AtomicBool::new(false),
             stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
             exit_code: AtomicI32::new(0),
             model: crate::model_cache::ModelCache::new(),
             jobs: Mutex::new(HashMap::new()),
-            notify_worker: std::sync::OnceLock::new(),
+            events,
+            docs: crate::docs::DocsState::default(),
+            login: crate::login::LoginState::default(),
+            feeds: crate::feeds::FeedsState::default(),
+            notify: crate::notify::NotifyState::default(),
+            orders: crate::orders::OrdersState::default(),
         })
     }
 
@@ -146,6 +171,13 @@ impl App {
         bagholder_ws::session::Home::new(&self.home)
     }
 
+    /// The pool itself, for a connection opened outside a request's lifetime (a
+    /// background fetch on a thread of its own): still a connection this pool
+    /// hands out, so its commits are heard the same way.
+    pub fn store(&self) -> Arc<bagholder_store::pool::Pool> {
+        self.store.clone()
+    }
+
     pub fn stopping(&self) -> bool {
         self.stop.load(Ordering::SeqCst)
     }
@@ -167,8 +199,8 @@ impl App {
         let _g = self.stop_bell.0.lock().unwrap_or_else(|e| e.into_inner());
         self.stop_bell.1.notify_all();
         drop(_g);
-        crate::events::signal(); // the streams and anything parked on a change, too
-        crate::notify::wake_streams();
+        self.events.signal(); // the streams and anything parked on a change, too
+        self.notify.wake_streams();
     }
 
     /// The model as it stands: each layer rebuilt only when something it reads

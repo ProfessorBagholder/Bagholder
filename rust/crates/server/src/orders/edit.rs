@@ -73,7 +73,7 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
     let rid = id.clone();
     let a = app.clone();
     spawn("bagholder-order-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&a, &rid));
+        let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
     json!({"ok": true, "id": id})
 }

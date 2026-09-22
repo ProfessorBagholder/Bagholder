@@ -239,12 +239,12 @@ pub fn ensure() {
     let _ = std::thread::Builder::new().name("bagholder-localmodel".into()).spawn(provision);
 }
 
-static ON_CHANGE: OnceLock<fn()> = OnceLock::new();
+static ON_CHANGE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 /// Called whenever the model's phase changes (coming up, ready, failed): how whoever
-/// waits for a model learns of it without asking again and again.
-pub fn on_change(f: fn()) {
-    let _ = ON_CHANGE.set(f);
+/// waits for a model learns of it without asking again and again. Set once, at start.
+pub fn on_change(f: impl Fn() + Send + Sync + 'static) {
+    let _ = ON_CHANGE.set(Box::new(f));
 }
 
 fn changed() {

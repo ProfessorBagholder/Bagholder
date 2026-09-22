@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
@@ -657,19 +657,30 @@ fn browser_alive(app: &Arc<App>) -> bool {
 
 // --- the streamed window ----------------------------------------------------------
 
+#[derive(Default)]
 struct View {
     ws: Option<Ws>,
     target: String,
 }
 
-fn view() -> &'static Mutex<View> {
-    static V: OnceLock<Mutex<View>> = OnceLock::new();
-    V.get_or_init(|| Mutex::new(View { ws: None, target: String::new() }))
+#[derive(Default)]
+struct Cast {
+    frame: Option<Vec<u8>>,
+    seq: u64,
+    at: Option<Instant>,
 }
 
-fn with_view<T>(f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
+/// The streamed Wealthsimple login window: the socket to it, and the frames cast
+/// from it for whoever is watching (`login_stream`).
+#[derive(Default)]
+pub struct LoginState {
+    view: Mutex<View>,
+    cast: (Mutex<Cast>, Condvar),
+}
+
+fn with_view<T>(app: &App, f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
     let pages = cdp_pages(DEBUG_PORT);
-    let mut v = view().lock().unwrap();
+    let mut v = app.login.view.lock().unwrap();
     let page = match pages.first() {
         Some(p) => p.clone(),
         None => {
@@ -696,22 +707,11 @@ pub fn login_frame(app: &Arc<App>) -> Option<Vec<u8>> {
     if !capturing(app) {
         return None;
     }
-    with_view(|ws| {
+    with_view(app, |ws| {
         let r = ws.call("Page.captureScreenshot", Some(json!({"format": "jpeg", "quality": 60})), CAPTURE_CALL)?;
         let data = r.get("result").map(|x| f(x, "data")).unwrap_or_default();
         if data.is_empty() { None } else { Some(unb64(&data)) }
     })
-}
-
-struct Cast {
-    frame: Option<Vec<u8>>,
-    seq: u64,
-    at: Option<Instant>,
-}
-
-fn cast() -> &'static (Mutex<Cast>, Condvar) {
-    static C: OnceLock<(Mutex<Cast>, Condvar)> = OnceLock::new();
-    C.get_or_init(|| (Mutex::new(Cast { frame: None, seq: 0, at: None }), Condvar::new()))
 }
 
 fn screencast_params() -> Value {
@@ -731,8 +731,8 @@ const NO_PASSKEYS: &str = r#"(() => {
   Object.defineProperty(c, "__bagholderNoPasskeys", { value: true });
 })();"#;
 
-fn publish_frame(frame: Vec<u8>) {
-    let (m, c) = cast();
+fn publish_frame(app: &App, frame: Vec<u8>) {
+    let (m, c) = &app.login.cast;
     let mut g = m.lock().unwrap();
     g.frame = Some(frame);
     g.seq += 1;
@@ -747,7 +747,7 @@ fn screenshot_loop(app: &Arc<App>, attempt: i64) {
     let mut ws: Option<Ws> = None;
     while attempt_is(app, attempt) && capturing(app) {
         std::thread::sleep(Duration::from_millis(250));
-        let stale = { let (m, _) = cast(); m.lock().unwrap().at.map(|t| t.elapsed() > Duration::from_millis(700)).unwrap_or(true) };
+        let stale = { let (m, _) = &app.login.cast; m.lock().unwrap().at.map(|t| t.elapsed() > Duration::from_millis(700)).unwrap_or(true) };
         if !stale {
             continue;
         }
@@ -759,7 +759,7 @@ fn screenshot_loop(app: &Arc<App>, attempt: i64) {
             Some(data) => {
                 let frame = unb64(data);
                 if !frame.is_empty() {
-                    publish_frame(frame);
+                    publish_frame(app, frame);
                 }
             }
             None => ws = None,
@@ -804,7 +804,7 @@ fn screencast_loop(app: &Arc<App>, attempt: i64) {
             let p = msg.get("params").cloned().unwrap_or(json!({}));
             let frame = unb64(&f(&p, "data"));
             if !frame.is_empty() {
-                publish_frame(frame);
+                publish_frame(app, frame);
             }
             // acknowledged without waiting for the answer
             ws.fire("Page.screencastFrameAck", json!({"sessionId": p.get("sessionId").cloned().unwrap_or(Value::Null)}));
@@ -826,7 +826,7 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(app: &Arc<App>, mut write: W) {
     // is ended here and its connection freed.
     static READER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let me = READER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    cast().1.notify_all();
+    app.login.cast.1.notify_all();
     let mut last = u64::MAX;
     let mut last_sent: Option<()> = None;
     loop {
@@ -834,7 +834,7 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(app: &Arc<App>, mut write: W) {
             return;
         }
         let frame = {
-            let (m, c) = cast();
+            let (m, c) = &app.login.cast;
             let mut g = m.lock().unwrap();
             if g.seq == last {
                 g = c.wait_timeout(g, Duration::from_secs(1)).unwrap().0;
@@ -890,12 +890,12 @@ fn key_event(ch: char, typ: &str) -> Value {
 }
 
 /// One click, text, key or scroll from the page.
-pub fn login_input(ev: &Value) -> Value {
+pub fn login_input(app: &App, ev: &Value) -> Value {
     let kind = f(ev, "kind");
     let x = crate::app::num(ev.get("x"), Some(0.0)).unwrap_or(0.0);
     let y = crate::app::num(ev.get("y"), Some(0.0)).unwrap_or(0.0);
     let mut unknown: Option<&str> = None;
-    let r = with_view(|ws| {
+    let r = with_view(app, |ws| {
         // sent without waiting on the answers: a slow reply is not a failure,
         // only a socket that is gone is
         let mut sent = true;
@@ -1060,7 +1060,7 @@ pub fn start_login_browser(app: &Arc<App>) -> Value {
     app.spawn_with("bagholder-cdp-capture", move |app| poll_session(&app, pid, attempt));
     if login_view() {
         {
-            let (m, _) = cast();
+            let (m, _) = &app.login.cast;
             let mut g = m.lock().unwrap();
             g.frame = None;
             g.seq = 0;

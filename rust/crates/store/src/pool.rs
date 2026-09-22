@@ -15,7 +15,7 @@
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
@@ -25,19 +25,25 @@ const KEPT: usize = 8;
 
 pub struct Pool {
     path: PathBuf,
+    hook: Option<Arc<dyn Fn() + Send + Sync>>,
     idle: Mutex<Vec<Connection>>,
 }
 
 impl Pool {
     pub fn new(path: &Path) -> Pool {
-        Pool { path: path.to_path_buf(), idle: Mutex::new(Vec::new()) }
+        Pool { path: path.to_path_buf(), hook: None, idle: Mutex::new(Vec::new()) }
+    }
+
+    /// As `new`, but every connection this pool opens carries `hook` on its commits.
+    pub fn with_hook(path: &Path, hook: Arc<dyn Fn() + Send + Sync>) -> Pool {
+        Pool { path: path.to_path_buf(), hook: Some(hook), idle: Mutex::new(Vec::new()) }
     }
 
     pub fn get(&self) -> rusqlite::Result<Pooled<'_>> {
         let kept = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
         let conn = match kept {
             Some(c) => c,
-            None => crate::open_db(&self.path)?,
+            None => crate::open_db_hooked(&self.path, self.hook.clone())?,
         };
         Ok(Pooled { pool: self, conn: Some(conn) })
     }

@@ -57,6 +57,14 @@ pub fn connect(home: &std::path::Path) -> rusqlite::Result<rusqlite::Connection>
 /// fsync per statement. The mode is a property of the file, so a database an
 /// earlier build made in rollback mode is converted the first time it is opened.
 pub fn open_db(path: &std::path::Path) -> rusqlite::Result<rusqlite::Connection> {
+    open_db_hooked(path, None)
+}
+
+/// As `open_db`, but with `hook` wired to the connection's commits, if given.
+/// `hook` runs inside SQLite's commit, on the writer's thread: it must only
+/// signal (wake a waiter) and return -- it must not touch the database. What
+/// changed is read afterwards, from the generation counters.
+pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(path)?;
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
     // Asking the mode takes no lock; changing it needs the file to itself for a
@@ -71,23 +79,13 @@ pub fn open_db(path: &std::path::Path) -> rusqlite::Result<rusqlite::Connection>
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     // every connection is made here, so every commit in the process is heard: no
     // writer has to remember to say it wrote
-    conn.commit_hook(Some(|| {
-        if let Some(heard) = ON_COMMIT.get() {
+    if let Some(heard) = hook {
+        conn.commit_hook(Some(move || {
             heard();
-        }
-        false // never veto the commit
-    }));
+            false // never veto the commit
+        }));
+    }
     Ok(conn)
-}
-
-static ON_COMMIT: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
-
-/// Be told whenever any connection commits. `heard` runs inside SQLite's commit,
-/// on the writer's thread: it must only signal (wake a waiter) and return -- it
-/// must not touch the database. What changed is read afterwards, from the
-/// generation counters. Set once, at start.
-pub fn on_commit(heard: impl Fn() + Send + Sync + 'static) {
-    let _ = ON_COMMIT.set(Box::new(heard));
 }
 
 /// Run `work` as one transaction on `conn`: all of it is committed, or, when it

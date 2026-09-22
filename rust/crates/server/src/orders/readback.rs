@@ -232,15 +232,12 @@ pub(super) fn feed_order_row(app: &Arc<App>, node: &Value) -> Order {
     }
 }
 
-pub static REFRESHED_AT: Mutex<String> = Mutex::new(String::new());
-pub(super) static REFRESHING: AtomicBool = AtomicBool::new(false);
-
-pub(super) fn refreshed_at() -> String {
-    REFRESHED_AT.lock().unwrap().clone()
+pub(super) fn refreshed_at(app: &App) -> String {
+    app.orders.refreshed_at.lock().unwrap().clone()
 }
 
 pub fn kick_orders_refresh(app: &Arc<App>) -> bool {
-    let at = refreshed_at();
+    let at = refreshed_at(app);
     if !at.is_empty() {
         let age = match parse_z(&at) {
             Some(t) => now_unix() - t as f64,
@@ -253,13 +250,13 @@ pub fn kick_orders_refresh(app: &Arc<App>) -> bool {
     if !connected_not_syncing(app) {
         return false;
     }
-    if REFRESHING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if app.orders.refreshing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return false;
     }
     let a = app.clone();
     spawn("bagholder-orders-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&a, ""));
-        REFRESHING.store(false, Ordering::SeqCst);
+        let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, "")));
+        a.orders.refreshing.store(false, Ordering::SeqCst);
     });
     true
 }
@@ -409,7 +406,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
                 }
             }
         }
-        *REFRESHED_AT.lock().unwrap() = now_iso();
+        *app.orders.refreshed_at.lock().unwrap() = now_iso();
     }
     if read != 0 || added != 0 || failed != 0 {
         log(&format!("bagholder orders: {} read, {} found pending at Wealthsimple, {} failed", read, added, failed));
@@ -422,18 +419,18 @@ pub fn orders_loop(app: &Arc<App>) {
         if !connected_not_syncing(app) {
             continue;
         }
-        let r = catch_unwind(|| {
+        let r = catch_unwind(AssertUnwindSafe(|| {
             // Wealthsimple pushes nothing, so orders are read back. Closely while it
             // matters -- an order is live, or the panel is open on some page -- and
             // otherwise only often enough to hear of an order placed in Wealthsimple's
             // own app, which the fills notification is owed.
-            let closely = orders_all(app).iter().any(|o| o.status.is_live()) || crate::events::watched("orders");
-            let age = parse_z(&refreshed_at()).map(|t| now_unix() - t as f64);
+            let closely = orders_all(app).iter().any(|o| o.status.is_live()) || app.events.watched("orders");
+            let age = parse_z(&refreshed_at(app)).map(|t| now_unix() - t as f64);
             if !closely && age.map_or(false, |a| a < (ORDERS_REFRESH_SEC * 10) as f64) {
                 return;
             }
             refresh_orders(app, "");
-        });
+        }));
         if r.is_err() {
             log("bagholder orders: refresh failed");
         }
@@ -478,7 +475,7 @@ pub fn cancel_order(app: &Arc<App>, order_id: &str) -> Value {
     let rid = id.clone();
     let a = app.clone();
     spawn("bagholder-order-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&a, &rid));
+        let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
     json!({"ok": true, "id": id, "status": "cancelling"})
 }
@@ -509,7 +506,7 @@ pub fn orders_doc(app: &Arc<App>, kick: bool) -> OrdersDoc {
     }
     let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db(app))).iter().map(|s| (f(s, "id"), f(s, "primaryExchange"))).collect();
     let orders = orders_all(app).into_iter().map(|order| OrderCard { exchange: exchanges.get(&order.security_id).cloned().unwrap_or_default(), order }).collect();
-    OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at() }
+    OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at(app) }
 }
 
 pub fn orders_payload(app: &Arc<App>, kick: bool) -> Value {

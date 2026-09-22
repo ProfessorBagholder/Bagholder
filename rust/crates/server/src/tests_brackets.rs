@@ -116,7 +116,7 @@ fn live(on: bool) {
 fn setup() -> MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
     seam::reset();
-    bracket_seam::reset();
+    bracket_seam::reset(crate::tests_common::app_ref());
     lk(&SENT).clear();
     lk(&REJECTIONS).clear();
     let c = db();

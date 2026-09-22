@@ -550,7 +550,7 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
     let rid = id.clone();
     let a = app.clone();
     spawn("bagholder-order-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&a, &rid));
+        let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
     json!({"ok": true, "id": id, "status": "sent", "wsOrderId": ws_id})
 }

@@ -34,8 +34,8 @@ async fn login_cancel(State(state): State<AppState>) -> Api {
 
 /// `POST /api/login/input`: a click, a key or a scroll on the streamed window,
 /// passed to the browser as the DevTools event it names.
-async fn login_input(Body(event): Body<Map<String, Value>>) -> Api {
-    answer(move || login::login_input(&Value::Object(event))).await
+async fn login_input(State(state): State<AppState>, Body(event): Body<Map<String, Value>>) -> Api {
+    answer(move || login::login_input(&state.app, &Value::Object(event))).await
 }
 
 /// `GET /api/login/frame`: the window's latest frame, for a page that cannot hold the stream.

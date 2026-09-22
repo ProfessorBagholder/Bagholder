@@ -21,6 +21,26 @@ use bagholder_store::tables::{get_meta, json_text, set_meta};
 use crate::app::{f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, App, ENRICH_VERSION};
 use crate::notify;
 
+/// The market-data loops' own state: what they are reading now, and for whom.
+#[derive(Default)]
+pub struct FeedsState {
+    /// Bare symbols the running news pass has still to read (`*` the market feed).
+    news_left: Mutex<HashSet<String>>,
+    /// The listing whose disclosures were asked for last: the one someone is
+    /// looking at, and so the one whose documents are read first.
+    looking_at: Mutex<String>,
+    /// The listing(s) whose disclosures are being read now, by document key.
+    reading_now: Mutex<HashMap<String, Vec<String>>>,
+    /// Whether the heatmap universes were asked for sooner than their own clock.
+    universe_kick: (Mutex<bool>, Condvar),
+    /// How many times a notice has sent for the issuer's record. A test counts the
+    /// reads rather than reaching the source.
+    #[cfg(test)]
+    pub(crate) record_reads: AtomicI64,
+    /// Listings the running short-interest sweep has still to read.
+    shorts_left: AtomicI64,
+}
+
 fn conn(app: &Arc<App>) -> Option<bagholder_store::pool::Pooled<'_>> {
     app.open().ok()
 }
@@ -84,7 +104,7 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
     let mut held: Vec<String> = held.into_iter().filter(|sid| !sid.is_empty() && !sid.starts_with("sec-c-")).collect();
     held.sort();
     let (today_s, _, _) = bagholder_market::clock_now();
-    let ctx = exposure::Ctx { conn: &c, db: app.db_path(), today: today_s.clone() };
+    let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s.clone() };
     let mut todo: Vec<String> = exposure::stale(&ctx, &held).into_iter().filter(|sid| secs.contains_key(sid)).collect();
     todo.sort_by_key(|sid| if exposure::is_fund(&f(&secs[sid], "name")) { 1 } else { 0 });
     let mut unders: Vec<(String, String)> = b
@@ -126,7 +146,7 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
         let app = app.clone();
         let h = std::thread::Builder::new().name("bagholder-exposure".into()).spawn(move || {
             let c = match conn(&app) { Some(c) => c, None => return };
-            let ctx = exposure::Ctx { conn: &c, db: app.db_path(), today: today_s };
+            let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s };
             loop {
                 let job = match queue.lock().unwrap().pop_front() { Some(j) => j, None => return };
                 if app.stopping() {
@@ -183,7 +203,7 @@ pub fn exposure_loop(app: Arc<App>) {
     loop {
         let before = listed();
         refresh_exposures(&app);
-        crate::events::park_until_or(&app, Duration::from_secs(6 * 3600), || listed() != before);
+        app.events.park_until_or(&app, Duration::from_secs(6 * 3600), || listed() != before);
         if app.stopping() {
             return;
         }
@@ -236,7 +256,7 @@ pub fn watch_add(app: &Arc<App>, body: &Value) -> Value {
             return;
         }
         if let Some(c) = conn(&a) {
-            let ctx = exposure::Ctx { conn: &c, db: a.db_path(), today: today() };
+            let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
             exposure::share_exposure(&ctx, &f(&row, "symbol"), &f(&row, "exchange"), &f(&row, "currency"));
         }
     });
@@ -313,13 +333,8 @@ pub fn news_listings(app: &Arc<App>) -> Vec<news::Listing> {
 }
 
 /// Bare symbols the running news pass has still to read (`*` the market feed).
-fn news_pass() -> &'static Mutex<HashSet<String>> {
-    static LEFT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    LEFT.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-pub fn news_reading() -> Vec<String> {
-    let mut left: Vec<String> = news_pass().lock().unwrap().iter().cloned().collect();
+pub fn news_reading(app: &Arc<App>) -> Vec<String> {
+    let mut left: Vec<String> = app.feeds.news_left.lock().unwrap().iter().cloned().collect();
     left.sort();
     left
 }
@@ -335,17 +350,17 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
         let clock = news::Clock { today: today_s, now: now as i64 };
         let key = |l: &news::Listing| { let t = tmx_symbol(&l.0); (if t.is_empty() { l.0.clone() } else { t }).to_uppercase() };
         let start = |due: &[news::Listing]| {
-            *news_pass().lock().unwrap() = due.iter().map(key).collect();
-            crate::events::signal(); // the status names the listings still to read
+            *app.feeds.news_left.lock().unwrap() = due.iter().map(key).collect();
+            app.events.signal(); // the status names the listings still to read
         };
         let done = |l: &news::Listing, _answered: bool| {
-            news_pass().lock().unwrap().remove(&key(l));
-            crate::events::signal();
+            app.feeds.news_left.lock().unwrap().remove(&key(l));
+            app.events.signal();
         };
         let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(app, c, sym, ex, rows, ids);
         let got = news::refresh(&|| own_conn(app), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
-        news_pass().lock().unwrap().clear();
-        crate::events::signal();
+        app.feeds.news_left.lock().unwrap().clear();
+        app.events.signal();
         match got {
             Ok(n) => n,
             Err(e) => {
@@ -360,12 +375,12 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
 /// Whether anyone is owed the news: a page is open to show it, or a Releases
 /// notification set is on and must hear of a release with no page open.
 fn news_wanted(app: &Arc<App>) -> bool {
-    crate::events::watchers() > 0 || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
+    app.events.watchers() > 0 || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
 }
 
 pub fn news_loop(app: Arc<App>) {
     // no wire pushes, so the sources are read; but only while someone is owed them
-    while crate::events::park_until(&app, || news_wanted(&app)) {
+    while app.events.park_until(&app, || news_wanted(&app)) {
         refresh_news(&app);
         if app.wait(Duration::from_secs(300)) {
             return;
@@ -737,17 +752,13 @@ pub fn release_notice(app: &Arc<App>, sym: &str, rows: &[Value]) -> (String, Str
     (title, head)
 }
 
-/// How many times a notice has sent for the issuer's record. A test counts the
-/// reads rather than reaching the source.
-#[cfg(test)]
-pub static RECORD_READS: AtomicI64 = AtomicI64::new(0);
-
 /// The issuer's declared record, read again because a release just announced a
 /// distribution.
-fn read_record_for_notice(_c: &Connection, _sym: &str, _exchange: &str) {
+fn read_record_for_notice(_app: &Arc<App>, _c: &Connection, _sym: &str, _exchange: &str) {
     #[cfg(test)]
     {
-        RECORD_READS.fetch_add(1, Ordering::SeqCst);
+        // a test counts the reads rather than reaching the source
+        _app.feeds.record_reads.fetch_add(1, Ordering::SeqCst);
     }
     #[cfg(not(test))]
     {
@@ -943,7 +954,7 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
         // the release is the announcement; the record it comes from is what carries the figures,
         // and it is read now rather than at its own twenty-hour clock so the notice is not a day
         // behind it
-        read_record_for_notice(c, &sym, exchange);
+        read_record_for_notice(app, c, &sym, exchange);
     }
     let (title, body) = release_notice(app, &sym, &fresh);
     notify::emit(app, c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));
@@ -1086,7 +1097,7 @@ pub fn filings_sweep_loop(app: Arc<App>) {
     // filing means asking; but only while they have asked to be told. With no
     // Disclosures or Releases set on, this waits for one to be switched on.
     let wanted = || conn(&app).map_or(false, |c| !notify::disclosure_scopes(&c).is_empty() || !notify::release_scopes(&c).is_empty());
-    while crate::events::park_until(&app, wanted) {
+    while app.events.park_until(&app, wanted) {
         sweep_filings(&app);
         if app.wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
             return;
@@ -1110,7 +1121,7 @@ pub fn disclosure_read_loop(app: Arc<App>) {
     loop {
         let stored = FILINGS_STORED.load(Ordering::SeqCst);
         summary_ensure();
-        if !crate::events::park_until(&app, || summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
+        if !app.events.park_until(&app, || summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
             return;
         }
         if !summary_ready() {
@@ -1121,7 +1132,7 @@ pub fn disclosure_read_loop(app: Arc<App>) {
                 return;
             }
         }
-        if !crate::events::park_until(&app, || FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
+        if !app.events.park_until(&app, || FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
             return;
         }
     }
@@ -1130,18 +1141,11 @@ pub fn disclosure_read_loop(app: Arc<App>) {
 /// Counts the times filings were stored: what the reading loop waits on.
 static FILINGS_STORED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The listing whose disclosures were asked for last: the one someone is
-/// looking at, and so the one whose documents are read first.
-fn looking_at() -> &'static Mutex<String> {
-    static S: OnceLock<Mutex<String>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(String::new()))
-}
-
 /// The newest stored filing that has never been read, read: the listing on
 /// screen first, then everything else. False when there is none, or nothing
 /// could be read.
 fn read_one_unread(app: &Arc<App>) -> bool {
-    let open = looking_at().lock().unwrap().clone();
+    let open = app.feeds.looking_at.lock().unwrap().clone();
     if !open.is_empty() && read_one_of(app, &open) {
         return true;
     }
@@ -1181,7 +1185,7 @@ pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchang
     }
     app.single_flight(&format!("filings:{}", sym), 0, || {
         let c = match conn(app) { Some(c) => c, None => return -1 };
-        refresh_filings_in(&c, &sym, name, exchange, currency, &|s, n, e, cy, p| disclosures::fetch(s, n, e, cy, 200, p))
+        refresh_filings_in(app, &c, &sym, name, exchange, currency, &|s, n, e, cy, p| disclosures::fetch(s, n, e, cy, 200, p))
     })
 }
 
@@ -1190,7 +1194,7 @@ pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchang
 pub type FetchFilings<'a> = &'a dyn Fn(&str, &str, &str, &str, &str) -> Value;
 
 /// `refresh_filings` on one connection with the gathering given.
-pub fn refresh_filings_in(c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> i64 {
+pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> i64 {
     {
         let c = c;
         let sym = sym.to_string();
@@ -1230,7 +1234,7 @@ pub fn refresh_filings_in(c: &Connection, sym: &str, name: Option<&str>, exchang
         }
         let _ = sf::mark_filings_fetched(c, &sym, &profile_no, &now);
         FILINGS_STORED.fetch_add(1, Ordering::SeqCst);
-        crate::events::signal(); // the reading loop has something to look at
+        app.events.signal(); // the reading loop has something to look at
         let _ = set_meta(c, &format!("filings_sources:{}", sym), &json_text(&Value::Object(sources)));
         if any_reached { total } else { -1 }
     }
@@ -1273,7 +1277,7 @@ pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option
         return json!({"ok": false, "error": "symbol required"});
     }
     let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
-    filings_payload_in(&c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency))
+    filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency))
 }
 
 // --- a listing's disclosures while a page shows them ------------------------------
@@ -1286,17 +1290,12 @@ pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option
 // as long as some page is still showing them. Each title and sentence is committed
 // as it is read and reaches its row as a change to that row.
 
-fn reading_now() -> &'static Mutex<HashMap<String, Vec<String>>> {
-    static R: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
-    R.get_or_init(Default::default)
-}
-
-fn set_reading(sym: &str, ids: Vec<String>) {
+fn set_reading(app: &Arc<App>, sym: &str, ids: Vec<String>) {
     {
-        let mut r = reading_now().lock().unwrap_or_else(|e| e.into_inner());
+        let mut r = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner());
         if ids.is_empty() { r.remove(sym); } else { r.insert(sym.to_string(), ids); }
     }
-    crate::events::signal(); // the rows still to be read wear the shimmer
+    app.events.signal(); // the rows still to be read wear the shimmer
 }
 
 /// The disclosures as stored, never waiting on a source: what a page showing them
@@ -1305,7 +1304,7 @@ fn set_reading(sym: &str, ids: Vec<String>) {
 pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Value {
     let sym = symbol.trim().to_uppercase();
     let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
-    let reading = reading_now().lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
+    let reading = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
     json!({
         "ok": true,
         "symbol": sym,
@@ -1330,38 +1329,38 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
     }
     spawn("bagholder-filings-shown", move || {
         app.single_flight(&format!("filings-shown:{}", sym), (), || {
-            *looking_at().lock().unwrap() = sym.clone();
+            *app.feeds.looking_at.lock().unwrap() = sym.clone();
             fn opt(s: &str) -> Option<&str> { if s.is_empty() { None } else { Some(s) } }
             if conn(&app).map_or(false, |c| filings_stale(&c, &sym, None)) {
                 refresh_filings(&app, &sym, opt(&name), opt(&exchange), opt(&currency));
             }
             let mut tried: HashSet<String> = HashSet::new();
-            while crate::events::watched(&doc) && !app.stopping() {
+            while app.events.watched(&doc) && !app.stopping() {
                 let c = match conn(&app) { Some(c) => c, None => break };
                 let mut left: Vec<Value> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
                     .filter(|r| (f(r, "subject").is_empty() || f(r, "summary").is_empty()) && !is_true(r, "enrichFinal") && !tried.contains(&f(r, "id")))
                     .collect();
                 left.sort_by(|a, b| f(b, "date").cmp(&f(a, "date")));
                 let Some(next) = left.first().map(|r| f(r, "id")) else { break };
-                set_reading(&sym, left.iter().map(|r| f(r, "id")).collect());
+                set_reading(&app, &sym, left.iter().map(|r| f(r, "id")).collect());
                 filings_enrich(&app, &sym, &next); // waits for the local model itself when one is coming up
                 tried.insert(next);
                 if app.wait(Duration::from_millis(150)) { // a person's pace at the source
                     break;
                 }
             }
-            set_reading(&sym, vec![]);
+            set_reading(&app, &sym, vec![]);
         });
     });
 }
 
 /// `filings_payload` on one connection with the refresh given.
-pub fn filings_payload_in(c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Value {
+pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Value {
     let sym = sym.trim().to_uppercase();
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    *looking_at().lock().unwrap() = sym.clone();
+    *app.feeds.looking_at.lock().unwrap() = sym.clone();
     let c = c;
     let mut wrote: Option<i64> = None;
     if refresh || filings_stale(c, &sym, None) {
@@ -1606,7 +1605,7 @@ pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
     }
     spawn("bagholder-fear-shown", move || {
         app.single_flight(&doc.clone(), (), || {
-            while crate::events::watched(&doc) && !app.stopping() {
+            while app.events.watched(&doc) && !app.stopping() {
                 let held = conn(&app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
                 if !(has_score(&held) && !fear_stale(held.as_ref().unwrap())) {
                     read_fear(&app, &which);
@@ -1626,9 +1625,6 @@ pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
 pub const SHORTS_STALE_HOURS: f64 = 6.0;
 pub const SHORTS_VERSION: i64 = 5;
 pub const SHORTS_SWEEP_EVERY_SEC: u64 = 1800;
-
-/// Listings the running sweep has still to read.
-static SHORTS_LEFT: AtomicI64 = AtomicI64::new(0);
 
 fn shorts_stale(rec: &Value) -> bool {
     if (num(rec.get("readVersion"), Some(0.0)).unwrap_or(0.0) as i64) < SHORTS_VERSION {
@@ -1708,7 +1704,7 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
 /// Every held or watched listing's stored short
 /// selling, each marked held or watched.
 pub fn shorts_feed(app: &Arc<App>) -> Value {
-    let reading = SHORTS_LEFT.load(Ordering::SeqCst) > 0;
+    let reading = app.feeds.shorts_left.load(Ordering::SeqCst) > 0;
     let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
     // what the feed says of a listing: its name, its venue, and the holding it opens
     struct Known {
@@ -1738,7 +1734,7 @@ pub fn shorts_feed(app: &Arc<App>) -> Value {
         r["watched"] = json!(watched.contains_key(&key));
         rows.push(r);
     }
-    json!({"ok": true, "rows": rows, "reading": SHORTS_LEFT.load(Ordering::SeqCst) > 0})
+    json!({"ok": true, "rows": rows, "reading": app.feeds.shorts_left.load(Ordering::SeqCst) > 0})
 }
 
 /// What the page for one listing needs, held or
@@ -1890,22 +1886,22 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
         }
     }
     let mut done = 0;
-    SHORTS_LEFT.store(due.len() as i64, Ordering::SeqCst);
-    crate::events::signal(); // the short-interest table says a read is under way
-    struct Reset;
-    impl Drop for Reset {
+    app.feeds.shorts_left.store(due.len() as i64, Ordering::SeqCst);
+    app.events.signal(); // the short-interest table says a read is under way
+    struct Reset<'a>(&'a App);
+    impl Drop for Reset<'_> {
         fn drop(&mut self) {
-            SHORTS_LEFT.store(0, Ordering::SeqCst);
-            crate::events::signal();
+            self.0.feeds.shorts_left.store(0, Ordering::SeqCst);
+            self.0.events.signal();
         }
     }
-    let _reset = Reset;
+    let _reset = Reset(app);
     for (sym, ex, ccy, name) in due {
         if truthy(Some(&read_shorts(app, &sym, &ex, &ccy, true, &name))) {
             done += 1;
         }
-        SHORTS_LEFT.fetch_sub(1, Ordering::SeqCst);
-        crate::events::signal();
+        app.feeds.shorts_left.fetch_sub(1, Ordering::SeqCst);
+        app.events.signal();
     }
     done
 }
@@ -1913,7 +1909,7 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
 pub fn shorts_sweep_loop(app: Arc<App>) {
     // the short-interest table is the only reader of a sweep: it runs while some page
     // shows that table, starting the moment one does
-    while crate::events::park_until(&app, || crate::events::watched("shorts")) {
+    while app.events.park_until(&app, || app.events.watched("shorts")) {
         sweep_shorts(&app);
         if app.wait(Duration::from_secs(SHORTS_SWEEP_EVERY_SEC)) {
             return;
@@ -1924,11 +1920,6 @@ pub fn shorts_sweep_loop(app: Arc<App>) {
 // ---------------------------------------------------------------------------
 // universes
 // ---------------------------------------------------------------------------
-
-fn universe_kick() -> &'static (Mutex<bool>, Condvar) {
-    static K: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
-    K.get_or_init(|| (Mutex::new(false), Condvar::new()))
-}
 
 /// The heatmaps' tiles. Never fails.
 pub fn refresh_universes(app: &Arc<App>) -> Vec<String> {
@@ -1949,14 +1940,14 @@ pub fn universe_loop(app: Arc<App>) {
     // half hour only while a page is still connected -- not at start, and not through
     // a night with nobody there.
     loop {
-        let kicked = || *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner());
-        if !crate::events::park_until(&app, kicked) {
+        let kicked = || *app.feeds.universe_kick.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !app.events.park_until(&app, kicked) {
             return;
         }
         loop {
-            *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            *app.feeds.universe_kick.0.lock().unwrap_or_else(|e| e.into_inner()) = false;
             refresh_universes(&app);
-            if !crate::events::park_until_or(&app, Duration::from_secs(1800), kicked) && (app.stopping() || crate::events::watchers() == 0) {
+            if !app.events.park_until_or(&app, Duration::from_secs(1800), kicked) && (app.stopping() || app.events.watchers() == 0) {
                 break;
             }
         }
@@ -1966,8 +1957,8 @@ pub fn universe_loop(app: Arc<App>) {
     }
 }
 
-pub fn kick_universes() -> Value {
-    let (lock, cv) = universe_kick();
+pub fn kick_universes(app: &Arc<App>) -> Value {
+    let (lock, cv) = &app.feeds.universe_kick;
     *lock.lock().unwrap() = true;
     cv.notify_all();
     json!({"ok": true})
@@ -2097,8 +2088,8 @@ pub fn archive_loop(app: Arc<App>) {
                 (now, was) => now.is_some() != was.is_some(),
             };
             match due {
-                Some(secs) => { crate::events::park_until_or(&app, Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
-                None => { crate::events::park_until(&app, moved); }
+                Some(secs) => { app.events.park_until_or(&app, Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
+                None => { app.events.park_until(&app, moved); }
             }
             delay = 0.0;
             batch = history::ARCHIVE_BATCH;
@@ -2122,7 +2113,7 @@ pub fn quote_loop(app: Arc<App>) {
     // after hours away gets fresh prices) and each minute while one stays. Which
     // listings are asked is narrowed again by whether their market can have moved
     // (`market::quotes::can_have_moved`).
-    while crate::events::park_until(&app, || crate::events::watchers() > 0) {
+    while app.events.park_until(&app, || app.events.watchers() > 0) {
         refresh_quotes(&app);
         if app.wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
             return;
@@ -2157,7 +2148,7 @@ pub fn watch_loop(app: Arc<App>) {
     // setting. The folder itself is looked at on a period: the standard library has
     // no file-system notification (docs/architecture.md, "Timers that remain").
     let set = || conn(&app).and_then(|c| bagholder_store::csvimport::watch_folder(&c).ok()).map_or(false, |f| !f.is_empty());
-    while crate::events::park_until(&app, set) {
+    while app.events.park_until(&app, set) {
         scan_watched_folder(&app);
         if app.wait(Duration::from_secs(WATCH_SCAN_SEC)) {
             return;
@@ -2249,7 +2240,7 @@ pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
             if !(src.is_some() && available.contains(&tf.as_str())) {
                 vec![]
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) && !history::intraday_ready(c, &inst, &tf, &start, &today_s, now) {
-                history::ensure_intraday_in_background(app.db_path(), inst.clone(), tf.clone(), start.clone(), end.clone());
+                history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone());
                 pending = true;
                 vec![]
             } else {
@@ -2376,7 +2367,7 @@ mod tests {
 
     fn payload(c: &Connection, sym: &str, fetch: &dyn Fn(&str, &str, &str, &str, &str) -> Value) -> Value {
         let s = sym.trim().to_uppercase();
-        filings_payload_in(c, sym, true, &|| refresh_filings_in(c, &s, None, None, None, fetch))
+        filings_payload_in(&app(), c, sym, true, &|| refresh_filings_in(&app(), c, &s, None, None, None, fetch))
     }
 
     #[test]

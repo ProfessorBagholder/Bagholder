@@ -31,11 +31,11 @@ pub const FRESH_DAYS: i64 = 7;
 pub const SHARE_KEY: &str = "share:";
 pub const FUND_KEY: &str = "fund:";
 
-/// What one pass of classification works in: the database, and where it is,
-/// for the name search that opens its own reader.
+/// What one pass of classification works in: the database, and the pool it came
+/// from, for the name search that opens its own reader.
 pub struct Ctx<'a> {
     pub conn: &'a Connection,
-    pub db: std::path::PathBuf,
+    pub pool: std::sync::Arc<bagholder_store::pool::Pool>,
     pub today: String,
 }
 
@@ -765,7 +765,7 @@ pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
     if clean.is_empty() {
         return None;
     }
-    let r = crate::search::symbol_search(&ctx.db, &clean.chars().take(40).collect::<String>());
+    let r = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>());
     r.get("matches").and_then(|m| m.as_array()).and_then(|a| a.first()).cloned()
 }
 

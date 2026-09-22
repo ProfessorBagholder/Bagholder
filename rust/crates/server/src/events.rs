@@ -3,7 +3,8 @@
 //!
 //! Nothing polls. A change reaches the page because it happened:
 //!
-//! - every database commit, on any connection, signals here (`store::on_commit`);
+//! - every database commit, on any connection, signals here (the store's commit
+//!   hook, wired to this bus when the app is built);
 //! - every write to the app's in-memory state signals here (`app::Watched`).
 //!
 //! Each open page has a stream (`GET /api/events`). On a signal the stream asks
@@ -25,110 +26,154 @@
 //! blocking thread, for as long as it takes.
 
 use serde_json::Value;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use bagholder_model::patch;
 
 use crate::app::App;
 
-fn bell() -> &'static (Mutex<u64>, Condvar) {
-    static B: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
-    B.get_or_init(|| (Mutex::new(0), Condvar::new()))
+type Wanted = std::collections::BTreeMap<String, Value>;
+
+/// Every page's live connection to this app: the bell that wakes a stream (and
+/// anything parked) when something changed, how many pages are looking now, and
+/// what each open stream is showing beyond the model. One per app.
+pub struct Bus {
+    bell: (Mutex<u64>, Condvar),
+    /// The same bell for whoever waits without a thread of its own (a page's
+    /// stream is a task on the runtime): a channel that holds the count.
+    ticker: tokio::sync::watch::Sender<u64>,
+    watchers: AtomicUsize,
+    streams: Mutex<HashMap<u64, Arc<Mutex<Wanted>>>>,
+    next_stream: AtomicU64,
 }
 
-/// The same bell for whoever waits without a thread of its own (a page's stream
-/// is a task on the runtime): a channel that holds the count.
-fn ticker() -> &'static tokio::sync::watch::Sender<u64> {
-    static T: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
-    T.get_or_init(|| tokio::sync::watch::channel(0).0)
+impl Bus {
+    pub fn new() -> Bus {
+        Bus {
+            bell: (Mutex::new(0), Condvar::new()),
+            ticker: tokio::sync::watch::channel(0).0,
+            watchers: AtomicUsize::new(0),
+            streams: Mutex::new(HashMap::new()),
+            next_stream: AtomicU64::new(1),
+        }
+    }
+
+    /// Something changed. Cheap, and safe to call from anywhere, SQLite's commit
+    /// hook included: it counts and wakes, no more.
+    pub fn signal(&self) {
+        let (m, c) = &self.bell;
+        *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        c.notify_all();
+        self.ticker.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// A receiver that is told of every signal from now on.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.ticker.subscribe()
+    }
+
+    /// Pages connected now. What a periodic read of an outside source consults
+    /// before it runs: nobody watching, nothing to fetch.
+    pub fn watchers(&self) -> usize {
+        self.watchers.load(Ordering::SeqCst)
+    }
+
+    /// Sleep until `ready` says so, looking again only when something signals: no
+    /// clock is consulted while it waits. False when the app is stopping instead. What
+    /// background work that has nothing to do parks on -- a loop with no one watching
+    /// its data, an engine with nothing armed.
+    pub fn park_until(&self, app: &App, ready: impl Fn() -> bool) -> bool {
+        let (m, c) = &self.bell;
+        loop {
+            if app.stopping() {
+                return false;
+            }
+            let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
+            if ready() {
+                return true;
+            }
+            let g = m.lock().unwrap_or_else(|e| e.into_inner());
+            drop(c.wait_while(g, |n| *n == seen && !app.stopping()));
+        }
+    }
+
+    /// As `park_until`, but no longer than `most`: true when `ready`, false when the
+    /// time ran out or the app is stopping.
+    pub fn park_until_or(&self, app: &App, most: Duration, ready: impl Fn() -> bool) -> bool {
+        let (m, c) = &self.bell;
+        let until = std::time::Instant::now() + most;
+        loop {
+            if app.stopping() {
+                return false;
+            }
+            let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
+            if ready() {
+                return true;
+            }
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            let g = m.lock().unwrap_or_else(|e| e.into_inner());
+            drop(c.wait_timeout_while(g, left, |n| *n == seen && !app.stopping()));
+        }
+    }
+
+    /// What the page on stream `id` is showing now, beyond the model. Replaces what it
+    /// said before. False when there is no such stream (it closed; the page will
+    /// connect again and say so again).
+    pub fn watch(&self, app: &Arc<App>, id: u64, docs: Wanted) -> bool {
+        let Some(wanted) = self.streams.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned() else { return false };
+        let fresh: Vec<String> = {
+            let mut w = wanted.lock().unwrap_or_else(|e| e.into_inner());
+            let fresh = docs.keys().filter(|k| !w.contains_key(*k)).cloned().collect();
+            *w = docs;
+            fresh
+        };
+        // a document just opened is worth reading fresh: once, now, in the background
+        for key in &fresh {
+            crate::docs::opened(app, key);
+        }
+        self.signal();
+        true
+    }
+
+    /// Whether any page is showing the document `key` now.
+    pub fn watched(&self, key: &str) -> bool {
+        self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
+    }
 }
 
-/// Something changed. Cheap, and safe to call from anywhere, SQLite's commit
-/// hook included: it counts and wakes, no more.
-pub fn signal() {
-    let (m, c) = bell();
-    *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-    c.notify_all();
-    ticker().send_modify(|n| *n = n.wrapping_add(1));
-}
-
-/// A receiver that is told of every signal from now on.
-pub fn subscribe() -> tokio::sync::watch::Receiver<u64> {
-    ticker().subscribe()
+impl Default for Bus {
+    fn default() -> Bus {
+        Bus::new()
+    }
 }
 
 /// Wait for the next signal; then let the signals that follow it close behind
 /// settle (`GATHER`), so a burst reaches the page as one message.
 pub async fn changed(rx: &mut tokio::sync::watch::Receiver<u64>) {
     if rx.changed().await.is_err() {
-        return std::future::pending().await; // the sender is a static: this cannot happen
+        return std::future::pending().await; // the sender lives as long as its app: this cannot happen
     }
     while let Ok(Ok(())) = tokio::time::timeout(GATHER, rx.changed()).await {}
 }
 
-/// Pages connected now. What a periodic read of an outside source consults
-/// before it runs: nobody watching, nothing to fetch.
-pub fn watchers() -> usize {
-    WATCHERS.load(Ordering::SeqCst)
-}
-
-static WATCHERS: AtomicUsize = AtomicUsize::new(0);
-
-struct Watching;
+struct Watching(Arc<Bus>);
 impl Watching {
-    fn new() -> Watching {
-        WATCHERS.fetch_add(1, Ordering::SeqCst);
-        signal(); // work that waits for someone to look can start
-        Watching
+    fn new(bus: &Arc<Bus>) -> Watching {
+        bus.watchers.fetch_add(1, Ordering::SeqCst);
+        bus.signal(); // work that waits for someone to look can start
+        Watching(bus.clone())
     }
 }
 impl Drop for Watching {
     fn drop(&mut self) {
-        WATCHERS.fetch_sub(1, Ordering::SeqCst);
-        signal();
-    }
-}
-
-/// Sleep until `ready` says so, looking again only when something signals: no
-/// clock is consulted while it waits. False when the app is stopping instead. What
-/// background work that has nothing to do parks on -- a loop with no one watching
-/// its data, an engine with nothing armed.
-pub fn park_until(app: &App, ready: impl Fn() -> bool) -> bool {
-    let (m, c) = bell();
-    loop {
-        if app.stopping() {
-            return false;
-        }
-        let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
-        if ready() {
-            return true;
-        }
-        let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        drop(c.wait_while(g, |n| *n == seen && !app.stopping()));
-    }
-}
-
-/// As `park_until`, but no longer than `most`: true when `ready`, false when the
-/// time ran out or the app is stopping.
-pub fn park_until_or(app: &App, most: Duration, ready: impl Fn() -> bool) -> bool {
-    let (m, c) = bell();
-    let until = std::time::Instant::now() + most;
-    loop {
-        if app.stopping() {
-            return false;
-        }
-        let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
-        if ready() {
-            return true;
-        }
-        let left = until.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() {
-            return false;
-        }
-        let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        drop(c.wait_timeout_while(g, left, |n| *n == seen && !app.stopping()));
+        self.0.watchers.fetch_sub(1, Ordering::SeqCst);
+        self.0.signal();
     }
 }
 
@@ -148,50 +193,18 @@ pub const KEEPALIVE: Duration = Duration::from_secs(15);
 // as it carries the model. When the page stops showing it, it stops being sent.
 // This is what replaces each panel asking again every few seconds.
 
-type Wanted = std::collections::BTreeMap<String, Value>;
-
-fn streams() -> &'static Mutex<std::collections::HashMap<u64, Arc<Mutex<Wanted>>>> {
-    static S: OnceLock<Mutex<std::collections::HashMap<u64, Arc<Mutex<Wanted>>>>> = OnceLock::new();
-    S.get_or_init(Default::default)
-}
-
-/// What the page on stream `id` is showing now, beyond the model. Replaces what it
-/// said before. False when there is no such stream (it closed; the page will
-/// connect again and say so again).
-pub fn watch(app: &Arc<App>, id: u64, docs: Wanted) -> bool {
-    let Some(wanted) = streams().lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned() else { return false };
-    let fresh: Vec<String> = {
-        let mut w = wanted.lock().unwrap_or_else(|e| e.into_inner());
-        let fresh = docs.keys().filter(|k| !w.contains_key(*k)).cloned().collect();
-        *w = docs;
-        fresh
-    };
-    // a document just opened is worth reading fresh: once, now, in the background
-    for key in &fresh {
-        crate::docs::opened(app, key);
-    }
-    signal();
-    true
-}
-
-/// Whether any page is showing the document `key` now.
-pub fn watched(key: &str) -> bool {
-    streams().lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
-}
-
-struct Registered(u64);
+struct Registered(u64, Arc<Bus>);
 impl Registered {
-    fn new() -> (Registered, Arc<Mutex<Wanted>>) {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+    fn new(bus: &Arc<Bus>) -> (Registered, Arc<Mutex<Wanted>>) {
+        let id = bus.next_stream.fetch_add(1, Ordering::SeqCst);
         let wanted = Arc::new(Mutex::new(Wanted::new()));
-        streams().lock().unwrap_or_else(|e| e.into_inner()).insert(id, wanted.clone());
-        (Registered(id), wanted)
+        bus.streams.lock().unwrap_or_else(|e| e.into_inner()).insert(id, wanted.clone());
+        (Registered(id, bus.clone()), wanted)
     }
 }
 impl Drop for Registered {
     fn drop(&mut self) {
-        streams().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        self.1.streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
     }
 }
 
@@ -212,8 +225,9 @@ pub type Message = (&'static str, Value);
 
 impl Feed {
     pub fn open(app: Arc<App>, filters: Option<Value>, detail: Option<String>) -> Feed {
-        let (registered, wanted) = Registered::new();
-        Feed { app, _watching: Watching::new(), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
+        let bus = app.events.clone();
+        let (registered, wanted) = Registered::new(&bus);
+        Feed { app, _watching: Watching::new(&bus), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
     }
 
     /// This stream's id.
@@ -233,7 +247,7 @@ impl Feed {
         let mut out: Vec<Message> = Vec::new();
         let (filters, detail) = (self.filters.clone(), self.detail.clone());
         let app = self.app.clone();
-        let view = match std::panic::catch_unwind(move || app.view(filters.as_ref(), detail.as_deref())) {
+        let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || app.view(filters.as_ref(), detail.as_deref()))) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
         };
@@ -268,7 +282,7 @@ impl Feed {
         self.sent_docs.retain(|k, _| want.contains_key(k));
         for (key, params) in &want {
             let app = &self.app;
-            let Ok(Some(now)) = std::panic::catch_unwind(|| crate::docs::read(app, key, params)) else { continue };
+            let Ok(Some(now)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::docs::read(app, key, params))) else { continue };
             match self.sent_docs.get(key) {
                 None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
                 Some(was) => {
@@ -293,7 +307,7 @@ pub fn signal_at_each_midnight(app: Arc<App>) {
         if app.wait(Duration::from_secs(secs)) {
             return;
         }
-        signal();
+        app.events.signal();
     });
 }
 
@@ -311,21 +325,22 @@ mod tests {
         let ran = Arc::new(AtomicBool::new(false));
         let t = {
             let ran = ran.clone();
+            let app = app.clone();
             std::thread::spawn(move || {
-                if park_until(&app, || watchers() > 0) {
+                if app.events.park_until(&app, || app.events.watchers() > 0) {
                     ran.store(true, Ordering::SeqCst);
                 }
             })
         };
         std::thread::sleep(Duration::from_millis(150));
-        signal(); // a change with nobody watching wakes it to look, and it parks again
+        app.events.signal(); // a change with nobody watching wakes it to look, and it parks again
         std::thread::sleep(Duration::from_millis(50));
         assert!(!ran.load(Ordering::SeqCst), "nobody is looking: nothing runs");
-        let page = Watching::new();
+        let page = Watching::new(&app.events);
         t.join().unwrap();
         assert!(ran.load(Ordering::SeqCst));
         drop(page);
-        assert_eq!(watchers(), 0);
+        assert_eq!(app.events.watchers(), 0);
     }
 
     #[test]
@@ -333,7 +348,7 @@ mod tests {
         let _g = crate::tests_common::guard();
         let app = crate::tests_common::app();
         let started = std::time::Instant::now();
-        assert!(!park_until_or(&app, Duration::from_millis(80), || false));
+        assert!(!app.events.park_until_or(&app, Duration::from_millis(80), || false));
         assert!(started.elapsed() >= Duration::from_millis(80));
     }
 }

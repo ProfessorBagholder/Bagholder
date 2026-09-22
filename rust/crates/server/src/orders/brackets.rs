@@ -17,18 +17,6 @@ pub(super) const GTC_DAYS: i64 = 90;
 pub(super) const BRACKET_TIF: &str = "UNTIL_CANCEL";
 pub(super) const BRACKET_ENDED_QUIETLY: [&str; 5] = ["stopped", "target", "cancelled by the user", "both legs removed", "sold from the ticket"];
 
-pub(super) static BRACKET_LOCK: AtomicBool = AtomicBool::new(false);
-
-pub fn bracket_said() -> &'static Mutex<HashSet<String>> {
-    static SAID: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    SAID.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-pub fn stop_allowed_cache() -> &'static Mutex<HashMap<String, bool>> {
-    static C: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// A bracket that still has work to do stands at one of these.
 pub(super) const BRACKET_LIVE_ST: [BracketStatus; 6] =
     [BracketStatus::Waiting, BracketStatus::Armed, BracketStatus::Firing, BracketStatus::TargetPlaced, BracketStatus::Stopping, BracketStatus::Closing];
@@ -115,17 +103,17 @@ pub mod bracket_seam {
     pub static STOP_ALLOWED: Mutex<Option<bool>> = Mutex::new(None);
     pub static CANCEL_ORDER: Mutex<Option<Value>> = Mutex::new(None);
     pub static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    pub fn reset() {
+    pub fn reset(app: &App) {
         *STOP_ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()) = None;
         SAID.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        bracket_said().lock().unwrap_or_else(|e| e.into_inner()).clear();
-        stop_allowed_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        app.orders.bracket_said.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        app.orders.stop_allowed_cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 
-pub(super) fn say_once(key: String, line: &str) {
-    if !bracket_said().lock().unwrap().insert(key) {
+pub(super) fn say_once(app: &App, key: String, line: &str) {
+    if !app.orders.bracket_said.lock().unwrap().insert(key) {
         return;
     }
     #[cfg(test)]
@@ -171,7 +159,7 @@ pub(super) fn place_exit(app: &Arc<App>, b: &Bracket, kind: OrderType, price: Op
     };
     if !orders_live() {
         let key = format!("{}|{}|{}", b.id, role, rp(price.map(|p| round_half_even(p, 4))));
-        say_once(key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, kind, b.symbol, bagholder_store::tables::json_text_sorted(&req)));
+        say_once(app, key, &format!("bagholder bracket (orders are off, not placed): {} {} for {}: {}", role, kind, b.symbol, bagholder_store::tables::json_text_sorted(&req)));
         return (String::new(), String::new());
     }
     let r = submit_order(app, &mut row, &req);
@@ -334,7 +322,7 @@ pub(super) fn stop_allowed(app: &Arc<App>, security_id: &str) -> bool {
     if let Some(v) = *bracket_seam::STOP_ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) {
         return v;
     }
-    if let Some(v) = stop_allowed_cache().lock().unwrap().get(security_id) {
+    if let Some(v) = app.orders.stop_allowed_cache.lock().unwrap().get(security_id) {
         return *v;
     }
     let sess = match ticket_session(app) {
@@ -348,7 +336,7 @@ pub(super) fn stop_allowed(app: &Arc<App>, security_id: &str) -> bool {
             return false;
         }
     };
-    stop_allowed_cache().lock().unwrap().insert(security_id.to_string(), ok);
+    app.orders.stop_allowed_cache.lock().unwrap().insert(security_id.to_string(), ok);
     ok
 }
 
@@ -412,6 +400,7 @@ pub(super) fn sweep_exits(app: &Arc<App>) {
         }
         let err = cancel_exit(app, &o.id);
         say_once(
+            app,
             format!("{}|orphan", o.id),
             &format!(
                 "bagholder bracket: {} for {} rests at Wealthsimple with no bracket holding it; cancelled{}\n",
@@ -731,16 +720,16 @@ pub(super) fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
 
 /// Quotes by security id, fetched here when None.
 pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, Value>>) -> Value {
-    if BRACKET_LOCK.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if app.orders.bracket_lock.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return json!({"ok": false, "skipped": "running"});
     }
-    struct Release;
-    impl Drop for Release {
+    struct Release<'a>(&'a App);
+    impl Drop for Release<'_> {
         fn drop(&mut self) {
-            BRACKET_LOCK.store(false, Ordering::SeqCst);
+            self.0.orders.bracket_lock.store(false, Ordering::SeqCst);
         }
     }
-    let _release = Release;
+    let _release = Release(app);
     let sweep = || {
         if let Err(e) = catch_unwind(AssertUnwindSafe(|| sweep_exits(app))) {
             log(&format!("bagholder bracket: sweep failed: {}", panic_text(&*e)));
@@ -828,19 +817,19 @@ pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, Value>>) -> V
 /// one, and then keeps its cadence -- a stop is watched every few seconds for as
 /// long as it exists, exactly as before.
 pub(super) fn bracket_work(app: &Arc<App>) -> bool {
-    catch_unwind(|| !live_brackets(app).is_empty() || orders_all(app).iter().any(|o| matches!(o.role, Role::Stop | Role::Target) && resting(o)))
+    catch_unwind(AssertUnwindSafe(|| !live_brackets(app).is_empty() || orders_all(app).iter().any(|o| matches!(o.role, Role::Stop | Role::Target) && resting(o))))
         .unwrap_or(true) // could not tell: tick, rather than miss a stop
 }
 
 pub fn bracket_loop(app: &Arc<App>) {
-    while crate::events::park_until(app, || bracket_work(app)) {
+    while app.events.park_until(app, || bracket_work(app)) {
         if app.wait(Duration::from_secs(BRACKET_POLL_SEC)) {
             return;
         }
         if !connected_not_syncing(app) {
             continue;
         }
-        if let Err(e) = catch_unwind(|| bracket_tick(app, None)) {
+        if let Err(e) = catch_unwind(AssertUnwindSafe(|| bracket_tick(app, None))) {
             log(&format!("bagholder bracket: tick failed: {}", panic_text(&*e)));
         }
     }

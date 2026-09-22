@@ -149,7 +149,7 @@ fn frames(text: &str) -> Vec<(String, Value)> {
 fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
     let _g = guard();
     runtime().block_on(async {
-        assert_eq!(crate::events::watchers(), 0);
+        assert_eq!(app().events.watchers(), 0);
         let res = router(AppState { app: app() }).oneshot(from_the_page(Method::GET, "/api/events", None)).await.unwrap();
         assert_eq!(res.headers()[header::CONTENT_TYPE], "text/event-stream");
         let mut body = res.into_body().into_data_stream();
@@ -163,7 +163,7 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
         assert!(got[0].1["id"].as_u64().unwrap() > 0);
         assert_eq!((got[1].0.as_str(), &got[1].1["doc"]), ("snapshot", &json!("model")));
         assert_eq!(got[1].1["data"]["status"]["ok"], json!(true), "the header's status rides with the view");
-        assert_eq!(crate::events::watchers(), 1, "someone is looking");
+        assert_eq!(app().events.watchers(), 1, "someone is looking");
 
         // something the header shows changes: the page is sent that field, as a
         // patch -- never the view again
@@ -178,12 +178,12 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 
         drop(body);
         for _ in 0..100 {
-            if crate::events::watchers() == 0 {
+            if app().events.watchers() == 0 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(crate::events::watchers(), 0, "the page went: nobody is looking");
+        assert_eq!(app().events.watchers(), 0, "the page went: nobody is looking");
     });
 }
 
@@ -204,7 +204,7 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     crate::notify::set_settings(&conn, &json!({"fills": true})).unwrap();
     bagholder_store::feeds::clear_notifications(&conn).unwrap();
     let mut feed = crate::events::Feed::open(app(), None, None);
-    assert!(crate::events::watch(&app(), feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
+    assert!(app().events.watch(&app(), feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
     let first = feed.step(&crate::status::payload);
     let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");
     assert_eq!((bell.0, &bell.1["data"]), ("snapshot", &json!({"rows": [], "unread": 0})));

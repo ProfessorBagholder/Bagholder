@@ -106,7 +106,7 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<Value>>> {
 /// The listings the directories find for the text,
 /// remembered for the process. A source that fails leaves the others' answer;
 /// nothing is remembered when one failed.
-pub fn symbol_search(conn_path: &std::path::Path, text: &str) -> Value {
+pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &str) -> Value {
     let text = bagholder_model::textrules::trim_space(text).to_string();
     if text.is_empty() {
         return json!({"ok": true, "matches": []});
@@ -161,7 +161,7 @@ pub fn symbol_search(conn_path: &std::path::Path, text: &str) -> Value {
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
         // or Cboe Canada listing is in none of them: TMX is asked what it
         // knows the ticker as
-        if let Ok(conn) = bagholder_store::open_db(conn_path) {
+        if let Ok(conn) = pool.get() {
             let (today, _, _) = crate::clock_now();
             if let Some(hit) = crate::tmx::tmx_listing(&conn, &text, &today) {
                 found = vec![hit];

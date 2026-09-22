@@ -89,7 +89,7 @@ fn setup() -> MutexGuard<'static, ()> {
         }
     }
     app().invalidate();
-    *o::REFRESHED_AT.lock().unwrap() = String::new();
+    *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
     {
         let mut s = app_ref().state.lock().unwrap();
         s.connected = false;
@@ -603,29 +603,29 @@ fn test_the_orders_tab_opening_kicks_a_read_unless_one_is_fresh() {
     app().state.lock().unwrap().connected = false;
     assert!(!o::kick_orders_refresh(&app()), "nothing is read while not connected");
     app().state.lock().unwrap().connected = true;
-    *o::REFRESHED_AT.lock().unwrap() = String::new();
+    *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
     assert_eq!(o::orders_payload(&app(), true)["ok"], json!(true));
     let ops: Vec<String> = ran.lock().unwrap().iter().map(|a| a.0.clone()).collect();
     assert_eq!(ops, ["OrderServiceExtendedOrderFeed"], "the list's first request reads everything");
-    *o::REFRESHED_AT.lock().unwrap() = now_iso();
+    *app_ref().orders.refreshed_at.lock().unwrap() = now_iso();
     assert!(!o::kick_orders_refresh(&app()), "a read younger than the loop's tick is fresh enough");
-    *o::REFRESHED_AT.lock().unwrap() = "2026-01-01T00:00:00Z".into();
+    *app_ref().orders.refreshed_at.lock().unwrap() = "2026-01-01T00:00:00Z".into();
     assert!(o::kick_orders_refresh(&app()));
     unpatch();
     app().state.lock().unwrap().connected = false;
-    *o::REFRESHED_AT.lock().unwrap() = String::new();
+    *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
 }
 
 #[test]
 fn test_one_orders_read_after_a_send_does_not_count_as_a_check() {
     let _g = setup();
     let oid = sent_order();
-    *o::REFRESHED_AT.lock().unwrap() = String::new();
+    *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
     set_gql(|_, _| Ok(json!({"soOrdersExtendedOrder": {"status": "SUBMITTED"}})));
     set_session(Some(tok()));
     o::refresh_orders(&app(), &oid);
     unpatch();
-    assert_eq!(*o::REFRESHED_AT.lock().unwrap(), "");
+    assert_eq!(*app_ref().orders.refreshed_at.lock().unwrap(), "");
     assert_eq!(st(&get_order(&oid), "status"), "pending");
 }
 
@@ -789,8 +789,8 @@ fn engine() -> (MutexGuard<'static, ()>, Engine) {
     let c = conn();
     bagholder_store::tables::replace_balances(&c, &[json!({"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25})]).unwrap();
     bagholder_store::tables::set_meta(&c, "balances_read_at", "").unwrap();
-    o::stop_allowed_cache().lock().unwrap().clear();
-    o::bracket_said().lock().unwrap().clear();
+    app_ref().orders.stop_allowed_cache.lock().unwrap().clear();
+    app_ref().orders.bracket_said.lock().unwrap().clear();
     let e = Engine { sent: Arc::default(), rejections: Arc::default() };
     (g, e)
 }

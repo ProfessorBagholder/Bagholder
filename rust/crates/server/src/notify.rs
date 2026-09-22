@@ -214,16 +214,23 @@ pub fn default_ident(i: &Value) -> String {
     }
 }
 
-fn wake() -> &'static (Mutex<u64>, Condvar) {
-    static W: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
-    W.get_or_init(|| (Mutex::new(0), Condvar::new()))
+/// This app's notification streams: the bell that wakes them to look again, and
+/// the one thread that shows the system's own notifications, started with the
+/// first (`enqueue`).
+#[derive(Default)]
+pub struct NotifyState {
+    bell: (Mutex<u64>, Condvar),
+    worker: OnceLock<Mutex<std::sync::mpsc::Sender<(String, String, String)>>>,
 }
 
-/// Wake every notification stream to look again: the app is stopping.
-pub fn wake_streams() {
-    let (m, c) = wake();
-    *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-    c.notify_all();
+impl NotifyState {
+    /// Wake every notification stream to look again: something was posted, or
+    /// the app is stopping.
+    pub fn wake_streams(&self) {
+        let (m, c) = &self.bell;
+        *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        c.notify_all();
+    }
 }
 
 /// One notification, if its kind is on and this key has not
@@ -251,14 +258,12 @@ fn post(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, b
     if !channel.is_empty() {
         enqueue(app.clone(), crate::app::f(&row, "title"), crate::app::f(&row, "body"), channel);
     }
-    let (m, c) = wake();
-    *m.lock().unwrap() += 1;
-    c.notify_all();
+    app.notify.wake_streams();
     Some(row)
 }
 
 fn enqueue(app: Arc<App>, title: String, body: String, chan: String) {
-    let tx = app.notify_worker.get_or_init(|| {
+    let tx = app.notify.worker.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<(String, String, String)>();
         // the app holds the sender and the thread only a weak hold on the app: when
         // the app goes, the sender goes with it and the thread ends
@@ -525,7 +530,7 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
     while !app.stopping() {
         let rows = app.open().ok().and_then(|c| bagholder_store::feeds::list_notifications(&c, last, "", false, 50, false).ok()).unwrap_or_default();
         if rows.is_empty() {
-            let (m, c) = wake();
+            let (m, c) = &app.notify.bell;
             let g = m.lock().unwrap();
             let _ = c.wait_timeout(g, heartbeat());
             if app.stopping() {
@@ -970,7 +975,7 @@ mod tests {
         assert_eq!(lines[1], "$0.15 a share, monthly · ex Aug 31, paid Sep 4 · was $0.20");
         assert_eq!(f(&rows[0]["extra"], "url"), "https://money.tmx.com/en/quote/RDDY/news/7");
         assert_eq!(f(&rows[0]["extra"], "symbol"), "RDDY");
-        assert!(crate::feeds::RECORD_READS.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        assert!(app.feeds.record_reads.load(std::sync::atomic::Ordering::SeqCst) > 0,
                 "the record is read again so the notice is not a day behind the release");
     }
 

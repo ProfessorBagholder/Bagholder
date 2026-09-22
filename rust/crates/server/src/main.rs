@@ -131,10 +131,11 @@ fn serve() -> i32 {
     *a.port.lock().unwrap() = port;
 
     // from here on a change reaches an open page because it happened: every commit
-    // on any connection, every write to the app's state, the day turning
-    bagholder_store::on_commit(events::signal);
+    // on any connection (wired to the bus when the app was built), every write to
+    // the app's state, the day turning
     events::signal_at_each_midnight(a.clone());
-    bagholder_market::localmodel::on_change(events::signal);
+    let events_for_localmodel = a.events.clone();
+    bagholder_market::localmodel::on_change(move || events_for_localmodel.signal());
     a.spawn_with("bagholder-auto-sync", session::auto_sync_loop);
     a.spawn_with("bagholder-market", |app| {
         feeds::refresh_market_data(&app);

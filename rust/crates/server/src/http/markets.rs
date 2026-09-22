@@ -58,8 +58,8 @@ struct Search {
 }
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> Api {
-    let path = state.app.db_path();
-    answer(move || bagholder_market::search::symbol_search(&path, &s.q)).await
+    let pool = state.app.store();
+    answer(move || bagholder_market::search::symbol_search(&pool, &s.q)).await
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
@@ -203,8 +203,8 @@ async fn history(State(state): State<AppState>, RawQuery(query): RawQuery) -> Ap
     answer(move || feeds::history_payload(&state.app, query.as_deref().unwrap_or(""))).await
 }
 
-async fn markets_refresh() -> Api {
-    answer(feeds::kick_universes).await
+async fn markets_refresh(State(state): State<AppState>) -> Api {
+    answer(move || feeds::kick_universes(&state.app)).await
 }
 
 // The three writes below hand their body to the module that owns the rows; it

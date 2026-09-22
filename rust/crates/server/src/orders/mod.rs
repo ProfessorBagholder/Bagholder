@@ -73,6 +73,20 @@ pub use readback::*;
 pub use ticket::*;
 pub use tools::*;
 
+/// The order loops' own state: brackets in flight, the last readback, and what
+/// has already been said or looked up once so it is not said or looked up again.
+#[derive(Default)]
+pub struct OrdersState {
+    /// When orders were last read back from Wealthsimple.
+    pub(crate) refreshed_at: Mutex<String>,
+    pub(crate) refreshing: AtomicBool,
+    /// One bracket tick at a time.
+    pub(crate) bracket_lock: AtomicBool,
+    /// What a bracket has already logged once, so it is not logged again.
+    pub(crate) bracket_said: Mutex<HashSet<String>>,
+    pub(crate) stop_allowed_cache: Mutex<HashMap<String, bool>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

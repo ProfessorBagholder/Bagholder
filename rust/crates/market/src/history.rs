@@ -940,7 +940,7 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start:
 
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once.
-pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: String, start: String, end: String) {
+pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Value, tf: String, start: String, end: String) {
     static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let sym = bagholder_model::venues::tmx_symbol(&field_s(&rec, "symbol"));
     {
@@ -951,7 +951,7 @@ pub fn ensure_intraday_in_background(db: std::path::PathBuf, rec: Value, tf: Str
         p.push(sym.clone());
     }
     let _ = std::thread::Builder::new().name(format!("bagholder-intraday-{}", sym)).spawn(move || {
-        if let Ok(conn) = bagholder_store::open_db(&db) {
+        if let Ok(conn) = pool.get() {
             let (today, now_unix, stamp) = crate::clock_now();
             let _ = ensure_intraday(&conn, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true);
         }

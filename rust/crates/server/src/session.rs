@@ -565,7 +565,7 @@ pub fn refresh_portfolio(app: &Arc<App>) -> Value {
 pub fn portfolio_loop(app: Arc<App>) {
     // balances, net liquidation values and buying power: read when a page connects and
     // each few minutes while one stays. Nothing else reads them between syncs.
-    while crate::events::park_until(&app, || crate::events::watchers() > 0) {
+    while app.events.park_until(&app, || app.events.watchers() > 0) {
         refresh_portfolio(&app);
         if app.wait(Duration::from_secs(60 * PORTFOLIO_REFRESH_MINUTES)) {
             return;
@@ -623,11 +623,11 @@ pub fn auto_sync_loop(app: Arc<App>) {
         let was = (connected, login);
         let changed = || (app.state.lock().unwrap().connected, has_login(&app)) != was;
         if sleep == Duration::MAX {
-            if !crate::events::park_until(&app, changed) {
+            if !app.events.park_until(&app, changed) {
                 return;
             }
         } else if !sleep.is_zero() {
-            crate::events::park_until_or(&app, sleep, changed);
+            app.events.park_until_or(&app, sleep, changed);
         }
         if app.stopping() {
             return;
@@ -651,7 +651,7 @@ pub fn auto_sync_loop(app: Arc<App>) {
             }
         } else if due {
             // a pull the user started is running; it marks the window done when it ends
-            crate::events::park_until(&app, || !app.state.lock().unwrap().syncing);
+            app.events.park_until(&app, || !app.state.lock().unwrap().syncing);
         }
         retry = None;
     }

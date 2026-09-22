@@ -154,7 +154,8 @@ fn db() -> Connection {
 }
 
 fn ctx(conn: &Connection) -> Ctx<'_> {
-    Ctx { conn, db: std::env::temp_dir().join("bh-exposure-test-none.db"), today: "2026-09-16".into() }
+    let pool = std::sync::Arc::new(bagholder_store::pool::Pool::new(&std::env::temp_dir().join("bh-exposure-test-none.db")));
+    Ctx { conn, pool, today: "2026-09-16".into() }
 }
 
 fn classified() -> Map<String, Value> {

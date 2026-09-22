@@ -36,7 +36,7 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
     let app = state.app;
     let feed = Feed::open(app.clone(), filters, q.trade);
     let hello = feed.hello();
-    let changes = stream::unfold((Some(feed), events::subscribe(), true), move |(feed, mut rx, first)| {
+    let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
     let value = app.clone();
     async move {
         let mut feed = feed?;
@@ -82,7 +82,7 @@ pub struct Watch {
 /// `POST /api/events/watch`
 pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api {
     let app = state.app;
-    let ok = blocking(move || events::watch(&app, w.id, w.docs.into_iter().collect())).await?;
+    let ok = blocking(move || app.events.watch(&app, w.id, w.docs.into_iter().collect())).await?;
     Ok(Json(json!({"ok": ok})))
 }
 

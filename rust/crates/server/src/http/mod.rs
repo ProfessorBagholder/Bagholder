@@ -174,7 +174,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::i
     let stopped = || {
         let app = app.clone();
         async move {
-            let mut rx = crate::events::subscribe();
+            let mut rx = app.events.subscribe();
             while !app.stopping() {
                 if rx.changed().await.is_err() {
                     break;

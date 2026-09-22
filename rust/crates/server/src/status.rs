@@ -53,7 +53,7 @@ pub fn payload(app: &Arc<App>) -> Value {
         "updating": st.updating,
         "updateError": st.update_error,
         "notify": notify_status,
-        "newsReading": feeds::news_reading(),
+        "newsReading": feeds::news_reading(app),
     })
 }
 
