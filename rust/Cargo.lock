@@ -164,6 +164,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-diff-derive"
+version = "1.45.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bagholder-market"
 version = "1.45.0"
 dependencies = [
@@ -185,6 +194,7 @@ dependencies = [
 name = "bagholder-model"
 version = "1.45.0"
 dependencies = [
+ "bagholder-diff-derive",
  "chrono",
  "serde",
  "serde_json",

@@ -193,7 +193,7 @@ impl App {
 
     /// The model as the page is sent it, under these filters and with this
     /// trade's detail: built once for a base, then shared.
-    pub fn view(&self, filters: Option<&Value>, detail: Option<&str>) -> rusqlite::Result<std::sync::Arc<Value>> {
+    pub fn view(&self, filters: Option<&Value>, detail: Option<&str>) -> rusqlite::Result<std::sync::Arc<bagholder_model::wire::View>> {
         let base = self.base()?;
         Ok(self.model.view(&base, filters, detail))
     }

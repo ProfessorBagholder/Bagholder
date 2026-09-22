@@ -74,14 +74,17 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
         let filters = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
         let view = app.view(filters.as_ref(), q.trade.as_deref()).map_err(|e| ApiError::Model(e.to_string()))?;
         let mut payload = if q.only.as_deref() == Some("live") {
-            let mut keys = vec!["ok", "today", "currency", "market", "positions", "positionsSummary", "portfolio"];
+            // only these sections are written out of the shared view, not the whole of it
+            let mut live = serde_json::json!({
+                "ok": view.ok, "today": view.today, "currency": view.currency, "market": view.market,
+                "positions": view.positions, "positionsSummary": view.positions_summary, "portfolio": view.portfolio,
+            });
             if q.markets.is_some() {
-                keys.push("markets");
+                live["markets"] = serde_json::to_value(&view.markets).map_err(|e| ApiError::Model(e.to_string()))?;
             }
-            // only these sections are copied out of the shared view, not the whole of it
-            Value::Object(keys.iter().filter_map(|k| view.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect())
+            live
         } else {
-            (*view).clone()
+            view.to_value()
         };
         payload["status"] = crate::status::payload();
         Ok(payload)

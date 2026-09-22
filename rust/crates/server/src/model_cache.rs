@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use bagholder_model::base::{self, Base, Inputs, Layers};
+use bagholder_model::wire::View;
 use bagholder_store::{activities, gens, market, rows, snapshot, tables};
 
 type Gens = BTreeMap<String, i64>;
@@ -44,7 +45,7 @@ struct Inner {
 struct Seen {
     base: Arc<Base>,
     key: String,
-    view: Arc<Value>,
+    view: Arc<View>,
 }
 
 /// How many views of the current base are kept: the page's own, another tab's,
@@ -90,7 +91,7 @@ impl ModelCache {
     /// page is sent it. Asked again for the same base, filters and trade it is the
     /// same object: a second tab, a reload, a filter set and cleared cost nothing.
     /// Views of an earlier base are dropped the first time a newer one is asked for.
-    pub fn view(&self, base: &Arc<Base>, filters: Option<&Value>, detail: Option<&str>) -> Arc<Value> {
+    pub fn view(&self, base: &Arc<Base>, filters: Option<&Value>, detail: Option<&str>) -> Arc<View> {
         let key = format!("{}|{}", bagholder_model::filters::clean_filters(filters).key(), detail.unwrap_or(""));
         {
             let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
@@ -103,7 +104,7 @@ impl ModelCache {
             }
         }
         // built outside the lock: a slow view never holds up a cached one
-        let view = Arc::new(bagholder_model::view::view_of(base, filters, bagholder_model::view::Detail::Only(detail)).to_value());
+        let view = Arc::new(bagholder_model::view::view_of(base, filters, bagholder_model::view::Detail::Only(detail)));
         let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
         views.retain(|s| Arc::ptr_eq(&s.base, base));
         if views.len() >= VIEWS_KEPT {
@@ -303,7 +304,7 @@ mod tests {
         let ticked = cache.base(&conn, TODAY).unwrap();
         let after = cache.view(&ticked, None, None);
         assert!(!Arc::ptr_eq(&all, &after));
-        assert_eq!(after["positions"][0]["last"], json!(2.10));
+        assert_eq!(after.to_value()["positions"][0]["last"], json!(2.10));
     }
 
     #[test]

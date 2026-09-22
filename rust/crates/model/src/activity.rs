@@ -17,7 +17,7 @@ use crate::value::compact;
 // --------------------------------------------------------------------------
 
 /// What is traded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub enum Kind {
     Shares,
     Options,
@@ -49,7 +49,7 @@ impl fmt::Display for Kind {
 }
 
 /// Which way a fill goes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub enum Side {
     #[serde(rename = "BUY")]
     Buy,
@@ -75,7 +75,7 @@ impl Side {
 }
 
 /// Which way a position faces.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub enum Direction {
     #[serde(rename = "LONG")]
     Long,
@@ -211,6 +211,12 @@ impl PartialOrd for Flag {
 impl Ord for Flag {
     fn cmp(&self, other: &Flag) -> std::cmp::Ordering {
         self.text().cmp(&other.text())
+    }
+}
+
+impl crate::patch::Diff for Flag {
+    fn diff(&self, new: &Self, path: &mut Vec<serde_json::Value>, ops: &mut Vec<serde_json::Value>) {
+        crate::patch::as_json(self, new, path, ops)
     }
 }
 

@@ -202,7 +202,7 @@ pub struct Feed {
     wanted: Arc<Mutex<Wanted>>,
     filters: Option<Value>,
     detail: Option<String>,
-    sent: Option<(Arc<Value>, Value)>,
+    sent: Option<(Arc<bagholder_model::wire::View>, Value)>,
     sent_docs: std::collections::BTreeMap<String, Value>,
 }
 
@@ -245,13 +245,14 @@ impl Feed {
             }
             match &self.sent {
                 None => {
-                    let mut whole = (*view).clone();
+                    let mut whole = view.to_value();
                     whole["status"] = now.clone();
                     out.push(("snapshot", serde_json::json!({"doc": "model", "data": whole})));
                 }
                 Some((was, was_status)) => {
-                    // the same view object is the same data: only a different one is compared
-                    let mut ops = if Arc::ptr_eq(was, &view) { vec![] } else { patch::diff(was, &view) };
+                    // compared as the model's own values, row by row by each row's id; the
+                    // same view object, or a part both views share, is not compared at all
+                    let mut ops = patch::typed(was, &view);
                     ops.extend(patch::diff_under(&["status"], was_status, &now));
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));

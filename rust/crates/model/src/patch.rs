@@ -119,6 +119,258 @@ pub fn diff_under(prefix: &[&str], old: &Value, new: &Value) -> Vec<Value> {
     ops
 }
 
+// --- the typed differ ----------------------------------------------------------
+//
+// The same operations, found by comparing the model's own values rather than their
+// JSON: a struct field by field under the names serde gives its fields, a list of
+// rows by the id its row type declares (`#[diff(key = …)]`) rather than one guessed
+// from the data, and a value shared between the two states (an `Arc` both hold) not
+// at all. `#[derive(Diff)]` (the `bagholder-diff-derive` crate) writes the struct
+// and enum impls; the leaves, lists, maps and pointers are here.
+
+/// A value the page holds, compared with its next state.
+pub trait Diff: serde::Serialize {
+    /// For a row type: the field (by its JSON name) that tells its rows apart.
+    const KEY: Option<&'static str> = None;
+    /// This row's value of that field, as the page's path step names it.
+    fn row_key(&self) -> Option<String> {
+        None
+    }
+    /// Push onto `ops` what turns `self` into `new`, under `path`.
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>);
+}
+
+/// The operations that turn `old` into `new`.
+pub fn typed<T: Diff + ?Sized>(old: &T, new: &T) -> Vec<Value> {
+    typed_under(&[], old, new)
+}
+
+/// As `typed`, for a part of the state that lives under `prefix`.
+pub fn typed_under<T: Diff + ?Sized>(prefix: &[&str], old: &T, new: &T) -> Vec<Value> {
+    let mut path: Vec<Value> = prefix.iter().map(|s| json!(s)).collect();
+    let mut ops = Vec::new();
+    old.diff(new, &mut path, &mut ops);
+    ops
+}
+
+fn to_json<T: serde::Serialize + ?Sized>(v: &T) -> Value {
+    serde_json::to_value(v).expect("a wire value is plain data")
+}
+
+fn set<T: serde::Serialize + ?Sized>(path: &[Value], v: &T, ops: &mut Vec<Value>) {
+    ops.push(json!(["set", path, to_json(v)]));
+}
+
+/// A value compared as its JSON: the same, or set.
+pub fn leaf<T: serde::Serialize + ?Sized>(old: &T, new: &T, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+    let n = to_json(new);
+    if to_json(old) != n {
+        ops.push(json!(["set", path, n]));
+    }
+}
+
+/// A value compared as the JSON it is written as, the way `diff` compares JSON.
+pub fn as_json<T: serde::Serialize + ?Sized>(old: &T, new: &T, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+    diff_into(&to_json(old), &to_json(new), path, ops)
+}
+
+/// The id a row written as JSON carries in `field`.
+pub fn json_key_of<T: serde::Serialize + ?Sized>(v: &T, field: &str) -> Option<String> {
+    to_json(v).get(field).and_then(key_text)
+}
+
+/// One field of a struct, always present.
+pub fn field<T: Diff + ?Sized>(old: &T, new: &T, name: &str, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+    path.push(json!(name));
+    old.diff(new, path, ops);
+    path.pop();
+}
+
+/// One field serde leaves out when it is empty: set when it appears, deleted when it goes.
+pub fn field_present<T: Diff + ?Sized>(old: &T, new: &T, was: bool, is: bool, name: &str, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+    path.push(json!(name));
+    match (was, is) {
+        (true, true) => old.diff(new, path, ops),
+        (false, true) => set(path, new, ops),
+        (true, false) => ops.push(json!(["del", path])),
+        (false, false) => {}
+    }
+    path.pop();
+}
+
+/// A row's id as a path step names it: its text, or its number written out.
+pub fn key_of<T: serde::Serialize + ?Sized>(v: &T) -> Option<String> {
+    key_text(&to_json(v))
+}
+
+macro_rules! leaves {
+    ($($t:ty),*) => {$(
+        impl Diff for $t {
+            fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+                if self != new {
+                    set(path, new, ops);
+                }
+            }
+        }
+    )*};
+}
+leaves!(String, str, bool, i32, i64, u32, u64, usize);
+
+impl Diff for f64 {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        // NaN is written as null, and null is null
+        if self != new && !(self.is_nan() && new.is_nan()) {
+            set(path, new, ops);
+        }
+    }
+}
+
+impl<T: Diff + ?Sized> Diff for &T {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        (**self).diff(*new, path, ops)
+    }
+}
+
+impl<T: Diff + ?Sized> Diff for std::sync::Arc<T> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        // the one value both states hold has not moved
+        if !std::sync::Arc::ptr_eq(self, new) {
+            (**self).diff(new, path, ops)
+        }
+    }
+}
+
+impl<T: Diff> Diff for Option<T> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        match (self, new) {
+            (Some(a), Some(b)) => a.diff(b, path, ops),
+            (None, None) => {}
+            _ => set(path, new, ops),
+        }
+    }
+}
+
+impl<A: serde::Serialize, B: serde::Serialize> Diff for (A, B) {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        leaf(self, new, path, ops)
+    }
+}
+
+/// Whether `old` and `new` are the same, as far as the page could tell.
+fn same<T: Diff + ?Sized>(old: &T, new: &T) -> bool {
+    let mut ops = Vec::new();
+    old.diff(new, &mut Vec::new(), &mut ops);
+    ops.is_empty()
+}
+
+/// Each row's id, when every row has one and no two share it.
+fn ids<T: Diff>(rows: &[T]) -> Option<Vec<String>> {
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<String> = rows.iter().map(|r| r.row_key()).collect::<Option<_>>()?;
+    ids.iter().all(|k| seen.insert(k.as_str())).then_some(ids)
+}
+
+impl<T: Diff> Diff for Vec<T> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        self.as_slice().diff(new.as_slice(), path, ops)
+    }
+}
+
+// serde writes arrays of a fixed length only up to 32, each length its own impl
+macro_rules! arrays {
+    ($($n:literal),*) => {$(
+        impl<T: Diff> Diff for [T; $n] {
+            fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+                self.as_slice().diff(new.as_slice(), path, ops)
+            }
+        }
+    )*};
+}
+arrays!(1, 2, 3, 4, 5, 6, 7, 8);
+
+impl<T: Diff> Diff for [T] {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        if self.is_empty() && new.is_empty() {
+            return;
+        }
+        // a list gone empty, or of rows no id tells apart, is sent whole when it differs
+        let keyed = match (T::KEY, new.is_empty()) {
+            (Some(key), false) => match (ids(self), ids(new)) {
+                (Some(was), Some(now)) => Some((key, was, now)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((key, was, now)) = keyed else {
+            if self.len() != new.len() || self.iter().zip(new).any(|(a, b)| !same(a, b)) {
+                set(path, new, ops);
+            }
+            return;
+        };
+        let at: std::collections::HashMap<&str, usize> = was.iter().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
+        if was != now {
+            let added: Map<String, Value> = new.iter().zip(&now).filter(|(_, k)| !at.contains_key(k.as_str())).map(|(r, k)| (k.clone(), to_json(r))).collect();
+            ops.push(json!(["rows", path, key, now, added]));
+        }
+        for (row, k) in new.iter().zip(&now) {
+            if let Some(&i) = at.get(k.as_str()) {
+                path.push(step(key, k));
+                self[i].diff(row, path, ops);
+                path.pop();
+            }
+        }
+    }
+}
+
+/// An object keyed by name: each value compared under its key, a key gained set,
+/// a key lost deleted.
+fn keyed<'a, V: Diff + 'a>(
+    old: impl Fn(&str) -> Option<&'a V>,
+    new: impl Iterator<Item = (&'a String, &'a V)>,
+    gone: impl Iterator<Item = &'a String>,
+    path: &mut Vec<Value>,
+    ops: &mut Vec<Value>,
+) {
+    for (k, v) in new {
+        path.push(json!(k));
+        match old(k) {
+            Some(was) => was.diff(v, path, ops),
+            None => set(path, v, ops),
+        }
+        path.pop();
+    }
+    for k in gone {
+        path.push(json!(k));
+        ops.push(json!(["del", path]));
+        path.pop();
+    }
+}
+
+impl<V: Diff> Diff for std::collections::BTreeMap<String, V> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        keyed(|k| self.get(k), new.iter(), self.keys().filter(|k| !new.contains_key(*k)), path, ops)
+    }
+}
+
+impl<V: Diff> Diff for std::collections::HashMap<String, V> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        keyed(|k| self.get(k), new.iter(), self.keys().filter(|k| !new.contains_key(*k)), path, ops)
+    }
+}
+
+impl<V: Diff> Diff for crate::wire::Ordered<V> {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        let find = |m: &'_ crate::wire::Ordered<V>, k: &str| m.0.iter().position(|(key, _)| key == k);
+        keyed(|k| find(self, k).map(|i| &self.0[i].1), new.0.iter().map(|(k, v)| (k, v)), self.0.iter().map(|(k, _)| k).filter(|k| find(new, k).is_none()), path, ops)
+    }
+}
+
+impl Diff for Value {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        diff_into(self, new, path, ops)
+    }
+}
+
 fn walk<'a>(root: &'a mut Value, path: &[Value]) -> Option<&'a mut Value> {
     let mut at = root;
     for s in path {

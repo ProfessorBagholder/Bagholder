@@ -13,7 +13,7 @@ pub const BENCHMARK_LABELS: [(&str, &str); 3] = [("SP500", "S&P 500"), ("TSX", "
 pub const PRESET_DAYS: [(&str, i64); 7] = [("1d", 1), ("1w", 7), ("1m", 30), ("3m", 90), ("6m", 180), ("1y", 365), ("5y", 1826)];
 
 /// Which side of its bound a range keeps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub enum Op {
     #[serde(rename = ">")]
     Above,
@@ -21,7 +21,7 @@ pub enum Op {
     Below,
 }
 
-#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub struct Range {
     pub op: Op,
     /// Nothing: the range is off.
@@ -45,7 +45,7 @@ impl Range {
 }
 
 /// The values each list filter keeps; empty keeps everything.
-#[derive(Clone, Debug, Default, Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub struct Lists {
     pub account: Vec<String>,
     pub symbol: Vec<String>,
@@ -57,7 +57,7 @@ pub struct Lists {
     pub result: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub struct Ranges {
     pub price: Range,
     pub hold: Range,
@@ -66,7 +66,7 @@ pub struct Ranges {
 }
 
 /// The filters as the model acts on them, and as it echoes them to the page.
-#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub struct Filters {
     pub lists: Lists,
     pub ranges: Ranges,

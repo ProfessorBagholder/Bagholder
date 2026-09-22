@@ -7,6 +7,9 @@
 //!                                                   -> cashflow
 //! ```
 
+// the derives name this crate by its own name, inside it as outside
+extern crate self as bagholder_model;
+
 pub mod value;
 pub mod lenient;
 pub mod activity;
