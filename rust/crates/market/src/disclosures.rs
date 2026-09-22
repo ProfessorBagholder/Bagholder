@@ -3,14 +3,15 @@
 //! first.
 //!
 //! A source is a regulator's filing system (SEDAR+ for Canada, SEC EDGAR for
-//! the US); a category is the kind of disclosure, the same across sources. An
-//! item is `{id, source, category, date, dateText, type, title, size, url}`,
-//! its id prefixed with the source ("sedar:", "sec:") so a stored row routes
-//! back to the provider that can download it.
+//! the US); a category is the kind of disclosure, the same across sources. A
+//! document is `FiledDocument`, its id prefixed with the source ("sedar:",
+//! "sec:") so a stored row routes back to the provider that can download it.
 
 use regex::Regex;
-use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
+
+use bagholder_store::feeds::{FiledDocument, Regulator};
 
 pub const FINANCIALS: &str = "Financials";
 pub const EVENTS: &str = "Material events";
@@ -72,10 +73,9 @@ pub fn names_match(a: &str, b: &str) -> bool {
     overlap > 0 && overlap as f64 >= ta.len().min(tb.len()) as f64 * 0.5
 }
 
-fn sort_key(item: &Value) -> (String, String) {
-    let s = |k: &str| item.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let date = { let d = s("date"); if d.is_empty() { s("dateText") } else { d } };
-    (date, s("source"))
+fn sort_key(item: &FiledDocument) -> (String, Regulator) {
+    let date = if item.date.is_empty() { item.date_text.clone() } else { item.date.clone() };
+    (date, item.source)
 }
 
 /// True when at least one source can be reached.
@@ -83,40 +83,69 @@ pub fn available() -> bool {
     crate::sedar::available() || crate::edgar::available()
 }
 
+/// What a reading made of a document: its title, a sentence, and whether it
+/// is read for good.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Enrichment {
+    pub subject: String,
+    pub summary: String,
+    #[serde(rename = "final", skip_serializing_if = "std::ops::Not::not")]
+    pub final_: bool,
+}
+
+/// One source's outcome in a gathering.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SourceOutcome {
+    pub available: bool,
+    pub matched: bool,
+    pub filer: bool,
+    pub count: usize,
+    pub error: String,
+}
+
+/// Every covering source's documents, newest first, with each source's
+/// outcome.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Gathered {
+    pub items: Vec<FiledDocument>,
+    pub sources: BTreeMap<Regulator, SourceOutcome>,
+}
+
 /// A filing source.
 pub trait Provider {
-    fn source(&self) -> &str;
+    fn source(&self) -> Regulator;
     fn available(&self) -> bool;
     fn covers(&self, symbol: &str, exchange: &str, currency: &str) -> bool;
-    fn fetch(&self, symbol: &str, name: &str, exchange: &str, currency: &str, profile_no: &str) -> Fetched<Vec<Value>>;
+    fn fetch(&self, symbol: &str, name: &str, exchange: &str, currency: &str, profile_no: &str) -> Fetched<Vec<FiledDocument>>;
     /// Whether the source knows a filer even when it listed nothing.
     fn has_filer(&self, _symbol: &str, _name: &str, _exchange: &str, _currency: &str) -> bool {
         false
     }
-    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)>;
+    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)>;
 }
 
 struct Sedar;
 impl Provider for Sedar {
-    fn source(&self) -> &str { crate::sedar::SOURCE }
+    fn source(&self) -> Regulator { Regulator::Sedar }
     fn available(&self) -> bool { crate::sedar::available() }
     fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::sedar::covers(s, e, c) }
-    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, p: &str) -> Fetched<Vec<Value>> {
+    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, p: &str) -> Fetched<Vec<FiledDocument>> {
         crate::sedar::fetch(s, n, e, c, crate::sedar::SEARCH_LIMIT, p)
     }
-    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)> { crate::sedar::document(row) }
+    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)> { crate::sedar::document(row) }
 }
 
 struct Edgar;
 impl Provider for Edgar {
-    fn source(&self) -> &str { crate::edgar::SOURCE }
+    fn source(&self) -> Regulator { Regulator::Sec }
     fn available(&self) -> bool { crate::edgar::available() }
     fn covers(&self, s: &str, e: &str, c: &str) -> bool { crate::edgar::covers(s, e, c) }
-    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, _p: &str) -> Fetched<Vec<Value>> {
+    fn fetch(&self, s: &str, n: &str, e: &str, c: &str, _p: &str) -> Fetched<Vec<FiledDocument>> {
         crate::edgar::fetch(s, n, e, c, 200)
     }
     fn has_filer(&self, s: &str, n: &str, e: &str, c: &str) -> bool { crate::edgar::has_filer(s, n, e, c) }
-    fn document(&self, row: &Value) -> Fetched<(Vec<u8>, String)> { crate::edgar::document(row) }
+    fn document(&self, row: &FiledDocument) -> Fetched<(Vec<u8>, String)> { crate::edgar::document(row) }
 }
 
 /// SEDAR+ first, then EDGAR.
@@ -127,18 +156,18 @@ pub fn providers() -> [&'static dyn Provider; 2] {
 /// Every covering source's filings for one instrument,
 /// merged newest first, with each source's outcome beside them. A source that
 /// fails is recorded and skipped; the others still return.
-pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Value {
+pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Gathered {
     fetch_from(&providers(), symbol, name, exchange, currency, limit, profile_no)
 }
 
 /// `fetch` over the providers given.
-pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Value {
-    let mut items: Vec<Value> = Vec::new();
-    let mut sources = Map::new();
+pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, profile_no: &str) -> Gathered {
+    let mut items: Vec<FiledDocument> = Vec::new();
+    let mut sources: BTreeMap<Regulator, SourceOutcome> = BTreeMap::new();
     for p in providers {
         let avail = p.available();
         if !(avail && p.covers(symbol, exchange, currency)) {
-            sources.insert(p.source().into(), json!({"available": avail, "matched": false, "filer": false, "count": 0, "error": ""}));
+            sources.insert(p.source(), SourceOutcome { available: avail, matched: false, filer: false, count: 0, error: String::new() });
             continue;
         }
         match p.fetch(symbol, name, exchange, currency, profile_no) {
@@ -146,49 +175,46 @@ pub fn fetch_from(providers: &[&dyn Provider], symbol: &str, name: &str, exchang
                 let n = got.len();
                 items.extend(got);
                 let filer = n > 0 || p.has_filer(symbol, name, exchange, currency);
-                sources.insert(p.source().into(), json!({"available": true, "matched": n > 0, "filer": filer, "count": n, "error": ""}));
+                sources.insert(p.source(), SourceOutcome { available: true, matched: n > 0, filer, count: n, error: String::new() });
             }
             Err(e) => {
-                sources.insert(p.source().into(), outcome_of(&e));
+                sources.insert(p.source(), outcome_of(&e));
             }
         }
     }
     // `sort(key=..., reverse=True)` is stable: equal keys keep their order
     items.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
     items.truncate(limit.max(1));
-    json!({"items": items, "sources": sources})
+    Gathered { items, sources }
 }
 
-fn outcome_of(e: &SourceError) -> Value {
+fn outcome_of(e: &SourceError) -> SourceOutcome {
     match e {
-        SourceError::Unavailable(m) => json!({"available": false, "matched": false, "filer": false, "count": 0, "error": m}),
-        SourceError::Other(m) => json!({"available": true, "matched": false, "filer": false, "count": 0, "error": m}),
+        SourceError::Unavailable(m) => SourceOutcome { available: false, matched: false, filer: false, count: 0, error: m.clone() },
+        SourceError::Other(m) => SourceOutcome { available: true, matched: false, filer: false, count: 0, error: m.clone() },
     }
 }
 
 /// The document a stored row points at, from its
 /// source. (bytes, content type).
-pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
+pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     document_from(&providers(), row)
 }
 
 /// `document` over the providers given.
-pub fn document_from(providers: &[&dyn Provider], row: &Value) -> Fetched<(Vec<u8>, String)> {
-    let src = row.get("source").and_then(|v| v.as_str()).unwrap_or("");
-    match providers.iter().find(|p| p.source() == src) {
+pub fn document_from(providers: &[&dyn Provider], row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
+    match providers.iter().find(|p| p.source() == row.source) {
         Some(p) => p.document(row),
-        None => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(src)))),
+        None => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(row.source.as_str())))),
     }
 }
 
 /// The document's readable substance, past a cover form
 /// where the provider can tell.
-pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
-    let src = row.get("source").and_then(|v| v.as_str()).unwrap_or("");
-    match src {
-        s if s == crate::sedar::SOURCE => crate::sedar::document(row),
-        s if s == crate::edgar::SOURCE => crate::edgar::content(row),
-        _ => Err(SourceError::Unavailable(format!("no provider for source {}", repr_quoted(src)))),
+pub fn content(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
+    match row.source {
+        Regulator::Sedar => crate::sedar::document(row),
+        Regulator::Sec => crate::edgar::content(row),
     }
 }
 
@@ -196,36 +222,29 @@ pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
 /// a structured filing it can parse exactly, or None.
 /// The title a row carries without anything being fetched: the name of the
 /// form it is, or of the document it is. None when only a reading can say.
-pub fn quick_title(row: &Value) -> Option<String> {
-    match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
-        s if s == crate::edgar::SOURCE => crate::formnames::title_of(row.get("type").and_then(|v| v.as_str()).unwrap_or("")),
-        s if s == crate::sedar::SOURCE => crate::sedar::enrichment(row)
-            .as_ref()
-            .and_then(|e| e.get("subject"))
-            .and_then(|v| v.as_str())
-            .map(|t| t.to_string()),
-        _ => None,
+pub fn quick_title(row: &FiledDocument) -> Option<String> {
+    match row.source {
+        Regulator::Sec => crate::formnames::title_of(&row.form),
+        Regulator::Sedar => crate::sedar::enrichment(row).map(|e| e.subject),
     }
 }
 
-pub fn enrichment(row: &Value) -> Option<Value> {
-    match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
-        s if s == crate::edgar::SOURCE => crate::edgar::enrichment(row),
-        s if s == crate::sedar::SOURCE => crate::sedar::enrichment(row),
-        _ => None,
+pub fn enrichment(row: &FiledDocument) -> Option<Enrichment> {
+    match row.source {
+        Regulator::Sec => crate::edgar::enrichment(row),
+        Regulator::Sedar => crate::sedar::enrichment(row),
     }
 }
 
 /// A stored row's category re-derived from its type,
-/// so a change to a mapping applies on read. Falls back to the stored one.
-pub fn categorize(row: &Value) -> Value {
-    let stored = row.get("category").cloned().unwrap_or(Value::Null);
-    let derived = match row.get("source").and_then(|v| v.as_str()).unwrap_or("") {
-        s if s == crate::sedar::SOURCE => crate::sedar::categorize(row),
-        s if s == crate::edgar::SOURCE => crate::edgar::categorize(row),
-        _ => return stored,
+/// so a change to a mapping applies on read. Falls back to the stored one --
+/// today it always reads as a string.
+pub fn categorize(row: &FiledDocument) -> String {
+    let derived = match row.source {
+        Regulator::Sedar => crate::sedar::categorize(row),
+        Regulator::Sec => crate::edgar::categorize(row),
     };
-    if derived.is_empty() { stored } else { json!(derived) }
+    if derived.is_empty() { row.category.clone() } else { derived }
 }
 
 /// A string quoted for a message: single quotes, or double quotes when it

@@ -93,13 +93,13 @@ fn call(name: &str, args: &Value) -> Result<Value, Fail> {
                 None => 100,
                 Some(v) => v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(|| Fail::Other(format!("ValueError: invalid literal for int(): {}", v)))?,
             };
-            Ok(disclosures::fetch(&symbol, &nm, &ex, &cur, limit.max(1) as usize, ""))
+            Ok(serde_json::to_value(disclosures::fetch(&symbol, &nm, &ex, &cur, limit.max(1) as usize, "")).unwrap())
         }
         "disclosures_document" => {
             let symbol = required(args, "symbol")?;
             let id = required(args, "id")?;
             let result = disclosures::fetch(&symbol, &nm, &ex, &cur, 200, "");
-            let row = result.get("items").and_then(|i| i.as_array()).and_then(|items| items.iter().find(|i| i.get("id").and_then(|v| v.as_str()) == Some(id.as_str())).cloned());
+            let row = result.items.into_iter().find(|i| i.id == id);
             let row = match row {
                 Some(r) => r,
                 None => return Ok(json!({"error": format!("no item {} for {}", disclosures::repr_quoted(&id), symbol)})),

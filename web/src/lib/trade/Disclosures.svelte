@@ -3,7 +3,7 @@
   // a filings table narrowed by category (mseg) and source (chip), sorted by
   // column, with each row's title and summary read in the background. Columns and
   // controls appear only when they carry more than one value.
-  import type { Trade, Filing } from '../model'
+  import type { Trade, Filing, FilingsDoc, SourceStatus } from '../model'
   import { relTime } from '../fmt'
   import { ICONS } from '../icons'
   import { sort, toggleSort, sortRows } from '../sort.svelte'
@@ -48,9 +48,11 @@
     // until the sources have been asked once there is nothing to say about this listing
     if (!rec || rec.loading || (rec.payload && rec.payload.everRead === false)) return { state: 'loading' as const }
     if (rec.error) return { state: 'error' as const, error: rec.error }
-    const p = rec.payload || { ok: true }
+    const p: FilingsDoc = rec.payload || {
+      ok: true, symbol: sym, available: false, sources: {}, categories: [], fetchedAt: '', everRead: false, summaryStatus: '', reading: [], filings: [],
+    }
     const all = p.filings || []
-    const srcStatus = p.sources || {}
+    const srcStatus: Record<string, SourceStatus> = p.sources || {}
     const availNames = Object.keys(srcStatus).filter((k) => srcStatus[k].available)
     const anyFiler = Object.keys(srcStatus).some((k) => srcStatus[k].filer)
     // a source that was tried and could not be reached (an outage, a maintenance page)

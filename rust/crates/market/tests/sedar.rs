@@ -1,7 +1,7 @@
 //! The parsers pinned against the trimmed real
 //! result rows in tests/fixtures, the navigation helpers, the scope cache, and
 //! the MCP server's protocol. No network.
-use bagholder_market::sedar;
+use bagholder_market::sedar::{self, ReportingIssuer};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -26,12 +26,12 @@ fn test_every_row_has_issuer_profile_file_date_and_a_document_url() {
     let nine = Regex::new(r"^\d{9}$").unwrap();
     let year = Regex::new(r"\d{4}").unwrap();
     for r in &rows {
-        assert!(nine.is_match(s(&r["profileNo"])), "a nine-digit profile number");
-        assert!(!s(&r["issuer"]).is_empty(), "an issuer name");
-        assert!(!s(&r["file"]).is_empty(), "a document file name");
-        assert!(year.is_match(s(&r["submitted"])), "a submitted date carrying a year");
-        assert!(s(&r["url"]).starts_with("https://www.sedarplus.ca/"), "a same-site document url");
-        assert!(s(&r["url"]).contains("resource.html"), "the url is a document resource link");
+        assert!(nine.is_match(&r.profile_no), "a nine-digit profile number");
+        assert!(!r.issuer.is_empty(), "an issuer name");
+        assert!(!r.file.is_empty(), "a document file name");
+        assert!(year.is_match(&r.submitted), "a submitted date carrying a year");
+        assert!(r.url.starts_with("https://www.sedarplus.ca/"), "a same-site document url");
+        assert!(r.url.contains("resource.html"), "the url is a document resource link");
     }
 }
 
@@ -39,17 +39,17 @@ fn test_every_row_has_issuer_profile_file_date_and_a_document_url() {
 fn test_the_first_row_is_read_exactly() {
     let rows = sedar::parse_filings(&fixture("search_documents.html"));
     let first = &rows[0];
-    assert_eq!(first["profileNo"], "000026091");
-    assert_eq!(first["issuer"], "Franco-Nevada Corporation (000026091)");
-    assert_eq!(first["file"], "News release - English.pdf");
-    assert!(s(&first["submitted"]).starts_with("13 Sep 2026"));
-    assert!(s(&first["url"]).contains("drmKey="));
+    assert_eq!(first.profile_no, "000026091");
+    assert_eq!(first.issuer, "Franco-Nevada Corporation (000026091)");
+    assert_eq!(first.file, "News release - English.pdf");
+    assert!(first.submitted.starts_with("13 Sep 2026"));
+    assert!(first.url.contains("drmKey="));
 }
 
 #[test]
 fn test_rows_keep_the_page_order() {
     let rows = sedar::parse_filings(&fixture("search_documents.html"));
-    let dates: Vec<String> = rows.iter().map(|r| s(&r["submitted"]).to_string()).collect();
+    let dates: Vec<String> = rows.iter().map(|r| r.submitted.clone()).collect();
     let mut sorted = dates.clone();
     sorted.sort();
     sorted.reverse();
@@ -64,19 +64,19 @@ fn test_each_row_maps_a_name_to_a_profile_number() {
     assert!(!rows.is_empty());
     let nine = Regex::new(r"^\d{9}$").unwrap();
     for r in &rows {
-        assert!(nine.is_match(s(&r["profileNo"])));
-        assert!(!s(&r["name"]).is_empty());
+        assert!(nine.is_match(&r.profile_no));
+        assert!(!r.name.is_empty());
     }
 }
 
 #[test]
 fn test_a_known_issuer_is_read_with_its_fields() {
     let rows = sedar::parse_reporting_issuers(&fixture("reporting_issuers.html"));
-    let by_no: HashMap<&str, &Value> = rows.iter().map(|r| (s(&r["profileNo"]), r)).collect();
+    let by_no: HashMap<&str, &ReportingIssuer> = rows.iter().map(|r| (r.profile_no.as_str(), r)).collect();
     let r = by_no.get("000010658").expect("000010658 is listed");
-    assert!(s(&r["name"]).contains("01 Quantum"));
-    assert!(s(&r["provinces"]).contains("ON"));
-    assert_eq!(r["type"], "Company", "the type column is read, not an eligibility flag");
+    assert!(r.name.contains("01 Quantum"));
+    assert!(r.provinces.contains("ON"));
+    assert_eq!(r.kind, "Company", "the type column is read, not an eligibility flag");
 }
 
 // --- EmptyAndOddInputTest
@@ -237,14 +237,21 @@ fn test_a_failed_walk_is_not_cached() {
 #[test]
 fn test_a_named_document_is_titled_by_its_name() {
     use bagholder_market::sedar::enrichment;
-    use serde_json::json;
-    let named = enrichment(&json!({"type": "Auditors' consent letter"})).unwrap();
-    assert_eq!(named["subject"], "Auditors' consent letter");
-    assert_eq!(named["final"], true);
-    assert_eq!(enrichment(&json!({"type": "Qualification certificate"})).unwrap()["subject"], "Qualification certificate");
+    use bagholder_store::feeds::{FiledDocument, Regulator};
+    fn doc(form: &str) -> FiledDocument {
+        FiledDocument {
+            id: String::new(), source: Regulator::Sedar, category: String::new(), profile_no: String::new(),
+            issuer: String::new(), form: form.into(), title: String::new(), date: String::new(),
+            date_text: String::new(), size: String::new(), url: String::new(),
+        }
+    }
+    let named = enrichment(&doc("Auditors' consent letter")).unwrap();
+    assert_eq!(named.subject, "Auditors' consent letter");
+    assert!(named.final_);
+    assert_eq!(enrichment(&doc("Qualification certificate")).unwrap().subject, "Qualification certificate");
     // what the document says is the point: these are read
-    assert!(enrichment(&json!({"type": "News release"})).is_none());
-    assert!(enrichment(&json!({"type": "Material change report"})).is_none());
-    assert!(enrichment(&json!({"type": "Final short form prospectus"})).is_none());
-    assert!(enrichment(&json!({"type": ""})).is_none());
+    assert!(enrichment(&doc("News release")).is_none());
+    assert!(enrichment(&doc("Material change report")).is_none());
+    assert!(enrichment(&doc("Final short form prospectus")).is_none());
+    assert!(enrichment(&doc("")).is_none());
 }

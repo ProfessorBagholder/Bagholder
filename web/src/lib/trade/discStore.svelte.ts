@@ -4,7 +4,7 @@
 // as the server reads the document, written into that row. The reading itself is the
 // server's work -- nothing here asks for one document after another, and there is no
 // timer in this file.
-import type { Trade, Filing, FilingsPayload } from '../model'
+import type { Trade, Filing, FilingsDoc } from '../model'
 import { listingTicker } from './chart'
 import { watchDoc } from '../live'
 import { get } from '../api'
@@ -13,7 +13,7 @@ export const DISC_ORDER = ['Financials', 'Material events', 'Governance', 'Offer
 
 export interface DiscRec {
   loading?: boolean
-  payload?: FilingsPayload
+  payload?: FilingsDoc
   error?: string
 }
 
@@ -47,11 +47,11 @@ export function showDisclosures(t: { symbol: string; kind?: string; underlying?:
     if (!discStore[sym]) discStore[sym] = { loading: true }
     const holder = {
       get data() { return discStore[sym]?.payload ?? null },
-      set data(v: FilingsPayload | null) {
+      set data(v: FilingsDoc | null) {
         discStore[sym] = v && v.ok ? { payload: v } : { error: 'Could not read disclosures.' }
       },
     }
-    watching.set(sym, { count: 1, stop: watchDoc<FilingsPayload>(docKey(sym, t), {}, holder) })
+    watching.set(sym, { count: 1, stop: watchDoc<FilingsDoc>(docKey(sym, t), {}, holder) })
   }
   return () => {
     const w = watching.get(sym)

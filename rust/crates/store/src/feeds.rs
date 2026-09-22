@@ -378,6 +378,68 @@ pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
 
 pub fn filing_key(symbol: &str) -> String { up(symbol) }
 
+/// The regulator a document was filed with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub enum Regulator {
+    #[serde(rename = "SEDAR+")]
+    Sedar,
+    #[serde(rename = "SEC")]
+    Sec,
+}
+
+impl Regulator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Regulator::Sedar => "SEDAR+",
+            Regulator::Sec => "SEC",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Regulator> {
+        match s {
+            "SEDAR+" => Some(Regulator::Sedar),
+            "SEC" => Some(Regulator::Sec),
+            _ => None,
+        }
+    }
+}
+
+/// A document a regulator lists for an issuer.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FiledDocument {
+    pub id: String,
+    pub source: Regulator,
+    pub category: String,
+    pub profile_no: String,
+    pub issuer: String,
+    /// The form or document type.
+    #[serde(rename = "type")]
+    pub form: String,
+    pub title: String,
+    pub date: String,
+    pub date_text: String,
+    pub size: String,
+    pub url: String,
+}
+
+/// A filed document as stored, with what a reading made of it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Filing {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub doc: FiledDocument,
+    pub subject: String,
+    pub summary: String,
+    pub enriched_at: String,
+    /// The version of the logic that read it; `None` when never read.
+    pub enrich_version: Option<i64>,
+    /// Read for good: a form read from its own boxes is not read again.
+    pub enrich_final: bool,
+    pub fetched_at: String,
+}
+
 /// A column that may not exist on this table at all, so it reads as empty
 /// when absent: the legacy filings columns are
 /// gone from a table created under the current schema.
@@ -390,62 +452,74 @@ fn maybe(r: &Row, name: &str) -> String {
 
 /// `_filing_from_row`: the old single-source columns stand in when the
 /// new ones are empty, so a row written before the schema changed still reads.
-fn filing_from_row(r: &Row) -> Result<Value> {
-    let or = |a: &str, b: &str| -> Result<String> {
+/// A row whose source names no known regulator is skipped: only SEDAR+ and
+/// SEC exist.
+fn filing_from_row(r: &Row) -> Result<Option<Filing>> {
+    let or = |a: &str, b: &str| -> String {
         let x = maybe(r, a);
-        Ok(if x.is_empty() { maybe(r, b) } else { x })
+        if x.is_empty() { maybe(r, b) } else { x }
     };
-    Ok(json!({
-        "id": maybe(r, "id"),
-        "source": maybe(r, "source"),
-        "category": maybe(r, "category"),
-        "profileNo": maybe(r, "profile_no"),
-        "issuer": maybe(r, "issuer"),
-        "type": or("type", "file")?,
-        "title": maybe(r, "title"),
-        "date": or("date", "submitted_at")?,
-        "dateText": or("date_text", "submitted")?,
-        "size": maybe(r, "size"),
-        "url": maybe(r, "url"),
-        "subject": maybe(r, "subject"),
-        "summary": maybe(r, "summary"),
-        "enrichedAt": maybe(r, "enriched_at"),
-        // a missing value reads as "", this one included
-        "enrichVersion": match r.get::<_, Option<i64>>("enrich_version")? { Some(v) => json!(v), None => json!("") },
+    let source = match Regulator::parse(&maybe(r, "source")) {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let doc = FiledDocument {
+        id: maybe(r, "id"),
+        source,
+        category: maybe(r, "category"),
+        profile_no: maybe(r, "profile_no"),
+        issuer: maybe(r, "issuer"),
+        form: or("type", "file"),
+        title: maybe(r, "title"),
+        date: or("date", "submitted_at"),
+        date_text: or("date_text", "submitted"),
+        size: maybe(r, "size"),
+        url: maybe(r, "url"),
+    };
+    Ok(Some(Filing {
+        doc,
+        subject: maybe(r, "subject"),
+        summary: maybe(r, "summary"),
+        enriched_at: maybe(r, "enriched_at"),
+        enrich_version: r.get::<_, Option<i64>>("enrich_version")?,
         // read for good: a regulator's form, read from its own boxes
-        "enrichFinal": match r.as_ref().column_index("enrich_final") {
+        enrich_final: match r.as_ref().column_index("enrich_final") {
             Ok(_) => r.get::<_, Option<i64>>("enrich_final")?.map(|v| v != 0).unwrap_or(false),
             Err(_) => false,
         },
-        "fetchedAt": maybe(r, "fetched_at"),
+        fetched_at: maybe(r, "fetched_at"),
     }))
 }
 
-pub fn filings_for(conn: &Connection, symbol: &str) -> Result<Vec<Value>> {
+pub fn filings_for(conn: &Connection, symbol: &str) -> Result<Vec<Filing>> {
     let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? ORDER BY date DESC, id")?;
     let mut rows = stmt.query([filing_key(symbol)])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(filing_from_row(r)?);
+        if let Some(fl) = filing_from_row(r)? {
+            out.push(fl);
+        }
     }
     Ok(out)
 }
 
-pub fn filings_all(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn filings_all(conn: &Connection) -> Result<std::collections::BTreeMap<String, Vec<Filing>>> {
     let mut stmt = conn.prepare("SELECT * FROM filings ORDER BY symbol, date DESC, id")?;
     let mut rows = stmt.query([])?;
-    let mut out: Map<String, Value> = Map::new();
+    let mut out: std::collections::BTreeMap<String, Vec<Filing>> = std::collections::BTreeMap::new();
     while let Some(r) = rows.next()? {
         let sym: String = r.get("symbol")?;
-        out.entry(sym).or_insert_with(|| Value::Array(vec![])).as_array_mut().unwrap().push(filing_from_row(r)?);
+        if let Some(fl) = filing_from_row(r)? {
+            out.entry(sym).or_default().push(fl);
+        }
     }
     Ok(out)
 }
 
-pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Value>> {
+pub fn filing(conn: &Connection, symbol: &str, doc_id: &str) -> Result<Option<Filing>> {
     let mut stmt = conn.prepare("SELECT * FROM filings WHERE symbol = ? AND id = ?")?;
     let mut rows = stmt.query(rusqlite::params![filing_key(symbol), doc_id])?;
-    match rows.next()? { Some(r) => Ok(Some(filing_from_row(r)?)), None => Ok(None) }
+    match rows.next()? { Some(r) => filing_from_row(r), None => Ok(None) }
 }
 
 /// `set_filing_enrichment`: what was read out of a document, stamped
@@ -497,7 +571,7 @@ pub fn set_filing_enrichment(
 /// list is refreshed far more often than a filed document changes, and
 /// throwing the reading away with it meant every document was read again from
 /// nothing on each refresh.
-pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[Value], now: &str) -> Result<usize> {
+pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items: &[FiledDocument], now: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let sym = filing_key(symbol);
         struct Kept { subject: Option<String>, summary: Option<String>, enriched_at: Option<String>, version: Option<i64>, final_: Option<i64> }
@@ -506,7 +580,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[V
             let mut stmt = conn.prepare(
                 "SELECT id, subject, summary, enriched_at, enrich_version, enrich_final FROM filings WHERE symbol = ? AND source = ?",
             )?;
-            let mut rows = stmt.query(rusqlite::params![sym, source])?;
+            let mut rows = stmt.query(rusqlite::params![sym, source.as_str()])?;
             while let Some(r) = rows.next()? {
                 kept.push((
                     r.get::<_, String>(0)?,
@@ -514,23 +588,21 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: &str, items: &[V
                 ));
             }
         }
-        conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source])?;
+        conn.execute("DELETE FROM filings WHERE symbol = ? AND source = ?", rusqlite::params![sym, source.as_str()])?;
 
         let mut n = 0usize;
-        for r in items {
-            let rid = field_s(r, "id");
-            if rid.is_empty() {
+        for it in items {
+            if it.id.is_empty() {
                 continue;
             }
-            let src = if source.is_empty() { field_s(r, "source") } else { source.to_string() };
-            let read = kept.iter().find(|(k, _)| *k == rid).map(|(_, v)| v);
+            let read = kept.iter().find(|(k, _)| *k == it.id).map(|(_, v)| v);
             conn.execute(
                 "INSERT OR REPLACE INTO filings (symbol, id, source, category, profile_no, issuer, type, title, date, date_text, size, url, fetched_at, \
                  subject, summary, enriched_at, enrich_version, enrich_final) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    sym, rid, src, field_s(r, "category"), field_s(r, "profileNo"), field_s(r, "issuer"),
-                    field_s(r, "type"), field_s(r, "title"), field_s(r, "date"), field_s(r, "dateText"),
-                    field_s(r, "size"), field_s(r, "url"), now,
+                    sym, it.id, source.as_str(), it.category, it.profile_no, it.issuer,
+                    it.form, it.title, it.date, it.date_text,
+                    it.size, it.url, now,
                     read.map(|k| k.subject.clone().unwrap_or_default()).unwrap_or_default(),
                     read.map(|k| k.summary.clone().unwrap_or_default()).unwrap_or_default(),
                     read.and_then(|k| k.enriched_at.clone()),

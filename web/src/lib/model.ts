@@ -15,6 +15,10 @@ export type {
   Filters, Unmatched, OpenLot, TradeDetail,
 } from './generated/wire'
 
+export type {
+  Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
+} from './generated/filings'
+
 export type EquityPoint = wire.Point
 export type Benchmark = wire.BenchmarkRef
 export type Listing = wire.ListingInfo
@@ -92,43 +96,6 @@ export interface ShortsResp {
   ok: boolean
   covered?: boolean
   shorts?: Shorts
-}
-
-export interface Filing {
-  id: string
-  source: string
-  category: string
-  type: string
-  title: string
-  subject: string
-  summary: string
-  summaryStatus?: string
-  /** nothing a further reading would add: the row is named as it will stay */
-  enrichFinal?: boolean
-  date: string
-  dateText: string
-  size: string
-  url: string
-}
-export interface FilingsSource {
-  available?: boolean
-  filer?: boolean
-  matched?: boolean
-  // set when the source was tried and could not be reached (an outage, a maintenance page)
-  error?: string
-}
-export interface FilingsPayload {
-  ok: boolean
-  filings?: Filing[]
-  sources?: Record<string, FilingsSource>
-  fetchedAt?: string
-  /** false until the sources have been asked once for this listing */
-  everRead?: boolean
-  /** the documents the server's pass has still to read; the first is being read now */
-  reading?: string[]
-  /** the local model that writes the sentences: ready, starting, downloading, off */
-  summaryStatus?: string
-  error?: string
 }
 
 export interface FearReading { label: string; score: number; rating: string }

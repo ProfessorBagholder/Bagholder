@@ -6,20 +6,21 @@
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use ts_rs::TS;
 
-use bagholder_market::{disclosures, edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
+use bagholder_market::disclosures::{self, Gathered, SourceOutcome};
+use bagholder_market::{edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
 use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds::{self as sf, NewsItem};
+use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator};
 use bagholder_store::market as sf_market;
-use bagholder_store::tables::{get_meta, json_text, set_meta};
+use bagholder_store::tables::{get_meta, set_meta};
 
 use crate::app::{f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, App, ENRICH_VERSION};
 use crate::notify;
@@ -525,8 +526,8 @@ fn naming_held(c: &Connection, holding: bool) -> bool {
 }
 
 /// What makes a filing itself.
-pub fn filing_mark(r: &Value) -> [String; 5] {
-    [f(r, "source"), f(r, "date"), f(r, "type"), f(r, "title"), f(r, "size")]
+pub fn filing_mark(r: &Filing) -> [String; 5] {
+    [r.doc.source.as_str().to_string(), r.doc.date.clone(), r.doc.form.clone(), r.doc.title.clone(), r.doc.size.clone()]
 }
 
 fn providers_cover(sym: &str, ex: &str, ccy: &str) -> bool {
@@ -616,20 +617,20 @@ pub fn sweep_filings(app: &Arc<App>) -> usize {
         if wrote < 0 {
             continue;
         }
-        let mut by_source: Vec<(String, Vec<Value>)> = Vec::new();
+        let mut by_source: Vec<(Regulator, Vec<Filing>)> = Vec::new();
         for r in sf::filings_for(&c, &sym).unwrap_or_default() {
-            let src = f(&r, "source");
+            let src = r.doc.source;
             match by_source.iter_mut().find(|(k, _)| *k == src) {
                 Some((_, v)) => v.push(r),
                 None => by_source.push((src, vec![r])),
             }
         }
-        let mut new: Vec<Value> = Vec::new();
+        let mut new: Vec<Filing> = Vec::new();
         for (src, rows) in &by_source {
-            let scope = format!("filings:{}:{}", sym, src);
+            let scope = format!("filings:{}:{}", sym, src.as_str());
             let events: Vec<String> = rows.iter().map(|r| filing_mark(r).join("|")).collect();
             let met = sf::events_told(&c, &scope, &events).unwrap_or_default();
-            new.extend(notify::fresh_since(&c, &scope, rows, |r| f(r, "date"), |r| filing_mark(r).join("|"), |r| {
+            new.extend(notify::fresh_since(&c, &scope, rows, |r| r.doc.date.clone(), |r| filing_mark(r).join("|"), |r| {
                 before.contains(&filing_mark(r)) || met.contains(&filing_mark(r).join("|"))
             }));
             let _ = sf::mark_told(&c, &scope, &events, &now_iso());
@@ -637,8 +638,8 @@ pub fn sweep_filings(app: &Arc<App>) -> usize {
         if new.is_empty() {
             continue;
         }
-        let rel: Vec<Value> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
-        let rest: Vec<Value> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
+        let rel: Vec<Filing> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
+        let rest: Vec<Filing> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
         let mut said = false;
         if !rel.is_empty() && in_release_scope(app, &c, &sym, Some(&rel_scopes)) && !sf::has_wire_release(&c, &sym).unwrap_or(false) {
             let (t, bd) = release_notice(app, &sym, &rel);
@@ -667,30 +668,54 @@ fn feed_scope(key: &str) -> Vec<String> {
     .to_string()]
 }
 
+/// One filing as a feed across listings carries it: the filing itself, with
+/// which listing it belongs to.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedFiling {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub filing: Filing,
+    pub symbol: String,
+    pub exchange: String,
+}
+
+/// The newest disclosures across a set of listings, as a page shows them.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingsFeed {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub scope: String,
+    pub filings: Vec<FeedFiling>,
+    pub reading: bool,
+}
+
 /// The stored disclosures of every ticker in a set,
 /// newest first.
-pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> Value {
+pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
     let key = { let k = scope.trim().to_lowercase(); if k.is_empty() { "all".to_string() } else { k } };
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": true, "scope": key, "filings": []}) };
-    let mut rows: Vec<Value> = Vec::new();
+    let c = match conn(app) {
+        Some(c) => c,
+        None => return FilingsFeed { ok: true, scope: key, filings: vec![], reading: false },
+    };
+    let mut rows: Vec<FeedFiling> = Vec::new();
     for inst in known_filing_symbols(app, &feed_scope(&key)) {
         let sym = f(&inst, "symbol");
-        for mut r in fresh_filings(&c, &sym) {
-            r["symbol"] = json!(sym);
-            r["exchange"] = json!(f(&inst, "exchange"));
-            rows.push(r);
+        for r in fresh_filings(&c, &sym) {
+            rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: f(&inst, "exchange") });
         }
     }
-    rows.sort_by(|a, b| f(b, "date").cmp(&f(a, "date")));
+    rows.sort_by(|a, b| b.filing.doc.date.cmp(&a.filing.doc.date));
     rows.truncate(limit.max(1) as usize);
-    json!({"ok": true, "scope": key, "filings": rows})
+    FilingsFeed { ok: true, scope: key, filings: rows, reading: enrich::summary_available() }
 }
 
 /// A filed document that is the company's own
 /// press release.
-pub fn is_news_release(filing: &Value) -> bool {
+pub fn is_news_release(filing: &Filing) -> bool {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&f(filing, "type"))
+    RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&filing.doc.form)
 }
 
 pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Option<&[String]>) -> bool {
@@ -764,36 +789,28 @@ impl Notable for NewsItem {
     }
 }
 
-impl Notable for Value {
+impl Notable for Filing {
     fn id(&self) -> String {
-        f(self, "id")
+        self.doc.id.clone()
     }
     fn heading(&self) -> String {
-        let mut head = f(self, "headline");
-        if head.is_empty() {
-            head = f(self, "subject");
-        }
-        if head.is_empty() {
-            head = f(self, "type");
-        }
-        head
+        // a filing has no headline
+        if self.subject.is_empty() { self.doc.form.clone() } else { self.subject.clone() }
     }
     fn moment(&self) -> String {
-        let p = f(self, "publishedAt");
-        if p.is_empty() { f(self, "date") } else { p }
+        self.doc.date.clone()
     }
     fn summary(&self) -> String {
-        f(self, "summary")
+        self.summary.clone()
     }
     fn url(&self) -> String {
-        f(self, "url")
+        self.doc.url.clone()
     }
     fn filed_source(&self) -> Option<String> {
-        let s = f(self, "source");
-        if matches!(s.as_str(), "SEDAR+" | "SEC" | "SEC EDGAR") { Some(s) } else { None }
+        Some(self.doc.source.as_str().to_string())
     }
     fn is_release(&self) -> bool {
-        f(self, "kind") == "release"
+        is_news_release(self)
     }
 }
 
@@ -1016,22 +1033,23 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
 }
 
 /// `New disclosure · QNC` and what was filed.
-pub fn filings_notice(app: &Arc<App>, sym: &str, new: &[Value]) -> (String, String) {
+pub fn filings_notice(app: &Arc<App>, sym: &str, new: &[Filing]) -> (String, String) {
     let (mut named, mut said): (Vec<String>, String) = (Vec::new(), String::new());
     for r in new.iter().take(3) {
-        let mut title = f(r, "subject").trim().to_string();
-        let mut summary = f(r, "summary").trim().to_string();
-        if (title.is_empty() || summary.is_empty()) && !f(r, "id").is_empty() {
-            let read = filings_enrich(app, sym, &f(r, "id"));
-            if title.is_empty() {
-                title = f(&read, "subject").trim().to_string();
-            }
-            if summary.is_empty() {
-                summary = f(&read, "summary").trim().to_string();
+        let mut title = r.subject.trim().to_string();
+        let mut summary = r.summary.trim().to_string();
+        if (title.is_empty() || summary.is_empty()) && !r.doc.id.is_empty() {
+            if let Ok(read) = filings_enrich_result(app, sym, &r.doc.id) {
+                if title.is_empty() {
+                    title = read.subject.trim().to_string();
+                }
+                if summary.is_empty() {
+                    summary = read.summary.trim().to_string();
+                }
             }
         }
         if title.is_empty() {
-            title = form_name(&f(r, "type"));
+            title = form_name(&r.doc.form);
         }
         if !title.is_empty() && !named.contains(&title) {
             named.push(title);
@@ -1042,7 +1060,7 @@ pub fn filings_notice(app: &Arc<App>, sym: &str, new: &[Value]) -> (String, Stri
     }
     let mut sources: Vec<String> = Vec::new();
     for r in new {
-        let src = f(r, "source").trim().to_string();
+        let src = r.doc.source.as_str().trim().to_string();
         if !src.is_empty() && !sources.contains(&src) {
             sources.push(src);
         }
@@ -1102,13 +1120,16 @@ pub fn form_name(code: &str) -> String {
 /// in front of it, so a refusal is ordinary and a retry often works; the page
 /// says that in words, names the document, and retries on a click.
 pub fn document_error_page(app: &Arc<App>, symbol: &str, doc_id: &str, why: &str) -> String {
-    let row = conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten()).unwrap_or_else(|| json!({}));
-    let pick = |ks: &[&str], fallback: &str| {
-        ks.iter().map(|k| f(&row, k)).find(|v| !v.is_empty()).unwrap_or_else(|| fallback.to_string())
-    };
-    let name = pick(&["subject", "title", "type"], "This document");
-    let source = pick(&["source"], "the regulator");
-    let when = { let t = f(&row, "dateText"); if t.is_empty() { f(&row, "date").chars().take(10).collect() } else { t } };
+    let row = conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten());
+    let name = row.as_ref().map(|r| {
+        let s = r.subject.trim();
+        if !s.is_empty() { s.to_string() } else if !r.doc.title.trim().is_empty() { r.doc.title.trim().to_string() } else { r.doc.form.trim().to_string() }
+    }).filter(|s| !s.is_empty()).unwrap_or_else(|| "This document".to_string());
+    let source = row.as_ref().map(|r| r.doc.source.as_str().to_string()).unwrap_or_else(|| "the regulator".to_string());
+    let when = row.as_ref().map(|r| {
+        let t = r.doc.date_text.trim();
+        if !t.is_empty() { t.to_string() } else { r.doc.date.chars().take(10).collect() }
+    }).unwrap_or_default();
     let again = format!("/api/filings/doc?symbol={}&id={}", url_quote(symbol), url_quote(doc_id));
     format!(
         "<!doctype html><meta charset=utf-8><title>{name}</title>\
@@ -1216,18 +1237,20 @@ fn read_one_of(app: &Arc<App>, only: &str) -> bool {
     for inst in list {
         let sym = f(&inst, "symbol");
         for r in sf::filings_for(&c, &sym).unwrap_or_default() {
-            if !f(&r, "subject").is_empty() || is_true(&r, "enrichFinal") {
+            if !r.subject.is_empty() || r.enrich_final {
                 continue;
             }
-            let date = f(&r, "date");
+            let date = r.doc.date.clone();
             if best.as_ref().map(|(d, _, _)| date > *d).unwrap_or(true) {
-                best = Some((date, sym.clone(), f(&r, "id")));
+                best = Some((date, sym.clone(), r.doc.id.clone()));
             }
         }
     }
     let (_, sym, id) = match best { Some(b) => b, None => return false };
-    let out = filings_enrich(app, &sym, &id);
-    truthy(out.get("ok")) && !f(&out, "subject").is_empty()
+    match filings_enrich_result(app, &sym, &id) {
+        Ok(out) => !out.subject.is_empty(),
+        Err(_) => false,
+    }
 }
 
 /// One symbol's disclosures from every covering
@@ -1245,8 +1268,8 @@ pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchang
 }
 
 /// The disclosures gathering `fetch_filings` gives: (symbol, name, exchange,
-/// currency, known SEDAR+ profile) to `{items, sources}`.
-pub type FetchFilings<'a> = &'a dyn Fn(&str, &str, &str, &str, &str) -> Value;
+/// currency, known SEDAR+ profile) to every covering source's documents.
+pub type FetchFilings<'a> = &'a dyn Fn(&str, &str, &str, &str, &str) -> Gathered;
 
 /// `refresh_filings` on one connection with the gathering given.
 pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>, fetch_filings: FetchFilings) -> i64 {
@@ -1264,64 +1287,68 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
         let mut total = 0i64;
         let mut any_reached = false;
         let mut profile_no = String::new();
-        let mut by_source: HashMap<String, Vec<Value>> = HashMap::new();
-        for it in result.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-            if f(&it, "source") == sedar::SOURCE && !f(&it, "profileNo").is_empty() {
-                profile_no = f(&it, "profileNo");
+        let mut by_source: HashMap<Regulator, Vec<FiledDocument>> = HashMap::new();
+        for it in result.items {
+            if it.source == Regulator::Sedar && !it.profile_no.is_empty() {
+                profile_no = it.profile_no.clone();
             }
-            by_source.entry(f(&it, "source")).or_default().push(it);
+            by_source.entry(it.source).or_default().push(it);
         }
-        let held: HashSet<String> = sf::filings_for(c, &sym).unwrap_or_default().iter().map(|r| f(r, "source")).collect();
+        let held: HashSet<Regulator> = sf::filings_for(c, &sym).unwrap_or_default().iter().map(|r| r.doc.source).collect();
         let now = now_iso();
-        let sources = result.get("sources").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        let sources = result.sources;
         for (src, status) in &sources {
-            if is_true(status, "available") {
+            if status.available {
                 any_reached = true;
             }
             let rows = by_source.get(src).cloned().unwrap_or_default();
             if rows.is_empty() && held.contains(src) {
-                log(&format!("bagholder disclosures: {}: {} answered empty; the stored rows stand", sym, src));
+                log(&format!("bagholder disclosures: {}: {} answered empty; the stored rows stand", sym, src.as_str()));
                 continue;
             }
-            if is_true(status, "matched") || is_true(status, "available") {
-                total += sf::replace_filings(c, &sym, src, &rows, &now).unwrap_or(0) as i64;
+            if status.matched || status.available {
+                total += sf::replace_filings(c, &sym, *src, &rows, &now).unwrap_or(0) as i64;
             }
         }
         let _ = sf::mark_filings_fetched(c, &sym, &profile_no, &now);
         FILINGS_STORED.fetch_add(1, Ordering::SeqCst);
         app.events.signal(); // the reading loop has something to look at
-        let _ = set_meta(c, &format!("filings_sources:{}", sym), &json_text(&Value::Object(sources)));
+        let _ = set_meta(c, &format!("filings_sources:{}", sym), &serde_json::to_string(&sources).unwrap_or_default());
         if any_reached { total } else { -1 }
     }
 }
 
-fn source_status(c: &Connection, sym: &str) -> Value {
-    let stored: Map<String, Value> = serde_json::from_str::<Value>(&get_meta(c, &format!("filings_sources:{}", sym), "").unwrap_or_default())
-        .ok()
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    let have: HashSet<String> = sf::filings_for(c, sym).unwrap_or_default().iter().map(|r| f(r, "source")).collect();
-    let mut out = Map::new();
-    for (source, dep) in [(sedar::SOURCE, sedar::available()), (edgar::SOURCE, edgar::available())] {
-        let st = stored.get(source).cloned().unwrap_or(json!({}));
+/// A source's outcome the last time a listing's disclosures were refreshed.
+#[derive(Clone, Debug, Default, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceStatus {
+    pub available: bool,
+    pub matched: bool,
+    pub filer: bool,
+    pub error: String,
+}
+
+fn source_status(c: &Connection, sym: &str) -> BTreeMap<Regulator, SourceStatus> {
+    let stored: BTreeMap<Regulator, SourceOutcome> = serde_json::from_str(&get_meta(c, &format!("filings_sources:{}", sym), "").unwrap_or_default()).unwrap_or_default();
+    let have: HashSet<Regulator> = sf::filings_for(c, sym).unwrap_or_default().iter().map(|r| r.doc.source).collect();
+    let mut out = BTreeMap::new();
+    for (source, dep) in [(Regulator::Sedar, sedar::available()), (Regulator::Sec, edgar::available())] {
+        let st = stored.get(&source);
         // "available" is whether the last read actually reached the source, not merely
         // whether its dependency is installed: a stored outcome that recorded the source
         // unavailable (an outage, a maintenance page) means it could not be reached even
         // with the dependency present. The error it left travels with it, so the card can
         // say the source is unavailable rather than assert the listing has no filer.
-        let reached = match st.get("available") {
-            Some(v) => v.as_bool().unwrap_or(false),
-            None => dep,
-        };
-        let error = st.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        out.insert(source.into(), json!({
-            "available": dep && reached,
-            "matched": have.contains(source),
-            "filer": is_true(&st, "filer") || have.contains(source),
-            "error": error,
-        }));
+        let reached = st.map(|s| s.available).unwrap_or(dep);
+        let error = st.map(|s| s.error.clone()).unwrap_or_default();
+        out.insert(source, SourceStatus {
+            available: dep && reached,
+            matched: have.contains(&source),
+            filer: st.map(|s| s.filer).unwrap_or(false) || have.contains(&source),
+            error,
+        });
     }
-    Value::Object(out)
+    out
 }
 
 /// The stored disclosures, refreshed first when
@@ -1332,7 +1359,10 @@ pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option
         return json!({"ok": false, "error": "symbol required"});
     }
     let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
-    filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency))
+    match filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency)) {
+        Ok(p) => serde_json::to_value(p).unwrap_or(Value::Null),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
 }
 
 // --- a listing's disclosures while a page shows them ------------------------------
@@ -1353,24 +1383,42 @@ fn set_reading(app: &Arc<App>, sym: &str, ids: Vec<String>) {
     app.events.signal(); // the rows still to be read wear the shimmer
 }
 
+/// What `filings_stored` sends a page showing a listing's disclosures.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingsDoc {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub symbol: String,
+    pub available: bool,
+    pub sources: BTreeMap<Regulator, SourceStatus>,
+    pub categories: Vec<String>,
+    pub fetched_at: String,
+    pub ever_read: bool,
+    pub summary_status: String,
+    pub reading: Vec<String>,
+    pub filings: Vec<Filing>,
+}
+
 /// The disclosures as stored, never waiting on a source: what a page showing them
 /// is sent. `reading` names the documents the pass has still to read, the first of
 /// them the one being read now.
-pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Value {
+pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Result<FilingsDoc, String> {
     let sym = symbol.trim().to_uppercase();
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
     let reading = app.feeds.reading_now.lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
-    json!({
-        "ok": true,
-        "symbol": sym,
-        "available": disclosures::available(),
-        "sources": source_status(&c, &sym),
-        "categories": disclosures::CATEGORIES,
-        "fetchedAt": sf::filings_fetched_for(&c, &sym).unwrap_or_default(),
-        "everRead": !sf::filings_fetched_for(&c, &sym).unwrap_or_default().is_empty(),
-        "summaryStatus": enrich::summary_status(),
-        "reading": reading,
-        "filings": fresh_filings(&c, &sym),
+    let fetched_at = sf::filings_fetched_for(&c, &sym).unwrap_or_default();
+    Ok(FilingsDoc {
+        ok: true,
+        symbol: sym.clone(),
+        available: disclosures::available(),
+        sources: source_status(&c, &sym),
+        categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
+        ever_read: !fetched_at.is_empty(),
+        fetched_at,
+        summary_status: enrich::summary_status().to_string(),
+        reading,
+        filings: fresh_filings(&c, &sym),
     })
 }
 
@@ -1392,13 +1440,13 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
             let mut tried: HashSet<String> = HashSet::new();
             while app.events.watched(&doc) && !app.stopping() {
                 let c = match conn(&app) { Some(c) => c, None => break };
-                let mut left: Vec<Value> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
-                    .filter(|r| (f(r, "subject").is_empty() || f(r, "summary").is_empty()) && !is_true(r, "enrichFinal") && !tried.contains(&f(r, "id")))
+                let mut left: Vec<Filing> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
+                    .filter(|r| (r.subject.is_empty() || r.summary.is_empty()) && !r.enrich_final && !tried.contains(&r.doc.id))
                     .collect();
-                left.sort_by(|a, b| f(b, "date").cmp(&f(a, "date")));
-                let Some(next) = left.first().map(|r| f(r, "id")) else { break };
-                set_reading(&app, &sym, left.iter().map(|r| f(r, "id")).collect());
-                filings_enrich(&app, &sym, &next); // waits for the local model itself when one is coming up
+                left.sort_by(|a, b| b.doc.date.cmp(&a.doc.date));
+                let Some(next) = left.first().map(|r| r.doc.id.clone()) else { break };
+                set_reading(&app, &sym, left.iter().map(|r| r.doc.id.clone()).collect());
+                let _ = filings_enrich(&app, &sym, &next); // waits for the local model itself when one is coming up
                 tried.insert(next);
                 if app.wait(Duration::from_millis(150)) { // a person's pace at the source
                     break;
@@ -1409,11 +1457,28 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
     });
 }
 
+/// What `filings_payload` returns: the `GET /api/filings?…&refresh=1` answer.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingsPayload {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub symbol: String,
+    pub available: bool,
+    pub sources: BTreeMap<Regulator, SourceStatus>,
+    pub categories: Vec<String>,
+    pub profile_no: String,
+    pub fetched_at: String,
+    pub refreshed: bool,
+    pub source_unavailable: bool,
+    pub filings: Vec<Filing>,
+}
+
 /// `filings_payload` on one connection with the refresh given.
-pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Value {
+pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bool, refresh_filings: &dyn Fn() -> i64) -> Result<FilingsPayload, String> {
     let sym = sym.trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return Err("symbol required".to_string());
     }
     *app.feeds.looking_at.lock().unwrap() = sym.clone();
     let c = c;
@@ -1421,37 +1486,36 @@ pub fn filings_payload_in(app: &Arc<App>, c: &Connection, sym: &str, refresh: bo
     if refresh || filings_stale(c, &sym, None) {
         wrote = Some(refresh_filings());
     }
-    json!({
-        "ok": true,
-        "symbol": sym,
-        "available": disclosures::available(),
-        "sources": source_status(c, &sym),
-        "categories": disclosures::CATEGORIES,
-        "profileNo": sf::sedar_profile(c, &sym).unwrap_or_default(),
-        "fetchedAt": sf::filings_fetched_for(c, &sym).unwrap_or_default(),
-        "refreshed": wrote.map(|w| w > 0).unwrap_or(false),
-        "sourceUnavailable": wrote == Some(-1),
-        "filings": fresh_filings(c, &sym),
+    Ok(FilingsPayload {
+        ok: true,
+        available: disclosures::available(),
+        sources: source_status(c, &sym),
+        categories: disclosures::CATEGORIES.iter().map(|s| s.to_string()).collect(),
+        profile_no: sf::sedar_profile(c, &sym).unwrap_or_default(),
+        fetched_at: sf::filings_fetched_for(c, &sym).unwrap_or_default(),
+        refreshed: wrote.map(|w| w > 0).unwrap_or(false),
+        source_unavailable: wrote == Some(-1),
+        filings: fresh_filings(c, &sym),
+        symbol: sym,
     })
 }
 
 /// Rows read by an older logic blanked, categories
 /// re-derived.
-fn fresh_filings(c: &Connection, sym: &str) -> Vec<Value> {
+fn fresh_filings(c: &Connection, sym: &str) -> Vec<Filing> {
     let mut rows = sf::filings_for(c, sym).unwrap_or_default();
     for r in rows.iter_mut() {
-        if (num(r.get("enrichVersion"), Some(0.0)).unwrap_or(0.0) as i64) < ENRICH_VERSION {
-            r["subject"] = json!("");
-            r["summary"] = json!("");
+        if r.enrich_version.unwrap_or(0) < ENRICH_VERSION {
+            r.subject = String::new();
+            r.summary = String::new();
         }
-        let cat = disclosures::categorize(r);
-        r["category"] = cat;
+        r.doc.category = disclosures::categorize(&r.doc);
         // the list arrives named: a form and a named document say what they are
         // without being fetched, so only the rest wait on a reading
-        if f(r, "subject").is_empty() {
-            if let Some(t) = disclosures::quick_title(r) {
-                let _ = sf::set_filing_enrichment(c, sym, &f(r, "id"), Some(&t), None, None, None, &now_iso());
-                r["subject"] = json!(t);
+        if r.subject.is_empty() {
+            if let Some(t) = disclosures::quick_title(&r.doc) {
+                let _ = sf::set_filing_enrichment(c, sym, &r.doc.id, Some(&t), None, None, None, &now_iso());
+                r.subject = t;
             }
         }
     }
@@ -1468,101 +1532,123 @@ pub fn filings_document(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<(V
         row = sf::filing(&c, &sym, doc_id).ok().flatten();
     }
     let row = row.ok_or_else(|| format!("no such document for {}", sym))?;
-    let (data, ct) = disclosures::document(&row).map_err(|e| e.to_string())?;
+    let (data, ct) = disclosures::document(&row.doc).map_err(|e| e.to_string())?;
     if data.is_empty() {
         return Err("empty document".into());
     }
     Ok((data, if ct.is_empty() { "application/octet-stream".into() } else { ct }))
 }
 
-/// One document read for its subject and, with a
-/// local model, a one-sentence summary; both cached on the row.
-pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> Value {
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "no such document"}) };
+/// `filings_enrich` on the app's own connection, typed.
+fn filings_enrich_result(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<Enriched, String> {
+    let c = conn(app).ok_or_else(|| "no such document".to_string())?;
     filings_enrich_in(&c, symbol, doc_id, &LiveReaders)
 }
 
-/// What `filings_enrich` reads a document with: the local model and the
+/// One document read for its subject and, with a
+/// local model, a one-sentence summary; both cached on the row.
+pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> Value {
+    match filings_enrich_result(app, symbol, doc_id) {
+        Ok(e) => serde_json::to_value(e).unwrap_or(Value::Null),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
+}
+
+/// What `filings_enrich_in` reads a document with: the local model and the
 /// disclosure sources.
 pub trait Readers {
     fn summary_available(&self) -> bool { enrich::summary_available() }
     fn summary_status(&self) -> &'static str { enrich::summary_status() }
     fn wait_for_summary(&self, seconds: f64) -> bool { enrich::wait_for_summary(seconds) }
     fn disclosures_available(&self) -> bool { disclosures::available() }
-    fn enrichment(&self, row: &Value) -> Option<Value> { disclosures::enrichment(row) }
-    fn content(&self, row: &Value) -> disclosures::Fetched<(Vec<u8>, String)> { disclosures::content(row) }
-    fn enrich_document_of(&self, code: &str, source: &str, data: &[u8], ct: &str) -> Value { enrich::enrich_document_of(code, source, data, ct) }
+    fn enrichment(&self, row: &FiledDocument) -> Option<disclosures::Enrichment> { disclosures::enrichment(row) }
+    fn content(&self, row: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> { disclosures::content(row) }
+    fn enrich_document_of(&self, code: &str, source: &str, data: &[u8], ct: &str) -> disclosures::Enrichment { enrich::enrich_document_of(code, source, data, ct) }
 }
 
 struct LiveReaders;
 impl Readers for LiveReaders {}
 
+/// One document's title and summary, as `filings_enrich` answers.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Enriched {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub id: String,
+    pub subject: String,
+    pub summary: String,
+    pub summary_available: bool,
+    pub summary_status: String,
+}
+
 /// `filings_enrich` on one connection with the readers given.
-pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Readers) -> Value {
+pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Readers) -> Result<Enriched, String> {
     let sym = symbol.trim().to_uppercase();
-    let row = match sf::filing(c, &sym, doc_id).ok().flatten() { Some(r) => r, None => return json!({"ok": false, "error": "no such document"}) };
-    let mut subject = f(&row, "subject");
-    let mut summary = f(&row, "summary");
+    let row = sf::filing(c, &sym, doc_id).ok().flatten().ok_or_else(|| "no such document".to_string())?;
+    let mut subject = row.subject.clone();
+    let mut summary = row.summary.clone();
     let mut model = r.summary_available();
-    let fresh = num(row.get("enrichVersion"), Some(0.0)).unwrap_or(0.0) as i64 >= ENRICH_VERSION;
-    let attempted = truthy(row.get("enrichedAt")) && fresh;
-    let answer = |subject: &str, summary: &str, avail: bool| {
-        json!({"ok": true, "id": doc_id, "subject": subject, "summary": summary, "summaryAvailable": avail, "summaryStatus": r.summary_status()})
+    let fresh = row.enrich_version.unwrap_or(0) >= ENRICH_VERSION;
+    let attempted = !row.enriched_at.is_empty() && fresh;
+    let answer = |subject: &str, summary: &str, avail: bool| Enriched {
+        ok: true, id: doc_id.to_string(), subject: subject.to_string(), summary: summary.to_string(),
+        summary_available: avail, summary_status: r.summary_status().to_string(),
     };
-    if attempted && (is_true(&row, "enrichFinal") || (!subject.is_empty() && !summary.is_empty()) || !model) {
-        return answer(&subject, &summary, model);
+    if attempted && (row.enrich_final || (!subject.is_empty() && !summary.is_empty()) || !model) {
+        return Ok(answer(&subject, &summary, model));
     }
     if !r.disclosures_available() {
-        return answer(&subject, &summary, model);
+        return Ok(answer(&subject, &summary, model));
     }
     let now = now_iso();
-    if let Some(exact) = r.enrichment(&row) {
+    if let Some(exact) = r.enrichment(&row.doc) {
         // What the source can say exactly: the form's own name, and for the
         // forms it can read in full, the sentence too. A name on its own is
         // kept and the document still read, so the sentence follows it.
-        let (sj, sm) = (f(&exact, "subject"), f(&exact, "summary"));
+        let (sj, sm) = (exact.subject.clone(), exact.summary.clone());
         if !sj.is_empty() && subject.is_empty() {
             subject = sj.clone();
             let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), None, None, None, &now);
         }
         if !sm.is_empty() {
             let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&sj), Some(&sm), Some(ENRICH_VERSION), None, &now);
-            return answer(&sj, &sm, model);
+            return Ok(answer(&sj, &sm, model));
         }
-        if is_true(&exact, "final") {
+        if exact.final_ {
             // a named document: nothing a reading would add
             let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&subject), Some(""), Some(ENRICH_VERSION), Some(true), &now);
-            return answer(&subject, "", model);
+            return Ok(answer(&subject, "", model));
         }
         if !model {
-            return answer(&subject, &summary, model);
+            return Ok(answer(&subject, &summary, model));
         }
     }
-    let (data, ct) = match r.content(&row) {
+    let (data, ct) = match r.content(&row.doc) {
         Ok(x) => x,
-        Err(e) => return json!({"ok": false, "error": e.to_string()}),
+        Err(e) => return Err(e.to_string()),
     };
     if data.is_empty() {
-        return json!({"ok": false, "error": "the document could not be read"});
+        return Err("the document could not be read".to_string());
     }
     if !model {
         model = r.wait_for_summary(enrich::SUMMARY_WAIT_SEC);
     }
-    let info = r.enrich_document_of(&f(&row, "type"), &f(&row, "source"), &data, &ct);
-    let new_subject = f(&info, "subject");
-    let got_summary = f(&info, "summary");
-    if is_true(&info, "final") {
+    let info = r.enrich_document_of(&row.doc.form, row.doc.source.as_str(), &data, &ct);
+    let new_subject = info.subject.clone();
+    let got_summary = info.summary.clone();
+    if info.final_ {
         let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&new_subject), Some(&got_summary), Some(ENRICH_VERSION), Some(true), &now);
-        return answer(&new_subject, &got_summary, model);
+        return Ok(answer(&new_subject, &got_summary, model));
     }
     if model && new_subject.is_empty() && got_summary.is_empty() && subject.is_empty() && summary.is_empty() {
         // a document with no text in it -- a release filed as a picture -- has
         // nothing for a reading to find, now or later: it is named by what it
         // is and never read again
-        let named = disclosures::quick_title(&row).unwrap_or_else(|| f(&row, "type"));
+        let named = disclosures::quick_title(&row.doc).unwrap_or_else(|| row.doc.form.clone());
         let named: String = named.chars().take(90).collect();
         let _ = sf::set_filing_enrichment(c, &sym, doc_id, Some(&named), Some(""), Some(ENRICH_VERSION), Some(true), &now);
-        return answer(&named, "", model);
+        return Ok(answer(&named, "", model));
     }
     if model {
         if fresh {
@@ -1583,7 +1669,7 @@ pub fn filings_enrich_in(c: &Connection, symbol: &str, doc_id: &str, r: &dyn Rea
         }
         let _ = sf::set_filing_enrichment(c, &sym, doc_id, if new_subject.is_empty() { None } else { Some(&new_subject) }, None, None, None, &now);
     }
-    answer(&subject, &summary, r.summary_available())
+    Ok(answer(&subject, &summary, r.summary_available()))
 }
 
 // ---------------------------------------------------------------------------
@@ -2351,24 +2437,25 @@ mod tests {
         c
     }
 
-    fn item(source: &str, i: i64, profile: &str) -> Value {
-        let tag = source.split('+').next().unwrap().to_lowercase().replace(' ', "");
-        let sec = source == "SEC";
-        json!({
-            "id": format!("{}:{}", tag, i),
-            "source": source,
-            "category": "Financials",
-            "date": format!("2026-08-{:02}", 10 + i),
-            "dateText": format!("2026-08-{:02}", 10 + i),
-            "type": if sec { "10-Q" } else { "Interim MD&A" },
-            "title": if sec { "Quarterly report" } else { "" },
-            "size": if sec { "" } else { "292 KB" },
-            "url": if sec { format!("https://www.sec.gov/x/{}", i) } else { format!("https://www.sedarplus.ca/x?drmKey={}", i) },
-            "profileNo": profile,
-        })
+    fn item(source: Regulator, i: i64, profile: &str) -> FiledDocument {
+        let sec = source == Regulator::Sec;
+        let tag = if sec { "sec" } else { "sedar" };
+        FiledDocument {
+            id: format!("{}:{}", tag, i),
+            source,
+            category: "Financials".into(),
+            profile_no: profile.into(),
+            issuer: String::new(),
+            form: if sec { "10-Q" } else { "Interim MD&A" }.into(),
+            title: if sec { "Quarterly report" } else { "" }.into(),
+            date: format!("2026-08-{:02}", 10 + i),
+            date_text: format!("2026-08-{:02}", 10 + i),
+            size: if sec { "" } else { "292 KB" }.into(),
+            url: if sec { format!("https://www.sec.gov/x/{}", i) } else { format!("https://www.sedarplus.ca/x?drmKey={}", i) },
+        }
     }
 
-    fn replace(c: &Connection, sym: &str, src: &str, items: &[Value]) {
+    fn replace(c: &Connection, sym: &str, src: Regulator, items: &[FiledDocument]) {
         sf::replace_filings(c, sym, src, items, &now_iso()).unwrap();
     }
 
@@ -2376,53 +2463,62 @@ mod tests {
         sf::set_filing_enrichment(c, sym, id, Some(subject), Some(summary), Some(version), None, &now_iso()).unwrap();
     }
 
+    /// A typed result as `filings_payload_in`/`filings_enrich_in` serve it: the
+    /// success shape, or `{"ok": false, "error": …}`.
+    fn v<T: serde::Serialize>(r: Result<T, String>) -> Value {
+        match r {
+            Ok(x) => serde_json::to_value(x).unwrap(),
+            Err(e) => json!({"ok": false, "error": e}),
+        }
+    }
+
     // --- DisclosuresStoreTest
 
     #[test]
     fn test_rows_from_two_sources_merge_newest_first() {
         let c = store();
-        replace(&c, "SHOP", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 3, "")]);
-        replace(&c, "SHOP", "SEC", &[item("SEC", 2, ""), item("SEC", 4, "")]);
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 3, "")]);
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, "")]);
         let rows = sf::filings_for(&c, "SHOP").unwrap();
         assert_eq!(rows.len(), 4);
-        let dates: Vec<String> = rows.iter().map(|r| f(r, "date")).collect();
+        let dates: Vec<String> = rows.iter().map(|r| r.doc.date.clone()).collect();
         let mut sorted = dates.clone();
         sorted.sort();
         sorted.reverse();
         assert_eq!(dates, sorted);
-        let srcs: HashSet<String> = rows.iter().map(|r| f(r, "source")).collect();
-        assert_eq!(srcs, HashSet::from(["SEDAR+".to_string(), "SEC".to_string()]));
+        let srcs: HashSet<Regulator> = rows.iter().map(|r| r.doc.source).collect();
+        assert_eq!(srcs, HashSet::from([Regulator::Sedar, Regulator::Sec]));
     }
 
     #[test]
     fn test_replacing_one_source_leaves_the_other() {
         let c = store();
-        replace(&c, "SHOP", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 2, "")]);
-        replace(&c, "SHOP", "SEC", &[item("SEC", 1, "")]);
-        replace(&c, "SHOP", "SEDAR+", &[item("SEDAR+", 9, "")]);
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 9, "")]);
         let rows = sf::filings_for(&c, "SHOP").unwrap();
-        let mut srcs: Vec<String> = rows.iter().map(|r| f(r, "source")).collect();
+        let mut srcs: Vec<&str> = rows.iter().map(|r| r.doc.source.as_str()).collect();
         srcs.sort();
         assert_eq!(srcs, ["SEC", "SEDAR+"]);
-        assert_eq!(rows.iter().filter(|r| f(r, "source") == "SEDAR+").count(), 1, "SEDAR+ replaced, not appended");
-        assert_eq!(rows.iter().filter(|r| f(r, "source") == "SEC").count(), 1, "SEC untouched");
+        assert_eq!(rows.iter().filter(|r| r.doc.source == Regulator::Sedar).count(), 1, "SEDAR+ replaced, not appended");
+        assert_eq!(rows.iter().filter(|r| r.doc.source == Regulator::Sec).count(), 1, "SEC untouched");
     }
 
     #[test]
     fn test_a_single_row_is_fetchable_by_id_for_download() {
         let c = store();
-        replace(&c, "SHOP", "SEC", &[item("SEC", 7, "")]);
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 7, "")]);
         let row = sf::filing(&c, "SHOP", "sec:7").unwrap().unwrap();
-        assert_eq!(f(&row, "source"), "SEC");
-        assert!(f(&row, "url").starts_with("https://www.sec.gov/"));
+        assert_eq!(row.doc.source, Regulator::Sec);
+        assert!(row.doc.url.starts_with("https://www.sec.gov/"));
         assert!(sf::filing(&c, "SHOP", "sec:999").unwrap().is_none());
     }
 
     #[test]
     fn test_symbols_do_not_bleed_and_the_profile_is_remembered() {
         let c = store();
-        replace(&c, "SHOP", "SEDAR+", &[item("SEDAR+", 1, "")]);
-        replace(&c, "ATD", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 2, "")]);
+        replace(&c, "SHOP", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        replace(&c, "ATD", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
         sf::mark_filings_fetched(&c, "ATD", "000012345", &now_iso()).unwrap();
         assert_eq!(sf::filings_for(&c, "SHOP").unwrap().len(), 1);
         assert_eq!(sf::filings_for(&c, "ATD").unwrap().len(), 2);
@@ -2432,7 +2528,7 @@ mod tests {
     #[test]
     fn test_forget_clears_rows_and_stamps() {
         let c = store();
-        replace(&c, "SHOP", "SEC", &[item("SEC", 1, "")]);
+        replace(&c, "SHOP", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
         sf::mark_filings_fetched(&c, "SHOP", "000037100", &now_iso()).unwrap();
         sf::forget_filings(&c, "SHOP").unwrap();
         assert!(sf::filings_for(&c, "SHOP").unwrap().is_empty());
@@ -2442,13 +2538,18 @@ mod tests {
 
     // --- FilingsPayloadTest
 
-    fn stub(items: Value, sources: Value) -> impl Fn(&str, &str, &str, &str, &str) -> Value {
-        move |_, _, _, _, _| json!({"items": items.clone(), "sources": sources.clone()})
+    fn stub(items: Vec<FiledDocument>, sources: &[(Regulator, SourceOutcome)]) -> impl Fn(&str, &str, &str, &str, &str) -> Gathered {
+        let sources: BTreeMap<Regulator, SourceOutcome> = sources.iter().cloned().collect();
+        move |_, _, _, _, _| Gathered { items: items.clone(), sources: sources.clone() }
     }
 
-    fn payload(c: &Connection, sym: &str, fetch: &dyn Fn(&str, &str, &str, &str, &str) -> Value) -> Value {
+    fn outcome(available: bool, matched: bool, count: usize, error: &str) -> SourceOutcome {
+        SourceOutcome { available, matched, filer: false, count, error: error.to_string() }
+    }
+
+    fn payload(c: &Connection, sym: &str, fetch: &dyn Fn(&str, &str, &str, &str, &str) -> Gathered) -> Value {
         let s = sym.trim().to_uppercase();
-        filings_payload_in(&app(), c, sym, true, &|| refresh_filings_in(&app(), c, &s, None, None, None, fetch))
+        v(filings_payload_in(&app(), c, sym, true, &|| refresh_filings_in(&app(), c, &s, None, None, None, fetch)))
     }
 
     #[test]
@@ -2471,9 +2572,8 @@ mod tests {
     fn test_refresh_merges_sources_and_reports_status() {
         let c = store();
         let fetch = stub(
-            json!([item("SEDAR+", 1, "000037100"), item("SEC", 2, "")]),
-            json!({"SEDAR+": {"available": true, "matched": true, "count": 1, "error": ""},
-                   "SEC": {"available": true, "matched": true, "count": 1, "error": ""}}),
+            vec![item(Regulator::Sedar, 1, "000037100"), item(Regulator::Sec, 2, "")],
+            &[(Regulator::Sedar, outcome(true, true, 1, "")), (Regulator::Sec, outcome(true, true, 1, ""))],
         );
         let out = payload(&c, "SHOP", &fetch);
         assert_eq!(out["ok"], true);
@@ -2491,9 +2591,8 @@ mod tests {
     fn test_only_one_source_matches() {
         let c = store();
         let fetch = stub(
-            json!([item("SEC", 1, "")]),
-            json!({"SEDAR+": {"available": true, "matched": false, "count": 0, "error": ""},
-                   "SEC": {"available": true, "matched": true, "count": 1, "error": ""}}),
+            vec![item(Regulator::Sec, 1, "")],
+            &[(Regulator::Sedar, outcome(true, false, 0, "")), (Regulator::Sec, outcome(true, true, 1, ""))],
         );
         let out = payload(&c, "NVDA", &fetch);
         let srcs: Vec<String> = out["filings"].as_array().unwrap().iter().map(|r| f(r, "source")).collect();
@@ -2509,9 +2608,8 @@ mod tests {
         // can say it is unavailable rather than assert the listing has no filer.
         let c = store();
         let fetch = stub(
-            json!([item("SEC", 1, "")]),
-            json!({"SEDAR+": {"available": false, "matched": false, "count": 0, "error": "SEDAR+ did not return the searchReportingIssuers form"},
-                   "SEC": {"available": true, "matched": true, "count": 1, "error": ""}}),
+            vec![item(Regulator::Sec, 1, "")],
+            &[(Regulator::Sedar, outcome(false, false, 0, "SEDAR+ did not return the searchReportingIssuers form")), (Regulator::Sec, outcome(true, true, 1, ""))],
         );
         let out = payload(&c, "SHOP", &fetch);
         assert_eq!(out["sources"]["SEDAR+"]["available"], false, "a source that failed to answer is unavailable, whatever its dependency");
@@ -2523,9 +2621,8 @@ mod tests {
     fn test_all_sources_unreachable_is_reported() {
         let c = store();
         let fetch = stub(
-            json!([]),
-            json!({"SEDAR+": {"available": false, "matched": false, "count": 0, "error": "the browser helper is missing"},
-                   "SEC": {"available": false, "matched": false, "count": 0, "error": "network"}}),
+            vec![],
+            &[(Regulator::Sedar, outcome(false, false, 0, "the browser helper is missing")), (Regulator::Sec, outcome(false, false, 0, "network"))],
         );
         let out = payload(&c, "SHOP", &fetch);
         assert_eq!(out["ok"], true, "the endpoint still answers cleanly");
@@ -2556,20 +2653,22 @@ mod tests {
             }
         }
         let c = store();
-        let mut form4 = item("SEC", 5, "");
-        form4["type"] = json!("4");
-        form4["title"] = json!("");
+        let mut form4 = item(Regulator::Sec, 5, "");
+        form4.form = "4".into();
+        form4.title = String::new();
         let fetch = stub(
-            json!([item("SEDAR+", 1, "000037100"), item("SEDAR+", 3, "000037100"), item("SEC", 2, ""), item("SEC", 4, ""), form4]),
-            json!({"SEDAR+": {"available": true, "matched": true, "filer": true, "count": 2, "error": ""},
-                   "SEC": {"available": true, "matched": true, "filer": true, "count": 3, "error": ""}}),
+            vec![item(Regulator::Sedar, 1, "000037100"), item(Regulator::Sedar, 3, "000037100"), item(Regulator::Sec, 2, ""), item(Regulator::Sec, 4, ""), form4],
+            &[
+                (Regulator::Sedar, SourceOutcome { available: true, matched: true, filer: true, count: 2, error: String::new() }),
+                (Regulator::Sec, SourceOutcome { available: true, matched: true, filer: true, count: 3, error: String::new() }),
+            ],
         );
         let first = payload(&c, "SHOP", &fetch);
         enrichment(&c, "SHOP", "sec:2", "Quarterly report", "Revenue rose.", ENRICH_VERSION);
         enrichment(&c, "SHOP", "sedar:1", "An old reading", "Read by an older logic.", ENRICH_VERSION - 1);
         sf::set_filing_enrichment(&c, "SHOP", "sedar:3", Some("Interim MD&A"), None, Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
-        let again = filings_payload_in(&app(), &c, "SHOP", false, &|| panic!("fresh: not read again"));
-        let enriched = filings_enrich_in(&c, "SHOP", "sec:2", &fake(true, ("x", "y"), false));
+        let again = v(filings_payload_in(&app(), &c, "SHOP", false, &|| panic!("fresh: not read again")));
+        let enriched = v(filings_enrich_in(&c, "SHOP", "sec:2", &fake(true, ("x", "y"), false)));
         let mut have = json!({"first": first, "again": again, "enriched": enriched});
         mask(&mut have);
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/filings_payload.json");
@@ -2605,17 +2704,13 @@ mod tests {
         fn summary_status(&self) -> &'static str { self.status }
         fn wait_for_summary(&self, _: f64) -> bool { self.waits.set(self.waits.get() + 1); self.wait }
         fn disclosures_available(&self) -> bool { true }
-        fn enrichment(&self, _: &Value) -> Option<Value> { None }
-        fn content(&self, _: &Value) -> disclosures::Fetched<(Vec<u8>, String)> {
+        fn enrichment(&self, _: &FiledDocument) -> Option<disclosures::Enrichment> { None }
+        fn content(&self, _: &FiledDocument) -> disclosures::Fetched<(Vec<u8>, String)> {
             self.reads.set(self.reads.get() + 1);
             Ok((b"%PDF-1.4 body".to_vec(), "application/pdf".into()))
         }
-        fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> Value {
-            let mut v = json!({"subject": self.read.0, "summary": self.read.1});
-            if self.final_ {
-                v["final"] = json!(true);
-            }
-            v
+        fn enrich_document_of(&self, _: &str, _: &str, _: &[u8], _: &str) -> disclosures::Enrichment {
+            disclosures::Enrichment { subject: self.read.0.to_string(), summary: self.read.1.to_string(), final_: self.final_ }
         }
     }
 
@@ -2627,18 +2722,18 @@ mod tests {
 
     fn enrich_store() -> Connection {
         let c = store();
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
         c
     }
 
     fn stored(c: &Connection) -> (String, String, i64) {
         let row = sf::filing(c, "QNC", DOC).unwrap().unwrap();
-        (f(&row, "subject"), f(&row, "summary"), num(row.get("enrichVersion"), Some(0.0)).unwrap_or(0.0) as i64)
+        (row.subject, row.summary, row.enrich_version.unwrap_or(0))
     }
 
     fn run(c: &Connection, model: bool, read: (&'static str, &'static str), final_: bool) -> (Value, usize) {
         let r = fake(model, read, final_);
-        let out = filings_enrich_in(c, "QNC", DOC, &r);
+        let out = v(filings_enrich_in(c, "QNC", DOC, &r));
         (out, r.reads.get())
     }
 
@@ -2746,7 +2841,7 @@ mod tests {
     fn test_a_model_that_is_starting_is_waited_for_rather_than_the_read_wasted() {
         let c = enrich_store();
         let r = Fake { model: false, status: "ready", wait: true, read: ("A title", "A sentence."), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
-        let out = filings_enrich_in(&c, "QNC", DOC, &r);
+        let out = v(filings_enrich_in(&c, "QNC", DOC, &r));
         assert_eq!(r.waits.get(), 1);
         assert_eq!(out["summary"], "A sentence.");
         assert_eq!(stored(&c), ("A title".to_string(), "A sentence.".to_string(), ENRICH_VERSION));
@@ -2756,7 +2851,7 @@ mod tests {
     fn test_a_model_that_never_comes_up_leaves_the_row_to_be_read_again() {
         let c = enrich_store();
         let r = Fake { model: false, status: "off", wait: false, read: ("A title", ""), final_: false, reads: Cell::new(0), waits: Cell::new(0) };
-        let out = filings_enrich_in(&c, "QNC", DOC, &r);
+        let out = v(filings_enrich_in(&c, "QNC", DOC, &r));
         assert_eq!(out["subject"], "A title");
         assert_eq!(stored(&c).2, 0);
     }
@@ -2766,31 +2861,31 @@ mod tests {
     #[test]
     fn test_a_row_the_source_still_lists_keeps_its_subject_and_summary() {
         let c = store();
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 2, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
         enrichment(&c, "QNC", "sedar:1", "A title", "A sentence.", 9);
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 2, ""), item("SEDAR+", 3, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, ""), item(Regulator::Sedar, 3, "")]);
         let row = sf::filing(&c, "QNC", "sedar:1").unwrap().unwrap();
-        assert_eq!((f(&row, "subject"), f(&row, "summary"), row["enrichVersion"].as_i64()), ("A title".into(), "A sentence.".into(), Some(9)));
+        assert_eq!((row.subject, row.summary, row.enrich_version), ("A title".into(), "A sentence.".into(), Some(9)));
     }
 
     #[test]
     fn test_what_the_source_says_about_a_row_is_still_refreshed() {
         let c = store();
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
         enrichment(&c, "QNC", "sedar:1", "A title", "A sentence.", 9);
-        let mut moved = item("SEDAR+", 1, "");
-        moved["url"] = json!("https://www.sedarplus.ca/x?drmKey=fresh");
-        replace(&c, "QNC", "SEDAR+", &[moved]);
+        let mut moved = item(Regulator::Sedar, 1, "");
+        moved.url = "https://www.sedarplus.ca/x?drmKey=fresh".into();
+        replace(&c, "QNC", Regulator::Sedar, &[moved]);
         let row = sf::filing(&c, "QNC", "sedar:1").unwrap().unwrap();
-        assert_eq!(f(&row, "url"), "https://www.sedarplus.ca/x?drmKey=fresh");
-        assert_eq!(f(&row, "summary"), "A sentence.");
+        assert_eq!(row.doc.url, "https://www.sedarplus.ca/x?drmKey=fresh");
+        assert_eq!(row.summary, "A sentence.");
     }
 
     #[test]
     fn test_a_row_the_source_no_longer_lists_goes() {
         let c = store();
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, ""), item("SEDAR+", 2, "")]);
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 2, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, ""), item(Regulator::Sedar, 2, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 2, "")]);
         assert!(sf::filing(&c, "QNC", "sedar:1").unwrap().is_none());
         assert!(sf::filing(&c, "QNC", "sedar:2").unwrap().is_some());
     }
@@ -2798,11 +2893,11 @@ mod tests {
     #[test]
     fn test_another_sources_rows_are_untouched() {
         let c = store();
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, "")]);
-        replace(&c, "QNC", "SEC", &[item("SEC", 1, "")]);
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        replace(&c, "QNC", Regulator::Sec, &[item(Regulator::Sec, 1, "")]);
         enrichment(&c, "QNC", "sec:1", "From EDGAR", "A sentence.", 9);
-        replace(&c, "QNC", "SEDAR+", &[item("SEDAR+", 1, "")]);
-        assert_eq!(f(&sf::filing(&c, "QNC", "sec:1").unwrap().unwrap(), "subject"), "From EDGAR");
+        replace(&c, "QNC", Regulator::Sedar, &[item(Regulator::Sedar, 1, "")]);
+        assert_eq!(sf::filing(&c, "QNC", "sec:1").unwrap().unwrap().subject, "From EDGAR");
     }
 
     // --- the listing page

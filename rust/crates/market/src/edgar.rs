@@ -7,12 +7,13 @@
 //! downloading needs no session.
 
 use regex::Regex;
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::disclosures::{self as d, Fetched, SourceError};
+use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
+use bagholder_store::feeds::{FiledDocument, Regulator};
 
 pub const SOURCE: &str = "SEC";
 pub const TICKERS_URL: &str = "https://www.sec.gov/files/company_tickers.json";
@@ -179,8 +180,8 @@ pub fn category(form: &str) -> &'static str {
     d::OTHER
 }
 
-pub fn categorize(row: &Value) -> String {
-    category(row.get("type").and_then(|v| v.as_str()).unwrap_or("")).to_string()
+pub fn categorize(row: &FiledDocument) -> String {
+    category(&row.form).to_string()
 }
 
 /// The plain-English title beside the form code; EDGAR often
@@ -201,64 +202,84 @@ fn s(v: Option<&Value>) -> String {
     bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
 
+/// One field of `filings.recent`: a list read leniently -- a missing key
+/// reads as empty, and an entry that is not a string reads as the text it
+/// had.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct RecentList(#[serde(default)] pub Vec<Value>);
+
+impl RecentList {
+    fn get(&self, i: usize) -> String {
+        s(self.0.get(i))
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// `filings.recent`, the parallel arrays the submissions answer carries one
+/// filing's fields in.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct Recent {
+    #[serde(default)]
+    pub form: RecentList,
+    #[serde(default, rename = "filingDate")]
+    pub filing_date: RecentList,
+    #[serde(default, rename = "primaryDocument")]
+    pub primary_document: RecentList,
+    #[serde(default, rename = "accessionNumber")]
+    pub accession_number: RecentList,
+    #[serde(default, rename = "primaryDocDescription")]
+    pub primary_doc_description: RecentList,
+}
+
+/// `filings` on the submissions answer.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct SubmissionFilings {
+    #[serde(default)]
+    pub recent: Recent,
+}
+
+/// SEC's submissions answer for one issuer, the parts this app reads.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct Submissions {
+    #[serde(default)]
+    pub filings: SubmissionFilings,
+}
+
 /// The submissions answer into items. Split from
 /// the request so the two implementations can be compared on one answer.
-pub fn parse_submissions(sub: &Value, cik: i64, limit: usize) -> Fetched<Vec<Value>> {
-    let sub = match sub {
-        Value::Object(_) => sub,
-        other => {
-            return Err(SourceError::Other(format!(
-                "AttributeError: '{}' object has no attribute 'get'",
-                match other { Value::Array(_) => "list", Value::String(_) => "str", Value::Null => "NoneType", Value::Bool(_) => "bool", _ => "float" }
-            )))
-        }
-    };
-    let truthy = |v: Option<&Value>| match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Object(m)) => !m.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::String(t)) => !t.is_empty(),
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
-    };
-    let empty = Value::Object(Map::new());
-    let filings = sub.get("filings").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    let recent = filings.get("recent").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    let list = |k: &str| -> Vec<Value> {
-        match recent.get(k) {
-            Some(Value::Array(a)) if !a.is_empty() => a.clone(),
-            _ => vec![],
-        }
-    };
-    let forms = list("form");
-    let dates = list("filingDate");
-    let docs = list("primaryDocument");
-    let accns = list("accessionNumber");
-    let mut descs = list("primaryDocDescription");
-    if descs.is_empty() {
-        descs = vec![json!(""); forms.len()];
-    }
+pub fn parse_submissions(sub: &Submissions, cik: i64, limit: usize) -> Fetched<Vec<FiledDocument>> {
+    let recent = &sub.filings.recent;
+    let forms = &recent.form;
+    let dates = &recent.filing_date;
+    let docs = &recent.primary_document;
+    let accns = &recent.accession_number;
+    let descs = &recent.primary_doc_description;
     let mut items = Vec::new();
     for i in 0..forms.len().min(dates.len()).min(accns.len()) {
-        let acc = s(accns.get(i));
-        let doc = docs.get(i).map(|v| s(Some(v))).unwrap_or_default();
+        let acc = accns.get(i);
+        let doc = docs.get(i);
         let url = if !doc.is_empty() {
             format!("https://www.sec.gov/Archives/edgar/data/{}/{}/{}", cik, acc.replace('-', ""), doc)
         } else {
             format!("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={}", cik)
         };
-        let form = s(forms.get(i));
-        items.push(json!({
-            "id": format!("sec:{}", acc),
-            "source": SOURCE,
-            "category": category(&form),
-            "date": dates[i],
-            "dateText": dates[i],
-            "type": forms[i],
-            "title": title(&form, &descs.get(i).map(|v| s(Some(v))).unwrap_or_default()),
-            "size": "",
-            "url": url,
-        }));
+        let form = forms.get(i);
+        let date = dates.get(i);
+        items.push(FiledDocument {
+            id: format!("sec:{}", acc),
+            source: Regulator::Sec,
+            category: category(&form).to_string(),
+            date: date.clone(),
+            date_text: date,
+            title: title(&form, &descs.get(i)),
+            form,
+            size: String::new(),
+            url,
+            issuer: String::new(),
+            profile_no: String::new(),
+        });
     }
     items.truncate(limit.max(1));
     Ok(items)
@@ -266,12 +287,12 @@ pub fn parse_submissions(sub: &Value, cik: i64, limit: usize) -> Fetched<Vec<Val
 
 /// The issuer's recent filings, newest first, or nothing when
 /// SEC does not know the ticker or the name guard rejects a collision.
-pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize) -> Fetched<Vec<Value>> {
+pub fn fetch(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize) -> Fetched<Vec<FiledDocument>> {
     fetch_with(symbol, name, exchange, currency, limit, &get_json)
 }
 
 /// `fetch` with the submissions request given.
-pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, get_json: &dyn Fn(&str) -> Fetched<Value>) -> Fetched<Vec<Value>> {
+pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limit: usize, get_json: &dyn Fn(&str) -> Fetched<Value>) -> Fetched<Vec<FiledDocument>> {
     let map = ticker_map()?;
     let (cik, sec_title) = match map.get(&bare(symbol)) { Some(t) => t.clone(), None => return Ok(vec![]) };
     let us_listed = us_exchange(exchange) || currency.to_uppercase() == "USD";
@@ -279,7 +300,16 @@ pub fn fetch_with(symbol: &str, name: &str, exchange: &str, currency: &str, limi
         // a Canadian ticker colliding with a US filer
         return Ok(vec![]);
     }
-    let sub = get_json(&SUBMISSIONS_URL.replace("{}", &format!("{:010}", cik)))?;
+    let raw = get_json(&SUBMISSIONS_URL.replace("{}", &format!("{:010}", cik)))?;
+    let sub: Submissions = match &raw {
+        Value::Object(_) => serde_json::from_value(raw).unwrap_or_default(),
+        other => {
+            return Err(SourceError::Other(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                match other { Value::Array(_) => "list", Value::String(_) => "str", Value::Null => "NoneType", Value::Bool(_) => "bool", _ => "float" }
+            )))
+        }
+    };
     parse_submissions(&sub, cik, limit)
 }
 
@@ -295,7 +325,7 @@ pub fn has_filer(symbol: &str, name: &str, exchange: &str, currency: &str) -> bo
 /// A Schedule 13G/13D's title and summary read
 /// from its XML fields. Split from the download so it can be compared on one
 /// document.
-pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
+pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Enrichment> {
     if !xml.contains("reportingPersonName") {
         return None;
     }
@@ -328,25 +358,27 @@ pub fn enrichment_from_xml(typ: &str, xml: &str) -> Option<Value> {
     let stake = if pct.is_empty() { String::new() } else { format!(" of {}%", pct) };
     let of_issuer = if issuer.is_empty() { String::new() } else { format!(" of {}", issuer) };
     let summary = format!("{} {}{}{}{}'s common shares.", who, verb, tail, stake, of_issuer);
-    Some(json!({"subject": subject.chars().take(90).collect::<String>(), "summary": summary.chars().take(240).collect::<String>()}))
+    Some(Enrichment { subject: subject.chars().take(90).collect(), summary: summary.chars().take(240).collect(), final_: false })
 }
 
 /// A deterministic title and summary for a Schedule 13G or
 /// 13D, read from its raw XML rather than the rendered page.
-pub fn enrichment(row: &Value) -> Option<Value> {
+pub fn enrichment(row: &FiledDocument) -> Option<Enrichment> {
     enrichment_with(row, &document)
 }
 
 /// `enrichment` with the download given.
-pub fn enrichment_with(row: &Value, document: &dyn Fn(&Value) -> Fetched<(Vec<u8>, String)>) -> Option<Value> {
-    let typ = s(row.get("type")).to_uppercase();
+pub fn enrichment_with(row: &FiledDocument, document: &dyn Fn(&FiledDocument) -> Fetched<(Vec<u8>, String)>) -> Option<Enrichment> {
+    let typ = row.form.to_uppercase();
     if !typ.starts_with("SCHEDULE 13") {
         // every other form carries its own name, which needs no download
-        return crate::formnames::title_of(&typ).map(|t| json!({"subject": t, "summary": ""}));
+        return crate::formnames::title_of(&typ).map(|t| Enrichment { subject: t, summary: String::new(), final_: false });
     }
     static XSL: OnceLock<Regex> = OnceLock::new();
-    let raw_url = XSL.get_or_init(|| Regex::new(r"/xsl[^/]*/").unwrap()).replace_all(&s(row.get("url")), "/").into_owned();
-    let (data, _) = document(&json!({"url": raw_url})).ok()?;
+    let raw_url = XSL.get_or_init(|| Regex::new(r"/xsl[^/]*/").unwrap()).replace_all(&row.url, "/").into_owned();
+    let mut probe = row.clone();
+    probe.url = raw_url;
+    let (data, _) = document(&probe).ok()?;
     enrichment_from_xml(&typ, &String::from_utf8_lossy(&data))
 }
 
@@ -382,17 +414,17 @@ pub fn pick_content(items: &[Value], primary: &str) -> Option<String> {
 }
 
 /// The filing's substance rather than its cover form.
-pub fn content(row: &Value) -> Fetched<(Vec<u8>, String)> {
+pub fn content(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
     content_with(row, &get_json, &document)
 }
 
 /// `content` with the index request and the download given.
 pub fn content_with(
-    row: &Value,
+    row: &FiledDocument,
     get_json: &dyn Fn(&str) -> Fetched<Value>,
-    document: &dyn Fn(&Value) -> Fetched<(Vec<u8>, String)>,
+    document: &dyn Fn(&FiledDocument) -> Fetched<(Vec<u8>, String)>,
 ) -> Fetched<(Vec<u8>, String)> {
-    let url = s(row.get("url"));
+    let url = &row.url;
     if !url.starts_with("https://www.sec.gov/") {
         return document(row);
     }
@@ -401,21 +433,24 @@ pub fn content_with(
     let items = listing.get("directory").and_then(|d| d.get("item")).and_then(|i| i.as_array()).cloned().unwrap_or_default();
     match pick_content(&items, primary) {
         None => document(row),
-        Some(best) => document(&json!({"url": format!("{}/{}", base, best)})).or_else(|_| document(row)),
+        Some(best) => {
+            let mut probe = row.clone();
+            probe.url = format!("{}/{}", base, best);
+            document(&probe).or_else(|_| document(row))
+        }
     }
 }
 
-/// One EDGAR document, fetched directly. (bytes, content
-/// type as `get_content_type()` gives it).
-pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
-    let url = s(row.get("url"));
+/// A document fetched directly by its address, for a call that needs only
+/// the bytes at a URL and not a stored row's other fields.
+fn fetch_url(url: &str) -> Fetched<(Vec<u8>, String)> {
     if !url.starts_with("https://www.sec.gov/") {
         return Err(SourceError::Unavailable("not an SEC document url".into()));
     }
     pace();
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate")];
-    let resp = crate::client::request("GET", &url, &headers, None, Duration::from_secs(TIMEOUT))
+    let resp = crate::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
         .map_err(|e| SourceError::Unavailable(format!("EDGAR document fetch failed: {}", describe(&e))))?;
     // email.message's get_content_type: the type alone, lower-cased, text/plain
     // where there is none or it is malformed
@@ -427,4 +462,10 @@ pub fn document(row: &Value) -> Fetched<(Vec<u8>, String)> {
         .filter(|v| v.matches('/').count() == 1)
         .unwrap_or_else(|| "text/plain".into());
     Ok((resp.body, ct))
+}
+
+/// One EDGAR document, fetched directly. (bytes, content
+/// type as `get_content_type()` gives it).
+pub fn document(row: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
+    fetch_url(&row.url)
 }

@@ -888,16 +888,16 @@ mod tests {
     fn test_a_disclosure_is_told_by_the_documents_own_title_and_the_form_code_stands_in() {
         use crate::feeds::filings_notice;
         let (_g, app, _c) = setup();
-        let rows = [json!({"id": "sec:1", "source": "SEC", "type": "144", "subject": "Proposed sale of 40,000 shares by an officer"})];
+        let rows = [filing_row("sec:1", "144", "Proposed sale of 40,000 shares by an officer")];
         assert_eq!(filings_notice(&app, "NBIS", &rows), ("New disclosure · NBIS".to_string(), "Proposed sale of 40,000 shares by an officer · SEC EDGAR".to_string()));
         // nothing could be read from it: the form stands in, in words where the app knows the form,
         // since "6-K" alone names the paperwork and not what happened. A row carrying an id would
         // be read over the network for a title first, which is not exercised here.
-        assert_eq!(filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "6-K"})]).1, "Foreign issuer report (6-K) · SEC EDGAR");
-        assert_eq!(filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "144"})]).1, "Notice of proposed sale (144) · SEC EDGAR");
-        assert_eq!(filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "40-F"})]).1, "40-F · SEC EDGAR",
+        assert_eq!(filings_notice(&app, "NBIS", &[filing_row("", "6-K", "")]).1, "Foreign issuer report (6-K) · SEC EDGAR");
+        assert_eq!(filings_notice(&app, "NBIS", &[filing_row("", "144", "")]).1, "Notice of proposed sale (144) · SEC EDGAR");
+        assert_eq!(filings_notice(&app, "NBIS", &[filing_row("", "40-F", "")]).1, "40-F · SEC EDGAR",
                    "a form the app has no words for keeps its code");
-        let many: Vec<Value> = (0..4).map(|i| json!({"id": format!("sec:{}", i), "source": "SEC", "type": "4", "subject": format!("Insider report {}", i)})).collect();
+        let many: Vec<bagholder_store::feeds::Filing> = (0..4).map(|i| filing_row(&format!("sec:{}", i), "4", &format!("Insider report {}", i))).collect();
         assert_eq!(filings_notice(&app, "NBIS", &many), ("4 new disclosures · NBIS".to_string(), "Insider report 0, Insider report 1, Insider report 2 and more · SEC EDGAR".to_string()));
     }
 
@@ -939,6 +939,32 @@ mod tests {
             bagholder_store::feeds::NewsItem {
                 id: id.into(), headline: head.into(), source: "Business Wire".into(), url: url.into(), published_at: when.into(),
                 summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::of_id(id).unwrap_or(bagholder_store::feeds::Feed::Tmx),
+            }
+        }
+
+        /// A filed document, every field given, as a notice reads it.
+        fn filing_full(id: &str, source: bagholder_store::feeds::Regulator, date: &str, form: &str, subject: &str, summary: &str, url: &str) -> bagholder_store::feeds::Filing {
+            bagholder_store::feeds::Filing {
+                doc: bagholder_store::feeds::FiledDocument {
+                    id: id.into(), source, category: String::new(), profile_no: String::new(), issuer: String::new(),
+                    form: form.into(), title: String::new(), date: date.into(), date_text: String::new(), size: String::new(), url: url.into(),
+                },
+                subject: subject.into(), summary: summary.into(), enriched_at: String::new(),
+                enrich_version: None, enrich_final: false, fetched_at: String::new(),
+            }
+        }
+
+        /// A filed document (SEC) with only its id, form code and subject given.
+        fn filing_row(id: &str, form: &str, subject: &str) -> bagholder_store::feeds::Filing {
+            filing_full(id, bagholder_store::feeds::Regulator::Sec, "", form, subject, "", "")
+        }
+
+        /// A news item, every field given, as a notice reads it.
+        fn news_item(id: &str, headline: &str, summary: &str, url: &str, published_at: &str) -> bagholder_store::feeds::NewsItem {
+            bagholder_store::feeds::NewsItem {
+                id: id.into(), headline: headline.into(), source: String::new(), url: url.into(), published_at: published_at.into(),
+                summary: summary.into(), kind: bagholder_store::feeds::NewsKind::Release,
+                via: bagholder_store::feeds::Feed::of_id(id).unwrap_or(bagholder_store::feeds::Feed::Tmx),
             }
         }
 
@@ -998,11 +1024,11 @@ mod tests {
         let (_g, app, c) = setup();
         bagholder_store::market::upsert_distributions(&c, "QNC", &[bagholder_store::market::DistributionRecord { ex_date: "2026-08-31".into(), pay_date: "2026-09-04".into(), amount: Some(0.15), currency: "CAD".into() }], "test").unwrap();
         assert_eq!(
-            crate::feeds::release_notice(&app, "QNC", &[json!({"id": "tmx:1", "headline": "Quantum eMotion Wins Certification", "publishedAt": "2026-09-15T13:00:00Z"})]),
+            crate::feeds::release_notice(&app, "QNC", &[news_item("tmx:1", "Quantum eMotion Wins Certification", "", "", "2026-09-15T13:00:00Z")]),
             ("Press release · QNC".to_string(), "Quantum eMotion Wins Certification".to_string())
         );
         assert_eq!(
-            crate::feeds::release_notice(&app, "NOSUCH", &[json!({"id": "tmx:2", "headline": "Announces Monthly Distribution", "publishedAt": "2026-09-15T13:00:00Z"})]).1,
+            crate::feeds::release_notice(&app, "NOSUCH", &[news_item("tmx:2", "Announces Monthly Distribution", "", "", "2026-09-15T13:00:00Z")]).1,
             "Announces Monthly Distribution",
             "no record for the listing: the headline stands alone"
         );
@@ -1011,18 +1037,17 @@ mod tests {
     #[test]
     fn test_a_release_with_no_figures_carries_what_the_source_said() {
         let (_g, app, _c) = setup();
-        let notice = crate::feeds::release_notice(&app, "QNC", &[json!({"id": "tmx:1", "headline": "Quantum eMotion Wins Certification",
-            "summary": "The certification covers its entropy module, which NIST listed this week.",
-            "publishedAt": "2026-09-15T13:00:00Z"})]);
+        let notice = crate::feeds::release_notice(&app, "QNC", &[news_item("tmx:1", "Quantum eMotion Wins Certification",
+            "The certification covers its entropy module, which NIST listed this week.", "", "2026-09-15T13:00:00Z")]);
         assert_eq!(notice.1, "Quantum eMotion Wins Certification\nThe certification covers its entropy module, which NIST listed this week.");
     }
 
     #[test]
     fn test_a_disclosure_notice_carries_the_sentence_the_document_yielded() {
         let (_g, app, _c) = setup();
-        let rows = vec![json!({"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
-                               "subject": "GAB0590 Avis Acceptation WKSI",
-                               "summary": "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."})];
+        let rows = vec![filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
+                               "GAB0590 Avis Acceptation WKSI",
+                               "The company announces the acceptance of its prospectus by the Autorité des marchés financiers.", "")];
         let (title, body) = crate::feeds::filings_notice(&app, "QNC", &rows);
         assert_eq!(title, "New disclosure · QNC");
         assert_eq!(
@@ -1030,8 +1055,8 @@ mod tests {
             vec!["GAB0590 Avis Acceptation WKSI · SEDAR+",
                  "The company announces the acceptance of its prospectus by the Autorité des marchés financiers."]
         );
-        let same = vec![json!({"id": "sedar:1", "source": "SEDAR+", "type": "Other Correspondence", "date": "2026-09-08T16:22",
-                               "subject": "GAB0590 Avis Acceptation WKSI", "summary": "GAB0590 Avis Acceptation WKSI"})];
+        let same = vec![filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "Other Correspondence",
+                               "GAB0590 Avis Acceptation WKSI", "GAB0590 Avis Acceptation WKSI", "")];
         assert_eq!(crate::feeds::filings_notice(&app, "QNC", &same).1, "GAB0590 Avis Acceptation WKSI · SEDAR+",
                    "a summary that only repeats the line above it is not a second line");
     }
@@ -1041,9 +1066,9 @@ mod tests {
         // nothing could be read from it: the form stands in, in words where the app knows the form,
         // since "6-K" alone names the paperwork and not what happened
         let (_g, app, _c) = setup();
-        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "6-K"})]).1, "Foreign issuer report (6-K) · SEC EDGAR");
-        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "144"})]).1, "Notice of proposed sale (144) · SEC EDGAR");
-        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[json!({"source": "SEC", "type": "40-F"})]).1, "40-F · SEC EDGAR",
+        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[filing_row("", "6-K", "")]).1, "Foreign issuer report (6-K) · SEC EDGAR");
+        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[filing_row("", "144", "")]).1, "Notice of proposed sale (144) · SEC EDGAR");
+        assert_eq!(crate::feeds::filings_notice(&app, "NBIS", &[filing_row("", "40-F", "")]).1, "40-F · SEC EDGAR",
                    "a form the app has no words for keeps its code");
     }
 
@@ -1052,23 +1077,23 @@ mod tests {
         // A release found today can have been published weeks ago: the notice carries the item's own
         // moment, so the panel can say when it happened rather than when it was told.
         let (_g, _app, _c) = setup();
-        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "tmx:1", "publishedAt": "2026-08-24T11:00:00Z"}),
-                                          json!({"id": "tmx:2", "publishedAt": "2026-08-31T07:00:00Z"})]),
+        assert_eq!(crate::feeds::notice_moment(&[news_item("tmx:1", "", "", "", "2026-08-24T11:00:00Z"),
+                                          news_item("tmx:2", "", "", "", "2026-08-31T07:00:00Z")]),
                    json!({"at": "2026-08-31T07:00:00Z"}), "the newest of them");
-        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "sedar:1", "date": "2026-09-08T16:22"})]), json!({"at": "2026-09-08T16:22"}));
-        assert_eq!(crate::feeds::notice_moment(&[json!({"id": "x"})]), json!({"at": ""}));
+        assert_eq!(crate::feeds::notice_moment(&[filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "", "", "", "")]), json!({"at": "2026-09-08T16:22"}));
+        assert_eq!(crate::feeds::notice_moment(&[news_item("x", "", "", "", "")]), json!({"at": ""}));
     }
 
     #[test]
     fn test_a_disclosure_notice_opens_the_document_it_is_about() {
         let (_g, _app, _c) = setup();
-        assert_eq!(crate::feeds::notice_link(&[json!({"id": "sedar:9", "source": "SEDAR+", "url": "https://www.sedarplus.ca/x?drmKey=9", "date": "2026-09-15T09:00"})]),
+        assert_eq!(crate::feeds::notice_link(&[filing_full("sedar:9", bagholder_store::feeds::Regulator::Sedar, "2026-09-15T09:00", "", "", "", "https://www.sedarplus.ca/x?drmKey=9")]),
                    json!({"url": "https://www.sedarplus.ca/x?drmKey=9", "doc": "sedar:9", "source": "SEDAR+"}));
-        assert_eq!(crate::feeds::notice_link(&[json!({"id": "sec:4", "source": "SEC", "url": "https://www.sec.gov/x/4.htm", "date": "2026-09-15T09:00"})]),
+        assert_eq!(crate::feeds::notice_link(&[filing_full("sec:4", bagholder_store::feeds::Regulator::Sec, "2026-09-15T09:00", "", "", "", "https://www.sec.gov/x/4.htm")]),
                    json!({"url": "https://www.sec.gov/x/4.htm", "doc": "sec:4", "source": "SEC"}), "the SEC serves its own documents");
-        assert_eq!(crate::feeds::notice_link(&[json!({"id": "tmx:1", "url": "https://money.tmx.com/en/quote/QNC/news/1", "publishedAt": "2026-09-15T13:00:00Z"})]),
+        assert_eq!(crate::feeds::notice_link(&[news_item("tmx:1", "", "", "https://money.tmx.com/en/quote/QNC/news/1", "2026-09-15T13:00:00Z")]),
                    json!({"url": "https://money.tmx.com/en/quote/QNC/news/1"}));
-        assert_eq!(crate::feeds::notice_link(&[json!({"id": "x", "publishedAt": "2026-09-15T13:00:00Z"})]), json!({}), "nothing to open, nothing claimed");
+        assert_eq!(crate::feeds::notice_link(&[news_item("x", "", "", "", "2026-09-15T13:00:00Z")]), json!({}), "nothing to open, nothing claimed");
     }
 
     #[test]

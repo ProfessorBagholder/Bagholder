@@ -10,9 +10,9 @@
 
 use regex::bytes::Regex as BytesRegex;
 use regex::Regex;
-use serde_json::{json, Value};
 use std::sync::OnceLock;
 
+use crate::disclosures::Enrichment;
 use crate::news::unescape;
 use bagholder_model::unichars::{is_alpha, is_digit, is_space, is_upper};
 use bagholder_model::textrules::trim_space;
@@ -378,30 +378,28 @@ pub fn title_from_model(text: &str) -> String {
 /// document, both from its readable text. `final` says the document has been
 /// read for good -- a regulator's form, read exactly or not at all -- and no
 /// model will add to it.
-pub fn enrich_document(source: &str, data: &[u8], content_type: &str) -> Value {
+pub fn enrich_document(source: &str, data: &[u8], content_type: &str) -> Enrichment {
     enrich_document_of("", source, data, content_type)
 }
 
 /// The same, told which form the document is, so a current report is named by
 /// its own items and the model is asked for the sentence alone.
-pub fn enrich_document_of(code: &str, _source: &str, data: &[u8], content_type: &str) -> Value {
+pub fn enrich_document_of(code: &str, _source: &str, data: &[u8], content_type: &str) -> Enrichment {
     let is_pdf = data.starts_with(b"%PDF-");
     let mut subject = if is_pdf { extract_pdf_subject(data) } else { String::new() };
     if is_junk_title(&subject) {
         subject = String::new();
     }
     let text = document_text(data, content_type);
-    let exact = crate::forms::read(&text);
-    if exact.as_object().map(|m| !m.is_empty()).unwrap_or(false) {
-        let s = exact.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-        return json!({
-            "subject": if s.is_empty() { subject } else { s.to_string() },
-            "summary": exact.get("summary").cloned().unwrap_or(json!("")),
-            "final": true,
-        });
+    if let Some(exact) = crate::forms::read(&text) {
+        return Enrichment {
+            subject: if exact.subject.is_empty() { subject } else { exact.subject },
+            summary: exact.summary,
+            final_: true,
+        };
     }
     if crate::forms::is_form(&text) {
-        return json!({"subject": subject, "summary": "", "final": true});
+        return Enrichment { subject, summary: String::new(), final_: true };
     }
     if let Some(named) = crate::formnames::items_title(code, &text) {
         subject = named;   // the report's own items, better than any sentence about them
@@ -414,5 +412,5 @@ pub fn enrich_document_of(code: &str, _source: &str, data: &[u8], content_type: 
     if subject.is_empty() {
         subject = title_from_model(&text);   // a form the regulator does not name: the model reads one
     }
-    json!({"subject": subject, "summary": summary})
+    Enrichment { subject, summary, final_: false }
 }

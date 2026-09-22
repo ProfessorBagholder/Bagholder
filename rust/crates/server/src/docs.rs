@@ -57,13 +57,15 @@ pub fn read(app: &Arc<App>, key: &str, _params: &Value) -> Option<Value> {
         // `history:<the chart's own query>`: only whether its intraday bars are still
         // being read -- the bars themselves are fetched once, when this says they are in
         // `filings:<symbol=…&name=…&exchange=…&currency=…>`: one listing's disclosures
-        k if k.starts_with("filings:") => Some(crate::feeds::filings_stored(app, &one(&k["filings:".len()..], "symbol"))),
+        k if k.starts_with("filings:") => Some(match crate::feeds::filings_stored(app, &one(&k["filings:".len()..], "symbol")) {
+            Ok(d) => serde_json::to_value(d).unwrap_or(Value::Null),
+            Err(e) => serde_json::json!({"ok": false, "error": e}),
+        }),
         // `filings-feed:<scope>`: the newest disclosures across the listings in scope;
         // `reading` says whether anything is reading their documents (a local model is up)
         k if k.starts_with("filings-feed:") => {
-            let mut feed = crate::feeds::filings_feed(app, &k["filings-feed:".len()..], 200);
-            feed["reading"] = serde_json::json!(bagholder_market::enrich::summary_available());
-            Some(feed)
+            let feed = crate::feeds::filings_feed(app, &k["filings-feed:".len()..], 200);
+            Some(serde_json::to_value(feed).unwrap_or(Value::Null))
         }
         // `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the first answer
         // `fear:<index>`: the fear and greed meter

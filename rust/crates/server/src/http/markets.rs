@@ -109,7 +109,7 @@ struct Scope {
 }
 
 async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api {
-    answer(move || feeds::filings_feed(&state.app, &s.scope, 200)).await
+    answer(move || serde_json::to_value(feeds::filings_feed(&state.app, &s.scope, 200)).unwrap_or(Value::Null)).await
 }
 
 /// One stored filing of one listing.

@@ -10,7 +10,7 @@
 
 use bagholder_market::disclosures::{self as d, Fetched, Provider, SourceError};
 use bagholder_market::{edgar, sedar};
-use bagholder_store::feeds as sf;
+use bagholder_store::feeds::{self as sf, FiledDocument, Regulator};
 use serde_json::{json, Map, Value};
 
 fn norm(v: Value) -> Value {
@@ -45,8 +45,8 @@ fn submissions() -> Value {
 }
 
 struct Prov {
-    source: &'static str,
-    items: Vec<Value>,
+    source: Regulator,
+    items: Vec<FiledDocument>,
     avail: bool,
     covers: bool,
     raises: Option<SourceError>,
@@ -54,14 +54,14 @@ struct Prov {
 }
 
 impl Provider for Prov {
-    fn source(&self) -> &str { self.source }
+    fn source(&self) -> Regulator { self.source }
     fn available(&self) -> bool { self.avail }
     fn covers(&self, _: &str, _: &str, _: &str) -> bool { self.covers }
-    fn fetch(&self, _: &str, _: &str, _: &str, _: &str, _: &str) -> Fetched<Vec<Value>> {
+    fn fetch(&self, _: &str, _: &str, _: &str, _: &str, _: &str) -> Fetched<Vec<FiledDocument>> {
         match &self.raises { Some(e) => Err(e.clone()), None => Ok(self.items.clone()) }
     }
     fn has_filer(&self, _: &str, _: &str, _: &str, _: &str) -> bool { self.filer }
-    fn document(&self, _: &Value) -> Fetched<(Vec<u8>, String)> {
+    fn document(&self, _: &FiledDocument) -> Fetched<(Vec<u8>, String)> {
         Ok((b"%PDF-".to_vec(), "application/pdf".into()))
     }
 }
@@ -100,17 +100,17 @@ fn answers() -> Value {
                <reportingPersonName>Capital Ventures International</reportingPersonName>\
                <classPercent>2.4</classPercent></edgarSubmission>";
     let doc = |_: &_| -> Fetched<(Vec<u8>, String)> { Ok((xml.as_bytes().to_vec(), "application/xml".into())) };
-    let g13 = sec_items.iter().find(|r| cell(r)["type"] == "SCHEDULE 13D/A").unwrap();
+    let g13 = sec_items.iter().find(|r| r.form == "SCHEDULE 13D/A").unwrap();
     out.insert("sec_ownership_enrichment".into(), cell(&edgar::enrichment_with(g13, &doc)));
 
     // every source merged, each with its outcome
-    let sedar_p = Prov { source: sedar::SOURCE, items: sedar_items.clone(), avail: true, covers: true, raises: None, filer: false };
-    let sec_p = Prov { source: edgar::SOURCE, items: sec_items.clone(), avail: true, covers: true, raises: None, filer: false };
-    let sec_empty = Prov { source: edgar::SOURCE, items: vec![], avail: true, covers: true, raises: None, filer: true };
-    let sedar_down = Prov { source: sedar::SOURCE, items: vec![], avail: true, covers: true, raises: Some(SourceError::Unavailable("SEDAR+ is unavailable.".into())), filer: false };
-    let sedar_err = Prov { source: sedar::SOURCE, items: vec![], avail: true, covers: true, raises: Some(SourceError::Other("ProfileNotFound".into())), filer: false };
-    let sec_off = Prov { source: edgar::SOURCE, items: sec_items.clone(), avail: false, covers: true, raises: None, filer: false };
-    let sec_uncovered = Prov { source: edgar::SOURCE, items: sec_items.clone(), avail: true, covers: false, raises: None, filer: false };
+    let sedar_p = Prov { source: Regulator::Sedar, items: sedar_items.clone(), avail: true, covers: true, raises: None, filer: false };
+    let sec_p = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: true, covers: true, raises: None, filer: false };
+    let sec_empty = Prov { source: Regulator::Sec, items: vec![], avail: true, covers: true, raises: None, filer: true };
+    let sedar_down = Prov { source: Regulator::Sedar, items: vec![], avail: true, covers: true, raises: Some(SourceError::Unavailable("SEDAR+ is unavailable.".into())), filer: false };
+    let sedar_err = Prov { source: Regulator::Sedar, items: vec![], avail: true, covers: true, raises: Some(SourceError::Other("ProfileNotFound".into())), filer: false };
+    let sec_off = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: false, covers: true, raises: None, filer: false };
+    let sec_uncovered = Prov { source: Regulator::Sec, items: sec_items.clone(), avail: true, covers: false, raises: None, filer: false };
     out.insert("merge_both".into(), cell(&d::fetch_from(&[&sedar_p, &sec_p], "NVDA", "NVIDIA", "NASDAQ", "USD", 12, "")));
     out.insert("merge_down".into(), cell(&d::fetch_from(&[&sedar_down, &sec_empty], "NVDA", "NVIDIA", "NASDAQ", "USD", 50, "")));
     out.insert("merge_error".into(), cell(&d::fetch_from(&[&sedar_err, &sec_off], "NVDA", "NVIDIA", "NASDAQ", "USD", 50, "")));
@@ -121,17 +121,17 @@ fn answers() -> Value {
     bagholder_store::schema::init_schema(&conn).unwrap();
     const NOW: &str = "2026-09-22T15:00:00Z";
     const LATER: &str = "2026-09-23T15:00:00Z";
-    sf::replace_filings(&conn, "nvda", sedar::SOURCE, &sedar_items, NOW).unwrap();
-    sf::replace_filings(&conn, "NVDA", edgar::SOURCE, &sec_items, NOW).unwrap();
+    sf::replace_filings(&conn, "nvda", Regulator::Sedar, &sedar_items, NOW).unwrap();
+    sf::replace_filings(&conn, "NVDA", Regulator::Sec, &sec_items, NOW).unwrap();
     let first = cell(&sf::filings_for(&conn, "NVDA").unwrap());
-    let sec0 = cell(&sec_items[0])["id"].as_str().unwrap().to_string();
-    let sec1 = cell(&sec_items[1])["id"].as_str().unwrap().to_string();
-    let sedar0 = cell(&sedar_items[0])["id"].as_str().unwrap().to_string();
+    let sec0 = sec_items[0].id.clone();
+    let sec1 = sec_items[1].id.clone();
+    let sedar0 = sedar_items[0].id.clone();
     sf::set_filing_enrichment(&conn, "NVDA", &sec0, Some("Quarterly report"), Some("Revenue rose."), Some(7), None, NOW).unwrap();
     sf::set_filing_enrichment(&conn, "NVDA", &sec1, Some("Current report"), None, None, Some(true), NOW).unwrap();
     sf::set_filing_enrichment(&conn, "NVDA", &sedar0, None, Some("An interim report."), Some(3), Some(false), NOW).unwrap();
     let read = cell(&sf::filings_for(&conn, "NVDA").unwrap());
-    sf::replace_filings(&conn, "NVDA", edgar::SOURCE, &sec_items[..sec_items.len() - 1], LATER).unwrap();
+    sf::replace_filings(&conn, "NVDA", Regulator::Sec, &sec_items[..sec_items.len() - 1], LATER).unwrap();
     out.insert("store_first".into(), first);
     out.insert("store_read".into(), read);
     out.insert("store_refreshed".into(), cell(&sf::filings_for(&conn, "NVDA").unwrap()));
