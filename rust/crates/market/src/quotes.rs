@@ -485,14 +485,20 @@ pub fn float_repr(x: f64) -> String {
 /// the previous UTC day's close when Coinbase has a market to take it from.
 pub fn fetch_coinbase_spot(conn: &rusqlite::Connection, pair: &str, today: &str, now_unix: f64) -> Option<Value> {
     let url = COINBASE_URL.replace("{}", pair);
-    let mut rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
-    if let Some(prev) = coinbase_prev_close(conn, pair, today, now_unix) {
-        let price = rec["price"].as_f64().unwrap_or(0.0);
-        rec["prevClose"] = json!(prev);
-        rec["priceChange"] = json!(price - prev);
-        rec["percentChange"] = json!((price - prev) / prev * 100.0);
-    }
-    Some(rec)
+    let rec = parse_coinbase_rec(&get_text(&url, &[]).ok()?, pair)?;
+    Some(match coinbase_prev_close(conn, pair, today, now_unix) {
+        Some(prev) => with_prev_close(rec, prev),
+        None => rec,
+    })
+}
+
+/// A spot price with its day's change against the previous close.
+pub fn with_prev_close(mut rec: Value, prev: f64) -> Value {
+    let price = rec["price"].as_f64().unwrap_or(0.0);
+    rec["prevClose"] = json!(prev);
+    rec["priceChange"] = json!(price - prev);
+    rec["percentChange"] = json!((price - prev) / prev * 100.0);
+    rec
 }
 
 /// The root of an OCC code, "" when it is not one.
