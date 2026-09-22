@@ -71,7 +71,7 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
         if l.symbol.is_empty() {
             return out;
         }
-        let rec = json!({"symbol": l.symbol, "exchange": l.exchange, "currency": l.currency, "kind": "Shares"});
+        let rec = bagholder_model::input::Listing::new(l.symbol, l.exchange, l.currency, "Shares");
         if let Ok(conn) = app.open() {
             let (today, _, _) = bagholder_market::clock_now();
             if let Some(Value::Object(q)) = bagholder_market::quotes::peek_quote(&conn, &rec, &today) {

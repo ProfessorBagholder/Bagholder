@@ -3,7 +3,7 @@
 //! never the network.
 
 use bagholder_market::client;
-use serde_json::json;
+use bagholder_model::input::Listing;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -90,8 +90,8 @@ fn test_quote_refresh_keys_a_watched_listing_by_venue() {
     let needing = bagholder_market::quotes::quote_symbols_needing_refresh(
         &conn,
         &[
-            json!({"symbol": "AAPL", "exchange": "NEO", "currency": "CAD", "kind": "Shares"}),
-            json!({"symbol": "AAPL", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares", "quoteKey": "AAPL@NASDAQ"}),
+            Listing::new("AAPL", "NEO", "CAD", "Shares"),
+            Listing { quote_key: Some("AAPL@NASDAQ".into()), ..Listing::new("AAPL", "NASDAQ", "USD", "Shares") },
         ],
         1_800_000_000.0,
         bagholder_market::quotes::QUOTE_REFRESH_MINUTES,

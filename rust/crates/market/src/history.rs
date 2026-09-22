@@ -14,6 +14,7 @@ use crate::parse::{parse_coinbase_candles, parse_tmx_history};
 use crate::quotes::{yahoo_forms, tmx_quote_symbol};
 use crate::http::FetchError;
 use crate::tmx::{tmx_lookup, tmx_lookup_try, TMX_URL};
+use bagholder_model::input::Listing;
 use bagholder_model::value::{field_s, get, num};
 
 /// A source covers a span when its first bar is
@@ -36,10 +37,10 @@ pub const YAHOO_CHART_RANGE_URL: &str = "https://query1.finance.yahoo.com/v8/fin
 /// pair in the position's own currency, then the USD market and pair, which
 /// are converted at the Bank of Canada rate. Nothing for an option contract
 /// itself -- the chart maps it to its underlying first.
-pub fn history_candidates(rec: &Value) -> Vec<(String, String)> {
-    let kind = { let k = field_s(rec, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-    let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
+pub fn history_candidates(rec: &Listing) -> Vec<(String, String)> {
+    let kind = { let k = rec.kind.clone(); if k.is_empty() { "Shares".to_string() } else { k } };
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let ccy = { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
     if sym.is_empty() {
         return vec![];
     }
@@ -58,20 +59,20 @@ pub fn history_candidates(rec: &Value) -> Vec<(String, String)> {
         return vec![];
     }
     let mut out = Vec::new();
-    if let Some(k) = tmx_quote_symbol(&field_s(rec, "symbol"), &field_s(rec, "exchange"), &ccy) {
+    if let Some(k) = tmx_quote_symbol(&rec.symbol, &rec.exchange, &ccy) {
         out.push(("tmx".to_string(), k));
     }
     out.extend(yahoo_forms(rec).into_iter().map(|f| ("yahoo".to_string(), f)));
     out
 }
 
-fn bars_meta_key(rec: &Value) -> String {
-    format!("bars_source:{}", bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol")))
+fn bars_meta_key(rec: &Listing) -> String {
+    format!("bars_source:{}", bagholder_model::venues::tmx_symbol(&rec.symbol))
 }
 
 /// The candidates with the remembered winner
 /// first.
-pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Value) -> Vec<(String, String)> {
+pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Listing) -> Vec<(String, String)> {
     let cands = history_candidates(rec);
     if cands.is_empty() {
         return cands;
@@ -88,20 +89,20 @@ pub fn ordered_candidates(conn: &rusqlite::Connection, rec: &Value) -> Vec<(Stri
     cands
 }
 
-fn remember_winner(conn: &rusqlite::Connection, rec: &Value, source: &str, key: &str) {
+fn remember_winner(conn: &rusqlite::Connection, rec: &Listing, source: &str, key: &str) {
     let _ = bagholder_store::tables::set_meta(conn, &bars_meta_key(rec), &format!("{}|{}", source, key));
 }
 
 /// The currency a candidate's bars are quoted in -- a
 /// crypto pair's quote currency, otherwise the listing's own.
-pub fn bar_currency(source_kind: &str, key: &str, rec: &Value) -> String {
+pub fn bar_currency(source_kind: &str, key: &str, rec: &Listing) -> String {
     let _ = source_kind;
-    if field_s(rec, "kind") == "Crypto" {
+    if rec.kind.clone() == "Crypto" {
         if let Some((_, q)) = key.split_once('-') {
             return q.to_string();
         }
     }
-    let c = field_s(rec, "currency");
+    let c = rec.currency.clone();
     if c.is_empty() { "CAD".into() } else { c.to_uppercase() }
 }
 
@@ -306,7 +307,7 @@ pub fn fetch_daily_from(
     conn: &rusqlite::Connection,
     source: &str,
     key: &str,
-    rec: &Value,
+    rec: &Listing,
     start: &str,
     end: &str,
     today: &str,
@@ -340,7 +341,7 @@ pub fn fetch_daily_from(
                     Value::Object(m)
                 })
                 .collect();
-            Ok(in_position_currency(conn, &days, &bar_currency(source, key, rec), &field_s(rec, "currency")))
+            Ok(in_position_currency(conn, &days, &bar_currency(source, key, rec), &rec.currency))
         }
         "yahoo" => {
             let days: Vec<Value> = fetch_yahoo(conn, key, start_ts, end_ts, "1d", today)?
@@ -356,7 +357,7 @@ pub fn fetch_daily_from(
                     })
                 })
                 .collect();
-            Ok(in_position_currency(conn, &whole_bars(days), &bar_currency(source, key, rec), &field_s(rec, "currency")))
+            Ok(in_position_currency(conn, &whole_bars(days), &bar_currency(source, key, rec), &rec.currency))
         }
         _ => Ok(vec![]),
     }
@@ -367,7 +368,7 @@ pub fn fetch_daily_from(
 /// is remembered.
 fn pick_covering<F: Fn(&Value) -> i64>(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     answers: &[(String, String, Vec<Value>)],
     span_start: i64,
     first_of: F,
@@ -405,16 +406,16 @@ fn chart_notes() -> &'static std::sync::Mutex<std::collections::HashMap<(String,
     N.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-fn remember_notes(rec: &Value, which: &'static str, notes: Vec<(String, String, Note)>) {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+fn remember_notes(rec: &Listing, which: &'static str, notes: Vec<(String, String, Note)>) {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     chart_notes().lock().unwrap().insert((sym, which), notes);
 }
 
 /// Why a chart has no bars, in one sentence -- what
 /// failed, or which sources were asked and had none.
-pub fn chart_reason(rec: &Value, tf: &str) -> String {
+pub fn chart_reason(rec: &Listing, tf: &str) -> String {
     let which: &'static str = if INTRADAY.contains(&tf) { "hourly" } else { "daily" };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let notes = chart_notes().lock().unwrap().get(&(sym, which)).cloned().unwrap_or_default();
     let label = |s: &str| -> String {
         crate::http::SOURCE_LABELS.iter().find(|(k, _)| *k == s).map(|(_, v)| v.to_string()).unwrap_or_else(|| s.to_string())
@@ -451,7 +452,7 @@ pub fn chart_reason(rec: &Value, tf: &str) -> String {
 
 /// The chain, stopping as soon as one candidate covers
 /// the span.
-pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end: &str, today: &str) -> (Vec<Value>, String) {
+pub fn fetch_history(conn: &rusqlite::Connection, rec: &Listing, start: &str, end: &str, today: &str) -> (Vec<Value>, String) {
     let span_start = epoch_of_day(start);
     let mut answers: Vec<(String, String, Vec<Value>)> = Vec::new();
     let mut notes: Vec<(String, String, Note)> = Vec::new();
@@ -485,14 +486,14 @@ pub fn fetch_history(conn: &rusqlite::Connection, rec: &Value, start: &str, end:
 /// never fetched or the copy is stale and the span reaches the present.
 pub fn ensure_history(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     start: &str,
     end: &str,
     today: &str,
     now_unix: f64,
     now_stamp: &str,
 ) -> rusqlite::Result<Vec<Value>> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let start: String = start.chars().take(10).collect();
     let end: String = end.chars().take(10).collect();
     if sym.is_empty() || start.len() != 10 || end.len() != 10 {
@@ -592,19 +593,19 @@ pub const INTRADAY_SECONDS: [(&str, i64); 2] = [("1h", 3600), ("4h", 14400)];
 /// What the chart draws for an instrument -- itself,
 /// or for an option contract its underlying, since no source keeps contract
 /// history.
-pub fn chart_instrument(rec: &Value) -> Value {
-    if field_s(rec, "kind") == "Options" {
-        let under = bagholder_model::symbols::underlying_symbol(&field_s(rec, "symbol"));
+pub fn chart_instrument(rec: &Listing) -> Listing {
+    if rec.kind == "Options" {
+        let under = bagholder_model::symbols::underlying_symbol(&rec.symbol);
         if !under.is_empty() && under != "—" {
-            let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "USD".to_string() } else { c } };
-            return json!({"symbol": under, "exchange": field_s(rec, "exchange"), "currency": ccy, "kind": "Shares"});
+            let ccy = if rec.currency.is_empty() { "USD" } else { &rec.currency };
+            return Listing::new(under, rec.exchange.clone(), ccy, "Shares");
         }
     }
     rec.clone()
 }
 
 /// The preferred source for an instrument's bars.
-pub fn history_source(rec: &Value) -> Option<(String, String)> {
+pub fn history_source(rec: &Listing) -> Option<(String, String)> {
     history_candidates(rec).into_iter().next()
 }
 
@@ -862,7 +863,7 @@ pub fn source_intraday_reach(source: &str, today: &str) -> String {
 
 /// The earliest date intraday bars exist for across
 /// the instrument's sources, or "".
-pub fn intraday_reach(rec: &Value, today: &str) -> String {
+pub fn intraday_reach(rec: &Listing, today: &str) -> String {
     history_candidates(rec)
         .iter()
         .map(|(s, _)| source_intraday_reach(s, today))
@@ -873,7 +874,7 @@ pub fn intraday_reach(rec: &Value, today: &str) -> String {
 
 /// What the chart can show for a trade starting
 /// on `start`.
-pub fn available_timeframes(rec: &Value, start: &str, today: &str) -> Vec<&'static str> {
+pub fn available_timeframes(rec: &Listing, start: &str, today: &str) -> Vec<&'static str> {
     if history_candidates(rec).is_empty() {
         return vec![];
     }
@@ -908,8 +909,8 @@ pub fn intraday_missed_recently(conn: &rusqlite::Connection, symbol: &str, tf: &
 
 /// The available timeframes less an intraday one
 /// a recent fetch could not supply and nothing is stored for.
-pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str, today: &str, now_unix: f64) -> Vec<&'static str> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Listing, start: &str, today: &str, now_unix: f64) -> Vec<&'static str> {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     available_timeframes(rec, start, today)
         .into_iter()
         .filter(|tf| {
@@ -921,8 +922,8 @@ pub fn offered_timeframes(conn: &rusqlite::Connection, rec: &Value, start: &str,
 }
 
 /// Whether the stored bars already cover [start, now].
-pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start: &str, today: &str, now_unix: f64) -> bool {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Listing, tf: &str, start: &str, today: &str, now_unix: f64) -> bool {
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let reach = intraday_reach(rec, today);
     if sym.is_empty() || reach.is_empty() || !INTRADAY.contains(&tf) {
         return true;
@@ -940,9 +941,9 @@ pub fn intraday_ready(conn: &rusqlite::Connection, rec: &Value, tf: &str, start:
 
 /// Start the fetch for a span not
 /// stored yet, once per instrument, and return at once.
-pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Value, tf: String, start: String, end: String) {
+pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_store::pool::Pool>, rec: Listing, tf: String, start: String, end: String) {
     static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(&rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     {
         let mut p = PENDING.lock().unwrap();
         if p.contains(&sym) {
@@ -964,13 +965,13 @@ pub fn fetch_intraday_from(
     conn: &rusqlite::Connection,
     source: &str,
     key: &str,
-    rec: &Value,
+    rec: &Listing,
     start_ts: i64,
     end_ts: i64,
     today: &str,
     on_demand: bool,
 ) -> Result<Map<String, Value>, FetchError> {
-    let crypto = field_s(rec, "kind") == "Crypto";
+    let crypto = rec.kind.clone() == "Crypto";
     let mut out = Map::new();
     match source {
         "tmx" => {
@@ -992,7 +993,7 @@ pub fn fetch_intraday_from(
             if coinbase_market(conn, key, today).is_empty() {
                 return Ok(out);
             }
-            let hourly = in_position_currency(conn, &fetch_coinbase_candles(key, 3600, start_ts, end_ts), &bar_currency(source, key, rec), &field_s(rec, "currency"));
+            let hourly = in_position_currency(conn, &fetch_coinbase_candles(key, 3600, start_ts, end_ts), &bar_currency(source, key, rec), &rec.currency);
             if !hourly.is_empty() {
                 out.insert("4h".into(), json!(aggregate_hourly(&hourly, 14400)));
                 out.insert("1h".into(), json!(hourly));
@@ -1003,7 +1004,7 @@ pub fn fetch_intraday_from(
         }
         "yahoo" => {
             let fetched = whole_bars(fetch_yahoo(conn, key, start_ts, end_ts, "60m", today)?);
-            let hourly = in_position_currency(conn, &fetched, &bar_currency(source, key, rec), &field_s(rec, "currency"));
+            let hourly = in_position_currency(conn, &fetched, &bar_currency(source, key, rec), &rec.currency);
             if hourly.is_empty() {
                 return Ok(out);
             }
@@ -1029,7 +1030,7 @@ pub fn fetch_intraday_from(
 /// tried first. The background sweep leaves the rate-limited sources alone.
 pub fn fetch_intraday(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     start_ts: i64,
     end_ts: i64,
     today: &str,
@@ -1078,7 +1079,7 @@ pub fn fetch_intraday(
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_intraday(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     tf: &str,
     start: &str,
     end: &str,
@@ -1088,7 +1089,7 @@ pub fn ensure_intraday(
     max_age_hours: f64,
     on_demand: bool,
 ) -> rusqlite::Result<Vec<Value>> {
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
     let reach = intraday_reach(rec, today);
     if sym.is_empty() || reach.is_empty() || !INTRADAY.contains(&tf) {
         return Ok(vec![]);
@@ -1159,12 +1160,12 @@ fn archive_read_age_hours(conn: &rusqlite::Connection, sym: &str, now_unix: f64)
 /// Keep the intraday bars of recently traded or
 /// held instruments for good, a few per call -- those never fetched first,
 /// then those whose copy is older than a day. Returns the symbols worked.
-pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
+pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
     let mut todo = archive_intraday_due(conn, recs, today, now_unix);
     todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
-        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
+        let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
         let _ = ensure_intraday(conn, &rec, "1h", &start, today, today, now_unix, now_stamp, ARCHIVE_TOPUP_HOURS, false);
         // however that went, it was asked: never the same listing again on the next pass
         if archive_read_age_hours(conn, &sym, now_unix).map_or(true, |age| age > ARCHIVE_TOPUP_HOURS) {
@@ -1177,10 +1178,10 @@ pub fn archive_intraday(conn: &rusqlite::Connection, recs: &[Value], today: &str
 
 /// The listings whose intraday bars the archive should ask for now: never asked
 /// first (0), then those last asked more than `ARCHIVE_TOPUP_HOURS` ago (1).
-pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64) -> Vec<(u8, String, Value)> {
-    let mut todo: Vec<(u8, String, Value)> = Vec::new();
+pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64) -> Vec<(u8, String, Listing)> {
+    let mut todo: Vec<(u8, String, Listing)> = Vec::new();
     for rec in recs {
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
         if sym.is_empty() || intraday_reach(rec, today).is_empty() {
             continue;
         }
@@ -1197,10 +1198,10 @@ pub fn archive_intraday_due(conn: &rusqlite::Connection, recs: &[Value], today: 
 /// stored read among `recs` passes `ARCHIVE_TOPUP_HOURS`. `None` when nothing is
 /// archived at all -- then only a change to the book can make work. What the
 /// archive waits for, in place of asking every five minutes.
-pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64) -> Option<f64> {
+pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64) -> Option<f64> {
     let mut soonest: Option<f64> = None;
     for rec in recs {
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
         if sym.is_empty() || intraday_reach(rec, today).is_empty() {
             continue;
         }
@@ -1215,11 +1216,11 @@ pub fn archive_next_due_secs(conn: &rusqlite::Connection, recs: &[Value], today:
 
 /// Keep daily bars for instruments whose source forgets
 /// them. No current source does, so this is idle until one is added.
-pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
-    let mut todo: Vec<(u8, String, Value)> = Vec::new();
+pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Listing], today: &str, now_unix: f64, now_stamp: &str, limit: usize) -> Vec<String> {
+    let mut todo: Vec<(u8, String, Listing)> = Vec::new();
     for rec in recs {
         let src = history_source(rec);
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
         let short = src.as_ref().map(|(s, _)| SHORT_DAILY_SOURCES.contains(&s.as_str())).unwrap_or(false);
         if !short || sym.is_empty() {
             continue;
@@ -1234,7 +1235,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, n
     todo.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let mut done = Vec::new();
     for (_, sym, rec) in todo.into_iter().take(limit) {
-        let start = { let s = field_s(&rec, "start"); if s.is_empty() { today.to_string() } else { s } };
+        let start = rec.start.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| today.to_string());
         let _ = ensure_history(conn, &rec, &start, today, today, now_unix, now_stamp);
         done.push(sym);
     }
@@ -1247,7 +1248,7 @@ pub fn archive_daily(conn: &rusqlite::Connection, recs: &[Value], today: &str, n
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_bars(
     conn: &rusqlite::Connection,
-    rec: &Value,
+    rec: &Listing,
     tf: &str,
     start: &str,
     end: &str,

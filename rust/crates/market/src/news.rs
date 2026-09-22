@@ -795,7 +795,7 @@ pub fn yahoo_form(conn: &Connection, symbol: &str, exchange: &str, currency: &st
     if tmx_form(exchange, currency).is_none() {
         return String::new();
     }
-    let forms = crate::quotes::yahoo_forms(&json!({"symbol": symbol, "exchange": exchange, "currency": currency}));
+    let forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(symbol, exchange, currency, ""));
     if let Some(first) = forms.first() {
         if exchange.trim().is_empty() && first.ends_with(".TO") {
             let remembered = crate::tmx::tmx_remembered(conn, &tmx_symbol(symbol));

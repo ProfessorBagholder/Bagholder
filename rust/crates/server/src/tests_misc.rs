@@ -2,6 +2,7 @@
 //! check, history endpoint, versions, tiles, watchlist and in-app update
 //! (the parts reachable without a network or a child process).
 use rusqlite::Connection;
+use bagholder_model::input::Listing;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -255,7 +256,7 @@ fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
     let d = db();
     bagholder_store::admin::save_tiles(&d.conn, &[json!({"symbol": "SPX", "exchange": "Index"})]).unwrap();
     let base = base_of(&d.conn, None);
-    let q: Vec<(String, String, String)> = bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&base)).iter().map(|r| (app::f(r, "quoteKey"), app::f(r, "yahoo"), app::f(r, "kind"))).collect();
+    let q: Vec<(String, String, String)> = bagholder_model::markets::quote_symbols(&base).into_iter().map(|r| (r.quote_key.unwrap_or_default(), r.yahoo.unwrap_or_default(), r.kind)).collect();
     assert_eq!(q, vec![("SPX@INDEX".to_string(), "^GSPC".to_string(), "Instrument".to_string())], "quoted through the watch path");
     let base = base_of(&d.conn, Some(json!({"SPX@INDEX": {"price": 6742.18, "priceChange": 42.18, "percentChange": 0.63}})));
     let row = &bagholder_model::testing::sent(&bagholder_model::markets::tile_rows(&base))[0];
@@ -303,8 +304,8 @@ fn test_quote_refresh_keys_a_watched_listing_by_venue() {
     let needing = bagholder_market::quotes::quote_symbols_needing_refresh(
         &d.conn,
         &[
-            json!({"symbol": "AAPL", "exchange": "NEO", "currency": "CAD", "kind": "Shares"}),
-            json!({"symbol": "AAPL", "exchange": "NASDAQ", "currency": "USD", "kind": "Shares", "quoteKey": "AAPL@NASDAQ"}),
+            Listing::new("AAPL", "NEO", "CAD", "Shares"),
+            Listing { quote_key: Some("AAPL@NASDAQ".into()), ..Listing::new("AAPL", "NASDAQ", "USD", "Shares") },
         ],
         app::now_unix(),
         15.0,

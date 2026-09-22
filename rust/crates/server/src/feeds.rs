@@ -219,7 +219,7 @@ pub const TILES_MAX: usize = 12;
 fn refresh_quote_symbols(app: &Arc<App>, what: &str, sym: &str) -> bool {
     let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return false };
     let (today_s, now, stamp) = bagholder_market::clock_now();
-    match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)), &today_s, now, &stamp) {
+    match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::markets::quote_symbols(&b), &today_s, now, &stamp) {
         Ok(_) => {
             true
         }
@@ -762,7 +762,7 @@ fn read_record_for_notice(_app: &Arc<App>, _c: &Connection, _sym: &str, _exchang
     }
     #[cfg(not(test))]
     {
-        bagholder_market::refresh::refresh_distributions(_c, &[json!({"symbol": _sym, "exchange": _exchange, "currency": ""})], true);
+        bagholder_market::refresh::refresh_distributions(_c, &[bagholder_model::input::Listing::new(_sym, _exchange, "", "")], true);
     }
 }
 
@@ -1794,7 +1794,7 @@ pub fn listing_payload_in(
     exchange: &str,
     currency: &str,
     name: &str,
-    peek_quote: &dyn Fn(&Value) -> Option<Value>,
+    peek_quote: &dyn Fn(&bagholder_model::input::Listing) -> Option<Value>,
 ) -> Value {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
@@ -1841,7 +1841,7 @@ pub fn listing_payload_in(
     let mut out = json!({"ok": true, "symbol": sym, "exchange": ex, "currency": ccy, "kind": kind, "name": nm,
                          "securityId": known.security_id, "fills": fills, "price": null, "percentChange": null});
     if kind == "Shares" {
-        let q = peek_quote(&json!({"symbol": sym, "exchange": ex, "currency": ccy, "kind": kind})).unwrap_or(json!({}));
+        let q = peek_quote(&bagholder_model::input::Listing::new(sym.clone(), ex.clone(), ccy.clone(), kind.clone())).unwrap_or(json!({}));
         out["price"] = q.get("price").cloned().unwrap_or(Value::Null);
         out["percentChange"] = q.get("percentChange").cloned().unwrap_or(Value::Null);
     }
@@ -1973,8 +1973,8 @@ pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
     app.root.join("ledger.html")
 }
 
-fn payer_symbols(app: &Arc<App>) -> Vec<Value> {
-    base(app).map(|b| bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&b))).unwrap_or_default()
+fn payer_symbols(app: &Arc<App>) -> Vec<bagholder_model::input::Listing> {
+    base(app).map(|b| bagholder_model::symbols_of::payer_symbols(&b)).unwrap_or_default()
 }
 
 /// USD/CAD, S&P 500, declared distributions
@@ -1996,8 +1996,8 @@ pub fn refresh_market_data(app: &Arc<App>) -> Value {
 pub fn refresh_quotes(app: &Arc<App>) -> usize {
     app.single_flight("quotes", 0, || {
         let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return 0 };
-        let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&b));
-        syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)));
+        let mut syms = bagholder_model::symbols_of::held_symbols(&b);
+        syms.extend(bagholder_model::markets::quote_symbols(&b));
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let n = bagholder_market::quotes::refresh_quotes(&c, &syms, &today_s, now, &stamp).unwrap_or(0);
         if n > 0 {
@@ -2022,7 +2022,7 @@ pub fn refresh_periodic_market(app: &Arc<App>) -> Value {
 pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String> {
     app.single_flight("archive", vec![], || {
         let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
-        let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(&b));
+        let recs = bagholder_model::symbols_of::intraday_archive_symbols(&b);
         let limit = limit.map(|l| l.max(1)).unwrap_or(history::ARCHIVE_BATCH);
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let mut out = history::archive_daily(&c, &recs, &today_s, now, &stamp, limit);
@@ -2077,7 +2077,7 @@ pub fn archive_loop(app: Arc<App>) {
             let was = base(&app);
             let due = match (conn(&app), was.as_ref()) {
                 (Some(c), Some(b)) => {
-                    let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(b));
+                    let recs = bagholder_model::symbols_of::intraday_archive_symbols(b);
                     let (today_s, now, _) = bagholder_market::clock_now();
                     history::archive_next_due_secs(&c, &recs, &today_s, now)
                 }
@@ -2206,8 +2206,7 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
 pub fn history_pending(app: &Arc<App>, query: &str) -> bool {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
-    let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),
-                     "currency": or(qs_one(query, "currency"), "CAD"), "kind": or(qs_one(query, "kind"), "Shares")});
+    let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
     let start: String = qs_one(query, "from").chars().take(10).collect();
     let tf = or(qs_one(query, "tf"), "1d");
     if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
@@ -2220,12 +2219,11 @@ pub fn history_pending(app: &Arc<App>, query: &str) -> bool {
 
 pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
-    let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),
-                     "currency": or(qs_one(query, "currency"), "CAD"), "kind": or(qs_one(query, "kind"), "Shares")});
+    let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
     let start: String = qs_one(query, "from").chars().take(10).collect();
     let end: String = qs_one(query, "to").chars().take(10).collect();
     let tf = or(qs_one(query, "tf"), "1d");
-    if f(&rec, "symbol").is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
+    if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
         return json!({"ok": false, "error": "symbol, from, to and a known tf are required"});
     }
     let inst = history::chart_instrument(&rec);
@@ -2249,7 +2247,7 @@ pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
         }
     };
     let reason = if !bars.is_empty() || pending { String::new() } else { history::chart_reason(&inst, &tf) };
-    json!({"ok": true, "symbol": f(&rec, "symbol"), "chartSymbol": inst.get("symbol").cloned().unwrap_or(Value::Null),
+    json!({"ok": true, "symbol": rec.symbol, "chartSymbol": inst.symbol,
            "source": src.map(|x| x.0).unwrap_or_default(), "tf": tf, "available": available, "bars": bars, "pending": pending,
            "reason": reason})
 }
@@ -2689,7 +2687,7 @@ mod tests {
         let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect() };
         let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
         let c = store();
-        let quote = move |_: &Value| Some(json!({"price": q.0, "percentChange": q.1}));
+        let quote = move |_: &bagholder_model::input::Listing| Some(json!({"price": q.0, "percentChange": q.1}));
         listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)
     }
 

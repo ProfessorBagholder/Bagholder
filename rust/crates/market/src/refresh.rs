@@ -6,6 +6,7 @@
 //! and none of them ever raises: a source that is down leaves what is stored.
 
 use rusqlite::Connection;
+use bagholder_model::input::Listing;
 use serde_json::{json, Value};
 
 use crate::http::{get_text, post_json, TMX_HEADERS};
@@ -125,7 +126,7 @@ impl Drop for Refreshing {
 
 /// FX, the benchmarks and the declared distributions for
 /// the payer symbols. Never fails; the row counts written.
-pub fn refresh_all(conn: &Connection, symbols: &[Value]) -> Value {
+pub fn refresh_all(conn: &Connection, symbols: &[Listing]) -> Value {
     let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "skipped": true}) };
     let _ = bagholder_store::tables::set_meta(conn, "market_attempt_at", &crate::now_stamp());
     json!({
@@ -144,13 +145,13 @@ pub const BOC_PUBLISH_MINUTE_ET: i64 = 16 * 60 + 30;
 
 /// Quotes and declared distributions for the
 /// dividend payers whose record is stale, or all of them when forced.
-pub fn refresh_distributions(conn: &Connection, symbols: &[Value], force: bool) -> usize {
+pub fn refresh_distributions(conn: &Connection, symbols: &[Listing], force: bool) -> usize {
     let (today, now_unix, stamp) = crate::clock_now();
     let todo: Vec<String> = if force {
         symbols
             .iter()
-            .filter(|r| crate::tmx::is_canadian_listing(&bagholder_model::value::field_s(r, "exchange"), &bagholder_model::value::field_s(r, "currency")))
-            .map(|r| bagholder_model::venues::tmx_symbol(&bagholder_model::value::field_s(r, "symbol")))
+            .filter(|r| crate::tmx::is_canadian_listing(&r.exchange, &r.currency))
+            .map(|r| bagholder_model::venues::tmx_symbol(&r.symbol))
             .collect()
     } else {
         crate::quotes::stale_symbols(conn, symbols, now_unix, RECORD_STALE_HOURS).unwrap_or_default()
@@ -159,8 +160,8 @@ pub fn refresh_distributions(conn: &Connection, symbols: &[Value], force: bool) 
     let mut exchanges: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for r in symbols {
         exchanges.insert(
-            bagholder_model::venues::tmx_symbol(&bagholder_model::value::field_s(r, "symbol")),
-            bagholder_model::value::field_s(r, "exchange"),
+            bagholder_model::venues::tmx_symbol(&r.symbol),
+            r.exchange.clone(),
         );
     }
     let mut done = 0;
@@ -197,7 +198,7 @@ pub fn benchmark_stale(conn: &Connection, today: &str) -> bool {
 }
 
 /// The rates, a benchmark, or a payer's record.
-pub fn is_stale(conn: &Connection, today: &str, symbols: &[Value]) -> bool {
+pub fn is_stale(conn: &Connection, today: &str, symbols: &[Listing]) -> bool {
     let limit = shift_date(today, -STALE_DAYS);
     let fx = fx_last_date(conn, FX_PAIR).unwrap_or_default();
     if fx.is_empty() || fx < limit || benchmark_stale(conn, today) {
@@ -222,7 +223,7 @@ pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
 /// USD/CAD and the benchmarks at most every six
 /// hours (sooner once today's rate is out, or a benchmark is stale), and every
 /// payer's distribution record past its hours.
-pub fn refresh_periodic(conn: &Connection, symbols: &[Value]) -> Value {
+pub fn refresh_periodic(conn: &Connection, symbols: &[Listing]) -> Value {
     let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
     let (today, now_unix, stamp) = crate::clock_now();
     let mut fx = 0;

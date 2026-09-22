@@ -660,7 +660,7 @@ where
     let ccy = if currency.trim().is_empty() { if where_ == "us" { "USD".to_string() } else { "CAD".to_string() } } else { currency.trim().to_string() };
     let mut count: Option<f64> = None;
     if session {
-        let mut forms = crate::quotes::yahoo_forms(&json!({"symbol": sym, "exchange": exchange, "currency": ccy}));
+        let mut forms = crate::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.clone(), exchange, ccy.clone(), ""));
         if forms.is_empty() {
             forms = vec![bagholder_model::venues::tmx_symbol(&sym)];
         }

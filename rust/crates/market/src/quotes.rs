@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use crate::http::{get_text, UA};
 use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_rec, parse_cboe_options, opt};
 use crate::tmx;
+use bagholder_model::input::Listing;
 use bagholder_model::value::{field_s, get, num};
 
 pub const QUOTE_REFRESH_MINUTES: f64 = 1.0;
@@ -230,12 +231,12 @@ const YAHOO_FORMS_USD: [&str; 1] = [""];
 /// the stock) or nothing at all; a TSX listing that trades in US dollars is
 /// still a Toronto one. Only a venue the app does not name leaves the currency
 /// to decide.
-pub fn yahoo_forms(rec: &Value) -> Vec<String> {
-    let root = yahoo_root(&field_s(rec, "symbol"));
-    let ccy = match bagholder_model::venues::tmx_form(&field_s(rec, "exchange"), "") {
+pub fn yahoo_forms(rec: &Listing) -> Vec<String> {
+    let root = yahoo_root(&rec.symbol);
+    let ccy = match bagholder_model::venues::tmx_form(&rec.exchange, "") {
         Some(":US") => "USD".to_string(),
         Some(_) => "CAD".to_string(),
-        None => { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } }
+        None => { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } }
     };
     if root.is_empty() || root.contains(' ') {
         return vec![];
@@ -245,7 +246,7 @@ pub fn yahoo_forms(rec: &Value) -> Vec<String> {
         "USD" => YAHOO_FORMS_USD.to_vec(),
         _ => return vec![],
     };
-    let venue = field_s(rec, "exchange").trim().to_uppercase();
+    let venue = rec.exchange.clone().trim().to_uppercase();
     let first = YAHOO_SUFFIX.iter().find(|(k, _)| *k == venue).map(|(_, v)| *v);
     let forms: Vec<&str> = match first {
         Some(f) if base.contains(&f) => {
@@ -270,37 +271,37 @@ pub fn tmx_quote_symbol(symbol: &str, exchange: &str, currency: &str) -> Option<
 
 /// Which public source covers this instrument, and the
 /// key it is filed under there.
-pub fn quote_source(rec: &Value) -> Option<(String, String)> {
-    let kind = { let k = field_s(rec, "kind"); if k.is_empty() { "Shares".to_string() } else { k } };
-    let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-    let ccy = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
+pub fn quote_source(rec: &Listing) -> Option<(String, String)> {
+    let kind = { let k = rec.kind.clone(); if k.is_empty() { "Shares".to_string() } else { k } };
+    let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+    let ccy = { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } };
     if sym.is_empty() {
         return None;
     }
     if kind == "Instrument" {
-        let y = field_s(rec, "yahoo");
+        let y = rec.yahoo.clone().unwrap_or_default();
         return if y.is_empty() { None } else { Some(("yahoo_quote".into(), y)) };
     }
     if kind == "Crypto" {
         return Some(("coinbase".into(), format!("{}-{}", sym, ccy)));
     }
     if kind == "Options" {
-        let code = occ_code(&field_s(rec, "symbol"));
+        let code = occ_code(&rec.symbol);
         return if !code.is_empty() && ccy == "USD" { Some(("cboe_options".into(), code)) } else { None };
     }
     if kind != "Shares" {
         return None;
     }
-    let venue = field_s(rec, "exchange").trim().to_uppercase();
+    let venue = rec.exchange.clone().trim().to_uppercase();
     if venue == "CBOE CANADA" || venue == "NEO" {
         return Some(("cboe_ca".into(), sym));
     }
     // a US listing is Yahoo's: TMX stamps one fifteen minutes behind
-    if bagholder_model::venues::tmx_form(&field_s(rec, "exchange"), &field_s(rec, "currency")) == Some(":US") {
+    if bagholder_model::venues::tmx_form(&rec.exchange, &rec.currency) == Some(":US") {
         let forms = yahoo_forms(rec);
         return forms.first().map(|f| ("yahoo_quote".to_string(), f.clone()));
     }
-    tmx_quote_symbol(&field_s(rec, "symbol"), &field_s(rec, "exchange"), &field_s(rec, "currency"))
+    tmx_quote_symbol(&rec.symbol, &rec.exchange, &rec.currency)
         .map(|q| ("tmx".to_string(), q))
 }
 
@@ -358,7 +359,7 @@ pub fn can_have_moved(source: &str, last: Option<f64>, now_unix: f64) -> bool {
 
 pub fn quote_symbols_needing_refresh(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     now_unix: f64,
     max_age_minutes: f64,
 ) -> rusqlite::Result<Vec<(String, String, String)>> {
@@ -368,8 +369,8 @@ pub fn quote_symbols_needing_refresh(
     for rec in symbols {
         // a watched listing is keyed by symbol and venue
         let sym = {
-            let k = field_s(rec, "quoteKey");
-            if k.is_empty() { bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol")) } else { k }
+            let k = rec.quote_key.clone().unwrap_or_default();
+            if k.is_empty() { bagholder_model::venues::tmx_symbol(&rec.symbol) } else { k }
         };
         let src = quote_source(rec);
         let (source, key) = match src { Some(s) => s, None => continue };
@@ -532,7 +533,7 @@ pub fn fetch_for(
 
 pub fn refresh_quotes(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     today: &str,
     now_unix: f64,
     now_stamp: &str,
@@ -560,15 +561,15 @@ pub fn refresh_quotes(
 /// distribution history look fresh.
 pub fn stale_symbols(
     conn: &rusqlite::Connection,
-    symbols: &[Value],
+    symbols: &[Listing],
     now_unix: f64,
     stale_hours: f64,
 ) -> rusqlite::Result<Vec<String>> {
     let fetched = crate::market::distributions_fetched_at(conn)?;
     let mut out = Vec::new();
     for rec in symbols {
-        let sym = bagholder_model::venues::tmx_symbol(&field_s(rec, "symbol"));
-        if sym.is_empty() || !tmx::is_canadian_listing(&field_s(rec, "exchange"), &field_s(rec, "currency")) {
+        let sym = bagholder_model::venues::tmx_symbol(&rec.symbol);
+        if sym.is_empty() || !tmx::is_canadian_listing(&rec.exchange, &rec.currency) {
             continue;
         }
         let last = fetched.get(&sym).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -620,10 +621,10 @@ pub const PEEK_SECONDS: u64 = 60;
 
 /// A listing's price and day change for a glance, from
 /// the source a watched listing uses, not stored, remembered for a minute.
-pub fn peek_quote(conn: &rusqlite::Connection, rec: &Value, today: &str) -> Option<Value> {
+pub fn peek_quote(conn: &rusqlite::Connection, rec: &Listing, today: &str) -> Option<Value> {
     static PEEK: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = std::sync::OnceLock::new();
     let (source, key) = quote_source(rec)?;
-    let k = format!("{}@{}", field_s(rec, "symbol").trim().to_uppercase(), field_s(rec, "exchange").trim().to_uppercase());
+    let k = format!("{}@{}", rec.symbol.clone().trim().to_uppercase(), rec.exchange.clone().trim().to_uppercase());
     let cache = PEEK.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if let Some((at, q)) = cache.lock().unwrap().get(&k) {
         if at.elapsed() < Duration::from_secs(PEEK_SECONDS) {

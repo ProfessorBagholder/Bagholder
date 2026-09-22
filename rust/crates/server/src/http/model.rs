@@ -58,14 +58,14 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
     let built = blocking(move || -> Result<Value, ApiError> {
         if let (Ok(conn), Ok(base)) = (app.open(), app.base()) {
             let (today, now, _) = bagholder_market::clock_now();
-            if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&base))) {
+            if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::symbols_of::payer_symbols(&base)) {
                 let a = app.clone();
                 app.kick("market", move || {
                     feeds::refresh_market_data(&a);
                 });
             } else {
-                let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&base));
-                syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&base)));
+                let mut syms = bagholder_model::symbols_of::held_symbols(&base);
+                syms.extend(bagholder_model::markets::quote_symbols(&base));
                 let due = bagholder_market::quotes::quote_symbols_needing_refresh(&conn, &syms, now, bagholder_market::quotes::QUOTE_REFRESH_MINUTES).map(|v| !v.is_empty()).unwrap_or(false);
                 if due {
                     let a = app.clone();

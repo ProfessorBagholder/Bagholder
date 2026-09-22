@@ -232,7 +232,7 @@ pub struct Distribution {
 
 /// A listing as the market readers are asked for it: what a quote, a chart or a
 /// record source needs to find it.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listing {
     pub symbol: String,
@@ -255,13 +255,13 @@ pub struct Listing {
 }
 
 impl Listing {
-    /// The listing as the JSON the market readers take.
+    /// A listing named by symbol, venue, currency and kind alone.
+    pub fn new(symbol: impl Into<String>, exchange: impl Into<String>, currency: impl Into<String>, kind: impl Into<String>) -> Self {
+        Listing { symbol: symbol.into(), exchange: exchange.into(), currency: currency.into(), kind: kind.into(), ..Listing::default() }
+    }
+
+    /// The listing as JSON, for a sweep that still carries its rows untyped.
     pub fn to_value(&self) -> serde_json::Value {
         serde_json::to_value(self).expect("a listing is plain data")
     }
-}
-
-/// Listings as the JSON the market readers take.
-pub fn listings_json(listings: &[Listing]) -> Vec<serde_json::Value> {
-    listings.iter().map(Listing::to_value).collect()
 }
