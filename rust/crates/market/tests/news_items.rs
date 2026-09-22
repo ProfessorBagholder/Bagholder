@@ -7,6 +7,7 @@
 //! and read the diff.
 
 use bagholder_market::news::{self, Clock, Net, NetError, Readers, WireAnswer};
+use bagholder_store::feeds::Feed;
 use serde_json::{json, Map, Value};
 use std::sync::Mutex;
 
@@ -27,7 +28,7 @@ fn wire(w: &Option<WireAnswer>) -> Value {
     match w {
         None => Value::Null,
         Some(w) => {
-            let mut missing: Vec<&String> = w.missing.iter().collect();
+            let mut missing: Vec<&str> = w.missing.iter().map(|f| f.as_str()).collect();
             missing.sort();
             json!({"rows": cell(&w.rows), "missing": missing})
         }
@@ -141,7 +142,7 @@ fn answers() -> Value {
     out.insert("tmx_releases".into(), cell(&news::parse_tmx_news(&tmx_releases(), "PNG", false)));
     out.insert("tmx_media".into(), cell(&news::parse_tmx_news(&tmx_media(), "PNG", true)));
     out.insert("nasdaq".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_news()).unwrap(), now, "SHOP", None)));
-    out.insert("nasdaq_press".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_press()).unwrap(), now, "SHOP", Some("release"))));
+    out.insert("nasdaq_press".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_press()).unwrap(), now, "SHOP", Some(bagholder_store::feeds::NewsKind::Release))));
     out.insert("nasdaq_market".into(), cell(&news::parse_nasdaq_news(&serde_json::from_str(nasdaq_news()).unwrap(), now, "", None)));
     out.insert("yahoo".into(), cell(&news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc.")));
     out.insert("sa".into(), cell(&news::parse_sa_news(sa_news(), "PNG:CA")));
@@ -176,10 +177,10 @@ fn answers() -> Value {
 
     // first: every source answers
     let full_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_net, s, e, cc, cl);
-    let all_extra = |key: &str, _: &news::Ask| {
+    let all_extra = |key: Feed, _: &news::Ask| {
         Ok(Some(match key {
-            "yahoo" => news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc."),
-            "sa" => news::parse_sa_news(sa_news(), "PNG:CA"),
+            Feed::Yahoo => news::parse_yahoo_news(&yahoo_news(), "PNG.V", "PNG", "Kraken Robotics Inc."),
+            Feed::Sa => news::parse_sa_news(sa_news(), "PNG:CA"),
             _ => news::parse_google_news(&google_news(), "PNG", "Kraken Robotics Inc.", false),
         }))
     };
@@ -187,7 +188,7 @@ fn answers() -> Value {
 
     // sixteen minutes on: the stories tab fails, Yahoo fails, the rest are not due
     let half_wire = |c: &rusqlite::Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &tmx_half, s, e, cc, cl);
-    let failing = |_: &str, _: &news::Ask| Err(down());
+    let failing = |_: Feed, _: &news::Ask| Err(down());
     out.insert("merge_stand_in".into(), pass(&conn, &Readers { wire: &half_wire, extra: &failing }, &Clock::at(now + 16 * 60)));
 
     // an hour on: nothing answers at all, and the stored list stands

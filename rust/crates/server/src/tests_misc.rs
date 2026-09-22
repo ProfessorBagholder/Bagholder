@@ -376,6 +376,7 @@ fn test_update_button_refuses_during_a_sync() {
 // ---------------------------------------------------------------------------
 
 use bagholder_market::news::{self, Ask, Clock, Net, NetError, Readers, WireAnswer};
+use bagholder_store::feeds::{Feed, NewsItem};
 
 #[test]
 fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
@@ -396,7 +397,7 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     };
     let net = Net { get: &get, post: &post, pace: false };
     let wire = |c: &Connection, s: &str, e: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, s, e, cc, cl);
-    let extra = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(Some(vec![])) };
+    let extra = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
     let readers = Readers { wire: &wire, extra: &extra };
     // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
     bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
@@ -416,14 +417,14 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
     let now = bagholder_market::clock_now().1 as i64;
     // every source read a moment ago: only a forced read asks them again
     for k in news::EXTRA_SOURCES {
-        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@TSX", k), &Clock::at(now).stamp()).unwrap();
+        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@TSX", k.as_str()), &Clock::at(now).stamp()).unwrap();
     }
     let read = std::sync::Mutex::new((None::<(String, String, String)>, Vec::<String>::new()));
     let wire = |_: &Connection, s: &str, e: &str, cc: &str, _: &Clock| {
         read.lock().unwrap().0 = Some((s.to_string(), e.to_string(), cc.to_string()));
-        ("tmx".to_string(), Some(WireAnswer::default()))
+        (Feed::Tmx, Some(WireAnswer::default()))
     };
-    let extra = |_: &str, ask: &Ask| -> Result<Option<Vec<Value>>, NetError> {
+    let extra = |_: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
         read.lock().unwrap().1.push(ask.name.clone());
         Ok(Some(vec![]))
     };

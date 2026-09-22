@@ -64,10 +64,13 @@ fn test_accounts_and_balances_replaced_with_themselves_are_not_a_change() {
 #[test]
 fn test_news_and_a_universe_read_again_unchanged_are_not_a_change() {
     let (_d, conn) = db();
-    let story = [json!({"id": "n1", "headline": "QNC files its quarter", "source": "Newswire", "url": "https://example.test/n1", "publishedAt": "2026-09-19T12:00:00Z"})];
-    feeds::replace_news(&conn, "QNC", "TSX-V", "tmx", &story, "2026-09-20T10:00:00Z").unwrap();
+    let story = [feeds::NewsItem {
+        id: "n1".into(), headline: "QNC files its quarter".into(), source: "Newswire".into(), url: "https://example.test/n1".into(),
+        published_at: "2026-09-19T12:00:00Z".into(), summary: String::new(), kind: feeds::NewsKind::Story, via: feeds::Feed::Tmx,
+    }];
+    feeds::replace_news(&conn, "QNC", "TSX-V", &story, "2026-09-20T10:00:00Z").unwrap();
     let n = gen(&conn, "news");
-    feeds::replace_news(&conn, "QNC", "TSX-V", "tmx", &story, "2026-09-20T10:15:00Z").unwrap();
+    feeds::replace_news(&conn, "QNC", "TSX-V", &story, "2026-09-20T10:15:00Z").unwrap();
     assert_eq!(gen(&conn, "news"), n);
 
     let rows = [json!({"symbol": "AAA", "name": "Aaa Corp", "value": 10.0, "percentChange": 1.5, "sector": "Energy", "country": "CA"})];

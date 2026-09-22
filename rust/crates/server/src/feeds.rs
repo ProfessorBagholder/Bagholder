@@ -17,7 +17,7 @@ use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds as sf;
+use bagholder_store::feeds::{self as sf, NewsItem};
 use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, json_text, set_meta};
 
@@ -317,19 +317,19 @@ pub fn tiles_set(app: &Arc<App>, body: &Value) -> Value {
 /// the same wire. The name the book records for it is what Google is searched
 /// for.
 pub fn news_listings(app: &Arc<App>) -> Vec<news::Listing> {
-    let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string(), String::new())];
+    let mut out = vec![news::Listing { symbol: news::MARKET.0.to_string(), exchange: news::MARKET.1.to_string(), currency: news::MARKET.2.to_string(), name: String::new() }];
     let b = match base(app) { Some(b) => b, None => return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for p in b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares) {
         let key = (tmx_symbol(&p.symbol), p.exchange.to_uppercase());
         if !key.0.is_empty() && seen.insert(key.clone()) {
-            out.push((key.0, p.exchange.clone(), p.currency.clone(), p.name.clone()));
+            out.push(news::Listing { symbol: key.0, exchange: p.exchange.clone(), currency: p.currency.clone(), name: p.name.clone() });
         }
     }
     for w in b.watchlist.iter() {
         let key = (tmx_symbol(&w.symbol), w.exchange.to_uppercase());
         if !key.0.is_empty() && key.1 != "CRYPTO" && instruments::find(&w.symbol, &w.exchange).is_none() && seen.insert(key.clone()) {
-            out.push((key.0, w.exchange.clone(), w.currency.clone(), w.name.clone()));
+            out.push(news::Listing { symbol: key.0, exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone() });
         }
     }
     out
@@ -351,7 +351,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
         let listings = news_listings(app);
         let (today_s, now, _) = bagholder_market::clock_now();
         let clock = news::Clock { today: today_s, now: now as i64 };
-        let key = |l: &news::Listing| { let t = tmx_symbol(&l.0); (if t.is_empty() { l.0.clone() } else { t }).to_uppercase() };
+        let key = |l: &news::Listing| { let t = tmx_symbol(&l.symbol); (if t.is_empty() { l.symbol.clone() } else { t }).to_uppercase() };
         let start = |due: &[news::Listing]| {
             *app.feeds.news_left.lock().unwrap() = due.iter().map(key).collect();
             app.events.signal(); // the status names the listings still to read
@@ -360,7 +360,7 @@ pub fn refresh_news(app: &Arc<App>) -> usize {
             app.feeds.news_left.lock().unwrap().remove(&key(l));
             app.events.signal();
         };
-        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(app, c, sym, ex, rows, ids);
+        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[NewsItem], ids: &[String]| note_wire_releases(app, c, sym, ex, rows, ids);
         let got = news::refresh(&|| own_conn(app), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         app.feeds.news_left.lock().unwrap().clear();
         app.events.signal();
@@ -459,7 +459,7 @@ pub fn news_symbol_payload_with(
     };
     let rows = match rows { Some(r) => r, None => return json!({"ok": false, "error": "the wire did not answer"}) };
     let _ = sf::trim_news(&c, news::KEEP);
-    json!({"ok": true, "count": rows.len(), "source": src, "exchange": ex})
+    json!({"ok": true, "count": rows.len(), "source": src.as_str(), "exchange": ex})
 }
 
 // ---------------------------------------------------------------------------
@@ -726,18 +726,80 @@ pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Optio
     false
 }
 
-pub fn release_notice(app: &Arc<App>, sym: &str, rows: &[Value]) -> (String, String) {
-    let when = |r: &Value| { let p = f(r, "publishedAt"); if p.is_empty() { f(r, "date") } else { p } };
-    let mut newest: Vec<&Value> = rows.iter().collect();
-    newest.sort_by(|a, b| when(b).cmp(&when(a)));
-    let first = newest[0];
-    let mut head = f(first, "headline");
-    if head.is_empty() {
-        head = f(first, "subject");
+/// What a notice is told of: a wire's item or a filed document.
+pub trait Notable: Clone {
+    fn id(&self) -> String;
+    /// What it says it is: a headline, else a filing's subject, else its type.
+    fn heading(&self) -> String;
+    /// When its source dates it.
+    fn moment(&self) -> String;
+    fn summary(&self) -> String;
+    fn url(&self) -> String;
+    /// The regulator a filed document came from ("SEDAR+", "SEC", "SEC EDGAR"), opened through the app.
+    fn filed_source(&self) -> Option<String>;
+    fn is_release(&self) -> bool;
+}
+
+impl Notable for NewsItem {
+    fn id(&self) -> String {
+        self.id.clone()
     }
-    if head.is_empty() {
-        head = f(first, "type");
+    fn heading(&self) -> String {
+        self.headline.clone()
     }
+    fn moment(&self) -> String {
+        self.published_at.clone()
+    }
+    fn summary(&self) -> String {
+        self.summary.clone()
+    }
+    fn url(&self) -> String {
+        self.url.clone()
+    }
+    fn filed_source(&self) -> Option<String> {
+        None
+    }
+    fn is_release(&self) -> bool {
+        self.kind == sf::NewsKind::Release
+    }
+}
+
+impl Notable for Value {
+    fn id(&self) -> String {
+        f(self, "id")
+    }
+    fn heading(&self) -> String {
+        let mut head = f(self, "headline");
+        if head.is_empty() {
+            head = f(self, "subject");
+        }
+        if head.is_empty() {
+            head = f(self, "type");
+        }
+        head
+    }
+    fn moment(&self) -> String {
+        let p = f(self, "publishedAt");
+        if p.is_empty() { f(self, "date") } else { p }
+    }
+    fn summary(&self) -> String {
+        f(self, "summary")
+    }
+    fn url(&self) -> String {
+        f(self, "url")
+    }
+    fn filed_source(&self) -> Option<String> {
+        let s = f(self, "source");
+        if matches!(s.as_str(), "SEDAR+" | "SEC" | "SEC EDGAR") { Some(s) } else { None }
+    }
+    fn is_release(&self) -> bool {
+        f(self, "kind") == "release"
+    }
+}
+
+pub fn release_notice<T: Notable>(app: &Arc<App>, sym: &str, rows: &[T]) -> (String, String) {
+    let first = newest_of(rows);
+    let mut head = first.heading();
     if head.is_empty() {
         head = "A new release.".into();
     }
@@ -747,7 +809,7 @@ pub fn release_notice(app: &Arc<App>, sym: &str, rows: &[Value]) -> (String, Str
     let mut detail = if is_distribution_release(&head) { distribution_detail(app, sym) } else { String::new() };
     if detail.is_empty() {
         // what the source said beneath its own headline, where it said anything
-        detail = f(first, "summary").trim().to_string();
+        detail = first.summary().trim().to_string();
     }
     if !detail.is_empty() {
         head = format!("{}\n{}", head, detail);
@@ -857,8 +919,8 @@ pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
 /// A release found today can have been published weeks ago -- the app reads a
 /// listing's back catalogue the first time it sees it -- and a notice that
 /// shows only when it was told reads as news that is not new.
-pub fn notice_moment(rows: &[Value]) -> Value {
-    json!({"at": f(&newest_of(rows), "publishedAt_or_date")})
+pub fn notice_moment<T: Notable>(rows: &[T]) -> Value {
+    json!({"at": newest_of(rows).moment()})
 }
 
 /// Where a notification's rows can be read: the newest one's own page.
@@ -866,28 +928,27 @@ pub fn notice_moment(rows: &[Value]) -> Value {
 /// A filed document is opened through the app, which is what the Disclosures
 /// table does, so it opens the same way from here; anything else carries the
 /// source's own link.
-pub fn notice_link(rows: &[Value]) -> Value {
+pub fn notice_link<T: Notable>(rows: &[T]) -> Value {
     let newest = newest_of(rows);
-    let url = f(&newest, "url");
-    let (id, source) = (f(&newest, "id"), f(&newest, "source"));
-    if !id.is_empty() && matches!(source.as_str(), "SEDAR+" | "SEC" | "SEC EDGAR") {
-        return json!({"url": url, "doc": id, "source": source});
+    let url = newest.url();
+    let id = newest.id();
+    if let Some(source) = newest.filed_source() {
+        if !id.is_empty() {
+            return json!({"url": url, "doc": id, "source": source});
+        }
     }
     if url.is_empty() { json!({}) } else { json!({"url": url}) }
 }
 
-/// The newest row by its own moment, with `publishedAt_or_date` set to it.
-fn newest_of(rows: &[Value]) -> Value {
-    let when = |r: &Value| { let p = f(r, "publishedAt"); if p.is_empty() { f(r, "date") } else { p } };
-    let mut sorted: Vec<&Value> = rows.iter().collect();
-    sorted.sort_by(|a, b| when(b).cmp(&when(a)));
-    let mut out = sorted[0].clone();
-    out["publishedAt_or_date"] = json!(when(sorted[0]));
-    out
+/// The newest row by its own moment.
+fn newest_of<T: Notable>(rows: &[T]) -> &T {
+    let mut sorted: Vec<&T> = rows.iter().collect();
+    sorted.sort_by(|a, b| b.moment().cmp(&a.moment()));
+    sorted[0]
 }
 
 /// A notification's extra: the symbol, the moment and the link, in one map.
-fn notice_extra(sym: &str, exchange: Option<&str>, rows: &[Value]) -> Value {
+fn notice_extra<T: Notable>(sym: &str, exchange: Option<&str>, rows: &[T]) -> Value {
     let mut out = Map::new();
     out.insert("symbol".into(), json!(sym));
     if let Some(ex) = exchange {
@@ -909,18 +970,11 @@ fn notice_extra(sym: &str, exchange: Option<&str>, rows: &[Value]) -> Value {
 /// TMX, Yahoo, Seeking Alpha and Google all carry the same release under their
 /// own ids, a week apart in their own timestamps; keyed by id, one release is
 /// four events.
-pub fn release_event(row: &Value) -> String {
-    let mut head = f(row, "headline");
-    if head.is_empty() {
-        head = f(row, "subject");
-    }
-    if head.is_empty() {
-        head = f(row, "type");
-    }
-    news::news_text(&head)
+pub fn release_event<T: Notable>(row: &T) -> String {
+    news::news_text(&row.heading())
 }
 
-fn release_key(sym: &str, rows: &[Value]) -> String {
+fn release_key<T: Notable>(sym: &str, rows: &[T]) -> String {
     let mut ids: Vec<String> = rows.iter().map(release_event).collect();
     ids.sort();
     format!("release:{}:{}", sym, sha1_hex12(&ids.join("|")))
@@ -928,14 +982,14 @@ fn release_key(sym: &str, rows: &[Value]) -> String {
 
 /// The press releases a wire answered with that
 /// are newer than any it showed for the listing.
-pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[Value], new_ids: &[String]) {
+pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], new_ids: &[String]) {
     let scopes = notify::release_scopes(c);
     let t = tmx_symbol(symbol);
     let sym = (if t.is_empty() { symbol.to_string() } else { t }).trim().to_uppercase();
     if scopes.is_empty() || !in_release_scope(app, c, &sym, Some(&scopes)) {
         return;
     }
-    let rel: Vec<Value> = rows.iter().filter(|r| f(r, "kind") == "release").cloned().collect();
+    let rel: Vec<NewsItem> = rows.iter().filter(|r| r.is_release()).cloned().collect();
     // An event is told once. The stream keeps what it has met, by what the thing is rather than by
     // the id a source gave it, so the same release reaching the app again -- from another source,
     // under another id, dated a week apart, or simply returning to a search's results after
@@ -944,14 +998,14 @@ pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange
     let scope = format!("news:{}", sf::news_key(symbol, exchange));
     let events: Vec<String> = rel.iter().map(release_event).collect();
     let met = sf::events_told(c, &scope, &events).unwrap_or_default();
-    let fresh = notify::fresh_since(c, &scope, &rel, |r| f(r, "publishedAt"), notify::default_ident, |r| {
-        !new_ids.contains(&f(r, "id")) || met.contains(&release_event(r))
+    let fresh = notify::fresh_since(c, &scope, &rel, |r: &NewsItem| r.published_at.clone(), |r: &NewsItem| r.id.clone(), |r: &NewsItem| {
+        !new_ids.contains(&r.id) || met.contains(&release_event(r))
     });
     let _ = sf::mark_told(c, &scope, &events, &now_iso());
     if fresh.is_empty() {
         return;
     }
-    if fresh.iter().any(|r| is_distribution_release(&f(r, "headline"))) {
+    if fresh.iter().any(|r| is_distribution_release(&r.headline)) {
         // the release is the announcement; the record it comes from is what carries the figures,
         // and it is read now rather than at its own twenty-hour clock so the notice is not a day
         // behind it

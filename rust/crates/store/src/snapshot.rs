@@ -74,21 +74,24 @@ fn watch_from_row(r: &Row) -> rusqlite::Result<Value> {
 
 /// `_news_from_row`: an item with no kind is a story, which is what a
 /// row stored before releases were told apart is.
-pub fn news_from_row(r: &Row) -> rusqlite::Result<Value> {
-    let kind = { let k = text(r, "kind")?; if k.is_empty() { "story".to_string() } else { k } };
-    Ok(json!({
-        "id": text(r, "id")?,
-        "symbol": text(r, "symbol")?,
-        "exchange": text(r, "exchange")?,
-        "source": text(r, "source")?,
-        "headline": text(r, "headline")?,
-        "wire": text(r, "wire")?,
-        "url": text(r, "url")?,
-        "publishedAt": text(r, "published_at")?,
-        "fetchedAt": text(r, "fetched_at")?,
-        "kind": kind,
-        "summary": text(r, "summary")?,
-    }))
+pub fn news_from_row(r: &Row) -> rusqlite::Result<crate::feeds::StoredNews> {
+    let kind = crate::feeds::NewsKind::parse(&text(r, "kind")?);
+    let id = text(r, "id")?;
+    let source = text(r, "source")?;
+    let feed = crate::feeds::Feed::parse(&source).or_else(|| crate::feeds::Feed::of_id(&id));
+    Ok(crate::feeds::StoredNews {
+        id,
+        symbol: text(r, "symbol")?,
+        exchange: text(r, "exchange")?,
+        feed,
+        headline: text(r, "headline")?,
+        wire: text(r, "wire")?,
+        url: text(r, "url")?,
+        published_at: text(r, "published_at")?,
+        fetched_at: text(r, "fetched_at")?,
+        kind,
+        summary: text(r, "summary")?,
+    })
 }
 
 /// `_tiles_from`: the saved Markets tile row, or `None` when it has
@@ -269,7 +272,13 @@ pub fn watchlist_part(conn: &Connection) -> Result<Vec<Value>> {
 }
 
 pub fn news_part(conn: &Connection) -> Result<Vec<Value>> {
-    collect(conn, "SELECT * FROM news ORDER BY published_at DESC, id", news_from_row)
+    let mut stmt = conn.prepare("SELECT * FROM news ORDER BY published_at DESC, id")?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(serde_json::to_value(news_from_row(r)?).unwrap_or(Value::Null));
+    }
+    Ok(out)
 }
 
 pub fn universes_part(conn: &Connection) -> Result<Map<String, Value>> {

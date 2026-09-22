@@ -168,17 +168,17 @@ fn heartbeat() -> Duration {
 /// showed at that moment. A stream met for the first time shows nothing and
 /// its mark is set from it; after that it shows what is newer than the mark,
 /// and what shares the mark's moment without having been shown.
-pub fn fresh_since<A, I, S>(conn: &Connection, stream: &str, items: &[Value], at: A, ident: I, seen: S) -> Vec<Value>
+pub fn fresh_since<T: Clone, A, I, S>(conn: &Connection, stream: &str, items: &[T], at: A, ident: I, seen: S) -> Vec<T>
 where
-    A: Fn(&Value) -> String,
-    I: Fn(&Value) -> String,
-    S: Fn(&Value) -> bool,
+    A: Fn(&T) -> String,
+    I: Fn(&T) -> String,
+    S: Fn(&T) -> bool,
 {
     let key = format!("{}{}", WATERMARK, stream);
     let raw = bagholder_store::tables::get_meta(conn, &key, "").unwrap_or_default();
     let (mark, shown_raw) = match raw.split_once('|') { Some((a, b)) => (a.to_string(), b.to_string()), None => (raw.clone(), String::new()) };
     let shown: Vec<String> = shown_raw.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
-    let stamped: Vec<(String, String, &Value)> = items.iter().map(|i| (at(i), ident(i), i)).collect();
+    let stamped: Vec<(String, String, &T)> = items.iter().map(|i| (at(i), ident(i), i)).collect();
     let newest = stamped.iter().map(|(w, _, _)| w.clone()).max().unwrap_or_default();
     let remember = |top: &str| {
         let mut at_top: Vec<String> = stamped.iter().filter(|(w, _, _)| w == top).map(|(_, i, _)| i.clone()).collect();
@@ -195,7 +195,7 @@ where
         }
         return vec![];
     }
-    let out: Vec<Value> = stamped
+    let out: Vec<T> = stamped
         .iter()
         .filter(|(w, i, v)| (*w > mark || (*w == mark && !shown.contains(i))) && !seen(v))
         .map(|(_, _, v)| (*v).clone())
@@ -207,6 +207,7 @@ where
 }
 
 /// The id a stream item is known by when no other is given.
+#[cfg(test)]
 pub fn default_ident(i: &Value) -> String {
     match i {
         Value::Object(_) => crate::app::f(i, "id"),
@@ -934,8 +935,11 @@ mod tests {
         }
 
         /// A release as a wire hands it over.
-        fn wire_release(id: &str, head: &str, url: &str, when: &str) -> Value {
-            json!({"id": id, "headline": head, "source": "Business Wire", "url": url, "publishedAt": when, "kind": "release"})
+        fn wire_release(id: &str, head: &str, url: &str, when: &str) -> bagholder_store::feeds::NewsItem {
+            bagholder_store::feeds::NewsItem {
+                id: id.into(), headline: head.into(), source: "Business Wire".into(), url: url.into(), published_at: when.into(),
+                summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::of_id(id).unwrap_or(bagholder_store::feeds::Feed::Tmx),
+            }
         }
 
     // ---------------------------------------------------------------------------
@@ -964,13 +968,17 @@ mod tests {
             ex_dividend_date: "2026-08-31".into(),
             ..Default::default()
         }, "tmx", "2026-09-15T14:00:00Z").unwrap();
-        let first = json!({"id": "tmx:7", "headline": "Harvest High Income Shares ETFs Announces August 2026 Distributions",
-                           "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7",
-                           "publishedAt": "2026-09-15T13:00:00Z", "kind": "release"});
+        let first = bagholder_store::feeds::NewsItem {
+            id: "tmx:7".into(), headline: "Harvest High Income Shares ETFs Announces August 2026 Distributions".into(),
+            source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
+            published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
+        };
         crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first.clone()], &["tmx:7".to_string()]);   // the first read is history
-        let second = json!({"id": "tmx:8", "headline": "Harvest ETFs Announces September 2026 Distributions",
-                            "source": "Business Wire", "url": "https://money.tmx.com/en/quote/RDDY/news/7",
-                            "publishedAt": "2026-09-15T14:00:00Z", "kind": "release"});
+        let second = bagholder_store::feeds::NewsItem {
+            id: "tmx:8".into(), headline: "Harvest ETFs Announces September 2026 Distributions".into(),
+            source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
+            published_at: "2026-09-15T14:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: bagholder_store::feeds::Feed::Tmx,
+        };
         crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[first, second], &["tmx:8".to_string()]);
         let rows = posted(&app);
         assert_eq!(rows.len(), 1);
@@ -1089,7 +1097,7 @@ mod tests {
         let head = "Harvest ETFs Announces September 2026 Distributions";
         let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
         let first = wire_release("tmx:1", head, "u1", "2026-09-14T11:30:00Z");
-        let note = |rows: &[Value], new: &[&str]| {
+        let note = |rows: &[bagholder_store::feeds::NewsItem], new: &[&str]| {
             crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", rows, &new.iter().map(|x| x.to_string()).collect::<Vec<_>>())
         };
         note(&[older.clone()], &["tmx:0"]);                       // the listing's first read: history
@@ -1110,11 +1118,11 @@ mod tests {
         // same releases returning under other ids on later passes are recognised rather than rung.
         let (_g, app, c) = setup();
         set_settings(&c, &json!({"releasesAll": true})).unwrap();
-        let old: Vec<Value> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &old, &old.iter().map(|r| f(r, "id")).collect::<Vec<_>>());
+        let old: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &old, &old.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
         // every one of them comes back under another source's ids, dated later, as a search's results shift
-        let again: Vec<Value> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
-        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &again, &again.iter().map(|r| f(r, "id")).collect::<Vec<_>>());
+        let again: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("gnews:{}", i), &format!("Release number {}", i), "u", &format!("2026-09-{:02}T07:00:00Z", 10 + i))).collect();
+        crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &again, &again.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
         assert!(posted(&app).is_empty(), "history stays history, whatever id it returns under");
     }
 

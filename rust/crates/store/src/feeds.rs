@@ -141,31 +141,159 @@ pub fn remove_watch(conn: &Connection, symbol: &str, exchange: &str) -> Result<b
 // news
 // --------------------------------------------------------------------------
 
+/// The feed a news item was read from. Declared in the order a wire's feeds
+/// stand in for each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Feed {
+    Tmx,
+    TmxMedia,
+    Nasdaq,
+    NasdaqPress,
+    Yahoo,
+    Sa,
+    Gnews,
+}
+
+impl Feed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Feed::Tmx => "tmx",
+            Feed::TmxMedia => "tmx-media",
+            Feed::Nasdaq => "nasdaq",
+            Feed::NasdaqPress => "nasdaq-press",
+            Feed::Yahoo => "yahoo",
+            Feed::Sa => "sa",
+            Feed::Gnews => "gnews",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Feed> {
+        match s {
+            "tmx" => Some(Feed::Tmx),
+            "tmx-media" => Some(Feed::TmxMedia),
+            "nasdaq" => Some(Feed::Nasdaq),
+            "nasdaq-press" => Some(Feed::NasdaqPress),
+            "yahoo" => Some(Feed::Yahoo),
+            "sa" => Some(Feed::Sa),
+            "gnews" => Some(Feed::Gnews),
+            _ => None,
+        }
+    }
+
+    /// The source an item's id names by its prefix (`tmx:`, `nasdaq:`,
+    /// `yahoo:`, `sa:`, `gnews:`).
+    pub fn of_id(id: &str) -> Option<Feed> {
+        match id.split_once(':').map(|(p, _)| p) {
+            Some("tmx") => Some(Feed::Tmx),
+            Some("nasdaq") => Some(Feed::Nasdaq),
+            Some("yahoo") => Some(Feed::Yahoo),
+            Some("sa") => Some(Feed::Sa),
+            Some("gnews") => Some(Feed::Gnews),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NewsKind {
+    #[default]
+    Story,
+    Release,
+}
+
+impl NewsKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NewsKind::Story => "story",
+            NewsKind::Release => "release",
+        }
+    }
+
+    pub fn parse(s: &str) -> NewsKind {
+        if s == "release" {
+            NewsKind::Release
+        } else {
+            NewsKind::Story
+        }
+    }
+}
+
+/// An item as a source answers it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsItem {
+    pub id: String,
+    pub headline: String,
+    /// The publisher or wire that carried it.
+    pub source: String,
+    pub url: String,
+    pub published_at: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    pub kind: NewsKind,
+    pub via: Feed,
+}
+
+/// A stored item, as read back for a listing.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredNews {
+    pub id: String,
+    pub symbol: String,
+    pub exchange: String,
+    /// The feed it was read from; `None` for a stored value that names none.
+    #[serde(rename = "source")]
+    pub feed: Option<Feed>,
+    pub headline: String,
+    /// The publisher or wire that carried it.
+    pub wire: String,
+    pub url: String,
+    pub published_at: String,
+    pub fetched_at: String,
+    pub kind: NewsKind,
+    pub summary: String,
+}
+
+impl StoredNews {
+    /// The item again, as its feed answered it; `None` when no feed is named.
+    pub fn item(&self) -> Option<NewsItem> {
+        Some(NewsItem {
+            id: self.id.clone(),
+            headline: self.headline.clone(),
+            source: self.wire.clone(),
+            url: self.url.clone(),
+            published_at: self.published_at.clone(),
+            summary: self.summary.clone(),
+            kind: self.kind,
+            via: self.feed?,
+        })
+    }
+}
+
 /// `news_key`.
 pub fn news_key(symbol: &str, exchange: &str) -> String {
     format!("{}@{}", up(symbol), up(exchange))
 }
 
 /// `replace_news`: a listing's latest items, in place of what it had. Each
-/// row is stored under the source it was read from (`via`: tmx, nasdaq,
-/// yahoo, sa, gnews), `source` when it names none.
-pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &str, rows: &[Value], now: &str) -> Result<()> {
+/// row is stored under the feed it was read from (`via`).
+pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, rows: &[NewsItem], now: &str) -> Result<()> {
     crate::atomically(conn, || {
         let sym = up(symbol);
         let ex = up(exchange);
         let changed = crate::gens::replace_if_changed(conn, "SELECT id, source, headline, wire, url, published_at, kind, summary FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex], || {
         conn.execute("DELETE FROM news WHERE symbol = ? AND exchange = ?", rusqlite::params![sym, ex])?;
         for r in rows {
-            let id = field_s(r, "id");
-            if id.is_empty() {
+            if r.id.is_empty() {
                 continue;
             }
-            let kind = { let k = field_s(r, "kind"); if k.is_empty() { "story".to_string() } else { k } };
             conn.execute(
                 "INSERT OR REPLACE INTO news (id, symbol, exchange, source, headline, wire, url, published_at, fetched_at, kind, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    id, sym, ex, { let v = field_s(r, "via"); if v.is_empty() { source.to_string() } else { v } }, field_s(r, "headline"), field_s(r, "source"),
-                    field_s(r, "url"), field_s(r, "publishedAt"), now, kind, field_s(r, "summary"),
+                    r.id, sym, ex, r.via.as_str(), r.headline, r.source,
+                    r.url, r.published_at, now, r.kind.as_str(), r.summary,
                 ],
             )?;
         }
@@ -183,7 +311,7 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, source: &st
 }
 
 /// `news_for`: a listing's stored items, newest first.
-pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<Value>> {
+pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<StoredNews>> {
     let mut stmt = conn.prepare("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id")?;
     let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], crate::snapshot::news_from_row)?;
     rows.collect()

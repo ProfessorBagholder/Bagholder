@@ -1,5 +1,6 @@
 //! News: every per-symbol source parsed into rows, merged and kept per listing.
 use bagholder_market::news;
+use bagholder_store::feeds::{Feed, NewsItem, NewsKind, StoredNews};
 use serde_json::{json, Value};
 
 const SEP11_1530: i64 = 1789140600;
@@ -14,8 +15,10 @@ fn test_tmx_items_carry_an_exact_time_and_a_page_link() {
                                         {"headline": "no id", "datetime": "2026-08-05T07:00:00-04:00"},
                                         {"headline": "bad time", "datetime": "yesterday", "newsid": 5}]}});
     let rows = news::parse_tmx_news(&data, "SHOP", false);
-    assert_eq!(rows, vec![json!({"id": "tmx:4883675477075330", "headline": "Shopify Delivers Big: 30%+ Growth Across GMV", "source": "GlobeNewswire", "summary": "",
-                                  "url": "https://money.tmx.com/en/quote/SHOP/news/4883675477075330", "publishedAt": "2026-08-05T11:00:00Z", "kind": "release", "via": "tmx"})]);
+    assert_eq!(rows, vec![NewsItem {
+        id: "tmx:4883675477075330".into(), headline: "Shopify Delivers Big: 30%+ Growth Across GMV".into(), source: "GlobeNewswire".into(), summary: String::new(),
+        url: "https://money.tmx.com/en/quote/SHOP/news/4883675477075330".into(), published_at: "2026-08-05T11:00:00Z".into(), kind: NewsKind::Release, via: Feed::Tmx,
+    }]);
 }
 
 #[test]
@@ -26,7 +29,7 @@ fn test_nasdaq_items_take_their_time_from_the_age_given() {
                                         {"id": 4, "publisher": "no title", "related_symbols": ["nvda|stocks"]},
                                         {"id": 5, "title": "Market wrap that never names it", "publisher": "Barchart", "created": "Sep 11, 2026", "ago": "3 minutes ago", "url": "/articles/wrap", "related_symbols": ["spy|etf", "aapl|stocks"]}]}});
     let rows = news::parse_nasdaq_news(&data, SEP11_1530, "NVDA", None);
-    let got: Vec<[&str; 5]> = rows.iter().map(|r| [s(&r["id"]), s(&r["headline"]), s(&r["source"]), s(&r["url"]), s(&r["publishedAt"])]).collect();
+    let got: Vec<[&str; 5]> = rows.iter().map(|r| [r.id.as_str(), r.headline.as_str(), r.source.as_str(), r.url.as_str(), r.published_at.as_str()]).collect();
     assert_eq!(got, vec![
         ["nasdaq:28351741", "Forget AMD. Here's Who Nvidia Really Needs to Be Worried About.", "The Motley Fool", "https://www.nasdaq.com/articles/forget-amd", "2026-09-11T15:13:00Z"],
         ["nasdaq:2", "Two hours", "Zacks", "https://www.nasdaq.com/articles/two", "2026-09-11T13:30:00Z"],
@@ -36,34 +39,35 @@ fn test_nasdaq_items_take_their_time_from_the_age_given() {
 
 #[test]
 fn test_the_wire_follows_the_venue() {
-    assert_eq!(news::source_for("SHOP", "TSX", "CAD"), "tmx");
-    assert_eq!(news::source_for("NVDA", "NASDAQ", "USD"), "nasdaq");
-    assert_eq!(news::source_for("AAPL", "", "USD"), "nasdaq");
-    assert_eq!(news::source_for("QBTC", "NEO", "CAD"), "tmx");
+    assert_eq!(news::source_for("SHOP", "TSX", "CAD"), Some(Feed::Tmx));
+    assert_eq!(news::source_for("NVDA", "NASDAQ", "USD"), Some(Feed::Nasdaq));
+    assert_eq!(news::source_for("AAPL", "", "USD"), Some(Feed::Nasdaq));
+    assert_eq!(news::source_for("QBTC", "NEO", "CAD"), Some(Feed::Tmx));
 }
 
 #[test]
 fn test_a_wires_item_is_a_release_and_a_publishers_a_story() {
     for wire in ["GlobeNewswire", "Business Wire", "PR Newswire", "ACCESS Newswire", "Accesswire", "TheNewsWire", "Canada Newswire", "TMX Newsfile", "Marketwired", "CNW Group", "NewMediaWire"] {
-        assert_eq!(news::kind_of(wire), "release", "{}", wire);
+        assert_eq!(news::kind_of(wire), NewsKind::Release, "{}", wire);
     }
     for publ in ["The Motley Fool", "Zacks", "Barchart", "RTTNews", "MarketBeat", "BNK Invest", "Fintel", "", "WIRED", "MT Newswires", "Dow Jones Newswires"] {
-        assert_eq!(news::kind_of(publ), "story", "{}", publ);
+        assert_eq!(news::kind_of(publ), NewsKind::Story, "{}", publ);
     }
     let tmx = news::parse_tmx_news(&json!({"data": {"news": [{"newsid": "1", "headline": "Closing", "source": "GlobeNewswire via QuoteMedia", "datetime": "2026-09-14T08:00:00-04:00"}]}}), "CH", false);
-    assert_eq!((s(&tmx[0]["kind"]), s(&tmx[0]["source"])), ("release", "GlobeNewswire"));
-    let press = news::parse_nasdaq_news(&json!({"data": {"rows": [{"id": 9, "title": "Shopify Delivers Big", "publisher": "", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/press-release/x", "related_symbols": ["shop|stocks"]}]}}), SEP15_1200, "SHOP", Some("release"));
-    assert_eq!((s(&press[0]["kind"]), s(&press[0]["source"]), s(&press[0]["publishedAt"])), ("release", "Nasdaq", "2026-08-05T00:00:00Z"));
+    assert_eq!((tmx[0].kind, tmx[0].source.as_str()), (NewsKind::Release, "GlobeNewswire"));
+    let press = news::parse_nasdaq_news(&json!({"data": {"rows": [{"id": 9, "title": "Shopify Delivers Big", "publisher": "", "created": "Aug 5, 2026", "ago": "Aug 5, 2026", "url": "/press-release/x", "related_symbols": ["shop|stocks"]}]}}), SEP15_1200, "SHOP", Some(NewsKind::Release));
+    assert_eq!((press[0].kind, press[0].source.as_str(), press[0].published_at.as_str()), (NewsKind::Release, "Nasdaq", "2026-08-05T00:00:00Z"));
     let story = news::parse_nasdaq_news(&json!({"data": {"rows": [{"id": 8, "title": "Why SHOP", "publisher": "The Motley Fool", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/articles/y", "related_symbols": ["shop|stocks"]}]}}), SEP15_1200, "SHOP", None);
-    assert_eq!(s(&story[0]["kind"]), "story");
+    assert_eq!(story[0].kind, NewsKind::Story);
 }
 
 #[test]
 fn test_the_market_feed_is_a_listing_of_its_own_with_no_tag() {
-    assert_eq!(news::source_for(news::MARKET.0, news::MARKET.1, news::MARKET.2), "nasdaq");
+    assert_eq!(news::source_for(news::MARKET.0, news::MARKET.1, news::MARKET.2), Some(Feed::Nasdaq));
     let data = json!({"data": {"rows": [{"id": 1, "title": "Stocks Settle Lower", "publisher": "Barchart", "url": "/articles/a", "ago": "7 minutes ago", "related_symbols": ["ryam|stocks"]},
                                         {"id": 2, "title": "Value ETFs", "publisher": "Zacks", "url": "/articles/b", "ago": "2 hours ago", "related_symbols": ["mu|stocks"]}]}});
-    let ids: Vec<&str> = news::parse_nasdaq_news(&data, SEP11_1600, "", None).iter().map(|r| s(&r["id"])).map(|x| Box::leak(x.to_string().into_boxed_str()) as &str).collect();
+    let rows = news::parse_nasdaq_news(&data, SEP11_1600, "", None);
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["nasdaq:1", "nasdaq:2"], "asked without a symbol, the feed keeps every item");
 }
 
@@ -104,16 +108,30 @@ fn down() -> NetError {
     NetError { code: None, text: "down".into() }
 }
 
-fn row(id: &str, headline: &str, when: &str, source: &str, kind: &str) -> Value {
-    json!({"id": id, "headline": headline, "source": source, "url": format!("u-{}", id), "publishedAt": when, "kind": kind})
+fn row(id: &str, headline: &str, when: &str, source: &str, kind: &str) -> NewsItem {
+    NewsItem { id: id.into(), headline: headline.into(), source: source.into(), url: format!("u-{}", id), published_at: when.into(), summary: String::new(), kind: NewsKind::parse(kind), via: Feed::of_id(id).unwrap() }
 }
 
-fn ids(rows: &[Value]) -> Vec<String> {
-    rows.iter().map(|r| s(&r["id"]).to_string()).collect()
+/// Rows and stored items alike are compared by their own id.
+trait Ided {
+    fn ident(&self) -> &str;
+}
+impl Ided for NewsItem {
+    fn ident(&self) -> &str { &self.id }
+}
+impl Ided for StoredNews {
+    fn ident(&self) -> &str { &self.id }
+}
+impl Ided for Value {
+    fn ident(&self) -> &str { self["id"].as_str().unwrap_or("") }
+}
+
+fn ids<T: Ided>(rows: &[T]) -> Vec<String> {
+    rows.iter().map(|r| r.ident().to_string()).collect()
 }
 
 fn listing(sym: &str, ex: &str, ccy: &str, name: &str) -> news::Listing {
-    (sym.into(), ex.into(), ccy.into(), name.into())
+    news::Listing { symbol: sym.into(), exchange: ex.into(), currency: ccy.into(), name: name.into() }
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +152,10 @@ fn test_tmx_is_asked_under_the_code_the_quote_uses_and_resolves_a_wrong_venue() 
     let clock = Clock::at(at(2026, 9, 16, 12, 0));
     let (src, rows) = news::fetch_symbol(&d.conn, &net, "QIMC", "CSE", "CAD", &clock);
     news::fetch_symbol(&d.conn, &net, "CH", "TSX-V", "CAD", &clock);
-    assert_eq!((src.as_str(), asked.lock().unwrap().clone()), ("tmx", vec!["QIMC:CNX".to_string(), "QIMC:CNX".into(), "CH".into(), "CH".into()]),
+    assert_eq!((src, asked.lock().unwrap().clone()), (Feed::Tmx, vec!["QIMC:CNX".to_string(), "QIMC:CNX".into(), "CH".into(), "CH".into()]),
                "each listing under the code its quote uses, once for each of TMX's two tabs");
     let rows = rows.unwrap().rows;
-    assert_eq!((s(&rows[0]["kind"]), s(&rows[0]["url"])), ("release", "https://money.tmx.com/en/quote/QIMC:CNX/news/7"));
+    assert_eq!((rows[0].kind, rows[0].url.as_str()), (NewsKind::Release, "https://money.tmx.com/en/quote/QIMC:CNX/news/7"));
     // the record names the wrong venue: the lookup resolves the form that answers, as it does for a quote
     // (the form TMX's resolver verified, remembered as a miss would be, so nothing is asked of the network)
     bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "none@2026-09-16").unwrap();
@@ -169,11 +187,11 @@ fn test_a_publishers_story_is_kept_only_where_tmx_tags_the_listing() {
         {"newsid": "2", "headline": "Most shorted stocks on Wall Street", "source": "SeekingAlpha via QuoteMedia",
          "datetime": "2026-09-05T11:00:00-04:00", "topic": "[ASTS,NBIS]"}]}});
     let rows = news::parse_tmx_news(&data, "PNG", true);
-    let got: Vec<[&str; 3]> = rows.iter().map(|r| [s(&r["id"]), s(&r["kind"]), s(&r["source"])]).collect();
-    assert_eq!(got, vec![["tmx:1", "story", "SeekingAlpha"]], "a story TMX tags with another listing is not this one's");
+    let got: Vec<(&str, NewsKind, &str)> = rows.iter().map(|r| (r.id.as_str(), r.kind, r.source.as_str())).collect();
+    assert_eq!(got, vec![("tmx:1", NewsKind::Story, "SeekingAlpha")], "a story TMX tags with another listing is not this one's");
     let wire = news::parse_tmx_news(&json!({"data": {"news": [{"newsid": "3", "headline": "Kraken closes financing", "source": "GlobeNewswire via QuoteMedia",
                                                               "datetime": "2026-09-05T08:00:00-04:00"}]}}), "PNG", false);
-    assert_eq!(s(&wire[0]["kind"]), "release", "the press releases tab reads as it always did");
+    assert_eq!(wire[0].kind, NewsKind::Release, "the press releases tab reads as it always did");
 }
 
 fn kraken_release() -> Value {
@@ -195,10 +213,10 @@ fn test_both_of_tmxs_tabs_are_read_and_a_failing_stories_tab_keeps_the_releases(
         Ok(json!({"data": {"news": [if media { kraken_story() } else { kraken_release() }]}}))
     };
     let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &no_get, post: &post, pace: false }, "PNG", "TSX-V", "CAD", &clock);
-    assert_eq!((src.as_str(), tabs.lock().unwrap().clone()), ("tmx", vec![false, true]));
-    let mut got: Vec<(String, String)> = rows.unwrap().rows.iter().map(|r| (s(&r["id"]).to_string(), s(&r["kind"]).to_string())).collect();
+    assert_eq!((src, tabs.lock().unwrap().clone()), (Feed::Tmx, vec![false, true]));
+    let mut got: Vec<(String, &str)> = rows.unwrap().rows.iter().map(|r| (r.id.clone(), r.kind.as_str())).collect();
     got.sort();
-    assert_eq!(got, vec![("tmx:10".to_string(), "release".to_string()), ("tmx:11".into(), "story".into())]);
+    assert_eq!(got, vec![("tmx:10".to_string(), "release"), ("tmx:11".into(), "story")]);
     let failing = |_: &str, body: &Value, _: &[(&str, &str)]| -> Result<Value, NetError> {
         if body["variables"]["companyInNews"].as_bool().unwrap_or(false) {
             return Err(down());
@@ -228,8 +246,8 @@ fn test_yahoo_keeps_what_its_ticker_tags_name() {
         yahoo_asset("a3", "Kraken Wins Navy Contract", &["PNG.V"], "The Globe and Mail", "2026-09-15T10:00:00.000Z"),
         yahoo_asset("a4", "no date", &["PNG.V"], "Newsfile", "")]}}}});
     let rows = news::parse_yahoo_news(&data, "PNG.V", "", "");
-    let got: Vec<[&str; 4]> = rows.iter().map(|r| [s(&r["id"]), s(&r["kind"]), s(&r["source"]), s(&r["publishedAt"])]).collect();
-    assert_eq!(got, vec![["yahoo:a1", "release", "Newsfile", "2026-09-14T13:13:00Z"], ["yahoo:a3", "story", "The Globe and Mail", "2026-09-15T10:00:00Z"]],
+    let got: Vec<(&str, &str, &str, &str)> = rows.iter().map(|r| (r.id.as_str(), r.kind.as_str(), r.source.as_str(), r.published_at.as_str())).collect();
+    assert_eq!(got, vec![("yahoo:a1", "release", "Newsfile", "2026-09-14T13:13:00Z"), ("yahoo:a3", "story", "The Globe and Mail", "2026-09-15T10:00:00Z")],
                "an item Yahoo tags with other tickers is theirs; a wire's item is a release");
     let d = db();
     bagholder_store::tables::set_meta(&d.conn, "tmx_form:QIMC", "@:CNX").unwrap();
@@ -271,8 +289,8 @@ fn test_seeking_alpha_keeps_what_its_symbol_tags_name() {
             <pubDate>Fri, 05 Sep 2026 11:00:00 -0400</pubDate><sa:symbol>ASTS</sa:symbol></item>
         </channel></rss>"#;
     let rows = news::parse_sa_news(xml, "PNG:CA");
-    let got: Vec<[&str; 4]> = rows.iter().map(|r| [s(&r["headline"]), s(&r["source"]), s(&r["url"]), s(&r["publishedAt"])]).collect();
-    assert_eq!(got, vec![["Kraken Robotics: Undersea Batteries Drive Growth", "Seeking Alpha", "https://seekingalpha.com/article/1", "2026-09-05T14:00:00Z"]]);
+    let got: Vec<(&str, &str, &str, &str)> = rows.iter().map(|r| (r.headline.as_str(), r.source.as_str(), r.url.as_str(), r.published_at.as_str())).collect();
+    assert_eq!(got, vec![("Kraken Robotics: Undersea Batteries Drive Growth", "Seeking Alpha", "https://seekingalpha.com/article/1", "2026-09-05T14:00:00Z")]);
     let forms: Vec<String> = [("PNG", "TSX-V", "CAD"), ("VEQT", "TSX", "CAD"), ("ASTS", "NASDAQ", "USD"), ("HG", "CSE", "CAD"), ("HBIX", "Cboe Canada", "CAD")]
         .iter().map(|(a, b, c)| news::sa_form(a, b, c)).collect();
     assert_eq!(forms, ["PNG:CA", "VEQT:CA", "ASTS", "", ""], "Seeking Alpha has no form for the CSE or Cboe Canada");
@@ -394,20 +412,20 @@ fn test_google_items_lose_the_publisher_suffix_quote_pages_and_undated_pages() {
         item("$HydroGraph Clean Power (HGRAF.US)$ - Moomoo", "Moomoo", "Fri, 31 Jul 2026 00:00:00 GMT", "https://news.google.com/rss/articles/g"),
     ].concat());
     let rows = news::parse_google_news(&xml, "HG", "Hydrograph Clean Power Inc.", false);
-    let got: Vec<[&str; 4]> = rows.iter().map(|r| [s(&r["headline"]), s(&r["source"]), s(&r["publishedAt"]), s(&r["kind"])]).collect();
-    assert_eq!(got, vec![["HydroGraph Announces Change of Auditor", "Investing News Network", "2026-08-31T12:00:00Z", "story"]]);
-    assert!(s(&rows[0]["id"]).starts_with("gnews:"));
+    let got: Vec<(&str, &str, &str, &str)> = rows.iter().map(|r| (r.headline.as_str(), r.source.as_str(), r.published_at.as_str(), r.kind.as_str())).collect();
+    assert_eq!(got, vec![("HydroGraph Announces Change of Auditor", "Investing News Network", "2026-08-31T12:00:00Z", "story")]);
+    assert!(rows[0].id.starts_with("gnews:"));
 }
 
 // ---------------------------------------------------------------------------
 // the merge
 // ---------------------------------------------------------------------------
 
-fn wire_of(answer: Option<Vec<Value>>) -> impl Fn(&Connection, &str, &str, &str, &Clock) -> (String, Option<WireAnswer>) + Sync {
-    move |_, _, _, _, _| ("tmx".to_string(), answer.clone().map(WireAnswer::of))
+fn wire_of(answer: Option<Vec<NewsItem>>) -> impl Fn(&Connection, &str, &str, &str, &Clock) -> (Feed, Option<WireAnswer>) + Sync {
+    move |_, _, _, _, _| (Feed::Tmx, answer.clone().map(WireAnswer::of))
 }
 
-fn stored(conn: &Connection, sym: &str, ex: &str) -> Vec<Value> {
+fn stored(conn: &Connection, sym: &str, ex: &str) -> Vec<StoredNews> {
     bagholder_store::feeds::news_for(conn, sym, ex).unwrap()
 }
 
@@ -417,12 +435,12 @@ fn test_every_source_is_merged_one_row_per_story_the_wires_copy_first() {
     let clock = Clock::at(at(2026, 9, 16, 12, 0));
     let wire = wire_of(Some(vec![row("tmx:1", "Charbone Closes Loan", "2026-09-08T12:00:00Z", "TheNewsWire", "release")]));
     let asked = Mutex::new(Vec::<(String, String)>::new());
-    let extra = |key: &str, ask: &Ask| -> Result<Option<Vec<Value>>, NetError> {
-        asked.lock().unwrap().push((key.to_string(), ask.name.clone()));
+    let extra = |key: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
+        asked.lock().unwrap().push((key.as_str().to_string(), ask.name.clone()));
         Ok(Some(match key {
-            "yahoo" => vec![row("yahoo:u1", "CHARBONE closes loan.", "2026-09-08T12:00:00Z", "TheNewsWire", "release"),
+            Feed::Yahoo => vec![row("yahoo:u1", "CHARBONE closes loan.", "2026-09-08T12:00:00Z", "TheNewsWire", "release"),
                             row("yahoo:u2", "Charbone delivers electrolyzer", "2026-09-09T12:00:00Z", "BNN Bloomberg", "story")],
-            "sa" => vec![row("sa:1", "Charbone: a hydrogen story", "2026-09-10T12:00:00Z", "Seeking Alpha", "story")],
+            Feed::Sa => vec![row("sa:1", "Charbone: a hydrogen story", "2026-09-10T12:00:00Z", "Seeking Alpha", "story")],
             _ => vec![row("gnews:1", "Charbone delivers electrolyzer", "2026-09-09T12:05:00Z", "The Globe and Mail", "story"),
                       row("gnews:2", "Charbone Reports Q2 2026 Financial Results", "2026-08-27T12:00:00Z", "The Globe and Mail", "story")],
         }))
@@ -432,17 +450,18 @@ fn test_every_source_is_merged_one_row_per_story_the_wires_copy_first() {
     a.sort();
     let name = "Charbone Hydrogen Corp".to_string();
     assert_eq!(a, vec![("gnews".to_string(), name.clone()), ("sa".into(), name.clone()), ("yahoo".into(), name)]);
-    assert_eq!((src.as_str(), ids(&rows.unwrap())), ("tmx", vec!["sa:1".to_string(), "yahoo:u2".into(), "tmx:1".into(), "gnews:2".into()]),
+    assert_eq!((src, ids(&rows.unwrap())), (Feed::Tmx, vec!["sa:1".to_string(), "yahoo:u2".into(), "tmx:1".into(), "gnews:2".into()]),
                "newest first; the same headline from a later source is the earlier source's row");
-    let got: Vec<[&str; 3]> = stored(&d.conn, "CH", "TSX-V").iter().map(|r| [s(&r["id"]), s(&r["source"]), s(&r["wire"])]).map(|x| x.map(|v| Box::leak(v.to_string().into_boxed_str()) as &str)).collect();
-    assert_eq!(got, vec![["sa:1", "sa", "Seeking Alpha"], ["yahoo:u2", "yahoo", "BNN Bloomberg"], ["tmx:1", "tmx", "TheNewsWire"], ["gnews:2", "gnews", "The Globe and Mail"]],
+    let stored_rows = stored(&d.conn, "CH", "TSX-V");
+    let got: Vec<(&str, &str, &str)> = stored_rows.iter().map(|r| (r.id.as_str(), r.feed.map(|f| f.as_str()).unwrap_or(""), r.wire.as_str())).collect();
+    assert_eq!(got, vec![("sa:1", "sa", "Seeking Alpha"), ("yahoo:u2", "yahoo", "BNN Bloomberg"), ("tmx:1", "tmx", "TheNewsWire"), ("gnews:2", "gnews", "The Globe and Mail")],
                "each row is stored under the source it was read from");
 }
 
-fn first_answers(key: &str) -> Vec<Value> {
+fn first_answers(key: Feed) -> Vec<NewsItem> {
     match key {
-        "yahoo" => vec![row("yahoo:u1", "Yahoo story", "2026-09-10T12:00:00Z", "Pub", "story")],
-        "sa" => vec![row("sa:1", "SA story", "2026-09-11T12:00:00Z", "Pub", "story")],
+        Feed::Yahoo => vec![row("yahoo:u1", "Yahoo story", "2026-09-10T12:00:00Z", "Pub", "story")],
+        Feed::Sa => vec![row("sa:1", "SA story", "2026-09-11T12:00:00Z", "Pub", "story")],
         _ => vec![row("gnews:1", "Google story", "2026-09-12T12:00:00Z", "Pub", "story")],
     }
 }
@@ -451,13 +470,13 @@ fn first_answers(key: &str) -> Vec<Value> {
 fn test_a_source_that_fails_or_is_not_due_keeps_its_stored_stories() {
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
-    let first = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(Some(first_answers(k))) };
+    let first = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(first_answers(k))) };
     let wire1 = wire_of(Some(vec![row("tmx:1", "Wire item", "2026-09-09T12:00:00Z", "Pub", "story")]));
     news::read_listing(&d.conn, &Readers { wire: &wire1, extra: &first }, "CH", "TSX-V", "CAD", "", false, &Clock::at(now), None).unwrap();
     let asked = Mutex::new(Vec::<String>::new());
-    let later = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> {
-        asked.lock().unwrap().push(k.to_string());
-        if k == "yahoo" { Err(down()) } else { Ok(Some(vec![])) }
+    let later = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
+        asked.lock().unwrap().push(k.as_str().to_string());
+        if k == Feed::Yahoo { Err(down()) } else { Ok(Some(vec![])) }
     };
     // fifteen minutes on: the wire and Yahoo are due, Seeking Alpha and Google are not; Yahoo fails
     let wire2 = wire_of(Some(vec![row("tmx:2", "New wire item", "2026-09-16T12:10:00Z", "Pub", "story")]));
@@ -466,12 +485,12 @@ fn test_a_source_that_fails_or_is_not_due_keeps_its_stored_stories() {
     assert_eq!(ids(&rows.unwrap()), vec!["tmx:2", "gnews:1", "sa:1", "yahoo:u1"], "the wire's item is replaced; the failing and the resting sources keep what they had");
     // nothing answers at all: the stored list stands untouched
     let none = wire_of(None);
-    let failing = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Err(down()) };
+    let failing = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Err(down()) };
     let got = news::read_listing(&d.conn, &Readers { wire: &none, extra: &failing }, "CH", "TSX-V", "CAD", "", true, &Clock::at(now + 45 * 60), None).unwrap();
-    assert_eq!((got.0.as_str(), got.1), ("tmx", None));
+    assert_eq!((got.0, got.1), (Feed::Tmx, None));
     assert_eq!(ids(&stored(&d.conn, "CH", "TSX-V")), vec!["tmx:2", "gnews:1", "sa:1", "yahoo:u1"]);
     // every source answers, Yahoo with nothing at all: a list it had does not vanish on one empty answer
-    let empty_yahoo = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(Some(if k == "yahoo" { vec![] } else { first_answers(k) })) };
+    let empty_yahoo = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(if k == Feed::Yahoo { vec![] } else { first_answers(k) })) };
     let (_, rows) = news::read_listing(&d.conn, &Readers { wire: &wire2, extra: &empty_yahoo }, "CH", "TSX-V", "CAD", "", true, &Clock::at(now + 60 * 60), None).unwrap();
     assert!(ids(&rows.unwrap()).contains(&"yahoo:u1".to_string()));
 }
@@ -481,7 +500,7 @@ fn test_a_release_is_new_once_whichever_source_carries_it_and_a_first_read_sourc
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let told = Mutex::new(Vec::<Vec<String>>::new());
-    let on_new = |_: &Connection, _: &str, _: &str, _: &[Value], new: &[String]| {
+    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| {
         let mut n = new.to_vec();
         n.sort();
         told.lock().unwrap().push(n);
@@ -489,14 +508,14 @@ fn test_a_release_is_new_once_whichever_source_carries_it_and_a_first_read_sourc
     let release = |i: &str| row(i, "Charbone Closes Loan", "2026-09-16T11:00:00Z", "TheNewsWire", "release");
     // the wire is read, Yahoo for the first time: Yahoo's whole list is history
     let wire = wire_of(Some(vec![row("tmx:1", "Old wire item", "2026-09-01T12:00:00Z", "Pub", "story")]));
-    let old = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> {
-        Ok(if k == "yahoo" { Some(vec![row("yahoo:old", "Charbone old release", "2026-09-10T12:00:00Z", "NewMediaWire", "release")]) } else { None })
+    let old = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
+        Ok(if k == Feed::Yahoo { Some(vec![row("yahoo:old", "Charbone old release", "2026-09-10T12:00:00Z", "NewMediaWire", "release")]) } else { None })
     };
     news::read_listing(&d.conn, &Readers { wire: &wire, extra: &old }, "CH", "TSX-V", "CAD", "", false, &Clock::at(now), Some(&on_new)).unwrap();
     assert_eq!(told.lock().unwrap().last().unwrap().clone(), vec!["tmx:1"], "a source met for the first time brings history, not news (the wire's own first read is the notifier's to judge)");
     // TMX fails this pass and Yahoo carries a new release: it is new
     let none = wire_of(None);
-    let fresh = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(if k == "yahoo" { Some(vec![release("yahoo:new")]) } else { None }) };
+    let fresh = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(if k == Feed::Yahoo { Some(vec![release("yahoo:new")]) } else { None }) };
     news::read_listing(&d.conn, &Readers { wire: &none, extra: &fresh }, "CH", "TSX-V", "CAD", "", false, &Clock::at(now + 16 * 60), Some(&on_new)).unwrap();
     assert_eq!(told.lock().unwrap().last().unwrap().clone(), vec!["yahoo:new"]);
     // TMX answers again with the same release under its own id: not new a second time
@@ -512,11 +531,11 @@ fn test_a_headline_repeated_months_later_is_a_new_release() {
     let now = at(2026, 9, 16, 12, 0);
     let told = Mutex::new(Vec::<Vec<String>>::new());
     let halt = |i: &str, when: &str| row(i, "IIROC Trading Halt - QNC", when, "TMX Newsfile", "release");
-    let nothing = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(None) };
+    let nothing = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(None) };
     let first = wire_of(Some(vec![halt("tmx:1", "2026-06-10T14:00:00Z")]));
     news::read_listing(&d.conn, &Readers { wire: &first, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now), None).unwrap();
     let second = wire_of(Some(vec![halt("tmx:2", "2026-09-16T13:00:00Z"), halt("tmx:1", "2026-06-10T14:00:00Z")]));
-    let on_new = |_: &Connection, _: &str, _: &str, _: &[Value], new: &[String]| told.lock().unwrap().push(new.to_vec());
+    let on_new = |_: &Connection, _: &str, _: &str, _: &[NewsItem], new: &[String]| told.lock().unwrap().push(new.to_vec());
     let (_, rows) = news::read_listing(&d.conn, &Readers { wire: &second, extra: &nothing }, "QNC", "TSX-V", "CAD", "", false, &Clock::at(now + 16 * 60), Some(&on_new)).unwrap();
     assert_eq!((ids(&rows.unwrap()), told.lock().unwrap().clone()), (vec!["tmx:2".to_string(), "tmx:1".into()], vec![vec!["tmx:2".to_string()]]),
                "the same words months apart are two halts, the second one new");
@@ -535,7 +554,7 @@ fn test_a_wire_feed_that_fails_keeps_its_stored_items() {
         }
         Ok(json!({"data": {"news": [kraken_release()]}}))
     };
-    let nothing = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(None) };
+    let nothing = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(None) };
     let read = |post: &news::PostFn<'_>, minutes: i64| {
         let net = Net { get: &no_get, post, pace: false };
         let wire = |c: &Connection, sy: &str, ex: &str, cc: &str, cl: &Clock| news::fetch_symbol(c, &net, sy, ex, cc, cl);
@@ -545,7 +564,7 @@ fn test_a_wire_feed_that_fails_keeps_its_stored_items() {
     let mut got = ids(&read(&stories_down, 16));
     got.sort();
     assert_eq!(got, vec!["tmx:10", "tmx:11"], "In The Media failing leaves the stories it had");
-    let by: std::collections::BTreeMap<String, String> = stored(&d.conn, "PNG", "TSX-V").iter().map(|r| (s(&r["id"]).to_string(), s(&r["source"]).to_string())).collect();
+    let by: std::collections::BTreeMap<String, String> = stored(&d.conn, "PNG", "TSX-V").iter().map(|r| (r.id.clone(), r.feed.map(|f| f.as_str().to_string()).unwrap_or_default())).collect();
     assert_eq!(by, [("tmx:10".to_string(), "tmx".to_string()), ("tmx:11".into(), "tmx-media".into())].into_iter().collect());
 }
 
@@ -554,13 +573,13 @@ fn test_a_source_with_nothing_to_ask_does_not_count_as_an_answer() {
     // a CSE listing: Seeking Alpha has no feed for it; everything that can be asked fails
     let d = db();
     let asked = Mutex::new(HashSet::<String>::new());
-    let failing = |k: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> {
-        asked.lock().unwrap().insert(k.to_string());
+    let failing = |k: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> {
+        asked.lock().unwrap().insert(k.as_str().to_string());
         Err(down())
     };
     let none = wire_of(None);
     let got = news::read_listing(&d.conn, &Readers { wire: &none, extra: &failing }, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.", true, &Clock::at(at(2026, 9, 16, 12, 0)), None).unwrap();
-    assert_eq!((got.0.as_str(), got.1), ("tmx", None), "nothing answered, so the listing is asked again next pass");
+    assert_eq!((got.0, got.1), (Feed::Tmx, None), "nothing answered, so the listing is asked again next pass");
     assert!(!asked.lock().unwrap().contains("sa"));
     assert!(news::fetch_sa(&Net { get: &no_get, post: &no_post, pace: false }, "HG", "CSE", "CAD").unwrap().is_none());
 }
@@ -572,19 +591,19 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
     let d = db();
     let now = at(2026, 9, 16, 12, 0);
     let stamp = Clock::at(now).stamp();
-    bagholder_store::feeds::replace_news(&d.conn, "CH", "TSX-V", "tmx", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
-    bagholder_store::feeds::replace_news(&d.conn, "HG", "CSE", "tmx", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_store::feeds::replace_news(&d.conn, "CH", "TSX-V", &[row("tmx:1", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
+    bagholder_store::feeds::replace_news(&d.conn, "HG", "CSE", &[row("tmx:2", "Wire item", "2026-09-16T11:00:00Z", "Pub", "story")], &stamp).unwrap();
     let listings = vec![listing("CH", "TSX-V", "CAD", "Charbone Hydrogen Corp"), listing("HG", "CSE", "CAD", "Hydrograph Clean Power Inc.")];
-    let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.0).collect::<Vec<_>>();
+    let syms = |ls: Vec<news::Listing>| ls.into_iter().map(|l| l.symbol).collect::<Vec<_>>();
     assert_eq!(syms(news::stale(&d.conn, &listings, now + 60, 15).unwrap()), ["CH", "HG"], "the wire is fresh, the other sources never read");
-    assert!(!news::sources_for(&d.conn, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").contains(&"sa".to_string()), "Seeking Alpha has no CSE feed");
+    assert!(!news::sources_for(&d.conn, "HG", "CSE", "CAD", "Hydrograph Clean Power Inc.").contains(&Feed::Sa), "Seeking Alpha has no CSE feed");
     let (started, landed) = (Mutex::new(Vec::<String>::new()), Mutex::new(Vec::<(String, bool)>::new()));
     let wire = wire_of(Some(vec![]));
-    let empty = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { Ok(Some(vec![])) };
+    let empty = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { Ok(Some(vec![])) };
     let path = d.dir.path().to_path_buf();
     let open = move || bagholder_store::connect(&path).ok();
-    let on_start = |due: &[news::Listing]| started.lock().unwrap().extend(due.iter().map(|l| l.0.clone()));
-    let on_done = |l: &news::Listing, ok: bool| landed.lock().unwrap().push((l.0.clone(), ok));
+    let on_start = |due: &[news::Listing]| started.lock().unwrap().extend(due.iter().map(|l| l.symbol.clone()));
+    let on_done = |l: &news::Listing, ok: bool| landed.lock().unwrap().push((l.symbol.clone(), ok));
     let n = news::refresh(&open, &Readers { wire: &wire, extra: &empty }, &listings, &Clock::at(now + 60), None, Some(&on_start), Some(&on_done), news::LISTINGS_AT_ONCE).unwrap();
     assert_eq!(n, 2);
     let (mut st, mut la) = (started.lock().unwrap().clone(), landed.lock().unwrap().clone());
@@ -598,8 +617,8 @@ fn test_a_listing_is_due_while_any_of_its_sources_is() {
 #[test]
 fn test_a_listing_with_no_venue_is_left_to_the_wire() {
     let d = db();
-    let wire = |_: &Connection, _: &str, _: &str, _: &str, _: &Clock| ("nasdaq".to_string(), Some(WireAnswer::default()));
-    let extra = |_: &str, _: &Ask| -> Result<Option<Vec<Value>>, NetError> { panic!("no other source is asked") };
+    let wire = |_: &Connection, _: &str, _: &str, _: &str, _: &Clock| (Feed::Nasdaq, Some(WireAnswer::default()));
+    let extra = |_: Feed, _: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { panic!("no other source is asked") };
     news::read_listing(&d.conn, &Readers { wire: &wire, extra: &extra }, "F", "", "", "", false, &Clock::at(at(2026, 9, 16, 12, 0)), None).unwrap();
 }
 
@@ -608,15 +627,15 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     let d = db();
     let now = at(2026, 9, 11, 15, 30);
     let answers = Mutex::new(std::collections::HashMap::from([
-        ("SHOP".to_string(), vec![json!({"id": "tmx:1", "headline": "One", "source": "GlobeNewswire", "url": "u1", "publishedAt": "2026-09-11T14:00:00Z"})]),
-        ("NVDA".to_string(), vec![json!({"id": "nasdaq:9", "headline": "Nine", "source": "Zacks", "url": "u9", "publishedAt": "2026-09-11T15:00:00Z"})]),
+        ("SHOP".to_string(), vec![row("tmx:1", "One", "2026-09-11T14:00:00Z", "GlobeNewswire", "story")]),
+        ("NVDA".to_string(), vec![row("nasdaq:9", "Nine", "2026-09-11T15:00:00Z", "Zacks", "story")]),
     ]));
     let calls = Mutex::new(Vec::<String>::new());
     let fake = |_: &Connection, symbol: &str, exchange: &str, _: &str, _: &Clock| {
         calls.lock().unwrap().push(symbol.to_string());
-        ((if exchange == "TSX" { "tmx" } else { "nasdaq" }).to_string(), answers.lock().unwrap().get(symbol).cloned().map(WireAnswer::of))
+        (if exchange == "TSX" { Feed::Tmx } else { Feed::Nasdaq }, answers.lock().unwrap().get(symbol).cloned().map(WireAnswer::of))
     };
-    let others = |_: &str, ask: &Ask| -> Result<Option<Vec<Value>>, NetError> { if ask.symbol == "BROKEN" { Err(down()) } else { Ok(Some(vec![])) } };
+    let others = |_: Feed, ask: &Ask| -> Result<Option<Vec<NewsItem>>, NetError> { if ask.symbol == "BROKEN" { Err(down()) } else { Ok(Some(vec![])) } };
     let readers = Readers { wire: &fake, extra: &others };
     let listings = vec![listing("SHOP", "TSX", "CAD", ""), listing("NVDA", "NASDAQ", "USD", ""), listing("BROKEN", "TSX", "CAD", "")];
     let path = d.dir.path().to_path_buf();
@@ -629,7 +648,7 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     calls.lock().unwrap().clear();
     assert_eq!(news::refresh(&open, &readers, &listings, &Clock::at(now), None, None, None, news::LISTINGS_AT_ONCE).unwrap(), 0);
     assert_eq!(calls.lock().unwrap().clone(), ["BROKEN"], "fresh listings are not asked again within fifteen minutes");
-    answers.lock().unwrap().insert("SHOP".into(), vec![json!({"id": "tmx:2", "headline": "Two", "source": "CNW", "url": "u2", "publishedAt": "2026-09-11T16:00:00Z"})]);
+    answers.lock().unwrap().insert("SHOP".into(), vec![row("tmx:2", "Two", "2026-09-11T16:00:00Z", "CNW", "story")]);
     let later = at(2026, 9, 11, 16, 0);
     news::refresh(&open, &readers, &listings, &Clock::at(later), None, None, None, news::LISTINGS_AT_ONCE).unwrap();
     let snap = bagholder_store::snapshot::snapshot(&d.conn, false).unwrap();
@@ -651,9 +670,9 @@ fn test_a_ticker_with_no_venue_is_never_asked_of_tmx() {
         Ok(r#"{"data": {"rows": [{"id": 5, "title": "Ford declares dividend", "publisher": "PR Newswire", "created": "Sep 14, 2026", "ago": "1 day ago", "url": "/a", "related_symbols": ["f|stocks"]}]}}"#.into())
     };
     let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, pace: false }, "F", "", "", &Clock::at(at(2026, 9, 15, 12, 0)));
-    assert_eq!(src, "nasdaq", "no venue: TMX is never asked");
-    let got: Vec<[&str; 2]> = rows.as_ref().unwrap().rows.iter().map(|r| [s(&r["kind"]), s(&r["headline"])]).collect();
-    assert_eq!(got, vec![["release", "Ford declares dividend"]]);
+    assert_eq!(src, Feed::Nasdaq, "no venue: TMX is never asked");
+    let got: Vec<(&str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.kind.as_str(), r.headline.as_str())).collect();
+    assert_eq!(got, vec![("release", "Ford declares dividend")]);
 }
 
 #[test]
@@ -669,9 +688,9 @@ fn test_a_us_listing_reads_its_releases_beside_its_news_each_once() {
         }.into())
     };
     let (src, rows) = news::fetch_symbol(&d.conn, &Net { get: &get, post: &no_post, pace: false }, "SHOP", "NASDAQ", "USD", &Clock::at(at(2026, 9, 15, 12, 0)));
-    assert_eq!(src, "nasdaq");
-    let got: Vec<[&str; 3]> = rows.as_ref().unwrap().rows.iter().map(|r| [s(&r["id"]), s(&r["kind"]), s(&r["source"])]).collect();
-    assert_eq!(got, vec![["nasdaq:1", "story", "Zacks"], ["nasdaq:2", "release", "GlobeNewswire"], ["nasdaq:3", "release", "Nasdaq"]],
+    assert_eq!(src, Feed::Nasdaq);
+    let got: Vec<(&str, &str, &str)> = rows.as_ref().unwrap().rows.iter().map(|r| (r.id.as_str(), r.kind.as_str(), r.source.as_str())).collect();
+    assert_eq!(got, vec![("nasdaq:1", "story", "Zacks"), ("nasdaq:2", "release", "GlobeNewswire"), ("nasdaq:3", "release", "Nasdaq")],
                "the news feed's own wire item is a release; the press feed adds what the news feed lacks, each once");
     assert_eq!(asked.lock().unwrap().len(), 2);
 }

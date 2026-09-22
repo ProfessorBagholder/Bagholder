@@ -311,7 +311,10 @@ mod tests {
     fn test_news_and_margin_rebuild_no_layer() {
         let (_d, conn, cache) = seeded();
         let (before, _) = cache.base_and_work(&conn, TODAY).unwrap();
-        bagholder_store::feeds::replace_news(&conn, "QNC", "TSX-V", "tmx", &[json!({"id": "n1", "headline": "QNC files", "source": "Wire", "url": "https://example.test/1", "publishedAt": "2026-03-01T12:00:00Z"})], "2026-03-02T15:00:00Z").unwrap();
+        bagholder_store::feeds::replace_news(&conn, "QNC", "TSX-V", &[bagholder_store::feeds::NewsItem {
+            id: "n1".into(), headline: "QNC files".into(), source: "Wire".into(), url: "https://example.test/1".into(),
+            published_at: "2026-03-01T12:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Story, via: bagholder_store::feeds::Feed::Tmx,
+        }], "2026-03-02T15:00:00Z").unwrap();
         tables::replace_margin(&conn, &[json!({"accountId": "a1", "buyingPower": 500.0, "currency": "CAD", "unavailable": ""})], "2026-03-02T15:00:00Z").unwrap();
         let (after, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert_eq!(work, Work { read: vec!["margin", "news"], built: vec![] });
