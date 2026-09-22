@@ -154,9 +154,9 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
 
 /// The remembered or given form first; when it answers
 /// nothing, the form TMX resolves for the symbol instead.
-pub fn tmx_lookup<F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<Value>, String)
+pub fn tmx_lookup<T, F>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> (Option<T>, String)
 where
-    F: Fn(&str) -> Option<Value>,
+    F: Fn(&str) -> Option<T>,
 {
     let first = tmx_remembered(conn, key);
     let r = f(&first);
@@ -173,9 +173,9 @@ where
 /// The TMX lookup for a lookup that can fail: a failure is passed straight
 /// back, so it stops there -- nothing is resolved and nothing
 /// is remembered on the strength of a request that did not get an answer.
-pub fn tmx_lookup_try<F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<Value>, String), E>
+pub fn tmx_lookup_try<T, F, E>(conn: &rusqlite::Connection, key: &str, today: &str, f: F) -> Result<(Option<T>, String), E>
 where
-    F: Fn(&str) -> Result<Option<Value>, E>,
+    F: Fn(&str) -> Result<Option<T>, E>,
 {
     let first = tmx_remembered(conn, key);
     let r = f(&first)?;

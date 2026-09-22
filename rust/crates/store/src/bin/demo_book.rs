@@ -496,7 +496,16 @@ fn write_bars(dir: &Path, b: &Book) -> rusqlite::Result<()> {
             let close = round_half_even(at(day) * (1.0 + ripple), 2);
             let (open, hi, lo) = (prev, prev.max(close) * 1.004, prev.min(close) * 0.996);
             let (y, m, d) = from_days(day);
-            bars.push(json!({"date": fmt(y, m, d), "open": open, "high": round_half_even(hi, 2), "low": round_half_even(lo, 2), "close": close, "volume": 100000.0 + ((day % 17) as f64) * 5000.0}));
+            bars.push(bagholder_store::bars::DayBar {
+                date: fmt(y, m, d),
+                px: bagholder_store::bars::Ohlcv {
+                    open: Some(open),
+                    high: Some(round_half_even(hi, 2)),
+                    low: Some(round_half_even(lo, 2)),
+                    close,
+                    volume: Some(100000.0 + ((day % 17) as f64) * 5000.0),
+                },
+            });
             prev = close;
         }
         let (y, m, d) = from_days(start);

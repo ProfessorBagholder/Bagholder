@@ -84,7 +84,7 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     const bare = markers.map((m) => ({ ...m, text: '' }))
     const slot: Record<string, number> = {}
     p.bars.forEach((b, i) => {
-      slot[String(b.date != null ? (b.date as string) : localTime(b.time as number))] = i
+      slot[String('date' in b ? (b.date as string) : localTime(b.time as number))] = i
     })
     const idx = markers.map((m) => slot[String(m.time)]).filter((i) => i != null).sort((a, b) => a - b)
     let labelled = false
@@ -131,7 +131,7 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     if (bars) {
       series!.setData(
         p.bars.map((b) => ({
-          time: (b.date != null ? b.date : localTime(b.time as number)) as Time,
+          time: ('date' in b ? b.date : localTime(b.time as number)) as Time,
           open: b.open as number,
           high: b.high as number,
           low: b.low as number,

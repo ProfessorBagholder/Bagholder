@@ -10,6 +10,8 @@ use serde_json::{json, Map, Value};
 
 use bagholder_model::value::{field_s, get, num};
 
+use crate::bars::{BarFetch, DayBar, HistoryFetch, Ohlcv, TimeBar};
+
 /// A number that is absent rather than zero.
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {
@@ -191,8 +193,9 @@ pub fn mark_distributions_fetched(conn: &Connection, symbol: &str, when: &str) -
 // daily history
 // --------------------------------------------------------------------------
 
-/// `price_history`: daily bars for one symbol, oldest first.
-pub fn price_history(conn: &Connection, symbol: &str, start: &str, end: &str) -> Result<Vec<Value>> {
+/// `price_history`: daily bars for one symbol, oldest first. A row whose
+/// close was never written (an old source's leftover) is skipped.
+pub fn price_history(conn: &Connection, symbol: &str, start: &str, end: &str) -> Result<Vec<DayBar>> {
     let sym = sym_of(symbol);
     if sym.is_empty() {
         return Ok(vec![]);
@@ -205,47 +208,28 @@ pub fn price_history(conn: &Connection, symbol: &str, start: &str, end: &str) ->
     let mut rows = stmt.query(rusqlite::params![sym, from, to])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(json!({
-            "date": r.get::<_, Option<String>>(0)?,
-            "open": r.get::<_, Option<f64>>(1)?,
-            "high": r.get::<_, Option<f64>>(2)?,
-            "low": r.get::<_, Option<f64>>(3)?,
-            "close": r.get::<_, Option<f64>>(4)?,
-            "volume": r.get::<_, Option<f64>>(5)?,
-        }));
+        let close: Option<f64> = r.get(4)?;
+        let close = match close { Some(c) => c, None => continue };
+        out.push(DayBar {
+            date: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            px: Ohlcv { open: r.get(1)?, high: r.get(2)?, low: r.get(3)?, close, volume: r.get(5)? },
+        });
     }
     Ok(out)
 }
 
-struct DayBar {
-    date: String,
-    open: Option<f64>,
-    high: Option<f64>,
-    low: Option<f64>,
-    close: f64,
-    volume: Option<f64>,
-}
-
 /// `upsert_price_history`.
-pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], source: &str) -> Result<usize> {
+pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[DayBar], source: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let sym = sym_of(symbol);
         let mut clean: Vec<DayBar> = Vec::new();
         for b in bars {
-            let d = head10(&field_s(b, "date"));
-            let close = opt_num(get(b, "close"));
-            let ok = d.len() == 10 && d.as_bytes()[4] == b'-' && close.map_or(false, |c| c > 0.0);
+            let d = head10(&b.date);
+            let ok = d.len() == 10 && d.as_bytes()[4] == b'-' && b.px.close > 0.0;
             if !ok {
                 continue;
             }
-            clean.push(DayBar {
-                date: d,
-                open: opt_num(get(b, "open")),
-                high: opt_num(get(b, "high")),
-                low: opt_num(get(b, "low")),
-                close: close.unwrap(),
-                volume: opt_num(get(b, "volume")),
-            });
+            clean.push(DayBar { date: d, px: b.px });
         }
         if sym.is_empty() || clean.is_empty() {
             return Ok(0);
@@ -259,7 +243,7 @@ pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], sou
         for c in &clean {
             conn.execute(
                 "INSERT OR IGNORE INTO price_history(symbol, date, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![sym, c.date, c.open, c.high, c.low, c.close, c.volume, source],
+                rusqlite::params![sym, c.date, c.px.open, c.px.high, c.px.low, c.px.close, c.px.volume, source],
             )?;
         }
         if !newest.is_empty() {
@@ -267,7 +251,7 @@ pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], sou
             for c in clean.iter().filter(|c| c.date == newest) {
                 conn.execute(
                     "UPDATE price_history SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND date = ?",
-                    rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, c.date],
+                    rusqlite::params![c.px.open, c.px.high, c.px.low, c.px.close, c.px.volume, source, sym, c.date],
                 )?;
             }
         }
@@ -275,16 +259,16 @@ pub fn upsert_price_history(conn: &Connection, symbol: &str, bars: &[Value], sou
     })
 }
 
-pub fn history_fetch(conn: &Connection, symbol: &str) -> Result<Value> {
+pub fn history_fetch(conn: &Connection, symbol: &str) -> Result<Option<HistoryFetch>> {
     let sym = sym_of(symbol);
     let mut stmt = conn.prepare("SELECT start, fetched_at FROM history_fetches WHERE symbol = ?")?;
     let mut rows = stmt.query([&sym])?;
     match rows.next()? {
-        Some(r) => Ok(json!({
-            "start": r.get::<_, Option<String>>(0)?,
-            "fetchedAt": r.get::<_, Option<String>>(1)?,
+        Some(r) => Ok(Some(HistoryFetch {
+            start: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            fetched_at: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
         })),
-        None => Ok(Value::Null),
+        None => Ok(None),
     }
 }
 
@@ -306,7 +290,7 @@ pub fn mark_history_fetched(conn: &Connection, symbol: &str, start: &str, when: 
 // --------------------------------------------------------------------------
 
 /// `price_bars`.
-pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_ts: i64) -> Result<Vec<Value>> {
+pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_ts: i64) -> Result<Vec<TimeBar>> {
     let sym = sym_of(symbol);
     let mut stmt = conn.prepare(
         "SELECT ts, open, high, low, close, volume FROM price_bars WHERE symbol = ? AND tf = ? AND ts >= ? AND ts <= ? ORDER BY ts",
@@ -314,40 +298,22 @@ pub fn price_bars(conn: &Connection, symbol: &str, tf: &str, start_ts: i64, end_
     let mut rows = stmt.query(rusqlite::params![sym, tf, start_ts, end_ts])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(json!({
-            "time": r.get::<_, i64>(0)?,
-            "open": r.get::<_, Option<f64>>(1)?,
-            "high": r.get::<_, Option<f64>>(2)?,
-            "low": r.get::<_, Option<f64>>(3)?,
-            "close": r.get::<_, Option<f64>>(4)?,
-            "volume": r.get::<_, Option<f64>>(5)?,
-        }));
+        let close: Option<f64> = r.get(4)?;
+        let close = match close { Some(c) => c, None => continue };
+        out.push(TimeBar {
+            time: r.get(0)?,
+            px: Ohlcv { open: r.get(1)?, high: r.get(2)?, low: r.get(3)?, close, volume: r.get(5)? },
+        });
     }
     Ok(out)
 }
 
 /// `upsert_price_bars`.
-pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Value], source: &str) -> Result<usize> {
+pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[TimeBar], source: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let sym = sym_of(symbol);
-        struct Bar { ts: i64, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64> }
-        let mut clean: Vec<Bar> = Vec::new();
-        for b in bars {
-            let time = get(b, "time");
-            let close = opt_num(get(b, "close"));
-            // a zero close is rejected too
-            match (time, close) {
-                (Some(t), Some(c)) if c > 0.0 => clean.push(Bar {
-                    ts: num(Some(t), 0.0) as i64,
-                    open: opt_num(get(b, "open")),
-                    high: opt_num(get(b, "high")),
-                    low: opt_num(get(b, "low")),
-                    close: c,
-                    volume: opt_num(get(b, "volume")),
-                }),
-                _ => continue,
-            }
-        }
+        // a zero close is rejected too
+        let clean: Vec<&TimeBar> = bars.iter().filter(|b| b.px.close > 0.0).collect();
         if sym.is_empty() || clean.is_empty() {
             return Ok(0);
         }
@@ -359,14 +325,14 @@ pub fn upsert_price_bars(conn: &Connection, symbol: &str, tf: &str, bars: &[Valu
         for c in &clean {
             conn.execute(
                 "INSERT OR IGNORE INTO price_bars(symbol, tf, ts, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![sym, tf, c.ts, c.open, c.high, c.low, c.close, c.volume, source],
+                rusqlite::params![sym, tf, c.time, c.px.open, c.px.high, c.px.low, c.px.close, c.px.volume, source],
             )?;
         }
         if let Some(n) = newest {
-            for c in clean.iter().filter(|c| c.ts == n) {
+            for c in clean.iter().filter(|c| c.time == n) {
                 conn.execute(
                     "UPDATE price_bars SET open = ?, high = ?, low = ?, close = ?, volume = ?, source = ? WHERE symbol = ? AND tf = ? AND ts = ?",
-                    rusqlite::params![c.open, c.high, c.low, c.close, c.volume, source, sym, tf, c.ts],
+                    rusqlite::params![c.px.open, c.px.high, c.px.low, c.px.close, c.px.volume, source, sym, tf, c.time],
                 )?;
             }
         }
@@ -385,16 +351,16 @@ pub fn last_bar_time(conn: &Connection, symbol: &str, tf: &str) -> Result<Option
     )
 }
 
-pub fn bar_fetch(conn: &Connection, symbol: &str, tf: &str) -> Result<Value> {
+pub fn bar_fetch(conn: &Connection, symbol: &str, tf: &str) -> Result<Option<BarFetch>> {
     let sym = sym_of(symbol);
     let mut stmt = conn.prepare("SELECT start_ts, fetched_at FROM bar_fetches WHERE symbol = ? AND tf = ?")?;
     let mut rows = stmt.query(rusqlite::params![sym, tf])?;
     match rows.next()? {
-        Some(r) => Ok(json!({
-            "startTs": r.get::<_, Option<i64>>(0)?,
-            "fetchedAt": r.get::<_, Option<String>>(1)?,
+        Some(r) => Ok(Some(BarFetch {
+            start_ts: r.get(0)?,
+            fetched_at: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
         })),
-        None => Ok(Value::Null),
+        None => Ok(None),
     }
 }
 

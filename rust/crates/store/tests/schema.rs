@@ -1,42 +1,51 @@
 //! Migrations run by `ensure` on a database an earlier version wrote.
 
 mod common;
+use bagholder_store::bars::{DayBar, Ohlcv, TimeBar};
 use bagholder_store::{feeds, market, schema};
 use common::*;
-use serde_json::{json, Value};
+use serde_json::json;
+
+fn day(date: &str, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64>) -> DayBar {
+    DayBar { date: date.to_string(), px: Ohlcv { open, high, low, close, volume } }
+}
+
+fn hour(time: i64, close: f64) -> TimeBar {
+    TimeBar { time, px: Ohlcv { open: Some(close), high: Some(close), low: Some(close), close, volume: Some(0.0) } }
+}
 
 #[test]
 fn test_replaced_sources_are_refetched_once() {
     let d = db();
     let c = &d.conn;
     let stamp = "2026-09-07T00:00:00Z";
-    market::upsert_price_history(c, "DOT", &[json!({"date": "2026-02-02", "open": null, "high": null, "low": null, "close": 9.5, "volume": null})], "coingecko").unwrap();
+    market::upsert_price_history(c, "DOT", &[day("2026-02-02", None, None, None, 9.5, None)], "coingecko").unwrap();
     market::mark_history_fetched(c, "DOT", "2026-02-02", stamp).unwrap();
-    market::upsert_price_history(c, "MAXQ", &[json!({"date": "2026-06-09", "open": 0.4, "high": 0.4, "low": 0.4, "close": 0.4, "volume": 1})], "cboe_ca").unwrap();
+    market::upsert_price_history(c, "MAXQ", &[day("2026-06-09", Some(0.4), Some(0.4), Some(0.4), 0.4, Some(1.0))], "cboe_ca").unwrap();
     market::mark_history_fetched(c, "MAXQ", "2025-10-14", stamp).unwrap();
-    market::upsert_price_history(c, "RDDY", &[json!({"date": "2026-02-02", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1})], "tmx").unwrap();
+    market::upsert_price_history(c, "RDDY", &[day("2026-02-02", Some(1.0), Some(1.0), Some(1.0), 1.0, Some(1.0))], "tmx").unwrap();
     market::mark_history_fetched(c, "RDDY", "2026-02-02", stamp).unwrap();
-    market::upsert_price_history(c, "USDC", &[json!({"date": "2026-02-25", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1})], "coinbase").unwrap();
+    market::upsert_price_history(c, "USDC", &[day("2026-02-25", Some(1.0), Some(1.0), Some(1.0), 1.0, Some(1.0))], "coinbase").unwrap();
     market::mark_history_fetched(c, "USDC", "2026-01-10", stamp).unwrap(); // claimed January, has late February
-    market::upsert_price_bars(c, "USDC", "1h", &[json!({"time": 1772000000, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0})], "coinbase").unwrap();
+    market::upsert_price_bars(c, "USDC", "1h", &[hour(1772000000, 1.0)], "coinbase").unwrap();
     market::mark_bars_fetched(c, "USDC", "1h", 1768000000, stamp).unwrap(); // claimed from 2026-01-10
-    market::upsert_price_bars(c, "RDDY", "1h", &[json!({"time": 1768003200, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0})], "tmx").unwrap();
+    market::upsert_price_bars(c, "RDDY", "1h", &[hour(1768003200, 1.0)], "tmx").unwrap();
     market::mark_bars_fetched(c, "RDDY", "1h", 1768000000, stamp).unwrap();
     c.execute("DELETE FROM meta WHERE key = 'history_sources_migrated'", []).unwrap();
     schema::init_schema(c).unwrap();
     let hist = |s: &str| market::price_history(c, s, "", "").unwrap();
-    assert_eq!(hist("DOT"), Vec::<Value>::new(), "close-only bars are gone");
-    assert_eq!(market::history_fetch(c, "DOT").unwrap(), Value::Null, "and their fetch stamp, so the chart refetches");
+    assert_eq!(hist("DOT"), Vec::<DayBar>::new(), "close-only bars are gone");
+    assert_eq!(market::history_fetch(c, "DOT").unwrap(), None, "and their fetch stamp, so the chart refetches");
     assert_eq!(hist("MAXQ").len(), 1, "Cboe's real bars stay");
-    assert_eq!(market::history_fetch(c, "MAXQ").unwrap(), Value::Null, "but the span is refetched from TMX, which reaches further back");
+    assert_eq!(market::history_fetch(c, "MAXQ").unwrap(), None, "but the span is refetched from TMX, which reaches further back");
     assert_eq!(hist("RDDY").len(), 1, "TMX candles stay");
-    assert_ne!(market::history_fetch(c, "RDDY").unwrap(), Value::Null);
+    assert_ne!(market::history_fetch(c, "RDDY").unwrap(), None);
     assert_eq!(hist("USDC").len(), 1, "real bars stay");
-    assert_eq!(market::history_fetch(c, "USDC").unwrap(), Value::Null, "a stamp claiming days its bars do not reach is dropped");
-    assert_eq!(market::bar_fetch(c, "USDC", "1h").unwrap(), Value::Null, "the same for intraday stamps");
-    assert_ne!(market::bar_fetch(c, "RDDY", "1h").unwrap(), Value::Null, "an honest intraday stamp stays");
+    assert_eq!(market::history_fetch(c, "USDC").unwrap(), None, "a stamp claiming days its bars do not reach is dropped");
+    assert_eq!(market::bar_fetch(c, "USDC", "1h").unwrap(), None, "the same for intraday stamps");
+    assert_ne!(market::bar_fetch(c, "RDDY", "1h").unwrap(), None, "an honest intraday stamp stays");
     // runs once: rows added afterwards under an old source name are left alone
-    market::upsert_price_history(c, "DOT", &[json!({"date": "2026-02-03", "open": null, "high": null, "low": null, "close": 9.6, "volume": null})], "coingecko").unwrap();
+    market::upsert_price_history(c, "DOT", &[day("2026-02-03", None, None, None, 9.6, None)], "coingecko").unwrap();
     schema::init_schema(c).unwrap();
     assert_eq!(hist("DOT").len(), 1);
 }

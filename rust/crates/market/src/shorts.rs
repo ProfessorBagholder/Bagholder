@@ -356,23 +356,23 @@ pub fn ca_traded(conn: &rusqlite::Connection, symbol: &str, exchange: &str, curr
         return None;
     }
     let code = crate::quotes::tmx_quote_symbol(symbol, exchange, currency)?;
-    let ask = |form: &str| -> Result<Option<Value>, FetchError> {
+    let ask = |form: &str| -> Result<Option<Vec<bagholder_store::bars::DayBar>>, FetchError> {
         let data = post_json(crate::tmx::TMX_URL, &json!({
             "operationName": "getTimeSeriesData",
             "variables": {"symbol": form, "freq": "day", "interval": 1, "start": start, "end": end},
             "query": TMX_HISTORY_QUERY,
         }), &crate::http::TMX_HEADERS)?;
         let bars = crate::parse::parse_tmx_history(&data);
-        Ok(if bars.is_empty() { None } else { Some(Value::Array(bars)) })
+        Ok(if bars.is_empty() { None } else { Some(bars) })
     };
     let bars = match crate::tmx::tmx_lookup_try(conn, &code, today, ask) {
-        Ok((b, _)) => b.and_then(|v| v.as_array().cloned()).unwrap_or_default(),
+        Ok((b, _)) => b.unwrap_or_default(),
         Err(e) => {
             eprintln!("bagholder shorts: {} traded volume failed: {}", symbol, e);
             return None;
         }
     };
-    let traded: Vec<f64> = bars.iter().filter_map(|b| num(b.get("volume")).filter(|v| *v != 0.0)).collect();
+    let traded: Vec<f64> = bars.iter().filter_map(|b| b.px.volume.filter(|v| *v != 0.0)).collect();
     if traded.is_empty() { None } else { Some(traded.iter().sum()) }
 }
 

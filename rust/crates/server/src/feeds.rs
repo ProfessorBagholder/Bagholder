@@ -4,16 +4,19 @@
 //! records, the intraday archive, the watched folder and the chart history.
 
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use ts_rs::TS;
 
 use bagholder_market::{disclosures, edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
 use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
+use bagholder_store::bars::ChartBars;
 use bagholder_store::feeds as sf;
 use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, json_text, set_meta};
@@ -2217,6 +2220,25 @@ pub fn history_pending(app: &Arc<App>, query: &str) -> bool {
     conn(app).map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
 }
 
+/// What a chart is sent for a span: the answer `history_payload` builds on
+/// success, generated to the page as `web/src/lib/generated/chart.ts`
+/// (`BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`).
+/// The failure case stays an ad hoc `{"ok": false, "error": ...}`, as it
+/// always has.
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartHistory {
+    pub ok: bool,
+    pub symbol: String,
+    pub chart_symbol: String,
+    pub source: String,
+    pub tf: String,
+    pub available: Vec<String>,
+    pub bars: ChartBars,
+    pub pending: bool,
+    pub reason: String,
+}
+
 pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
     let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
@@ -2232,24 +2254,33 @@ pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
     let c = conn(app);
     let available: Vec<&'static str> = c.as_ref().map(|c| history::offered_timeframes(c, &inst, &start, &today_s, now)).unwrap_or_default();
     let mut pending = false;
-    let bars: Vec<Value> = match &c {
-        None => vec![],
+    let bars: ChartBars = match &c {
+        None => ChartBars::default(),
         Some(c) => {
             if !(src.is_some() && available.contains(&tf.as_str())) {
-                vec![]
+                ChartBars::default()
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) && !history::intraday_ready(c, &inst, &tf, &start, &today_s, now) {
                 history::ensure_intraday_in_background(app.store(), inst.clone(), tf.clone(), start.clone(), end.clone());
                 pending = true;
-                vec![]
+                ChartBars::default()
             } else {
                 history::ensure_bars(c, &inst, &tf, &start, &end, &today_s, now, &stamp).unwrap_or_default()
             }
         }
     };
     let reason = if !bars.is_empty() || pending { String::new() } else { history::chart_reason(&inst, &tf) };
-    json!({"ok": true, "symbol": rec.symbol, "chartSymbol": inst.symbol,
-           "source": src.map(|x| x.0).unwrap_or_default(), "tf": tf, "available": available, "bars": bars, "pending": pending,
-           "reason": reason})
+    let payload = ChartHistory {
+        ok: true,
+        symbol: rec.symbol,
+        chart_symbol: inst.symbol,
+        source: src.map(|x| x.0).unwrap_or_default(),
+        tf,
+        available: available.into_iter().map(|s| s.to_string()).collect(),
+        bars,
+        pending,
+        reason,
+    };
+    serde_json::to_value(&payload).unwrap_or(Value::Null)
 }
 
 // ---------------------------------------------------------------------------

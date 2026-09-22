@@ -15,6 +15,7 @@ use crate::parse::{occ_code, option_mark, parse_cboe_ca_quote, parse_coinbase_re
 use crate::tmx;
 use bagholder_model::input::Listing;
 use bagholder_model::value::{field_s, get, num};
+use bagholder_store::bars::{Ohlcv, SourceBar};
 
 pub const QUOTE_REFRESH_MINUTES: f64 = 1.0;
 
@@ -118,7 +119,7 @@ pub fn instant_secs_public(s: &str) -> Option<f64> {
 /// Yahoo's `gmtoffset` is the offset today, not the bar's, so where the
 /// exchange names its zone each bar is given its own standard or daylight
 /// offset instead.
-pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
+pub fn parse_yahoo_chart(text: &str) -> Vec<SourceBar> {
     let d: Value = match serde_json::from_str(if text.is_empty() { "{}" } else { text }) { Ok(v) => v, Err(_) => return vec![] };
     let results = match d.get("chart").and_then(|c| c.get("result")).and_then(|r| r.as_array()) {
         Some(r) if !r.is_empty() => r,
@@ -141,7 +142,7 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
         q.get(k).and_then(|v| v.as_array()).and_then(|a| a.get(i)).and_then(|x| x.as_f64())
     };
 
-    let mut out: Vec<Value> = Vec::new();
+    let mut out: Vec<SourceBar> = Vec::new();
     for (i, t) in ts.iter().enumerate() {
         let t = match t.as_i64() { Some(t) => t, None => continue };
         let close = match col("close", i) { Some(c) if c > 0.0 => c, _ => continue };
@@ -155,13 +156,15 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<Value> {
                 (bagholder_model::dates::fmt(y, m, dd), (rem / 60) as i64, fixed)
             }
         };
-        out.push(json!({
-            "time": t, "day": day, "minute": minute, "offset": off,
-            "open": col("open", i), "high": col("high", i), "low": col("low", i),
-            "close": close, "volume": col("volume", i),
-        }));
+        out.push(SourceBar {
+            time: t,
+            day,
+            minute,
+            offset: off,
+            px: Ohlcv { open: col("open", i), high: col("high", i), low: col("low", i), close, volume: col("volume", i) },
+        });
     }
-    out.sort_by_key(|b| b.get("time").and_then(|v| v.as_i64()).unwrap_or(0));
+    out.sort_by_key(|b| b.time);
     out
 }
 
@@ -438,16 +441,15 @@ pub fn coinbase_prev_close(conn: &rusqlite::Connection, pair: &str, today: &str,
         let bars = crate::history::fetch_coinbase_candles(&product, 86400, now - 4 * 86400, now);
         let quoted = product.rsplit('-').next().unwrap_or("").to_string();
         let bars = crate::history::in_position_currency(conn, &bars, &quoted, &ccy);
-        let done: Vec<&Value> = bars
+        let done: Vec<&bagholder_store::bars::TimeBar> = bars
             .iter()
             .filter(|b| {
-                let ts = b["time"].as_i64().unwrap_or(0);
-                let (y, m, d) = bagholder_model::dates::from_days(ts.div_euclid(86400));
+                let (y, m, d) = bagholder_model::dates::from_days(b.time.div_euclid(86400));
                 bagholder_model::dates::fmt(y, m, d).as_str() < today
             })
             .collect();
         if let Some(last) = done.last() {
-            prev = last["close"].as_f64();
+            prev = Some(last.px.close);
             break;
         }
     }

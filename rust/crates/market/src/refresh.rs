@@ -86,10 +86,8 @@ pub fn refresh_tmx_index(conn: &Connection, key: &str) -> usize {
     let data = match post_json(TMX_URL, &payload, &TMX_HEADERS) { Ok(d) => d, Err(_) => return 0 };
     let mut mapping = Series::new();
     for b in parse_tmx_history(&data) {
-        if let Some(close) = b.get("close").and_then(|c| c.as_f64()) {
-            if close != 0.0 {
-                mapping.insert(bagholder_model::value::field_s(&b, "date"), close);
-            }
+        if b.px.close != 0.0 {
+            mapping.insert(b.date, b.px.close);
         }
     }
     if mapping.is_empty() {

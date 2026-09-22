@@ -6,22 +6,13 @@
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
 import { lookup } from '../api'
+import type { ChartHistory, DayBar, TimeBar } from '../generated/chart'
 
-export interface Bar {
-  date?: string | null
-  time?: number
-  open: number | null
-  high: number | null
-  low: number | null
-  close: number | null
-}
-export interface History {
-  reason: string
-  bars: Bar[]
-  available: string[]
-  chartSymbol: string
-  pending: boolean
-}
+export type { DayBar, TimeBar } from '../generated/chart'
+// A daily (or weekly/monthly) bar has a `date`; an intraday one has a `time`
+// instead -- never both. `'date' in b` tells the two apart.
+export type Bar = DayBar | TimeBar
+export type History = Pick<ChartHistory, 'reason' | 'available' | 'chartSymbol' | 'pending'> & { bars: Bar[] }
 export interface ChartColors {
   text: string
   grid: string
@@ -74,15 +65,8 @@ function chartSpan(t: Trade): { from: string; to: string } {
   return { from, to }
 }
 
-interface HistoryAnswer {
-  reason?: string
-  bars?: Bar[]
-  available?: string[]
-  chartSymbol?: string
-  pending?: boolean
-}
 // bars still being read are not the answer: asked again when they are in
-const histories = lookup<HistoryAnswer>({ keep: (a) => !a.pending })
+const histories = lookup<ChartHistory>({ keep: (a) => !a.pending })
 /** A server started again may have other bars, or a source it did not have: ask it. */
 export function forgetHistory(): void {
   histories.forget()
@@ -132,8 +116,8 @@ export interface FillMarker {
 // A fill sits on the bar that contains it: by date on daily and coarser bars, by
 // bucket on intraday ones.
 export function fillMarkers(fills: Fill[], bars: Bar[], c: ChartColors): FillMarker[] {
-  const keys = bars.map((b) => (b.date != null ? (b.date as string | number) : (b.time as number)))
-  const keyOf = (f: Fill) => (bars.length && bars[0].date != null ? f.date : Math.round(Date.parse(f.when) / 1000))
+  const keys = bars.map((b) => ('date' in b ? (b.date as string | number) : (b.time as number)))
+  const keyOf = (f: Fill) => (bars.length && 'date' in bars[0] ? f.date : Math.round(Date.parse(f.when) / 1000))
   const onBar = (k: string | number) => {
     let best: string | number | null = null
     for (const x of keys) {
