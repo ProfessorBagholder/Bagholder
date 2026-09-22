@@ -2533,6 +2533,55 @@ mod tests {
         assert_eq!(out["filings"], json!([]));
     }
 
+    /// What the page is sent of a listing's disclosures, pinned in
+    /// `tests/golden/filings_payload.json` with what depends on this machine or
+    /// on the clock (whether a source is reachable here, the stamps, the local
+    /// model's state) left out. After an intended change:
+    /// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_disclosures_the_page_is_sent`.
+    #[test]
+    fn test_the_disclosures_the_page_is_sent_are_what_they_were() {
+        let _g = crate::tests_common::guard();
+        fn mask(v: &mut Value) {
+            match v {
+                Value::Object(m) => {
+                    for k in ["available", "fetchedAt", "enrichedAt", "summaryStatus", "summaryAvailable"] {
+                        if m.contains_key(k) {
+                            m.insert(k.into(), json!("*"));
+                        }
+                    }
+                    m.values_mut().for_each(mask);
+                }
+                Value::Array(a) => a.iter_mut().for_each(mask),
+                _ => {}
+            }
+        }
+        let c = store();
+        let mut form4 = item("SEC", 5, "");
+        form4["type"] = json!("4");
+        form4["title"] = json!("");
+        let fetch = stub(
+            json!([item("SEDAR+", 1, "000037100"), item("SEDAR+", 3, "000037100"), item("SEC", 2, ""), item("SEC", 4, ""), form4]),
+            json!({"SEDAR+": {"available": true, "matched": true, "filer": true, "count": 2, "error": ""},
+                   "SEC": {"available": true, "matched": true, "filer": true, "count": 3, "error": ""}}),
+        );
+        let first = payload(&c, "SHOP", &fetch);
+        enrichment(&c, "SHOP", "sec:2", "Quarterly report", "Revenue rose.", ENRICH_VERSION);
+        enrichment(&c, "SHOP", "sedar:1", "An old reading", "Read by an older logic.", ENRICH_VERSION - 1);
+        sf::set_filing_enrichment(&c, "SHOP", "sedar:3", Some("Interim MD&A"), None, Some(ENRICH_VERSION), Some(true), &now_iso()).unwrap();
+        let again = filings_payload_in(&app(), &c, "SHOP", false, &|| panic!("fresh: not read again"));
+        let enriched = filings_enrich_in(&c, "SHOP", "sec:2", &fake(true, ("x", "y"), false));
+        let mut have = json!({"first": first, "again": again, "enriched": enriched});
+        mask(&mut have);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/filings_payload.json");
+        if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&have).unwrap() + "\n").unwrap();
+            return;
+        }
+        let want: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("tests/golden/filings_payload.json")).unwrap();
+        assert_eq!(have, want, "the disclosures the page is sent are not what they were");
+    }
+
     #[test]
     fn test_empty_symbol_is_rejected() {
         let _g = crate::tests_common::guard();
