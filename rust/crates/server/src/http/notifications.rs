@@ -42,8 +42,9 @@ async fn settings(State(state): State<AppState>, Body(patch): Body<Map<String, V
 }
 
 async fn test(State(state): State<AppState>) -> Api {
-    with_store(&state, |conn| {
-        let row = notify::test_notification(conn);
+    let app = state.app.clone();
+    with_store(&state, move |conn| {
+        let row = notify::test_notification(&app, conn);
         Ok(json!({"ok": row.is_some(), "id": row.as_ref().and_then(|r| r.get("id").cloned()).unwrap_or(json!(0))}))
     })
     .await

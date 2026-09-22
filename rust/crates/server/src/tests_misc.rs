@@ -5,13 +5,14 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::app::{self, app};
+use crate::app;
+use crate::tests_common::{app, app_ref};
 use crate::update;
 
 /// The shared app, its store's schema in place.
 fn guard() -> std::sync::MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
-    bagholder_store::relabel::ensure(&app().open().unwrap()).unwrap();
+    bagholder_store::relabel::ensure(&app_ref().open().unwrap()).unwrap();
     g
 }
 
@@ -53,20 +54,20 @@ fn insert_local(conn: &Connection, row: Value) {
 #[test]
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
-    let conn = app().open().unwrap();
-    let v0 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
+    let conn = app_ref().open().unwrap();
+    let v0 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     assert!(!v0.is_empty());
     let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
     bagholder_store::market::upsert_quote(&conn, "RDDY", &json!({"price": price, "fetchedAt": "2026-09-07T15:00:00Z"}), "tmx", &app::now_iso()).unwrap();
-    let v1 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
+    let v1 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     assert_ne!(v0, v1);
     bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2026-09-30", "payDate": "2026-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
-    let v2 = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
+    let v2 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     // the shared home may already hold this row: then a second, later one moves it
     if v1 == v2 {
         bagholder_store::market::upsert_distributions(&conn, "RDDY", &[json!({"exDate": "2099-09-30", "payDate": "2099-10-05", "amount": 0.2, "currency": "CAD"})], "tmx").unwrap();
     }
-    assert_ne!(v1, crate::status::payload()["dataVersion"].as_str().unwrap());
+    assert_ne!(v1, crate::status::payload(&app())["dataVersion"].as_str().unwrap());
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
     let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
     app().invalidate();
@@ -77,17 +78,17 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
 #[test]
 fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight() {
     let _g = guard();
-    let v = crate::status::payload()["dataVersion"].as_str().unwrap().to_string();
+    let v = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
     assert!(v.ends_with(&format!("|{}", bagholder_model::clock::today_local())), "{}", v);
 }
 
 #[test]
 fn test_page_and_server_agree_on_the_protocol_stamp() {
     let _g = guard();
-    let page = std::fs::read_to_string(crate::feeds::ledger_path()).unwrap();
+    let page = std::fs::read_to_string(crate::feeds::ledger_path(&app())).unwrap();
     let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&page).expect("PROTOCOL on the page");
     assert_eq!(&m[1], app::PROTOCOL);
-    assert_eq!(crate::status::payload()["protocol"], app::PROTOCOL);
+    assert_eq!(crate::status::payload(&app())["protocol"], app::PROTOCOL);
 }
 
 #[test]
@@ -129,7 +130,7 @@ impl UpdateFakes {
 impl Drop for UpdateFakes {
     fn drop(&mut self) {
         *update::FAKE_RELEASE.lock().unwrap() = None;
-        if let Ok(c) = app().open() {
+        if let Ok(c) = app_ref().open() {
             let _ = c.execute("DELETE FROM meta WHERE key = 'update_check'", []);
             let _ = c.execute("DELETE FROM notifications WHERE key LIKE 'update:%'", []);
         }
@@ -138,8 +139,8 @@ impl Drop for UpdateFakes {
 }
 
 fn set_checked_at(secs_ago: f64) {
-    let c = app().open().unwrap();
-    let mut rec = update::update_status();
+    let c = app_ref().open().unwrap();
+    let mut rec = update::update_status(&app());
     rec["checkedAt"] = json!(app::stamp_of((app::now_unix() - secs_ago) as i64));
     bagholder_store::tables::set_meta(&c, "update_check", &rec.to_string()).unwrap();
 }
@@ -156,34 +157,34 @@ fn test_update_check_flags_only_a_newer_release() {
     let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
     let older = "v0.9.0";
     let fakes = UpdateFakes::new(Some(json!({"tag_name": format!("v{}", app::APP_VERSION), "html_url": "https://github.com/x/y/releases/tag/v1"})));
-    let rec = update::check_for_update();
+    let rec = update::check_for_update(&app());
     assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool()), (Some(true), Some(false)), "same release: no flag");
     fakes.answer(Some(json!({"tag_name": older, "html_url": "u"})));
-    assert_eq!(update::check_for_update()["updateAvailable"], false, "an older release never flags");
+    assert_eq!(update::check_for_update(&app())["updateAvailable"], false, "an older release never flags");
     fakes.answer(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/ProfessorBagholder/Bagholder/releases/tag/{}", newer)})));
     set_checked_at(30.0 * 60.0);
-    update::check_for_update_if_due();
+    update::check_for_update_if_due(&app());
     assert_eq!(fakes.calls(), 0, "checked half an hour ago: GitHub is not asked again");
     set_checked_at(2.0 * 3600.0);
-    let rec = update::check_for_update_if_due();
+    let rec = update::check_for_update_if_due(&app());
     assert_eq!((rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(newer.as_str())));
-    let st = crate::status::payload();
+    let st = crate::status::payload(&app());
     assert_eq!(
         (st["version"].clone(), st["latestVersion"].clone(), st["updateAvailable"].clone(), st["updateUrl"].clone()),
         (json!(app::APP_VERSION), json!(newer), json!(true), rec["url"].clone())
     );
     fakes.answer(None);
-    let rec = update::check_for_update();
+    let rec = update::check_for_update(&app());
     assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool()), (Some(false), Some(false)), "offline: silent, no flag");
     fakes.answer(Some(json!({"message": "Not Found"})));
-    assert_eq!(update::check_for_update()["updateAvailable"], false, "no release published yet: nothing to flag");
+    assert_eq!(update::check_for_update(&app())["updateAvailable"], false, "no release published yet: nothing to flag");
 }
 
 #[test]
 fn test_history_endpoint_validates_and_serves_bars() {
     let _g = guard();
-    assert_eq!(crate::feeds::history_payload("symbol=RDDY")["ok"], false);
-    assert_eq!(crate::feeds::history_payload("symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h")["ok"], false);
+    assert_eq!(crate::feeds::history_payload(&app(), "symbol=RDDY")["ok"], false);
+    assert_eq!(crate::feeds::history_payload(&app(), "symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h")["ok"], false);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +267,12 @@ fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
 #[test]
 fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twelve() {
     let _g = guard();
-    let conn = app().open().unwrap();
+    let conn = app_ref().open().unwrap();
     let saved = bagholder_store::tables::get_meta(&conn, bagholder_store::snapshot::TILES_META, "").unwrap();
     bagholder_store::admin::save_tiles(&conn, &[json!({"symbol": "VIX", "exchange": "Index"}), json!({"symbol": "GC", "exchange": "COMEX"})]).unwrap();
     app().invalidate();
     let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
-    assert_eq!(crate::feeds::tiles_set(&json!({"tiles": too_many}))["ok"], false);
+    assert_eq!(crate::feeds::tiles_set(&app(), &json!({"tiles": too_many}))["ok"], false);
     let b = app().base().unwrap();
     let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
     assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
@@ -341,32 +342,32 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
     let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
     let _fakes = UpdateFakes::new(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/x/y/releases/tag/{}", newer), "assets": [{"name": format!("bagholder-{}-web.zip", newer), "browser_download_url": "u"}]})));
     std::env::set_var("BAGHOLDER_NO_UPDATE", "1");
-    let rec = update::check_for_update();
-    let st = crate::status::payload();
-    let out = update::start_update();
+    let rec = update::check_for_update(&app());
+    let st = crate::status::payload(&app());
+    let out = update::start_update(&app());
     std::env::remove_var("BAGHOLDER_NO_UPDATE");
     assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(true), Some(newer.as_str())));
     assert_eq!((st["updateBy"].as_str(), st["updateUrl"].clone()), (Some("image"), json!(update::image_page())), "told of the release, sent to the image");
     assert_eq!((out["ok"].as_bool(), out["error"].as_str()), (Some(false), Some(update::UPDATES_OFF_MESSAGE)));
-    assert_eq!(crate::status::payload()["updateBy"], "app");
+    assert_eq!(crate::status::payload(&app())["updateBy"], "app");
 }
 
 #[test]
 fn test_update_button_refuses_during_a_sync() {
     let _g = guard();
     let _fakes = UpdateFakes::new(None);
-    let conn = app().open().unwrap();
+    let conn = app_ref().open().unwrap();
     bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": true, "latest": "v9.9.9", "assets": {"archive": "z", "sha": "s"}}).to_string()).unwrap();
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app_ref().state.lock().unwrap();
         st.syncing = true;
         st.updating.clear();
     }
-    let during = update::start_update();
+    let during = update::start_update(&app());
     app().state.lock().unwrap().syncing = false;
     assert_eq!(during["ok"], false);
     bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": false}).to_string()).unwrap();
-    assert_eq!(update::start_update()["ok"], false, "nothing to install");
+    assert_eq!(update::start_update(&app())["ok"], false, "nothing to install");
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +382,7 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     // security records the sync brought, then TMX's resolver, which names the venue it verified
     // by the quote. A ticker TMX cannot place is a US one.
     let _g = guard();
-    let c = app().open().unwrap();
+    let c = app_ref().open().unwrap();
     let today = bagholder_market::clock_now().0;
     let seen = std::sync::Mutex::new((Vec::<String>::new(), None::<String>));
     let get = |url: &str, _: &[(&str, &str)]| -> Result<String, NetError> {
@@ -398,19 +399,19 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     let readers = Readers { wire: &wire, extra: &extra };
     // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
     bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
-    let out = crate::feeds::news_symbol_payload_with("QIMC", "", "", &readers, &|_, _, _| None);
+    let out = crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| None);
     assert_eq!((out["source"].as_str().unwrap(), seen.lock().unwrap().1.clone()), ("tmx", Some("QIMC:CNX".to_string())));
     *seen.lock().unwrap() = (vec![], None);
     // TMX cannot place it: Nasdaq, whose items name the symbols they belong to
     bagholder_store::tables::set_meta(&c, "tmx_form:KO", &format!("none@{}", today)).unwrap();
-    let out = crate::feeds::news_symbol_payload_with("KO", "", "", &readers, &|_, _, _| None);
+    let out = crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| None);
     assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NASDAQ", false));
 }
 
 #[test]
 fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
     let _g = guard();
-    let c = app().open().unwrap();
+    let c = app_ref().open().unwrap();
     let now = bagholder_market::clock_now().1 as i64;
     // every source read a moment ago: only a forced read asks them again
     for k in news::EXTRA_SOURCES {
@@ -426,7 +427,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
         Ok(Some(vec![]))
     };
     let listing = |_: &Connection, _: &str, _: &str| Some(json!({"symbol": "SXHI", "name": "Ninepoint SpaceX HighShares ETF", "exchange": "TSX", "currency": "CAD"}));
-    let out = crate::feeds::news_symbol_payload_with("SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing);
+    let out = crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing);
     assert_eq!(out["exchange"], "TSX");
     let got = read.lock().unwrap().clone();
     assert_eq!(got.0, Some(("SXHI".to_string(), "TSX".to_string(), "CAD".to_string())));
@@ -438,8 +439,8 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
 fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root() {
     let _g = guard();
     assert!(app().root.join("ledger.html").is_file(), "the root is the repository's");
-    assert_eq!(update::cargo_dir(), app().root.join("rust"));
-    assert!(update::cargo_dir().join("Cargo.toml").is_file());
+    assert_eq!(update::cargo_dir(&app()), app().root.join("rust"));
+    assert!(update::cargo_dir(&app()).join("Cargo.toml").is_file());
 }
 
 /// Every place the code waits on a clock, by file, with why it may. A wait that is

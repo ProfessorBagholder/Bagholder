@@ -18,21 +18,21 @@ use bagholder_store::feeds as sf;
 use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, json_text, set_meta};
 
-use crate::app::{app, f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, ENRICH_VERSION};
+use crate::app::{f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, App, ENRICH_VERSION};
 use crate::notify;
 
-fn conn() -> Option<bagholder_store::pool::Pooled<'static>> {
-    app().open().ok()
+fn conn(app: &Arc<App>) -> Option<bagholder_store::pool::Pooled<'_>> {
+    app.open().ok()
 }
 
 /// A connection of the caller's own, not the pool's: for work that hands it to
 /// threads it starts itself and keeps it for the length of a pass.
-fn own_conn() -> Option<Connection> {
-    bagholder_store::connect(&app().home).ok()
+fn own_conn(app: &Arc<App>) -> Option<Connection> {
+    bagholder_store::connect(&app.home).ok()
 }
 
-fn base() -> Option<Arc<Base>> {
-    app().base().ok()
+fn base(app: &Arc<App>) -> Option<Arc<Base>> {
+    app.base().ok()
 }
 
 fn is_true(v: &Value, k: &str) -> bool {
@@ -63,9 +63,9 @@ enum ExposureJob {
 
 /// The exposure record of every held security
 /// that has none or an old one, four at a time, each shown as it lands.
-pub fn refresh_exposures() -> Value {
-    let c = match conn() { Some(c) => c, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
-    let b = match base() { Some(b) => b, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
+pub fn refresh_exposures(app: &Arc<App>) -> Value {
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
+    let b = match base(app) { Some(b) => b, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
     let snap = bagholder_store::snapshot::snapshot(&c, false).unwrap_or(json!({}));
     let mut secs: HashMap<String, Value> = HashMap::new();
     for sec in snap.get("securities").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
@@ -84,7 +84,7 @@ pub fn refresh_exposures() -> Value {
     let mut held: Vec<String> = held.into_iter().filter(|sid| !sid.is_empty() && !sid.starts_with("sec-c-")).collect();
     held.sort();
     let (today_s, _, _) = bagholder_market::clock_now();
-    let ctx = exposure::Ctx { conn: &c, db: app().db_path(), today: today_s.clone() };
+    let ctx = exposure::Ctx { conn: &c, db: app.db_path(), today: today_s.clone() };
     let mut todo: Vec<String> = exposure::stale(&ctx, &held).into_iter().filter(|sid| secs.contains_key(sid)).collect();
     todo.sort_by_key(|sid| if exposure::is_fund(&f(&secs[sid], "name")) { 1 } else { 0 });
     let mut unders: Vec<(String, String)> = b
@@ -123,12 +123,13 @@ pub fn refresh_exposures() -> Value {
         let queue = queue.clone();
         let done = done.clone();
         let today_s = today_s.clone();
+        let app = app.clone();
         let h = std::thread::Builder::new().name("bagholder-exposure".into()).spawn(move || {
-            let c = match conn() { Some(c) => c, None => return };
-            let ctx = exposure::Ctx { conn: &c, db: app().db_path(), today: today_s };
+            let c = match conn(&app) { Some(c) => c, None => return };
+            let ctx = exposure::Ctx { conn: &c, db: app.db_path(), today: today_s };
             loop {
                 let job = match queue.lock().unwrap().pop_front() { Some(j) => j, None => return };
-                if app().stopping() {
+                if app.stopping() {
                     continue;
                 }
                 let line = match job {
@@ -171,19 +172,19 @@ pub fn refresh_exposures() -> Value {
 }
 
 /// Soon after start and every half hour.
-pub fn exposure_loop() {
+pub fn exposure_loop(app: Arc<App>) {
     // What a fund holds changes over months. The records are looked over shortly after
     // start, then when the set of listings they are kept for changes (a trade, a
     // watchlist row), and otherwise a few times a day -- not every half hour for ever.
-    let listed = || conn().and_then(|c| bagholder_store::gens::all(&c).ok()).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"])).unwrap_or_default();
-    if app().wait(Duration::from_secs(EXPOSURE_FIRST_SEC)) {
+    let listed = || conn(&app).and_then(|c| bagholder_store::gens::all(&c).ok()).map(|g| bagholder_store::gens::key(&g, &["activities", "watchlist", "securities"])).unwrap_or_default();
+    if app.wait(Duration::from_secs(EXPOSURE_FIRST_SEC)) {
         return;
     }
     loop {
         let before = listed();
-        refresh_exposures();
-        crate::events::park_until_or(Duration::from_secs(6 * 3600), || listed() != before);
-        if app().stopping() {
+        refresh_exposures(&app);
+        crate::events::park_until_or(&app, Duration::from_secs(6 * 3600), || listed() != before);
+        if app.stopping() {
             return;
         }
     }
@@ -195,8 +196,8 @@ pub fn exposure_loop() {
 
 pub const TILES_MAX: usize = 12;
 
-fn refresh_quote_symbols(what: &str, sym: &str) -> bool {
-    let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return false };
+fn refresh_quote_symbols(app: &Arc<App>, what: &str, sym: &str) -> bool {
+    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return false };
     let (today_s, now, stamp) = bagholder_market::clock_now();
     match bagholder_market::quotes::refresh_quotes(&c, &bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)), &today_s, now, &stamp) {
         Ok(_) => {
@@ -213,40 +214,41 @@ fn refresh_quote_symbols(what: &str, sym: &str) -> bool {
     }
 }
 
-pub fn watch_add(body: &Value) -> Value {
+pub fn watch_add(app: &Arc<App>, body: &Value) -> Value {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
     let ex = f(body, "exchange");
     let inst = instruments::find(&sym, &ex);
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "name"));
     let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "currency"));
     let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &f(body, "securityId"), &now_iso()).ok().flatten().unwrap_or(json!({}));
     let is_inst = inst.is_some();
     let crypto = ex.to_uppercase() == "CRYPTO";
     let sym2 = sym.clone();
+    let a = app.clone();
     spawn("watch-fetch", move || {
         // its quote and its sector, from the same public sources a holding uses
-        refresh_quote_symbols("watchlist", &sym2);
+        refresh_quote_symbols(&a, "watchlist", &sym2);
         if is_inst || crypto {
             return;
         }
-        if let Some(c) = conn() {
-            let ctx = exposure::Ctx { conn: &c, db: app().db_path(), today: today() };
+        if let Some(c) = conn(&a) {
+            let ctx = exposure::Ctx { conn: &c, db: a.db_path(), today: today() };
             exposure::share_exposure(&ctx, &f(&row, "symbol"), &f(&row, "exchange"), &f(&row, "currency"));
         }
     });
     json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
 }
 
-pub fn watch_remove(body: &Value) -> Value {
+pub fn watch_remove(app: &Arc<App>, body: &Value) -> Value {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let ex = f(body, "exchange");
     let _ = sf::remove_watch(&c, &sym, &ex);
     // a row kept under Wealthsimple's form
@@ -257,7 +259,7 @@ pub fn watch_remove(body: &Value) -> Value {
 
 /// The Markets tab's tile row, only instruments the
 /// directory knows, twelve at most.
-pub fn tiles_set(body: &Value) -> Value {
+pub fn tiles_set(app: &Arc<App>, body: &Value) -> Value {
     let mut rows: Vec<Value> = Vec::new();
     let mut seen: HashSet<&'static str> = HashSet::new();
     for r in body.get("tiles").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
@@ -273,12 +275,13 @@ pub fn tiles_set(body: &Value) -> Value {
     if rows.len() > TILES_MAX {
         return json!({"ok": false, "error": format!("at most {} tiles", TILES_MAX)});
     }
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let _ = bagholder_store::admin::save_tiles(&c, &rows);
-    spawn("tiles-fetch", || {
-        refresh_quote_symbols("tiles", "");
+    let a = app.clone();
+    spawn("tiles-fetch", move || {
+        refresh_quote_symbols(&a, "tiles", "");
     });
-    let tiles = base().map(|b| bagholder_model::markets::tile_rows(&b)).unwrap_or_default();
+    let tiles = base(app).map(|b| bagholder_model::markets::tile_rows(&b)).unwrap_or_default();
     json!({"ok": true, "tiles": tiles})
 }
 
@@ -290,9 +293,9 @@ pub fn tiles_set(body: &Value) -> Value {
 /// read, under its bare ticker: the book's QNC.TO and the watchlist's QNC are
 /// the same wire. The name the book records for it is what Google is searched
 /// for.
-pub fn news_listings() -> Vec<news::Listing> {
+pub fn news_listings(app: &Arc<App>) -> Vec<news::Listing> {
     let mut out = vec![(news::MARKET.0.to_string(), news::MARKET.1.to_string(), news::MARKET.2.to_string(), String::new())];
-    let b = match base() { Some(b) => b, None => return out };
+    let b = match base(app) { Some(b) => b, None => return out };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for p in b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares) {
         let key = (tmx_symbol(&p.symbol), p.exchange.to_uppercase());
@@ -325,9 +328,9 @@ pub fn news_reading() -> Vec<String> {
 /// items reach the model as it lands, and the listings still to read are in
 /// the status, so the News card says a read is under way instead of `No
 /// news.` while a pass runs.
-pub fn refresh_news() -> usize {
-    app().single_flight("news", 0, || {
-        let listings = news_listings();
+pub fn refresh_news(app: &Arc<App>) -> usize {
+    app.single_flight("news", 0, || {
+        let listings = news_listings(app);
         let (today_s, now, _) = bagholder_market::clock_now();
         let clock = news::Clock { today: today_s, now: now as i64 };
         let key = |l: &news::Listing| { let t = tmx_symbol(&l.0); (if t.is_empty() { l.0.clone() } else { t }).to_uppercase() };
@@ -339,8 +342,8 @@ pub fn refresh_news() -> usize {
             news_pass().lock().unwrap().remove(&key(l));
             crate::events::signal();
         };
-        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(c, sym, ex, rows, ids);
-        let got = news::refresh(&own_conn, &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
+        let on_new = |c: &Connection, sym: &str, ex: &str, rows: &[Value], ids: &[String]| note_wire_releases(app, c, sym, ex, rows, ids);
+        let got = news::refresh(&|| own_conn(app), &news::LIVE_READERS, &listings, &clock, Some(&on_new), Some(&start), Some(&done), news::LISTINGS_AT_ONCE);
         news_pass().lock().unwrap().clear();
         crate::events::signal();
         match got {
@@ -356,15 +359,15 @@ pub fn refresh_news() -> usize {
 /// At start, then every five minutes, each listing read once per fifteen.
 /// Whether anyone is owed the news: a page is open to show it, or a Releases
 /// notification set is on and must hear of a release with no page open.
-fn news_wanted() -> bool {
-    crate::events::watchers() > 0 || conn().map_or(false, |c| crate::notify::any_release_scope(&c))
+fn news_wanted(app: &Arc<App>) -> bool {
+    crate::events::watchers() > 0 || conn(app).map_or(false, |c| crate::notify::any_release_scope(&c))
 }
 
-pub fn news_loop() {
+pub fn news_loop(app: Arc<App>) {
     // no wire pushes, so the sources are read; but only while someone is owed them
-    while crate::events::park_until(news_wanted) {
-        refresh_news();
-        if app().wait(Duration::from_secs(300)) {
+    while crate::events::park_until(&app, || news_wanted(&app)) {
+        refresh_news(&app);
+        if app.wait(Duration::from_secs(300)) {
             return;
         }
     }
@@ -374,11 +377,12 @@ pub fn news_loop() {
 /// a ticker neither held nor watched has no rows until asked for. The rows are
 /// stored under the listing (tagged as neither held nor watched, so they show
 /// only under its chip) and the model reloads.
-pub fn news_symbol_payload(symbol: &str, exchange: &str, currency: &str) -> Value {
-    news_symbol_payload_with(symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today))
+pub fn news_symbol_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> Value {
+    news_symbol_payload_with(app, symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today))
 }
 
 pub fn news_symbol_payload_with(
+    app: &Arc<App>,
     symbol: &str,
     exchange: &str,
     currency: &str,
@@ -389,7 +393,7 @@ pub fn news_symbol_payload_with(
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "the wire did not answer"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "the wire did not answer"}) };
     let (today_s, now, _) = bagholder_market::clock_now();
     let clock = news::Clock { today: today_s.clone(), now: now as i64 };
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
@@ -512,12 +516,12 @@ fn providers_cover(sym: &str, ex: &str, ccy: &str) -> bool {
 }
 
 /// The tickers to watch for filings.
-pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
+pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<Value> {
     let has = |k: &str| scopes.iter().any(|x| x == k);
     let mut rows: Vec<Value> = Vec::new();
     let mut b = None;
     if has("held") || has("all") {
-        match app().base() {
+        match app.base() {
             Ok(x) => b = Some(x),
             Err(e) => log(&format!("bagholder disclosures: the book not read for the sweep: {}", e)),
         }
@@ -539,7 +543,7 @@ pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
         }
     }
     if has("watched") || has("all") {
-        if let Some(c) = conn() {
+        if let Some(c) = conn(app) {
             rows.extend(sf::list_watchlist(&c).unwrap_or_default());
         }
     }
@@ -564,15 +568,15 @@ pub fn known_filing_symbols(scopes: &[String]) -> Vec<Value> {
 /// While a Disclosures or Releases set is on, each
 /// chosen ticker not read within half an hour is read again and what is new is
 /// told. Returns how many tickers had something new.
-pub fn sweep_filings() -> usize {
-    let c = match conn() { Some(c) => c, None => return 0 };
+pub fn sweep_filings(app: &Arc<App>) -> usize {
+    let c = match conn(app) { Some(c) => c, None => return 0 };
     let scopes = notify::disclosure_scopes(&c);
     let rel_scopes = notify::release_scopes(&c);
     if scopes.is_empty() && rel_scopes.is_empty() {
         return 0;
     }
     let mut told = 0;
-    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(&scopes).iter().map(|i| f(i, "symbol")).collect() };
+    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes).iter().map(|i| f(i, "symbol")).collect() };
     let hold = !disc_syms.is_empty() && naming_held(&c, !can_name_documents());
     let mut both: Vec<String> = scopes.clone();
     for r in &rel_scopes {
@@ -580,7 +584,7 @@ pub fn sweep_filings() -> usize {
             both.push(r.clone());
         }
     }
-    for inst in known_filing_symbols(&both) {
+    for inst in known_filing_symbols(app, &both) {
         let sym = f(&inst, "symbol");
         if !filings_stale(&c, &sym, Some(FILINGS_SWEEP_AGE_MIN / 60.0)) {
             continue;
@@ -590,7 +594,7 @@ pub fn sweep_filings() -> usize {
         }
         let before: HashSet<[String; 5]> = sf::filings_for(&c, &sym).unwrap_or_default().iter().map(filing_mark).collect();
         let name = f(&inst, "name");
-        let wrote = refresh_filings(&sym, if name.is_empty() { None } else { Some(&name) }, Some(&f(&inst, "exchange")), Some(&f(&inst, "currency")));
+        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&f(&inst, "exchange")), Some(&f(&inst, "currency")));
         if wrote < 0 {
             continue;
         }
@@ -618,16 +622,16 @@ pub fn sweep_filings() -> usize {
         let rel: Vec<Value> = new.iter().filter(|r| is_news_release(r)).cloned().collect();
         let rest: Vec<Value> = new.iter().filter(|r| !is_news_release(r)).cloned().collect();
         let mut said = false;
-        if !rel.is_empty() && in_release_scope(&c, &sym, Some(&rel_scopes)) && !sf::has_wire_release(&c, &sym).unwrap_or(false) {
-            let (t, bd) = release_notice(&sym, &rel);
-            said = notify::emit(&c, "releases", &release_key(&sym, &rel), &t, &bd, Some(notice_extra(&sym, None, &rel))).is_some() || said;
+        if !rel.is_empty() && in_release_scope(app, &c, &sym, Some(&rel_scopes)) && !sf::has_wire_release(&c, &sym).unwrap_or(false) {
+            let (t, bd) = release_notice(app, &sym, &rel);
+            said = notify::emit(app, &c, "releases", &release_key(&sym, &rel), &t, &bd, Some(notice_extra(&sym, None, &rel))).is_some() || said;
         }
         if !rest.is_empty() && disc_syms.contains(&sym) {
-            let (t, bd) = filings_notice(&sym, &rest);
+            let (t, bd) = filings_notice(app, &sym, &rest);
             let mut marks: Vec<String> = rest.iter().map(|r| filing_mark(r).join("/")).collect();
             marks.sort();
             let digest = sha1_hex12(&marks.join("|"));
-            said = notify::emit(&c, "disclosures", &format!("filings:{}:{}", sym, digest), &t, &bd, Some(notice_extra(&sym, None, &rest))).is_some() || said;
+            said = notify::emit(app, &c, "disclosures", &format!("filings:{}:{}", sym, digest), &t, &bd, Some(notice_extra(&sym, None, &rest))).is_some() || said;
         }
         if said {
             told += 1;
@@ -647,11 +651,11 @@ fn feed_scope(key: &str) -> Vec<String> {
 
 /// The stored disclosures of every ticker in a set,
 /// newest first.
-pub fn filings_feed(scope: &str, limit: i64) -> Value {
+pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> Value {
     let key = { let k = scope.trim().to_lowercase(); if k.is_empty() { "all".to_string() } else { k } };
-    let c = match conn() { Some(c) => c, None => return json!({"ok": true, "scope": key, "filings": []}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": true, "scope": key, "filings": []}) };
     let mut rows: Vec<Value> = Vec::new();
-    for inst in known_filing_symbols(&feed_scope(&key)) {
+    for inst in known_filing_symbols(app, &feed_scope(&key)) {
         let sym = f(&inst, "symbol");
         for mut r in fresh_filings(&c, &sym) {
             r["symbol"] = json!(sym);
@@ -671,7 +675,7 @@ pub fn is_news_release(filing: &Value) -> bool {
     RE.get_or_init(|| regex::Regex::new(r"(?i)news release|press release").unwrap()).is_match(&f(filing, "type"))
 }
 
-pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) -> bool {
+pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Option<&[String]>) -> bool {
     let owned;
     let scopes = match scopes {
         Some(x) => x,
@@ -692,7 +696,7 @@ pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) ->
         (if t.is_empty() { x.to_string() } else { t }).trim().to_uppercase() == sym
     };
     if scopes.iter().any(|x| x == "held") {
-        if let Some(b) = base() {
+        if let Some(b) = base(app) {
             if b.positions.iter().any(|p| same(&p.symbol)) {
                 return true;
             }
@@ -704,7 +708,7 @@ pub fn in_release_scope(c: &Connection, sym: &str, scopes: Option<&[String]>) ->
     false
 }
 
-pub fn release_notice(sym: &str, rows: &[Value]) -> (String, String) {
+pub fn release_notice(app: &Arc<App>, sym: &str, rows: &[Value]) -> (String, String) {
     let when = |r: &Value| { let p = f(r, "publishedAt"); if p.is_empty() { f(r, "date") } else { p } };
     let mut newest: Vec<&Value> = rows.iter().collect();
     newest.sort_by(|a, b| when(b).cmp(&when(a)));
@@ -722,7 +726,7 @@ pub fn release_notice(sym: &str, rows: &[Value]) -> (String, String) {
     let title = if rows.len() == 1 { "Press release · ".to_string() } else { format!("{} press releases · ", rows.len()) } + sym;
     // A release announcing distributions carries the figures beneath the headline, since the
     // headline alone ("Announces August 2026 Distributions") says nothing a holder can act on.
-    let mut detail = if is_distribution_release(&head) { distribution_detail(sym) } else { String::new() };
+    let mut detail = if is_distribution_release(&head) { distribution_detail(app, sym) } else { String::new() };
     if detail.is_empty() {
         // what the source said beneath its own headline, where it said anything
         detail = f(first, "summary").trim().to_string();
@@ -790,8 +794,8 @@ pub fn stamp_day(iso: &str) -> String {
 /// A release headline says only that distributions were announced; the figure
 /// is what the holder wants, and reading it from the record rather than the
 /// release's prose keeps it the same figure the Cashflow tab pays from.
-pub fn distribution_detail(sym: &str) -> String {
-    let c = match conn() { Some(c) => c, None => return String::new() };
+pub fn distribution_detail(app: &Arc<App>, sym: &str) -> String {
+    let c = match conn(app) { Some(c) => c, None => return String::new() };
     distribution_detail_in(&c, sym)
 }
 
@@ -912,11 +916,11 @@ fn release_key(sym: &str, rows: &[Value]) -> String {
 
 /// The press releases a wire answered with that
 /// are newer than any it showed for the listing.
-pub fn note_wire_releases(c: &Connection, symbol: &str, exchange: &str, rows: &[Value], new_ids: &[String]) {
+pub fn note_wire_releases(app: &Arc<App>, c: &Connection, symbol: &str, exchange: &str, rows: &[Value], new_ids: &[String]) {
     let scopes = notify::release_scopes(c);
     let t = tmx_symbol(symbol);
     let sym = (if t.is_empty() { symbol.to_string() } else { t }).trim().to_uppercase();
-    if scopes.is_empty() || !in_release_scope(c, &sym, Some(&scopes)) {
+    if scopes.is_empty() || !in_release_scope(app, c, &sym, Some(&scopes)) {
         return;
     }
     let rel: Vec<Value> = rows.iter().filter(|r| f(r, "kind") == "release").cloned().collect();
@@ -941,18 +945,18 @@ pub fn note_wire_releases(c: &Connection, symbol: &str, exchange: &str, rows: &[
         // behind it
         read_record_for_notice(c, &sym, exchange);
     }
-    let (title, body) = release_notice(&sym, &fresh);
-    notify::emit(c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));
+    let (title, body) = release_notice(app, &sym, &fresh);
+    notify::emit(app, c, "releases", &release_key(&sym, &fresh), &title, &body, Some(notice_extra(&sym, Some(exchange), &fresh)));
 }
 
 /// `New disclosure · QNC` and what was filed.
-pub fn filings_notice(sym: &str, new: &[Value]) -> (String, String) {
+pub fn filings_notice(app: &Arc<App>, sym: &str, new: &[Value]) -> (String, String) {
     let (mut named, mut said): (Vec<String>, String) = (Vec::new(), String::new());
     for r in new.iter().take(3) {
         let mut title = f(r, "subject").trim().to_string();
         let mut summary = f(r, "summary").trim().to_string();
         if (title.is_empty() || summary.is_empty()) && !f(r, "id").is_empty() {
-            let read = filings_enrich(sym, &f(r, "id"));
+            let read = filings_enrich(app, sym, &f(r, "id"));
             if title.is_empty() {
                 title = f(&read, "subject").trim().to_string();
             }
@@ -1031,8 +1035,8 @@ pub fn form_name(code: &str) -> String {
 /// SEDAR+ mints a document's address inside a live session and puts a bot gate
 /// in front of it, so a refusal is ordinary and a retry often works; the page
 /// says that in words, names the document, and retries on a click.
-pub fn document_error_page(symbol: &str, doc_id: &str, why: &str) -> String {
-    let row = conn().and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten()).unwrap_or_else(|| json!({}));
+pub fn document_error_page(app: &Arc<App>, symbol: &str, doc_id: &str, why: &str) -> String {
+    let row = conn(app).and_then(|c| sf::filing(&c, &symbol.trim().to_uppercase(), doc_id).ok().flatten()).unwrap_or_else(|| json!({}));
     let pick = |ks: &[&str], fallback: &str| {
         ks.iter().map(|k| f(&row, k)).find(|v| !v.is_empty()).unwrap_or_else(|| fallback.to_string())
     };
@@ -1077,14 +1081,14 @@ fn url_quote(t: &str) -> String {
     out
 }
 
-pub fn filings_sweep_loop() {
+pub fn filings_sweep_loop(app: Arc<App>) {
     // The regulators publish no feed to subscribe to, so telling someone of a new
     // filing means asking; but only while they have asked to be told. With no
     // Disclosures or Releases set on, this waits for one to be switched on.
-    let wanted = || conn().map_or(false, |c| !notify::disclosure_scopes(&c).is_empty() || !notify::release_scopes(&c).is_empty());
-    while crate::events::park_until(wanted) {
-        sweep_filings();
-        if app().wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
+    let wanted = || conn(&app).map_or(false, |c| !notify::disclosure_scopes(&c).is_empty() || !notify::release_scopes(&c).is_empty());
+    while crate::events::park_until(&app, wanted) {
+        sweep_filings(&app);
+        if app.wait(Duration::from_secs(FILINGS_SWEEP_EVERY_SEC)) {
             return;
         }
     }
@@ -1098,7 +1102,7 @@ pub const READ_GAP_SEC: u64 = 2;
 /// follows: a title and a sentence cost a download and a reading each, and a
 /// list is no use standing still while someone waits for them. One at a time,
 /// paced, and only while a model is up to do the reading.
-pub fn disclosure_read_loop() {
+pub fn disclosure_read_loop(app: Arc<App>) {
     // Reads while there is something unread and a model to read it; otherwise waits
     // for one of the two to change -- a filing stored (`FILINGS_STORED`) or the
     // model coming up (`localmodel::on_change`) -- and consults nothing in between.
@@ -1106,18 +1110,18 @@ pub fn disclosure_read_loop() {
     loop {
         let stored = FILINGS_STORED.load(Ordering::SeqCst);
         summary_ensure();
-        if !crate::events::park_until(|| summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
+        if !crate::events::park_until(&app, || summary_ready() || FILINGS_STORED.load(Ordering::SeqCst) != stored) {
             return;
         }
         if !summary_ready() {
             continue; // more was stored and there is still no model: try bringing one up again
         }
-        while read_one_unread() {
-            if app().wait(Duration::from_secs(READ_GAP_SEC)) {
+        while read_one_unread(&app) {
+            if app.wait(Duration::from_secs(READ_GAP_SEC)) {
                 return;
             }
         }
-        if !crate::events::park_until(|| FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
+        if !crate::events::park_until(&app, || FILINGS_STORED.load(Ordering::SeqCst) != stored || !summary_ready()) {
             return;
         }
     }
@@ -1136,19 +1140,19 @@ fn looking_at() -> &'static Mutex<String> {
 /// The newest stored filing that has never been read, read: the listing on
 /// screen first, then everything else. False when there is none, or nothing
 /// could be read.
-fn read_one_unread() -> bool {
+fn read_one_unread(app: &Arc<App>) -> bool {
     let open = looking_at().lock().unwrap().clone();
-    if !open.is_empty() && read_one_of(&open) {
+    if !open.is_empty() && read_one_of(app, &open) {
         return true;
     }
-    read_one_of("")
+    read_one_of(app, "")
 }
 
 /// One unread document of `only`, or of every followed listing when it is empty.
-fn read_one_of(only: &str) -> bool {
-    let c = match conn() { Some(c) => c, None => return false };
+fn read_one_of(app: &Arc<App>, only: &str) -> bool {
+    let c = match conn(app) { Some(c) => c, None => return false };
     let mut best: Option<(String, String, String)> = None;   // date, symbol, id
-    let every = known_filing_symbols(&["held".to_string(), "watched".to_string()]);
+    let every = known_filing_symbols(app, &["held".to_string(), "watched".to_string()]);
     let list: Vec<Value> = if only.is_empty() { every } else { vec![json!({"symbol": only})] };
     for inst in list {
         let sym = f(&inst, "symbol");
@@ -1163,20 +1167,20 @@ fn read_one_of(only: &str) -> bool {
         }
     }
     let (_, sym, id) = match best { Some(b) => b, None => return false };
-    let out = filings_enrich(&sym, &id);
+    let out = filings_enrich(app, &sym, &id);
     truthy(out.get("ok")) && !f(&out, "subject").is_empty()
 }
 
 /// One symbol's disclosures from every covering
 /// source, stored per source. The total written, or -1 when no source could be
 /// reached.
-pub fn refresh_filings(symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> i64 {
+pub fn refresh_filings(app: &Arc<App>, symbol: &str, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> i64 {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return 0;
     }
-    app().single_flight(&format!("filings:{}", sym), 0, || {
-        let c = match conn() { Some(c) => c, None => return -1 };
+    app.single_flight(&format!("filings:{}", sym), 0, || {
+        let c = match conn(app) { Some(c) => c, None => return -1 };
         refresh_filings_in(&c, &sym, name, exchange, currency, &|s, n, e, cy, p| disclosures::fetch(s, n, e, cy, 200, p))
     })
 }
@@ -1263,13 +1267,13 @@ fn source_status(c: &Connection, sym: &str) -> Value {
 
 /// The stored disclosures, refreshed first when
 /// forced or stale.
-pub fn filings_payload(symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Value {
+pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Value {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
-    filings_payload_in(&c, &sym, refresh, &|| refresh_filings(&sym, name, exchange, currency))
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    filings_payload_in(&c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency))
 }
 
 // --- a listing's disclosures while a page shows them ------------------------------
@@ -1298,9 +1302,9 @@ fn set_reading(sym: &str, ids: Vec<String>) {
 /// The disclosures as stored, never waiting on a source: what a page showing them
 /// is sent. `reading` names the documents the pass has still to read, the first of
 /// them the one being read now.
-pub fn filings_stored(symbol: &str) -> Value {
+pub fn filings_stored(app: &Arc<App>, symbol: &str) -> Value {
     let sym = symbol.trim().to_uppercase();
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let reading = reading_now().lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned().unwrap_or_default();
     json!({
         "ok": true,
@@ -1319,30 +1323,30 @@ pub fn filings_stored(symbol: &str) -> Value {
 /// A page has started showing `symbol`'s disclosures (`doc` is the document's key):
 /// bring the list up to date if it is stale, then read what has no title, until no
 /// page shows them any more. One pass per listing at a time.
-pub fn filings_shown(doc: String, symbol: String, name: String, exchange: String, currency: String) {
+pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, exchange: String, currency: String) {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return;
     }
     spawn("bagholder-filings-shown", move || {
-        app().single_flight(&format!("filings-shown:{}", sym), (), || {
+        app.single_flight(&format!("filings-shown:{}", sym), (), || {
             *looking_at().lock().unwrap() = sym.clone();
             fn opt(s: &str) -> Option<&str> { if s.is_empty() { None } else { Some(s) } }
-            if conn().map_or(false, |c| filings_stale(&c, &sym, None)) {
-                refresh_filings(&sym, opt(&name), opt(&exchange), opt(&currency));
+            if conn(&app).map_or(false, |c| filings_stale(&c, &sym, None)) {
+                refresh_filings(&app, &sym, opt(&name), opt(&exchange), opt(&currency));
             }
             let mut tried: HashSet<String> = HashSet::new();
-            while crate::events::watched(&doc) && !app().stopping() {
-                let c = match conn() { Some(c) => c, None => break };
+            while crate::events::watched(&doc) && !app.stopping() {
+                let c = match conn(&app) { Some(c) => c, None => break };
                 let mut left: Vec<Value> = sf::filings_for(&c, &sym).unwrap_or_default().into_iter()
                     .filter(|r| (f(r, "subject").is_empty() || f(r, "summary").is_empty()) && !is_true(r, "enrichFinal") && !tried.contains(&f(r, "id")))
                     .collect();
                 left.sort_by(|a, b| f(b, "date").cmp(&f(a, "date")));
                 let Some(next) = left.first().map(|r| f(r, "id")) else { break };
                 set_reading(&sym, left.iter().map(|r| f(r, "id")).collect());
-                filings_enrich(&sym, &next); // waits for the local model itself when one is coming up
+                filings_enrich(&app, &sym, &next); // waits for the local model itself when one is coming up
                 tried.insert(next);
-                if app().wait(Duration::from_millis(150)) { // a person's pace at the source
+                if app.wait(Duration::from_millis(150)) { // a person's pace at the source
                     break;
                 }
             }
@@ -1401,12 +1405,12 @@ fn fresh_filings(c: &Connection, sym: &str) -> Vec<Value> {
 }
 
 /// (bytes, content type), or the error.
-pub fn filings_document(symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String), String> {
+pub fn filings_document(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String), String> {
     let sym = symbol.trim().to_uppercase();
-    let c = conn().ok_or_else(|| "store unavailable".to_string())?;
+    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
     let mut row = sf::filing(&c, &sym, doc_id).ok().flatten();
     if row.is_none() {
-        refresh_filings(&sym, None, None, None);
+        refresh_filings(app, &sym, None, None, None);
         row = sf::filing(&c, &sym, doc_id).ok().flatten();
     }
     let row = row.ok_or_else(|| format!("no such document for {}", sym))?;
@@ -1419,8 +1423,8 @@ pub fn filings_document(symbol: &str, doc_id: &str) -> Result<(Vec<u8>, String),
 
 /// One document read for its subject and, with a
 /// local model, a one-sentence summary; both cached on the row.
-pub fn filings_enrich(symbol: &str, doc_id: &str) -> Value {
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "no such document"}) };
+pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> Value {
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "no such document"}) };
     filings_enrich_in(&c, symbol, doc_id, &LiveReaders)
 }
 
@@ -1536,10 +1540,10 @@ pub const FEAR_STALE_MIN: f64 = 15.0;
 pub const FEAR_VERSION: i64 = 1;
 
 /// One index read from its publisher and kept.
-pub fn read_fear(index: &str) -> Value {
+pub fn read_fear(app: &Arc<App>, index: &str) -> Value {
     let rec = fear::read(index);
     if truthy(Some(&rec)) {
-        if let Some(c) = conn() {
+        if let Some(c) = conn(app) {
             let _ = sf::save_gauge(&c, index, &rec, &now_iso(), FEAR_VERSION);
         }
     }
@@ -1561,31 +1565,32 @@ fn has_score(rec: &Option<Value>) -> bool {
 }
 
 /// One index's meter, from the store at once.
-pub fn fear_payload(index: &str) -> Value {
+pub fn fear_payload(app: &Arc<App>, index: &str) -> Value {
     let which = index.trim().to_lowercase();
     if !fear::INDEXES.contains(&which.as_str()) {
         return json!({"ok": false, "error": "no such index"});
     }
-    let held = conn().and_then(|c| sf::gauge(&c, &which).ok().flatten());
+    let held = conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
     if has_score(&held) {
         let held = held.unwrap();
         if fear_stale(&held) {
             let w = which.clone();
-            app().kick(&format!("fear:{}", which), move || {
-                read_fear(&w);
+            let a = app.clone();
+            app.kick(&format!("fear:{}", which), move || {
+                read_fear(&a, &w);
             });
         }
         return json!({"ok": true, "gauge": held});
     }
-    let rec = read_fear(&which);
+    let rec = read_fear(app, &which);
     if truthy(Some(&rec)) { json!({"ok": true, "gauge": rec}) } else { json!({"ok": false, "error": "the index did not answer"}) }
 }
 
 /// The meter as it is held, never waiting on its publisher: what a page showing it is
 /// sent (`docs`).
-pub fn fear_stored(index: &str) -> Value {
+pub fn fear_stored(app: &Arc<App>, index: &str) -> Value {
     let which = index.trim().to_lowercase();
-    match conn().and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
+    match conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
         Some(g) if has_score(&Some(g.clone())) => json!({"ok": true, "gauge": g}),
         _ => json!({"ok": true, "gauge": Value::Null}),
     }
@@ -1594,19 +1599,19 @@ pub fn fear_stored(index: &str) -> Value {
 /// A page has started showing the meter `index`: read it when it is missing or
 /// stale, and again as it goes stale, for as long as some page still shows it. The
 /// publishers push nothing; with no page showing a meter, nothing reads one.
-pub fn fear_shown(doc: String, index: String) {
+pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
     let which = index.trim().to_lowercase();
     if !fear::INDEXES.contains(&which.as_str()) {
         return;
     }
     spawn("bagholder-fear-shown", move || {
-        app().single_flight(&doc.clone(), (), || {
-            while crate::events::watched(&doc) && !app().stopping() {
-                let held = conn().and_then(|c| sf::gauge(&c, &which).ok().flatten());
+        app.single_flight(&doc.clone(), (), || {
+            while crate::events::watched(&doc) && !app.stopping() {
+                let held = conn(&app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
                 if !(has_score(&held) && !fear_stale(held.as_ref().unwrap())) {
-                    read_fear(&which);
+                    read_fear(&app, &which);
                 }
-                if app().wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {
+                if app.wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {
                     return;
                 }
             }
@@ -1637,8 +1642,8 @@ fn shorts_stale(rec: &Value) -> bool {
 
 /// One listing's short selling from its regulator,
 /// kept. {} for a market where no one publishes it.
-pub fn read_shorts(symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Value {
-    let c = match conn() { Some(c) => c, None => return json!({}) };
+pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Value {
+    let c = match conn(app) { Some(c) => c, None => return json!({}) };
     let rec = shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name);
     if truthy(Some(&rec)) {
         let ex = { let e = f(&rec, "exchange"); if e.is_empty() { exchange.to_string() } else { e } };
@@ -1649,12 +1654,12 @@ pub fn read_shorts(symbol: &str, exchange: &str, currency: &str, trend: bool, na
 
 /// One listing's short selling, from the store at
 /// once where it was read before.
-pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Value {
+pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Value {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    let c = match conn() { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
     let meta = instrument_meta(&c, &sym);
     let listed_as = if meta.0 == sym { String::new() } else { meta.0.clone() };
     let mut ex = exchange.unwrap_or("").trim().to_string();
@@ -1685,14 +1690,15 @@ pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&st
         if !trend || truthy(held.get("series")) {
             if shorts_stale(&held) {
                 let (s2, e2, c2, n2) = (sym.clone(), ex.clone(), ccy.clone(), listed_as.clone());
-                app().kick(&format!("shorts:{}|{}", sym, ex), move || {
-                    read_shorts(&s2, &e2, &c2, true, &n2);
+                let a = app.clone();
+                app.kick(&format!("shorts:{}|{}", sym, ex), move || {
+                    read_shorts(&a, &s2, &e2, &c2, true, &n2);
                 });
             }
             return json!({"ok": true, "covered": true, "shorts": held});
         }
     }
-    let rec = read_shorts(&sym, &ex, &ccy, trend, &listed_as);
+    let rec = read_shorts(app, &sym, &ex, &ccy, trend, &listed_as);
     if !truthy(Some(&rec)) {
         return json!({"ok": true, "covered": false});
     }
@@ -1701,9 +1707,9 @@ pub fn shorts_payload(symbol: &str, exchange: Option<&str>, currency: Option<&st
 
 /// Every held or watched listing's stored short
 /// selling, each marked held or watched.
-pub fn shorts_feed() -> Value {
+pub fn shorts_feed(app: &Arc<App>) -> Value {
     let reading = SHORTS_LEFT.load(Ordering::SeqCst) > 0;
-    let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
+    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
     // what the feed says of a listing: its name, its venue, and the holding it opens
     struct Known {
         name: String,
@@ -1737,12 +1743,12 @@ pub fn shorts_feed() -> Value {
 
 /// What the page for one listing needs, held or
 /// not.
-pub fn listing_payload(symbol: &str, exchange: &str, currency: &str, name: &str) -> Value {
+pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, name: &str) -> Value {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
         return json!({"ok": false, "error": "symbol required"});
     }
-    let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": false, "error": "store unavailable"}) };
+    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": false, "error": "store unavailable"}) };
     let day = today();
     let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
     let positions: Vec<ListedRow> = b.positions.iter().filter(|p| named(&p.symbol)).map(|p| ListedRow { id: p.id.clone(), symbol: p.symbol.clone(), exchange: p.exchange.clone(), currency: p.currency.clone(), kind: p.kind.to_string(), name: p.name.clone(), security_id: p.security_id.clone(), fills: vec![] }).collect();
@@ -1848,8 +1854,8 @@ pub fn listing_payload_in(
 
 /// The shares held and the listings watched whose
 /// short selling is published.
-pub fn shorts_listings(scope: &str) -> Vec<(String, String, String, String)> {
-    let b = match base() { Some(b) => b, None => return vec![] };
+pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, String, String)> {
+    let b = match base(app) { Some(b) => b, None => return vec![] };
     let mut rows: Vec<(&str, &str, &str, &str)> = Vec::new();
     if scope == "holdings" || scope == "all" {
         rows.extend(b.positions.iter().map(|p| (p.symbol.as_str(), p.exchange.as_str(), p.currency.as_str(), p.name.as_str())));
@@ -1873,10 +1879,10 @@ pub fn shorts_listings(scope: &str) -> Vec<(String, String, String, String)> {
 
 /// Keep every held and watched listing's short
 /// selling stored and current.
-pub fn sweep_shorts() -> usize {
-    let c = match conn() { Some(c) => c, None => return 0 };
+pub fn sweep_shorts(app: &Arc<App>) -> usize {
+    let c = match conn(app) { Some(c) => c, None => return 0 };
     let mut due = Vec::new();
-    for (sym, ex, ccy, name) in shorts_listings("all") {
+    for (sym, ex, ccy, name) in shorts_listings(app, "all") {
         let held = sf::shorts_for(&c, &sym, &ex).ok().flatten();
         let fresh = held.as_ref().map(|h| truthy(Some(h)) && truthy(h.get("series")) && !shorts_stale(h)).unwrap_or(false);
         if !fresh {
@@ -1895,7 +1901,7 @@ pub fn sweep_shorts() -> usize {
     }
     let _reset = Reset;
     for (sym, ex, ccy, name) in due {
-        if truthy(Some(&read_shorts(&sym, &ex, &ccy, true, &name))) {
+        if truthy(Some(&read_shorts(app, &sym, &ex, &ccy, true, &name))) {
             done += 1;
         }
         SHORTS_LEFT.fetch_sub(1, Ordering::SeqCst);
@@ -1904,12 +1910,12 @@ pub fn sweep_shorts() -> usize {
     done
 }
 
-pub fn shorts_sweep_loop() {
+pub fn shorts_sweep_loop(app: Arc<App>) {
     // the short-interest table is the only reader of a sweep: it runs while some page
     // shows that table, starting the moment one does
-    while crate::events::park_until(|| crate::events::watched("shorts")) {
-        sweep_shorts();
-        if app().wait(Duration::from_secs(SHORTS_SWEEP_EVERY_SEC)) {
+    while crate::events::park_until(&app, || crate::events::watched("shorts")) {
+        sweep_shorts(&app);
+        if app.wait(Duration::from_secs(SHORTS_SWEEP_EVERY_SEC)) {
             return;
         }
     }
@@ -1925,9 +1931,9 @@ fn universe_kick() -> &'static (Mutex<bool>, Condvar) {
 }
 
 /// The heatmaps' tiles. Never fails.
-pub fn refresh_universes() -> Vec<String> {
-    app().single_flight("universes", vec![], || {
-        let c = match conn() { Some(c) => c, None => return vec![] };
+pub fn refresh_universes(app: &Arc<App>) -> Vec<String> {
+    app.single_flight("universes", vec![], || {
+        let c = match conn(app) { Some(c) => c, None => return vec![] };
         let done = bagholder_market::universes::refresh(&c, &now_iso());
         if !done.is_empty() {
         }
@@ -1937,24 +1943,24 @@ pub fn refresh_universes() -> Vec<String> {
 
 /// At start, then every thirty minutes, or sooner
 /// when the page asks.
-pub fn universe_loop() {
+pub fn universe_loop(app: Arc<App>) {
     // The index constituents feed the heatmap and nothing else: sixty-odd requests a
     // pass. They are read when a page asks for the heatmap (the kick), and again each
     // half hour only while a page is still connected -- not at start, and not through
     // a night with nobody there.
     loop {
         let kicked = || *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner());
-        if !crate::events::park_until(kicked) {
+        if !crate::events::park_until(&app, kicked) {
             return;
         }
         loop {
             *universe_kick().0.lock().unwrap_or_else(|e| e.into_inner()) = false;
-            refresh_universes();
-            if !crate::events::park_until_or(Duration::from_secs(1800), kicked) && (app().stopping() || crate::events::watchers() == 0) {
+            refresh_universes(&app);
+            if !crate::events::park_until_or(&app, Duration::from_secs(1800), kicked) && (app.stopping() || crate::events::watchers() == 0) {
                 break;
             }
         }
-        if app().stopping() {
+        if app.stopping() {
             return;
         }
     }
@@ -1972,22 +1978,22 @@ pub fn kick_universes() -> Value {
 // ---------------------------------------------------------------------------
 
 /// The page, beside the app.
-pub fn ledger_path() -> std::path::PathBuf {
-    app().root.join("ledger.html")
+pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
+    app.root.join("ledger.html")
 }
 
-fn payer_symbols() -> Vec<Value> {
-    base().map(|b| bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&b))).unwrap_or_default()
+fn payer_symbols(app: &Arc<App>) -> Vec<Value> {
+    base(app).map(|b| bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&b))).unwrap_or_default()
 }
 
 /// USD/CAD, S&P 500, declared distributions
 /// and quotes. Never fails.
-pub fn refresh_market_data() -> Value {
-    app().single_flight("market", json!({}), || {
+pub fn refresh_market_data(app: &Arc<App>) -> Value {
+    app.single_flight("market", json!({}), || {
         let skipped = json!({"fx": 0, "benchmark": 0, "distributions": 0, "quotes": 0, "skipped": true});
-        let c = match conn() { Some(c) => c, None => return skipped };
-        let mut out = bagholder_market::refresh::refresh_all(&c, &payer_symbols());
-        let q = refresh_quotes();
+        let c = match conn(app) { Some(c) => c, None => return skipped };
+        let mut out = bagholder_market::refresh::refresh_all(&c, &payer_symbols(app));
+        let q = refresh_quotes(app);
         out["quotes"] = json!(q);
         if truthy(out.get("distributions")) || q > 0 {
         }
@@ -1996,9 +2002,9 @@ pub fn refresh_market_data() -> Value {
 }
 
 /// Prices for held positions and watched listings.
-pub fn refresh_quotes() -> usize {
-    app().single_flight("quotes", 0, || {
-        let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return 0 };
+pub fn refresh_quotes(app: &Arc<App>) -> usize {
+    app.single_flight("quotes", 0, || {
+        let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return 0 };
         let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&b));
         syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&b)));
         let (today_s, now, stamp) = bagholder_market::clock_now();
@@ -2011,10 +2017,10 @@ pub fn refresh_quotes() -> usize {
 
 /// The rates, benchmarks and distributions
 /// on their own clocks. Never fails; 0 when one is already running.
-pub fn refresh_periodic_market() -> Value {
-    app().single_flight("periodic", json!(0), || {
-        let c = match conn() { Some(c) => c, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
-        let out = bagholder_market::refresh::refresh_periodic(&c, &payer_symbols());
+pub fn refresh_periodic_market(app: &Arc<App>) -> Value {
+    app.single_flight("periodic", json!(0), || {
+        let c = match conn(app) { Some(c) => c, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
+        let out = bagholder_market::refresh::refresh_periodic(&c, &payer_symbols(app));
         if truthy(out.get("fx")) || truthy(out.get("benchmark")) || truthy(out.get("distributions")) {
         }
         out
@@ -2022,9 +2028,9 @@ pub fn refresh_periodic_market() -> Value {
 }
 
 /// A few instruments per call.
-pub fn archive_intraday_bars(limit: Option<usize>) -> Vec<String> {
-    app().single_flight("archive", vec![], || {
-        let (c, b) = match (conn(), base()) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
+pub fn archive_intraday_bars(app: &Arc<App>, limit: Option<usize>) -> Vec<String> {
+    app.single_flight("archive", vec![], || {
+        let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return vec![] };
         let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(&b));
         let limit = limit.map(|l| l.max(1)).unwrap_or(history::ARCHIVE_BATCH);
         let (today_s, now, stamp) = bagholder_market::clock_now();
@@ -2066,19 +2072,19 @@ fn cpu_clock() -> f64 {
 }
 
 /// The backfill paced by the processor time it costs.
-pub fn archive_loop() {
+pub fn archive_loop(app: Arc<App>) {
     let mut delay = 20.0f64;
     let mut batch = history::ARCHIVE_BATCH;
-    while !app().wait(Duration::from_secs_f64(delay)) {
+    while !app.wait(Duration::from_secs_f64(delay)) {
         let started = cpu_clock();
-        let worked = archive_intraday_bars(Some(batch));
+        let worked = archive_intraday_bars(&app, Some(batch));
         let spent = (cpu_clock() - started).max(0.0);
         if worked.is_empty() {
             // Nothing is due. The next top-up falls due at a known moment (a stored
             // read passing its age), and new work can otherwise only come from the
             // book gaining a listing: wait for whichever is first.
-            let was = base();
-            let due = match (conn(), was.as_ref()) {
+            let was = base(&app);
+            let due = match (conn(&app), was.as_ref()) {
                 (Some(c), Some(b)) => {
                     let recs = bagholder_model::input::listings_json(&bagholder_model::symbols_of::intraday_archive_symbols(b));
                     let (today_s, now, _) = bagholder_market::clock_now();
@@ -2086,13 +2092,13 @@ pub fn archive_loop() {
                 }
                 _ => None,
             };
-            let moved = || match (base(), was.as_ref()) {
+            let moved = || match (base(&app), was.as_ref()) {
                 (Some(now), Some(was)) => !Arc::ptr_eq(&now.book, &was.book),
                 (now, was) => now.is_some() != was.is_some(),
             };
             match due {
-                Some(secs) => { crate::events::park_until_or(Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
-                None => { crate::events::park_until(moved); }
+                Some(secs) => { crate::events::park_until_or(&app, Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
+                None => { crate::events::park_until(&app, moved); }
             }
             delay = 0.0;
             batch = history::ARCHIVE_BATCH;
@@ -2108,7 +2114,7 @@ pub fn archive_loop() {
 }
 
 /// Prices, every QUOTE_REFRESH_MINUTES.
-pub fn quote_loop() {
+pub fn quote_loop(app: Arc<App>) {
     // The exchanges offer no push, so prices are asked for; but only while a page is
     // open to show them. With nobody looking, nothing is fetched; a page that opens
     // asks for fresh quotes itself (`/api/events` -> the model's own kick).
@@ -2116,27 +2122,27 @@ pub fn quote_loop() {
     // after hours away gets fresh prices) and each minute while one stays. Which
     // listings are asked is narrowed again by whether their market can have moved
     // (`market::quotes::can_have_moved`).
-    while crate::events::park_until(|| crate::events::watchers() > 0) {
-        refresh_quotes();
-        if app().wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
+    while crate::events::park_until(&app, || crate::events::watchers() > 0) {
+        refresh_quotes(&app);
+        if app.wait(Duration::from_secs_f64(60.0 * bagholder_market::quotes::QUOTE_REFRESH_MINUTES)) {
             return;
         }
     }
 }
 
 /// The periodic records and the update check, hourly.
-pub fn market_loop() {
-    while !app().wait(Duration::from_secs(60 * bagholder_market::refresh::MARKET_CHECK_MINUTES)) {
-        refresh_periodic_market();
-        crate::update::check_for_update_if_due();
+pub fn market_loop(app: Arc<App>) {
+    while !app.wait(Duration::from_secs(60 * bagholder_market::refresh::MARKET_CHECK_MINUTES)) {
+        refresh_periodic_market(&app);
+        crate::update::check_for_update_if_due(&app);
     }
 }
 
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
 /// New or changed CSVs imported. Never fails.
-pub fn scan_watched_folder() -> Option<Value> {
-    let c = conn()?;
+pub fn scan_watched_folder(app: &Arc<App>) -> Option<Value> {
+    let c = conn(app)?;
     if bagholder_store::csvimport::watch_folder(&c).ok()?.is_empty() {
         return None;
     }
@@ -2146,22 +2152,22 @@ pub fn scan_watched_folder() -> Option<Value> {
     Some(result)
 }
 
-pub fn watch_loop() {
+pub fn watch_loop(app: Arc<App>) {
     // Only while a folder is set to be watched; until one is, this waits for the
     // setting. The folder itself is looked at on a period: the standard library has
     // no file-system notification (docs/architecture.md, "Timers that remain").
-    let set = || conn().and_then(|c| bagholder_store::csvimport::watch_folder(&c).ok()).map_or(false, |f| !f.is_empty());
-    while crate::events::park_until(set) {
-        scan_watched_folder();
-        if app().wait(Duration::from_secs(WATCH_SCAN_SEC)) {
+    let set = || conn(&app).and_then(|c| bagholder_store::csvimport::watch_folder(&c).ok()).map_or(false, |f| !f.is_empty());
+    while crate::events::park_until(&app, set) {
+        scan_watched_folder(&app);
+        if app.wait(Duration::from_secs(WATCH_SCAN_SEC)) {
             return;
         }
     }
 }
 
-pub fn sync_then_market() -> bool {
-    let ok = crate::session::run_sync(true, true);
-    refresh_market_data();
+pub fn sync_then_market(app: &Arc<App>) -> bool {
+    let ok = crate::session::run_sync(app, true, true);
+    refresh_market_data(app);
     ok
 }
 
@@ -2207,7 +2213,7 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// and cached on demand.
 /// Whether the intraday bars this chart asked for are still being read. What the
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
-pub fn history_pending(query: &str) -> bool {
+pub fn history_pending(app: &Arc<App>, query: &str) -> bool {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
     let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),
                      "currency": or(qs_one(query, "currency"), "CAD"), "kind": or(qs_one(query, "kind"), "Shares")});
@@ -2218,10 +2224,10 @@ pub fn history_pending(query: &str) -> bool {
     }
     let inst = history::chart_instrument(&rec);
     let (today_s, now, _) = bagholder_market::clock_now();
-    conn().map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
+    conn(app).map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
 }
 
-pub fn history_payload(query: &str) -> Value {
+pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
     let rec = json!({"symbol": qs_one(query, "symbol"), "exchange": qs_one(query, "exchange"),
                      "currency": or(qs_one(query, "currency"), "CAD"), "kind": or(qs_one(query, "kind"), "Shares")});
@@ -2234,7 +2240,7 @@ pub fn history_payload(query: &str) -> Value {
     let inst = history::chart_instrument(&rec);
     let src = history::history_source(&inst);
     let (today_s, now, stamp) = bagholder_market::clock_now();
-    let c = conn();
+    let c = conn(app);
     let available: Vec<&'static str> = c.as_ref().map(|c| history::offered_timeframes(c, &inst, &start, &today_s, now)).unwrap_or_default();
     let mut pending = false;
     let bars: Vec<Value> = match &c {
@@ -2243,7 +2249,7 @@ pub fn history_payload(query: &str) -> Value {
             if !(src.is_some() && available.contains(&tf.as_str())) {
                 vec![]
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) && !history::intraday_ready(c, &inst, &tf, &start, &today_s, now) {
-                history::ensure_intraday_in_background(app().db_path(), inst.clone(), tf.clone(), start.clone(), end.clone());
+                history::ensure_intraday_in_background(app.db_path(), inst.clone(), tf.clone(), start.clone(), end.clone());
                 pending = true;
                 vec![]
             } else {
@@ -2264,6 +2270,7 @@ pub fn history_payload(query: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests_common::app;
     use std::cell::Cell;
 
     fn store() -> Connection {
@@ -2456,7 +2463,8 @@ mod tests {
 
     #[test]
     fn test_empty_symbol_is_rejected() {
-        assert_eq!(filings_payload("", false, None, None, None)["ok"], false);
+        let _g = crate::tests_common::guard();
+        assert_eq!(filings_payload(&app(), "", false, None, None, None)["ok"], false);
     }
 
     // --- EnrichTest

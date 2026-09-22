@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 
 use super::extract::trimmed;
 use super::{blocking, with_store, Api, ApiError, AppState, Body, Params};
-use crate::app::{self, app, truthy};
+use std::sync::Arc;
+
+use crate::app::{self, truthy, App};
 use crate::{feeds, session};
 
 pub fn routes() -> Router<AppState> {
@@ -29,8 +31,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/watch/clear", post(watch_clear))
 }
 
-async fn status() -> Api {
-    super::answer(crate::status::payload).await
+async fn status(State(state): State<AppState>) -> Api {
+    super::answer(move || crate::status::payload(&state.app)).await
 }
 
 #[derive(Deserialize)]
@@ -57,16 +59,18 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
         if let (Ok(conn), Ok(base)) = (app.open(), app.base()) {
             let (today, now, _) = bagholder_market::clock_now();
             if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::input::listings_json(&bagholder_model::symbols_of::payer_symbols(&base))) {
-                app.kick("market", || {
-                    feeds::refresh_market_data();
+                let a = app.clone();
+                app.kick("market", move || {
+                    feeds::refresh_market_data(&a);
                 });
             } else {
                 let mut syms = bagholder_model::input::listings_json(&bagholder_model::symbols_of::held_symbols(&base));
                 syms.extend(bagholder_model::input::listings_json(&bagholder_model::markets::quote_symbols(&base)));
                 let due = bagholder_market::quotes::quote_symbols_needing_refresh(&conn, &syms, now, bagholder_market::quotes::QUOTE_REFRESH_MINUTES).map(|v| !v.is_empty()).unwrap_or(false);
                 if due {
-                    app.kick("quotes", || {
-                        feeds::refresh_quotes();
+                    let a = app.clone();
+                    app.kick("quotes", move || {
+                        feeds::refresh_quotes(&a);
                     });
                 }
             }
@@ -86,7 +90,7 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
         } else {
             view.to_value()
         };
-        payload["status"] = crate::status::payload();
+        payload["status"] = crate::status::payload(&app);
         Ok(payload)
     })
     .await??;
@@ -130,7 +134,7 @@ async fn book(State(state): State<AppState>) -> Api {
 }
 
 /// The row counts the Data & storage dialog shows before a wipe.
-fn data_summary(conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
+fn data_summary(app: &Arc<App>, conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
     let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
     let journal_raw = bagholder_store::tables::get_meta(conn, "journal_v2", "")?;
     let journal_n = serde_json::from_str::<Value>(&journal_raw).ok().and_then(|v| v.as_object().map(|m| m.len())).unwrap_or(0);
@@ -138,7 +142,7 @@ fn data_summary(conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
         conn.query_row("SELECT MIN(transaction_date), MAX(transaction_date) FROM activities", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(json!({
         "ok": true,
-        "path": app().db_path().display().to_string(),
+        "path": app.db_path().display().to_string(),
         "activities": count("SELECT COUNT(*) FROM activities")?,
         "firstActivity": first_act.unwrap_or_default(),
         "lastActivity": last_act.unwrap_or_default(),
@@ -151,12 +155,13 @@ fn data_summary(conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
         "benchmarkDays": count("SELECT COUNT(*) FROM benchmark_prices")?,
         "filings": count("SELECT COUNT(*) FROM filings")?,
         "syncedAt": bagholder_store::tables::get_meta(conn, "synced_at", "")?,
-        "sessionPresent": session::load_session().is_some(),
+        "sessionPresent": session::load_session(app).is_some(),
     }))
 }
 
 async fn data(State(state): State<AppState>) -> Api {
-    with_store(&state, data_summary).await
+    let app = state.app.clone();
+    with_store(&state, move |conn| data_summary(&app, conn)).await
 }
 
 /// What `POST /api/data/clear` removes besides the synced rows.
@@ -174,17 +179,18 @@ async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> A
     if state.app.state.lock().unwrap().syncing {
         return Err(ApiError::Conflict("A sync is running. Wait for it to finish.".into()));
     }
+    let app = state.app.clone();
     with_store(&state, move |conn| {
         bagholder_store::admin::clear_synced_data(conn, !what.journal, !what.market)?;
         if what.session {
-            session::delete_session();
+            session::delete_session(&app);
         }
         {
-            let mut st = app().state.lock().unwrap();
+            let mut st = app.state.lock().unwrap();
             st.last_sync.clear();
             st.error.clear();
         }
-        data_summary(conn)
+        data_summary(&app, conn)
     })
     .await
 }

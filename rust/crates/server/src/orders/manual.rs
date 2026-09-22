@@ -6,7 +6,7 @@ use super::*;
 // manual activity
 // ---------------------------------------------------------------------------
 
-pub(super) fn manual_from_fields(body: &Value) -> Value {
+pub(super) fn manual_from_fields(_app: &Arc<App>, body: &Value) -> Value {
     let mut side = upper(or_v(body.get("side"), Some(&json!("BUY"))));
     if side != "BUY" && side != "SELL" {
         side = "BUY".into();
@@ -95,25 +95,25 @@ pub(super) fn normalize_local_row(act: &Value) -> Value {
     Value::Object(act)
 }
 
-pub fn append_manual(body: &Value) -> Value {
+pub fn append_manual(app: &Arc<App>, body: &Value) -> Value {
     let rows: Vec<Value> = if let Some(Value::Array(a)) = body.get("activities") {
         a.iter().filter(|r| r.is_object()).cloned().collect()
     } else if truthy(body.get("activity")) && body.get("activity").map_or(false, |a| a.is_object()) {
         vec![body["activity"].clone()]
     } else {
-        vec![manual_from_fields(body)]
+        vec![manual_from_fields(app, body)]
     };
     let rows: Vec<Value> = rows.iter().map(normalize_local_row).collect();
-    let conn = db();
+    let conn = db(app);
     let result = must(bagholder_store::merge::merge_local_rows(&conn, &rows, &uuid4));
-    let mut snap = snapshot();
+    let mut snap = snapshot(app);
     if !tr(&snap, "syncedAt") {
         let stamp = now_iso();
         must(bagholder_store::tables::set_meta(&conn, "synced_at", &stamp));
-        snap = snapshot();
+        snap = snapshot(app);
     }
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         let synced = f(&snap, "syncedAt");
         if !synced.is_empty() {
             st.last_sync = synced;

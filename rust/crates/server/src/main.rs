@@ -84,7 +84,7 @@ fn serve() -> i32 {
         let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
     }
     let bind_host = { let b = std::env::var("BAGHOLDER_BIND").unwrap_or_default().trim().to_string(); if b.is_empty() { "127.0.0.1".to_string() } else { b } };
-    let a = app::init(home, root_dir(), bind_host.clone());
+    let a = app::App::new(home, root_dir(), bind_host.clone());
     match a.open() {
         Ok(conn) => {
             if let Err(e) = bagholder_store::relabel::ensure(&conn) {
@@ -97,7 +97,7 @@ fn serve() -> i32 {
             return 1;
         }
     }
-    session::boot_session();
+    session::boot_session(&a);
 
     // The runtime the HTTP server and the page streams run on. Everything else --
     // SQLite, the market and Wealthsimple clients, the background loops -- is
@@ -133,20 +133,20 @@ fn serve() -> i32 {
     // from here on a change reaches an open page because it happened: every commit
     // on any connection, every write to the app's state, the day turning
     bagholder_store::on_commit(events::signal);
-    events::signal_at_each_midnight();
+    events::signal_at_each_midnight(a.clone());
     bagholder_market::localmodel::on_change(events::signal);
-    spawn("bagholder-auto-sync", session::auto_sync_loop);
-    spawn("bagholder-market", || {
-        feeds::refresh_market_data();
+    a.spawn_with("bagholder-auto-sync", session::auto_sync_loop);
+    a.spawn_with("bagholder-market", |app| {
+        feeds::refresh_market_data(&app);
     });
-    spawn("bagholder-update-check", || {
-        update::check_for_update();
+    a.spawn_with("bagholder-update-check", |app| {
+        update::check_for_update(&app);
     });
-    spawn("bagholder-quote-loop", feeds::quote_loop);
-    spawn("bagholder-portfolio-loop", session::portfolio_loop);
-    spawn("bagholder-orders-loop", orders::orders_loop);
-    spawn("bagholder-bracket-loop", orders::bracket_loop);
-    spawn("bagholder-exposure-loop", feeds::exposure_loop);
+    a.spawn_with("bagholder-quote-loop", feeds::quote_loop);
+    a.spawn_with("bagholder-portfolio-loop", session::portfolio_loop);
+    a.spawn_with("bagholder-orders-loop", |app| orders::orders_loop(&app));
+    a.spawn_with("bagholder-bracket-loop", |app| orders::bracket_loop(&app));
+    a.spawn_with("bagholder-exposure-loop", feeds::exposure_loop);
     // rows added before the bare-ticker convention (Wealthsimple's `.TO` on a dual listing) take it now
     if let Ok(conn) = a.open() {
         for w in bagholder_store::feeds::list_watchlist(&conn).unwrap_or_default() {
@@ -158,14 +158,14 @@ fn serve() -> i32 {
             }
         }
     }
-    spawn("bagholder-news-loop", feeds::news_loop);
-    spawn("bagholder-universe-loop", feeds::universe_loop);
-    spawn("bagholder-market-loop", feeds::market_loop);
-    spawn("bagholder-archive", feeds::archive_loop);
-    spawn("bagholder-watch", feeds::watch_loop);
-    spawn("bagholder-filings-sweep", feeds::filings_sweep_loop);
-    spawn("bagholder-disclosure-reader", feeds::disclosure_read_loop);
-    spawn("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
+    a.spawn_with("bagholder-news-loop", feeds::news_loop);
+    a.spawn_with("bagholder-universe-loop", feeds::universe_loop);
+    a.spawn_with("bagholder-market-loop", feeds::market_loop);
+    a.spawn_with("bagholder-archive", feeds::archive_loop);
+    a.spawn_with("bagholder-watch", feeds::watch_loop);
+    a.spawn_with("bagholder-filings-sweep", feeds::filings_sweep_loop);
+    a.spawn_with("bagholder-disclosure-reader", feeds::disclosure_read_loop);
+    a.spawn_with("bagholder-shorts-sweep", feeds::shorts_sweep_loop);
 
     let url = format!("http://127.0.0.1:{}", port);
     println!("Bagholder  {}", url);
@@ -177,13 +177,15 @@ fn serve() -> i32 {
         let due = a.open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, app::now_unix() as i64 - 0).ok()).unwrap_or(false);
         let _ = ACTIVITY_PULL_SEC;
         if due {
-            spawn("bagholder-boot-sync", || {
-                session::run_sync(true, true);
+            let b = a.clone();
+            spawn("bagholder-boot-sync", move || {
+                session::run_sync(&b, true, true);
             });
         } else {
-            spawn("bagholder-listings", || {
-                if let Some(sess) = session::load_session() {
-                    session::fill_listings(&sess, false);
+            let b = a.clone();
+            spawn("bagholder-listings", move || {
+                if let Some(sess) = session::load_session(&b) {
+                    session::fill_listings(&b, &sess, false);
                 }
             });
         }
@@ -191,7 +193,8 @@ fn serve() -> i32 {
 
     // Ctrl-C and a service manager's TERM stop the app the way its own updater
     // does: the requests in hand finish, the streams end, the loops wake and leave.
-    runtime.spawn(async {
+    let stop_app = a.clone();
+    runtime.spawn(async move {
         let term = async {
             #[cfg(unix)]
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -205,9 +208,9 @@ fn serve() -> i32 {
             _ = tokio::signal::ctrl_c() => {}
             _ = term => {}
         }
-        app::app().request_stop();
+        stop_app.request_stop();
     });
-    if let Err(e) = runtime.block_on(http::serve(listener, http::AppState { app: a })) {
+    if let Err(e) = runtime.block_on(http::serve(listener, http::AppState { app: a.clone() })) {
         log(&format!("bagholder: the server stopped: {}", e));
     }
     // a producer thread still writing to a stream that has gone is not waited for
@@ -373,7 +376,7 @@ mod tests {
             assert!(root().join(needed).is_file(), "{} beside the workspace", needed);
         }
         let src = include_str!("http/assets.rs");
-        assert!(src.contains("\"lightweight-charts.js\"") && src.contains("\"favicon.png\"") && src.contains("feeds::ledger_path()"));
+        assert!(src.contains("\"lightweight-charts.js\"") && src.contains("\"favicon.png\"") && src.contains("feeds::ledger_path("));
     }
 }
 

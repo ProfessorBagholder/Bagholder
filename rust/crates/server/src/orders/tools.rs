@@ -16,8 +16,8 @@ pub fn orders_live() -> bool {
     *LIVE.get_or_init(|| std::env::var("BAGHOLDER_DRY_ORDERS").map(|v| v.trim() != "1").unwrap_or(true))
 }
 
-pub(super) fn db() -> bagholder_store::pool::Pooled<'static> {
-    app().open().expect("bagholder orders: the store could not be opened")
+pub(super) fn db(app: &Arc<App>) -> bagholder_store::pool::Pooled<'_> {
+    app.open().expect("bagholder orders: the store could not be opened")
 }
 
 pub(super) fn must<T>(r: rusqlite::Result<T>) -> T {
@@ -142,7 +142,7 @@ pub(super) fn parse_z(t: &str) -> Option<i64> {
     t.strip_suffix('Z').and_then(parse_ymdhms)
 }
 
-pub(super) fn gql(sess: &Value, op: &str, vars: Value) -> Result<Value, CallError> {
+pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &Value, op: &str, vars: Value) -> Result<Value, CallError> {
     if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
         return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
     }
@@ -157,7 +157,7 @@ pub(super) fn gql(sess: &Value, op: &str, vars: Value) -> Result<Value, CallErro
     }
     #[cfg(not(test))]
     {
-        let home = app().ws_home();
+        let home = app.ws_home();
         Client { home: &home }.graphql(sess, op, &vars, None)
     }
 }
@@ -181,28 +181,28 @@ pub(super) fn first_error(errs: &Value) -> Option<String> {
     })
 }
 
-pub(super) fn orders_all() -> Vec<Order> {
-    must(so::typed::list_orders(&db(), 200))
+pub(super) fn orders_all(app: &Arc<App>) -> Vec<Order> {
+    must(so::typed::list_orders(&db(app), 200))
 }
 
-pub(super) fn order(id: &str) -> Option<Order> {
-    must(so::typed::get_order(&db(), id))
+pub(super) fn order(app: &Arc<App>, id: &str) -> Option<Order> {
+    must(so::typed::get_order(&db(app), id))
 }
 
-pub(super) fn patch_order(id: &str, patch: OrderPatch) {
-    must(so::typed::update_order(&db(), id, &patch, &now_iso()))
+pub(super) fn patch_order(app: &Arc<App>, id: &str, patch: OrderPatch) {
+    must(so::typed::update_order(&db(app), id, &patch, &now_iso()))
 }
 
-pub(super) fn live_brackets() -> Vec<Bracket> {
-    must(so::typed::list_brackets(&db(), &BRACKET_LIVE_ST))
+pub(super) fn live_brackets(app: &Arc<App>) -> Vec<Bracket> {
+    must(so::typed::list_brackets(&db(app), &BRACKET_LIVE_ST))
 }
 
-pub(super) fn bracket(id: &str) -> Option<Bracket> {
-    must(so::typed::get_bracket(&db(), id))
+pub(super) fn bracket(app: &Arc<App>, id: &str) -> Option<Bracket> {
+    must(so::typed::get_bracket(&db(app), id))
 }
 
-pub(super) fn patch_bracket(id: &str, patch: BracketPatch) {
-    must(so::typed::update_bracket(&db(), id, &patch, &now_iso()))
+pub(super) fn patch_bracket(app: &Arc<App>, id: &str, patch: BracketPatch) {
+    must(so::typed::update_bracket(&db(app), id, &patch, &now_iso()))
 }
 
 /// A number that is there and is not zero: what the engine means by "has a price".
@@ -219,15 +219,15 @@ pub(super) fn parse_utc_text(t: &str) -> Option<i64> {
     parse_ymdhms(&t.chars().take(19).collect::<String>())
 }
 
-pub(super) fn emit(kind: &str, key: &str, title: &str, body: &str) {
-    notify::emit(&db(), kind, key, title, body, None);
+pub(super) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &str) {
+    notify::emit(app, &db(app), kind, key, title, body, None);
 }
 
-pub(super) fn snapshot() -> Value {
-    must(bagholder_store::snapshot::snapshot(&db(), false))
+pub(super) fn snapshot(app: &Arc<App>) -> Value {
+    must(bagholder_store::snapshot::snapshot(&db(app), false))
 }
 
-pub(super) fn connected_not_syncing() -> bool {
-    let st = app().state.lock().unwrap();
+pub(super) fn connected_not_syncing(app: &Arc<App>) -> bool {
+    let st = app.state.lock().unwrap();
     st.connected && !st.syncing
 }

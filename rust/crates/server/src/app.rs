@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bagholder_model::base::Base;
@@ -101,32 +101,35 @@ pub struct App {
     model: crate::model_cache::ModelCache,
     store: bagholder_store::pool::Pool,
     jobs: Mutex<HashMap<String, Job>>,
-}
-
-static APP: OnceLock<App> = OnceLock::new();
-
-pub fn app() -> &'static App {
-    APP.get().expect("the app is set up at start")
-}
-
-pub fn init(home: PathBuf, root: PathBuf, bind_host: String) -> &'static App {
-    APP.get_or_init(|| App {
-        store: bagholder_store::pool::Pool::new(&home.join("bagholder.db")),
-        home,
-        root,
-        bind_host,
-        port: Mutex::new(0),
-        started_at: now_iso(),
-        state: Watched::new(State::default()),
-        stop: AtomicBool::new(false),
-        stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
-        exit_code: AtomicI32::new(0),
-        model: crate::model_cache::ModelCache::new(),
-        jobs: Mutex::new(HashMap::new()),
-    })
+    /// The one thread that shows this app's notifications, started with the first.
+    pub(crate) notify_worker: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<(String, String, String)>>>,
 }
 
 impl App {
+    pub fn new(home: PathBuf, root: PathBuf, bind_host: String) -> Arc<App> {
+        Arc::new(App {
+            store: bagholder_store::pool::Pool::new(&home.join("bagholder.db")),
+            home,
+            root,
+            bind_host,
+            port: Mutex::new(0),
+            started_at: now_iso(),
+            state: Watched::new(State::default()),
+            stop: AtomicBool::new(false),
+            stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
+            exit_code: AtomicI32::new(0),
+            model: crate::model_cache::ModelCache::new(),
+            jobs: Mutex::new(HashMap::new()),
+            notify_worker: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Run `f` on a thread of its own, named `name`, handed this app.
+    pub fn spawn_with<F: FnOnce(Arc<App>) + Send + 'static>(self: &Arc<Self>, name: &str, f: F) {
+        let app = self.clone();
+        spawn(name, move || f(app));
+    }
+
     pub fn db_path(&self) -> PathBuf {
         self.home.join("bagholder.db")
     }
@@ -232,7 +235,7 @@ impl App {
 
     /// Start a background job unless one is running or its
     /// cooldown holds. True when a thread was started.
-    pub fn kick<F: FnOnce() + Send + 'static>(&'static self, name: &str, f: F) -> bool {
+    pub fn kick<F: FnOnce() + Send + 'static>(self: &Arc<Self>, name: &str, f: F) -> bool {
         {
             let jobs = self.jobs.lock().unwrap();
             if let Some(job) = jobs.get(name) {

@@ -3,22 +3,23 @@
 //! here reaches the page as the field that changed.
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 
-use crate::app::{self, app, f, s, truthy};
+use crate::app::{self, f, s, truthy, App};
 use crate::{feeds, login, notify, orders, session, update, versions};
 
-pub fn payload() -> Value {
-    let conn = app().open().ok();
+pub fn payload(app: &Arc<App>) -> Value {
+    let conn = app.open().ok();
     let (acts, accounts, synced) = conn.as_ref().and_then(|c| versions::status_counts(c).ok()).unwrap_or((0, 0, String::new()));
     let data_version = conn.as_ref().and_then(|c| versions::data_version(c).ok()).unwrap_or_default();
     let core_version = conn.as_ref().and_then(|c| versions::core_version(c).ok()).unwrap_or_default();
-    let upd = update::update_status();
-    let sess = session::load_session();
+    let upd = update::update_status(app);
+    let sess = session::load_session(app);
     let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or(json!({}));
-    let open_orders = orders::open_orders_count();
-    let can_update = update::can_update(None);
+    let open_orders = orders::open_orders_count(app);
+    let can_update = update::can_update(app, None);
     let off = update::updates_off();
-    let st = app().state.lock().unwrap();
+    let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| truthy(x.get("access_token"))).unwrap_or(false);
     let email = if !st.email.is_empty() { st.email.clone() } else { sess.as_ref().map(|x| f(x, "email")).unwrap_or_default() };
     json!({
@@ -39,7 +40,7 @@ pub fn payload() -> Value {
         "coreVersion": format!("{}|{}", core_version, bagholder_model::clock::today_local()),
         "summaryReady": bagholder_market::enrich::summary_status() == "ready",
         "protocol": app::PROTOCOL,
-        "startedAt": app().started_at,
+        "startedAt": app.started_at,
         "version": app::APP_VERSION,
         "latestVersion": s(upd.get("latest")),
         "updateAvailable": truthy(upd.get("updateAvailable")),

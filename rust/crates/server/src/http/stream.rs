@@ -33,16 +33,18 @@ pub struct EventsQuery {
 /// nobody is looking any more.
 pub async fn events(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<EventsQuery>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let filters = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-    let feed = Feed::open(filters, q.trade);
-    let hello = feed.hello();
     let app = state.app;
-    let changes = stream::unfold((Some(feed), events::subscribe(), true), move |(feed, mut rx, first)| async move {
+    let feed = Feed::open(app.clone(), filters, q.trade);
+    let hello = feed.hello();
+    let changes = stream::unfold((Some(feed), events::subscribe(), true), move |(feed, mut rx, first)| {
+    let value = app.clone();
+    async move {
         let mut feed = feed?;
         if !first {
             events::changed(&mut rx).await;
         }
         loop {
-            if app.stopping() {
+            if value.stopping() {
                 return None;
             }
             // mark what has been seen before looking, so a change made while
@@ -60,6 +62,7 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
             }
             events::changed(&mut rx).await;
         }
+    }
     });
     let messages = stream::iter([vec![hello]]).chain(changes).flat_map(stream::iter);
     Sse::new(messages.map(|(name, data)| Ok(Event::default().event(name).data(data.to_string()))))
@@ -77,8 +80,9 @@ pub struct Watch {
 }
 
 /// `POST /api/events/watch`
-pub async fn watch(Body(w): Body<Watch>) -> Api {
-    let ok = blocking(move || events::watch(w.id, w.docs.into_iter().collect())).await?;
+pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api {
+    let app = state.app;
+    let ok = blocking(move || events::watch(&app, w.id, w.docs.into_iter().collect())).await?;
     Ok(Json(json!({"ok": ok})))
 }
 
@@ -99,15 +103,17 @@ pub struct After {
 
 /// `GET /api/notifications/stream`: every notification made from now on (or after
 /// `after` / `Last-Event-ID`), each once. Folded into `/api/events` in stage 6.
-pub async fn notifications(Params(q): Params<After>, headers: HeaderMap) -> Response {
+pub async fn notifications(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<After>, headers: HeaderMap) -> Response {
     let named = q.after.or_else(|| headers.get("last-event-id").and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string()));
     let after = named.filter(|a| !a.is_empty() && a.bytes().all(|c| c.is_ascii_digit())).and_then(|a| a.parse::<i64>().ok());
-    let body = produced("bagholder-notify-stream", move |write| crate::notify::stream(after, |text| write(text.as_bytes())));
+    let app = state.app;
+    let body = produced("bagholder-notify-stream", move |write| crate::notify::stream(&app, after, |text| write(text.as_bytes())));
     ([(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")], body).into_response()
 }
 
 /// `GET /api/login/stream`: the sign-in window as a multipart JPEG stream.
-pub async fn login() -> Response {
-    let body = produced("bagholder-login-stream", |write| crate::login::login_stream(|chunk| write(chunk)));
+pub async fn login(axum::extract::State(state): axum::extract::State<AppState>) -> Response {
+    let app = state.app;
+    let body = produced("bagholder-login-stream", move |write| crate::login::login_stream(&app, |chunk| write(chunk)));
     ([(header::CONTENT_TYPE, "multipart/x-mixed-replace; boundary=frame")], body).into_response()
 }

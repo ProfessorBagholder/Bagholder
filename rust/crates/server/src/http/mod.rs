@@ -26,6 +26,7 @@ mod session;
 mod stream;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
@@ -48,7 +49,7 @@ pub use extract::{Body, Params};
 /// global can be retired module by module without touching them again.
 #[derive(Clone)]
 pub struct AppState {
-    pub app: &'static App,
+    pub app: Arc<App>,
 }
 
 /// What a JSON route answers.
@@ -73,7 +74,7 @@ pub async fn answer(work: impl FnOnce() -> Value + Send + 'static) -> Api {
 
 /// Synchronous work on a connection to the store.
 pub async fn with_store(state: &AppState, work: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value> + Send + 'static) -> Api {
-    let app = state.app;
+    let app = state.app.clone();
     Ok(Json(blocking(move || app.open().and_then(|conn| work(&conn))).await??))
 }
 
@@ -116,7 +117,7 @@ fn refused(code: StatusCode) -> Response {
 /// resolves a name of its own to this machine names itself there), and a write
 /// has to come from the page itself.
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    match admitted(state.app, &req) {
+    match admitted(&state.app, &req) {
         Ok(()) => next.run(req).await,
         Err(code) => refused(code),
     }
@@ -169,12 +170,15 @@ fn host_ok(bind_host: &str, port: u16, host: &str) -> bool {
 /// for at most `DRAIN`.
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
     const DRAIN: Duration = Duration::from_secs(5);
-    let app = state.app;
-    let stopped = || async move {
-        let mut rx = crate::events::subscribe();
-        while !app.stopping() {
-            if rx.changed().await.is_err() {
-                break;
+    let app = state.app.clone();
+    let stopped = || {
+        let app = app.clone();
+        async move {
+            let mut rx = crate::events::subscribe();
+            while !app.stopping() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
             }
         }
     };

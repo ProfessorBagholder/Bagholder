@@ -13,12 +13,12 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::{router, AppState};
-use crate::app::app;
+use crate::tests_common::{app, app_ref};
 
 /// The one app, with its store prepared as the server prepares it at start.
 fn guard() -> std::sync::MutexGuard<'static, ()> {
     let g = crate::tests_common::guard();
-    bagholder_store::relabel::ensure(&app().open().unwrap()).unwrap();
+    bagholder_store::relabel::ensure(&app_ref().open().unwrap()).unwrap();
     g
 }
 
@@ -190,7 +190,7 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 #[test]
 fn test_a_feed_with_nothing_new_has_nothing_to_say() {
     let _g = guard();
-    let mut feed = crate::events::Feed::open(None, None);
+    let mut feed = crate::events::Feed::open(app(), None, None);
     let first = feed.step(&crate::status::payload);
     assert_eq!(first.iter().map(|m| m.0).collect::<Vec<_>>(), ["snapshot"]);
     assert!(feed.step(&crate::status::payload).is_empty(), "the same view and the same status: no message at all");
@@ -200,16 +200,16 @@ fn test_a_feed_with_nothing_new_has_nothing_to_say() {
 fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
     std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
-    let conn = app().open().unwrap();
+    let conn = app_ref().open().unwrap();
     crate::notify::set_settings(&conn, &json!({"fills": true})).unwrap();
     bagholder_store::feeds::clear_notifications(&conn).unwrap();
-    let mut feed = crate::events::Feed::open(None, None);
-    assert!(crate::events::watch(feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
+    let mut feed = crate::events::Feed::open(app(), None, None);
+    assert!(crate::events::watch(&app(), feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
     let first = feed.step(&crate::status::payload);
     let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");
     assert_eq!((bell.0, &bell.1["data"]), ("snapshot", &json!({"rows": [], "unread": 0})));
 
-    let row = crate::notify::emit(&conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).expect("fills are on");
+    let row = crate::notify::emit(&app(), &conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).expect("fills are on");
     let next = feed.step(&crate::status::payload);
     let change = next.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell is told");
     assert_eq!(change.0, "patch");

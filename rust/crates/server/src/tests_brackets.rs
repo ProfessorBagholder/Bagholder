@@ -10,6 +10,7 @@ use bagholder_store::tables as tb;
 use bagholder_ws::session::CallError;
 
 use crate::orders::{self as od, bracket_seam, seam};
+use crate::tests_common::app;
 
 static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 static REJECTIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -19,7 +20,7 @@ fn lk<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
 }
 
 fn db() -> bagholder_store::pool::Pooled<'static> {
-    crate::app::app().open().unwrap()
+    crate::tests_common::app_ref().open().unwrap()
 }
 
 fn now() -> String {
@@ -155,7 +156,7 @@ fn ticket(over: Value) -> Value {
 }
 
 fn entry(over: Value) -> (String, Value) {
-    let r = od::place_order(&ticket(over));
+    let r = od::place_order(&app(), &ticket(over));
     assert!(tv(&r, "ok"), "{}", r);
     (sv(&r, "id"), get_bracket(&sv(&r, "bracketId")))
 }
@@ -169,7 +170,7 @@ fn tick(quote: Option<Value>) -> Value {
     if let Some(v) = quote {
         m.insert("sec-s-us".to_string(), v);
     }
-    od::bracket_tick(Some(m))
+    od::bracket_tick(&app(), Some(m))
 }
 
 fn t0() {
@@ -464,7 +465,7 @@ fn test_an_ending_is_confirmed_before_the_bracket_is_done() {
     let id = sv(&b, "id");
     let stop = sv(&get_bracket(&id), "slOrderId");
     *lk(&bracket_seam::CANCEL_ORDER) = Some(json!({"ok": false, "error": "Wealthsimple is busy"}));
-    od::cancel_bracket(&id);
+    od::cancel_bracket(&app(), &id);
     *lk(&bracket_seam::CANCEL_ORDER) = None;
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), sv(&b, "outcome")), ("closing".into(), "cancelled by the user".into()));
@@ -501,7 +502,7 @@ fn test_a_sell_from_the_ticket_ends_the_bracket_on_those_shares_first() {
     let id = sv(&b, "id");
     let stop = sv(&get_bracket(&id), "slOrderId");
     clear();
-    let r = od::place_order(&ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
     assert!(tv(&r, "ok"), "{}", r);
     let o = ops();
     assert_eq!(o[0], "SoOrdersOrderCancel", "the resting stop goes first");
@@ -520,7 +521,7 @@ fn test_selling_part_of_the_shares_keeps_the_bracket_on_the_rest() {
     t0();
     let id = sv(&b, "id");
     let first = sv(&get_bracket(&id), "slOrderId");
-    let r = od::place_order(&ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
+    let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
     assert!(tv(&r, "ok"), "{}", r);
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), fv(&b, "quantity"), sv(&b, "slOrderId")), ("armed".into(), 15.0, "".into()));
@@ -693,11 +694,11 @@ fn test_a_rejected_exit_is_tried_again_spaced_out_for_as_long_as_the_bracket_liv
 fn test_with_orders_off_nothing_is_placed_and_the_line_is_printed_once() {
     let _g = setup();
     live(false);
-    let r = od::place_order(&ticket(json!({})));
+    let r = od::place_order(&app(), &ticket(json!({})));
     let (oid, bid) = (sv(&r, "id"), sv(&r, "bracketId"));
     filled(&oid);
-    od::bracket_tick(Some(HashMap::new()));
-    od::bracket_tick(Some(HashMap::new()));
+    od::bracket_tick(&app(), Some(HashMap::new()));
+    od::bracket_tick(&app(), Some(HashMap::new()));
     let b = get_bracket(&bid);
     assert_eq!((sv(&b, "status"), sv(&b, "slOrderId")), ("armed".into(), "".into()));
     assert!(creates().is_empty());
@@ -713,7 +714,7 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     t0();
     let id = sv(&b, "id");
     clear();
-    let r = od::cancel_bracket(&id);
+    let r = od::cancel_bracket(&app(), &id);
     assert!(tv(&r, "ok"));
     assert_eq!(ops(), vec!["SoOrdersOrderCancel"]);
     let b = get_bracket(&id);
@@ -727,9 +728,9 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     t0();
     let b = get_bracket(&id);
     assert_eq!(sv(&b, "status"), "done", "done once Wealthsimple confirms the cancel");
-    assert!(sv(&od::cancel_bracket(&id), "error").contains("not live"));
-    assert_eq!(sv(&od::cancel_bracket("nope"), "error"), "No such bracket.");
-    let ids: Vec<String> = od::orders_payload(false)["brackets"].as_array().unwrap().iter().map(|x| sv(x, "id")).collect();
+    assert!(sv(&od::cancel_bracket(&app(), &id), "error").contains("not live"));
+    assert_eq!(sv(&od::cancel_bracket(&app(), "nope"), "error"), "No such bracket.");
+    let ids: Vec<String> = od::orders_payload(&app(), false)["brackets"].as_array().unwrap().iter().map(|x| sv(x, "id")).collect();
     assert_eq!(ids, vec![id]);
 }
 

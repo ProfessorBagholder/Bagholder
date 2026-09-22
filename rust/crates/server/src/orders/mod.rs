@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -22,7 +22,7 @@ use bagholder_ws::session::{identity_from, CallError};
 #[cfg(not(test))]
 use bagholder_ws::session::Client;
 
-use crate::app::{app, f, log, now_iso, now_unix, num, qty_text, s, truthy, uuid4};
+use crate::app::{f, log, now_iso, now_unix, num, qty_text, s, truthy, uuid4, App};
 
 /// Test seams: a fake Wealthsimple, the live switch, the session, and threads.
 /// Under `cfg(test)` nothing reaches the network: without a fake every call fails.

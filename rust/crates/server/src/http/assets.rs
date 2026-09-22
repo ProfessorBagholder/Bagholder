@@ -64,8 +64,9 @@ fn file(name: &str, data: Vec<u8>, cache: &'static str) -> Response {
 
 async fn index(State(state): State<AppState>) -> Result<Response, ApiError> {
     let root = state.app.root.clone();
+    let app = state.app.clone();
     // a checkout where the page has not been built still opens: on the legacy page
-    let data = blocking(move || built(&root, "index.html").or_else(|| std::fs::read(crate::feeds::ledger_path()).ok())).await?;
+    let data = blocking(move || built(&root, "index.html").or_else(|| std::fs::read(crate::feeds::ledger_path(&app)).ok())).await?;
     data.map(|d| file("index.html", d, "no-cache")).ok_or_else(|| ApiError::NotFound("index missing".into()))
 }
 
@@ -97,7 +98,8 @@ async fn root_file(State(state): State<AppState>, name: &'static str) -> Result<
     data.map(|d| file(name, d, "no-cache")).ok_or_else(|| ApiError::NotFound(format!("{} missing", name)))
 }
 
-async fn legacy() -> Result<Response, ApiError> {
-    let data = blocking(|| std::fs::read(crate::feeds::ledger_path()).ok()).await?;
+async fn legacy(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let app = state.app.clone();
+    let data = blocking(move || std::fs::read(crate::feeds::ledger_path(&app)).ok()).await?;
     data.map(|d| file("ledger.html", d, "no-cache")).ok_or_else(|| ApiError::NotFound("ledger.html missing".into()))
 }

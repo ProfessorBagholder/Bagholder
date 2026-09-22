@@ -12,29 +12,30 @@ pub const ORDER_TIFS: [&str; 2] = ["DAY", "UNTIL_CANCEL"];
 pub(super) const ORDER_TRADABLE_TYPES: [&str; 1] = ["SELF_DIRECTED"];
 pub(super) const ORDER_UNTRADABLE_MARKERS: [&str; 3] = ["CRYPTO", "PREDICTIONS", "MANAGED"];
 
-pub(super) fn ticket_session() -> Option<Value> {
+pub(super) fn ticket_session(app: &Arc<App>) -> Option<Value> {
     #[cfg(test)]
     {
+        let _ = app;
         return seam::SESSION.lock().unwrap_or_else(|e| e.into_inner()).clone().flatten();
     }
     #[allow(unreachable_code)]
-    let sess = load_session()?;
+    let sess = load_session(app)?;
     if f(&sess, "access_token").is_empty() {
         return None;
     }
-    ensure_fresh_token(Some(sess.clone()));
-    match load_session() {
+    ensure_fresh_token(app, Some(sess.clone()));
+    match load_session(app) {
         Some(v) if v.as_object().map_or(false, |m| !m.is_empty()) => Some(v),
         _ => Some(sess),
     }
 }
 
-pub fn order_accounts(accounts: Option<&[Value]>) -> Vec<Value> {
+pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<Value> {
     let owned;
     let list: &[Value] = match accounts {
         Some(a) => a,
         None => {
-            owned = snapshot().get("accounts").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+            owned = snapshot(app).get("accounts").and_then(|a| a.as_array()).cloned().unwrap_or_default();
             &owned
         }
     };
@@ -59,8 +60,8 @@ pub fn order_accounts(accounts: Option<&[Value]>) -> Vec<Value> {
     out
 }
 
-pub fn resolve_security(symbol: &str, security_id: &str) -> Option<Value> {
-    let rows = must(bagholder_store::admin::list_securities(&db()));
+pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Option<Value> {
+    let rows = must(bagholder_store::admin::list_securities(&db(app)));
     let sid = security_id.trim();
     if !sid.is_empty() {
         if let Some(r) = rows.iter().find(|r| f(r, "id") == sid) {
@@ -160,13 +161,13 @@ pub fn parse_buying_power(data: &Value) -> Value {
     json!({"buyingPower": jo(on(bp, "quantity")), "cash": jo(on(cash, "quantity")), "currency": s(or_v(bp.get("currency"), cash.get("currency")))})
 }
 
-pub fn fetch_quotes(sess: &Value, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
+pub fn fetch_quotes(app: &Arc<App>, sess: &Value, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
     let ids: Vec<String> = security_ids.iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     let mut out = HashMap::new();
     if ids.is_empty() {
         return Ok(out);
     }
-    let data = gql(sess, "FetchSecuritiesSummary", json!({"ids": ids}))?;
+    let data = gql(app, sess, "FetchSecuritiesSummary", json!({"ids": ids}))?;
     if let Some(a) = data.get("securities").and_then(|v| v.as_array()) {
         for node in a {
             if let Some(q) = parse_quote(node) {
@@ -211,8 +212,8 @@ pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Optio
     None
 }
 
-pub fn lookup_listing(sess: &Value, symbol: &str, exchange: &str) -> Option<Value> {
-    let data = match gql(sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
+pub fn lookup_listing(app: &Arc<App>, sess: &Value, symbol: &str, exchange: &str) -> Option<Value> {
+    let data = match gql(app, sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
         Ok(d) => d,
         Err(e) => {
             log(&format!("bagholder ticket: listing search for {} failed: {}", symbol, e));
@@ -221,30 +222,30 @@ pub fn lookup_listing(sess: &Value, symbol: &str, exchange: &str) -> Option<Valu
     };
     let sec = parse_listing_search(&data, symbol, exchange);
     if let Some(sec) = &sec {
-        must(bagholder_store::admin::upsert_securities(&db(), std::slice::from_ref(sec), &now_iso()));
+        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(sec), &now_iso()));
     }
     sec
 }
 
-pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> Value {
+pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> Value {
     let name_of = || if symbol.is_empty() { security_id.to_string() } else { symbol.to_string() };
-    let mut sec = resolve_security(symbol, security_id);
+    let mut sec = resolve_security(app, symbol, security_id);
     if sec.is_none() && exchange.is_empty() {
         return json!({"ok": false, "error": format!("No listing stored for {}.", name_of())});
     }
-    let sess = match ticket_session() {
+    let sess = match ticket_session(app) {
         Some(s) => s,
         None => return json!({"ok": false, "error": "Not connected."}),
     };
     if sec.is_none() {
-        sec = lookup_listing(&sess, &symbol.trim().to_uppercase(), exchange);
+        sec = lookup_listing(app, &sess, &symbol.trim().to_uppercase(), exchange);
     }
     let sec = match sec {
         Some(s) => s,
         None => return json!({"ok": false, "error": format!("No listing stored for {}.", name_of())}),
     };
     let sid = f(&sec, "id");
-    let mut quotes = match fetch_quotes(&sess, &[sid.clone()]) {
+    let mut quotes = match fetch_quotes(app, &sess, &[sid.clone()]) {
         Ok(q) => q,
         Err(CallError::NotAuthorized) => return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again."}),
         Err(e) => return json!({"ok": false, "error": format!("Quote failed: {}", err_text(&e))}),
@@ -265,16 +266,16 @@ pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange:
         set(&mut quote, "currency", json!(f(&sec, "currency").to_uppercase()));
     }
     let mut md = json!({"orderTypes": ORDER_EXEC_TYPES, "marginRate": null});
-    match gql(&sess, "FetchSecurityMarketData", json!({"id": sid})) {
+    match gql(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
         Ok(d) => md = parse_market_data(&d),
         Err(e) => log(&format!("bagholder ticket: market data for {} failed: {}", sid, e)),
     }
-    let accounts = order_accounts(None);
+    let accounts = order_accounts(app, None);
     let acct = accounts.iter().find(|a| f(a, "id") == account_id).cloned();
     let mut balance = json!({"buyingPower": null, "cash": null, "currency": ""});
     if let Some(a) = &acct {
         let cur = if f(&quote, "currency").is_empty() { "CAD".to_string() } else { f(&quote, "currency") };
-        match gql(&sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": f(a, "id"), "currency": cur, "securityId": sid})) {
+        match gql(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": f(a, "id"), "currency": cur, "securityId": sid})) {
             Ok(d) => balance = parse_buying_power(&d),
             Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", f(a, "id"), e)),
         }
@@ -282,7 +283,7 @@ pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange:
     let mut margin_available = Value::Null;
     if let Some(a) = &acct {
         if tr(a, "marginAccountId") {
-            let snap = snapshot();
+            let snap = snapshot(app);
             for m in snap.get("margin").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
                 if f(&m, "accountId") == f(a, "marginAccountId") && m.get("buyingPower").map_or(false, |v| !v.is_null()) {
                     margin_available = jo(on(&m, "buyingPower"));
@@ -290,7 +291,7 @@ pub fn ticket_quote(symbol: &str, security_id: &str, account_id: &str, exchange:
             }
         }
     }
-    let fx_map = must(bagholder_store::tables::fx_rates(&db(), "USDCAD"));
+    let fx_map = must(bagholder_store::tables::fx_rates(&db(app), "USDCAD"));
     let fx_usd_cad = if fx_map.is_empty() {
         Value::Null
     } else {
@@ -400,7 +401,7 @@ impl Ticket {
 
 /// The order a ticket asks for, and what Wealthsimple is sent for it; or what is wrong
 /// with the ticket, in the words the ticket shows.
-pub fn ticket_order(t: &Ticket) -> Result<(Order, Value), String> {
+pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String> {
     let side = Side::parse(&t.side.to_uppercase());
     if !side.is_set() {
         return Err("Side must be Buy or Sell.".into());
@@ -427,11 +428,11 @@ pub fn ticket_order(t: &Ticket) -> Result<(Order, Value), String> {
     if has_stop && !positive(stop_price) {
         return Err("A stop price is required.".into());
     }
-    let acct = match order_accounts(None).into_iter().find(|a| f(a, "id") == t.account_id) {
+    let acct = match order_accounts(app, None).into_iter().find(|a| f(a, "id") == t.account_id) {
         Some(a) => a,
         None => return Err("Choose an account.".into()),
     };
-    let sec = match resolve_security(&t.symbol, &t.security_id) {
+    let sec = match resolve_security(app, &t.symbol, &t.security_id) {
         Some(s) => s,
         None => return Err(format!("No listing stored for {}.", t.symbol)),
     };
@@ -500,30 +501,30 @@ pub fn ticket_order(t: &Ticket) -> Result<(Order, Value), String> {
 
 /// `ticket_order`, from JSON and to it: how the tests ask.
 #[cfg(test)]
-pub fn order_request(body: &Value) -> Result<(Value, Value), String> {
-    ticket_order(&Ticket::from_json(body)).map(|(o, req)| (serde_json::to_value(&o).unwrap_or(Value::Null), req))
+pub fn order_request(app: &Arc<App>, body: &Value) -> Result<(Value, Value), String> {
+    ticket_order(app, &Ticket::from_json(body)).map(|(o, req)| (serde_json::to_value(&o).unwrap_or(Value::Null), req))
 }
 
 /// Write the order, then send it; what became of it is written over what was written.
 /// With orders off it is written as `dry` and nothing is sent.
-pub fn submit_order(row: &mut Order, req: &Value) -> Value {
+pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
     let id = row.id.clone();
     let now_is = |status: OrderStatus, error: &str| {
-        patch_order(&id, OrderPatch { status: Some(status), error: Some(error.into()), ..OrderPatch::default() });
+        patch_order(app, &id, OrderPatch { status: Some(status), error: Some(error.into()), ..OrderPatch::default() });
     };
     if !orders_live() {
         row.status = OrderStatus::Dry;
-        must(so::typed::insert_order(&db(), row, &now_iso()));
+        must(so::typed::insert_order(&db(app), row, &now_iso()));
         log(&format!("bagholder order (dry run, not sent): {}", bagholder_store::tables::json_text_sorted(req)));
         return json!({"ok": true, "id": id, "status": "dry", "order": row});
     }
-    let sess = match ticket_session() {
+    let sess = match ticket_session(app) {
         Some(s) => s,
         None => return json!({"ok": false, "error": "Not connected."}),
     };
     row.status = OrderStatus::Sending;
-    must(so::typed::insert_order(&db(), row, &now_iso()));
-    let data = match gql(&sess, "SoOrdersOrderCreate", json!({"input": req})) {
+    must(so::typed::insert_order(&db(app), row, &now_iso()));
+    let data = match gql(app, &sess, "SoOrdersOrderCreate", json!({"input": req})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => {
             now_is(OrderStatus::Failed, "Wealthsimple refused the session.");
@@ -544,11 +545,12 @@ pub fn submit_order(row: &mut Order, req: &Value) -> Value {
         return json!({"ok": false, "error": format!("Wealthsimple rejected the order: {}", msg), "id": id});
     }
     let ws_id = f(result.get("order").filter(|v| truthy(Some(v))).unwrap_or(&empty), "orderId");
-    patch_order(&id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
+    patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
     log(&format!("bagholder order: {} sent, Wealthsimple order {}", id, ws_id));
     let rid = id.clone();
+    let a = app.clone();
     spawn("bagholder-order-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&rid));
+        let _ = catch_unwind(|| refresh_orders(&a, &rid));
     });
     json!({"ok": true, "id": id, "status": "sent", "wsOrderId": ws_id})
 }
@@ -556,32 +558,32 @@ pub fn submit_order(row: &mut Order, req: &Value) -> Value {
 /// Place what a ticket asks for. A sale first takes its shares out from under any
 /// bracket guarding them -- the bracket ended, or kept on what is left -- so that the
 /// bracket's own exits and this sale never sell the same shares twice.
-pub fn place_ticket(t: &Ticket) -> Value {
-    let (mut row, req) = match ticket_order(t) {
+pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> Value {
+    let (mut row, req) = match ticket_order(app, t) {
         Ok(x) => x,
         Err(e) => return json!({"ok": false, "error": e}),
     };
     if row.side == Side::Sell {
         let mut left = row.quantity.unwrap_or(0.0);
-        for b in live_brackets() {
+        for b in live_brackets(app) {
             if b.account_id != row.account_id || b.security_id != row.security_id || matches!(b.status, BracketStatus::Waiting | BracketStatus::Closing) {
                 continue;
             }
             let held = b.quantity.unwrap_or(0.0);
             if left >= held {
-                end_bracket(&b, "sold from the ticket", "");
-                await_cancels(&b, 8);
+                end_bracket(app, &b, "sold from the ticket", "");
+                await_cancels(app, &b, 8);
                 left -= held;
             } else if left > 0.0 {
-                release_shares(&b, left);
-                await_cancels(&b, 8);
+                release_shares(app, &b, left);
+                await_cancels(app, &b, 8);
                 left = 0.0;
             }
         }
     }
-    let mut r = submit_order(&mut row, &req);
+    let mut r = submit_order(app, &mut row, &req);
     if tr(&r, "ok") && (row.stop_loss.is_some() || row.take_profit.is_some()) {
-        let b = create_bracket(&row);
+        let b = create_bracket(app, &row);
         set(&mut r, "bracketId", json!(b.id));
     }
     r
@@ -589,7 +591,7 @@ pub fn place_ticket(t: &Ticket) -> Value {
 
 /// `place_ticket`, from JSON: how the tests ask.
 #[cfg(test)]
-pub fn place_order(body: &Value) -> Value {
-    place_ticket(&Ticket::from_json(body))
+pub fn place_order(app: &Arc<App>, body: &Value) -> Value {
+    place_ticket(app, &Ticket::from_json(body))
 }
 

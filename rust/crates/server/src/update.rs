@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::app::{app, f, log, now_iso, now_unix, parse_instant, spawn, truthy, APP_VERSION, REPO};
+use std::sync::Arc;
+
+use crate::app::{f, log, now_iso, now_unix, parse_instant, spawn, truthy, App, APP_VERSION, REPO};
 
 pub const RESTART_CODE: i32 = 3;
 /// A restarted server alive this long is a good update.
@@ -59,12 +61,12 @@ fn exe_name() -> &'static str {
 }
 
 /// The folder the running copy lives in: the executable's own.
-pub fn app_dir() -> PathBuf {
+pub fn app_dir(app: &Arc<App>) -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok())
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| app().root.clone())
+        .unwrap_or_else(|| app.root.clone())
 }
 
 /// 'v1.2.3' -> (1, 2, 3).
@@ -108,7 +110,7 @@ fn fetch_release() -> Option<Value> {
 
 /// The latest release against APP_VERSION, the
 /// record stored in meta. Never fails.
-pub fn check_for_update() -> Value {
+pub fn check_for_update(app: &Arc<App>) -> Value {
     let mut record = json!({"checkedAt": now_iso(), "ok": false, "latest": "", "url": format!("{}/releases/latest", repo_url()), "updateAvailable": false});
     let rel = fetch_release();
     if let Some(rel) = rel {
@@ -124,8 +126,9 @@ pub fn check_for_update() -> Value {
             record["updateAvailable"] = json!(available);
             record["assets"] = release_assets(&rel);
             if available {
-                if let Ok(c) = app().open() {
+                if let Ok(c) = app.open() {
                     crate::notify::emit(
+                        app,
                         &c,
                         "updates",
                         &format!("update:{}", tag),
@@ -137,15 +140,15 @@ pub fn check_for_update() -> Value {
             }
         }
     }
-    if let Ok(c) = app().open() {
+    if let Ok(c) = app.open() {
         let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&record));
     }
     record
 }
 
 /// The last check's record, {} when none.
-pub fn update_status() -> Value {
-    let raw = app().open().ok().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "").ok()).unwrap_or_default();
+pub fn update_status(app: &Arc<App>) -> Value {
+    let raw = app.open().ok().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "").ok()).unwrap_or_default();
     match serde_json::from_str::<Value>(&raw) {
         Ok(v) if v.is_object() => v,
         _ => json!({}),
@@ -193,48 +196,48 @@ fn which(cmd: &str) -> bool {
 }
 
 /// The Cargo workspace of a checkout: rust/ under the repository root.
-pub fn cargo_dir() -> PathBuf {
-    let nested = app().root.join("rust");
-    if nested.join("Cargo.toml").is_file() { nested } else { app().root.clone() }
+pub fn cargo_dir(app: &Arc<App>) -> PathBuf {
+    let nested = app.root.join("rust");
+    if nested.join("Cargo.toml").is_file() { nested } else { app.root.clone() }
 }
 
 /// 'git' when this copy is a git checkout with git on
 /// the path, else 'release'.
-pub fn update_mode() -> &'static str {
-    if app().root.join(".git").exists() && which("git") { "git" } else { "release" }
+pub fn update_mode(app: &Arc<App>) -> &'static str {
+    if app.root.join(".git").exists() && which("git") { "git" } else { "release" }
 }
 
-fn git(args: &[&str]) -> std::io::Result<std::process::Output> {
-    Command::new("git").args(args).current_dir(&app().root).stdin(Stdio::null()).output()
+fn git(app: &Arc<App>, args: &[&str]) -> std::io::Result<std::process::Output> {
+    Command::new("git").args(args).current_dir(&app.root).stdin(Stdio::null()).output()
 }
 
 /// A clean tree on master.
-pub fn git_update_ready() -> (bool, String) {
-    let status = match git(&["status", "--porcelain"]) { Ok(o) => o, Err(e) => return (false, format!("git: {}", e)) };
+pub fn git_update_ready(app: &Arc<App>) -> (bool, String) {
+    let status = match git(app, &["status", "--porcelain"]) { Ok(o) => o, Err(e) => return (false, format!("git: {}", e)) };
     if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
         return (false, "This copy is a git checkout with local changes; pull it yourself.".into());
     }
-    let head = match git(&["rev-parse", "--abbrev-ref", "HEAD"]) { Ok(o) => o, Err(e) => return (false, format!("git: {}", e)) };
+    let head = match git(app, &["rev-parse", "--abbrev-ref", "HEAD"]) { Ok(o) => o, Err(e) => return (false, format!("git: {}", e)) };
     if String::from_utf8_lossy(&head.stdout).trim() != "master" {
         return (false, "This copy is a git checkout on another branch; pull it yourself.".into());
     }
     (true, String::new())
 }
 
-pub fn can_update(rec: Option<&Value>) -> bool {
+pub fn can_update(app: &Arc<App>, rec: Option<&Value>) -> bool {
     let owned;
     let rec = match rec {
         Some(r) => r,
         None => {
-            owned = update_status();
+            owned = update_status(app);
             &owned
         }
     };
     if !truthy(rec.get("updateAvailable")) || updates_off() {
         return false;
     }
-    if update_mode() == "git" {
-        return git_update_ready().0;
+    if update_mode(app) == "git" {
+        return git_update_ready(app).0;
     }
     truthy(rec.get("assets"))
 }
@@ -366,10 +369,10 @@ fn put_in_place(src: &Path, dest: &Path, copy: bool) -> std::io::Result<()> {
 
 /// The current copies kept under HOME/previous,
 /// the new files put in place, the marker the supervisor watches left.
-fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
-    let home = &app().home;
+fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
+    let home = &app.home;
     bagholder_store::guard_home(home)?;
-    let dir = app_dir();
+    let dir = app_dir(app);
     let previous = home.join("previous");
     if previous.exists() {
         std::fs::remove_dir_all(&previous).map_err(|e| e.to_string())?;
@@ -387,7 +390,7 @@ fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), Stri
     for name in names {
         if let Err(e) = put_in_place(&staging.join(name), &dir.join(name), false) {
             // a replace failed part way: every file goes back to its previous copy
-            rollback();
+            rollback(app);
             return Err(e.to_string());
         }
     }
@@ -395,8 +398,8 @@ fn install_files(staging: &Path, names: &[String], tag: &str) -> Result<(), Stri
 }
 
 /// The previous copies put back.
-pub fn rollback() -> bool {
-    rollback_in(&app().home, &app_dir())
+pub fn rollback(app: &Arc<App>) -> bool {
+    rollback_in(&app.home, &app_dir(app))
 }
 
 fn rollback_in(home: &Path, dir: &Path) -> bool {
@@ -418,29 +421,30 @@ fn rollback_in(home: &Path, dir: &Path) -> bool {
 
 /// Finish the response in flight, then stop
 /// serving so the supervisor restarts the server.
-pub fn request_restart() {
-    app().exit_code.store(RESTART_CODE, std::sync::atomic::Ordering::SeqCst);
-    spawn("bagholder-restart", || {
+pub fn request_restart(app: &Arc<App>) {
+    app.exit_code.store(RESTART_CODE, std::sync::atomic::Ordering::SeqCst);
+    let a = app.clone();
+    spawn("bagholder-restart", move || {
         std::thread::sleep(Duration::from_millis(500));
-        app().request_stop();
+        a.request_stop();
     });
 }
 
-fn set_updating(msg: &str) {
-    app().state.lock().unwrap().updating = msg.to_string();
+fn set_updating(app: &Arc<App>, msg: &str) {
+    app.state.lock().unwrap().updating = msg.to_string();
 }
 
 fn sha256_hex(data: &[u8]) -> String {
     openssl::sha::sha256(data).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-fn install_release(tag: &str, rec: &Value) -> Result<(), String> {
+fn install_release(app: &Arc<App>, tag: &str, rec: &Value) -> Result<(), String> {
     let assets = rec.get("assets").cloned().unwrap_or(json!({}));
     if !truthy(Some(&assets)) {
         return Err("This release has no downloadable archive.".into());
     }
-    set_updating(&format!("Downloading {}…", tag));
-    let home = app().home.clone();
+    set_updating(app, &format!("Downloading {}…", tag));
+    let home = app.home.clone();
     let staging = home.join("staging");
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
@@ -455,60 +459,60 @@ fn install_release(tag: &str, rec: &Value) -> Result<(), String> {
     if want != got {
         return Err("The download did not match the release's checksum.".into());
     }
-    set_updating(&format!("Installing {}…", tag));
+    set_updating(app, &format!("Installing {}…", tag));
     let names = extract_release(&archive, &staging)?;
     check_binary(&staging, &names, tag)?;
-    install_files(&staging, &names, tag)?;
+    install_files(app, &staging, &names, tag)?;
     let _ = std::fs::remove_dir_all(&staging);
     let _ = std::fs::remove_file(&archive);
     let _ = std::fs::remove_file(&sha_file);
     Ok(())
 }
 
-fn pull(tag: &str) -> Result<(), String> {
-    set_updating(&format!("Updating to {}…", tag));
-    let (ok, why) = git_update_ready();
+fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
+    set_updating(app, &format!("Updating to {}…", tag));
+    let (ok, why) = git_update_ready(app);
     if !ok {
         return Err(why);
     }
-    let before = git(&["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
-    let r = git(&["pull", "--ff-only"]).map_err(|e| e.to_string())?;
+    let before = git(app, &["rev-parse", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let r = git(app, &["pull", "--ff-only"]).map_err(|e| e.to_string())?;
     if !r.status.success() {
         let msg = { let e = String::from_utf8_lossy(&r.stderr).to_string(); if e.is_empty() { String::from_utf8_lossy(&r.stdout).to_string() } else { e } };
         return Err(format!("git pull failed: {}", msg.trim().chars().take(200).collect::<String>()));
     }
     // a checkout runs what it builds: the new sources are built before the restart,
     // and a build that fails puts the previous commit back
-    set_updating(&format!("Building {}…", tag));
-    let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(cargo_dir()).stdin(Stdio::null()).output();
+    set_updating(app, &format!("Building {}…", tag));
+    let built = Command::new("cargo").args(["build", "--release", "--bins"]).current_dir(cargo_dir(app)).stdin(Stdio::null()).output();
     if !built.as_ref().map(|o| o.status.success()).unwrap_or(false) {
         if !before.is_empty() {
-            let _ = git(&["reset", "--hard", &before]);
+            let _ = git(app, &["reset", "--hard", &before]);
         }
         let msg = built.map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_else(|e| e.to_string());
         let last = msg.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>();
         return Err(format!("the new version did not build: {}", last));
     }
-    std::fs::write(app().home.join("update-pending"), tag).map_err(|e| e.to_string())
+    std::fs::write(app.home.join("update-pending"), tag).map_err(|e| e.to_string())
 }
 
 /// Bring this copy to `tag`, then restart. Never
 /// fails; a failure lands in the state's update error and nothing is changed.
-pub fn perform_update(tag: &str, rec: &Value) {
-    if let Err(e) = bagholder_store::guard_home(&app().home) {
+pub fn perform_update(app: &Arc<App>, tag: &str, rec: &Value) {
+    if let Err(e) = bagholder_store::guard_home(&app.home) {
         log(&format!("bagholder update: {}", e));
         return;
     }
-    let done = if update_mode() == "git" { pull(tag) } else { install_release(tag, rec) };
+    let done = if update_mode(app) == "git" { pull(app, tag) } else { install_release(app, tag, rec) };
     match done {
         Ok(()) => {
-            set_updating("Restarting…");
+            set_updating(app, "Restarting…");
             log(&format!("bagholder update: {} installed, restarting", tag));
-            request_restart();
+            request_restart(app);
         }
         Err(e) => {
             {
-                let mut st = app().state.lock().unwrap();
+                let mut st = app.state.lock().unwrap();
                 st.updating.clear();
                 st.update_error = format!("Update failed: {}", e);
             }
@@ -519,13 +523,13 @@ pub fn perform_update(tag: &str, rec: &Value) {
 
 /// Begin the update the page asked for, in the
 /// background.
-pub fn start_update() -> Value {
+pub fn start_update(app: &Arc<App>) -> Value {
     if updates_off() {
         return json!({"ok": false, "error": UPDATES_OFF_MESSAGE});
     }
-    let rec = update_status();
+    let rec = update_status(app);
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         if !st.updating.is_empty() {
             return json!({"ok": true});
         }
@@ -536,11 +540,11 @@ pub fn start_update() -> Value {
             return json!({"ok": false, "error": "No update to install."});
         }
         drop(st);
-        if !can_update(Some(&rec)) {
-            let why = if update_mode() == "git" { git_update_ready().1 } else { "This release has no downloadable archive.".to_string() };
+        if !can_update(app, Some(&rec)) {
+            let why = if update_mode(app) == "git" { git_update_ready(app).1 } else { "This release has no downloadable archive.".to_string() };
             return json!({"ok": false, "error": why});
         }
-        st = app().state.lock().unwrap();
+        st = app.state.lock().unwrap();
         if !st.updating.is_empty() {
             return json!({"ok": true});
         }
@@ -548,7 +552,8 @@ pub fn start_update() -> Value {
         st.updating = format!("Updating to {}…", f(&rec, "latest"));
     }
     let tag = f(&rec, "latest");
-    spawn("bagholder-update", move || perform_update(&tag, &rec));
+    let a = app.clone();
+    spawn("bagholder-update", move || perform_update(&a, &tag, &rec));
     json!({"ok": true})
 }
 
@@ -617,12 +622,12 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
 }
 
 /// At most hourly.
-pub fn check_for_update_if_due() -> Value {
-    let rec = update_status();
+pub fn check_for_update_if_due(app: &Arc<App>) -> Value {
+    let rec = update_status(app);
     if let Some(last) = parse_instant(&f(&rec, "checkedAt")) {
         if now_unix() - last < UPDATE_CHECK_HOURS * 3600.0 {
             return rec;
         }
     }
-    check_for_update()
+    check_for_update(app)
 }

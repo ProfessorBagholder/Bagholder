@@ -24,12 +24,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/update", post(start_update))
 }
 
-async fn login_start() -> Api {
-    answer(login::start_login_browser).await
+async fn login_start(State(state): State<AppState>) -> Api {
+    answer(move || login::start_login_browser(&state.app)).await
 }
 
-async fn login_cancel() -> Api {
-    answer(login::cancel_login).await
+async fn login_cancel(State(state): State<AppState>) -> Api {
+    answer(move || login::cancel_login(&state.app)).await
 }
 
 /// `POST /api/login/input`: a click, a key or a scroll on the streamed window,
@@ -39,43 +39,44 @@ async fn login_input(Body(event): Body<Map<String, Value>>) -> Api {
 }
 
 /// `GET /api/login/frame`: the window's latest frame, for a page that cannot hold the stream.
-async fn login_frame() -> Result<Response, ApiError> {
-    Ok(match blocking(login::login_frame).await? {
+async fn login_frame(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(match blocking(move || login::login_frame(&state.app)).await? {
         Some(jpeg) => ([(header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
     })
 }
 
 /// `POST /api/capture`: tokens handed over by hand (the fallback to the window).
-async fn capture(Body(tokens): Body<Map<String, Value>>) -> Api {
-    answer(move || session::capture_tokens(&Value::Object(tokens))).await
+async fn capture(State(state): State<AppState>, Body(tokens): Body<Map<String, Value>>) -> Api {
+    answer(move || session::capture_tokens(&state.app, &Value::Object(tokens))).await
 }
 
-async fn refresh() -> Api {
-    answer(session::refresh_now).await
+async fn refresh(State(state): State<AppState>) -> Api {
+    answer(move || session::refresh_now(&state.app)).await
 }
 
 /// `POST /api/sync`: start a pull; its progress reaches the page as status changes.
 async fn sync(State(state): State<AppState>) -> Api {
     let app = state.app;
     answer(move || {
-        if session::load_session().is_none() {
+        if session::load_session(&app).is_none() {
             return json!({"ok": false, "error": "not connected"});
         }
         app.state.lock().unwrap().error.clear();
-        crate::app::spawn("bagholder-sync", || {
-            feeds::sync_then_market();
+        let a = app.clone();
+        crate::app::spawn("bagholder-sync", move || {
+            feeds::sync_then_market(&a);
         });
         json!({"ok": true, "syncing": true})
     })
     .await
 }
 
-async fn disconnect() -> Api {
-    blocking(session::delete_session).await?;
+async fn disconnect(State(state): State<AppState>) -> Api {
+    blocking(move || session::delete_session(&state.app)).await?;
     Ok(Json(json!({"ok": true})))
 }
 
-async fn start_update() -> Api {
-    answer(update::start_update).await
+async fn start_update(State(state): State<AppState>) -> Api {
+    answer(move || update::start_update(&state.app)).await
 }

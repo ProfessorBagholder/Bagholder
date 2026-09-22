@@ -169,15 +169,15 @@ pub fn parse_extended_order(data: &Value) -> Option<Reading> {
     })
 }
 
-pub(super) fn fetch_extended_order(sess: &Value, external_id: &str) -> Result<Option<Reading>, CallError> {
-    Ok(parse_extended_order(&gql(sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id}))?))
+pub(super) fn fetch_extended_order(app: &Arc<App>, sess: &Value, external_id: &str) -> Result<Option<Reading>, CallError> {
+    Ok(parse_extended_order(&gql(app, sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id}))?))
 }
 
-pub(super) fn fetch_order_feed(sess: &Value, identity: &str) -> Result<Vec<Value>, CallError> {
+pub(super) fn fetch_order_feed(app: &Arc<App>, sess: &Value, identity: &str) -> Result<Vec<Value>, CallError> {
     let mut out = Vec::new();
     let mut cursor = Value::Null;
     loop {
-        let data = gql(sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": WS_PENDING, "first": 25, "cursor": cursor}))?;
+        let data = gql(app, sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": WS_PENDING, "first": 25, "cursor": cursor}))?;
         let empty = json!({});
         let feed = data.get("identity").and_then(|v| v.get("orderServiceExtendedOrderFeed")).filter(|v| v.is_object()).unwrap_or(&empty);
         if let Some(edges) = feed.get("edges").and_then(|v| v.as_array()) {
@@ -199,13 +199,13 @@ pub(super) fn fetch_order_feed(sess: &Value, identity: &str) -> Result<Vec<Value
 }
 
 /// An order found pending at Wealthsimple that was not placed here.
-pub(super) fn feed_order_row(node: &Value) -> Order {
+pub(super) fn feed_order_row(app: &Arc<App>, node: &Value) -> Order {
     let empty = json!({});
     let sec = node.get("security").filter(|v| v.is_object()).unwrap_or(&empty);
     let stock = sec.get("stock").filter(|v| v.is_object()).unwrap_or(&empty);
-    let acct = order_accounts(None).into_iter().find(|a| f(a, "id") == f(node, "canonicalAccountId"));
+    let acct = order_accounts(app, None).into_iter().find(|a| f(a, "id") == f(node, "canonicalAccountId"));
     let security_id = s(or_v(node.get("securityId"), sec.get("id")));
-    let mut symbol = must(so::symbol_for_security(&db(), &security_id));
+    let mut symbol = must(so::symbol_for_security(&db(app), &security_id));
     if symbol.is_empty() {
         symbol = s(or_v(node.get("symbol"), stock.get("symbol")));
     }
@@ -239,7 +239,7 @@ pub(super) fn refreshed_at() -> String {
     REFRESHED_AT.lock().unwrap().clone()
 }
 
-pub fn kick_orders_refresh() -> bool {
+pub fn kick_orders_refresh(app: &Arc<App>) -> bool {
     let at = refreshed_at();
     if !at.is_empty() {
         let age = match parse_z(&at) {
@@ -250,14 +250,15 @@ pub fn kick_orders_refresh() -> bool {
             return false;
         }
     }
-    if !connected_not_syncing() {
+    if !connected_not_syncing(app) {
         return false;
     }
     if REFRESHING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return false;
     }
-    spawn("bagholder-orders-refresh", || {
-        let _ = catch_unwind(|| refresh_orders(""));
+    let a = app.clone();
+    spawn("bagholder-orders-refresh", move || {
+        let _ = catch_unwind(|| refresh_orders(&a, ""));
         REFRESHING.store(false, Ordering::SeqCst);
     });
     true
@@ -266,7 +267,7 @@ pub fn kick_orders_refresh() -> bool {
 /// Write a fill as a trade in the book, until the next sync brings Wealthsimple's own row
 /// for it. Only an order placed here, only what has filled beyond what was already
 /// booked, and only once -- the booked quantity is kept on the order.
-pub fn book_order_fill(order: &Order, upd: &Reading) -> bool {
+pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
     if order.source == Source::Wealthsimple || !order.side.is_set() {
         return false;
     }
@@ -291,7 +292,7 @@ pub fn book_order_fill(order: &Order, upd: &Reading) -> bool {
         date = crate::app::today_utc();
     }
     let currency = [&order.currency, &upd.currency].into_iter().map(|c| c.trim().to_uppercase()).find(|c| !c.is_empty()).filter(|c| c == "CAD" || c == "USD").unwrap_or_else(|| "CAD".into());
-    let accounts = snapshot().get("accounts").cloned().unwrap_or(json!([]));
+    let accounts = snapshot(app).get("accounts").cloned().unwrap_or(json!([]));
     let mult = bagholder_model::symbols::option_multiplier(&symbol);
     let buy = order.side == Side::Buy;
     let account_id = &order.account_id;
@@ -321,22 +322,22 @@ pub fn book_order_fill(order: &Order, upd: &Reading) -> bool {
         "securityId": order.security_id,
         "source": "bagholder-fill",
     });
-    let conn = db();
+    let conn = db(app);
     must(bagholder_store::activities::insert_local(&conn, &act, &uuid4));
     must(so::mark_order_fill_booked(&conn, &order.id, filled, &now_iso()));
     log(&format!("bagholder orders: {} filled {} {} @ {} booked as a local trade until the next sync", order.id, qty_text(filled), symbol, rp(Some(price))));
     true
 }
 
-pub fn refresh_orders(only_id: &str) -> Value {
-    let sess = match ticket_session() {
+pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
+    let sess = match ticket_session(app) {
         Some(s) => s,
         None => return json!({"ok": false, "skipped": "no session"}),
     };
-    let live: Vec<Order> = orders_all().into_iter().filter(|o| o.status.is_live() && (only_id.is_empty() || o.id == only_id)).collect();
+    let live: Vec<Order> = orders_all(app).into_iter().filter(|o| o.status.is_live() && (only_id.is_empty() || o.id == only_id)).collect();
     let (mut read, mut failed, mut added) = (0i64, 0i64, 0i64);
     for o in &live {
-        let upd = match fetch_extended_order(&sess, &o.id) {
+        let upd = match fetch_extended_order(app, &sess, &o.id) {
             Ok(u) => u,
             Err(CallError::NotAuthorized) => {
                 log("bagholder orders: Wealthsimple refused the session");
@@ -367,20 +368,20 @@ pub fn refresh_orders(only_id: &str) -> Value {
             patch.quantity = upd.quantity.map(Some);
             patch.limit_price = upd.limit_price.map(Some);
             patch.stop_price = upd.stop_price.map(Some);
-            let name = must(so::symbol_for_security(&db(), &o.security_id));
+            let name = must(so::symbol_for_security(&db(app), &o.security_id));
             if !name.is_empty() && name != o.symbol {
                 patch.symbol = Some(name);
             }
         }
         let notice = order_notice(o, &upd);
-        patch_order(&o.id, patch);
+        patch_order(app, &o.id, patch);
         read += 1;
         if let Some((kind, key, title, body)) = notice {
-            emit(&kind, &key, &title, &body);
+            emit(app, &kind, &key, &title, &body);
         }
         if upd.status == OrderStatus::Filled {
-            let current = order(&o.id).unwrap_or_else(|| o.clone());
-            if catch_unwind(AssertUnwindSafe(|| book_order_fill(&current, &upd))).is_err() {
+            let current = order(app, &o.id).unwrap_or_else(|| o.clone());
+            if catch_unwind(AssertUnwindSafe(|| book_order_fill(app, &current, &upd))).is_err() {
                 log(&format!("bagholder orders: {} fill not booked locally", o.id));
             }
         }
@@ -388,16 +389,16 @@ pub fn refresh_orders(only_id: &str) -> Value {
     if only_id.is_empty() {
         let identity = identity_from(&sess);
         if !identity.is_empty() {
-            let rows = orders_all();
+            let rows = orders_all(app);
             let mut known: HashSet<String> = rows.iter().map(|o| o.id.clone()).collect();
             known.extend(rows.iter().filter(|o| !o.ws_order_id.is_empty()).map(|o| o.ws_order_id.clone()));
-            match fetch_order_feed(&sess, &identity) {
+            match fetch_order_feed(app, &sess, &identity) {
                 Ok(nodes) => {
                     for node in nodes {
                         if known.contains(&f(&node, "id")) || known.contains(&f(&node, "orderId")) {
                             continue;
                         }
-                        must(so::typed::insert_order(&db(), &feed_order_row(&node), &now_iso()));
+                        must(so::typed::insert_order(&db(app), &feed_order_row(app, &node), &now_iso()));
                         added += 1;
                     }
                 }
@@ -416,9 +417,9 @@ pub fn refresh_orders(only_id: &str) -> Value {
     json!({"ok": failed == 0, "read": read, "added": added, "failed": failed})
 }
 
-pub fn orders_loop() {
-    while !app().wait(Duration::from_secs(ORDERS_REFRESH_SEC)) {
-        if !connected_not_syncing() {
+pub fn orders_loop(app: &Arc<App>) {
+    while !app.wait(Duration::from_secs(ORDERS_REFRESH_SEC)) {
+        if !connected_not_syncing(app) {
             continue;
         }
         let r = catch_unwind(|| {
@@ -426,12 +427,12 @@ pub fn orders_loop() {
             // matters -- an order is live, or the panel is open on some page -- and
             // otherwise only often enough to hear of an order placed in Wealthsimple's
             // own app, which the fills notification is owed.
-            let closely = orders_all().iter().any(|o| o.status.is_live()) || crate::events::watched("orders");
+            let closely = orders_all(app).iter().any(|o| o.status.is_live()) || crate::events::watched("orders");
             let age = parse_z(&refreshed_at()).map(|t| now_unix() - t as f64);
             if !closely && age.map_or(false, |a| a < (ORDERS_REFRESH_SEC * 10) as f64) {
                 return;
             }
-            refresh_orders("");
+            refresh_orders(app, "");
         });
         if r.is_err() {
             log("bagholder orders: refresh failed");
@@ -439,12 +440,12 @@ pub fn orders_loop() {
     }
 }
 
-pub fn cancel_order(order_id: &str) -> Value {
+pub fn cancel_order(app: &Arc<App>, order_id: &str) -> Value {
     #[cfg(test)]
     if let Some(v) = bracket_seam::CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return v;
     }
-    let row = match order(order_id) {
+    let row = match order(app, order_id) {
         Some(r) => r,
         None => return json!({"ok": false, "error": "No such order."}),
     };
@@ -454,12 +455,12 @@ pub fn cancel_order(order_id: &str) -> Value {
     if !orders_live() {
         return json!({"ok": false, "error": "Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple."});
     }
-    let sess = match ticket_session() {
+    let sess = match ticket_session(app) {
         Some(s) => s,
         None => return json!({"ok": false, "error": "Not connected."}),
     };
     let id = row.id.clone();
-    let data = match gql(&sess, "SoOrdersOrderCancel", json!({"cancelOrderRequest": {"externalId": id}})) {
+    let data = match gql(app, &sess, "SoOrdersOrderCancel", json!({"cancelOrderRequest": {"externalId": id}})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again."}),
         Err(e) => {
@@ -472,11 +473,12 @@ pub fn cancel_order(order_id: &str) -> Value {
         log(&format!("bagholder orders: cancel {} refused: {}", id, msg));
         return json!({"ok": false, "error": format!("Wealthsimple refused the cancel: {}", msg)});
     }
-    patch_order(&id, OrderPatch { status: Some(OrderStatus::Cancelling), ws_status: Some("CANCEL_PENDING".into()), ..OrderPatch::default() });
+    patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Cancelling), ws_status: Some("CANCEL_PENDING".into()), ..OrderPatch::default() });
     log(&format!("bagholder orders: cancel {} accepted", id));
     let rid = id.clone();
+    let a = app.clone();
     spawn("bagholder-order-refresh", move || {
-        let _ = catch_unwind(|| refresh_orders(&rid));
+        let _ = catch_unwind(|| refresh_orders(&a, &rid));
     });
     json!({"ok": true, "id": id, "status": "cancelling"})
 }
@@ -501,22 +503,22 @@ pub struct OrdersDoc {
     pub refreshed_at: String,
 }
 
-pub fn orders_doc(kick: bool) -> OrdersDoc {
+pub fn orders_doc(app: &Arc<App>, kick: bool) -> OrdersDoc {
     if kick {
-        kick_orders_refresh();
+        kick_orders_refresh(app);
     }
-    let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db())).iter().map(|s| (f(s, "id"), f(s, "primaryExchange"))).collect();
-    let orders = orders_all().into_iter().map(|order| OrderCard { exchange: exchanges.get(&order.security_id).cloned().unwrap_or_default(), order }).collect();
-    OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(), &[])), live: orders_live(), refreshed_at: refreshed_at() }
+    let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db(app))).iter().map(|s| (f(s, "id"), f(s, "primaryExchange"))).collect();
+    let orders = orders_all(app).into_iter().map(|order| OrderCard { exchange: exchanges.get(&order.security_id).cloned().unwrap_or_default(), order }).collect();
+    OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at() }
 }
 
-pub fn orders_payload(kick: bool) -> Value {
-    serde_json::to_value(orders_doc(kick)).unwrap_or(Value::Null)
+pub fn orders_payload(app: &Arc<App>, kick: bool) -> Value {
+    serde_json::to_value(orders_doc(app, kick)).unwrap_or(Value::Null)
 }
 
 /// What the header's badge counts: entries still with the broker, and brackets at work.
-pub fn open_orders_count() -> i64 {
-    let entries = orders_all().iter().filter(|o| o.status.is_live() && o.role == Role::Entry).count();
-    let at_work = must(so::typed::list_brackets(&db(), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting).count();
+pub fn open_orders_count(app: &Arc<App>) -> i64 {
+    let entries = orders_all(app).iter().filter(|o| o.status.is_live() && o.role == Role::Entry).count();
+    let at_work = must(so::typed::list_brackets(&db(app), &[])).iter().filter(|b| b.status.is_live() && b.status != BracketStatus::Waiting).count();
     (entries + at_work) as i64
 }

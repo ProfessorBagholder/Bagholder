@@ -3,54 +3,55 @@
 //! listing names, and the Portfolio figures read between syncs.
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bagholder_ws::fetch;
 use bagholder_ws::session::{identity_from, CallError, Client};
 
-use crate::app::{app, f, log, now_iso, now_unix, spawn, today_utc};
+use crate::app::{f, log, now_iso, now_unix, spawn, today_utc, App};
 
 pub const PORTFOLIO_REFRESH_MINUTES: u64 = 5;
 /// A sync that has failed this many times in a row is told, once.
 pub const SYNC_FAILS_TOLD: i64 = 3;
 pub const LOGIN_URL: &str = "https://my.wealthsimple.com/app/login";
 
-pub fn load_session() -> Option<Value> {
-    app().ws_home().load_session()
+pub fn load_session(app: &Arc<App>) -> Option<Value> {
+    app.ws_home().load_session()
 }
 
-pub fn save_session(sess: &Value) {
-    let _ = app().ws_home().save_session(sess);
+pub fn save_session(app: &Arc<App>, sess: &Value) {
+    let _ = app.ws_home().save_session(sess);
 }
 
-fn set_error(msg: &str) {
-    app().state.lock().unwrap().error = msg.to_string();
+fn set_error(app: &Arc<App>, msg: &str) {
+    app.state.lock().unwrap().error = msg.to_string();
 }
 
-fn set_step(msg: &str) {
-    app().state.lock().unwrap().sync_step = msg.to_string();
+fn set_step(app: &Arc<App>, msg: &str) {
+    app.state.lock().unwrap().sync_step = msg.to_string();
 }
 
 /// The refresh grant, one at a time. A failure
 /// says why on the header.
-pub fn refresh_session(sess: &mut Value, adopt: bool) -> bool {
-    let home = app().ws_home();
+pub fn refresh_session(app: &Arc<App>, sess: &mut Value, adopt: bool) -> bool {
+    let home = app.ws_home();
     let client = Client { home: &home };
     match client.refresh_session(sess, adopt) {
         Ok(()) => true,
         Err(msg) => {
-            set_error(&msg);
+            set_error(app, &msg);
             false
         }
     }
 }
 
-pub fn token_info(sess: &Value) -> Value {
-    let home = app().ws_home();
+pub fn token_info(app: &Arc<App>, sess: &Value) -> Value {
+    let home = app.ws_home();
     Client { home: &home }.token_info(sess)
 }
 
-pub fn apply_token_info_client_id(sess: &mut Value, info: Option<&Value>) -> String {
+pub fn apply_token_info_client_id(app: &Arc<App>, sess: &mut Value, info: Option<&Value>) -> String {
     if f(sess, "access_token").is_empty() {
         return String::new();
     }
@@ -58,7 +59,7 @@ pub fn apply_token_info_client_id(sess: &mut Value, info: Option<&Value>) -> Str
     let info = match info {
         Some(i) => i,
         None => {
-            fetched = token_info(sess);
+            fetched = token_info(app, sess);
             &fetched
         }
     };
@@ -67,14 +68,14 @@ pub fn apply_token_info_client_id(sess: &mut Value, info: Option<&Value>) -> Str
         return String::new();
     }
     sess["client_id"] = json!(cid);
-    app().ws_home().save_client_id(&cid);
+    app.ws_home().save_client_id(&cid);
     cid
 }
 
 /// The production client id from Wealthsimple's
 /// login script, cached.
-pub fn scrape_client_id() -> String {
-    let home = app().ws_home();
+pub fn scrape_client_id(app: &Arc<App>) -> String {
+    let home = app.ws_home();
     let cached = home.cached_client_id();
     if !cached.is_empty() {
         return cached;
@@ -102,22 +103,22 @@ pub fn scrape_client_id() -> String {
 
 /// Refresh ahead of the expiry. Connected means
 /// this grant produced a new token.
-pub fn ensure_fresh_token(sess: Option<Value>) -> bool {
-    let mut sess = match sess.or_else(load_session) {
+pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Value>) -> bool {
+    let mut sess = match sess.or_else(|| load_session(app)) {
         Some(s) if !f(&s, "refresh_token").is_empty() => s,
         _ => {
-            let mut st = app().state.lock().unwrap();
+            let mut st = app.state.lock().unwrap();
             st.connected = false;
             st.error = "missing refresh token".into();
             return false;
         }
     };
-    let connected = app().state.lock().unwrap().connected;
+    let connected = app.state.lock().unwrap().connected;
     if connected && !bagholder_ws::sync::token_refresh_needed(&sess, now_unix()) {
         return true;
     }
-    let ok = refresh_session(&mut sess, true);
-    let mut st = app().state.lock().unwrap();
+    let ok = refresh_session(app, &mut sess, true);
+    let mut st = app.state.lock().unwrap();
     st.connected = ok;
     if ok {
         st.error.clear();
@@ -128,9 +129,9 @@ pub fn ensure_fresh_token(sess: Option<Value>) -> bool {
 }
 
 /// The login only; stored rows stay.
-pub fn delete_session() {
-    app().ws_home().delete_session();
-    let mut st = app().state.lock().unwrap();
+pub fn delete_session(app: &Arc<App>) {
+    app.ws_home().delete_session();
+    let mut st = app.state.lock().unwrap();
     st.connected = false;
     st.email.clear();
     st.last_sync.clear();
@@ -138,12 +139,12 @@ pub fn delete_session() {
     st.error.clear();
 }
 
-pub fn boot_session() {
-    let conn = match app().open() { Ok(c) => c, Err(_) => return };
-    let mut sess = match load_session() {
+pub fn boot_session(app: &Arc<App>) {
+    let conn = match app.open() { Ok(c) => c, Err(_) => return };
+    let mut sess = match load_session(app) {
         Some(s) => s,
         None => {
-            let mut st = app().state.lock().unwrap();
+            let mut st = app.state.lock().unwrap();
             st.connected = false;
             st.last_sync = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
             return;
@@ -151,25 +152,25 @@ pub fn boot_session() {
     };
     let mut info_ok = false;
     if !f(&sess, "access_token").is_empty() {
-        let info = token_info(&sess);
+        let info = token_info(app, &sess);
         info_ok = info.as_object().map(|m| !m.is_empty()).unwrap_or(false) && !crate::app::truthy(info.get("error")) && !crate::app::truthy(info.get("_http_status"));
         if info_ok {
-            apply_token_info_client_id(&mut sess, Some(&info));
+            apply_token_info_client_id(app, &mut sess, Some(&info));
             if !f(&info, "identity_canonical_id").is_empty() && f(&sess, "identity_canonical_id").is_empty() {
                 sess["identity_canonical_id"] = info["identity_canonical_id"].clone();
             }
             if !f(&info, "email").is_empty() {
                 sess["email"] = info["email"].clone();
             }
-            save_session(&sess);
+            save_session(app, &sess);
         }
     }
     let mut ok = info_ok;
     if !ok && !f(&sess, "refresh_token").is_empty() {
-        ok = refresh_session(&mut sess, true);
-        sess = load_session().unwrap_or(sess);
+        ok = refresh_session(app, &mut sess, true);
+        sess = load_session(app).unwrap_or(sess);
     }
-    let mut st = app().state.lock().unwrap();
+    let mut st = app.state.lock().unwrap();
     st.connected = ok;
     if ok {
         st.error.clear();
@@ -181,25 +182,25 @@ pub fn boot_session() {
 }
 
 /// Told once per expiry.
-pub fn note_session_expired() {
+pub fn note_session_expired(app: &Arc<App>) {
     let was = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         let was = st.connected;
         st.connected = false;
         st.error = "Session expired. Connect again.".into();
         was
     };
     if was {
-        if let Ok(conn) = app().open() {
-            crate::notify::emit(&conn, "connection", &format!("session:{}", now_iso()), "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.", None);
+        if let Ok(conn) = app.open() {
+            crate::notify::emit(app, &conn, "connection", &format!("session:{}", now_iso()), "Sign in needed", "The Wealthsimple session expired. Connect again from the menu.", None);
         }
     }
 }
 
 /// The third failure in a row is told.
-pub fn note_sync_failed(reason: &str) {
+pub fn note_sync_failed(app: &Arc<App>, reason: &str) {
     let (fails, first) = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         st.sync_fails += 1;
         if st.sync_fails == 1 {
             st.sync_first_fail = now_iso();
@@ -207,14 +208,14 @@ pub fn note_sync_failed(reason: &str) {
         (st.sync_fails, st.sync_first_fail.clone())
     };
     if fails == SYNC_FAILS_TOLD {
-        if let Ok(conn) = app().open() {
-            crate::notify::emit(&conn, "connection", &format!("sync:{}", first), "Sync failing", if reason.is_empty() { "Sync failed." } else { reason }, None);
+        if let Ok(conn) = app.open() {
+            crate::notify::emit(app, &conn, "connection", &format!("sync:{}", first), "Sync failing", if reason.is_empty() { "Sync failed." } else { reason }, None);
         }
     }
 }
 
 /// Per-filter-nickname daily equity: (points, public errors).
-fn fetch_nickname_nav_history(client: &Client, sess: &Value, accounts: &[Value], conn: &rusqlite::Connection) -> (Vec<Value>, Vec<String>) {
+fn fetch_nickname_nav_history(app: &Arc<App>, client: &Client, sess: &Value, accounts: &[Value], conn: &rusqlite::Connection) -> (Vec<Value>, Vec<String>) {
     let mut points = Vec::new();
     let mut errors = Vec::new();
     let last_by = bagholder_store::tables::nav_last_dates(conn).unwrap_or_default();
@@ -223,7 +224,7 @@ fn fetch_nickname_nav_history(client: &Client, sess: &Value, accounts: &[Value],
     let mut names: Vec<&String> = groups.keys().collect();
     names.sort();
     for nick in names {
-        set_step(&format!("Fetching equity history for {}…", nick));
+        set_step(app, &format!("Fetching equity history for {}…", nick));
         let since = last_by.get(nick).and_then(|v| v.as_str()).map(|s| s.to_string());
         let ids: Vec<String> = groups[nick].as_array().cloned().unwrap_or_default().iter().map(|v| crate::app::s(Some(v))).collect();
         let mut series = Vec::new();
@@ -253,9 +254,9 @@ fn fetch_nickname_nav_history(client: &Client, sess: &Value, accounts: &[Value],
 
 /// The pull. Inserts new Wealthsimple rows only and never
 /// rebuilds the table.
-pub fn run_sync(allow_refresh: bool, force_activity: bool) -> bool {
+pub fn run_sync(app: &Arc<App>, allow_refresh: bool, force_activity: bool) -> bool {
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         if st.syncing {
             return false;
         }
@@ -263,54 +264,54 @@ pub fn run_sync(allow_refresh: bool, force_activity: bool) -> bool {
         st.error.clear();
         st.sync_step = "Checking session…".into();
     }
-    let result = sync_body(force_activity);
+    let result = sync_body(app, force_activity);
     let out = match result {
         Ok(v) => v,
         Err(CallError::NotAuthorized) => {
             let refreshed = allow_refresh && {
-                let mut s = load_session().unwrap_or(json!({}));
-                refresh_session(&mut s, true)
+                let mut s = load_session(app).unwrap_or(json!({}));
+                refresh_session(app, &mut s, true)
             };
             if refreshed {
-                app().state.lock().unwrap().syncing = false;
-                return run_sync(false, force_activity);
+                app.state.lock().unwrap().syncing = false;
+                return run_sync(app, false, force_activity);
             }
-            note_session_expired();
+            note_session_expired(app);
             false
         }
         Err(e) => {
             let public = bagholder_ws::sync::public_sync_error(&e.to_string());
             let line = format!("Sync failed: {}", public);
             log(&line);
-            set_error(&line);
-            note_sync_failed(&public);
+            set_error(app, &line);
+            note_sync_failed(app, &public);
             false
         }
     };
-    let mut st = app().state.lock().unwrap();
+    let mut st = app.state.lock().unwrap();
     st.syncing = false;
     st.sync_step.clear();
     out
 }
 
-fn sync_body(force_activity: bool) -> Result<bool, CallError> {
+fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     let failed = |e: rusqlite::Error| CallError::Failed(e.to_string());
-    let conn = app().open().map_err(failed)?;
-    let mut sess = match load_session() {
+    let conn = app.open().map_err(failed)?;
+    let mut sess = match load_session(app) {
         Some(s) if !f(&s, "access_token").is_empty() || !f(&s, "refresh_token").is_empty() => s,
         _ => {
-            app().state.lock().unwrap().connected = false;
+            app.state.lock().unwrap().connected = false;
             return Ok(false);
         }
     };
     if f(&sess, "access_token").is_empty() {
-        app().state.lock().unwrap().connected = false;
+        app.state.lock().unwrap().connected = false;
         return Ok(false);
     }
     let mut info = json!({});
     let mut identity = identity_from(&sess);
     if identity.is_empty() {
-        info = token_info(&sess);
+        info = token_info(app, &sess);
         identity = identity_from(&info);
     }
     if identity.is_empty() {
@@ -321,11 +322,11 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
     if !email.is_empty() {
         sess["email"] = json!(email);
     }
-    save_session(&sess);
+    save_session(app, &sess);
 
     if !force_activity && !bagholder_store::admin::activity_pull_due(&conn, now_unix() as i64).map_err(failed)? {
         let synced = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         st.connected = true;
         st.email = email;
         if !synced.is_empty() {
@@ -337,9 +338,9 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
         return Ok(true);
     }
 
-    let home = app().ws_home();
+    let home = app.ws_home();
     let client = Client { home: &home };
-    set_step("Fetching accounts…");
+    set_step(app, "Fetching accounts…");
     let accounts = fetch::fetch_all_accounts(&client, &sess, &identity)?;
     let mut acc_by_id = serde_json::Map::new();
     for a in &accounts {
@@ -351,7 +352,7 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
     let acc_by_id = Value::Object(acc_by_id);
     let (start_date, _full) = bagholder_ws::sync::activity_sync_bounds(&conn).map_err(failed)?;
     let mut mapped: Vec<Value> = Vec::new();
-    set_step("Syncing transactions");
+    set_step(app, "Syncing transactions");
     let now_i = now_unix() as i64;
     for acc in accounts.iter().filter(|a| !f(a, "id").is_empty()) {
         let items = fetch::fetch_activities_for_account(&client, &sess, &f(acc, "id"), start_date.as_deref(), now_i)?;
@@ -365,11 +366,11 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
         let pool = pools.get(&aid).cloned().unwrap_or(aid);
         row["fifoId"] = json!(pool);
     }
-    set_step("Fetching balances…");
+    set_step(app, "Fetching balances…");
     let ids: Vec<String> = acc_by_id.as_object().unwrap().keys().cloned().collect();
     let balances = fetch::fetch_balances(&client, &sess, &ids)?;
     let margin = fetch::fetch_margin(&client, &sess, &fetch::margin_account_ids(&accounts), &now_iso());
-    set_step("Fetching equity history…");
+    set_step(app, "Fetching equity history…");
     let last_by = bagholder_store::tables::nav_last_dates(&conn).map_err(failed)?;
     let since_all = last_by.get("").and_then(|v| v.as_str()).map(|s| s.to_string());
     let nav_history = fetch::fetch_nav_history(&client, &sess, &identity, since_all.as_deref(), &today_utc()).unwrap_or_default();
@@ -381,11 +382,11 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
             Value::Object(m)
         })
         .collect();
-    let (nick_pts, nav_errors) = fetch_nickname_nav_history(&client, &sess, &accounts, &conn);
+    let (nick_pts, nav_errors) = fetch_nickname_nav_history(app, &client, &sess, &accounts, &conn);
     combined.extend(nick_pts);
     bagholder_store::merge::apply_wealthsimple_mapped(&conn, &mapped, &crate::app::uuid4).map_err(failed)?;
     let synced = now_iso();
-    set_step("Saving…");
+    set_step(app, "Saving…");
     bagholder_store::tables::replace_accounts(&conn, &bagholder_ws::sync::slim_accounts(&accounts)).map_err(failed)?;
     bagholder_store::tables::replace_balances(&conn, &balances).map_err(failed)?;
     bagholder_store::tables::replace_margin(&conn, &margin, &synced).map_err(failed)?;
@@ -393,9 +394,9 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
     bagholder_store::tables::set_meta(&conn, "synced_at", &synced).map_err(failed)?;
     bagholder_store::admin::mark_activity_pulled(&conn, &synced).map_err(failed)?;
     drop(conn);
-    fill_listings(&sess, true);
+    fill_listings(app, &sess, true);
     let nav_line = if nav_errors.is_empty() { String::new() } else { format!("NAV history failed for {}", nav_errors.join("; ")) };
-    let mut st = app().state.lock().unwrap();
+    let mut st = app.state.lock().unwrap();
     st.connected = true;
     st.sync_fails = 0;
     st.email = email;
@@ -408,12 +409,12 @@ fn sync_body(force_activity: bool) -> Result<bool, CallError> {
 
 /// Stamp missing activity security ids and cache
 /// the listings the book names.
-pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
+pub fn fill_listings(app: &Arc<App>, sess: &Value, from_sync: bool) -> bool {
     if f(sess, "access_token").is_empty() {
         return false;
     }
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         if st.listings_filling || (st.syncing && !from_sync) {
             return false;
         }
@@ -421,13 +422,13 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
         st.sync_step = "Attaching listing ids…".into();
     }
     let ok = (|| -> Result<(), String> {
-        let conn = app().open().map_err(|e| e.to_string())?;
-        let home = app().ws_home();
+        let conn = app.open().map_err(|e| e.to_string())?;
+        let home = app.ws_home();
         let client = Client { home: &home };
         if bagholder_store::admin::needs_security_id_backfill(&conn).map_err(|e| e.to_string())? {
             let mut walk_ok = true;
             let mut mapped = Vec::new();
-            set_step("Attaching listing ids…");
+            set_step(app, "Attaching listing ids…");
             let snap = bagholder_store::snapshot::snapshot(&conn, true).map_err(|e| e.to_string())?;
             let mut ids: Vec<String> = Vec::new();
             for a in snap.get("accounts").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
@@ -487,7 +488,7 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
         let mut to_upsert: Vec<Value> = Vec::new();
         // options point at an underlying security, fetched in a second round
         while !pending.is_empty() {
-            set_step(&format!("Looking up company names, {} left", pending.len()));
+            set_step(app, &format!("Looking up company names, {} left", pending.len()));
             let batch: Vec<String> = pending.iter().filter(|s| !seen.contains(s)).cloned().collect();
             seen.extend(batch.iter().cloned());
             pending.clear();
@@ -507,7 +508,7 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
         Ok(())
     })()
     .is_ok();
-    let mut st = app().state.lock().unwrap();
+    let mut st = app.state.lock().unwrap();
     st.listings_filling = false;
     st.sync_step.clear();
     ok
@@ -515,9 +516,9 @@ pub fn fill_listings(sess: &Value, from_sync: bool) -> bool {
 
 /// Net liquidation values, balances and buying
 /// power read again between syncs.
-pub fn refresh_portfolio() -> Value {
+pub fn refresh_portfolio(app: &Arc<App>) -> Value {
     {
-        let st = app().state.lock().unwrap();
+        let st = app.state.lock().unwrap();
         if st.syncing {
             return json!({"ok": false, "skipped": "sync running"});
         }
@@ -525,16 +526,16 @@ pub fn refresh_portfolio() -> Value {
             return json!({"ok": false, "skipped": "not connected"});
         }
     }
-    let sess = load_session();
+    let sess = load_session(app);
     let identity = sess.as_ref().map(identity_from).unwrap_or_default();
     let sess = match sess { Some(s) if !f(&s, "access_token").is_empty() && !identity.is_empty() => s, _ => {
         log("bagholder portfolio: no session to read with");
         return json!({"ok": false, "skipped": "no session"});
     } };
-    let home = app().ws_home();
+    let home = app.ws_home();
     let client = Client { home: &home };
     let run = || -> Result<Value, String> {
-        let conn = app().open().map_err(|e| e.to_string())?;
+        let conn = app.open().map_err(|e| e.to_string())?;
         let accounts = fetch::fetch_all_accounts(&client, &sess, &identity).map_err(|e| e.to_string())?;
         let ids: Vec<String> = accounts.iter().map(|a| f(a, "id")).filter(|i| !i.is_empty()).collect();
         if ids.is_empty() {
@@ -561,30 +562,30 @@ pub fn refresh_portfolio() -> Value {
     }
 }
 
-pub fn portfolio_loop() {
+pub fn portfolio_loop(app: Arc<App>) {
     // balances, net liquidation values and buying power: read when a page connects and
     // each few minutes while one stays. Nothing else reads them between syncs.
-    while crate::events::park_until(|| crate::events::watchers() > 0) {
-        refresh_portfolio();
-        if app().wait(Duration::from_secs(60 * PORTFOLIO_REFRESH_MINUTES)) {
+    while crate::events::park_until(&app, || crate::events::watchers() > 0) {
+        refresh_portfolio(&app);
+        if app.wait(Duration::from_secs(60 * PORTFOLIO_REFRESH_MINUTES)) {
             return;
         }
     }
 }
 
 /// The grant, always.
-pub fn refresh_now() -> Value {
-    let mut sess = match load_session() {
+pub fn refresh_now(app: &Arc<App>) -> Value {
+    let mut sess = match load_session(app) {
         Some(s) if !f(&s, "refresh_token").is_empty() => s,
         _ => {
-            let mut st = app().state.lock().unwrap();
+            let mut st = app.state.lock().unwrap();
             st.connected = false;
             st.error = "not connected".into();
             return json!({"ok": false, "error": "not connected", "connected": false});
         }
     };
-    let ok = refresh_session(&mut sess, true);
-    let mut st = app().state.lock().unwrap();
+    let ok = refresh_session(app, &mut sess, true);
+    let mut st = app.state.lock().unwrap();
     st.connected = ok;
     if ok {
         st.error.clear();
@@ -594,7 +595,7 @@ pub fn refresh_now() -> Value {
 
 /// The token kept fresh, and the weekday pull when
 /// it is due, backing off on failure.
-pub fn auto_sync_loop() {
+pub fn auto_sync_loop(app: Arc<App>) {
     // Two things are waited for, and both are known ahead: the token coming up for
     // refresh, and the next pull window opening. The loop sleeps until the nearer --
     // hours, usually -- and wakes early only when the session changes under it (a
@@ -603,68 +604,68 @@ pub fn auto_sync_loop() {
     // retried on a period, doubling from `RETRY_FIRST` to half an hour.
     const RETRY_FIRST: Duration = Duration::from_secs(30);
     const RETRY_MOST: Duration = Duration::from_secs(1800);
-    let has_login = || load_session().map_or(false, |s| !f(&s, "refresh_token").is_empty());
+    let has_login = |app: &Arc<App>| load_session(app).map_or(false, |s| !f(&s, "refresh_token").is_empty());
     let mut retry: Option<Duration> = None;
     loop {
         let now = now_unix();
-        let connected = app().state.lock().unwrap().connected;
-        let login = has_login();
+        let connected = app.state.lock().unwrap().connected;
+        let login = has_login(&app);
         let sleep = match retry {
             Some(d) => d,
             None if !login => Duration::MAX, // nothing to keep fresh until someone signs in
             None => {
-                let token = load_session().map_or(0.0, |s| bagholder_ws::sync::seconds_until_token_refresh(&s, now));
-                let due = app().open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now as i64).ok()).unwrap_or(false);
+                let token = load_session(&app).map_or(0.0, |s| bagholder_ws::sync::seconds_until_token_refresh(&s, now));
+                let due = app.open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now as i64).ok()).unwrap_or(false);
                 let pull = if due { 0 } else { bagholder_store::admin::seconds_until_pull_window(now as i64) };
                 Duration::from_secs_f64(token.min(pull as f64).max(0.0))
             }
         };
         let was = (connected, login);
-        let changed = || (app().state.lock().unwrap().connected, has_login()) != was;
+        let changed = || (app.state.lock().unwrap().connected, has_login(&app)) != was;
         if sleep == Duration::MAX {
-            if !crate::events::park_until(changed) {
+            if !crate::events::park_until(&app, changed) {
                 return;
             }
         } else if !sleep.is_zero() {
-            crate::events::park_until_or(sleep, changed);
+            crate::events::park_until_or(&app, sleep, changed);
         }
-        if app().stopping() {
+        if app.stopping() {
             return;
         }
-        if !has_login() {
+        if !has_login(&app) {
             retry = None;
             continue;
         }
-        if !ensure_fresh_token(None) {
+        if !ensure_fresh_token(&app, None) {
             retry = Some(retry.map_or(RETRY_FIRST, |d| (d * 2).min(RETRY_MOST)));
             continue;
         }
-        let syncing = app().state.lock().unwrap().syncing;
-        let due = app().open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now_unix() as i64).ok()).unwrap_or(false);
+        let syncing = app.state.lock().unwrap().syncing;
+        let due = app.open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, now_unix() as i64).ok()).unwrap_or(false);
         if due && !syncing {
-            let ok = run_sync(true, true);
-            crate::feeds::refresh_market_data();
+            let ok = run_sync(&app, true, true);
+            crate::feeds::refresh_market_data(&app);
             if !ok {
                 retry = Some(retry.map_or(RETRY_FIRST, |d| (d * 2).min(RETRY_MOST)));
                 continue;
             }
         } else if due {
             // a pull the user started is running; it marks the window done when it ends
-            crate::events::park_until(|| !app().state.lock().unwrap().syncing);
+            crate::events::park_until(&app, || !app.state.lock().unwrap().syncing);
         }
         retry = None;
     }
 }
 
 /// Keep the captured login and take it over.
-pub fn capture_tokens(body: &Value) -> Value {
+pub fn capture_tokens(app: &Arc<App>, body: &Value) -> Value {
     if !body.is_object() {
         return json!({"ok": false, "error": "bad body"});
     }
     if f(body, "access_token").is_empty() {
         return json!({"ok": false, "error": "missing access_token"});
     }
-    let mut sess = load_session().unwrap_or(json!({}));
+    let mut sess = load_session(app).unwrap_or(json!({}));
     for k in ["access_token", "refresh_token", "identity_canonical_id", "expires_at", "wssdi", "client_id", "session_id", "user_agent"] {
         if crate::app::truthy(body.get(k)) {
             sess[k] = body[k].clone();
@@ -674,7 +675,7 @@ pub fn capture_tokens(body: &Value) -> Value {
     if ident.is_empty() {
         ident = identity_from(&sess);
     }
-    let info = if f(&sess, "access_token").is_empty() { json!({}) } else { token_info(&sess) };
+    let info = if f(&sess, "access_token").is_empty() { json!({}) } else { token_info(app, &sess) };
     if ident.is_empty() {
         ident = identity_from(&info);
     }
@@ -684,36 +685,37 @@ pub fn capture_tokens(body: &Value) -> Value {
     if f(&sess, "session_id").is_empty() {
         sess["session_id"] = json!(crate::app::uuid4());
     }
-    apply_token_info_client_id(&mut sess, Some(&info));
+    apply_token_info_client_id(app, &mut sess, Some(&info));
     if f(&sess, "client_id").is_empty() {
-        let cid = scrape_client_id();
+        let cid = scrape_client_id(app);
         if !cid.is_empty() {
             sess["client_id"] = json!(cid);
         }
     }
     if f(&sess, "user_agent").is_empty() {
-        let ua = app().ws_home().cached_user_agent();
+        let ua = app.ws_home().cached_user_agent();
         if !ua.is_empty() {
             sess["user_agent"] = json!(ua);
         }
     }
     // take the login over: rotate its refresh token now, so the copy the
     // browser holds goes stale instead of ours
-    if !refresh_session(&mut sess, false) {
-        let mut st = app().state.lock().unwrap();
+    if !refresh_session(app, &mut sess, false) {
+        let mut st = app.state.lock().unwrap();
         st.connected = false;
         let err = if st.error.is_empty() { "Wealthsimple refused the captured login".to_string() } else { st.error.clone() };
         return json!({"ok": false, "error": err});
     }
-    save_session(&sess);
+    save_session(app, &sess);
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         st.connected = true;
         st.capturing = false;
         st.error.clear();
     }
-    spawn("bagholder-sync", || {
-        run_sync(true, true);
+    let a = app.clone();
+    spawn("bagholder-sync", move || {
+        run_sync(&a, true, true);
     });
     json!({"ok": true})
 }

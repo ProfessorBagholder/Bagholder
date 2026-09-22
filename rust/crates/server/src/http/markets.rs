@@ -86,8 +86,8 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
 }
 
 /// `GET /api/listing`: one listing's own page, held or not.
-async fn listing(Params(l): Params<Listing>) -> Api {
-    answer(move || feeds::listing_payload(&l.symbol, &l.exchange, &l.currency, &l.name)).await
+async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
+    answer(move || feeds::listing_payload(&state.app, &l.symbol, &l.exchange, &l.currency, &l.name)).await
 }
 
 #[derive(Deserialize)]
@@ -99,12 +99,12 @@ struct Filings {
     refresh: bool,
 }
 
-async fn filings(Params(q): Params<Filings>) -> Api {
+async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api {
     let l = q.listing;
     if l.symbol.is_empty() {
         return Err(ApiError::BadRequest("symbol required".into()));
     }
-    answer(move || feeds::filings_payload(&l.symbol, q.refresh, some(&l.name), some(&l.exchange), some(&l.currency))).await
+    answer(move || feeds::filings_payload(&state.app, &l.symbol, q.refresh, some(&l.name), some(&l.exchange), some(&l.currency))).await
 }
 
 #[derive(Deserialize)]
@@ -113,8 +113,8 @@ struct Scope {
     scope: String,
 }
 
-async fn filings_feed(Params(s): Params<Scope>) -> Api {
-    answer(move || feeds::filings_feed(&s.scope, 200)).await
+async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api {
+    answer(move || feeds::filings_feed(&state.app, &s.scope, 200)).await
 }
 
 /// One stored filing of one listing.
@@ -136,12 +136,13 @@ impl Document {
 }
 
 /// `GET /api/filings/doc`: the document itself, opened in a tab of its own.
-async fn filings_doc(Params(d): Params<Document>, headers: HeaderMap) -> Result<Response, ApiError> {
+async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>, headers: HeaderMap) -> Result<Response, ApiError> {
     let (symbol, id) = d.named()?;
     let wants_page = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("text/html"));
     let read = blocking({
         let (symbol, id) = (symbol.clone(), id.clone());
-        move || feeds::filings_document(&symbol, &id)
+        let app = state.app.clone();
+        move || feeds::filings_document(&app, &symbol, &id)
     })
     .await?;
     match read {
@@ -152,16 +153,16 @@ async fn filings_doc(Params(d): Params<Document>, headers: HeaderMap) -> Result<
         // a browser asking for a page is answered with one: a raw JSON error in a
         // tab of its own is the app failing in front of the person
         Err(why) if wants_page => {
-            let page = feeds::document_error_page(&symbol, &id, &why);
+            let page = feeds::document_error_page(&state.app, &symbol, &id, &why);
             Ok((StatusCode::BAD_GATEWAY, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response())
         }
         Err(why) => Err(ApiError::Upstream(why)),
     }
 }
 
-async fn filings_enrich(Params(d): Params<Document>) -> Api {
+async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api {
     let (symbol, id) = d.named()?;
-    answer(move || feeds::filings_enrich(&symbol, &id)).await
+    answer(move || feeds::filings_enrich(&state.app, &symbol, &id)).await
 }
 
 #[derive(Deserialize)]
@@ -170,8 +171,8 @@ struct Fear {
     index: Option<String>,
 }
 
-async fn fear(Params(q): Params<Fear>) -> Api {
-    answer(move || feeds::fear_payload(q.index.as_deref().unwrap_or("stocks"))).await
+async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api {
+    answer(move || feeds::fear_payload(&state.app, q.index.as_deref().unwrap_or("stocks"))).await
 }
 
 #[derive(Deserialize)]
@@ -183,23 +184,23 @@ struct Shorts {
     trend: bool,
 }
 
-async fn shorts(Params(q): Params<Shorts>) -> Api {
+async fn shorts(State(state): State<AppState>, Params(q): Params<Shorts>) -> Api {
     let l = q.listing;
-    answer(move || feeds::shorts_payload(&l.symbol, some(&l.exchange), some(&l.currency), q.trend)).await
+    answer(move || feeds::shorts_payload(&state.app, &l.symbol, some(&l.exchange), some(&l.currency), q.trend)).await
 }
 
-async fn shorts_feed() -> Api {
-    answer(feeds::shorts_feed).await
+async fn shorts_feed(State(state): State<AppState>) -> Api {
+    answer(move || feeds::shorts_feed(&state.app)).await
 }
 
-async fn news_symbol(Params(l): Params<Listing>) -> Api {
-    answer(move || feeds::news_symbol_payload(&l.symbol, &l.exchange, &l.currency)).await
+async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
+    answer(move || feeds::news_symbol_payload(&state.app, &l.symbol, &l.exchange, &l.currency)).await
 }
 
 /// `GET /api/history`: a chart's bars. Its parameters are read by the history
 /// module itself, which is also handed them by the documents (`history:<query>`).
-async fn history(RawQuery(query): RawQuery) -> Api {
-    answer(move || feeds::history_payload(query.as_deref().unwrap_or(""))).await
+async fn history(State(state): State<AppState>, RawQuery(query): RawQuery) -> Api {
+    answer(move || feeds::history_payload(&state.app, query.as_deref().unwrap_or(""))).await
 }
 
 async fn markets_refresh() -> Api {
@@ -209,14 +210,14 @@ async fn markets_refresh() -> Api {
 // The three writes below hand their body to the module that owns the rows; it
 // becomes a typed request with the typed watchlist and tiles (stage 5).
 
-async fn watchlist_add(Body(body): Body<Map<String, Value>>) -> Api {
-    answer(move || feeds::watch_add(&Value::Object(body))).await
+async fn watchlist_add(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
+    answer(move || feeds::watch_add(&state.app, &Value::Object(body))).await
 }
 
-async fn watchlist_remove(Body(body): Body<Map<String, Value>>) -> Api {
-    answer(move || feeds::watch_remove(&Value::Object(body))).await
+async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
+    answer(move || feeds::watch_remove(&state.app, &Value::Object(body))).await
 }
 
-async fn tiles_set(Body(body): Body<Map<String, Value>>) -> Api {
-    answer(move || feeds::tiles_set(&Value::Object(body))).await
+async fn tiles_set(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
+    answer(move || feeds::tiles_set(&state.app, &Value::Object(body))).await
 }

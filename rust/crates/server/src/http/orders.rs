@@ -1,6 +1,7 @@
 //! Orders and brackets. Every route here reaches Wealthsimple, or would: with
 //! `BAGHOLDER_DRY_ORDERS` set nothing is placed (`orders::orders_live`).
 
+use axum::extract::State;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
@@ -23,14 +24,14 @@ pub fn routes() -> Router<AppState> {
         .route("/api/book/append", post(book_append))
 }
 
-async fn list() -> Api {
-    answer(|| orders::orders_payload(true)).await
+async fn list(State(state): State<AppState>) -> Api {
+    answer(move || orders::orders_payload(&state.app, true)).await
 }
 
-async fn refresh() -> Api {
-    answer(|| {
-        let mut r = orders::refresh_orders("");
-        if let (Value::Object(m), Value::Object(p)) = (&mut r, orders::orders_payload(false)) {
+async fn refresh(State(state): State<AppState>) -> Api {
+    answer(move || {
+        let mut r = orders::refresh_orders(&state.app, "");
+        if let (Value::Object(m), Value::Object(p)) = (&mut r, orders::orders_payload(&state.app, false)) {
             m.extend(p);
         }
         r
@@ -50,14 +51,14 @@ struct QuoteOf {
     exchange: String,
 }
 
-async fn quote(Params(q): Params<QuoteOf>) -> Api {
-    answer(move || orders::ticket_quote(&q.symbol, &q.security, &q.account, &q.exchange)).await
+async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api {
+    answer(move || orders::ticket_quote(&state.app, &q.symbol, &q.security, &q.account, &q.exchange)).await
 }
 
 /// `POST /api/order`. The body is read as a ticket; `place_ticket` checks it field by
 /// field and answers each refusal in the words the ticket shows.
-async fn place(Body(ticket): Body<orders::Ticket>) -> Api {
-    answer(move || orders::place_ticket(&ticket)).await
+async fn place(State(state): State<AppState>, Body(ticket): Body<orders::Ticket>) -> Api {
+    answer(move || orders::place_ticket(&state.app, &ticket)).await
 }
 
 #[derive(Deserialize, Default)]
@@ -66,8 +67,8 @@ struct Named {
     id: String,
 }
 
-async fn cancel(Body(o): Body<Named>) -> Api {
-    answer(move || orders::cancel_order(&o.id)).await
+async fn cancel(State(state): State<AppState>, Body(o): Body<Named>) -> Api {
+    answer(move || orders::cancel_order(&state.app, &o.id)).await
 }
 
 /// A resting order's new size or limit. Either may be a number or the text the
@@ -81,8 +82,8 @@ struct Modify {
     limit_price: Option<Value>,
 }
 
-async fn modify(Body(m): Body<Modify>) -> Api {
-    answer(move || orders::modify_order(&m.id, m.quantity.as_ref(), m.limit_price.as_ref())).await
+async fn modify(State(state): State<AppState>, Body(m): Body<Modify>) -> Api {
+    answer(move || orders::modify_order(&state.app, &m.id, m.quantity.as_ref(), m.limit_price.as_ref())).await
 }
 
 /// One leg of a bracket moved, given a trail, or taken off.
@@ -98,15 +99,15 @@ struct Adjust {
     remove: bool,
 }
 
-async fn bracket_adjust(Body(a): Body<Adjust>) -> Api {
-    answer(move || orders::adjust_bracket(&a.id, &a.leg, a.price.as_ref(), a.trail.as_ref(), a.remove)).await
+async fn bracket_adjust(State(state): State<AppState>, Body(a): Body<Adjust>) -> Api {
+    answer(move || orders::adjust_bracket(&state.app, &a.id, &a.leg, a.price.as_ref(), a.trail.as_ref(), a.remove)).await
 }
 
-async fn bracket_cancel(Body(b): Body<Named>) -> Api {
-    answer(move || orders::cancel_bracket(&b.id)).await
+async fn bracket_cancel(State(state): State<AppState>, Body(b): Body<Named>) -> Api {
+    answer(move || orders::cancel_bracket(&state.app, &b.id)).await
 }
 
 /// `POST /api/book/append`: a fill the person enters by hand.
-async fn book_append(Body(row): Body<Map<String, Value>>) -> Api {
-    answer(move || orders::append_manual(&Value::Object(row))).await
+async fn book_append(State(state): State<AppState>, Body(row): Body<Map<String, Value>>) -> Api {
+    answer(move || orders::append_manual(&state.app, &Value::Object(row))).await
 }

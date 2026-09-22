@@ -10,7 +10,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::app::{app, f, log, spawn};
+use std::sync::Arc;
+
+use crate::app::{f, log, spawn, App};
 
 pub const CAPTURE_WAIT: Duration = Duration::from_secs(180);
 pub const DEBUG_PORT: u16 = 18765;
@@ -426,7 +428,7 @@ fn cookies_from_document_cookie(text: &str) -> Vec<Value> {
         .collect()
 }
 
-pub fn tokens_from_cookie_list(cookies: &[Value]) -> Option<Value> {
+pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<Value> {
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
     for c in cookies {
@@ -467,7 +469,7 @@ fn cookie_list(msg: Option<Value>) -> Vec<Value> {
     msg.and_then(|m| m.get("result").filter(|r| r.is_object()).and_then(|r| r.get("cookies")).and_then(|c| c.as_array()).cloned()).unwrap_or_default()
 }
 
-fn cookies_from_target(ws_url: &str) -> Option<Value> {
+fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<Value> {
     let mut ws = Ws::connect(ws_url, CAPTURE_CALL).ok()?;
     let with_ua = |mut body: Value, ua: &str| {
         if !ua.is_empty() {
@@ -477,31 +479,31 @@ fn cookies_from_target(ws_url: &str) -> Option<Value> {
     };
     let ua = ws.call("Browser.getVersion", None, CAPTURE_CALL).and_then(|v| v.get("result").map(|r| f(r, "userAgent").trim().to_string())).unwrap_or_default();
     if !ua.is_empty() {
-        app().ws_home().save_user_agent(&ua);
+        app.ws_home().save_user_agent(&ua);
     }
     ws.call("Network.enable", None, CAPTURE_CALL);
     let mut cookies = cookie_list(ws.call("Network.getAllCookies", None, CAPTURE_CALL));
-    if let Some(b) = tokens_from_cookie_list(&cookies) {
+    if let Some(b) = tokens_from_cookie_list(app, &cookies) {
         ws.close();
         return Some(with_ua(b, &ua));
     }
     let extra = cookie_list(ws.call("Storage.getCookies", None, CAPTURE_CALL));
     cookies.extend(extra);
-    if let Some(b) = tokens_from_cookie_list(&cookies) {
+    if let Some(b) = tokens_from_cookie_list(app, &cookies) {
         ws.close();
         return Some(with_ua(b, &ua));
     }
     let ev = ws.call("Runtime.evaluate", Some(json!({"expression": "document.cookie", "returnByValue": true})), CAPTURE_CALL);
     let val = ev.and_then(|e| e.get("result").and_then(|r| r.get("result")).map(|r| f(r, "value"))).unwrap_or_default();
     ws.close();
-    tokens_from_cookie_list(&cookies_from_document_cookie(&val)).map(|b| with_ua(b, &ua))
+    tokens_from_cookie_list(app, &cookies_from_document_cookie(&val)).map(|b| with_ua(b, &ua))
 }
 
-fn try_capture(port: u16) -> Option<Value> {
+fn try_capture(app: &Arc<App>, port: u16) -> Option<Value> {
     let targets = cdp_list(port, Duration::from_secs(1));
     let (pages, others): (Vec<Value>, Vec<Value>) = targets.into_iter().filter(|t| !f(t, "webSocketDebuggerUrl").is_empty()).partition(|t| f(t, "type") == "page");
     for t in pages.into_iter().chain(others) {
-        if let Some(body) = cookies_from_target(&f(&t, "webSocketDebuggerUrl")) {
+        if let Some(body) = cookies_from_target(app, &f(&t, "webSocketDebuggerUrl")) {
             if crate::app::truthy(body.get("access_token")) {
                 return Some(body);
             }
@@ -510,30 +512,30 @@ fn try_capture(port: u16) -> Option<Value> {
     None
 }
 
-fn attempt_is(attempt: i64) -> bool {
-    app().state.lock().unwrap().login_attempt == attempt
+fn attempt_is(app: &Arc<App>, attempt: i64) -> bool {
+    app.state.lock().unwrap().login_attempt == attempt
 }
 
-fn capturing() -> bool {
-    app().state.lock().unwrap().capturing
+fn capturing(app: &Arc<App>) -> bool {
+    app.state.lock().unwrap().capturing
 }
 
-fn capture_loop(pid: u32, attempt: i64) {
+fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
     let mut refused: Option<String> = None;
-    while attempt_is(attempt) {
-        if !capturing() {
+    while attempt_is(app, attempt) {
+        if !capturing(app) {
             return;
         }
-        let body = if !cdp_pages(DEBUG_PORT).is_empty() { try_capture(DEBUG_PORT) } else { None };
+        let body = if !cdp_pages(DEBUG_PORT).is_empty() { try_capture(app, DEBUG_PORT) } else { None };
         if let Some(b) = body {
             let rt = f(&b, "refresh_token");
-            if attempt_is(attempt) && Some(rt.clone()) != refused {
-                if !capturing() {
+            if attempt_is(app, attempt) && Some(rt.clone()) != refused {
+                if !capturing(app) {
                     return;
                 }
-                if crate::session::capture_tokens(&b).get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if crate::session::capture_tokens(app, &b).get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
                     log("bagholder captured Wealthsimple session");
-                    close_login_browser(Some(pid));
+                    close_login_browser(app, Some(pid));
                     return;
                 }
                 refused = Some(rt);
@@ -544,8 +546,8 @@ fn capture_loop(pid: u32, attempt: i64) {
     }
 }
 
-fn proc_alive(pid: u32) -> bool {
-    let mut st = app().state.lock().unwrap();
+fn proc_alive(app: &Arc<App>, pid: u32) -> bool {
+    let mut st = app.state.lock().unwrap();
     if st.chrome_pid != pid {
         return false;
     }
@@ -555,47 +557,47 @@ fn proc_alive(pid: u32) -> bool {
     }
 }
 
-fn poll_session(pid: u32, attempt: i64) {
+fn poll_session(app: &Arc<App>, pid: u32, attempt: i64) {
     let deadline = Instant::now() + CAPTURE_WAIT;
     let start = Instant::now();
     let mut seen_page = false;
-    spawn("bagholder-cdp-capture", move || capture_loop(pid, attempt));
+    app.spawn_with("bagholder-cdp-capture", move |app| capture_loop(&app, pid, attempt));
     while Instant::now() < deadline {
-        if !attempt_is(attempt) || !capturing() {
+        if !attempt_is(app, attempt) || !capturing(app) {
             return;
         }
-        let alive = proc_alive(pid);
+        let alive = proc_alive(app, pid);
         let pages = if alive { cdp_pages(DEBUG_PORT) } else { vec![] };
         seen_page = seen_page || !pages.is_empty();
         let gone = !alive || (pages.is_empty() && (seen_page || start.elapsed() > Duration::from_secs(10)));
         if gone {
-            if !attempt_is(attempt) {
+            if !attempt_is(app, attempt) {
                 return;
             }
             {
-                let mut st = app().state.lock().unwrap();
+                let mut st = app.state.lock().unwrap();
                 if st.capturing {
                     st.error = "The Chrome window closed before a session showed up. Choose Connect Wealthsimple to try again.".into();
                     st.capturing = false;
                 }
             }
             log("bagholder login: window closed, waiting stopped");
-            close_login_browser(Some(pid));
+            close_login_browser(app, Some(pid));
             return;
         }
         std::thread::sleep(WINDOW_CHECK);
     }
-    if !attempt_is(attempt) {
+    if !attempt_is(app, attempt) {
         return;
     }
     {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         if st.capturing {
             st.error = "No session yet. Finish login in the Chrome window, then wait a few seconds.".into();
             st.capturing = false;
         }
     }
-    close_login_browser(Some(pid));
+    close_login_browser(app, Some(pid));
 }
 
 fn browser_ws() -> Option<String> {
@@ -618,9 +620,9 @@ fn wait_child(child: &mut Child, d: Duration) -> bool {
 
 /// Gracefully through DevTools, then by
 /// ending the process. Only ever the app's own instance.
-pub fn close_login_browser(only: Option<u32>) {
+pub fn close_login_browser(app: &Arc<App>, only: Option<u32>) {
     let (mut child, current) = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         match only {
             Some(pid) if st.chrome_pid != pid => (None, false),
             _ => {
@@ -645,9 +647,9 @@ pub fn close_login_browser(only: Option<u32>) {
     }
 }
 
-fn browser_alive() -> bool {
+fn browser_alive(app: &Arc<App>) -> bool {
     let alive = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         match st.chrome_proc.as_mut() { Some(c) => matches!(c.try_wait(), Ok(None)), None => false }
     };
     alive && browser_ws().is_some() && !cdp_pages(DEBUG_PORT).is_empty()
@@ -690,8 +692,8 @@ fn with_view<T>(f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
 }
 
 /// The login window as a JPEG.
-pub fn login_frame() -> Option<Vec<u8>> {
-    if !capturing() {
+pub fn login_frame(app: &Arc<App>) -> Option<Vec<u8>> {
+    if !capturing(app) {
         return None;
     }
     with_view(|ws| {
@@ -741,9 +743,9 @@ fn publish_frame(frame: Vec<u8>) {
 /// The screencast sends a frame only when the page changes, and in a container
 /// it can send none at all: whenever no frame has come for a moment, a
 /// screenshot taken over a socket of its own stands in for one.
-fn screenshot_loop(attempt: i64) {
+fn screenshot_loop(app: &Arc<App>, attempt: i64) {
     let mut ws: Option<Ws> = None;
-    while attempt_is(attempt) && capturing() {
+    while attempt_is(app, attempt) && capturing(app) {
         std::thread::sleep(Duration::from_millis(250));
         let stale = { let (m, _) = cast(); m.lock().unwrap().at.map(|t| t.elapsed() > Duration::from_millis(700)).unwrap_or(true) };
         if !stale {
@@ -765,9 +767,9 @@ fn screenshot_loop(attempt: i64) {
     }
 }
 
-fn screencast_loop(attempt: i64) {
-    while attempt_is(attempt) {
-        if !capturing() {
+fn screencast_loop(app: &Arc<App>, attempt: i64) {
+    while attempt_is(app, attempt) {
+        if !capturing(app) {
             return;
         }
         let pages = cdp_pages(DEBUG_PORT);
@@ -783,7 +785,7 @@ fn screencast_loop(attempt: i64) {
         ws.call("Runtime.evaluate", Some(json!({"expression": NO_PASSKEYS})), CAPTURE_CALL);
         ws.call("Page.startScreencast", Some(screencast_params()), CAPTURE_CALL);
         loop {
-            if !attempt_is(attempt) || !capturing() {
+            if !attempt_is(app, attempt) || !capturing(app) {
                 ws.close();
                 return;
             }
@@ -813,7 +815,7 @@ fn screencast_loop(attempt: i64) {
 
 /// The window as a multipart JPEG stream, each frame
 /// as Chromium pushes it.
-pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
+pub fn login_stream<W: FnMut(&[u8]) -> bool>(app: &Arc<App>, mut write: W) {
     // The latest frame goes out at once, then every new one, and the latest
     // again after a second without one: a page that is redrawn opens a new
     // stream and drops the old one, and only a write finds out that the reader
@@ -828,7 +830,7 @@ pub fn login_stream<W: FnMut(&[u8]) -> bool>(mut write: W) {
     let mut last = u64::MAX;
     let mut last_sent: Option<()> = None;
     loop {
-        if !capturing() || READER.load(std::sync::atomic::Ordering::SeqCst) != me {
+        if !capturing(app) || READER.load(std::sync::atomic::Ordering::SeqCst) != me {
             return;
         }
         let frame = {
@@ -955,27 +957,27 @@ pub fn login_input(ev: &Value) -> Value {
     }
 }
 
-pub fn cancel_login() -> Value {
+pub fn cancel_login(app: &Arc<App>) -> Value {
     let was = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         let was = st.capturing;
         st.capturing = false;
         st.error.clear();
         was
     };
     log("bagholder login: cancelled");
-    close_login_browser(None);
+    close_login_browser(app, None);
     json!({"ok": true, "cancelled": was})
 }
 
 /// Open the login window, or bring forward the
 /// one the app already has up.
-pub fn start_login_browser() -> Value {
-    if let Err(e) = bagholder_store::guard_home(&app().home) {
+pub fn start_login_browser(app: &Arc<App>) -> Value {
+    if let Err(e) = bagholder_store::guard_home(&app.home) {
         return json!({"ok": false, "error": e});
     }
     log("bagholder login: connect requested");
-    if browser_alive() {
+    if browser_alive(app) {
         if let Some(u) = browser_ws() {
             if let Ok(mut ws) = Ws::connect(&u, Duration::from_secs(5)) {
                 if let Some(p) = cdp_pages(DEBUG_PORT).first() {
@@ -985,7 +987,7 @@ pub fn start_login_browser() -> Value {
             }
         }
         let (already, pid, attempt) = {
-            let mut st = app().state.lock().unwrap();
+            let mut st = app.state.lock().unwrap();
             let already = st.capturing;
             st.capturing = true;
             st.error.clear();
@@ -995,17 +997,18 @@ pub fn start_login_browser() -> Value {
             (already, st.chrome_pid, st.login_attempt)
         };
         if !already {
-            spawn("bagholder-cdp-capture", move || poll_session(pid, attempt));
+            let a = app.clone();
+            spawn("bagholder-cdp-capture", move || poll_session(&a, pid, attempt));
         }
         log("bagholder login: window already up, brought forward");
         return json!({"ok": true, "reused": true});
     }
-    close_login_browser(None);
+    close_login_browser(app, None);
     let chrome = find_chrome();
     if chrome.is_empty() {
         return json!({"ok": false, "error": NO_BROWSER});
     }
-    let profile = app().home.join("chrome");
+    let profile = app.home.join("chrome");
     let _ = std::fs::create_dir_all(&profile);
     if login_view() {
         // a container's profile outlives the container: the lock a previous one
@@ -1046,7 +1049,7 @@ pub fn start_login_browser() -> Value {
     let pid = child.id();
     log(&format!("bagholder login: chrome launched (pid {})", pid));
     let attempt = {
-        let mut st = app().state.lock().unwrap();
+        let mut st = app.state.lock().unwrap();
         st.chrome_proc = Some(child);
         st.chrome_pid = pid;
         st.capturing = true;
@@ -1054,7 +1057,7 @@ pub fn start_login_browser() -> Value {
         st.login_attempt += 1;
         st.login_attempt
     };
-    spawn("bagholder-cdp-capture", move || poll_session(pid, attempt));
+    app.spawn_with("bagholder-cdp-capture", move |app| poll_session(&app, pid, attempt));
     if login_view() {
         {
             let (m, _) = cast();
@@ -1063,8 +1066,8 @@ pub fn start_login_browser() -> Value {
             g.seq = 0;
             g.at = None;
         }
-        spawn("bagholder-screencast", move || screencast_loop(attempt));
-        spawn("bagholder-screenshots", move || screenshot_loop(attempt));
+        let a1 = app.clone(); spawn("bagholder-screencast", move || screencast_loop(&a1, attempt));
+        let a2 = app.clone(); spawn("bagholder-screenshots", move || screenshot_loop(&a2, attempt));
     }
     json!({"ok": true})
 }

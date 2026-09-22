@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use bagholder_model::patch;
 
-use crate::app::app;
+use crate::app::App;
 
 fn bell() -> &'static (Mutex<u64>, Condvar) {
     static B: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
@@ -95,10 +95,10 @@ impl Drop for Watching {
 /// clock is consulted while it waits. False when the app is stopping instead. What
 /// background work that has nothing to do parks on -- a loop with no one watching
 /// its data, an engine with nothing armed.
-pub fn park_until(ready: impl Fn() -> bool) -> bool {
+pub fn park_until(app: &App, ready: impl Fn() -> bool) -> bool {
     let (m, c) = bell();
     loop {
-        if app().stopping() {
+        if app.stopping() {
             return false;
         }
         let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
@@ -106,17 +106,17 @@ pub fn park_until(ready: impl Fn() -> bool) -> bool {
             return true;
         }
         let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        drop(c.wait_while(g, |n| *n == seen && !app().stopping()));
+        drop(c.wait_while(g, |n| *n == seen && !app.stopping()));
     }
 }
 
 /// As `park_until`, but no longer than `most`: true when `ready`, false when the
 /// time ran out or the app is stopping.
-pub fn park_until_or(most: Duration, ready: impl Fn() -> bool) -> bool {
+pub fn park_until_or(app: &App, most: Duration, ready: impl Fn() -> bool) -> bool {
     let (m, c) = bell();
     let until = std::time::Instant::now() + most;
     loop {
-        if app().stopping() {
+        if app.stopping() {
             return false;
         }
         let seen = *m.lock().unwrap_or_else(|e| e.into_inner());
@@ -128,7 +128,7 @@ pub fn park_until_or(most: Duration, ready: impl Fn() -> bool) -> bool {
             return false;
         }
         let g = m.lock().unwrap_or_else(|e| e.into_inner());
-        drop(c.wait_timeout_while(g, left, |n| *n == seen && !app().stopping()));
+        drop(c.wait_timeout_while(g, left, |n| *n == seen && !app.stopping()));
     }
 }
 
@@ -158,7 +158,7 @@ fn streams() -> &'static Mutex<std::collections::HashMap<u64, Arc<Mutex<Wanted>>
 /// What the page on stream `id` is showing now, beyond the model. Replaces what it
 /// said before. False when there is no such stream (it closed; the page will
 /// connect again and say so again).
-pub fn watch(id: u64, docs: Wanted) -> bool {
+pub fn watch(app: &Arc<App>, id: u64, docs: Wanted) -> bool {
     let Some(wanted) = streams().lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned() else { return false };
     let fresh: Vec<String> = {
         let mut w = wanted.lock().unwrap_or_else(|e| e.into_inner());
@@ -168,7 +168,7 @@ pub fn watch(id: u64, docs: Wanted) -> bool {
     };
     // a document just opened is worth reading fresh: once, now, in the background
     for key in &fresh {
-        crate::docs::opened(key);
+        crate::docs::opened(app, key);
     }
     signal();
     true
@@ -197,6 +197,7 @@ impl Drop for Registered {
 
 /// One page's stream: what it was last sent, and so what to send it next.
 pub struct Feed {
+    app: Arc<App>,
     _watching: Watching,
     registered: Registered,
     wanted: Arc<Mutex<Wanted>>,
@@ -210,9 +211,9 @@ pub struct Feed {
 pub type Message = (&'static str, Value);
 
 impl Feed {
-    pub fn open(filters: Option<Value>, detail: Option<String>) -> Feed {
+    pub fn open(app: Arc<App>, filters: Option<Value>, detail: Option<String>) -> Feed {
         let (registered, wanted) = Registered::new();
-        Feed { _watching: Watching::new(), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
+        Feed { app, _watching: Watching::new(), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
     }
 
     /// This stream's id.
@@ -228,15 +229,16 @@ impl Feed {
     /// What differs now from what this page was last sent: nothing when nothing
     /// does. Reads the store and may rebuild a layer of the model, so it runs off
     /// the runtime's own threads.
-    pub fn step(&mut self, status: &dyn Fn() -> Value) -> Vec<Message> {
+    pub fn step(&mut self, status: &dyn Fn(&Arc<App>) -> Value) -> Vec<Message> {
         let mut out: Vec<Message> = Vec::new();
         let (filters, detail) = (self.filters.clone(), self.detail.clone());
-        let view = match std::panic::catch_unwind(move || app().view(filters.as_ref(), detail.as_deref())) {
+        let app = self.app.clone();
+        let view = match std::panic::catch_unwind(move || app.view(filters.as_ref(), detail.as_deref())) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
         };
         if let Some(view) = view {
-            let mut now = status();
+            let mut now = status(&self.app);
             // the two version strings are how a polling page learned that something
             // moved; this page is told what moved, so they would only be noise here
             if let Some(o) = now.as_object_mut() {
@@ -265,7 +267,8 @@ impl Feed {
         let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.sent_docs.retain(|k, _| want.contains_key(k));
         for (key, params) in &want {
-            let Ok(Some(now)) = std::panic::catch_unwind(|| crate::docs::read(key, params)) else { continue };
+            let app = &self.app;
+            let Ok(Some(now)) = std::panic::catch_unwind(|| crate::docs::read(app, key, params)) else { continue };
             match self.sent_docs.get(key) {
                 None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
                 Some(was) => {
@@ -284,10 +287,10 @@ impl Feed {
 /// The day is an input of the model (an option expires, year-to-date rolls over).
 /// It turns at a known moment, so that moment is waited for; nothing checks the
 /// clock in between.
-pub fn signal_at_each_midnight() {
-    crate::app::spawn("bagholder-midnight", || loop {
+pub fn signal_at_each_midnight(app: Arc<App>) {
+    crate::app::spawn("bagholder-midnight", move || loop {
         let secs = bagholder_model::clock::seconds_until_local_midnight().max(1) + 1;
-        if app().wait(Duration::from_secs(secs)) {
+        if app.wait(Duration::from_secs(secs)) {
             return;
         }
         signal();
@@ -304,11 +307,12 @@ mod tests {
     #[test]
     fn test_parked_work_starts_when_a_page_connects_and_not_before() {
         let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
         let ran = Arc::new(AtomicBool::new(false));
         let t = {
             let ran = ran.clone();
             std::thread::spawn(move || {
-                if park_until(|| watchers() > 0) {
+                if park_until(&app, || watchers() > 0) {
                     ran.store(true, Ordering::SeqCst);
                 }
             })
@@ -327,8 +331,9 @@ mod tests {
     #[test]
     fn test_a_bounded_park_gives_up_at_its_deadline() {
         let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
         let started = std::time::Instant::now();
-        assert!(!park_until_or(Duration::from_millis(80), || false));
+        assert!(!park_until_or(&app, Duration::from_millis(80), || false));
         assert!(started.elapsed() >= Duration::from_millis(80));
     }
 }
