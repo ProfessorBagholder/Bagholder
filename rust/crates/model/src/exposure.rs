@@ -75,7 +75,7 @@ pub fn norm_sector(name: &str) -> String {
 
 /// What a security is exposed to: weights by sector and by country, in the
 /// order the record gives them (which decides a tie for the dominant sector).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Exposure {
     pub sectors: Vec<(String, f64)>,
     pub countries: Vec<(String, f64)>,
@@ -84,11 +84,18 @@ pub struct Exposure {
 impl<'de> serde::Deserialize<'de> for Exposure {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Exposure, D::Error> {
         let v = Value::deserialize(d)?;
-        let weights = |key: &str| match v.get(key) {
-            Some(Value::Object(m)) => m.iter().map(|(name, w)| (name.clone(), num(Some(w), 0.0))).collect(),
+        Ok(Exposure::from_weights(v.get("sectors").unwrap_or(&Value::Null), v.get("countries").unwrap_or(&Value::Null)))
+    }
+}
+
+impl Exposure {
+    /// From the two weight maps as the record keeps them; what is not a map is no weights.
+    pub fn from_weights(sectors: &Value, countries: &Value) -> Exposure {
+        let weights = |v: &Value| match v {
+            Value::Object(m) => m.iter().map(|(name, w)| (name.clone(), num(Some(w), 0.0))).collect(),
             _ => vec![],
         };
-        Ok(Exposure { sectors: weights("sectors"), countries: weights("countries") })
+        Exposure { sectors: weights(sectors), countries: weights(countries) }
     }
 }
 

@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use bagholder_model::base::{self, Base, Inputs, Layers};
-use bagholder_store::{activities, gens, market, snapshot, tables};
+use bagholder_store::{activities, gens, market, rows, snapshot, tables};
 
 type Gens = BTreeMap<String, i64>;
 
@@ -139,31 +139,33 @@ impl ModelCache {
             };
         }
         part!("activities", ["activities"], i.set_raw_activities(activities::all_raw_activities(conn)?));
-        part!("securities", ["securities"], i.set_securities(&snapshot::securities_part(conn)?));
-        part!("fx", ["fx"], i.fx = Arc::new(base::fx_part(Some(&Value::Object(tables::fx_rates(conn, tables::FX_PAIR)?)))));
+        part!("securities", ["securities"], i.securities = Arc::new(rows::securities(conn)?));
+        part!("fx", ["fx"], i.fx = Arc::new(rows::fx(conn, tables::FX_PAIR)?));
         part!("benchmark", ["benchmark"], {
-            let mut all = serde_json::Map::new();
+            i.benchmark = Arc::new(rows::benchmark(conn, tables::BENCHMARK_SYMBOL)?);
+            let mut all = std::collections::HashMap::new();
             for sym in market::BENCHMARK_SYMBOLS.iter() {
-                all.insert((*sym).to_string(), Value::Object(tables::benchmark_prices(conn, sym)?));
+                all.insert((*sym).to_string(), rows::benchmark(conn, sym)?);
             }
-            i.set_benchmarks(Some(&Value::Object(tables::benchmark_prices(conn, tables::BENCHMARK_SYMBOL)?)), Some(&Value::Object(all)));
+            i.benchmarks = Arc::new(all);
         });
-        part!("distributions", ["distributions"], i.set_distributions(&market::distributions(conn)?));
-        part!("quotes", ["quotes"], i.set_quotes(&market::quotes(conn)?));
-        part!("groups", ["groups"], i.set_groups(&snapshot::groups_part(conn)?));
-        part!("journal", ["journal"], i.set_journal(&snapshot::journal(conn)?));
-        part!("accounts", ["accounts"], i.set_accounts(&snapshot::accounts_part(conn)?));
-        part!("balances", ["balances"], i.set_balances(&snapshot::balances_part(conn)?));
-        part!("margin", ["margin"], i.set_margin(&snapshot::margin_part(conn)?));
+        part!("distributions", ["distributions"], i.distributions = Arc::new(rows::distributions(conn)?));
+        part!("quotes", ["quotes"], i.quotes = Arc::new(rows::quotes(conn)?));
+        part!("groups", ["groups"], i.groups = Arc::new(rows::groups(conn)?));
+        part!("journal", ["journal"], i.journal = Arc::new(rows::journal(conn)?));
+        part!("accounts", ["accounts"], i.accounts = Arc::new(rows::accounts(conn)?));
+        part!("balances", ["balances"], i.balances = Arc::new(rows::balances(conn)?));
+        part!("margin", ["margin"], i.margin = Arc::new(rows::margin(conn)?));
         part!("nav", ["nav"], {
-            let (nav, by_account) = snapshot::nav_part(conn)?;
-            i.set_nav(&nav, &by_account);
+            let (nav, by_account) = rows::nav(conn)?;
+            i.nav = Arc::new(nav);
+            i.nav_by_account = Arc::new(by_account);
         });
-        part!("exposures", ["exposures"], i.set_exposures(&snapshot::exposures_part(conn)?));
-        part!("watchlist", ["watchlist"], i.set_watchlist(&snapshot::watchlist_part(conn)?));
-        part!("news", ["news"], i.set_news(&snapshot::news_part(conn)?));
-        part!("universes", ["universes"], i.set_universes(&snapshot::universes_part(conn)?));
-        part!("tiles", ["tiles"], i.set_tiles(Some(&snapshot::tiles_part(conn)?)));
+        part!("exposures", ["exposures"], i.exposures = Arc::new(rows::exposures(conn)?));
+        part!("watchlist", ["watchlist"], i.watchlist = Arc::new(rows::watchlist(conn)?));
+        part!("news", ["news"], i.news = Arc::new(rows::news(conn)?));
+        part!("universes", ["universes"], i.universes = Arc::new(rows::universes(conn)?));
+        part!("tiles", ["tiles"], i.tiles = Arc::new(rows::tiles(conn)?));
         part!("synced", ["synced"], i.synced_at = snapshot::synced_at_part(conn)?);
         drop(tx);
 

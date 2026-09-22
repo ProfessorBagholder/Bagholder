@@ -35,7 +35,7 @@ const MIC_MAP: [(&str, &str); 8] = [
 ];
 
 /// One security as Wealthsimple describes it.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Security {
     #[serde(deserialize_with = "lenient::text")]

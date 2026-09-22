@@ -10,7 +10,7 @@ use crate::lenient;
 use crate::value::norm_account_name;
 
 /// A Wealthsimple account.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AccountRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -38,7 +38,7 @@ impl AccountRow {
 }
 
 /// What Wealthsimple says an account holds of one security.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BalanceRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -50,7 +50,7 @@ pub struct BalanceRow {
 }
 
 /// An account's buying power.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MarginRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -73,7 +73,7 @@ pub enum QuoteSource {
 }
 
 /// A stored price.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Quote {
     #[serde(deserialize_with = "lenient::maybe_number")]
@@ -132,7 +132,7 @@ pub struct JournalEntry {
 pub type Journal = HashMap<String, JournalEntry>;
 
 /// Trades the person grouped by hand, named by their members' keys.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct TradeGroup {
     #[serde(deserialize_with = "lenient::text")]
@@ -154,7 +154,7 @@ pub fn journal_from(map: &serde_json::Map<String, serde_json::Value>) -> Journal
 }
 
 /// A listing the person watches.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct WatchRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -168,7 +168,7 @@ pub struct WatchRow {
 }
 
 /// A stored news item, as read for one listing (or for the market: `*` on `MARKET`).
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NewsRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -191,7 +191,7 @@ pub struct NewsRow {
 }
 
 /// One constituent of a market universe (the heatmaps beyond the book).
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UniverseRow {
     #[serde(deserialize_with = "lenient::text")]
@@ -209,7 +209,7 @@ pub struct UniverseRow {
 }
 
 /// A tile the person put in the Markets tab's row.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct TileRef {
     #[serde(deserialize_with = "lenient::text")]
@@ -219,7 +219,7 @@ pub struct TileRef {
 }
 
 /// A declared distribution of a fund.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Distribution {
     #[serde(deserialize_with = "lenient::text")]

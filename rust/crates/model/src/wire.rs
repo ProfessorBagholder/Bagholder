@@ -289,7 +289,7 @@ pub struct CashflowRow {
 
 /// Keys to values in the order they were first put in, which is the order the
 /// page is sent them in: the symbol picker lists listings as the book met them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Ordered<V>(pub Vec<(String, V)>);
 
 impl<V> Default for Ordered<V> {
