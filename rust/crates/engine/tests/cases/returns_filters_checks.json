@@ -1,0 +1,78 @@
+[
+  {
+    "name": "a year's return chains its daily returns net of the money moved; the index over the same span; the drawdown",
+    "spec": "SPEC.md §2 Equity and returns: yearly return chain-linked, net of deposits; the index over the same span; max drawdown of the flow-adjusted index",
+    "working": [
+      "Dec 31: 1,000 deposited, 10 X bought for 1,000, X closes 100 → 1,000",
+      "Jan 1 (no close; Dec 31's): 1,000, return 0. Jan 2: X 110 → 1,100, return 0.1. Jan 3–4: 1,100, return 0",
+      "Jan 5: 500 deposited, X 110 → 1,600, return (1,600 − 500) ÷ 1,100 − 1 = 0",
+      "Jan 6 (today, X's last close 99): 990 + 500 = 1,490, return 1,490 ÷ 1,600 − 1 = −0.06875",
+      "2026: Dec 31 cleared 1 % of the peak, so the year runs from Jan 1: 1.1 × 0.93125 − 1 = 0.024375",
+      "S&P 500 5,000 on Dec 31 and 5,100 on Jan 6: 0.02",
+      "the index peaks at 1.1 (last on Jan 5) and falls to 1.024375 on Jan 6: −0.06875"
+    ],
+    "today": "2026-01-06",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "closes": {"X": {"2025-12-31": "100", "2026-01-02": "110", "2026-01-05": "110", "2026-01-06": "99"}},
+    "benchmarks": {"SP500": {"2025-12-31": "5000", "2026-01-06": "5100"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2025-12-31", "at": "2025-12-31T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2025-12-31", "at": "2025-12-31T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1000"},
+      {"id": "t3", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "500"}
+    ],
+    "expect": {"kpi": {"years": [{"year": 2026, "r": 0.024375, "benchmark": 0.02, "from": "2026-01-01"}], "drawdown": -0.06875, "drawdown_at": "2026-01-06"}}
+  },
+  {
+    "name": "the tiles over one account",
+    "spec": "SPEC.md §5: one filter set applies to every page",
+    "working": ["A's trade made 50, B's 30: with only B chosen, realized 30 over 1"],
+    "today": "2026-02-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2025-12-01", "at": "2025-12-01T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2025-12-15", "at": "2025-12-15T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "150"},
+      {"id": "t3", "account": "B", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "130"}
+    ],
+    "expect": {"kpi": {"accounts": ["B"], "realized": "30.00", "count": 1}}
+  },
+  {
+    "name": "the tiles over the year to date",
+    "spec": "SPEC.md §5: trades are scoped by close date",
+    "working": ["the same book: the year to date keeps only the trade closed in 2026, realized 30"],
+    "today": "2026-02-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2025-12-01", "at": "2025-12-01T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2025-12-15", "at": "2025-12-15T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "150"},
+      {"id": "t3", "account": "B", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t4", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "130"}
+    ],
+    "expect": {"kpi": {"preset": "ytd", "realized": "30.00", "count": 1}}
+  },
+  {
+    "name": "the broker check is exact, and pending against a statement newer than the book's activity",
+    "spec": "docs/plans/stage-2-engine.md, the broker check",
+    "working": [
+      "A: 1,000 deposited, 10 X bought for 500 → cash 500 CAD and 10 X; the broker states the same: no difference",
+      "B: the same record, the broker states 12 X, as of after the book's last activity: one difference, pending"
+    ],
+    "today": "2026-01-08",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "a1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "a2", "account": "A", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"},
+      {"id": "b1", "account": "B", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "b2", "account": "B", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"}
+    ],
+    "brokers": {
+      "A": {"cash": {"CAD": "500"}, "held": {"X": "10"}, "as_of": "2026-01-06T15:00:00Z"},
+      "B": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z"}
+    },
+    "expect": {"checks": [{"account": "A", "differences": 0, "pending": false}, {"account": "B", "differences": 1, "pending": true}]}
+  }
+]

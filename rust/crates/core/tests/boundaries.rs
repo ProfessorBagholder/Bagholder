@@ -18,11 +18,18 @@ struct Rules {
     name: &'static str,
     dir: &'static str,
     allowed: &'static [&'static str],
-    /// Source files, relative to the crate, that may use `f64`.
+    /// Source files, relative to the crate, that may use `f64`: a path ending in
+    /// `/` allows every file under it.
     floats_in: &'static [&'static str],
 }
 
-const CRATES: [Rules; 3] = [
+impl Rules {
+    fn floats_allowed(&self, path: &str) -> bool {
+        self.floats_in.iter().any(|p| if p.ends_with('/') { path.starts_with(p) } else { path == *p })
+    }
+}
+
+const CRATES: [Rules; 4] = [
     Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"] },
     Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[] },
     Rules {
@@ -31,6 +38,9 @@ const CRATES: [Rules; 3] = [
         allowed: &["bagholder-core", "bagholder-sqlite", "rusqlite", "serde", "serde_json", "uuid", "jiff"],
         floats_in: &["src/import/old.rs"],
     },
+    // the engine (docs/plans/stage-2-engine.md): the vocabulary alone, which
+    // re-exports the calendar; floats only for the statistics
+    Rules { name: "bagholder-engine", dir: "engine", allowed: &["bagholder-core"], floats_in: &["src/stat/"] },
 ];
 
 /// The names a manifest depends on for the crate itself: every `[dependencies]`
@@ -83,7 +93,7 @@ fn violations(rules: &Rules, manifest: &str, sources: &[(String, String)]) -> Ve
                     out.push(format!("{}:{}: reads the clock ({clock})", path, n + 1));
                 }
             }
-            if code.contains("f64") && !rules.floats_in.contains(&path.as_str()) {
+            if code.contains("f64") && !rules.floats_allowed(path) {
                 out.push(format!("{}:{}: uses a float", path, n + 1));
             }
         }
@@ -149,4 +159,19 @@ fn the_checker_catches_each_kind_of_violation() {
     assert!(violations(rules, clean, &allowed).is_empty());
     let commented = vec![("src/a.rs".to_string(), "let x = 1; // never an f64, never now()".to_string())];
     assert!(violations(rules, clean, &commented).is_empty());
+
+    // the engine: the vocabulary alone, floats only for the statistics
+    let engine = &CRATES[3];
+    let on_core = "[dependencies]\nbagholder-core = { path = \"../core\" }\n";
+    assert!(violations(engine, on_core, &[]).is_empty());
+    let on_decimal = "[dependencies]\nbagholder-core = { path = \"../core\" }\nrust_decimal = \"1\"\n";
+    assert_eq!(violations(engine, on_decimal, &[]), vec!["bagholder-engine depends on rust_decimal"]);
+    let on_store = "[dependencies]\nbagholder-store = { path = \"../store\" }\n";
+    assert_eq!(violations(engine, on_store, &[]), vec!["bagholder-engine depends on bagholder-store"]);
+    let stat = vec![("src/stat/returns.rs".to_string(), "fn r(a: f64) -> f64".to_string())];
+    assert!(violations(engine, on_core, &stat).is_empty());
+    let figure = vec![("src/trades.rs".to_string(), "let pnl: f64 = 0.0;".to_string())];
+    assert_eq!(violations(engine, on_core, &figure), vec!["src/trades.rs:1: uses a float"]);
+    let clock = vec![("src/fx.rs".to_string(), "let now = Timestamp::now();".to_string())];
+    assert_eq!(violations(engine, on_core, &clock).len(), 1);
 }

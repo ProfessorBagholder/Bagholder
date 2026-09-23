@@ -137,7 +137,7 @@ impl Book {
         let found: Option<String> = self
             .conn()
             .query_row(
-                "SELECT rate FROM fx_rates WHERE currency = ? AND day = ? ORDER BY received_at, rowid LIMIT 1",
+                "SELECT rate FROM fx_rates WHERE currency = ? AND day = ? ORDER BY rowid LIMIT 1",
                 params![currency.as_str(), day(d)],
                 |r| r.get(0),
             )
@@ -145,9 +145,10 @@ impl Book {
         found.map(|s| parse_dec("fx_rates", "rate", &s)).transpose()
     }
 
-    /// Every stored rate: the first received for each day.
+    /// Every stored rate: the first stored for each day (the order rows were
+    /// written in, whatever time a read was stamped with).
     pub fn rates(&self) -> Result<BTreeMap<Currency, BTreeMap<jiff::civil::Date, Dec>>> {
-        let mut stmt = self.conn().prepare_cached("SELECT currency, day, rate FROM fx_rates ORDER BY currency, day, received_at DESC, rowid DESC")?;
+        let mut stmt = self.conn().prepare_cached("SELECT currency, day, rate FROM fx_rates ORDER BY currency, day, rowid DESC")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
         let mut out: BTreeMap<Currency, BTreeMap<jiff::civil::Date, Dec>> = BTreeMap::new();
         for row in rows {
@@ -161,7 +162,7 @@ impl Book {
     /// Every rate that came later and differed from the one that stands.
     pub fn rate_conflicts(&self) -> Result<Vec<RateConflict>> {
         let mut out = Vec::new();
-        let mut stmt = self.conn().prepare_cached("SELECT currency, day, rate FROM fx_rates ORDER BY currency, day, received_at, rowid")?;
+        let mut stmt = self.conn().prepare_cached("SELECT currency, day, rate FROM fx_rates ORDER BY currency, day, rowid")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
         let mut first: BTreeMap<(String, String), Dec> = BTreeMap::new();
         for row in rows {

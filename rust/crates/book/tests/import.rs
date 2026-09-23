@@ -239,7 +239,8 @@ fn every_row_shape_books_as_the_table_says() {
         ("expir-long", Kind::OptionExpiry, None, Some("-1"), None, Some(InstrumentKind::OptionContract)),
         ("assign", Kind::OptionAssignment, None, Some("1"), None, Some(InstrumentKind::OptionContract)),
         ("stkdis-marker", Kind::CorporateEvent, None, None, None, Some(InstrumentKind::Security)),
-        ("stkdis-in", Kind::CorporateEvent, None, Some("4000"), None, Some(InstrumentKind::Security)),
+        // Wealthsimple's notice of a distribution to come, listing the units held: a dividend of no cash
+        ("stkdis-in", Kind::Dividend, None, None, Some("0 CAD"), Some(InstrumentKind::Security)),
         ("dividend", Kind::Dividend, None, None, Some("12.5 CAD"), Some(InstrumentKind::Security)),
         ("dividend-reversal", Kind::Dividend, None, None, Some("-12.5 CAD"), Some(InstrumentKind::Security)),
         ("interest", Kind::Interest, None, None, Some("1.1 CAD"), None),

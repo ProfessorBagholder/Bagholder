@@ -146,7 +146,37 @@ impl Mapping for Spelled {
             })
             .collect();
         let problems = v.get("problems").and_then(Value::as_array).map(|ps| ps.iter().map(|p| Problem::new(p.as_str().unwrap(), "stated by the test")).collect()).unwrap_or_default();
-        Mapped { legs, problems, ..Mapped::default() }
+        // `{"adjustments": [{"leg", "applies_to": "<record>/<leg>", "legs": [{"from": [[scheme, value]], "to": …, …}]}]}`
+        let refs = |v: Option<&Value>| -> Option<Vec<Reference>> {
+            v.and_then(Value::as_array).map(|rs| rs.iter().map(|r| Reference::new(RefScheme::parse(r[0].as_str().unwrap()).unwrap(), r[1].as_str().unwrap())).collect())
+        };
+        let adjustments = v
+            .get("adjustments")
+            .and_then(Value::as_array)
+            .map(|adjs| {
+                adjs.iter()
+                    .map(|a| bagholder_book::mapping::AdjustmentDraft {
+                        leg: Leg::parse(a["leg"].as_str().unwrap_or("adjustment")).unwrap(),
+                        applies_to: bagholder_core::TransactionId::parse(a["applies_to"].as_str().unwrap()).unwrap(),
+                        legs: a["legs"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|l| bagholder_book::mapping::AdjustmentLegDraft {
+                                from: refs(l.get("from")),
+                                to: refs(l.get("to")),
+                                units_per_unit: l.get("units_per_unit").and_then(Value::as_str).map(d),
+                                cost_share: l.get("cost_share").and_then(Value::as_str).map(d),
+                                cash_per_unit: money(l, "cash_per_unit"),
+                                cost: money(l, "cost"),
+                                acquired: l.get("acquired").and_then(Value::as_str).map(|s| s.parse().unwrap()),
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Mapped { legs, problems, adjustments }
     }
 }
 

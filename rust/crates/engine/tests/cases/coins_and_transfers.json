@@ -1,0 +1,130 @@
+[
+  {
+    "name": "a staking reward opens a lot at no cost",
+    "spec": "SPEC.md §2 Trade, Crypto: staking rewards open a lot at zero cost and carry a reward flag",
+    "working": ["0.5 ETH rewarded (cost 0), sold for 1,000: P&L 1,000, marked reward"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "staking-reward", "instrument": "ETH", "qty": "0.5"},
+      {"id": "t2", "account": "C", "day": "2026-02-05", "at": "2026-02-05T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-0.5", "cash": "1000"}
+    ],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "1000.00", "flags": ["reward"]}]}
+  },
+  {
+    "name": "a deposited coin's cost is not on the record: its sale stands as its own trade, left out of the figures",
+    "spec": "SPEC.md §2 Trade, Crypto: a transfer in is a deposit of an asset, basis unknown; that trade stands on its own and is left out of the performance figures",
+    "working": [
+      "1 BTC bought for 50,000 (Jan 5); 1 BTC transferred in (Jan 6); 2 BTC sold for 120,000 (60,000 each)",
+      "first in first out: the bought coin closes at 60,000 → P&L 10,000; the deposited one closes in a round trip of its own whose P&L is not stated",
+      "realized: 10,000 over 1 trade, 1 left out"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "BTC", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "1", "cash": "-50000"},
+      {"id": "t2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "1"},
+      {"id": "t3", "account": "C", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "BTC", "qty": "-2", "cash": "120000"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [{"opened_by": "t1", "pnl": "10000.00"}, {"opened_by": "t2", "pnl": {"gaps": ["basis-unknown"]}, "flags": ["deposited"]}],
+      "kpi": {"realized": "10000.00", "count": 1, "left_out": 1}
+    }
+  },
+  {
+    "name": "a transfer out takes coins at their cost, with no P&L; a residue after a sale is held",
+    "spec": "SPEC.md §2 Trade, Crypto: a transfer out comes off the lots first in first out at their cost, with no P&L",
+    "working": [
+      "2 BTC bought for 100,000; 0.5 sent out: 25,000 of cost leaves with them, no trade",
+      "1.5 sold for 90,000: cost 75,000 → P&L 15,000",
+      "1.0001 ETH bought for 5,000.50 (5,000 each); 1 sold for 6,000: cost 5,000 → P&L 1,000; 0.0001 ETH left, book 0.50"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "BTC", "kind": "crypto"}, {"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "2", "cash": "-100000"},
+      {"id": "t2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "transfer-out", "instrument": "BTC", "qty": "-0.5"},
+      {"id": "t3", "account": "C", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "BTC", "qty": "-1.5", "cash": "90000"},
+      {"id": "t4", "account": "C", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "ETH", "qty": "1.0001", "cash": "-5000.50"},
+      {"id": "t5", "account": "C", "day": "2026-02-01", "at": "2026-02-01T16:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-1", "cash": "6000"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [{"opened_by": "t1", "pnl": "15000.00"}, {"opened_by": "t4", "pnl": "1000.00"}],
+      "positions": [{"account": "C", "instrument": "ETH", "qty": "0.0001", "book": "0.50"}]
+    }
+  },
+  {
+    "name": "event contracts: bought, and resolved at the cash each resolution states",
+    "spec": "SPEC.md §2 Trade; docs/plans/stage-2-engine.md: event contracts are matched like shares, a resolution closes them at the cash it states",
+    "working": ["E1: 300 bought for 60, resolved for nothing → P&L −60", "E2: 100 bought for 40, resolved for 100 → P&L 60"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "P", "kind": "event-contracts"}],
+    "instruments": [{"id": "E1", "kind": "event-contract"}, {"id": "E2", "kind": "event-contract"}],
+    "transactions": [
+      {"id": "t1", "account": "P", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "E1", "qty": "300", "cash": "-60"},
+      {"id": "t2", "account": "P", "day": "2026-01-20", "at": "2026-01-20T15:00:00Z", "kind": "resolution", "instrument": "E1", "qty": "-300", "cash": "0"},
+      {"id": "t3", "account": "P", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "E2", "qty": "100", "cash": "-40"},
+      {"id": "t4", "account": "P", "day": "2026-01-20", "at": "2026-01-20T16:00:00Z", "kind": "resolution", "instrument": "E2", "qty": "-100", "cash": "100"}
+    ],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "-60.00"}, {"opened_by": "t3", "pnl": "60.00"}]}
+  },
+  {
+    "name": "a whole holding moved to another of the person's accounts is the same round trip",
+    "spec": "docs/plans/stage-2-engine.md, transfers: the lots move with their cost and days; the whole holding keeps its round trip",
+    "working": ["10 X bought in A for 100; all 10 moved to B (linked); sold in B for 150: one trade opened by the purchase, P&L 50, held in B, 27 days"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10"},
+      {"id": "t4", "account": "B", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "150"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {"trade_count": 1, "trades": [{"opened_by": "t1", "pnl": "50.00", "hold_days": 27, "flags": ["transferred"]}]}
+  },
+  {
+    "name": "part of a holding moved to another account is a round trip of its own there, keeping the day it was bought",
+    "spec": "docs/plans/stage-2-engine.md, transfers and trade identity: a part moved is a new round trip, so no two positions share an id",
+    "working": [
+      "10 X bought in A for 100 (Jan 5); 4 moved to B (linked, Jan 10)",
+      "B sells 4 for 60: its own round trip, opened by the receiving transfer, cost 40 → P&L 20, held from Jan 5 → 27 days",
+      "A sells 6 for 90: cost 60 → P&L 30"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-4"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "4"},
+      {"id": "t4", "account": "B", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-4", "cash": "60"},
+      {"id": "t5", "account": "A", "day": "2026-02-01", "at": "2026-02-01T16:00:00Z", "kind": "sell", "instrument": "X", "qty": "-6", "cash": "90"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "trade_count": 2,
+      "trades": [{"opened_by": "t3", "pnl": "20.00", "opened": "2026-01-05", "hold_days": 27}, {"opened_by": "t1", "pnl": "30.00"}]
+    }
+  },
+  {
+    "name": "the person's cost for a deposit gives it that cost and day",
+    "spec": "docs/plans/stage-2-engine.md: the person's cost-basis entry for a deposit gives its lots that cost",
+    "working": ["1 ETH transferred in; the person states it cost 2,000 on 2025-06-01; sold for 3,000: P&L 1,000, opened 2025-06-01"],
+    "today": "2026-04-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-03-01", "at": "2026-03-01T15:00:00Z", "kind": "transfer-in", "instrument": "ETH", "qty": "1"},
+      {"id": "t2", "account": "C", "day": "2026-03-15", "at": "2026-03-15T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-1", "cash": "3000"}
+    ],
+    "adjustments": [{"applies_to": "t1", "source": "person", "legs": [{"to": "ETH", "cost": "2000", "acquired": "2025-06-01"}]}],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "1000.00", "opened": "2025-06-01"}]}
+  }
+]

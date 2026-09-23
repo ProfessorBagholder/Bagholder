@@ -25,7 +25,7 @@ use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money, Rounding, TransactionId};
 
 use crate::gap::{Fig, Gap, Gaps};
-use crate::input::{Adjustment, AdjustmentLeg, Inputs, InstrumentInfo};
+use crate::input::{AdjustmentLeg, Inputs, InstrumentInfo};
 
 /// Places a pro-rata share is computed to before the last part takes the rest.
 pub const SHARE_PLACES: u32 = 12;
@@ -862,7 +862,7 @@ impl<'a> Matcher<'a> {
         };
         if effect == Some(Effect::Open) && self.book(account, instrument).lots.iter().any(|l| l.direction == closes) {
             // the record says it opens, and it meets an opposite position
-            let gaps = Gaps::of(Gap::Arithmetic(format!("{} says it opens a position against one already held", t.id)));
+            let gaps = Gaps::of(Gap::EffectConflict(t.id.clone()));
             self.taint(account, instrument, &gaps);
         }
         if !left.is_positive() {
@@ -1060,8 +1060,16 @@ impl<'a> Matcher<'a> {
         };
         let day = t.trade_date;
         let at = t.occurred_at;
+        // each holding's lots' cost before the event: every leg's share of a cost
+        // is a share of the cost as it stood, whatever the legs before it moved
+        let before: BTreeMap<InstrumentId, Vec<Fig<Money>>> = adjustment
+            .legs
+            .iter()
+            .filter_map(|l| l.from)
+            .map(|i| (i, self.book(account, i).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| l.value.clone()).collect()))
+            .collect();
         for leg in &adjustment.legs {
-            if let Err(g) = self.apply_leg(account, &anchor, day, at, leg, &stated, &adjustment) {
+            if let Err(g) = self.apply_leg(account, &anchor, day, at, leg, &stated, &before) {
                 for i in [leg.from, leg.to].into_iter().flatten() {
                     self.taint(account, i, &g);
                 }
@@ -1071,8 +1079,7 @@ impl<'a> Matcher<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, adj: &Adjustment) -> Result<(), Gaps> {
-        let _ = adj;
+    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, before: &BTreeMap<InstrumentId, Vec<Fig<Money>>>) -> Result<(), Gaps> {
         let unknown = || Gaps::of(Gap::EventUnknown(anchor.clone()));
         let Some(from) = leg.from else {
             // a stated cost belongs to a deposit, applied where the deposit is
@@ -1143,8 +1150,15 @@ impl<'a> Matcher<'a> {
                 }
                 // a spin-off: the child takes part of each lot's cost and keeps its dates
                 let currency = self.currency(to);
-                let parents: Vec<(Dec, Fig<Money>, Date, Option<Timestamp>)> =
-                    self.book(account, from).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| (l.qty, l.value.clone(), l.day, l.at)).collect();
+                let costs_before = before.get(&from).cloned().unwrap_or_default();
+                let parents: Vec<(Dec, Fig<Money>, Date, Option<Timestamp>)> = self
+                    .book(account, from)
+                    .lots
+                    .iter()
+                    .filter(|l| l.direction == Direction::Long)
+                    .enumerate()
+                    .map(|(k, l)| (l.qty, costs_before.get(k).cloned().unwrap_or_else(|| l.value.clone()), l.day, l.at))
+                    .collect();
                 let mut child_left = units;
                 let mut held_left = held;
                 let mut moved_values = Vec::new();

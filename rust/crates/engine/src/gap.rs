@@ -35,6 +35,9 @@ pub enum Gap {
     BasisUnknown(TransactionId),
     /// A sale or close of more than the account held.
     BeyondHeld(TransactionId),
+    /// A fill whose record says it opens a position while the account holds the
+    /// opposite one: what it did is not what the record says.
+    EffectConflict(TransactionId),
     /// A fill whose cash is in another currency than the instrument's, with no
     /// rate stated for the conversion.
     CurrencyUnstated(TransactionId),
@@ -71,6 +74,7 @@ impl Gap {
             Gap::EventUnknown(_) => "event-unknown",
             Gap::BasisUnknown(_) => "basis-unknown",
             Gap::BeyondHeld(_) => "beyond-held",
+            Gap::EffectConflict(_) => "effect-conflict",
             Gap::CurrencyUnstated(_) => "currency-unstated",
             Gap::PriceUnknown(_) => "price-unknown",
             Gap::CloseUnknown { .. } => "close-unknown",
@@ -95,6 +99,7 @@ impl fmt::Display for Gap {
             Gap::EventUnknown(t) => write!(f, "the corporate event {t} has no known values yet"),
             Gap::BasisUnknown(t) => write!(f, "what the asset deposited by {t} cost is not on the record"),
             Gap::BeyondHeld(t) => write!(f, "{t} takes out more than the account held"),
+            Gap::EffectConflict(t) => write!(f, "{t} says it opens a position while the account holds the opposite one"),
             Gap::CurrencyUnstated(t) => write!(f, "{t} is paid in another currency than its instrument's, at no stated rate"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),
             Gap::CloseUnknown { instrument, day } => write!(f, "{instrument} has no close for {day}"),
