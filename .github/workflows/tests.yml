@@ -59,6 +59,25 @@ jobs:
         run: cargo test --workspace
         working-directory: rust
 
+  # The same suite on a Mac, with the tests a sandboxed local run cannot hold (they are marked
+  # #[ignore] with their reason, e.g. the notification applet, built with osacompile, which needs
+  # Apple Events) run as well: every test counts on every push, whoever ran what locally.
+  rust-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: The Rust suite, ignored tests included
+        env:
+          CI: "true"
+        run: cargo test --workspace -- --include-ignored
+        working-directory: rust
+
   web:
     runs-on: ubuntu-latest
     defaults:
