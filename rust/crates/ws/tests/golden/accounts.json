@@ -1,0 +1,108 @@
+[
+  {
+    "id": "acc-cad-1",
+    "nickname": "Trading",
+    "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "linkedAccount": {"id": "acc-usd-1"},
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": "1000.50"}}}
+  },
+  {
+    "id": "acc-usd-1",
+    "nickname": "Trading",
+    "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN",
+    "currency": "USD",
+    "status": "open",
+    "type": "SelfDirected",
+    "linkedAccount": {"id": "acc-cad-1"},
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": 500.25}}}
+  },
+  {
+    "id": "acc-nick-a",
+    "nickname": "Shared",
+    "unifiedAccountType": "SELF_DIRECTED_RRSP",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": "10.00"}}}
+  },
+  {
+    "id": "acc-nick-b",
+    "nickname": "Shared",
+    "unifiedAccountType": "SELF_DIRECTED_RRSP",
+    "currency": "USD",
+    "status": "open",
+    "type": "SelfDirected",
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": 20}}}
+  },
+  {
+    "id": "acc-no-nickname",
+    "unifiedAccountType": "SELF_DIRECTED_RRSP",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected"
+  },
+  {
+    "id": "acc-only-type",
+    "type": "ObsoleteAccount",
+    "currency": "CAD",
+    "status": "open",
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": 5}}}
+  },
+  {
+    "id": "acc-margin-closed",
+    "nickname": "OldMargin",
+    "unifiedAccountType": "SELF_DIRECTED_MARGIN",
+    "currency": "CAD",
+    "status": "closed",
+    "type": "SelfDirected",
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": "0"}}}
+  },
+  {
+    "id": "acc-margin-open",
+    "nickname": "Margin",
+    "unifiedAccountType": "SELF_DIRECTED_MARGIN",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "custodianAccounts": [{"id": "cust-margin-1"}],
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": 1234.56}}}
+  },
+  {
+    "id": "acc-tfsa-boost",
+    "nickname": "TFSA",
+    "unifiedAccountType": "SELF_DIRECTED_TFSA",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "accountFeatures": [
+      {"name": "MARGIN_BOOST", "enabled": true, "functional": true, "metadata": {"targetMarginAccountId": "cust-margin-1"}}
+    ],
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": "999.99"}}}
+  },
+  {
+    "id": "acc-feature-disabled",
+    "nickname": "TFSA2",
+    "unifiedAccountType": "SELF_DIRECTED_TFSA",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "accountFeatures": [
+      {"name": "MARGIN_BOOST", "enabled": false, "functional": true, "metadata": {"targetMarginAccountId": "cust-margin-1"}}
+    ],
+    "financials": {"currentCombined": {"netLiquidationValue": {"amount": 1}}}
+  },
+  {
+    "id": "acc-feature-nonfunctional",
+    "nickname": "TFSA3",
+    "unifiedAccountType": "SELF_DIRECTED_TFSA",
+    "currency": "CAD",
+    "status": "open",
+    "type": "SelfDirected",
+    "accountFeatures": [
+      {"name": "MARGIN_BOOST", "enabled": true, "functional": false, "metadata": {"targetMarginAccountId": "cust-margin-1"}}
+    ]
+  }
+]
