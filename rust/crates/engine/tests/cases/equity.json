@@ -77,5 +77,30 @@
       {"id": "t2", "account": "A", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"}
     ],
     "expect": {"equity": [{"account": "A", "day": "2026-01-05", "value": null, "own_gaps": ["close-unknown"]}]}
+  },
+  {
+    "name": "a return across a day whose value waits still nets the money moved in that day",
+    "spec": "docs/plans/stage-2-engine.md, the equity series: returns net of flows, formed only between two days of the same source",
+    "working": [
+      "Mon Jan 5: 1,000 deposited, 100 X bought for 1,000, X closes at 10 → 1,000",
+      "Jan 6–12: no close, the last within the week is Jan 5's 10 → 1,000 each day",
+      "Tue Jan 13: 1,000 deposited; no close within the week → the value waits (close-unknown), the deposit is still a flow",
+      "Wed Jan 14: X closes at 11 → 1,000 + 1,100 = 2,100; the return from Jan 12 is (2,100 − 1,000) ÷ 1,000 − 1 = 0.1"
+    ],
+    "today": "2026-01-15",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "closes": {"X": {"2026-01-05": "10", "2026-01-14": "11"}},
+    "quotes": {"X": {"price": "11"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t3", "account": "A", "day": "2026-01-13", "at": "2026-01-13T15:00:00Z", "kind": "deposit", "cash": "1000"}
+    ],
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-12", "value": "1000", "source": "own", "return": 0.0},
+      {"account": "A", "day": "2026-01-13", "value": null, "own_gaps": ["close-unknown"]},
+      {"account": "A", "day": "2026-01-14", "value": "2100", "source": "own", "return": 0.1}
+    ]}
   }
 ]

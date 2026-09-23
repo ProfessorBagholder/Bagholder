@@ -52,9 +52,13 @@ pub struct DayValue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountEquity {
     pub account: AccountId,
-    /// Every day from the account's first to today: its own value and flow, or
-    /// what they wait on.
-    pub own: BTreeMap<Date, Fig<(Dec, Dec)>>,
+    /// Every day from the account's first to today: its own value, or what it
+    /// waits on.
+    pub own: BTreeMap<Date, Fig<Dec>>,
+    /// Every day's money and assets moved in (positive) or out, or what they
+    /// wait on: apart from the value, so a day whose value waits still carries
+    /// its flows into the return across it.
+    pub flows: BTreeMap<Date, Fig<Dec>>,
     /// The series shown: its own value where stated, else the broker's.
     pub points: Vec<DayValue>,
     /// Each day's return and the value it is over, formed only between two
@@ -160,17 +164,18 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
         let problem = problems.get(&account);
         let mut cash: BTreeMap<Currency, Dec> = BTreeMap::new();
         let mut own = BTreeMap::new();
+        let mut day_flows = BTreeMap::new();
         let mut day = first;
         while day <= today {
             for m in cash_moves.get(&day).into_iter().flatten() {
                 let e = cash.entry(m.currency).or_insert(Dec::ZERO);
                 *e = e.checked_add(m.amount).unwrap_or(*e);
             }
-            let value = (|| -> Fig<(Dec, Dec)> {
-                if let Some((d, g)) = problem {
-                    if *d <= day {
-                        return Err(g.clone());
-                    }
+            // a record with a problem leaves the value and the flows unstated from its day
+            let problem_now = problem.filter(|(d, _)| *d <= day).map(|(_, g)| g.clone());
+            let value = (|| -> Fig<Dec> {
+                if let Some(g) = &problem_now {
+                    return Err(g.clone());
                 }
                 let mut gaps = Gaps::none();
                 let mut total = Dec::ZERO;
@@ -200,6 +205,13 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                         Err(g) => gaps.merge(&g),
                     }
                 }
+                gaps.or(total)
+            })();
+            let flow = (|| -> Fig<Dec> {
+                if let Some(g) = &problem_now {
+                    return Err(g.clone());
+                }
+                let mut gaps = Gaps::none();
                 let mut flow = Dec::ZERO;
                 for t in flows.get(&day).into_iter().flatten() {
                     let f = (|| -> Fig<Dec> {
@@ -222,9 +234,10 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                         Err(g) => gaps.merge(&g),
                     }
                 }
-                gaps.or((total, flow))
+                gaps.or(flow)
             })();
             own.insert(day, value);
+            day_flows.insert(day, flow);
             day = match day.tomorrow() {
                 Ok(d) => d,
                 Err(_) => break,
@@ -244,13 +257,13 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                 last_deposits = deposits;
             }
             match (v, broker_value) {
-                (Ok((value, flow)), _) => points.push(DayValue { day: *d, value: *value, flow: Some(*flow), source: ValueSource::Own }),
+                (Ok(value), _) => points.push(DayValue { day: *d, value: *value, flow: day_flows.get(d).and_then(|f| f.as_ref().ok()).copied(), source: ValueSource::Own }),
                 (Err(_), Some(b)) => points.push(DayValue { day: *d, value: b, flow: broker_flow, source: ValueSource::Broker }),
                 (Err(_), None) => {}
             }
         }
-        let returns = daily_returns(&own, broker, &points);
-        out.insert(account, AccountEquity { account, own, points, returns });
+        let returns = daily_returns(&own, &day_flows, broker, &points);
+        out.insert(account, AccountEquity { account, own, flows: day_flows, points, returns });
     }
     out
 }
@@ -258,15 +271,16 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
 /// Each day's return, formed only between two stated days of the same source:
 /// its own value on both, else the broker's on both; across a gap, from the last
 /// stated day to the next, net of the flows between.
-fn daily_returns(own: &BTreeMap<Date, Fig<(Dec, Dec)>>, broker: Option<&crate::input::BrokerAccount>, points: &[DayValue]) -> Vec<(Date, Ratio, Dec)> {
+fn daily_returns(own: &BTreeMap<Date, Fig<Dec>>, flows: &BTreeMap<Date, Fig<Dec>>, broker: Option<&crate::input::BrokerAccount>, points: &[DayValue]) -> Vec<(Date, Ratio, Dec)> {
     let mut out = Vec::new();
     for w in points.windows(2) {
         let (a, b) = (&w[0], &w[1]);
         let own_pair = match (own.get(&a.day), own.get(&b.day)) {
-            (Some(Ok((va, _))), Some(Ok((vb, _)))) => {
-                // the flows of every day after `a` up to and including `b`
-                let flow = own.range(a.day..=b.day).skip(1).try_fold(Dec::ZERO, |acc, (_, v)| match v {
-                    Ok((_, f)) => acc.checked_add(*f).ok(),
+            (Some(Ok(va)), Some(Ok(vb))) => {
+                // the flows of every day after `a` up to and including `b`,
+                // days whose value waits included
+                let flow = flows.range(a.day..=b.day).skip(1).try_fold(Dec::ZERO, |acc, (_, f)| match f {
+                    Ok(f) => acc.checked_add(*f).ok(),
                     Err(_) => None,
                 });
                 flow.map(|f| (*va, *vb, f))
@@ -343,7 +357,7 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched, equity: &BTreeMap<Accou
         };
         let own_now = equity.get(account).and_then(|e| e.own.get(&today)).cloned();
         let value_difference = b.net_value_now.map(|n| match own_now {
-            Some(Ok((v, _))) => v.checked_sub(n).map_err(Gaps::from),
+            Some(Ok(v)) => v.checked_sub(n).map_err(Gaps::from),
             Some(Err(g)) => Err(g),
             // an account with nothing on the record holds nothing
             None => Ok(n.neg()),
