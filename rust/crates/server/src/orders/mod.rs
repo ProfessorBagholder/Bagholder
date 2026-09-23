@@ -19,11 +19,12 @@ use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, Order
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use bagholder_ws::session::CallError;
+use bagholder_ws::wire;
 // the one real caller is compiled out of test builds, where no call reaches the network
 #[cfg(not(test))]
 use bagholder_ws::session::Client;
 
-use crate::app::{f, log, now_iso, now_unix, num, qty_text, s, truthy, uuid4, App};
+use crate::app::{log, now_iso, now_unix, num, qty_text, s, uuid4, App};
 
 /// Test seams: a fake Wealthsimple, the live switch, the session, and threads.
 /// Under `cfg(test)` nothing reaches the network: without a fake every call fails.

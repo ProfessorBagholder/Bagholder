@@ -45,35 +45,26 @@ pub struct OrderAccount {
     pub margin_account_id: String,
 }
 
-pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<OrderAccount> {
-    let owned: Vec<Value>;
-    let list: &[Value] = match accounts {
-        Some(a) => a,
-        None => {
-            owned = must(bagholder_store::tables::accounts(&db(app))).iter().map(|a| serde_json::to_value(a).unwrap_or(Value::Null)).collect();
-            &owned
-        }
-    };
+/// The accounts the ticket offers, from the stored accounts.
+pub fn order_accounts(app: &Arc<App>) -> Vec<OrderAccount> {
     let mut out = Vec::new();
-    for a in list {
-        let typ = s(or_v(a.get("unifiedAccountType"), a.get("unified_account_type"))).to_uppercase();
-        let status = f(a, "status").to_lowercase();
-        if !tr(a, "id") || status == "closed" || !ORDER_TRADABLE_TYPES.iter().any(|p| typ.starts_with(p)) {
+    for a in must(bagholder_store::tables::accounts(&db(app))) {
+        let typ = a.unified_account_type.to_uppercase();
+        if a.id.is_empty() || a.status.to_lowercase() == "closed" || !ORDER_TRADABLE_TYPES.iter().any(|p| typ.starts_with(p)) {
             continue;
         }
         if ORDER_UNTRADABLE_MARKERS.iter().any(|m| typ.contains(m)) {
             continue;
         }
-        let nick_src = if tr(a, "nickname") { f(a, "nickname") } else { typ.clone() };
-        let nick = bagholder_model::value::norm_account_name(&nick_src);
+        let name = bagholder_model::value::norm_account_name(if a.nickname.is_empty() { &typ } else { &a.nickname });
         let margin = typ.contains("MARGIN");
         out.push(OrderAccount {
-            id: f(a, "id"),
-            name: nick,
-            kind: typ.clone(),
+            margin_account_id: if margin { a.id.clone() } else { a.margin_account_id },
+            id: a.id,
+            name,
+            kind: typ,
             margin,
-            currency: f(a, "currency"),
-            margin_account_id: if margin { f(a, "id") } else { f(a, "marginAccountId") },
+            currency: a.currency,
         });
     }
     out
@@ -125,56 +116,50 @@ pub struct TicketQuoteDetail {
     pub multiplier: Option<f64>,
 }
 
-pub fn parse_quote(node: &Value) -> Option<TicketQuoteDetail> {
-    if !node.is_object() || !tr(node, "id") {
+/// A security's quote as the ticket shows it; nothing for a security with no id.
+pub fn parse_quote(node: &wire::SummarySecurity) -> Option<TicketQuoteDetail> {
+    if node.id.is_empty() {
         return None;
     }
-    let empty = json!({});
-    let q = node.get("quoteV2").filter(|v| v.is_object()).unwrap_or(&empty);
-    let stock = node.get("stock").filter(|v| v.is_object()).unwrap_or(&empty);
-    let opt = node.get("optionDetails").filter(|v| v.is_object()).unwrap_or(&empty);
-    let last = on(q, "price").or_else(|| on(q, "last"));
-    let base = on(q, "previousBaseline").or_else(|| on(q, "referenceClose"));
-    let (bid, ask) = (on(q, "bid"), on(q, "ask"));
+    let q = node.quote_v2.clone().unwrap_or_default();
+    let stock = node.stock.clone().unwrap_or_default();
+    let last = q.price.or(q.last);
+    let base = q.previous_baseline.or(q.reference_close);
+    let (bid, ask) = (q.bid, q.ask);
     let change = match (last, base) {
         (Some(l), Some(b)) => Some(l - b),
         _ => None,
     };
-    let mid = if q.get("mid").map_or(false, |v| !v.is_null()) {
-        on(q, "mid")
-    } else {
-        match (bid, ask) {
-            (Some(b), Some(a)) => Some((b + a) / 2.0),
-            _ => None,
-        }
-    };
+    let mid = q.mid.or(match (bid, ask) {
+        (Some(b), Some(a)) => Some((b + a) / 2.0),
+        _ => None,
+    });
     let change_pct = match (change, base) {
         (Some(c), Some(b)) if b != 0.0 => Some(c / b),
         _ => None,
     };
-    let multiplier = if opt.as_object().map_or(false, |m| !m.is_empty()) { on(opt, "multiplier") } else { None };
     Some(TicketQuoteDetail {
-        security_id: f(node, "id"),
-        symbol: f(stock, "symbol"),
-        name: f(stock, "name"),
-        exchange: f(stock, "primaryExchange"),
-        currency: s(or_v(q.get("currency"), node.get("currency"))).to_uppercase(),
-        security_type: f(node, "securityType"),
-        buyable: tr(node, "buyable"),
-        sellable: tr(node, "sellable"),
-        trade_eligible: tr(node, "wsTradeEligible"),
-        status: f(node, "status"),
+        security_id: node.id.clone(),
+        symbol: stock.symbol,
+        name: stock.name,
+        exchange: stock.primary_exchange,
+        currency: if q.currency.is_empty() { &node.currency } else { &q.currency }.to_uppercase(),
+        security_type: node.security_type.clone(),
+        buyable: node.buyable,
+        sellable: node.sellable,
+        trade_eligible: node.ws_trade_eligible,
+        status: node.status.clone(),
         last,
         bid,
         ask,
-        bid_size: on(q, "bidSize"),
-        ask_size: on(q, "askSize"),
+        bid_size: q.bid_size,
+        ask_size: q.ask_size,
         mid,
         change,
         change_pct,
-        market_status: f(q, "marketStatus"),
-        quoted_as_of: f(q, "quotedAsOf"),
-        multiplier,
+        market_status: q.market_status,
+        quoted_as_of: q.quoted_as_of,
+        multiplier: node.option_details.as_ref().and_then(|o| o.multiplier),
     })
 }
 
@@ -227,13 +212,9 @@ pub fn fetch_quotes(app: &Arc<App>, sess: &bagholder_ws::session::Session, secur
     if ids.is_empty() {
         return Ok(out);
     }
-    let data = gql(app, sess, "FetchSecuritiesSummary", json!({"ids": ids}))?;
-    if let Some(a) = data.get("securities").and_then(|v| v.as_array()) {
-        for node in a {
-            if let Some(q) = parse_quote(node) {
-                out.insert(q.security_id.clone(), q);
-            }
-        }
+    let data: wire::SecuritiesSummary = gql_as(app, sess, "FetchSecuritiesSummary", json!({"ids": ids}))?;
+    for q in data.securities.iter().filter_map(parse_quote) {
+        out.insert(q.security_id.clone(), q);
     }
     Ok(out)
 }
@@ -251,31 +232,31 @@ pub(super) fn bare_symbol(sym: &str) -> String {
     sym
 }
 
-pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Option<bagholder_model::securities::Security> {
+/// The equity or ETF a search found for this symbol on this exchange, a Canadian
+/// suffix on either side ignored.
+pub fn parse_listing_search(data: &wire::SecuritySearchAnswer, symbol: &str, exchange: &str) -> Option<bagholder_model::securities::Security> {
     let (want_sym, want_ex) = (bare_symbol(symbol), exchange.trim().to_uppercase());
-    let empty = json!({});
-    let results = data.get("securitySearch").and_then(|v| v.get("results")).and_then(|v| v.as_array())?;
-    for r in results {
-        if !r.is_object() || !tr(r, "id") {
-            continue;
-        }
-        let stock = r.get("stock").filter(|v| v.is_object()).unwrap_or(&empty);
-        if bare_symbol(&f(stock, "symbol")) != want_sym || f(stock, "primaryExchange").to_uppercase() != want_ex {
-            continue;
-        }
-        if !LOOKUP_TYPES.contains(&f(r, "securityType").to_uppercase().as_str()) {
-            continue;
-        }
-        return Some(bagholder_model::securities::Security {
-            id: f(r, "id"), symbol: f(stock, "symbol").to_uppercase(), name: f(stock, "name"), primary_exchange: f(stock, "primaryExchange"),
-            primary_mic: f(stock, "primaryMic"), currency: f(r, "currency").to_uppercase(), underlying_id: String::new(),
-        });
-    }
-    None
+    let results = &data.security_search.as_ref()?.results;
+    results.iter().find_map(|r| {
+        let stock = r.stock.clone().unwrap_or_default();
+        let found = !r.id.is_empty()
+            && bare_symbol(&stock.symbol) == want_sym
+            && stock.primary_exchange.to_uppercase() == want_ex
+            && LOOKUP_TYPES.contains(&r.security_type.to_uppercase().as_str());
+        found.then(|| bagholder_model::securities::Security {
+            id: r.id.clone(),
+            symbol: stock.symbol.to_uppercase(),
+            name: stock.name,
+            primary_exchange: stock.primary_exchange,
+            primary_mic: stock.primary_mic,
+            currency: r.currency.to_uppercase(),
+            underlying_id: String::new(),
+        })
+    })
 }
 
 pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, symbol: &str, exchange: &str) -> Option<bagholder_model::securities::Security> {
-    let data = match gql(app, sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
+    let data: wire::SecuritySearchAnswer = match gql_as(app, sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
         Ok(d) => d,
         Err(e) => {
             log(&format!("bagholder ticket: listing search for {} failed: {}", symbol, e));
@@ -374,17 +355,17 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         quote.currency = sec.currency.to_uppercase();
     }
     let mut md = MarketData::default();
-    match gql(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
-        Ok(d) => md = parse_market_data(&serde_json::from_value(d).unwrap_or_default()),
+    match gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
+        Ok(d) => md = parse_market_data(&d),
         Err(e) => log(&format!("bagholder ticket: market data for {} failed: {}", sid, e)),
     }
-    let accounts = order_accounts(app, None);
+    let accounts = order_accounts(app);
     let acct = accounts.iter().find(|a| a.id == account_id).cloned();
     let mut balance = BuyingPowerFigures::default();
     if let Some(a) = &acct {
         let cur = if quote.currency.is_empty() { "CAD".to_string() } else { quote.currency.clone() };
-        match gql(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": a.id, "currency": cur, "securityId": sid})) {
-            Ok(d) => balance = parse_buying_power(&serde_json::from_value(d).unwrap_or_default()),
+        match gql_as(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": a.id, "currency": cur, "securityId": sid})) {
+            Ok(d) => balance = parse_buying_power(&d),
             Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", a.id, e)),
         }
     }
@@ -534,7 +515,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     if has_stop && !positive(stop_price) {
         return Err("A stop price is required.".into());
     }
-    let acct = match order_accounts(app, None).into_iter().find(|a| a.id == t.account_id) {
+    let acct = match order_accounts(app).into_iter().find(|a| a.id == t.account_id) {
         Some(a) => a,
         None => return Err("Choose an account.".into()),
     };
@@ -664,7 +645,7 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
     };
     row.status = OrderStatus::Sending;
     must(so::typed::insert_order(&db(app), row, &now_iso()));
-    let data = match gql(app, &sess, "SoOrdersOrderCreate", json!({"input": req})) {
+    let data: wire::CreateOrderAnswer = match gql_as(app, &sess, "SoOrdersOrderCreate", json!({"input": req})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => {
             now_is(OrderStatus::Failed, "Wealthsimple refused the session.");
@@ -677,14 +658,14 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicket
             return PlaceTicketAnswer::err_with_id(format!("Order failed: {}", msg), id);
         }
     };
-    let empty = json!({});
-    let result = data.get("soOrdersCreateOrder").filter(|v| truthy(Some(v))).unwrap_or(&empty);
-    if let Some(msg) = result.get("errors").filter(|v| truthy(Some(v))).and_then(first_error) {
-        now_is(OrderStatus::Rejected, &msg);
-        log(&format!("bagholder order: {} rejected: {}", id, msg));
-        return PlaceTicketAnswer::err_with_id(format!("Wealthsimple rejected the order: {}", msg), id);
+    // an answer that names no order still leaves the order sent: the read-back finds it by our id
+    let result = data.so_orders_create_order.unwrap_or_default();
+    if let Some(reason) = result.errors.0 {
+        now_is(OrderStatus::Rejected, &reason);
+        log(&format!("bagholder order: {} rejected: {}", id, reason));
+        return PlaceTicketAnswer::err_with_id(refused_words("Wealthsimple rejected the order", &reason), id);
     }
-    let ws_id = f(result.get("order").filter(|v| truthy(Some(v))).unwrap_or(&empty), "orderId");
+    let ws_id = result.order.map(|o| o.order_id).unwrap_or_default();
     patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
     log(&format!("bagholder order: {} sent, Wealthsimple order {}", id, ws_id));
     let rid = id.clone();

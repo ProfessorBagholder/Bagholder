@@ -54,7 +54,7 @@ pub(super) fn order_words(o: &Order) -> String {
 }
 
 /// What Wealthsimple says of an order, read from its extended order.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Reading {
     pub ws_status: String,
@@ -143,90 +143,84 @@ pub fn app_status(ws_status: &str) -> OrderStatus {
     }
 }
 
-pub fn parse_extended_order(data: &Value) -> Option<Reading> {
-    let o = data.get("soOrdersExtendedOrder")?;
-    if !o.is_object() || !tr(o, "status") {
-        return None;
-    }
+/// What Wealthsimple says of an order, or nothing when it names no status.
+pub fn parse_extended_order(data: &wire::ExtendedOrderAnswer) -> Option<Reading> {
+    let o = data.so_orders_extended_order.as_ref().filter(|o| !o.status.is_empty())?;
+    let first = |a: &String, b: &String| if a.is_empty() { b.clone() } else { a.clone() };
     Some(Reading {
-        ws_status: f(o, "status").to_uppercase(),
-        status: app_status(&f(o, "status")),
-        filled_qty: on(o, "filledQuantity"),
-        avg_fill: on(o, "averageFilledPrice"),
-        submitted_at: f(o, "submittedAtUtc"),
-        expires_at: f(o, "expiredAtUtc"),
-        first_filled_at: f(o, "firstFilledAtUtc"),
-        last_filled_at: f(o, "lastFilledAtUtc"),
-        error: s(or_v(o.get("rejectionCause"), o.get("rejectionCode"))),
-        quantity: on(o, "submittedQuantity"),
-        limit_price: on(o, "limitPrice"),
-        stop_price: on(o, "stopPrice"),
-        tif: f(o, "timeInForce").to_uppercase(),
-        currency: f(o, "securityCurrency").to_uppercase(),
-        account_id: s(or_v(o.get("canonicalAccountId"), o.get("accountId"))),
-        security_id: f(o, "securityId"),
-        kind: f(o, "orderType").to_uppercase(),
+        ws_status: o.status.to_uppercase(),
+        status: app_status(&o.status),
+        filled_qty: o.filled_quantity,
+        avg_fill: o.average_filled_price,
+        submitted_at: o.submitted_at_utc.clone(),
+        expires_at: o.expired_at_utc.clone(),
+        first_filled_at: o.first_filled_at_utc.clone(),
+        last_filled_at: o.last_filled_at_utc.clone(),
+        error: first(&o.rejection_cause, &o.rejection_code),
+        quantity: o.submitted_quantity,
+        limit_price: o.limit_price,
+        stop_price: o.stop_price,
+        tif: o.time_in_force.to_uppercase(),
+        currency: o.security_currency.to_uppercase(),
+        account_id: first(&o.canonical_account_id, &o.account_id),
+        security_id: o.security_id.clone(),
+        kind: o.order_type.to_uppercase(),
     })
 }
 
 pub(super) fn fetch_extended_order(app: &Arc<App>, sess: &bagholder_ws::session::Session, external_id: &str) -> Result<Option<Reading>, CallError> {
-    Ok(parse_extended_order(&gql(app, sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id}))?))
+    let data: wire::ExtendedOrderAnswer = gql_as(app, sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id}))?;
+    Ok(parse_extended_order(&data))
 }
 
-pub(super) fn fetch_order_feed(app: &Arc<App>, sess: &bagholder_ws::session::Session, identity: &str) -> Result<Vec<Value>, CallError> {
+/// Every order the feed lists as still open, page by page.
+pub(crate) fn fetch_order_feed(app: &Arc<App>, sess: &bagholder_ws::session::Session, identity: &str) -> Result<Vec<wire::FeedOrder>, CallError> {
     let mut out = Vec::new();
-    let mut cursor = Value::Null;
+    let mut cursor: Option<String> = None;
     loop {
-        let data = gql(app, sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": WS_PENDING, "first": 25, "cursor": cursor}))?;
-        let empty = json!({});
-        let feed = data.get("identity").and_then(|v| v.get("orderServiceExtendedOrderFeed")).filter(|v| v.is_object()).unwrap_or(&empty);
-        if let Some(edges) = feed.get("edges").and_then(|v| v.as_array()) {
-            for edge in edges {
-                if let Some(node) = edge.get("node") {
-                    if node.is_object() && tr(node, "id") {
-                        out.push(node.clone());
-                    }
-                }
-            }
-        }
-        let page = feed.get("pageInfo").filter(|v| v.is_object()).unwrap_or(&empty);
-        cursor = gv(page, "endCursor");
-        if !tr(page, "hasNextPage") || !truthy(Some(&cursor)) {
+        let data: wire::OrderFeedAnswer = gql_as(app, sess, "OrderServiceExtendedOrderFeed", json!({"identityId": identity, "statuses": WS_PENDING, "first": 25, "cursor": cursor}))?;
+        let feed = data.identity.and_then(|i| i.order_service_extended_order_feed).unwrap_or_default();
+        cursor = feed.next_cursor();
+        out.extend(feed.nodes().filter(|n| !n.id.is_empty()));
+        if cursor.is_none() {
             break;
         }
     }
     Ok(out)
 }
 
-/// An order found pending at Wealthsimple that was not placed here.
-pub(super) fn feed_order_row(app: &Arc<App>, node: &Value) -> Order {
-    let empty = json!({});
-    let sec = node.get("security").filter(|v| v.is_object()).unwrap_or(&empty);
-    let stock = sec.get("stock").filter(|v| v.is_object()).unwrap_or(&empty);
-    let acct = order_accounts(app, None).into_iter().find(|a| a.id == f(node, "canonicalAccountId"));
-    let security_id = s(or_v(node.get("securityId"), sec.get("id")));
+/// An order found open at Wealthsimple that was not placed here. The feed is asked
+/// only for open orders, so one that names no status is still open.
+pub(crate) fn feed_order_row(app: &Arc<App>, node: &wire::FeedOrder) -> Order {
+    let (sec_id, stock_symbol) = match &node.security {
+        Some(sec) => (sec.id.clone(), sec.stock.as_ref().map(|st| st.symbol.clone()).unwrap_or_default()),
+        None => (String::new(), String::new()),
+    };
+    let acct = order_accounts(app).into_iter().find(|a| a.id == node.canonical_account_id);
+    let security_id = if node.security_id.is_empty() { sec_id } else { node.security_id.clone() };
     let mut symbol = must(so::symbol_for_security(&db(app), &security_id));
     if symbol.is_empty() {
-        symbol = s(or_v(node.get("symbol"), stock.get("symbol")));
+        symbol = if node.symbol.is_empty() { stock_symbol } else { node.symbol.clone() };
     }
-    let kind = OrderType::parse(&f(node, "executionType").to_uppercase());
+    let kind = OrderType::parse(&node.execution_type.to_uppercase());
+    let status = app_status(&node.status);
     Order {
-        id: f(node, "id"),
-        created_at: f(node, "createdAtUtc"),
-        account_id: f(node, "canonicalAccountId"),
+        id: node.id.clone(),
+        created_at: node.created_at_utc.clone(),
+        account_id: node.canonical_account_id.clone(),
         account: acct.map(|a| a.name).unwrap_or_default(),
         security_id,
         symbol,
-        currency: f(node, "securityCurrency").to_uppercase(),
-        side: if f(node, "side").to_uppercase().starts_with("SELL") { Side::Sell } else { Side::Buy },
+        currency: node.security_currency.to_uppercase(),
+        side: if node.side.to_uppercase().starts_with("SELL") { Side::Sell } else { Side::Buy },
         kind: if kind.is_set() { kind } else { OrderType::Limit },
-        quantity: Some(on(node, "submittedQuantity").unwrap_or(0.0)),
-        limit_price: on(node, "limitPrice"),
-        stop_price: on(node, "stopPrice"),
-        status: app_status(&f(node, "status")),
-        ws_status: f(node, "status").to_uppercase(),
-        ws_order_id: f(node, "orderId"),
-        avg_fill: on(node, "averageFillPrice"),
+        quantity: Some(node.submitted_quantity.unwrap_or(0.0)),
+        limit_price: node.limit_price,
+        stop_price: node.stop_price,
+        status: if status.is_set() { status } else { OrderStatus::Pending },
+        ws_status: node.status.to_uppercase(),
+        ws_order_id: node.order_id.clone(),
+        avg_fill: node.average_fill_price,
         source: Source::Wealthsimple,
         ..Order::default()
     }
@@ -418,7 +412,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
             match fetch_order_feed(app, &sess, &identity) {
                 Ok(nodes) => {
                     for node in nodes {
-                        if known.contains(&f(&node, "id")) || known.contains(&f(&node, "orderId")) {
+                        if known.contains(&node.id) || known.contains(&node.order_id) {
                             continue;
                         }
                         must(so::typed::insert_order(&db(app), &feed_order_row(app, &node), &now_iso()));
@@ -483,7 +477,7 @@ pub fn cancel_order(app: &Arc<App>, order_id: &str) -> OrderActionAnswer {
         None => return OrderActionAnswer::err("Not connected."),
     };
     let id = row.id.clone();
-    let data = match gql(app, &sess, "SoOrdersOrderCancel", json!({"cancelOrderRequest": {"externalId": id}})) {
+    let data: wire::CancelOrderAnswer = match gql_as(app, &sess, "SoOrdersOrderCancel", json!({"cancelOrderRequest": {"externalId": id}})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => return OrderActionAnswer::err("Wealthsimple refused the session. Connect Wealthsimple again."),
         Err(e) => {
@@ -492,9 +486,9 @@ pub fn cancel_order(app: &Arc<App>, order_id: &str) -> OrderActionAnswer {
             return OrderActionAnswer::err(format!("Cancel failed: {}", msg));
         }
     };
-    if let Some(msg) = data.get("orderServiceCancelOrder").and_then(|r| r.get("errors")).filter(|v| truthy(Some(v))).and_then(first_error) {
-        log(&format!("bagholder orders: cancel {} refused: {}", id, msg));
-        return OrderActionAnswer::err(format!("Wealthsimple refused the cancel: {}", msg));
+    if let Some(reason) = data.order_service_cancel_order.and_then(|r| r.errors.0) {
+        log(&format!("bagholder orders: cancel {} refused: {}", id, reason));
+        return OrderActionAnswer::err(refused_words("Wealthsimple refused the cancel", &reason));
     }
     patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Cancelling), ws_status: Some("CANCEL_PENDING".into()), ..OrderPatch::default() });
     log(&format!("bagholder orders: cancel {} accepted", id));

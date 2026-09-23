@@ -329,8 +329,8 @@ pub(super) fn stop_allowed(app: &Arc<App>, security_id: &str) -> bool {
         Some(s) => s,
         None => return false,
     };
-    let ok = match gql(app, &sess, "FetchSecurityMarketData", json!({"id": security_id})) {
-        Ok(d) => parse_market_data(&serde_json::from_value(d).unwrap_or_default()).order_types.iter().any(|t| t == "STOP"),
+    let ok = match gql_as(app, &sess, "FetchSecurityMarketData", json!({"id": security_id})) {
+        Ok(d) => parse_market_data(&d).order_types.iter().any(|t| t == "STOP"),
         Err(e) => {
             log(&format!("bagholder bracket: order types for {} unknown: {}", security_id, e));
             return false;

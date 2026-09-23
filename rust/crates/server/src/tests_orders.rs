@@ -154,7 +154,7 @@ fn sent_order() -> String {
 #[test]
 fn test_tradable_accounts_are_open_self_directed_securities_accounts() {
     let _g = setup();
-    let accts = o::order_accounts(&app(), None);
+    let accts = o::order_accounts(&app());
     let ids: Vec<String> = accts.iter().map(|a| st(a, "id")).collect();
     assert_eq!(ids, ["acct-margin", "acct-tfsa"], "crypto, managed and closed accounts are not offered");
     let m: HashMap<String, Value> = accts.iter().map(|a| (st(a, "id"), json!(a.margin))).collect();
@@ -178,13 +178,13 @@ fn test_the_quote_card_is_read_from_wealthsimples_summary() {
         "stock": {"name": "NVIDIA Corp", "symbol": "NVDA", "primaryExchange": "NASDAQ", "primaryMic": "XNAS"},
         "quoteV2": {"__typename": "EquityQuote", "ask": 165.42, "bid": 165.38, "currency": "USD", "price": 165.40, "previousBaseline": 163.42,
                     "marketStatus": "OPEN", "askSize": 300, "bidSize": 100, "mid": 165.40, "quotedAsOf": "2026-09-10T15:30:00Z"}});
-    let q = o::parse_quote(&node).unwrap();
+    let q = o::parse_quote(&serde_json::from_value(node.clone()).unwrap()).unwrap();
     assert_eq!((st(&q, "symbol"), st(&q, "exchange"), st(&q, "currency")), ("NVDA".into(), "NASDAQ".into(), "USD".into()));
     assert_eq!((n(&q, "last"), n(&q, "bid"), n(&q, "ask"), n(&q, "bidSize"), n(&q, "askSize"), n(&q, "mid")), (165.40, 165.38, 165.42, 100.0, 300.0, 165.40));
     assert!((n(&q, "change") - 1.98).abs() < 1e-6);
     assert!((n(&q, "changePct") - 1.98 / 163.42).abs() < 1e-9);
     assert_eq!(st(&q, "marketStatus"), "OPEN");
-    assert!(o::parse_quote(&json!({"stock": {}})).is_none(), "no id, no quote");
+    assert!(o::parse_quote(&serde_json::from_value(json!({"stock": {}})).unwrap()).is_none(), "no id, no quote");
     let md_in = serde_json::from_value(json!({"security": {"allowedOrderSubtypes": ["LIMIT", "FRACTIONAL", "MARKET"], "marginRates": {"clientMarginRate": 30}}})).unwrap();
     let md = o::parse_market_data(&md_in);
     assert_eq!(md.order_types, vec!["MARKET".to_string(), "LIMIT".to_string()], "only the ticket's types, in the ticket's order");
@@ -206,7 +206,7 @@ fn search_answer() -> Value {
 #[test]
 fn test_listing_search_picks_the_symbol_on_its_exchange() {
     let a = search_answer();
-    let pick = |sym: &str, ex: &str| o::parse_listing_search(&a, sym, ex);
+    let pick = |sym: &str, ex: &str| o::parse_listing_search(&serde_json::from_value(a.clone()).unwrap(), sym, ex);
     assert_eq!(st(&pick("BBAI", "NYSE").unwrap(), "id"), "sec-s-bbai");
     assert_eq!(st(&pick("bbai", "nyse").unwrap(), "currency"), "USD");
     assert_eq!(st(&pick("QNC", "TSX-V").unwrap(), "id"), "sec-s-qnc-ca");
@@ -282,7 +282,7 @@ fn test_collateral_account_names_the_margin_account_it_backs() {
     bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
     let kept: HashMap<String, bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
     assert_eq!(kept["acct-tfsa"].margin_account_id, "acct-margin", "the link survives the store");
-    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app(), None).into_iter().map(|a| (a.id.clone(), a)).collect();
+    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app()).into_iter().map(|a| (a.id.clone(), a)).collect();
     assert_eq!(by_id["acct-margin"].margin_account_id, "acct-margin");
     assert_eq!(by_id["acct-tfsa"].margin_account_id, "acct-margin");
     assert_eq!(by_id["acct-rrsp"].margin_account_id, "");
@@ -1297,3 +1297,6 @@ fn test_a_ticket_is_refused_in_words_however_its_fields_are_spelled() {
     assert_eq!(req["orderType"], json!("BUY_QUANTITY"));
     assert!(serde_json::from_value::<o::Ticket>(json!("not a ticket")).is_err());
 }
+
+#[path = "tests_orders_wire_golden.rs"]
+mod wire_golden;

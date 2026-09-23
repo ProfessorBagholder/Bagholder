@@ -24,33 +24,12 @@ pub(super) fn must<T>(r: rusqlite::Result<T>) -> T {
     r.unwrap_or_else(|e| panic!("bagholder orders: store: {}", e))
 }
 
-pub(super) fn tr(v: &Value, k: &str) -> bool {
-    truthy(v.get(k))
-}
-
-pub(super) fn on(v: &Value, k: &str) -> Option<f64> {
-    num(v.get(k), None)
-}
-
 /// The first value that is present and non-zero.
 pub(super) fn or_f(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     match a {
         Some(x) if x != 0.0 => Some(x),
         _ => b,
     }
-}
-
-/// The first JSON value that is truthy (not null, false, zero or empty).
-pub(super) fn or_v<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value> {
-    if truthy(a) {
-        a
-    } else {
-        b
-    }
-}
-
-pub(super) fn gv(v: &Value, k: &str) -> Value {
-    v.get(k).cloned().unwrap_or(Value::Null)
 }
 
 pub(super) fn jo(v: Option<f64>) -> Value {
@@ -138,7 +117,11 @@ pub(super) fn parse_z(t: &str) -> Option<i64> {
     t.strip_suffix('Z').and_then(parse_ymdhms)
 }
 
-pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: Value) -> Result<Value, CallError> {
+/// One call to Wealthsimple, its answer read as `T`: the order code's only way there.
+/// No answer is a failure, as the client itself has it, and so is one that is not the
+/// shape asked for. Under the dry setting nothing that places, cancels or changes an
+/// order is sent.
+pub(super) fn gql_as<T: serde::de::DeserializeOwned>(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: Value) -> Result<T, CallError> {
     if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
         return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
     }
@@ -147,14 +130,32 @@ pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, ses
         let _ = sess;
         let g = seam::GQL.lock().unwrap_or_else(|e| e.into_inner()).clone();
         return match g {
-            Some(g) => g(op, &vars),
+            Some(g) => read_answer(op, g(op, &vars)?),
             None => Err(CallError::Failed(format!("{}: no network in tests", op))),
         };
     }
     #[cfg(not(test))]
     {
         let home = app.ws_home();
-        Client { home: &home }.graphql::<Value>(sess, op, &vars, None)
+        Client { home: &home }.graphql::<T>(sess, op, &vars, None)
+    }
+}
+
+/// An answer's `data` read as `T`, by the client's own rule (`Client::graphql`).
+#[cfg(test)]
+pub(crate) fn read_answer<T: serde::de::DeserializeOwned>(op: &str, data: Value) -> Result<T, CallError> {
+    if data.is_null() {
+        return Err(CallError::Failed(format!("graphql failed: {}", op)));
+    }
+    T::deserialize(data).map_err(|e| CallError::Failed(format!("{}: unreadable answer: {}", op, e)))
+}
+
+/// A refusal in words: the reason after the sentence when Wealthsimple gave one.
+pub(super) fn refused_words(what: &str, reason: &str) -> String {
+    if reason.is_empty() {
+        format!("{}.", what)
+    } else {
+        format!("{}: {}", what, reason)
     }
 }
 
@@ -165,16 +166,6 @@ pub(super) fn err_text(e: &CallError) -> String {
     } else {
         t
     }
-}
-
-pub(super) fn first_error(errs: &Value) -> Option<String> {
-    let a = errs.as_array()?;
-    let first = a.first()?;
-    Some(if first.is_object() {
-        s(or_v(first.get("message"), first.get("code")))
-    } else {
-        s(Some(first))
-    })
 }
 
 pub(super) fn orders_all(app: &Arc<App>) -> Vec<Order> {

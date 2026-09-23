@@ -51,7 +51,7 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<f64>, limit
     }
     let mut inp = change.clone();
     inp.insert("externalId".into(), json!(id));
-    let data = match gql(app, &sess, "SoOrdersOrderModify", json!({"input": inp})) {
+    let data: wire::ModifyOrderAnswer = match gql_as(app, &sess, "SoOrdersOrderModify", json!({"input": inp})) {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => return refused("Wealthsimple refused the session. Connect Wealthsimple again."),
         Err(e) => {
@@ -60,9 +60,9 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<f64>, limit
             return OrderActionAnswer::err(format!("Change failed: {}", msg));
         }
     };
-    if let Some(msg) = data.get("soOrdersModifyOrder").and_then(|r| r.get("errors")).filter(|v| truthy(Some(v))).and_then(first_error) {
-        log(&format!("bagholder orders: modify {} refused: {}", id, msg));
-        return OrderActionAnswer::err(format!("Wealthsimple refused the change: {}", msg));
+    if let Some(reason) = data.so_orders_modify_order.and_then(|r| r.errors.0) {
+        log(&format!("bagholder orders: modify {} refused: {}", id, reason));
+        return OrderActionAnswer::err(refused_words("Wealthsimple refused the change", &reason));
     }
     patch_order(app, &id, OrderPatch { limit_price: new_limit.map(Some), quantity: new_quantity.map(Some), ..OrderPatch::default() });
     // a bracket still waiting on this entry guards the size the entry now has
