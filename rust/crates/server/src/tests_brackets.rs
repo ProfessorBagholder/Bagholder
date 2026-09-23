@@ -36,32 +36,34 @@ fn sv(v: &impl serde::Serialize, k: &str) -> String {
     }
 }
 
-fn fv(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(|x| x.as_f64()).unwrap_or(f64::NAN)
+fn fv(v: &impl serde::Serialize, k: &str) -> f64 {
+    serde_json::to_value(v).unwrap().get(k).and_then(|x| x.as_f64()).unwrap_or(f64::NAN)
 }
 
 fn tv(v: &impl serde::Serialize, k: &str) -> bool {
     crate::app::truthy(serde_json::to_value(v).unwrap().get(k))
 }
 
-fn get_bracket(id: &str) -> Value {
-    so::get_bracket(&db(), id).unwrap().expect("bracket")
+fn get_bracket(id: &str) -> so::Bracket {
+    so::typed::get_bracket(&db(), id).unwrap().expect("bracket")
 }
 
-fn get_order(id: &str) -> Value {
-    so::get_order(&db(), id).unwrap().unwrap_or(json!({}))
+fn get_order(id: &str) -> so::Order {
+    so::typed::get_order(&db(), id).unwrap().unwrap_or_default()
 }
 
 fn update_order(id: &str, patch: Value) {
-    so::update_order(&db(), id, &patch, &now()).unwrap()
+    let patch: so::OrderPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_order(&db(), id, &patch, &now()).unwrap()
 }
 
 fn update_bracket(id: &str, patch: Value) {
-    so::update_bracket(&db(), id, &patch, &now()).unwrap()
+    let patch: so::BracketPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_bracket(&db(), id, &patch, &now()).unwrap()
 }
 
-fn list_orders() -> Vec<Value> {
-    so::list_orders(&db(), 200).unwrap()
+fn list_orders() -> Vec<so::Order> {
+    so::typed::list_orders(&db(), 200).unwrap()
 }
 
 fn set_meta(k: &str, v: &str) {
@@ -95,7 +97,7 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
         "SoOrdersOrderCancel" => json!({"orderServiceCancelOrder": {"externalId": vars["cancelOrderRequest"]["externalId"], "errors": []}}),
         "FetchSecurityMarketData" => json!({"security": {"id": vars["id"], "allowedOrderSubtypes": ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"], "marginRates": {"clientMarginRate": 0.3}}}),
         "FetchSoOrdersExtendedOrder" => {
-            let row = so::get_order(&db(), vars["externalId"].as_str().unwrap_or("")).unwrap().unwrap_or(json!({}));
+            let row = so::typed::get_order(&db(), vars["externalId"].as_str().unwrap_or("")).unwrap().unwrap_or_default();
             let ws = match sv(&row, "status").as_str() {
                 "cancelling" => "CANCEL_PENDING",
                 "filled" => "FILLED",
@@ -104,10 +106,10 @@ fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
                 "rejected" => "REJECTED",
                 _ => "SUBMITTED",
             };
-            let exp = if tv(&row, "expiresAt") { row["expiresAt"].clone() } else { Value::Null };
-            json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": row.get("filledQty").cloned().unwrap_or(Value::Null),
-                "averageFilledPrice": row.get("avgFill").cloned().unwrap_or(Value::Null), "submittedQuantity": row.get("quantity").cloned().unwrap_or(Value::Null),
-                "timeInForce": row.get("tif").cloned().unwrap_or(Value::Null), "expiredAtUtc": exp}})
+            let exp = if !row.expires_at.is_empty() { json!(row.expires_at) } else { Value::Null };
+            json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": row.filled_qty,
+                "averageFilledPrice": row.avg_fill, "submittedQuantity": row.quantity,
+                "timeInForce": row.tif, "expiredAtUtc": exp}})
         }
         other => panic!("{}", other),
     })
@@ -160,7 +162,7 @@ fn ticket(over: Value) -> Value {
     body
 }
 
-fn entry(over: Value) -> (String, Value) {
+fn entry(over: Value) -> (String, so::Bracket) {
     let r = od::place_order(&app(), &ticket(over));
     assert!(tv(&r, "ok"), "{:?}", r);
     (sv(&r, "id"), get_bracket(&sv(&r, "bracketId")))
@@ -216,7 +218,7 @@ fn test_a_ticket_with_brackets_makes_a_waiting_bracket() {
     let (oid, b) = entry(json!({}));
     assert_eq!((sv(&b, "orderId"), sv(&b, "status"), sv(&b, "slKind"), fv(&b, "slPrice"), fv(&b, "tpPrice"), fv(&b, "quantity"), sv(&b, "tif")),
         (oid, "waiting".into(), "stop".into(), 157.13, 181.94, 25.0, "UNTIL_CANCEL".into()));
-    assert!(so::bracket_for_order(&db(), "nope").unwrap().is_none());
+    assert!(so::typed::bracket_for_order(&db(), "nope").unwrap().is_none());
     t0();
     assert_eq!(sv(&get_bracket(&sv(&b, "id")), "status"), "waiting", "an unfilled entry leaves the bracket waiting");
 }
@@ -229,7 +231,7 @@ fn test_the_fill_arms_the_bracket_and_places_the_stop_as_wealthsimples_own_order
     clear();
     t0();
     let b = get_bracket(&sv(&b, "id"));
-    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), b["slNative"].clone()), ("armed".into(), "native".into(), json!(true)));
+    assert_eq!((sv(&b, "status"), sv(&b, "slMode"), b.sl_native), ("armed".into(), "native".into(), true));
     assert!(sv(&b, "slOrderId").starts_with("order-"));
     let c = creates();
     assert_eq!(c.len(), 1);
@@ -616,7 +618,7 @@ fn test_the_balances_feed_never_touches_a_bracket_with_a_resting_order() {
     assert!(sent_empty(), "nothing is cancelled on the balances' word");
 }
 
-fn watched_only() -> (String, Value) {
+fn watched_only() -> (String, so::Bracket) {
     let (oid, b) = entry(json!({}));
     filled(&oid);
     *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
@@ -684,12 +686,12 @@ fn test_a_rejected_exit_is_tried_again_spaced_out_for_as_long_as_the_bracket_liv
     t0();
     assert!(creates().is_empty(), "no second try within the minute");
     for n in 2..7 {
-        so::update_bracket(&db(), &id, &json!({"error": "Market closed"}), "2020-01-01T00:00:00Z").unwrap();
+        so::typed::update_bracket(&db(), &id, &so::BracketPatch { error: Some("Market closed".into()), ..Default::default() }, "2020-01-01T00:00:00Z").unwrap();
         t0();
         let b = get_bracket(&id);
         assert_eq!((sv(&b, "status"), fv(&b, "attempts")), ("armed".into(), n as f64), "attempt {}, still armed", n);
     }
-    so::update_bracket(&db(), &id, &json!({"error": "Market closed"}), "2020-01-01T00:00:00Z").unwrap();
+    so::typed::update_bracket(&db(), &id, &so::BracketPatch { error: Some("Market closed".into()), ..Default::default() }, "2020-01-01T00:00:00Z").unwrap();
     t0();
     let b = get_bracket(&id);
     assert!(tv(&b, "slOrderId"));
@@ -751,7 +753,7 @@ fn in_days(days: f64) -> String {
 }
 
 /// An armed bracket whose stop rests at Wealthsimple, lapsing in `days`.
-fn armed_with_stop_lapsing_in(days: f64) -> (Value, String) {
+fn armed_with_stop_lapsing_in(days: f64) -> (so::Bracket, String) {
     let (oid, b) = entry(json!({}));
     filled(&oid);
     t0();

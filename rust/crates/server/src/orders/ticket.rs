@@ -79,14 +79,14 @@ pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<OrderAc
     out
 }
 
-pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Option<Value> {
+pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Option<bagholder_model::securities::Security> {
     let rows = must(bagholder_store::admin::list_securities(&db(app)));
     let sid = security_id.trim();
     if !sid.is_empty() {
         if let Some(r) = rows.iter().find(|r| r.id == sid) {
-            return Some(serde_json::to_value(r).unwrap());
+            return Some(r.clone());
         }
-        return Some(json!({"id": sid, "symbol": symbol.trim().to_uppercase(), "name": "", "primaryExchange": "", "primaryMic": "", "currency": "", "underlyingId": null}));
+        return Some(bagholder_model::securities::Security { id: sid.to_string(), symbol: symbol.trim().to_uppercase(), ..Default::default() });
     }
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
@@ -94,7 +94,7 @@ pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Opti
     }
     let mut same: Vec<bagholder_model::securities::Security> = rows.into_iter().filter(|r| r.symbol.to_uppercase() == sym).collect();
     same.sort_by_key(|r| (if r.id.starts_with("sec-s-") { 0 } else { 1 }, r.id.clone()));
-    same.into_iter().next().map(|r| serde_json::to_value(&r).unwrap())
+    same.into_iter().next()
 }
 
 /// A ticket's own quote, as `GET /api/order/quote` and the ticket's live
@@ -251,7 +251,7 @@ pub(super) fn bare_symbol(sym: &str) -> String {
     sym
 }
 
-pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Option<Value> {
+pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Option<bagholder_model::securities::Security> {
     let (want_sym, want_ex) = (bare_symbol(symbol), exchange.trim().to_uppercase());
     let empty = json!({});
     let results = data.get("securitySearch").and_then(|v| v.get("results")).and_then(|v| v.as_array())?;
@@ -266,13 +266,15 @@ pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Optio
         if !LOOKUP_TYPES.contains(&f(r, "securityType").to_uppercase().as_str()) {
             continue;
         }
-        return Some(json!({"id": f(r, "id"), "symbol": f(stock, "symbol").to_uppercase(), "name": f(stock, "name"), "primaryExchange": f(stock, "primaryExchange"),
-            "primaryMic": f(stock, "primaryMic"), "currency": f(r, "currency").to_uppercase(), "underlyingId": null}));
+        return Some(bagholder_model::securities::Security {
+            id: f(r, "id"), symbol: f(stock, "symbol").to_uppercase(), name: f(stock, "name"), primary_exchange: f(stock, "primaryExchange"),
+            primary_mic: f(stock, "primaryMic"), currency: f(r, "currency").to_uppercase(), underlying_id: String::new(),
+        });
     }
     None
 }
 
-pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, symbol: &str, exchange: &str) -> Option<Value> {
+pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, symbol: &str, exchange: &str) -> Option<bagholder_model::securities::Security> {
     let data = match gql(app, sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
         Ok(d) => d,
         Err(e) => {
@@ -282,8 +284,7 @@ pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, sym
     };
     let sec = parse_listing_search(&data, symbol, exchange);
     if let Some(sec) = &sec {
-        let typed: bagholder_model::securities::Security = serde_json::from_value(sec.clone()).unwrap_or_default();
-        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(&typed), &now_iso()));
+        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(sec), &now_iso()));
     }
     sec
 }
@@ -347,7 +348,7 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         Some(s) => s,
         None => return TicketQuote::err(format!("No listing stored for {}.", name_of())),
     };
-    let sid = f(&sec, "id");
+    let sid = sec.id.clone();
     let mut quotes = match fetch_quotes(app, &sess, &[sid.clone()]) {
         Ok(q) => q,
         Err(CallError::NotAuthorized) => return TicketQuote::err("Wealthsimple refused the session. Connect Wealthsimple again."),
@@ -356,21 +357,21 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
     let mut quote = match quotes.remove(&sid) {
         Some(q) => q,
         None => {
-            let label = if tr(&sec, "symbol") { f(&sec, "symbol") } else { sid.clone() };
+            let label = if !sec.symbol.is_empty() { sec.symbol.clone() } else { sid.clone() };
             return TicketQuote::err(format!("Wealthsimple has no quote for {}.", label));
         }
     };
     if quote.symbol.is_empty() {
-        quote.symbol = f(&sec, "symbol");
+        quote.symbol = sec.symbol.clone();
     }
     if quote.name.is_empty() {
-        quote.name = f(&sec, "name");
+        quote.name = sec.name.clone();
     }
     if quote.exchange.is_empty() {
-        quote.exchange = f(&sec, "primaryExchange");
+        quote.exchange = sec.primary_exchange.clone();
     }
     if quote.currency.is_empty() {
-        quote.currency = f(&sec, "currency").to_uppercase();
+        quote.currency = sec.currency.to_uppercase();
     }
     let mut md = MarketData::default();
     match gql(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
@@ -572,7 +573,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
         "executionType": kind.as_str(),
         "orderType": format!("{}_QUANTITY", side),
         "quantity": qty,
-        "securityId": f(&sec, "id"),
+        "securityId": sec.id.clone(),
         "timeInForce": tif,
     });
     if has_limit {
@@ -581,14 +582,14 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     if has_stop {
         set(&mut req, "stopPrice", jo(stop_price));
     }
-    let currency = t.currency.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| f(&sec, "currency")).to_uppercase();
+    let currency = t.currency.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| sec.currency.clone()).to_uppercase();
     let order = Order {
         id: oid,
         created_at: now_iso(),
         account_id: acct.id.clone(),
         account: acct.name.clone(),
-        security_id: f(&sec, "id"),
-        symbol: f(&sec, "symbol"),
+        security_id: sec.id.clone(),
+        symbol: sec.symbol.clone(),
         currency,
         side,
         kind,

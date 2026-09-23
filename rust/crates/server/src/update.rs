@@ -7,14 +7,14 @@
 //! (`.zip` on Windows) with its `.sha256` beside it, holding the `bagholder`
 //! executable and the page's static files.
 
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
 
-use crate::app::{f, log, now_iso, now_unix, parse_instant, spawn, truthy, App, APP_VERSION, REPO};
+use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, APP_VERSION, REPO};
 
 pub const RESTART_CODE: i32 = 3;
 /// A restarted server alive this long is a good update.
@@ -80,12 +80,52 @@ pub fn parse_version(tag: &str) -> Option<(u64, u64, u64)> {
     Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
 }
 
+/// One asset attached to a GitHub release.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct GithubAsset {
+    pub(crate) name: String,
+    pub(crate) browser_download_url: String,
+}
+
+/// The GitHub release reply, the fields Bagholder reads; the rest of the
+/// body is never kept.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GithubRelease {
+    pub(crate) tag_name: String,
+    pub(crate) html_url: String,
+    pub(crate) assets: Vec<GithubAsset>,
+}
+
+/// {archive, sha} download URLs of this platform's archive and its
+/// .sha256, when the release carries both.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseAssets {
+    pub archive: String,
+    pub sha: String,
+}
+
+/// The last check against GitHub, stored as `update_check` and echoed to the page.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UpdateRecord {
+    pub checked_at: String,
+    pub ok: bool,
+    pub latest: String,
+    pub url: String,
+    pub update_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assets: Option<ReleaseAssets>,
+}
+
 /// Tests stand in for GitHub here: `(calls, answer)`, `None` answering as offline.
 #[cfg(test)]
-pub static FAKE_RELEASE: std::sync::Mutex<Option<(usize, Option<Value>)>> = std::sync::Mutex::new(None);
+pub static FAKE_RELEASE: std::sync::Mutex<Option<(usize, Option<GithubRelease>)>> = std::sync::Mutex::new(None);
 
 /// The latest release as GitHub describes it, `None` when it cannot be read.
-fn fetch_release() -> Option<Value> {
+fn fetch_release() -> Option<GithubRelease> {
     #[cfg(test)]
     {
         if let Some((calls, answer)) = FAKE_RELEASE.lock().unwrap().as_mut() {
@@ -110,21 +150,20 @@ fn fetch_release() -> Option<Value> {
 
 /// The latest release against APP_VERSION, the
 /// record stored in meta. Never fails.
-pub fn check_for_update(app: &Arc<App>) -> Value {
-    let mut record = json!({"checkedAt": now_iso(), "ok": false, "latest": "", "url": format!("{}/releases/latest", repo_url()), "updateAvailable": false});
+pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
+    let mut record = UpdateRecord { checked_at: now_iso(), ok: false, latest: String::new(), url: format!("{}/releases/latest", repo_url()), update_available: false, assets: None };
     let rel = fetch_release();
     if let Some(rel) = rel {
-        if let Some(latest) = parse_version(&f(&rel, "tag_name")) {
-            let tag = f(&rel, "tag_name");
-            let html = f(&rel, "html_url");
-            record["ok"] = json!(true);
-            record["latest"] = json!(tag);
-            if !html.is_empty() {
-                record["url"] = json!(html);
+        if let Some(latest) = parse_version(&rel.tag_name) {
+            let tag = rel.tag_name.clone();
+            record.ok = true;
+            record.latest = tag.clone();
+            if !rel.html_url.is_empty() {
+                record.url = rel.html_url.clone();
             }
             let available = Some(latest) > parse_version(APP_VERSION);
-            record["updateAvailable"] = json!(available);
-            record["assets"] = release_assets(&rel);
+            record.update_available = available;
+            record.assets = release_assets(&rel);
             if available {
                 if let Ok(c) = app.open() {
                     crate::notify::emit(
@@ -141,18 +180,16 @@ pub fn check_for_update(app: &Arc<App>) -> Value {
         }
     }
     if let Ok(c) = app.open() {
-        let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&record));
+        let _ = bagholder_store::tables::set_meta(&c, "update_check", &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap()));
     }
     record
 }
 
-/// The last check's record, {} when none.
-pub fn update_status(app: &Arc<App>) -> Value {
+/// The last check's record, default when none.
+pub fn update_status(app: &Arc<App>) -> UpdateRecord {
     let raw = app.open().ok().and_then(|c| bagholder_store::tables::get_meta(&c, "update_check", "").ok()).unwrap_or_default();
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(v) if v.is_object() => v,
-        _ => json!({}),
-    }
+    if raw.is_empty() { return UpdateRecord::default(); }
+    serde_json::from_str(&raw).unwrap_or_default()
 }
 
 /// This platform's archive in the release `tag`: `bagholder-vX.Y.Z-rust-<target>.tar.gz`
@@ -163,24 +200,18 @@ pub fn archive_name(tag: &str) -> String {
 
 /// {archive, sha} download URLs of this platform's
 /// archive and its .sha256, when the release carries both.
-pub fn release_assets(rel: &Value) -> Value {
-    let tag = f(rel, "tag_name");
-    let stem = archive_name(&tag);
+pub(crate) fn release_assets(rel: &GithubRelease) -> Option<ReleaseAssets> {
+    let stem = archive_name(&rel.tag_name);
     let mut archive = String::new();
     let mut sha = String::new();
-    for a in rel.get("assets").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-        let name = f(&a, "name");
-        if name == stem {
-            archive = f(&a, "browser_download_url");
-        } else if name == format!("{}.sha256", stem) {
-            sha = f(&a, "browser_download_url");
+    for a in &rel.assets {
+        if a.name == stem {
+            archive = a.browser_download_url.clone();
+        } else if a.name == format!("{}.sha256", stem) {
+            sha = a.browser_download_url.clone();
         }
     }
-    if !archive.is_empty() && !sha.is_empty() {
-        json!({"archive": archive, "sha": sha})
-    } else {
-        json!({})
-    }
+    if !archive.is_empty() && !sha.is_empty() { Some(ReleaseAssets { archive, sha }) } else { None }
 }
 
 // --------------------------------------------------------------------------
@@ -224,7 +255,7 @@ pub fn git_update_ready(app: &Arc<App>) -> (bool, String) {
     (true, String::new())
 }
 
-pub fn can_update(app: &Arc<App>, rec: Option<&Value>) -> bool {
+pub fn can_update(app: &Arc<App>, rec: Option<&UpdateRecord>) -> bool {
     let owned;
     let rec = match rec {
         Some(r) => r,
@@ -233,13 +264,13 @@ pub fn can_update(app: &Arc<App>, rec: Option<&Value>) -> bool {
             &owned
         }
     };
-    if !truthy(rec.get("updateAvailable")) || updates_off() {
+    if !rec.update_available || updates_off() {
         return false;
     }
     if update_mode(app) == "git" {
         return git_update_ready(app).0;
     }
-    truthy(rec.get("assets"))
+    rec.assets.is_some()
 }
 
 fn download(url: &str, dest: &Path, max_bytes: usize) -> Result<(), String> {
@@ -438,11 +469,8 @@ fn sha256_hex(data: &[u8]) -> String {
     openssl::sha::sha256(data).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-fn install_release(app: &Arc<App>, tag: &str, rec: &Value) -> Result<(), String> {
-    let assets = rec.get("assets").cloned().unwrap_or(json!({}));
-    if !truthy(Some(&assets)) {
-        return Err("This release has no downloadable archive.".into());
-    }
+fn install_release(app: &Arc<App>, tag: &str, rec: &UpdateRecord) -> Result<(), String> {
+    let Some(assets) = &rec.assets else { return Err("This release has no downloadable archive.".into()) };
     set_updating(app, &format!("Downloading {}…", tag));
     let home = app.home.clone();
     let staging = home.join("staging");
@@ -452,8 +480,8 @@ fn install_release(app: &Arc<App>, tag: &str, rec: &Value) -> Result<(), String>
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let archive = home.join(format!("bagholder-{}.{}", tag, archive_ext()));
     let sha_file = home.join("release.sha256");
-    download(&f(&assets, "archive"), &archive, UPDATE_MAX_BYTES)?;
-    download(&f(&assets, "sha"), &sha_file, 4096)?;
+    download(&assets.archive, &archive, UPDATE_MAX_BYTES)?;
+    download(&assets.sha, &sha_file, 4096)?;
     let want = std::fs::read_to_string(&sha_file).map_err(|e| e.to_string())?.split_whitespace().next().unwrap_or("").trim().to_lowercase();
     let got = sha256_hex(&std::fs::read(&archive).map_err(|e| e.to_string())?);
     if want != got {
@@ -498,7 +526,7 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
 
 /// Bring this copy to `tag`, then restart. Never
 /// fails; a failure lands in the state's update error and nothing is changed.
-pub fn perform_update(app: &Arc<App>, tag: &str, rec: &Value) {
+pub fn perform_update(app: &Arc<App>, tag: &str, rec: &UpdateRecord) {
     if let Err(e) = bagholder_store::guard_home(&app.home) {
         log(&format!("bagholder update: {}", e));
         return;
@@ -537,7 +565,7 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
         if st.syncing {
             return OkOr::err("Wait for the sync to finish, then update.");
         }
-        if !truthy(rec.get("updateAvailable")) || !truthy(rec.get("latest")) {
+        if !rec.update_available || rec.latest.is_empty() {
             return OkOr::err("No update to install.");
         }
         drop(st);
@@ -550,9 +578,9 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
             return OkOr::ok();
         }
         st.update_error.clear();
-        st.updating = format!("Updating to {}…", f(&rec, "latest"));
+        st.updating = format!("Updating to {}…", rec.latest);
     }
-    let tag = f(&rec, "latest");
+    let tag = rec.latest.clone();
     let a = app.clone();
     spawn("bagholder-update", move || perform_update(&a, &tag, &rec));
     OkOr::ok()
@@ -623,9 +651,9 @@ pub fn supervise(home: &Path, healthy_sec: u64) -> i32 {
 }
 
 /// At most hourly.
-pub fn check_for_update_if_due(app: &Arc<App>) -> Value {
+pub fn check_for_update_if_due(app: &Arc<App>) -> UpdateRecord {
     let rec = update_status(app);
-    if let Some(last) = parse_instant(&f(&rec, "checkedAt")) {
+    if let Some(last) = parse_instant(&rec.checked_at) {
         if now_unix() - last < UPDATE_CHECK_HOURS * 3600.0 {
             return rec;
         }

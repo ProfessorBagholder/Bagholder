@@ -284,7 +284,7 @@ fn answers() -> Value {
         out.insert("store_exposure_record_ry".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "share:RY:").unwrap().unwrap()));
         out.insert("store_exposure_record_missing".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "nope").unwrap()));
 
-        let snap_map = bagholder_store::snapshot::exposures_part(&conn).unwrap();
+        let snap_map = bagholder_store::feeds::all_exposures(&conn).unwrap();
         let mut snap_keys: Vec<&String> = snap_map.keys().collect();
         snap_keys.sort();
         out.insert("store_admin_exposures_map_keys".into(), cell(&snap_keys));
@@ -297,7 +297,7 @@ fn answers() -> Value {
         }
         out.insert("store_rows_exposures".into(), Value::Object(rows_out));
 
-        let part = bagholder_store::snapshot::exposures_part(&conn).unwrap();
+        let part = bagholder_store::feeds::all_exposures(&conn).unwrap();
         let mut part_keys: Vec<&String> = part.keys().collect();
         part_keys.sort();
         out.insert("store_snapshot_exposures_part_keys".into(), cell(&part_keys));

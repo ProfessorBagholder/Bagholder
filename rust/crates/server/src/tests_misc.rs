@@ -113,7 +113,7 @@ fn test_port_can_be_chosen_for_a_second_instance() {
 struct UpdateFakes;
 
 impl UpdateFakes {
-    fn new(answer: Option<Value>) -> Self {
+    fn new(answer: Option<update::GithubRelease>) -> Self {
         *update::FAKE_RELEASE.lock().unwrap() = Some((0, answer));
         let mut d = crate::notify::test_hooks::DELIVERED.lock().unwrap();
         if d.is_none() {
@@ -121,7 +121,7 @@ impl UpdateFakes {
         }
         UpdateFakes
     }
-    fn answer(&self, answer: Option<Value>) {
+    fn answer(&self, answer: Option<update::GithubRelease>) {
         *update::FAKE_RELEASE.lock().unwrap() = Some((0, answer));
     }
     fn calls(&self) -> usize {
@@ -143,8 +143,8 @@ impl Drop for UpdateFakes {
 fn set_checked_at(secs_ago: f64) {
     let c = app_ref().open().unwrap();
     let mut rec = update::update_status(&app());
-    rec["checkedAt"] = json!(app::stamp_of((app::now_unix() - secs_ago) as i64));
-    bagholder_store::tables::set_meta(&c, "update_check", &rec.to_string()).unwrap();
+    rec.checked_at = app::stamp_of((app::now_unix() - secs_ago) as i64);
+    bagholder_store::tables::set_meta(&c, "update_check", &serde_json::to_string(&rec).unwrap()).unwrap();
 }
 
 #[test]
@@ -158,28 +158,32 @@ fn test_update_check_flags_only_a_newer_release() {
     let mine = update::parse_version(app::APP_VERSION).unwrap();
     let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
     let older = "v0.9.0";
-    let fakes = UpdateFakes::new(Some(json!({"tag_name": format!("v{}", app::APP_VERSION), "html_url": "https://github.com/x/y/releases/tag/v1"})));
+    let fakes = UpdateFakes::new(Some(update::GithubRelease { tag_name: format!("v{}", app::APP_VERSION), html_url: "https://github.com/x/y/releases/tag/v1".into(), ..Default::default() }));
     let rec = update::check_for_update(&app());
-    assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool()), (Some(true), Some(false)), "same release: no flag");
-    fakes.answer(Some(json!({"tag_name": older, "html_url": "u"})));
-    assert_eq!(update::check_for_update(&app())["updateAvailable"], false, "an older release never flags");
-    fakes.answer(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/ProfessorBagholder/Bagholder/releases/tag/{}", newer)})));
+    assert_eq!((rec.ok, rec.update_available), (true, false), "same release: no flag");
+    fakes.answer(Some(update::GithubRelease { tag_name: older.into(), html_url: "u".into(), ..Default::default() }));
+    assert_eq!(update::check_for_update(&app()).update_available, false, "an older release never flags");
+    fakes.answer(Some(update::GithubRelease {
+        tag_name: newer.clone(),
+        html_url: format!("https://github.com/ProfessorBagholder/Bagholder/releases/tag/{}", newer),
+        ..Default::default()
+    }));
     set_checked_at(30.0 * 60.0);
     update::check_for_update_if_due(&app());
     assert_eq!(fakes.calls(), 0, "checked half an hour ago: GitHub is not asked again");
     set_checked_at(2.0 * 3600.0);
     let rec = update::check_for_update_if_due(&app());
-    assert_eq!((rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(newer.as_str())));
+    assert_eq!((rec.update_available, rec.latest.as_str()), (true, newer.as_str()));
     let st = crate::status::status(&app());
     assert_eq!(
-        (st.version, st.latest_version, st.update_available, json!(st.update_url)),
-        (app::APP_VERSION.to_string(), newer.clone(), true, rec["url"].clone())
+        (st.version, st.latest_version, st.update_available, st.update_url.clone()),
+        (app::APP_VERSION.to_string(), newer.clone(), true, rec.url.clone())
     );
     fakes.answer(None);
     let rec = update::check_for_update(&app());
-    assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool()), (Some(false), Some(false)), "offline: silent, no flag");
-    fakes.answer(Some(json!({"message": "Not Found"})));
-    assert_eq!(update::check_for_update(&app())["updateAvailable"], false, "no release published yet: nothing to flag");
+    assert_eq!((rec.ok, rec.update_available), (false, false), "offline: silent, no flag");
+    fakes.answer(Some(update::GithubRelease { ..Default::default() }));
+    assert_eq!(update::check_for_update(&app()).update_available, false, "no release published yet: nothing to flag");
 }
 
 #[test]
@@ -335,17 +339,21 @@ fn test_quote_refresh_keys_a_watched_listing_by_venue() {
 /// The Rust release names its archive `-rust-<target>`, beside the Python app's `-web.zip`.
 #[test]
 fn test_release_assets_take_the_web_archive_by_name_and_ignore_the_rest() {
-    let rel = |names: &[String]| json!({"tag_name": "v2.0.0", "assets": names.iter().map(|n| json!({"name": n, "browser_download_url": format!("https://x/{}", n)})).collect::<Vec<_>>()});
+    let rel = |names: &[String]| update::GithubRelease {
+        tag_name: "v2.0.0".into(),
+        assets: names.iter().map(|n| update::GithubAsset { name: n.clone(), browser_download_url: format!("https://x/{}", n) }).collect(),
+        ..Default::default()
+    };
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
     let mine = format!("bagholder-v2.0.0-rust-{}.{}", update::target_triple(), ext);
     assert_eq!(update::archive_name("v2.0.0"), mine);
     // the pre-split name of a target archive is not this one's
     let bare = format!("bagholder-v2.0.0-{}.{}", update::target_triple(), ext);
-    assert_eq!(update::release_assets(&rel(&[bare.clone(), format!("{}.sha256", bare)])), json!({}));
+    assert_eq!(update::release_assets(&rel(&[bare.clone(), format!("{}.sha256", bare)])), None);
     let got = update::release_assets(&rel(&["bagholder-v2.0.0-android.apk".into(), "bagholder-v2.0.0-web.zip".into(), mine.clone(), format!("{}.sha256", mine), "bagholder-v2.0.0-web.zip.sha256".into()]));
-    assert_eq!(got, json!({"archive": format!("https://x/{}", mine), "sha": format!("https://x/{}.sha256", mine)}));
-    assert_eq!(update::release_assets(&rel(&["bagholder-v2.0.0-web.zip".into(), "bagholder-v2.0.0-web.zip.sha256".into()])), json!({}), "another platform's archive is not this one's");
-    assert_eq!(update::release_assets(&rel(&[mine.clone(), "bagholder-v2.0.0-android.apk".into()])), json!({}), "nothing without its checksum");
+    assert_eq!(got, Some(update::ReleaseAssets { archive: format!("https://x/{}", mine), sha: format!("https://x/{}.sha256", mine) }));
+    assert_eq!(update::release_assets(&rel(&["bagholder-v2.0.0-web.zip".into(), "bagholder-v2.0.0-web.zip.sha256".into()])), None, "another platform's archive is not this one's");
+    assert_eq!(update::release_assets(&rel(&[mine.clone(), "bagholder-v2.0.0-android.apk".into()])), None, "nothing without its checksum");
 }
 
 /// The update-off half: the Host check takes a live request and is not reachable here.
@@ -354,14 +362,18 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
     let _g = guard();
     let mine = update::parse_version(app::APP_VERSION).unwrap();
     let newer = format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1);
-    let _fakes = UpdateFakes::new(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/x/y/releases/tag/{}", newer), "assets": [{"name": format!("bagholder-{}-web.zip", newer), "browser_download_url": "u"}]})));
+    let _fakes = UpdateFakes::new(Some(update::GithubRelease {
+        tag_name: newer.clone(),
+        html_url: format!("https://github.com/x/y/releases/tag/{}", newer),
+        assets: vec![update::GithubAsset { name: format!("bagholder-{}-web.zip", newer), browser_download_url: "u".into() }],
+    }));
     std::env::set_var("BAGHOLDER_NO_UPDATE", "1");
     let rec = update::check_for_update(&app());
     let st = crate::status::status(&app());
     let out = update::start_update(&app());
     std::env::remove_var("BAGHOLDER_NO_UPDATE");
-    assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(true), Some(newer.as_str())));
-    assert_eq!((st.update_by.as_str(), json!(st.update_url)), ("image", json!(update::image_page())), "told of the release, sent to the image");
+    assert_eq!((rec.ok, rec.update_available, rec.latest.as_str()), (true, true, newer.as_str()));
+    assert_eq!((st.update_by.as_str(), st.update_url.clone()), ("image", update::image_page()), "told of the release, sent to the image");
     assert_eq!((out.ok, out.error.as_deref()), (false, Some(update::UPDATES_OFF_MESSAGE)));
     assert_eq!(crate::status::status(&app()).update_by, "app");
 }

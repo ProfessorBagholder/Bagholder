@@ -9,7 +9,6 @@ pub mod activities;
 pub mod tables;
 pub mod merge;
 pub mod csvimport;
-pub mod snapshot;
 pub mod book;
 pub mod rows;
 pub mod market;

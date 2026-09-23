@@ -15,4 +15,5 @@ edition.workspace = true
 wreq = { version = "=6.0.0-rc.31", features = ["cookies", "gzip", "brotli", "zstd", "deflate"] }
 wreq-util = { version = "=3.0.0-rc.14", features = ["emulation", "emulation-compression"] }
 tokio = { version = "1", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

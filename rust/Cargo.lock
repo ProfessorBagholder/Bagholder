@@ -157,6 +157,7 @@ dependencies = [
 name = "bagholder-browser"
 version = "1.45.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tokio",
  "wreq",

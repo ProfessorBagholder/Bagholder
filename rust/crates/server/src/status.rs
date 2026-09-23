@@ -8,7 +8,7 @@ use std::sync::Arc;
 use bagholder_diff_derive::Diff;
 use ts_rs::TS;
 
-use crate::app::{self, s, truthy, App};
+use crate::app::{self, App};
 use crate::notify::NotifyStatus;
 use crate::{feeds, login, notify, orders, session, update, versions};
 
@@ -91,9 +91,9 @@ pub fn status(app: &Arc<App>) -> Status {
         protocol: app::PROTOCOL.to_string(),
         started_at: app.started_at.clone(),
         version: app::APP_VERSION.to_string(),
-        latest_version: s(upd.get("latest")),
-        update_available: truthy(upd.get("updateAvailable")),
-        update_url: if off { update::image_page() } else { let u = s(upd.get("url")); if u.is_empty() { update::repo_url() } else { u } },
+        latest_version: upd.latest.clone(),
+        update_available: upd.update_available,
+        update_url: if off { update::image_page() } else if upd.url.is_empty() { update::repo_url() } else { upd.url.clone() },
         can_update,
         update_by: if off { "image" } else { "app" }.to_string(),
         login_view: login::login_view(),

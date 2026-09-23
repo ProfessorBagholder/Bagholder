@@ -120,7 +120,7 @@ fn answers() -> Value {
         .map(|(k, rows)| (k, rows.iter().map(|r| json!({"symbol": r.symbol, "name": r.name, "value": r.value, "percentChange": r.percent_change, "sector": r.sector, "country": r.country})).collect()))
         .collect();
     out.insert("stored_universes".into(), cell(&read));
-    out.insert("snapshot_universes".into(), cell(&bagholder_store::snapshot::universes_part(&conn).unwrap()));
+    out.insert("snapshot_universes".into(), cell(&bagholder_store::feeds::stored_universes(&conn).unwrap()));
     Value::Object(out)
 }
 

@@ -3,7 +3,6 @@
 //! listing names, and the Portfolio figures read between syncs.
 
 use serde::Serialize;
-use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use ts_rs::TS;
@@ -554,31 +553,28 @@ fn keep_unread_margin(conn: &rusqlite::Connection, mut read: Vec<bagholder_store
 
 /// Net liquidation values, balances and buying
 /// power read again between syncs.
-pub fn refresh_portfolio(app: &Arc<App>) -> serde_json::Value {
+pub fn refresh_portfolio(app: &Arc<App>) {
     {
         let st = app.state.lock().unwrap();
-        if st.syncing {
-            return json!({"ok": false, "skipped": "sync running"});
-        }
-        if !st.connected {
-            return json!({"ok": false, "skipped": "not connected"});
+        if st.syncing || !st.connected {
+            return;
         }
     }
     let sess = load_session(app);
     let identity = sess.as_ref().map(|s| s.identity()).unwrap_or_default();
     let sess = match sess { Some(s) if !s.access_token.is_empty() && !identity.is_empty() => s, _ => {
         app.state.lock().unwrap().portfolio_error = "Portfolio refresh failed: no Wealthsimple login to read with".into();
-        return json!({"ok": false, "skipped": "no session"});
+        return;
     } };
     let home = app.ws_home();
     let client = Client { home: &home };
-    let run = || -> Result<serde_json::Value, String> {
+    let run = || -> Result<(), String> {
         let conn = app.open().map_err(|e| e.to_string())?;
         let accounts = fetch::fetch_all_accounts(&client, &sess, &identity).map_err(|e| e.to_string())?;
         let ids: Vec<String> = accounts.iter().map(|a| a.id.clone()).filter(|i| !i.is_empty()).collect();
         if ids.is_empty() {
             log("bagholder portfolio: Wealthsimple returned no accounts");
-            return Ok(json!({"ok": false, "skipped": "no accounts"}));
+            return Ok(());
         }
         let balances = fetch::fetch_balances(&client, &sess, &ids).map_err(|e| e.to_string())?;
         let now = now_iso();
@@ -593,16 +589,12 @@ pub fn refresh_portfolio(app: &Arc<App>) -> serde_json::Value {
         let available = margin.iter().filter(|m| m.buying_power.is_some()).count();
         log(&format!("bagholder portfolio: {} accounts, {} balances, buying power for {} of {} margin accounts", ids.len(), balances.len(), available, margin.len()));
         app.state.lock().unwrap().portfolio_error = problems_line(&problems);
-        Ok(json!({"ok": true, "accounts": ids.len(), "balances": balances.len(), "margin": margin.len()}))
+        Ok(())
     };
-    match run() {
-        Ok(v) => v,
-        Err(e) => {
-            let line = format!("Portfolio refresh failed: {}", bagholder_ws::sync::public_sync_error(&e));
-            log(&format!("bagholder portfolio: {}", line));
-            app.state.lock().unwrap().portfolio_error = line;
-            json!({"ok": false, "skipped": "error"})
-        }
+    if let Err(e) = run() {
+        let line = format!("Portfolio refresh failed: {}", bagholder_ws::sync::public_sync_error(&e));
+        log(&format!("bagholder portfolio: {}", line));
+        app.state.lock().unwrap().portfolio_error = line;
     }
 }
 
@@ -847,6 +839,7 @@ mod tests {
     use super::*;
     use bagholder_store::broker::Margin;
     use bagholder_ws::standin::{fixture, graphql, graphql_errors};
+    use serde_json::json;
     /// A Wealthsimple that answers everything but buying power and the
     /// account-wide equity history.
     fn half_answering() -> bagholder_ws::standin::Fixture {

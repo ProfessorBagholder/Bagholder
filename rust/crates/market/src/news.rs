@@ -1792,7 +1792,7 @@ pub fn stale(conn: &Connection, listings: &[Listing], now: i64, minutes: i64) ->
     let mut out = Vec::new();
     for l in listings {
         let (symbol, exchange, currency, name) = (&l.symbol, &l.exchange, &l.currency, &l.name);
-        let last = fetched.get(&sf::news_key(symbol, exchange)).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let last = fetched.get(&sf::news_key(symbol, exchange)).cloned().unwrap_or_default();
         let old = match if last.is_empty() { None } else { instant(&last) } {
             None => true,
             Some(then) => now - then > minutes * 60,

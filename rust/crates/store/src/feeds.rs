@@ -7,9 +7,9 @@
 //! of a document survives a refresh of the list it came from.
 
 use rusqlite::{Connection, Result, Row};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 
 use bagholder_model::value::FSum;
 
@@ -456,13 +456,13 @@ pub fn has_wire_release(conn: &Connection, symbol: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-pub fn news_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn news_fetched_at(conn: &Connection) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'news_fetched:%'")?;
     let mut rows = stmt.query([])?;
-    let mut out = Map::new();
+    let mut out = HashMap::new();
     while let Some(r) = rows.next()? {
         let key: String = r.get(0)?;
-        out.insert(key["news_fetched:".len()..].to_string(), json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()));
+        out.insert(key["news_fetched:".len()..].to_string(), r.get::<_, Option<String>>(1)?.unwrap_or_default());
     }
     Ok(out)
 }
@@ -1298,32 +1298,6 @@ pub fn replace_universe(conn: &Connection, key: &str, rows: &[bagholder_model::i
 // the remaining readers
 // --------------------------------------------------------------------------
 
-/// `dividend_symbols`: the symbols that have paid, with the listing
-/// exchange when the securities table knows it.
-pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT a.symbol AS symbol, a.currency AS currency, s.primary_exchange AS exchange \
-         FROM activities a LEFT JOIN securities s ON s.id = a.security_id \
-         WHERE a.category = 'dividend' AND IFNULL(a.symbol, '') != ''",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    while let Some(r) = rows.next()? {
-        let sym = up(&text(r, "symbol")?);
-        if sym.is_empty() || seen.contains(&sym) {
-            continue;
-        }
-        seen.push(sym.clone());
-        out.push(json!({
-            "symbol": sym,
-            "currency": text(r, "currency")?,
-            "exchange": text(r, "exchange")?.trim().to_string(),
-        }));
-    }
-    Ok(out)
-}
-
 /// `all_shorts`: every listing's stored short selling, for the ranked
 /// list. A row from before the market was typed is left out.
 pub fn all_shorts(conn: &Connection) -> Result<Vec<StoredShorts>> {
@@ -1359,20 +1333,6 @@ pub fn mark_filings_fetched(conn: &Connection, symbol: &str, profile_no: &str, n
 
 pub fn filings_fetched_for(conn: &Connection, symbol: &str) -> Result<String> {
     Ok(crate::tables::get_meta(conn, &format!("filings_fetched:{}", filing_key(symbol)), "")?)
-}
-
-pub fn filings_fetched_at(conn: &Connection) -> Result<Map<String, Value>> {
-    let mut stmt = conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'filings_fetched:%'")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Map::new();
-    while let Some(r) = rows.next()? {
-        let key: String = r.get(0)?;
-        out.insert(
-            key["filings_fetched:".len()..].to_string(),
-            json!(r.get::<_, Option<String>>(1)?.unwrap_or_default()),
-        );
-    }
-    Ok(out)
 }
 
 /// `sedar_profile`.
@@ -1466,4 +1426,52 @@ pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<StoredExpo
     let mut stmt = conn.prepare("SELECT * FROM exposures WHERE key = ?")?;
     let mut rows = stmt.query(rusqlite::params![key])?;
     match rows.next()? { Some(r) => Ok(Some(stored_exposure(r)?)), None => Ok(None) }
+}
+
+/// Every exposure row, keyed as it is stored: for a caller that wants the
+/// row as read, coverage and source included, not the model's weights alone
+/// (`rows::exposures`).
+pub fn all_exposures(conn: &Connection) -> Result<HashMap<String, StoredExposure>> {
+    let mut out = HashMap::new();
+    let mut stmt = conn.prepare("SELECT * FROM exposures")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.insert(text(r, "key")?, stored_exposure(r)?);
+    }
+    Ok(out)
+}
+
+/// One universe constituent as stored, with the moment its record was fetched
+/// -- what a caller wanting more than the model's own `UniverseRow` reads.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredUniverseRow {
+    pub symbol: String,
+    pub name: String,
+    pub value: f64,
+    pub percent_change: Option<f64>,
+    pub sector: String,
+    pub country: String,
+    pub fetched_at: String,
+}
+
+/// Every universe's constituents, in key order, each with when it was fetched.
+pub fn stored_universes(conn: &Connection) -> Result<bagholder_model::wire::Ordered<Vec<StoredUniverseRow>>> {
+    let mut stmt = conn.prepare("SELECT * FROM universes ORDER BY key, value DESC, symbol")?;
+    let mut rows = stmt.query([])?;
+    let mut out = bagholder_model::wire::Ordered::default();
+    while let Some(r) = rows.next()? {
+        let key = text(r, "key")?;
+        let row = StoredUniverseRow {
+            symbol: text(r, "symbol")?,
+            name: text(r, "name")?,
+            value: r.get::<_, Option<f64>>("value")?.unwrap_or(0.0),
+            percent_change: r.get::<_, Option<f64>>("percent_change")?,
+            sector: text(r, "sector")?,
+            country: text(r, "country")?,
+            fetched_at: text(r, "fetched_at")?,
+        };
+        out.entry(&key, Vec::new).push(row);
+    }
+    Ok(out)
 }

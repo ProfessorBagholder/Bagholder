@@ -194,8 +194,10 @@ pub struct TakeProfit {
 }
 
 /// The fields of an order that change after it is written. `None` leaves a field as it
-/// is; a number set to `Some(None)` is cleared.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// is; a number set to `Some(None)` is cleared. A key a patch does not name is `None`;
+/// one it names `null` clears a number, and a key the store does not read is ignored.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct OrderPatch {
     pub status: Option<OrderStatus>,
     pub ws_order_id: Option<String>,
@@ -265,7 +267,8 @@ pub struct Bracket {
 }
 
 /// The fields of a bracket that change after it is written; as `OrderPatch`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct BracketPatch {
     pub symbol: Option<String>,
     pub currency: Option<String>,

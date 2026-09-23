@@ -190,11 +190,12 @@ fn test_the_counts_match_the_snapshot_without_reading_the_rows() {
 #[test]
 fn test_the_orders_table_survives_clear_synced_data() {
     let d = db();
-    orders::insert_order(&d.conn, &json!({"id": "order-1", "accountId": "acct-margin", "securityId": "sec-s-us", "symbol": "QNC", "currency": "USD", "side": "BUY", "type": "LIMIT", "tif": "DAY", "quantity": 25, "limitPrice": 165.4, "status": "dry", "source": "bagholder"}), "2026-09-10T14:00:00Z").unwrap();
+    let given: orders::Order = serde_json::from_value(json!({"id": "order-1", "accountId": "acct-margin", "securityId": "sec-s-us", "symbol": "QNC", "currency": "USD", "side": "BUY", "type": "LIMIT", "tif": "DAY", "quantity": 25, "limitPrice": 165.4, "status": "dry", "source": "bagholder"})).unwrap();
+    orders::typed::insert_order(&d.conn, &given, "2026-09-10T14:00:00Z").unwrap();
     admin::clear_synced_data(&d.conn, false, false).unwrap();
-    let rows = orders::list_orders(&d.conn, 200).unwrap();
+    let rows = orders::typed::list_orders(&d.conn, 200).unwrap();
     assert_eq!(rows.len(), 1, "what was submitted is a record of the user's own actions, never cleared with the synced rows");
-    assert_eq!(rows[0]["id"], "order-1");
+    assert_eq!(rows[0].id, "order-1");
 }
 
 #[test]

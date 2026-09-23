@@ -342,6 +342,8 @@ pub fn extract_instrument(description: &str) -> (String, String) {
     (String::new(), String::new())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Parsed {
     pub symbol: String,
     pub name: String,
@@ -378,15 +380,6 @@ pub fn parse_statement_description(description: &str) -> Parsed {
     p
 }
 
-impl Parsed {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "symbol": self.symbol, "name": self.name, "quantity": self.quantity, "unitPrice": self.unit_price,
-            "executedAt": self.executed_at, "fillParsed": self.fill_parsed,
-            "contractSigned": self.contract_signed, "sharesSigned": self.shares_signed,
-        })
-    }
-}
 
 /// `map_statement_type`: (activity type, sub-type, category) for a
 /// statement's transaction code and description.
@@ -987,12 +980,8 @@ pub fn scan_folder(conn: &Connection, folder: Option<&str>, force: bool) -> Resu
         });
     }
     let now = stamp();
-    let kept: Map<String, Value> = seen
-        .into_iter()
-        .filter(|(k, _)| std::path::Path::new(k).exists())
-        .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or(Value::Null)))
-        .collect();
-    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::json_text(&Value::Object(kept)))?;
+    let kept: IndexMap<String, SeenFile> = seen.into_iter().filter(|(k, _)| std::path::Path::new(k).exists()).collect();
+    crate::tables::set_meta(conn, WATCH_FILES_META, &crate::tables::json_text(&serde_json::to_value(&kept).unwrap_or(Value::Null)))?;
     crate::tables::set_meta(conn, WATCH_LAST_META, &now)?;
     Ok(ScanReport { ok: true, error: None, path: Some(path), added: Some(added), duplicates: Some(duplicates), files: Some(files), scanned_at: Some(now) })
 }

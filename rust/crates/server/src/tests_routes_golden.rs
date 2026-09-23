@@ -284,12 +284,8 @@ fn test_orders_routes_golden() {
     assert_eq!(appended["body"]["added"], json!(1));
 
     // a resting order, cancelled through the stand-in for Wealthsimple's cancel mutation
-    so::insert_order(
-        &app.open().unwrap(),
-        &json!({"id": "golden-order-1", "accountId": "acct-golden", "account": "Golden", "securityId": "sec-golden", "symbol": "GOLDEN", "currency": "USD", "side": "BUY", "type": "LIMIT", "quantity": 5, "limitPrice": 1.75, "tif": "DAY", "status": "sent", "source": "bagholder", "role": "entry"}),
-        &crate::app::now_iso(),
-    )
-    .unwrap();
+    let golden_order: so::Order = serde_json::from_value(json!({"id": "golden-order-1", "accountId": "acct-golden", "account": "Golden", "securityId": "sec-golden", "symbol": "GOLDEN", "currency": "USD", "side": "BUY", "type": "LIMIT", "quantity": 5, "limitPrice": 1.75, "tif": "DAY", "status": "sent", "source": "bagholder", "role": "entry"})).unwrap();
+    so::typed::insert_order(&app.open().unwrap(), &golden_order, &crate::app::now_iso()).unwrap();
     *seam::SESSION.lock().unwrap() = Some(Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() }));
     *seam::LIVE.lock().unwrap() = Some(true);
     seam::SPAWN_INLINE.store(true, Ordering::SeqCst);

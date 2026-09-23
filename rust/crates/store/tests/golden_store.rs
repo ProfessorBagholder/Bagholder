@@ -23,7 +23,7 @@
 
 use bagholder_model::input::{TileRef, TradeGroup};
 use bagholder_store::tables::LegacyNote;
-use bagholder_store::{activities, admin, book, csvimport, merge, rows, snapshot, tables};
+use bagholder_store::{activities, admin, book, csvimport, feeds, merge, rows, tables};
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use std::cell::Cell;
@@ -257,7 +257,7 @@ fn helpers_scenario(out: &mut Map<String, Value>) {
     });
     out.insert("helpers/extract_instrument".into(), instruments);
 
-    let parsed = |d: &str| csvimport::parse_statement_description(d).to_json();
+    let parsed = |d: &str| serde_json::to_value(csvimport::parse_statement_description(d)).unwrap();
     out.insert("helpers/parse_statement_description".into(), json!({
         "shares": parsed("AAPL - Apple Inc: 10 shares at $150.00 per share (executed at 2024-05-01)"),
         "contracts": parsed("AAPL 260918C00200000: 2 contracts at $1.50 per share"),
@@ -947,13 +947,13 @@ fn clear_synced_data_scenario(out: &mut Map<String, Value>) {
 }
 
 // --------------------------------------------------------------------------
-// snapshot: exposures and universes, still read as JSON; the book export
+// exposures and universes as stored, and the book export
 // --------------------------------------------------------------------------
 
 fn snapshot_scenario(out: &mut Map<String, Value>) {
     let conn = fresh_conn();
-    out.insert("snapshot/exposures_part".into(), json!(snapshot::exposures_part(&conn).unwrap()));
-    out.insert("snapshot/universes_part".into(), json!(snapshot::universes_part(&conn).unwrap()));
+    out.insert("snapshot/exposures_part".into(), json!(feeds::all_exposures(&conn).unwrap()));
+    out.insert("snapshot/universes_part".into(), json!(feeds::stored_universes(&conn).unwrap()));
 }
 
 // --------------------------------------------------------------------------

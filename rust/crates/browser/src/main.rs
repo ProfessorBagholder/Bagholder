@@ -6,6 +6,7 @@
 //! request asked for bytes -- or `{"error": ...}`. Redirects are followed and
 //! cookies kept for the life of the process.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::time::Duration;
@@ -25,6 +26,42 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
+/// One request line: `{"method": "GET"|"POST", "url": ..., "timeout": seconds,
+/// "headers": [[name, value], ...], "body": ..., "binary": bool}`.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Req {
+    method: String,
+    url: String,
+    timeout: Option<f64>,
+    headers: Vec<(String, String)>,
+    body: Option<String>,
+    binary: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base64_pads_by_the_remainder() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn test_a_request_line_reads_its_fields_leniently() {
+        let r: Req = serde_json::from_str(r#"{"method": "post", "url": "http://x", "timeout": 5, "headers": [["A", "1"], ["B", "2"]], "body": "hi", "binary": true}"#).unwrap();
+        assert_eq!((r.method.as_str(), r.url.as_str(), r.timeout, r.body.as_deref(), r.binary), ("post", "http://x", Some(5.0), Some("hi"), true));
+        assert_eq!(r.headers, vec![("A".to_string(), "1".to_string()), ("B".to_string(), "2".to_string())]);
+        let empty: Req = serde_json::from_str("{}").unwrap();
+        assert_eq!((empty.method.as_str(), empty.url.as_str(), empty.timeout, empty.body, empty.binary), ("", "", None, None, false));
+    }
+}
+
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
     let client = wreq::Client::builder()
@@ -40,7 +77,7 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(&line) {
+        let req: Req = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
                 let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
@@ -49,23 +86,19 @@ fn main() {
             }
         };
         let answer = rt.block_on(async {
-            let url = req.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("GET").to_uppercase();
-            let secs = req.get("timeout").and_then(|v| v.as_f64()).unwrap_or(30.0);
-            let binary = req.get("binary").and_then(|v| v.as_bool()).unwrap_or(false);
+            let url = req.url.as_str();
+            let method = req.method.to_uppercase();
+            let secs = req.timeout.unwrap_or(30.0);
+            let binary = req.binary;
             let mut b = if method == "POST" { client.post(url) } else { client.get(url) };
             b = b.timeout(Duration::from_secs_f64(secs));
-            if let Some(h) = req.get("headers").and_then(|v| v.as_array()) {
-                for pair in h {
-                    let k = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
-                    let v = pair.get(1).and_then(|v| v.as_str()).unwrap_or("");
-                    if !k.is_empty() {
-                        b = b.header(k, v);
-                    }
+            for (k, v) in &req.headers {
+                if !k.is_empty() {
+                    b = b.header(k, v);
                 }
             }
-            if let Some(body) = req.get("body").and_then(|v| v.as_str()) {
-                b = b.body(body.to_string());
+            if let Some(body) = req.body {
+                b = b.body(body);
             }
             match b.send().await {
                 Ok(resp) => {

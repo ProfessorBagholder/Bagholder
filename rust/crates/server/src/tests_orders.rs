@@ -40,20 +40,22 @@ fn jv(v: &impl serde::Serialize) -> Value {
     serde_json::to_value(v).unwrap()
 }
 
-fn get_order(id: &str) -> Value {
-    so::get_order(&conn(), id).unwrap().unwrap_or(Value::Null)
+fn get_order(id: &str) -> so::Order {
+    so::typed::get_order(&conn(), id).unwrap().unwrap_or_default()
 }
 fn update_order(id: &str, patch: Value) {
-    so::update_order(&conn(), id, &patch, &now_iso()).unwrap()
+    let patch: so::OrderPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_order(&conn(), id, &patch, &now_iso()).unwrap()
 }
-fn get_bracket(id: &str) -> Value {
-    so::get_bracket(&conn(), id).unwrap().unwrap_or(Value::Null)
+fn get_bracket(id: &str) -> so::Bracket {
+    so::typed::get_bracket(&conn(), id).unwrap().unwrap_or_default()
 }
 fn update_bracket(id: &str, patch: Value) {
-    so::update_bracket(&conn(), id, &patch, &now_iso()).unwrap()
+    let patch: so::BracketPatch = serde_json::from_value(patch).unwrap();
+    so::typed::update_bracket(&conn(), id, &patch, &now_iso()).unwrap()
 }
-fn list_orders() -> Vec<Value> {
-    so::list_orders(&conn(), 200).unwrap()
+fn list_orders() -> Vec<so::Order> {
+    so::typed::list_orders(&conn(), 200).unwrap()
 }
 fn activities() -> Vec<Value> {
     bagholder_store::activities::all_activities(&conn()).unwrap().iter().map(|r| serde_json::to_value(r).unwrap()).collect()
@@ -413,8 +415,8 @@ fn test_under_the_dry_setting_a_submit_is_recorded_and_nothing_is_sent() {
     // `request` is stored but never sent to the page, so it is read back through the typed store, not the JSON row
     let stored = so::typed::get_order(&conn(), &st(&r, "id")).unwrap().unwrap();
     assert_eq!(stored.request.get("executionType").and_then(|v| v.as_str()), Some("LIMIT"));
-    assert_eq!(n(&rows[0]["stopLoss"], "price"), 157.13);
-    assert_eq!(get_order(&st(&r, "id"))["takeProfit"], json!({"price": 181.94}));
+    assert_eq!(rows[0].stop_loss.as_ref().unwrap().price, Some(157.13));
+    assert_eq!(get_order(&st(&r, "id")).take_profit, Some(so::TakeProfit { price: Some(181.94) }));
 }
 
 #[test]
@@ -534,7 +536,7 @@ fn test_an_order_placed_in_wealthsimples_app_becomes_a_row_from_the_feed() {
     let row = get_order("order-ws-placed");
     assert_eq!((st(&row, "source"), st(&row, "status"), st(&row, "symbol"), st(&row, "account"), st(&row, "side"), st(&row, "type"), n(&row, "quantity"), n(&row, "limitPrice"), st(&row, "wsOrderId")),
         ("wealthsimple".into(), "pending".into(), "QNC".into(), "TFSA".into(), "BUY".into(), "LIMIT".into(), 3.0, 1.76, "ws-9".into()));
-    assert!(row["stopLoss"].is_null());
+    assert!(row.stop_loss.is_none());
     let r = o::refresh_orders(&app(), "");
     unpatch();
     assert_eq!((n(&r, "read"), n(&r, "added")), (1.0, 0.0), "{:?}", r);
@@ -669,11 +671,12 @@ fn ws_sell(cid: &str, qty: f64, price: f64, symbol: &str, sub: &str, atype: &str
 }
 
 fn place_live(oid: &str, symbol: &str, security_id: &str, qty: f64, typ: &str, role: &str) -> String {
-    so::insert_order(&conn(), &json!({
+    let order: so::Order = serde_json::from_value(json!({
         "id": oid, "accountId": "acct-tfsa", "account": "TFSA", "securityId": security_id, "symbol": symbol,
         "currency": "USD", "side": "SELL", "type": typ, "quantity": qty, "stopPrice": 1.60, "tif": "UNTIL_CANCEL",
         "status": "sent", "source": "bagholder", "role": role,
-    }), &now_iso()).unwrap();
+    })).unwrap();
+    so::typed::insert_order(&conn(), &order, &now_iso()).unwrap();
     oid.to_string()
 }
 
@@ -831,7 +834,7 @@ impl Engine {
                 "SoOrdersOrderCancel" => Ok(json!({"orderServiceCancelOrder": {"externalId": vars["cancelOrderRequest"]["externalId"], "errors": []}})),
                 "FetchSecurityMarketData" => Ok(json!({"security": {"id": vars["id"], "allowedOrderSubtypes": ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"], "marginRates": {"clientMarginRate": 0.3}}})),
                 "FetchSoOrdersExtendedOrder" => {
-                    let row = so::get_order(&conn(), &st(vars, "externalId")).unwrap().unwrap_or(json!({}));
+                    let row = so::typed::get_order(&conn(), &st(vars, "externalId")).unwrap().unwrap_or_default();
                     let ws = match st(&row, "status").as_str() {
                         "cancelling" => "CANCEL_PENDING",
                         "filled" => "FILLED",
@@ -840,10 +843,9 @@ impl Engine {
                         "rejected" => "REJECTED",
                         _ => "SUBMITTED",
                     };
-                    let exp = if st(&row, "expiresAt").is_empty() { Value::Null } else { row["expiresAt"].clone() };
-                    let g = |k: &str| row.get(k).cloned().unwrap_or(Value::Null);
-                    Ok(json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": g("filledQty"), "averageFilledPrice": g("avgFill"), "submittedQuantity": g("quantity"),
-                        "timeInForce": g("tif"), "expiredAtUtc": exp}}))
+                    let exp = if row.expires_at.is_empty() { Value::Null } else { json!(row.expires_at) };
+                    Ok(json!({"soOrdersExtendedOrder": {"status": ws, "filledQuantity": row.filled_qty, "averageFilledPrice": row.avg_fill, "submittedQuantity": row.quantity,
+                        "timeInForce": row.tif, "expiredAtUtc": exp}}))
                 }
                 _ => panic!("{}", op),
             }
@@ -856,7 +858,7 @@ impl Engine {
         unpatch();
     }
 
-    fn entry(&self, over: Value) -> (String, Value) {
+    fn entry(&self, over: Value) -> (String, so::Bracket) {
         self.live();
         let r = jv(&o::place_order(&app(), &ticket(over)));
         self.off();
@@ -1038,7 +1040,7 @@ fn test_removing_a_leg_and_then_the_other_ends_the_bracket() {
     assert_eq!(adjust(&e, &id, "tp", None, None, true)["ok"], json!(true));
     let b = get_bracket(&id);
     assert_eq!((st(&b, "status"), st(&b, "outcome")), ("cancelled".into(), "both legs removed".into()));
-    assert!(b["tpPrice"].is_null());
+    assert!(b.tp_price.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,7 +1112,7 @@ fn test_prices_are_rounded_to_the_tick_before_they_are_sent() {
 // NinetyDayRollTest
 // ---------------------------------------------------------------------------
 
-fn armed(e: &Engine) -> Value {
+fn armed(e: &Engine) -> so::Bracket {
     let (oid, b) = e.entry(json!({}));
     update_order(&oid, json!({"status": "filled", "filledQty": 25, "avgFill": 165.38}));
     e.tick(None);
@@ -1184,8 +1186,8 @@ fn test_the_end_is_ninety_days_from_submission_when_wealthsimple_reports_none() 
     assert_eq!(e.cancels(), vec![st(&b, "slOrderId")]);
 }
 
-fn latest_stop(b: &Value) -> String {
-    let rows: Vec<Value> = list_orders().into_iter().filter(|x| st(x, "parentId") == st(b, "orderId") && st(x, "role") == "stop").collect();
+fn latest_stop(b: &so::Bracket) -> String {
+    let rows: Vec<so::Order> = list_orders().into_iter().filter(|x| st(x, "parentId") == st(b, "orderId") && st(x, "role") == "stop").collect();
     st(&rows[0], "id")
 }
 

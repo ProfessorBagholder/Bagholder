@@ -3,7 +3,7 @@
 mod common;
 
 use bagholder_store::orders::typed;
-use bagholder_store::orders::{self, Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
+use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
 use common::*;
 use serde_json::json;
 
@@ -58,13 +58,13 @@ fn test_a_patch_touches_the_fields_it_carries_and_no_others() {
 }
 
 #[test]
-fn test_the_json_view_of_an_order_is_the_typed_one() {
+fn test_a_leniently_read_order_is_the_typed_one() {
     let d = db();
-    orders::insert_order(&d.conn, &json!({"id": "order-2", "accountId": "a", "symbol": "ENB", "side": "SELL", "type": "MARKET", "quantity": "10", "status": "dry", "source": "manual"}), NOW).unwrap();
+    let given: Order = serde_json::from_value(json!({"id": "order-2", "accountId": "a", "symbol": "ENB", "side": "SELL", "type": "MARKET", "quantity": "10", "status": "dry", "source": "manual"})).unwrap();
+    typed::insert_order(&d.conn, &given, NOW).unwrap();
     let typed_row = typed::get_order(&d.conn, "order-2").unwrap().unwrap();
     assert_eq!((typed_row.side, typed_row.kind, typed_row.quantity, typed_row.status, typed_row.source), (Side::Sell, OrderType::Market, Some(10.0), OrderStatus::Dry, Source::Manual));
-    let as_json = orders::get_order(&d.conn, "order-2").unwrap().unwrap();
-    assert_eq!(as_json, serde_json::to_value(&typed_row).unwrap());
+    let as_json = serde_json::to_value(&typed_row).unwrap();
     // the wire's words: absent text is "", an absent number null, the keys in this order
     assert_eq!(as_json["limitPrice"], json!(null));
     assert_eq!(as_json["wsOrderId"], json!(""));
@@ -75,21 +75,23 @@ fn test_the_json_view_of_an_order_is_the_typed_one() {
 
 #[test]
 fn test_every_word_the_order_code_writes_is_kept_as_written() {
-    // a word missing from its enum would be stored as nothing: each is written through
-    // the JSON door the order code still uses, and read back
+    // a word missing from its enum would be stored as nothing: each is read leniently
+    // off the wire's own text, written, and read back
     let d = db();
     for (n, status) in ["dry", "sending", "sent", "pending", "cancelling", "filled", "cancelled", "expired", "rejected", "failed"].iter().enumerate() {
         let id = format!("order-w{}", n);
-        orders::insert_order(&d.conn, &json!({"id": id, "status": status, "role": "target", "source": "wealthsimple", "side": "SELL", "type": "STOP_LIMIT"}), NOW).unwrap();
-        let row = orders::get_order(&d.conn, &id).unwrap().unwrap();
-        assert_eq!((row["status"].as_str(), row["role"].as_str(), row["source"].as_str(), row["side"].as_str(), row["type"].as_str()),
-            (Some(*status), Some("target"), Some("wealthsimple"), Some("SELL"), Some("STOP_LIMIT")));
+        let given: Order = serde_json::from_value(json!({"id": id, "status": status, "role": "target", "source": "wealthsimple", "side": "SELL", "type": "STOP_LIMIT"})).unwrap();
+        typed::insert_order(&d.conn, &given, NOW).unwrap();
+        let row = typed::get_order(&d.conn, &id).unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.role.as_str(), row.source.as_str(), row.side.as_str(), row.kind.as_str()),
+            (*status, "target", "wealthsimple", "SELL", "STOP_LIMIT"));
     }
     for (n, status) in ["waiting", "armed", "firing", "target_placed", "stopping", "closing", "done", "cancelled"].iter().enumerate() {
         let id = format!("br-w{}", n);
-        orders::insert_bracket(&d.conn, &json!({"id": id, "orderId": "o", "status": status, "slKind": "trail", "slTrailUnit": "amt", "slMode": "watched"}), NOW).unwrap();
-        let row = orders::get_bracket(&d.conn, &id).unwrap().unwrap();
-        assert_eq!((row["status"].as_str(), row["slKind"].as_str(), row["slTrailUnit"].as_str(), row["slMode"].as_str()), (Some(*status), Some("trail"), Some("amt"), Some("watched")));
+        let given: Bracket = serde_json::from_value(json!({"id": id, "orderId": "o", "status": status, "slKind": "trail", "slTrailUnit": "amt", "slMode": "watched"})).unwrap();
+        typed::insert_bracket(&d.conn, &given, NOW).unwrap();
+        let row = typed::get_bracket(&d.conn, &id).unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.sl_kind.as_str(), row.sl_trail_unit.as_str(), row.sl_mode.as_str()), (*status, "trail", "amt", "watched"));
     }
 }
 
@@ -128,7 +130,6 @@ fn test_a_bracket_reads_back_is_patched_and_is_found_by_status_and_by_its_entry(
     assert_eq!(typed::list_brackets(&d.conn, &[BracketStatus::Waiting]).unwrap().len(), 0);
     assert_eq!(typed::list_brackets(&d.conn, &[]).unwrap().len(), 1);
     assert_eq!(typed::bracket_for_order(&d.conn, "order-1").unwrap().unwrap().id, "br-1");
-    assert_eq!(orders::get_bracket(&d.conn, "br-1").unwrap().unwrap(), serde_json::to_value(&armed).unwrap());
 }
 
 #[test]

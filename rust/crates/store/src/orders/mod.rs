@@ -4,13 +4,10 @@
 //! write and the broker's answer leaves a record rather than a silence. A
 //! ticket is never deleted; it gains a status.
 //!
-//! `types` says what an order and a bracket are; `typed` reads and writes them;
-//! `rows` is the same store spoken to in JSON, for the callers not yet moved
-//! (docs/architecture.md, stage 5) -- it is made of `typed`, not beside it.
+//! `types` says what an order and a bracket are; `typed` reads and writes them.
 
-mod rows;
 pub mod typed;
 pub mod types;
 
-pub use rows::*;
 pub use types::*;
+pub use typed::{mark_order_fill_booked, symbol_for_security};

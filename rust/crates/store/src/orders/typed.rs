@@ -268,3 +268,35 @@ pub fn open_orders_count(conn: &Connection, open: &[OrderStatus]) -> Result<i64>
     let params: Vec<&dyn rusqlite::ToSql> = open.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     conn.query_row(&format!("SELECT COUNT(*) FROM orders WHERE status IN ({})", marks), params.as_slice(), |r| r.get(0))
 }
+
+/// Record that this order's fill has been written as a local activity, so a later
+/// status poll does not book it twice.
+///
+/// The booked quantity only ever grows; a smaller value never lowers it. The answer is
+/// whether this statement changed a row, not the pooled connection's running tally.
+pub fn mark_order_fill_booked(conn: &Connection, order_id: &str, qty: f64, now: &str) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE orders SET fill_booked_qty = ?, updated_at = ? WHERE id = ? AND (fill_booked_qty IS NULL OR fill_booked_qty < ?)",
+        rusqlite::params![qty, now, order_id, qty],
+    )?;
+    Ok(n > 0)
+}
+
+/// The symbol the book uses for a security, from its activity rows.
+///
+/// For an option that is the contract name, which the securities table does
+/// not carry. Empty when the book has no row for it.
+pub fn symbol_for_security(conn: &Connection, security_id: &str) -> Result<String> {
+    let sid = security_id.trim();
+    if sid.is_empty() {
+        return Ok(String::new());
+    }
+    let s: Option<String> = conn
+        .query_row(
+            "SELECT symbol FROM activities WHERE security_id = ? AND symbol IS NOT NULL AND symbol != '' ORDER BY COALESCE(occurred_at, transaction_date) DESC LIMIT 1",
+            [sid],
+            |r| r.get(0),
+        )
+        .unwrap_or(None);
+    Ok(s.unwrap_or_default())
+}
