@@ -22,16 +22,22 @@ fn conn() -> bagholder_store::pool::Pooled<'static> {
     crate::tests_common::app_ref().open().unwrap()
 }
 
-fn n(v: &Value, k: &str) -> f64 {
+fn n(v: &impl serde::Serialize, k: &str) -> f64 {
+    let v = serde_json::to_value(v).unwrap();
     v.get(k).and_then(|x| x.as_f64()).unwrap_or_else(|| panic!("{} not a number in {}", k, v))
 }
 
-fn st(v: &Value, k: &str) -> String {
+fn st(v: &impl serde::Serialize, k: &str) -> String {
+    let v = serde_json::to_value(v).unwrap();
     match v.get(k) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Null) | None => String::new(),
         Some(x) => x.to_string(),
     }
+}
+
+fn jv(v: &impl serde::Serialize) -> Value {
+    serde_json::to_value(v).unwrap()
 }
 
 fn get_order(id: &str) -> Value {
@@ -395,7 +401,7 @@ fn test_under_the_dry_setting_a_submit_is_recorded_and_nothing_is_sent() {
     set_gql(|_, _| panic!("must not be called"));
     set_live(Some(false));
     let r = o::place_order(&app(), &ticket(json!({})));
-    assert_eq!(crate::status::payload(&app())["ordersLive"], json!(false));
+    assert_eq!(crate::status::status(&app()).orders_live, false);
     unpatch();
     assert_eq!(r["ok"], json!(true));
     assert_eq!(st(&r, "status"), "dry");
@@ -492,7 +498,7 @@ fn test_a_sent_order_is_read_back_by_its_external_id_on_the_TR_branch() {
     });
     set_session(Some(ident_sess()));
     let r = o::refresh_orders(&app(), "");
-    assert_eq!((n(&r, "read"), n(&r, "added"), n(&r, "failed")), (1.0, 0.0, 0.0), "{}", r);
+    assert_eq!((n(&r, "read"), n(&r, "added"), n(&r, "failed")), (1.0, 0.0, 0.0), "{:?}", r);
     {
         let a = asked.lock().unwrap();
         assert_eq!((a[0].0.as_str(), &a[0].1), ("FetchSoOrdersExtendedOrder", &json!({"branchId": "TR", "externalId": oid})));
@@ -520,14 +526,14 @@ fn test_an_order_placed_in_wealthsimples_app_becomes_a_row_from_the_feed() {
     });
     set_session(Some(ident_sess()));
     let r = o::refresh_orders(&app(), "");
-    assert_eq!((n(&r, "read"), n(&r, "added")), (0.0, 1.0), "{}", r);
+    assert_eq!((n(&r, "read"), n(&r, "added")), (0.0, 1.0), "{:?}", r);
     let row = get_order("order-ws-placed");
     assert_eq!((st(&row, "source"), st(&row, "status"), st(&row, "symbol"), st(&row, "account"), st(&row, "side"), st(&row, "type"), n(&row, "quantity"), n(&row, "limitPrice"), st(&row, "wsOrderId")),
         ("wealthsimple".into(), "pending".into(), "QNC".into(), "TFSA".into(), "BUY".into(), "LIMIT".into(), 3.0, 1.76, "ws-9".into()));
     assert!(row["stopLoss"].is_null());
     let r = o::refresh_orders(&app(), "");
     unpatch();
-    assert_eq!((n(&r, "read"), n(&r, "added")), (1.0, 0.0), "{}", r);
+    assert_eq!((n(&r, "read"), n(&r, "added")), (1.0, 0.0), "{:?}", r);
     assert_eq!(st(&get_order("order-ws-placed"), "tif"), "UNTIL_CANCEL");
     assert_eq!(list_orders().len(), 1);
 }
@@ -545,7 +551,7 @@ fn test_a_failed_read_is_counted_and_the_others_still_happen() {
     set_session(Some(ident_sess()));
     let r = o::refresh_orders(&app(), "");
     unpatch();
-    assert_eq!((r["ok"].clone(), n(&r, "failed")), (json!(false), 1.0), "{}", r);
+    assert_eq!((r.ok, n(&r, "failed")), (false, 1.0), "{:?}", r);
     assert_eq!(st(&get_order(&oid), "status"), "sent", "an unanswered read changes nothing");
 }
 
@@ -576,7 +582,7 @@ fn test_cancel_goes_to_wealthsimple_by_external_id_and_the_row_says_cancelling()
     set_live(Some(true));
     set_session(Some(tok()));
     let r = o::cancel_order(&app(), &oid);
-    assert_eq!(r["ok"], json!(true), "{}", r);
+    assert!(r.ok, "{:?}", r);
     assert_eq!(st(&r, "status"), "cancelling");
     assert_eq!(*sent.lock().unwrap(), vec![("SoOrdersOrderCancel".to_string(), json!({"cancelOrderRequest": {"externalId": oid}}))]);
     let row = get_order(&oid);
@@ -607,7 +613,7 @@ fn test_the_orders_tab_opening_kicks_a_read_unless_one_is_fresh() {
     assert!(!o::kick_orders_refresh(&app()), "nothing is read while not connected");
     app().state.lock().unwrap().connected = true;
     *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
-    assert_eq!(o::orders_payload(&app(), true)["ok"], json!(true));
+    assert!(o::orders_payload(&app(), true).ok);
     let ops: Vec<String> = ran.lock().unwrap().iter().map(|a| a.0.clone()).collect();
     assert_eq!(ops, ["OrderServiceExtendedOrderFeed"], "the list's first request reads everything");
     *app_ref().orders.refreshed_at.lock().unwrap() = now_iso();
@@ -675,7 +681,7 @@ fn fill(oid: &str, filled: f64, avg: f64, submitted: Option<f64>) -> Value {
     set_session(Some(tok()));
     let r = o::refresh_orders(&app(), oid);
     unpatch();
-    r
+    jv(&r)
 }
 
 fn booked(symbol: &str) -> Vec<Value> {
@@ -895,7 +901,7 @@ fn test_open_orders_are_counted_for_the_header_badge() {
     let (_g, e) = engine();
     let (oid, b) = e.entry(json!({}));
     assert_eq!(o::open_orders_count(&app()), 1);
-    assert_eq!(crate::status::payload(&app())["openOrders"], json!(1));
+    assert_eq!(crate::status::status(&app()).open_orders, 1);
     update_order(&oid, json!({"status": "filled", "filledQty": 25}));
     e.tick(None);
     assert_eq!(st(&get_bracket(&st(&b, "id")), "status"), "armed");
@@ -919,7 +925,7 @@ fn test_edit_sends_wealthsimples_modify_with_the_new_price_and_quantity() {
     set_session(Some(tok()));
     let r = o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(164.0)));
     unpatch();
-    assert_eq!(r["ok"], json!(true), "{}", r);
+    assert!(r.ok, "{:?}", r);
     assert_eq!(*sent.lock().unwrap(), vec![("SoOrdersOrderModify".to_string(), json!({"input": {"externalId": oid, "newLimitPrice": 164.0, "newQuantity": 30.0}}))]);
     let row = get_order(&oid);
     assert_eq!((n(&row, "quantity"), n(&row, "limitPrice")), (30.0, 164.0));
@@ -928,9 +934,9 @@ fn test_edit_sends_wealthsimples_modify_with_the_new_price_and_quantity() {
     set_gql(fake);
     set_live(Some(true));
     set_session(Some(tok()));
-    assert_eq!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0)))["ok"], json!(true));
+    assert!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0))).ok);
     assert_eq!(sent.lock().unwrap().last().unwrap().1["input"], json!({"externalId": oid, "newLimitPrice": 165.0}));
-    assert_eq!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0)))["unchanged"], json!(true));
+    assert_eq!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0))).unchanged, Some(true));
     unpatch();
     set_live(Some(true)); // the default
     assert!(st(&o::modify_order(&app(), &oid, Some(&json!(0)), Some(&json!(165.0))), "error").contains("more than zero"));
@@ -950,7 +956,7 @@ fn adjust(e: &Engine, id: &str, leg: &str, price: Option<Value>, trail: Option<V
     e.live();
     let r = o::adjust_bracket(&app(), id, leg, price.as_ref(), trail.as_ref(), remove);
     e.off();
-    r
+    jv(&r)
 }
 
 #[test]
@@ -1051,7 +1057,7 @@ fn test_the_feed_matches_bagholders_order_by_either_id() {
     set_session(Some(ident_sess()));
     let r = o::refresh_orders(&app(), "");
     unpatch();
-    assert_eq!(n(&r, "added"), 0.0, "{}", r);
+    assert_eq!(n(&r, "added"), 0.0, "{:?}", r);
     assert_eq!(list_orders().len(), 1);
 }
 

@@ -127,6 +127,23 @@
       "files": []
     }
   },
+  "watch_clear": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "path": "<db-path>",
+      "watching": false,
+      "lastScan": "",
+      "files": []
+    }
+  },
+  "import_no_text": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "text required"
+    }
+  },
   "notifications_list": {
     "status": 200,
     "body": {
@@ -212,6 +229,149 @@
       "price": null,
       "priceChange": null,
       "percentChange": null
+    }
+  },
+  "filings_missing_symbol": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "filings_no_documents": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "symbol": "GOLDEN",
+      "available": true,
+      "sources": {
+        "SEC": {
+          "available": true,
+          "matched": false,
+          "filer": false,
+          "error": ""
+        },
+        "SEDAR+": {
+          "available": false,
+          "matched": false,
+          "filer": false,
+          "error": ""
+        }
+      },
+      "categories": [
+        "Financials",
+        "Material events",
+        "Governance",
+        "Offerings",
+        "Insider & ownership",
+        "News releases",
+        "Other"
+      ],
+      "profileNo": "",
+      "fetchedAt": "<fetched-at>",
+      "refreshed": false,
+      "sourceUnavailable": false,
+      "filings": []
+    }
+  },
+  "filings_feed_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "scope": "all",
+      "filings": [],
+      "reading": false
+    }
+  },
+  "filings_enrich_no_such_doc": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "no such document"
+    }
+  },
+  "fear_empty": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "the index did not answer"
+    }
+  },
+  "shorts_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "shorts_feed_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "rows": [],
+      "reading": false
+    }
+  },
+  "history_missing_params": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol, from, to and a known tf are required"
+    }
+  },
+  "markets_refresh": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "login_cancel": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "cancelled": false
+    }
+  },
+  "login_input_no_window": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "No login window."
+    }
+  },
+  "disconnect": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "update_offline": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "No update to install."
+    }
+  },
+  "refresh_no_session": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "not connected",
+      "connected": false
+    }
+  },
+  "sync_no_session": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "not connected"
+    }
+  },
+  "capture_offline": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "transport"
     }
   }
 }

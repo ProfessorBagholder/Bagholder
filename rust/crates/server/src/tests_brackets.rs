@@ -27,7 +27,8 @@ fn now() -> String {
     crate::app::now_iso()
 }
 
-fn sv(v: &Value, k: &str) -> String {
+fn sv(v: &impl serde::Serialize, k: &str) -> String {
+    let v = serde_json::to_value(v).unwrap();
     match v.get(k) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Null) | None => String::new(),
@@ -39,8 +40,8 @@ fn fv(v: &Value, k: &str) -> f64 {
     v.get(k).and_then(|x| x.as_f64()).unwrap_or(f64::NAN)
 }
 
-fn tv(v: &Value, k: &str) -> bool {
-    crate::app::truthy(v.get(k))
+fn tv(v: &impl serde::Serialize, k: &str) -> bool {
+    crate::app::truthy(serde_json::to_value(v).unwrap().get(k))
 }
 
 fn get_bracket(id: &str) -> Value {
@@ -735,7 +736,7 @@ fn test_cancel_bracket_cancels_its_resting_orders_and_stops_watching() {
     assert_eq!(sv(&b, "status"), "done", "done once Wealthsimple confirms the cancel");
     assert!(sv(&od::cancel_bracket(&app(), &id), "error").contains("not live"));
     assert_eq!(sv(&od::cancel_bracket(&app(), "nope"), "error"), "No such bracket.");
-    let ids: Vec<String> = od::orders_payload(&app(), false)["brackets"].as_array().unwrap().iter().map(|x| sv(x, "id")).collect();
+    let ids: Vec<String> = od::orders_payload(&app(), false).brackets.iter().map(|b| b.id.clone()).collect();
     assert_eq!(ids, vec![id]);
 }
 

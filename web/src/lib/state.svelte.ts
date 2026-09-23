@@ -2,7 +2,7 @@ import type { Model } from './model'
 import { filters } from './filters.svelte'
 import { connect, disconnect, onChange, onRestart } from './live'
 import { forgetHistory } from './trade/chart'
-import { get, post } from './api'
+import { post, call } from './api'
 import { leaveSub, route } from './router.svelte'
 import { flash } from './ui.svelte'
 
@@ -44,7 +44,7 @@ export async function loadDetail(id: string | null): Promise<void> {
   if (id !== detail.id) Object.assign(detail, { id: id ?? '', legs: [], fills: undefined })
   if (!id) return
   try {
-    const d = await get<{ legs?: unknown[]; fills?: unknown[] }>('/api/trade', { id })
+    const d = await call('GET /api/trade', { query: { id } })
     if (!d.ok || detail.id !== id) return
     const next = { legs: d.legs ?? [], fills: d.fills ?? [] }
     // the same answer is not a change: the chart and the executions stand as they are
@@ -104,7 +104,7 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
   }
   const body = { id, thesis: (t as { thesis?: string }).thesis ?? '', tags: (t as { tags?: string[] }).tags ?? [], grade: (t as { grade?: string }).grade ?? '' }
   try {
-    const d = await post('/api/journal', body)
+    const d = await call('POST /api/journal', { body })
     if (!d.ok) throw new Error('save failed')
   } catch {
     // said in the header, and the row put back as the server has it

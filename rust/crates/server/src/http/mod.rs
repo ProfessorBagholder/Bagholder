@@ -18,10 +18,10 @@
 mod assets;
 mod error;
 mod extract;
-mod markets;
-mod model;
+pub(crate) mod markets;
+pub(crate) mod model;
 mod notifications;
-mod orders;
+pub(crate) mod orders;
 mod session;
 mod stream;
 
@@ -51,6 +51,26 @@ pub use extract::{Body, Params};
 #[derive(Clone)]
 pub struct AppState {
     pub app: Arc<App>,
+}
+
+/// `{"ok": true}`, or `{"ok": false, "error": "…"}`: a soft refusal (still
+/// 200) that several routes across `login`, `session` and `update` answer in
+/// this one shape.
+#[derive(Serialize, ts_rs::TS)]
+pub struct OkOr {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+impl OkOr {
+    pub fn ok() -> OkOr {
+        OkOr { ok: true, error: None }
+    }
+    pub fn err(e: impl Into<String>) -> OkOr {
+        OkOr { ok: false, error: Some(e.into()) }
+    }
 }
 
 /// What a JSON route answers: `Value` while a module is still untyped, the
@@ -112,7 +132,12 @@ pub(crate) use api_routes;
 /// what `tests_types.rs` turns into `web/src/lib/generated/routes.ts`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn route_table() -> Vec<RouteEntry> {
-    notifications::routes().table
+    let mut t = notifications::routes().table;
+    t.extend(session::routes().table);
+    t.extend(orders::routes().table);
+    t.extend(markets::routes().table);
+    t.extend(model::routes().table);
+    t
 }
 
 /// Run synchronous work on the blocking pool. Work that panics is a 500; the
@@ -134,10 +159,10 @@ pub async fn with_store<T: Serialize + Send + 'static>(state: &AppState, work: i
 
 pub fn router(state: AppState) -> Router {
     let once = Router::new()
-        .merge(model::routes())
-        .merge(markets::routes())
-        .merge(orders::routes())
-        .merge(session::routes())
+        .merge(model::routes().router)
+        .merge(markets::routes().router)
+        .merge(orders::routes().router)
+        .merge(session::routes().router)
         .merge(notifications::routes().router)
         .route("/api/events/watch", post(stream::watch))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, ROUTE_TIMEOUT));

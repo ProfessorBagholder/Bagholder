@@ -12,7 +12,7 @@ use serde::Serialize;
 /// singular `activity`), or the ticket-shaped fields a hand-entered trade
 /// sends -- each with the alternative spellings the page and the phones have
 /// used, read in the precedence `manual_from_fields` resolves.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, ts_rs::TS)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BookAppend {
     #[serde(deserialize_with = "bagholder_model::lenient::list")]
@@ -168,7 +168,7 @@ pub struct Appended {
     pub activities: Option<Vec<ActivityRow>>,
 }
 
-pub fn append_manual(app: &Arc<App>, body: &BookAppend) -> Value {
+pub fn append_manual(app: &Arc<App>, body: &BookAppend) -> Appended {
     let rows: Vec<ActivityRow> = if !body.activities.is_empty() {
         body.activities.clone()
     } else if let Some(a) = &body.activity {
@@ -199,5 +199,5 @@ pub fn append_manual(app: &Arc<App>, body: &BookAppend) -> Value {
     } else if rows.len() == 1 {
         out.activity = Some(rows[0].clone());
     }
-    serde_json::to_value(&out).unwrap_or(Value::Null)
+    out
 }

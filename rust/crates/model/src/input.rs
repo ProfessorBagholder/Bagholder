@@ -116,7 +116,7 @@ impl Quote {
 pub type Quotes = HashMap<String, Quote>;
 
 /// What the person wrote about a trade.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
 #[serde(default)]
 pub struct JournalEntry {
     #[serde(deserialize_with = "lenient::text")]
@@ -142,7 +142,7 @@ fn tags_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::
 pub type Journal = HashMap<String, JournalEntry>;
 
 /// Trades the person grouped by hand, named by their members' keys.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
 #[serde(default)]
 pub struct TradeGroup {
     #[serde(deserialize_with = "lenient::text")]

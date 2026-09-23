@@ -16,7 +16,8 @@ use serde_json::{json, Map, Value};
 
 use bagholder_store::orders as so;
 use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, Source, SlMode, StopLoss, TakeProfit, TrailUnit};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use bagholder_ws::session::CallError;
 // the one real caller is compiled out of test builds, where no call reaches the network
 #[cfg(not(test))]
@@ -72,6 +73,41 @@ pub use manual::*;
 pub use readback::*;
 pub use ticket::*;
 pub use tools::*;
+
+/// One order or bracket action -- cancel, modify, adjust -- refused with a
+/// reason, or accepted with what changed. The same shape every one of these
+/// routes has answered in since before it was typed.
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+pub struct OrderActionAnswer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unchanged: Option<bool>,
+}
+
+impl OrderActionAnswer {
+    pub fn err(e: impl Into<String>) -> OrderActionAnswer {
+        OrderActionAnswer { ok: false, error: Some(e.into()), id: None, status: None, unchanged: None }
+    }
+    pub fn accepted(id: impl Into<String>) -> OrderActionAnswer {
+        OrderActionAnswer { ok: true, error: None, id: Some(id.into()), status: None, unchanged: None }
+    }
+    pub fn cancelling(id: impl Into<String>) -> OrderActionAnswer {
+        OrderActionAnswer { ok: true, error: None, id: Some(id.into()), status: Some("cancelling".into()), unchanged: None }
+    }
+    pub fn already(id: impl Into<String>) -> OrderActionAnswer {
+        OrderActionAnswer { ok: true, error: None, id: Some(id.into()), status: None, unchanged: Some(true) }
+    }
+}
 
 /// The order loops' own state: brackets in flight, the last readback, and what
 /// has already been said or looked up once so it is not said or looked up again.

@@ -50,3 +50,19 @@ export type OrdersDoc = { ok: boolean, orders: Array<OrderCard>, brackets: Array
  * Whether orders are sent at all (`BAGHOLDER_DRY_ORDERS` turns them off).
  */
 live: boolean, refreshedAt: string, };
+
+export type OrderActionAnswer = { ok: boolean, error?: string, id?: string, status?: string, unchanged?: boolean, };
+
+export type RefreshOrdersAnswer = { ok: boolean, skipped?: string, read?: number, added?: number, failed?: number, };
+
+export type Named = { id: string, };
+
+export type Modify = { id: string, quantity: number | string | null, limitPrice: number | string | null, };
+
+export type Adjust = { id: string, leg: string, price?: number | string | null, trail?: number | string | null, remove?: boolean, };
+
+export type RefreshAndOrders = { ok: boolean, skipped?: string, read?: number, added?: number, failed?: number, orders: Array<OrderCard>, brackets: Array<Bracket>, 
+/**
+ * Whether orders are sent at all (`BAGHOLDER_DRY_ORDERS` turns them off).
+ */
+live: boolean, refreshedAt: string, };

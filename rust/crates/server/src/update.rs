@@ -523,30 +523,31 @@ pub fn perform_update(app: &Arc<App>, tag: &str, rec: &Value) {
 
 /// Begin the update the page asked for, in the
 /// background.
-pub fn start_update(app: &Arc<App>) -> Value {
+pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
+    use crate::http::OkOr;
     if updates_off() {
-        return json!({"ok": false, "error": UPDATES_OFF_MESSAGE});
+        return OkOr::err(UPDATES_OFF_MESSAGE);
     }
     let rec = update_status(app);
     {
         let mut st = app.state.lock().unwrap();
         if !st.updating.is_empty() {
-            return json!({"ok": true});
+            return OkOr::ok();
         }
         if st.syncing {
-            return json!({"ok": false, "error": "Wait for the sync to finish, then update."});
+            return OkOr::err("Wait for the sync to finish, then update.");
         }
         if !truthy(rec.get("updateAvailable")) || !truthy(rec.get("latest")) {
-            return json!({"ok": false, "error": "No update to install."});
+            return OkOr::err("No update to install.");
         }
         drop(st);
         if !can_update(app, Some(&rec)) {
             let why = if update_mode(app) == "git" { git_update_ready(app).1 } else { "This release has no downloadable archive.".to_string() };
-            return json!({"ok": false, "error": why});
+            return OkOr::err(why);
         }
         st = app.state.lock().unwrap();
         if !st.updating.is_empty() {
-            return json!({"ok": true});
+            return OkOr::ok();
         }
         st.update_error.clear();
         st.updating = format!("Updating to {}…", f(&rec, "latest"));
@@ -554,7 +555,7 @@ pub fn start_update(app: &Arc<App>) -> Value {
     let tag = f(&rec, "latest");
     let a = app.clone();
     spawn("bagholder-update", move || perform_update(&a, &tag, &rec));
-    json!({"ok": true})
+    OkOr::ok()
 }
 
 /// Run the server as a child and start it again whenever

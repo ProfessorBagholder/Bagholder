@@ -9,7 +9,7 @@ import { draftStore } from '../ticket/ticket.svelte'
 import { px, money, qty as qtyFmt } from '../fmt'
 import { plain } from '../ticket/vals'
 import { symText } from '../sym'
-import { request } from '../api'
+import { call } from '../api'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -186,7 +186,7 @@ export async function orderEditSave(id: string) {
   if (!(quantity != null && quantity > 0)) { e.error = 'Shares must be more than zero.'; return }
   if (hasLimit && !(limitPrice != null && limitPrice > 0)) { e.error = 'A limit price is required.'; return }
   panel.busy = 'orders'; e.error = ''
-  const r = await request('POST', '/api/order/modify', { id, quantity, limitPrice })
+  const r = await call('POST /api/order/modify', { body: { id, quantity, limitPrice } })
   panel.busy = ''
   if (!r || !r.ok) { if (panel.orderEdit) panel.orderEdit.error = (r && (r.error as string)) || 'Could not change the order.'; return }
   panel.orderEdit = null
@@ -211,8 +211,8 @@ export async function bracketEditSave(id: string) {
   }
   if (!calls.length) { panel.bracketEdit = null; return }
   panel.busy = 'orders'; e.error = ''
-  for (const call of calls) {
-    const r = await request('POST', '/api/bracket/adjust', call)
+  for (const c of calls) {
+    const r = await call('POST /api/bracket/adjust', { body: c as { id: string; leg: string; price?: number; trail?: number } })
     if (!r || !r.ok) { panel.busy = ''; if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not change the bracket.'; return }
   }
   panel.busy = ''; panel.bracketEdit = null
@@ -223,7 +223,7 @@ export async function bracketRemove(id: string, leg: string) {
   const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
   if (!b) return
   panel.busy = 'orders'
-  const r = await request('POST', '/api/bracket/adjust', { id, leg, remove: true })
+  const r = await call('POST /api/bracket/adjust', { body: { id, leg, remove: true } })
   panel.busy = ''
   if (!r || !r.ok) { if (panel.bracketEdit) panel.bracketEdit.error = (r && (r.error as string)) || 'Could not remove the leg.'; return }
   panel.bracketEdit = null
@@ -232,12 +232,12 @@ export async function bracketRemove(id: string, leg: string) {
 
 export async function cancelOrderNow(id: string) {
   const o = orderById(id)
-  const r = await request('POST', '/api/order/cancel', { id })
+  const r = await call('POST /api/order/cancel', { body: { id } })
   flash(r && r.ok ? 'Cancel sent · ' + (o ? orderLine(o) : '') : (r && (r.error as string)) || 'Could not cancel the order.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
 }
 export async function cancelBracketNow(id: string) {
   const b = (ordersStore.data?.brackets ?? []).find((x) => x.id === id)
-  const r = await request('POST', '/api/bracket/cancel', { id })
+  const r = await call('POST /api/bracket/cancel', { body: { id } })
   flash(r && r.ok ? 'Bracket cancelled · ' + (b ? b.symbol : '') : (r && (r.error as string)) || 'Could not cancel the bracket.', r && r.ok ? 'ok' : 'err', r && r.ok ? 10000 : 6000)
 }
 

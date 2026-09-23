@@ -27,6 +27,7 @@ use bagholder_store::rows;
 use bagholder_store::tables::{get_meta, set_meta};
 
 use crate::app::{f, log, now_iso, now_unix, parse_instant, spawn, truthy, App, ENRICH_VERSION};
+use crate::http::OkOr;
 use crate::notify;
 
 /// The market-data loops' own state: what they are reading now, and for whom.
@@ -1344,15 +1345,23 @@ fn source_status(c: &Connection, sym: &str) -> BTreeMap<String, SourceStatus> {
 
 /// The stored disclosures, refreshed first when
 /// forced or stale.
-pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> Value {
+/// `GET /api/filings`.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum FilingsAnswer {
+    Ok(FilingsPayload),
+    Refused(OkOr),
+}
+
+pub fn filings_payload(app: &Arc<App>, symbol: &str, refresh: bool, name: Option<&str>, exchange: Option<&str>, currency: Option<&str>) -> FilingsAnswer {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return FilingsAnswer::Refused(OkOr::err("symbol required"));
     }
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return FilingsAnswer::Refused(OkOr::err("store unavailable")) };
     match filings_payload_in(app, &c, &sym, refresh, &|| refresh_filings(app, &sym, name, exchange, currency)) {
-        Ok(p) => serde_json::to_value(p).unwrap_or(Value::Null),
-        Err(e) => json!({"ok": false, "error": e}),
+        Ok(p) => FilingsAnswer::Ok(p),
+        Err(e) => FilingsAnswer::Refused(OkOr::err(e)),
     }
 }
 
@@ -1538,10 +1547,18 @@ fn filings_enrich_result(app: &Arc<App>, symbol: &str, doc_id: &str) -> Result<E
 
 /// One document read for its subject and, with a
 /// local model, a one-sentence summary; both cached on the row.
-pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> Value {
+/// `GET /api/filings/enrich`.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum EnrichAnswer {
+    Ok(Enriched),
+    Refused(OkOr),
+}
+
+pub fn filings_enrich(app: &Arc<App>, symbol: &str, doc_id: &str) -> EnrichAnswer {
     match filings_enrich_result(app, symbol, doc_id) {
-        Ok(e) => serde_json::to_value(e).unwrap_or(Value::Null),
-        Err(e) => json!({"ok": false, "error": e}),
+        Ok(e) => EnrichAnswer::Ok(e),
+        Err(e) => EnrichAnswer::Refused(OkOr::err(e)),
     }
 }
 
@@ -1697,6 +1714,23 @@ pub struct FearDoc {
     pub gauge: Option<StoredGauge>,
 }
 
+/// `GET /api/fear`.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum FearAnswer {
+    Ok(FearDoc),
+    Refused(OkOr),
+}
+
+impl From<Result<FearDoc, String>> for FearAnswer {
+    fn from(r: Result<FearDoc, String>) -> FearAnswer {
+        match r {
+            Ok(d) => FearAnswer::Ok(d),
+            Err(e) => FearAnswer::Refused(OkOr::err(e)),
+        }
+    }
+}
+
 /// One index's meter, from the store at once.
 pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
     let which = index.trim().to_lowercase();
@@ -1786,6 +1820,23 @@ pub struct ShortsPayload {
     pub ok: bool,
     pub covered: bool,
     pub shorts: Option<StoredShorts>,
+}
+
+/// `GET /api/shorts`.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum ShortsAnswer {
+    Ok(ShortsPayload),
+    Refused(OkOr),
+}
+
+impl From<Result<ShortsPayload, String>> for ShortsAnswer {
+    fn from(r: Result<ShortsPayload, String>) -> ShortsAnswer {
+        match r {
+            Ok(d) => ShortsAnswer::Ok(d),
+            Err(e) => ShortsAnswer::Refused(OkOr::err(e)),
+        }
+    }
 }
 
 /// One listing's short selling, from the store at
@@ -2118,11 +2169,11 @@ pub fn universe_loop(app: Arc<App>) {
     }
 }
 
-pub fn kick_universes(app: &Arc<App>) -> Value {
+pub fn kick_universes(app: &Arc<App>) -> OkOr {
     let (lock, cv) = &app.feeds.universe_kick;
     *lock.lock().unwrap() = true;
     cv.notify_all();
-    json!({"ok": true})
+    OkOr::ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -2394,14 +2445,22 @@ pub struct ChartHistory {
     pub reason: String,
 }
 
-pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
+/// `GET /api/history`.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum HistoryAnswer {
+    Ok(ChartHistory),
+    Refused(OkOr),
+}
+
+pub fn history_payload(app: &Arc<App>, query: &str) -> HistoryAnswer {
     let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
     let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
     let start: String = qs_one(query, "from").chars().take(10).collect();
     let end: String = qs_one(query, "to").chars().take(10).collect();
     let tf = or(qs_one(query, "tf"), "1d");
     if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
-        return json!({"ok": false, "error": "symbol, from, to and a known tf are required"});
+        return HistoryAnswer::Refused(OkOr::err("symbol, from, to and a known tf are required"));
     }
     let inst = history::chart_instrument(&rec);
     let src = history::history_source(&inst);
@@ -2435,7 +2494,7 @@ pub fn history_payload(app: &Arc<App>, query: &str) -> Value {
         pending,
         reason,
     };
-    serde_json::to_value(&payload).unwrap_or(Value::Null)
+    HistoryAnswer::Ok(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -2701,7 +2760,7 @@ mod tests {
     #[test]
     fn test_empty_symbol_is_rejected() {
         let _g = crate::tests_common::guard();
-        assert_eq!(filings_payload(&app(), "", false, None, None, None)["ok"], false);
+        assert!(matches!(filings_payload(&app(), "", false, None, None, None), FilingsAnswer::Refused(_)));
     }
 
     // --- EnrichTest

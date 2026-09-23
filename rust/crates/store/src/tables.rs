@@ -318,7 +318,7 @@ pub fn save_trade_groups(conn: &Connection, groups: &[TradeGroup]) -> Result<Vec
 }
 
 /// A note kept on a trade by an older version of the page, before the journal.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LegacyNote {
     #[serde(deserialize_with = "bagholder_model::lenient::text")]

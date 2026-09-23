@@ -1,10 +1,11 @@
 // Small shared UI state for the header menu, modals and the confirm dialog —
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
 import { store } from './state.svelte'
-import { request } from './api'
+import { request, call } from './api'
 
 // the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
-import type { Appended, ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
+import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
+import type { LoginInput } from './generated/session'
 
 export interface TradeForm {
   date: string
@@ -94,7 +95,7 @@ export function syncNow(): void {
     s.syncing = true
     s.syncStep = 'Syncing…'
   }
-  request('POST', '/api/sync').then((r) => {
+  call('POST /api/sync').then((r) => {
     if (r && r.ok) return
     const cur = store.model?.status
     if (cur) {
@@ -107,7 +108,7 @@ export function syncNow(): void {
 export function refreshSession(): void {
   ui.menuOpen = false
   ui.busy = 'refresh'
-  request('POST', '/api/refresh').then((r) => {
+  call('POST /api/refresh').then((r) => {
     ui.busy = ''
     flash(r && r.ok ? 'Session refreshed' : (r && (r.error as string)) || 'Refresh failed', r && r.ok ? 'ok' : 'err')
   })
@@ -115,7 +116,7 @@ export function refreshSession(): void {
 
 /** Install the release on offer. Its progress reaches the header as the status changes. */
 export function updateNow(): void {
-  request('POST', '/api/update').then((r) => {
+  call('POST /api/update').then((r) => {
     if (!r || !r.ok) flash((r && (r.error as string)) || 'Update failed.', 'err')
   })
 }
@@ -140,7 +141,7 @@ export function connect(): void {
   sawCapturing = false
   const s = store.model?.status
   if (s) s.error = ''
-  request('POST', '/api/login/start').then((res) => {
+  call('POST /api/login/start').then((res) => {
     if (!ui.connecting) return // cancelled meanwhile
     if (!res || !res.ok) {
       endConnect((res && (res.error as string)) || 'Install Chrome. Passkey login has to happen on Wealthsimple’s site.')
@@ -180,11 +181,11 @@ export function cancelConnect(): void {
   endConnect('')
   const cur = store.model?.status
   if (cur) cur.error = ''
-  request('POST', '/api/login/cancel')
+  call('POST /api/login/cancel')
 }
 // One login input event (click/key/wheel/text), forwarded to the streamed browser.
-export function loginInput(ev: unknown): void {
-  request('POST', '/api/login/input', ev)
+export function loginInput(ev: LoginInput): void {
+  call('POST /api/login/input', { body: ev })
 }
 
 export function disconnect(): void {
@@ -193,7 +194,7 @@ export function disconnect(): void {
 }
 export function disconnectNow(): void {
   ui.confirm = ''
-  request('POST', '/api/disconnect')
+  call('POST /api/disconnect')
 }
 
 export function openData(): void {
@@ -202,7 +203,7 @@ export function openData(): void {
 }
 export function clearDataNow(): void {
   ui.confirm = ''
-  request('POST', '/api/data/clear', { journal: true, market: true })
+  call('POST /api/data/clear', { body: { journal: true, market: true } })
 }
 
 export function openTradeModal(): void {
@@ -227,16 +228,25 @@ export function saveTrade(accounts: { id: string; name: string }[]): void {
   const acc = accounts.find((a) => a.id === f.account)
   ui.busy = 'trade'
   f.error = ''
-  request<Appended>('POST', '/api/book/append', {
-    date: f.date,
-    symbol: f.symbol.trim().toUpperCase(),
-    side: f.side,
-    qty,
-    price,
-    currency: f.currency,
-    commission: fees,
-    accountId: acc ? acc.id : 'manual',
-    accountType: acc ? acc.name : 'Manual',
+  call('POST /api/book/append', {
+    body: {
+      activities: [],
+      activity: null,
+      date: f.date,
+      transactionDate: '',
+      occurredAt: '',
+      symbol: f.symbol.trim().toUpperCase(),
+      side: f.side,
+      qty,
+      quantity: null,
+      price,
+      unitPrice: null,
+      currency: f.currency,
+      commission: fees,
+      accountId: acc ? acc.id : 'manual',
+      account: '',
+      accountType: acc ? acc.name : 'Manual',
+    },
   }).then((r) => {
     ui.busy = ''
     if (!r || !r.ok) {
@@ -272,7 +282,7 @@ async function importFiles(list: FileList | null): Promise<void> {
   for (const file of files) {
     try {
       const text = await file.text()
-      const r = await request<ImportedFileReport>('POST', '/api/import', { name: file.name, text })
+      const r = await call('POST /api/import', { body: { name: file.name, text } })
       if (!r || !r.ok) report.files.push({ file: file.name, error: (r && r.error) || 'Import failed' })
       else {
         report.files.push(r)
@@ -314,7 +324,7 @@ export function scanFolder(): void {
   })
 }
 export function stopWatch(): void {
-  request<WatchStatus>('POST', '/api/watch/clear', {}).then((w) => {
+  call('POST /api/watch/clear').then((w) => {
     ui.watch = w && w.ok ? w : null
     ui.folderPath = ''
   })

@@ -1,6 +1,8 @@
 // Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.
 
+import type { OkOr } from './common'
+
 export type GaugeReading = { label: string, score: number, rating: string, };
 
 export type GaugePart = { name: string, score: number, rating: string, };
@@ -43,3 +45,19 @@ export type ShortsFeedRow = { positionId: string | null, held: boolean, watched:
 series: Array<ShortPoint> | null, };
 
 export type ShortsFeed = { ok: true, rows: Array<ShortsFeedRow>, reading: boolean, };
+
+export type FearAnswer = FearDoc | OkOr;
+
+export type ShortsAnswer = ShortsPayload | OkOr;
+
+export type Listing = { symbol: string, exchange: string, currency: string, name: string, };
+
+export type Fear = { index: string | null, };
+
+export type ShortsQuery = { 
+/**
+ * carry the series too, for the listing's own page
+ */
+trend: boolean, symbol: string, exchange: string, currency: string, name: string, };
+
+export type GlanceAnswer = { ok: boolean, price: number | null, priceChange: number | null, percentChange: number | null, };

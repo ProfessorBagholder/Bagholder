@@ -90,7 +90,7 @@ fn test_page_and_server_agree_on_the_protocol_stamp() {
     let page = std::fs::read_to_string(crate::feeds::ledger_path(&app())).unwrap();
     let m = regex::Regex::new(r#"const PROTOCOL = "([^"]+)""#).unwrap().captures(&page).expect("PROTOCOL on the page");
     assert_eq!(&m[1], app::PROTOCOL);
-    assert_eq!(crate::status::payload(&app())["protocol"], app::PROTOCOL);
+    assert_eq!(crate::status::status(&app()).protocol, app::PROTOCOL);
 }
 
 #[test]
@@ -170,10 +170,10 @@ fn test_update_check_flags_only_a_newer_release() {
     set_checked_at(2.0 * 3600.0);
     let rec = update::check_for_update_if_due(&app());
     assert_eq!((rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(newer.as_str())));
-    let st = crate::status::payload(&app());
+    let st = crate::status::status(&app());
     assert_eq!(
-        (st["version"].clone(), st["latestVersion"].clone(), st["updateAvailable"].clone(), st["updateUrl"].clone()),
-        (json!(app::APP_VERSION), json!(newer), json!(true), rec["url"].clone())
+        (st.version, st.latest_version, st.update_available, json!(st.update_url)),
+        (app::APP_VERSION.to_string(), newer.clone(), true, rec["url"].clone())
     );
     fakes.answer(None);
     let rec = update::check_for_update(&app());
@@ -185,8 +185,11 @@ fn test_update_check_flags_only_a_newer_release() {
 #[test]
 fn test_history_endpoint_validates_and_serves_bars() {
     let _g = guard();
-    assert_eq!(crate::feeds::history_payload(&app(), "symbol=RDDY")["ok"], false);
-    assert_eq!(crate::feeds::history_payload(&app(), "symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h")["ok"], false);
+    assert!(matches!(crate::feeds::history_payload(&app(), "symbol=RDDY"), crate::feeds::HistoryAnswer::Refused(_)));
+    assert!(matches!(
+        crate::feeds::history_payload(&app(), "symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h"),
+        crate::feeds::HistoryAnswer::Refused(_)
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -354,13 +357,13 @@ fn test_a_container_copy_binds_wide_keeps_the_host_check_and_never_updates() {
     let _fakes = UpdateFakes::new(Some(json!({"tag_name": newer, "html_url": format!("https://github.com/x/y/releases/tag/{}", newer), "assets": [{"name": format!("bagholder-{}-web.zip", newer), "browser_download_url": "u"}]})));
     std::env::set_var("BAGHOLDER_NO_UPDATE", "1");
     let rec = update::check_for_update(&app());
-    let st = crate::status::payload(&app());
+    let st = crate::status::status(&app());
     let out = update::start_update(&app());
     std::env::remove_var("BAGHOLDER_NO_UPDATE");
     assert_eq!((rec["ok"].as_bool(), rec["updateAvailable"].as_bool(), rec["latest"].as_str()), (Some(true), Some(true), Some(newer.as_str())));
-    assert_eq!((st["updateBy"].as_str(), st["updateUrl"].clone()), (Some("image"), json!(update::image_page())), "told of the release, sent to the image");
-    assert_eq!((out["ok"].as_bool(), out["error"].as_str()), (Some(false), Some(update::UPDATES_OFF_MESSAGE)));
-    assert_eq!(crate::status::payload(&app())["updateBy"], "app");
+    assert_eq!((st.update_by.as_str(), json!(st.update_url)), ("image", json!(update::image_page())), "told of the release, sent to the image");
+    assert_eq!((out.ok, out.error.as_deref()), (false, Some(update::UPDATES_OFF_MESSAGE)));
+    assert_eq!(crate::status::status(&app()).update_by, "app");
 }
 
 #[test]
@@ -376,9 +379,9 @@ fn test_update_button_refuses_during_a_sync() {
     }
     let during = update::start_update(&app());
     app().state.lock().unwrap().syncing = false;
-    assert_eq!(during["ok"], false);
+    assert_eq!(during.ok, false);
     bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": false}).to_string()).unwrap();
-    assert_eq!(update::start_update(&app())["ok"], false, "nothing to install");
+    assert_eq!(update::start_update(&app()).ok, false, "nothing to install");
 }
 
 // ---------------------------------------------------------------------------

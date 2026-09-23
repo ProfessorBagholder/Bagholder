@@ -4,38 +4,38 @@
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
-use serde_json::{json, Map, Value};
+use axum::routing::get;
 
-use super::{answer, blocking, Api, ApiError, AppState, Body};
-use crate::{feeds, login, session, update};
+use super::{answer, api_routes, blocking, Api, ApiError, AppState, Body, OkOr, Routed};
+use crate::{login, session, update};
 
-pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/login/start", post(login_start))
-        .route("/api/login/cancel", post(login_cancel))
-        .route("/api/login/input", post(login_input))
-        .route("/api/login/frame", get(login_frame))
-        .route("/api/capture", post(capture))
-        .route("/api/refresh", post(refresh))
-        .route("/api/sync", post(sync))
-        .route("/api/disconnect", post(disconnect))
-        .route("/api/update", post(start_update))
+pub fn routes() -> Routed {
+    let mut routed = api_routes! {
+        post "/api/login/start" => login_start, answer: "StartLoginAnswer";
+        post "/api/login/cancel" => login_cancel, answer: "CancelLoginAnswer";
+        post "/api/login/input" => login_input, body: "LoginInput", answer: "OkOr";
+        post "/api/capture" => capture, body: "Capture", answer: "OkOr";
+        post "/api/refresh" => refresh, answer: "RefreshAnswer";
+        post "/api/sync" => sync, answer: "SyncAnswer";
+        post "/api/disconnect" => disconnect, answer: "OkOr";
+        post "/api/update" => start_update, answer: "OkOr";
+    };
+    routed.router = routed.router.route("/api/login/frame", get(login_frame));
+    routed
 }
 
-async fn login_start(State(state): State<AppState>) -> Api<Value> {
+async fn login_start(State(state): State<AppState>) -> Api<login::StartLoginAnswer> {
     answer(move || login::start_login_browser(&state.app)).await
 }
 
-async fn login_cancel(State(state): State<AppState>) -> Api<Value> {
+async fn login_cancel(State(state): State<AppState>) -> Api<login::CancelLoginAnswer> {
     answer(move || login::cancel_login(&state.app)).await
 }
 
 /// `POST /api/login/input`: a click, a key or a scroll on the streamed window,
 /// passed to the browser as the DevTools event it names.
-async fn login_input(State(state): State<AppState>, Body(event): Body<Map<String, Value>>) -> Api<Value> {
-    answer(move || login::login_input(&state.app, &Value::Object(event))).await
+async fn login_input(State(state): State<AppState>, Body(event): Body<login::LoginInput>) -> Api<OkOr> {
+    answer(move || login::login_input(&state.app, &event)).await
 }
 
 /// `GET /api/login/frame`: the window's latest frame, for a page that cannot hold the stream.
@@ -47,36 +47,24 @@ async fn login_frame(State(state): State<AppState>) -> Result<Response, ApiError
 }
 
 /// `POST /api/capture`: tokens handed over by hand (the fallback to the window).
-async fn capture(State(state): State<AppState>, Body(tokens): Body<Map<String, Value>>) -> Api<Value> {
-    answer(move || session::capture_tokens(&state.app, &Value::Object(tokens))).await
+async fn capture(State(state): State<AppState>, Body(tokens): Body<session::Capture>) -> Api<OkOr> {
+    answer(move || session::capture_tokens(&state.app, &tokens)).await
 }
 
-async fn refresh(State(state): State<AppState>) -> Api<Value> {
+async fn refresh(State(state): State<AppState>) -> Api<session::RefreshAnswer> {
     answer(move || session::refresh_now(&state.app)).await
 }
 
 /// `POST /api/sync`: start a pull; its progress reaches the page as status changes.
-async fn sync(State(state): State<AppState>) -> Api<Value> {
-    let app = state.app;
-    answer(move || {
-        if session::load_session(&app).is_none() {
-            return json!({"ok": false, "error": "not connected"});
-        }
-        app.state.lock().unwrap().error.clear();
-        let a = app.clone();
-        crate::app::spawn("bagholder-sync", move || {
-            feeds::sync_then_market(&a);
-        });
-        json!({"ok": true, "syncing": true})
-    })
-    .await
+async fn sync(State(state): State<AppState>) -> Api<session::SyncAnswer> {
+    answer(move || session::sync_now(&state.app)).await
 }
 
-async fn disconnect(State(state): State<AppState>) -> Api<Value> {
+async fn disconnect(State(state): State<AppState>) -> Api<OkOr> {
     blocking(move || session::delete_session(&state.app)).await?;
-    Ok(Json(json!({"ok": true})))
+    Ok(axum::Json(OkOr::ok()))
 }
 
-async fn start_update(State(state): State<AppState>) -> Api<Value> {
+async fn start_update(State(state): State<AppState>) -> Api<OkOr> {
     answer(move || update::start_update(&state.app)).await
 }

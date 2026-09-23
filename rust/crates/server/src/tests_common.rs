@@ -14,6 +14,10 @@ pub fn home() -> PathBuf {
         let d = std::env::temp_dir().join(format!("bh-server-tests-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
+        // nothing this binary does reaches beyond loopback; the Wealthsimple
+        // stand-in (`bagholder_ws::standin`) answers on 127.0.0.1, which stays
+        // allowed, so it still works
+        std::env::set_var("BAGHOLDER_OFFLINE", "1");
         d
     })
     .clone()

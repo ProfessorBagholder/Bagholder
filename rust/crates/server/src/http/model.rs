@@ -2,37 +2,47 @@
 //! status, the journal, imports, and the Data & storage dialog.
 
 use axum::extract::State;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::routing::get;
+use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+use ts_rs::TS;
 
 use super::extract::trimmed;
-use super::{blocking, with_store, Api, ApiError, AppState, Body, Params};
+use super::{api_routes, blocking, with_store, Api, ApiError, AppState, Body, Params, Routed};
 use std::sync::Arc;
 
 use crate::app::{self, truthy, App};
 use crate::{feeds, session};
 
-pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/status", get(status))
+pub fn routes() -> Routed {
+    let mut routed = api_routes! {
+        get "/api/status" => status, answer: "StatusAnswer";
+        get "/api/trade" => trade, query: "TradeQuery", answer: "TradeAnswer";
+        get "/api/data" => data, answer: "DataSummary";
+        post "/api/data/clear" => data_clear, body: "Clear", answer: "DataSummary";
+        post "/api/journal" => journal, body: "JournalEntryRequest", answer: "JournalAnswer";
+        post "/api/groups" => groups, body: "Groups", answer: "GroupsAnswer";
+        post "/api/notes" => notes, body: "Notes", answer: "NotesAnswer";
+        post "/api/import" => import, body: "Import", answer: "ImportReport";
+        post "/api/watch/clear" => watch_clear, answer: "WatchStatus";
+    };
+    // not yet in the table: `/api/model` (stage 5d7d's Filters typing, §3, is
+    // unfinished), `/api/book` (`Book` reaches into `bagholder_store::broker::Account`
+    // and `bagholder_model::securities::Security`, neither typed for the page yet),
+    // and `/api/watch`'s GET (shares its path with the POST below) and
+    // `/api/watch/scan`, which answer with their own status code
+    routed.router = routed
+        .router
         .route("/api/model", get(model))
-        .route("/api/trade", get(trade))
         .route("/api/book", get(book))
-        .route("/api/data", get(data))
-        .route("/api/data/clear", post(data_clear))
-        .route("/api/journal", post(journal))
-        .route("/api/groups", post(groups))
-        .route("/api/notes", post(notes))
-        .route("/api/import", post(import))
         .route("/api/watch", get(watch_status).post(watch_set))
-        .route("/api/watch/scan", post(watch_scan))
-        .route("/api/watch/clear", post(watch_clear))
+        .route("/api/watch/scan", axum::routing::post(watch_scan));
+    routed
 }
 
-async fn status(State(state): State<AppState>) -> Api<Value> {
-    super::answer(move || serde_json::to_value(crate::status::answer(&state.app)).unwrap_or(Value::Null)).await
+async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
+    super::answer(move || crate::status::answer(&state.app)).await
 }
 
 #[derive(Deserialize)]
@@ -53,7 +63,7 @@ struct ModelQuery {
 
 /// `GET /api/model`: the whole view for a set of filters. The Svelte page gets its
 /// view over `/api/events`; this is what the legacy page and the phones read.
-async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> Api<Value> {
+async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> super::Api<Value> {
     let app = state.app;
     let built = blocking(move || -> Result<Value, ApiError> {
         if let (Ok(conn), Ok(base)) = (app.open(), app.base()) {
@@ -90,37 +100,46 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
         } else {
             view.to_value()
         };
-        payload["status"] = crate::status::payload(&app);
+        payload["status"] = serde_json::to_value(crate::status::status(&app)).unwrap_or(Value::Null);
         Ok(payload)
     })
     .await??;
     Ok(Json(built))
 }
 
-#[derive(Deserialize)]
-struct TradeQuery {
+#[derive(Deserialize, TS)]
+pub struct TradeQuery {
     #[serde(default, deserialize_with = "trimmed")]
     id: Option<String>,
 }
 
+/// `GET /api/trade`.
+#[derive(Serialize, TS)]
+pub struct TradeAnswer {
+    ok: bool,
+    id: String,
+    legs: Vec<bagholder_model::wire::Leg>,
+    fills: Vec<bagholder_model::wire::Fill>,
+}
+
 /// `GET /api/trade`: the legs and fills of one trade or holding, fetched when its page opens.
-async fn trade(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<Value> {
+async fn trade(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<TradeAnswer> {
     let app = state.app;
     let id = q.id.unwrap_or_default();
     let found = blocking(move || app.base().map(|base| bagholder_model::view::trade_detail(&base, &id))).await?.map_err(|e| ApiError::Model(e.to_string()))?;
     let detail = found.ok_or_else(|| ApiError::NotFound("no such trade".into()))?;
-    Ok(Json(json!({"ok": true, "id": detail.id, "legs": detail.legs, "fills": detail.fills})))
+    Ok(Json(TradeAnswer { ok: true, id: detail.id, legs: detail.legs.to_vec(), fills: detail.fills.to_vec() }))
 }
 
 /// `GET /api/book`: the stored rows as they are, for the phones and for export.
-async fn book(State(state): State<AppState>) -> Api<Value> {
-    with_store(&state, |conn| Ok(to_value(&bagholder_store::book::book(conn)?))).await
+async fn book(State(state): State<AppState>) -> Api<bagholder_store::book::Book> {
+    with_store(&state, |conn| bagholder_store::book::book(conn)).await
 }
 
 /// The row counts the Data & storage dialog shows before a wipe.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct DataSummary {
+pub struct DataSummary {
     ok: bool,
     path: String,
     activities: i64,
@@ -162,30 +181,33 @@ fn data_summary(app: &Arc<App>, conn: &rusqlite::Connection) -> rusqlite::Result
     })
 }
 
-async fn data(State(state): State<AppState>) -> Api<Value> {
+async fn data(State(state): State<AppState>) -> Api<DataSummary> {
     let app = state.app.clone();
-    with_store(&state, move |conn| Ok(to_value(&data_summary(&app, conn)?))).await
+    with_store(&state, move |conn| data_summary(&app, conn)).await
 }
 
 /// What `POST /api/data/clear` removes besides the synced rows.
-#[derive(Deserialize, Default)]
-struct Clear {
+#[derive(Deserialize, Default, TS)]
+pub struct Clear {
     #[serde(default)]
-    journal: bool,
+    #[ts(optional)]
+    journal: Option<bool>,
     #[serde(default)]
-    market: bool,
+    #[ts(optional)]
+    market: Option<bool>,
     #[serde(default)]
-    session: bool,
+    #[ts(optional)]
+    session: Option<bool>,
 }
 
-async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> Api<Value> {
+async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> Api<DataSummary> {
     if state.app.state.lock().unwrap().syncing {
         return Err(ApiError::Conflict("A sync is running. Wait for it to finish.".into()));
     }
     let app = state.app.clone();
     with_store(&state, move |conn| {
-        bagholder_store::admin::clear_synced_data(conn, !what.journal, !what.market)?;
-        if what.session {
+        bagholder_store::admin::clear_synced_data(conn, !what.journal.unwrap_or(false), !what.market.unwrap_or(false))?;
+        if what.session.unwrap_or(false) {
             session::delete_session(&app);
         }
         {
@@ -193,54 +215,76 @@ async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> A
             st.last_sync.clear();
             st.error.clear();
         }
-        Ok(to_value(&data_summary(&app, conn)?))
+        data_summary(&app, conn)
     })
     .await
 }
 
 /// One trade's journal entry. A field left out is cleared, as the page sends all three.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, TS)]
 #[serde(default)]
-struct JournalEntryRequest {
+pub struct JournalEntryRequest {
     #[serde(deserialize_with = "trimmed")]
     id: Option<String>,
     #[serde(flatten)]
+    #[ts(flatten)]
     entry: bagholder_model::input::JournalEntry,
 }
 
-async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryRequest>) -> Api<Value> {
+/// `POST /api/journal`.
+#[derive(Serialize, TS)]
+pub struct JournalAnswer {
+    ok: bool,
+    journal: std::collections::HashMap<String, bagholder_model::input::JournalEntry>,
+}
+
+async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryRequest>) -> Api<JournalAnswer> {
     let id = e.id.unwrap_or_default();
     if id.trim().is_empty() {
         return Err(ApiError::BadRequest("id required".into()));
     }
-    with_store(&state, move |conn| Ok(json!({"ok": true, "journal": bagholder_store::admin::save_journal_entry(conn, &id, Some(&e.entry))?}))).await
+    with_store(&state, move |conn| Ok(JournalAnswer { ok: true, journal: bagholder_store::admin::save_journal_entry(conn, &id, Some(&e.entry))? })).await
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, TS)]
 #[serde(default)]
-struct Groups {
+pub struct Groups {
     #[serde(deserialize_with = "bagholder_model::lenient::list")]
     groups: Vec<bagholder_model::input::TradeGroup>,
 }
 
-async fn groups(State(state): State<AppState>, Body(g): Body<Groups>) -> Api<Value> {
-    with_store(&state, move |conn| Ok(json!({"ok": true, "groups": bagholder_store::tables::save_trade_groups(conn, &g.groups)?}))).await
+/// `POST /api/groups`.
+#[derive(Serialize, TS)]
+pub struct GroupsAnswer {
+    ok: bool,
+    groups: Vec<bagholder_model::input::TradeGroup>,
 }
 
-#[derive(Deserialize, Default)]
+async fn groups(State(state): State<AppState>, Body(g): Body<Groups>) -> Api<GroupsAnswer> {
+    with_store(&state, move |conn| Ok(GroupsAnswer { ok: true, groups: bagholder_store::tables::save_trade_groups(conn, &g.groups)? })).await
+}
+
+#[derive(Deserialize, Default, TS)]
 #[serde(default)]
-struct Notes {
+pub struct Notes {
     #[serde(deserialize_with = "bagholder_model::lenient::map")]
     notes: std::collections::BTreeMap<String, bagholder_store::tables::LegacyNote>,
 }
 
-async fn notes(State(state): State<AppState>, Body(n): Body<Notes>) -> Api<Value> {
-    with_store(&state, move |conn| Ok(json!({"ok": true, "notes": bagholder_store::tables::save_trade_notes(conn, &n.notes)?}))).await
+/// `POST /api/notes`.
+#[derive(Serialize, TS)]
+pub struct NotesAnswer {
+    ok: bool,
+    notes: bagholder_store::tables::LegacyNotes,
+}
+
+async fn notes(State(state): State<AppState>, Body(n): Body<Notes>) -> Api<NotesAnswer> {
+    with_store(&state, move |conn| Ok(NotesAnswer { ok: true, notes: bagholder_store::tables::save_trade_notes(conn, &n.notes)? })).await
 }
 
 /// A CSV the page read from a file the person chose.
-#[derive(Deserialize, Default)]
-struct Import {
+#[derive(Deserialize, Default, TS)]
+pub struct Import {
     #[serde(default)]
     text: String,
     #[serde(default)]
@@ -251,15 +295,15 @@ fn to_value<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api<Value> {
+async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api<bagholder_store::csvimport::ImportReport> {
     if bagholder_model::textrules::trim_space(&i.text).is_empty() {
         return Err(ApiError::BadRequest("text required".into()));
     }
     let name = if i.name.is_empty() { "upload.csv".to_string() } else { i.name };
     let app = state.app;
-    let report = blocking(move || -> Result<Value, ApiError> {
+    let report = blocking(move || -> Result<bagholder_store::csvimport::ImportReport, ApiError> {
         let conn = app.open()?;
-        bagholder_store::csvimport::import_text(&conn, &name, &i.text).map(|r| to_value(&r)).map_err(|e| {
+        bagholder_store::csvimport::import_text(&conn, &name, &i.text).map_err(|e| {
             app::log(&format!("bagholder: import failed: {}", e));
             ApiError::Failed(e.to_string())
         })
@@ -268,8 +312,8 @@ async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api<Val
     Ok(Json(report))
 }
 
-async fn watch_status(State(state): State<AppState>) -> Api<Value> {
-    with_store(&state, |conn| bagholder_store::csvimport::status(conn).map(|s| to_value(&s))).await
+async fn watch_status(State(state): State<AppState>) -> Api<bagholder_store::csvimport::WatchStatus> {
+    with_store(&state, |conn| bagholder_store::csvimport::status(conn)).await
 }
 
 #[derive(Deserialize, Default)]
@@ -308,10 +352,10 @@ async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::Status
     Ok((if truthy(result.get("ok")) { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(result)))
 }
 
-async fn watch_clear(State(state): State<AppState>) -> Api<Value> {
+async fn watch_clear(State(state): State<AppState>) -> Api<bagholder_store::csvimport::WatchStatus> {
     with_store(&state, |conn| {
         bagholder_store::csvimport::clear_watch_folder(conn)?;
-        bagholder_store::csvimport::status(conn).map(|s| to_value(&s))
+        bagholder_store::csvimport::status(conn)
     })
     .await
 }

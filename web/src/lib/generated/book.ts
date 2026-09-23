@@ -21,3 +21,7 @@ export type StatusFile = { file: string, added: number, duplicates: number, form
 export type WatchStatus = { ok: boolean, path: string, watching: boolean, lastScan: string, files: Array<StatusFile>, };
 
 export type Appended = { ok: boolean, added: number, duplicates: number, activity: ActivityRow | null, activities: Array<ActivityRow> | null, };
+
+export type BookAppend = { activities: Array<ActivityRow>, activity: ActivityRow | null, side: string, qty: number | null, quantity: number | null, price: number | null, unitPrice: number | null, date: string, transactionDate: string, occurredAt: string, symbol: string, currency: string, accountId: string, account: string, accountType: string, commission: number | null, };
+
+export type LegacyNote = { thesis: string, tag: string, grade: string, tradeId: string, };

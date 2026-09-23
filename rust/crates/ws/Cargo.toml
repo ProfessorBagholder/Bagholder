@@ -10,6 +10,9 @@ bagholder-market = { path = "../market" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# `IdentityKeys` and `Expiry` are part of `session::Capture`, the server's
+# `/api/capture` request; typed for the page the same way every other body is.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }
 
 [features]
 # the stand-in Wealthsimple server tests point the client at

@@ -9,7 +9,7 @@
   import Mseg from '../markets/Mseg.svelte'
   import Icon from '../markets/Icon.svelte'
   import HeatBox from './HeatBox.svelte'
-  import { request } from '../api'
+  import { call } from '../api'
   import { go, goHash, rewrite, route } from '../router.svelte'
   import { heat, show, remember, heatHash, applyAddress, nextScope, MARKET_U, EVERY_SCOPE } from './heat.svelte'
 
@@ -37,7 +37,7 @@
   const tiles = $derived(heatTilesFor(heat))
   const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? 'Not read yet.' : 'No open positions.')
   const unread = (u: string) => !!MARKET_U[u] && !((markets.universes as Record<string, unknown[]>)[u] || []).length
-  const readMarkets = () => void request('POST', '/api/markets/refresh', {})
+  const readMarkets = () => void call('POST /api/markets/refresh')
 
   function pick(patch: Partial<typeof heat>) {
     if ('universe' in patch) show.on = null // a scope picked by hand ends the cycling

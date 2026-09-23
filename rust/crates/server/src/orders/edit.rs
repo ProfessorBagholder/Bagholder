@@ -4,8 +4,8 @@ use super::*;
 
 /// Change a resting order's size or its limit. A stop order cannot be changed at
 /// Wealthsimple, only cancelled and placed again.
-pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, limit_price: Option<&Value>) -> Value {
-    let refused = |e: &str| json!({"ok": false, "error": e});
+pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, limit_price: Option<&Value>) -> OrderActionAnswer {
+    let refused = |e: &str| OrderActionAnswer::err(e);
     let row = match order(app, order_id) {
         Some(r) => r,
         None => return refused("No such order."),
@@ -33,7 +33,7 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
     let new_limit = lp.filter(|_| limit_type && lp != row.limit_price);
     let new_quantity = q.filter(|_| q != row.quantity);
     if new_limit.is_none() && new_quantity.is_none() {
-        return json!({"ok": true, "id": id, "unchanged": true});
+        return OrderActionAnswer::already(id);
     }
     if !orders_live() {
         return refused("Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.");
@@ -57,12 +57,12 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
         Err(e) => {
             let msg = err_text(&e);
             log(&format!("bagholder orders: modify {} failed: {}", id, msg));
-            return json!({"ok": false, "error": format!("Change failed: {}", msg)});
+            return OrderActionAnswer::err(format!("Change failed: {}", msg));
         }
     };
     if let Some(msg) = data.get("soOrdersModifyOrder").and_then(|r| r.get("errors")).filter(|v| truthy(Some(v))).and_then(first_error) {
         log(&format!("bagholder orders: modify {} refused: {}", id, msg));
-        return json!({"ok": false, "error": format!("Wealthsimple refused the change: {}", msg)});
+        return OrderActionAnswer::err(format!("Wealthsimple refused the change: {}", msg));
     }
     patch_order(app, &id, OrderPatch { limit_price: new_limit.map(Some), quantity: new_quantity.map(Some), ..OrderPatch::default() });
     // a bracket still waiting on this entry guards the size the entry now has
@@ -75,14 +75,14 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
     spawn("bagholder-order-refresh", move || {
         let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
-    json!({"ok": true, "id": id})
+    OrderActionAnswer::accepted(id)
 }
 
 /// Move a leg of a live bracket, give a trailing stop another trail, or take a leg off.
 /// A leg that rests at Wealthsimple is cancelled first, and the engine places it again
 /// at the new level; a bracket left with no leg is over.
-pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option<&Value>, trail: Option<&Value>, remove: bool) -> Value {
-    let refused = |e: String| json!({"ok": false, "error": e});
+pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option<&Value>, trail: Option<&Value>, remove: bool) -> OrderActionAnswer {
+    let refused = |e: String| OrderActionAnswer::err(e);
     let b = match bracket(app, bracket_id) {
         Some(b) => b,
         None => return refused("No such bracket.".into()),
@@ -125,7 +125,7 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
         }
         patch_bracket(app, &b.id, patch);
         log(&format!("bagholder bracket: {} for {}: {} removed by the user", b.id, b.symbol, if stop_leg { "stop loss" } else { "take profit" }));
-        return json!({"ok": true, "id": b.id});
+        return OrderActionAnswer::accepted(b.id);
     }
     if stop_leg {
         if !b.sl_kind.is_set() {
@@ -153,7 +153,7 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
         }
         patch_bracket(app, &b.id, patch);
         log(&format!("bagholder bracket: {} for {}: stop moved to {} by the user", b.id, b.symbol, rp(new_price)));
-        return json!({"ok": true, "id": b.id});
+        return OrderActionAnswer::accepted(b.id);
     }
     let Some(p) = positive(price) else { return refused("A limit price is required.".into()) };
     patch.tp_price = Some(Some(p));
@@ -167,5 +167,5 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
     }
     patch_bracket(app, &b.id, patch);
     log(&format!("bagholder bracket: {} for {}: target moved to {} by the user", b.id, b.symbol, rp(Some(p))));
-    json!({"ok": true, "id": b.id})
+    OrderActionAnswer::accepted(b.id)
 }

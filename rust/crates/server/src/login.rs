@@ -3,6 +3,7 @@
 //! cookies appear. In a container the window lives on a virtual display and
 //! is streamed into the page, which forwards clicks and keys back to it.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -11,8 +12,10 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
+use ts_rs::TS;
 
 use crate::app::{f, log, spawn, App};
+use crate::http::OkOr;
 
 pub const CAPTURE_WAIT: Duration = Duration::from_secs(180);
 pub const DEBUG_PORT: u16 = 18765;
@@ -536,7 +539,8 @@ fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
                 if !capturing(app) {
                     return;
                 }
-                if crate::session::capture_tokens(app, &b).get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                let capture: crate::session::Capture = serde_json::from_value(b.clone()).unwrap_or_default();
+                if crate::session::capture_tokens(app, &capture).ok {
                     log("bagholder captured Wealthsimple session");
                     close_login_browser(app, Some(pid));
                     return;
@@ -892,18 +896,38 @@ fn key_event(ch: char, typ: &str) -> Value {
     ev
 }
 
+/// One click, text, key or scroll from the page. Every field defaults as
+/// leniently as the `Value` this read (a missing or wrongly-typed field
+/// never refuses the request, only does nothing for it).
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LoginInput {
+    #[ts(optional)]
+    pub kind: Option<String>,
+    #[ts(optional)]
+    pub x: Option<f64>,
+    #[ts(optional)]
+    pub y: Option<f64>,
+    #[ts(optional)]
+    pub text: Option<String>,
+    #[ts(optional)]
+    pub key: Option<String>,
+    #[serde(rename = "deltaY")]
+    #[ts(optional)]
+    pub delta_y: Option<f64>,
+}
+
 /// One click, text, key or scroll from the page.
-pub fn login_input(app: &App, ev: &Value) -> Value {
-    let kind = f(ev, "kind");
-    let x = crate::app::num(ev.get("x"), Some(0.0)).unwrap_or(0.0);
-    let y = crate::app::num(ev.get("y"), Some(0.0)).unwrap_or(0.0);
+pub fn login_input(app: &App, ev: &LoginInput) -> OkOr {
+    let kind = ev.kind.as_deref().unwrap_or_default();
+    let (x, y) = (ev.x.unwrap_or(0.0), ev.y.unwrap_or(0.0));
     let mut unknown: Option<&str> = None;
     let r = with_view(app, |ws| {
         // sent without waiting on the answers: a slow reply is not a failure,
         // only a socket that is gone is
         let mut sent = true;
         let mut call = |m: &str, p: Value| sent &= ws.fire(m, p);
-        match kind.as_str() {
+        match kind {
             "click" => {
                 call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y}));
                 for typ in ["mousePressed", "mouseReleased"] {
@@ -911,7 +935,7 @@ pub fn login_input(app: &App, ev: &Value) -> Value {
                 }
             }
             "text" => {
-                let text = f(ev, "text");
+                let text = ev.text.clone().unwrap_or_default();
                 let n = text.chars().count();
                 if n == 1 || (n > 0 && n <= 8 && text.chars().all(|c| c.is_alphanumeric())) {
                     // a keystroke, or a pasted code: one key per character, since a
@@ -925,7 +949,7 @@ pub fn login_input(app: &App, ev: &Value) -> Value {
                 }
             }
             "key" => {
-                let key = f(ev, "key");
+                let key = ev.key.as_deref().unwrap_or_default();
                 let vk = match VIEW_KEYS.iter().find(|(k, _)| *k == key) { Some((_, v)) => *v, None => { unknown = Some("unknown key"); return Some(()) } };
                 let mut base = json!({"key": key, "code": key, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk});
                 if key == "Enter" {
@@ -939,7 +963,7 @@ pub fn login_input(app: &App, ev: &Value) -> Value {
                 call("Input.dispatchKeyEvent", up);
             }
             "wheel" => {
-                let dy = crate::app::num(ev.get("deltaY"), Some(0.0)).unwrap_or(0.0);
+                let dy = ev.delta_y.unwrap_or(0.0);
                 call("Input.dispatchMouseEvent", json!({"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy}));
             }
             _ => {
@@ -951,16 +975,23 @@ pub fn login_input(app: &App, ev: &Value) -> Value {
         if sent { Some(()) } else { None }
     });
     if let Some(u) = unknown {
-        return json!({"ok": false, "error": u});
+        return OkOr::err(u);
     }
     match r {
-        Some(()) => json!({"ok": true}),
-        None if cdp_pages(DEBUG_PORT).is_empty() => json!({"ok": false, "error": "No login window."}),
-        None => json!({"ok": false, "error": "The login window did not take that."}),
+        Some(()) => OkOr::ok(),
+        None if cdp_pages(DEBUG_PORT).is_empty() => OkOr::err("No login window."),
+        None => OkOr::err("The login window did not take that."),
     }
 }
 
-pub fn cancel_login(app: &Arc<App>) -> Value {
+/// `POST /api/login/cancel`.
+#[derive(Serialize, TS)]
+pub struct CancelLoginAnswer {
+    pub ok: bool,
+    pub cancelled: bool,
+}
+
+pub fn cancel_login(app: &Arc<App>) -> CancelLoginAnswer {
     let was = {
         let mut st = app.state.lock().unwrap();
         let was = st.capturing;
@@ -970,14 +1001,38 @@ pub fn cancel_login(app: &Arc<App>) -> Value {
     };
     log("bagholder login: cancelled");
     close_login_browser(app, None);
-    json!({"ok": true, "cancelled": was})
+    CancelLoginAnswer { ok: true, cancelled: was }
+}
+
+/// `POST /api/login/start`.
+#[derive(Serialize, TS)]
+pub struct StartLoginAnswer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+impl StartLoginAnswer {
+    fn ok() -> StartLoginAnswer {
+        StartLoginAnswer { ok: true, reused: None, error: None }
+    }
+    fn reused() -> StartLoginAnswer {
+        StartLoginAnswer { ok: true, reused: Some(true), error: None }
+    }
+    fn err(e: impl Into<String>) -> StartLoginAnswer {
+        StartLoginAnswer { ok: false, reused: None, error: Some(e.into()) }
+    }
 }
 
 /// Open the login window, or bring forward the
 /// one the app already has up.
-pub fn start_login_browser(app: &Arc<App>) -> Value {
+pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
     if let Err(e) = bagholder_store::guard_home(&app.home) {
-        return json!({"ok": false, "error": e});
+        return StartLoginAnswer::err(e);
     }
     log("bagholder login: connect requested");
     if browser_alive(app) {
@@ -1004,12 +1059,12 @@ pub fn start_login_browser(app: &Arc<App>) -> Value {
             spawn("bagholder-cdp-capture", move || poll_session(&a, pid, attempt));
         }
         log("bagholder login: window already up, brought forward");
-        return json!({"ok": true, "reused": true});
+        return StartLoginAnswer::reused();
     }
     close_login_browser(app, None);
     let chrome = find_chrome();
     if chrome.is_empty() {
-        return json!({"ok": false, "error": NO_BROWSER});
+        return StartLoginAnswer::err(NO_BROWSER);
     }
     let profile = app.home.join("chrome");
     let _ = std::fs::create_dir_all(&profile);
@@ -1048,7 +1103,7 @@ pub fn start_login_browser(app: &Arc<App>) -> Value {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let child = match cmd.spawn() { Ok(c) => c, Err(_) => return json!({"ok": false, "error": NO_BROWSER}) };
+    let child = match cmd.spawn() { Ok(c) => c, Err(_) => return StartLoginAnswer::err(NO_BROWSER) };
     let pid = child.id();
     log(&format!("bagholder login: chrome launched (pid {})", pid));
     let attempt = {
@@ -1072,6 +1127,6 @@ pub fn start_login_browser(app: &Arc<App>) -> Value {
         let a1 = app.clone(); spawn("bagholder-screencast", move || screencast_loop(&a1, attempt));
         let a2 = app.clone(); spawn("bagholder-screenshots", move || screenshot_loop(&a2, attempt));
     }
-    json!({"ok": true})
+    StartLoginAnswer::ok()
 }
 

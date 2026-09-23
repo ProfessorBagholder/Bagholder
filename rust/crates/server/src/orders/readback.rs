@@ -328,10 +328,34 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
     true
 }
 
-pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
+/// `POST /api/orders/refresh`.
+#[derive(Debug, Serialize, TS)]
+pub struct RefreshOrdersAnswer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub skipped: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub added: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub failed: Option<i64>,
+}
+
+impl RefreshOrdersAnswer {
+    fn skipped(why: &str) -> RefreshOrdersAnswer {
+        RefreshOrdersAnswer { ok: false, skipped: Some(why.into()), read: None, added: None, failed: None }
+    }
+}
+
+pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> RefreshOrdersAnswer {
     let sess = match ticket_session(app) {
         Some(s) => s,
-        None => return json!({"ok": false, "skipped": "no session"}),
+        None => return RefreshOrdersAnswer::skipped("no session"),
     };
     let live: Vec<Order> = orders_all(app).into_iter().filter(|o| o.status.is_live() && (only_id.is_empty() || o.id == only_id)).collect();
     let (mut read, mut failed, mut added) = (0i64, 0i64, 0i64);
@@ -340,7 +364,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
             Ok(u) => u,
             Err(CallError::NotAuthorized) => {
                 log("bagholder orders: Wealthsimple refused the session");
-                return json!({"ok": false, "skipped": "refused"});
+                return RefreshOrdersAnswer::skipped("refused");
             }
             Err(e) => {
                 failed += 1;
@@ -401,7 +425,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
                         added += 1;
                     }
                 }
-                Err(CallError::NotAuthorized) => return json!({"ok": false, "skipped": "refused"}),
+                Err(CallError::NotAuthorized) => return RefreshOrdersAnswer::skipped("refused"),
                 Err(e) => {
                     failed += 1;
                     log(&format!("bagholder orders: pending-order feed failed: {}", err_text(&e)));
@@ -413,7 +437,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
     if read != 0 || added != 0 || failed != 0 {
         log(&format!("bagholder orders: {} read, {} found pending at Wealthsimple, {} failed", read, added, failed));
     }
-    json!({"ok": failed == 0, "read": read, "added": added, "failed": failed})
+    RefreshOrdersAnswer { ok: failed == 0, skipped: None, read: Some(read), added: Some(added), failed: Some(failed) }
 }
 
 pub fn orders_loop(app: &Arc<App>) {
@@ -439,38 +463,38 @@ pub fn orders_loop(app: &Arc<App>) {
     }
 }
 
-pub fn cancel_order(app: &Arc<App>, order_id: &str) -> Value {
+pub fn cancel_order(app: &Arc<App>, order_id: &str) -> OrderActionAnswer {
     #[cfg(test)]
     if let Some(v) = bracket_seam::CANCEL_ORDER.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-        return v;
+        return serde_json::from_value(v).unwrap_or_else(|_| OrderActionAnswer::err("bad seam value"));
     }
     let row = match order(app, order_id) {
         Some(r) => r,
-        None => return json!({"ok": false, "error": "No such order."}),
+        None => return OrderActionAnswer::err("No such order."),
     };
     if !row.status.is_live() {
-        return json!({"ok": false, "error": "That order is not open."});
+        return OrderActionAnswer::err("That order is not open.");
     }
     if !orders_live() {
-        return json!({"ok": false, "error": "Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple."});
+        return OrderActionAnswer::err("Orders are off (BAGHOLDER_DRY_ORDERS): nothing is sent to Wealthsimple.");
     }
     let sess = match ticket_session(app) {
         Some(s) => s,
-        None => return json!({"ok": false, "error": "Not connected."}),
+        None => return OrderActionAnswer::err("Not connected."),
     };
     let id = row.id.clone();
     let data = match gql(app, &sess, "SoOrdersOrderCancel", json!({"cancelOrderRequest": {"externalId": id}})) {
         Ok(d) => d,
-        Err(CallError::NotAuthorized) => return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again."}),
+        Err(CallError::NotAuthorized) => return OrderActionAnswer::err("Wealthsimple refused the session. Connect Wealthsimple again."),
         Err(e) => {
             let msg = err_text(&e);
             log(&format!("bagholder orders: cancel {} failed: {}", id, msg));
-            return json!({"ok": false, "error": format!("Cancel failed: {}", msg)});
+            return OrderActionAnswer::err(format!("Cancel failed: {}", msg));
         }
     };
     if let Some(msg) = data.get("orderServiceCancelOrder").and_then(|r| r.get("errors")).filter(|v| truthy(Some(v))).and_then(first_error) {
         log(&format!("bagholder orders: cancel {} refused: {}", id, msg));
-        return json!({"ok": false, "error": format!("Wealthsimple refused the cancel: {}", msg)});
+        return OrderActionAnswer::err(format!("Wealthsimple refused the cancel: {}", msg));
     }
     patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Cancelling), ws_status: Some("CANCEL_PENDING".into()), ..OrderPatch::default() });
     log(&format!("bagholder orders: cancel {} accepted", id));
@@ -479,7 +503,7 @@ pub fn cancel_order(app: &Arc<App>, order_id: &str) -> Value {
     spawn("bagholder-order-refresh", move || {
         let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
-    json!({"ok": true, "id": id, "status": "cancelling"})
+    OrderActionAnswer::cancelling(id)
 }
 
 /// An order as the Orders panel shows it: the order, and the venue its listing trades on.
@@ -512,8 +536,8 @@ pub fn orders_doc(app: &Arc<App>, kick: bool) -> OrdersDoc {
     OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at(app) }
 }
 
-pub fn orders_payload(app: &Arc<App>, kick: bool) -> Value {
-    serde_json::to_value(orders_doc(app, kick)).unwrap_or(Value::Null)
+pub fn orders_payload(app: &Arc<App>, kick: bool) -> OrdersDoc {
+    orders_doc(app, kick)
 }
 
 /// What the header's badge counts: entries still with the broker, and brackets at work.

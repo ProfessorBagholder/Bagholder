@@ -10,7 +10,7 @@
   import { watchDoc } from '../live'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
-  import { request } from '../api'
+  import { call } from '../api'
   import { goSub } from '../router.svelte'
   import { rememberListing } from '../listing.svelte'
   import { escapable } from '../escape'
@@ -59,8 +59,8 @@
       if (query.trim().toUpperCase() !== key) return
       if ((feed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return
       found[key] = { loading: true }
-      request<{ ok: boolean; covered?: boolean; shorts?: ShortsFeedRow }>('GET', '/api/shorts?symbol=' + encodeURIComponent(key)).then((d) => {
-        found[key] = d && d.ok && d.covered ? { row: d.shorts as ShortsFeedRow } : { missing: true }
+      call('GET /api/shorts', { query: { symbol: key, exchange: '', currency: '', name: '', trend: false } }).then((d) => {
+        found[key] = d && d.ok && 'covered' in d && d.covered ? { row: d.shorts as unknown as ShortsFeedRow } : { missing: true }
       })
     }, 450)
   }

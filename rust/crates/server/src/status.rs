@@ -3,7 +3,6 @@
 //! here reaches the page as the field that changed.
 
 use serde::Serialize;
-use serde_json::Value;
 use std::sync::Arc;
 
 use bagholder_diff_derive::Diff;
@@ -123,10 +122,4 @@ pub fn answer(app: &Arc<App>) -> StatusAnswer {
     }
 }
 
-/// `payload`, as the stream and `GET /api/status` sent it before the header
-/// was typed: `Status`'s own JSON. Callers that still take a `Value` keep
-/// working; new callers should read `status` directly.
-pub fn payload(app: &Arc<App>) -> Value {
-    serde_json::to_value(status(app)).unwrap_or(Value::Null)
-}
 

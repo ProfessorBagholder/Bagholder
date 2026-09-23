@@ -2,14 +2,17 @@
 //! the daily pull of activities, balances, margin and equity history, the
 //! listing names, and the Portfolio figures read between syncs.
 
+use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
+use ts_rs::TS;
 
 use bagholder_ws::fetch;
 use bagholder_ws::session::{CallError, Client, Session};
 
 use crate::app::{log, now_iso, now_unix, spawn, today_utc, App};
+use crate::http::OkOr;
 
 pub const PORTFOLIO_REFRESH_MINUTES: u64 = 5;
 /// A sync that has failed this many times in a row is told, once.
@@ -614,15 +617,49 @@ pub fn portfolio_loop(app: Arc<App>) {
     }
 }
 
+/// `POST /api/refresh`.
+#[derive(Serialize, TS)]
+pub struct RefreshAnswer {
+    pub ok: bool,
+    pub error: String,
+    pub connected: bool,
+}
+
+/// `POST /api/sync`.
+#[derive(Serialize, TS)]
+pub struct SyncAnswer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub syncing: Option<bool>,
+}
+
+/// Start a pull if a login is saved; its progress reaches the page as status
+/// changes.
+pub fn sync_now(app: &Arc<App>) -> SyncAnswer {
+    if load_session(app).is_none() {
+        return SyncAnswer { ok: false, error: Some("not connected".into()), syncing: None };
+    }
+    app.state.lock().unwrap().error.clear();
+    let a = app.clone();
+    spawn("bagholder-sync", move || {
+        crate::feeds::sync_then_market(&a);
+    });
+    SyncAnswer { ok: true, error: None, syncing: Some(true) }
+}
+
 /// The grant, always.
-pub fn refresh_now(app: &Arc<App>) -> serde_json::Value {
+pub fn refresh_now(app: &Arc<App>) -> RefreshAnswer {
     let mut sess = match load_session(app) {
         Some(s) if !s.refresh_token.is_empty() => s,
         _ => {
             let mut st = app.state.lock().unwrap();
             st.connected = false;
             st.error = "not connected".into();
-            return json!({"ok": false, "error": "not connected", "connected": false});
+            return RefreshAnswer { ok: false, error: "not connected".into(), connected: false };
         }
     };
     let ok = refresh_session(app, &mut sess, true);
@@ -631,7 +668,7 @@ pub fn refresh_now(app: &Arc<App>) -> serde_json::Value {
     if ok {
         st.error.clear();
     }
-    json!({"ok": ok, "error": st.error.trim(), "connected": ok})
+    RefreshAnswer { ok, error: st.error.trim().to_string(), connected: ok }
 }
 
 /// The token kept fresh, and the weekday pull when
@@ -700,7 +737,7 @@ pub fn auto_sync_loop(app: Arc<App>) {
 
 /// The captured login's fields; any other key the body carries is kept as it
 /// was, exactly as a saved `Session` keeps what it does not read.
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, TS)]
 #[serde(default)]
 pub struct Capture {
     #[serde(deserialize_with = "bagholder_model::lenient::text")]
@@ -721,16 +758,10 @@ pub struct Capture {
 }
 
 /// Keep the captured login and take it over.
-pub fn capture_tokens(app: &Arc<App>, body: &serde_json::Value) -> serde_json::Value {
-    if !body.is_object() {
-        return json!({"ok": false, "error": "bad body"});
-    }
-    let capture: Capture = match serde_json::from_value(body.clone()) {
-        Ok(c) => c,
-        Err(_) => return json!({"ok": false, "error": "bad body"}),
-    };
+pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
+    let capture = capture.clone();
     if capture.access_token.is_empty() {
-        return json!({"ok": false, "error": "missing access_token"});
+        return OkOr::err("missing access_token");
     }
     let mut sess = load_session(app).unwrap_or_default();
     sess.access_token = capture.access_token;
@@ -792,11 +823,11 @@ pub fn capture_tokens(app: &Arc<App>, body: &serde_json::Value) -> serde_json::V
         let mut st = app.state.lock().unwrap();
         st.connected = false;
         let err = if st.error.is_empty() { "Wealthsimple refused the captured login".to_string() } else { st.error.clone() };
-        return json!({"ok": false, "error": err});
+        return OkOr::err(err);
     }
     if let Err(e) = save_session(app, &sess) {
         app.state.lock().unwrap().error = e.clone();
-        return json!({"ok": false, "error": e});
+        return OkOr::err(e);
     }
     {
         let mut st = app.state.lock().unwrap();
@@ -808,7 +839,7 @@ pub fn capture_tokens(app: &Arc<App>, body: &serde_json::Value) -> serde_json::V
     spawn("bagholder-sync", move || {
         run_sync(&a, true, true);
     });
-    json!({"ok": true})
+    OkOr::ok()
 }
 
 #[cfg(test)]
@@ -850,7 +881,7 @@ mod tests {
     }
 
     fn error_line(app: &Arc<App>) -> String {
-        crate::status::payload(app)["error"].as_str().unwrap_or_default().to_string()
+        crate::status::status(app).error
     }
 
     #[test]

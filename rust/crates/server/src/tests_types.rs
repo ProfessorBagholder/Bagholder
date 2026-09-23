@@ -16,17 +16,22 @@ use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderT
 
 use bagholder_store::activities::ActivityRow;
 use bagholder_store::csvimport::{CsvFile, ImportReport, ScanReport, ScannedFile, Skipped, StatusFile, WatchSet, WatchStatus};
+use bagholder_store::tables::LegacyNote;
 use bagholder_store::feeds::{Notification, NotificationExtra};
 
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
-use crate::orders::{Appended, OrderCard, OrdersDoc};
+use crate::http::orders::{Adjust, Modify, Named, RefreshAndOrders};
+use crate::orders::{Appended, OrderActionAnswer, OrderCard, OrdersDoc, RefreshOrdersAnswer};
 
 fn declarations() -> String {
     let config = ts_rs::Config::new().with_large_int("number");
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![Side, OrderType, OrderStatus, Role, Source, BracketStatus, SlKind, TrailUnit, SlMode, StopLoss, TakeProfit, Order, OrderCard, Bracket, OrdersDoc];
+    let decls: Vec<String> = decls![
+        Side, OrderType, OrderStatus, Role, Source, BracketStatus, SlKind, TrailUnit, SlMode, StopLoss, TakeProfit, Order, OrderCard, Bracket, OrdersDoc,
+        OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders,
+    ];
     let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\n");
     for d in decls {
         out.push_str("export ");
@@ -56,8 +61,8 @@ fn chart_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory];
-    let mut out = String::from("// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\n");
+    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer];
+    let mut out = String::from("// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -85,8 +90,11 @@ fn filings_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's filings documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_filing_types`.\n\n");
+    let decls: Vec<String> = decls![
+        Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
+        crate::feeds::FilingsAnswer, crate::feeds::EnrichAnswer, crate::http::markets::Filings, crate::http::markets::Scope, crate::http::markets::Document,
+    ];
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's filings documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_filing_types`.\n\nimport type { OkOr } from './common'\nimport type { Listing } from './markets'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -117,8 +125,10 @@ fn markets_declarations() -> String {
     let decls: Vec<String> = decls![
         GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc,
         ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
+        crate::feeds::FearAnswer, crate::feeds::ShortsAnswer,
+        crate::http::markets::Listing, crate::http::markets::Fear, crate::http::markets::ShortsQuery, crate::http::markets::GlanceAnswer,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -146,7 +156,7 @@ fn book_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended];
+    let decls: Vec<String> = decls![ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended, crate::orders::BookAppend, LegacyNote];
     let mut out = String::from("// Generated from rust/crates/store/src/activities.rs, rust/crates/store/src/csvimport.rs and the\n// server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\n");
     for d in decls {
         out.push_str("export ");
@@ -176,7 +186,7 @@ fn status_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::status::Status];
+    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::status::Status, crate::status::StatusAnswer];
     let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\n");
     for d in decls {
         out.push_str("export ");
@@ -233,12 +243,138 @@ fn test_the_pages_notifications_types_are_the_servers() {
     assert!(have == want, "web/src/lib/generated/notifications.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }
 
+/// `{"ok": true} | {"ok": false, "error": string}`, generated to
+/// `web/src/lib/generated/common.ts` -- the one shape several routes across
+/// `login`, `session` and `update` answer.
+fn common_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    let mut out = String::from("// Generated from the server's http module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_common_types`.\n\n");
+    out.push_str("export ");
+    out.push_str(crate::http::OkOr::decl(&config).trim());
+    out.push('\n');
+    out
+}
+
+#[test]
+fn test_the_pages_common_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/common.ts");
+    let want = common_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/common.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The session and login types, generated to `web/src/lib/generated/session.ts`
+/// -- a field renamed, added or made nullable on any of these fails the page's type check.
+fn session_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![
+        bagholder_ws::session::IdentityKeys, bagholder_ws::session::Expiry, crate::session::Capture, crate::login::LoginInput,
+        crate::login::StartLoginAnswer, crate::login::CancelLoginAnswer, crate::session::RefreshAnswer, crate::session::SyncAnswer,
+    ];
+    let mut out = String::from(
+        "// Generated from rust/crates/ws/src/session.rs, session.rs and login.rs. Do not edit: change\n// the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_session_types`.\n\n",
+    );
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_session_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/session.ts");
+    let want = session_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/session.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// `http::model`'s own request and answer types, generated to
+/// `web/src/lib/generated/model_api.ts` -- named apart from `model.ts` (the
+/// page's own hand-written model types) so neither shadows the other.
+fn model_api_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![
+        bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
+        crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::DataSummary, crate::http::model::Clear,
+        crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
+        crate::http::model::Notes, crate::http::model::NotesAnswer, crate::http::model::Import,
+    ];
+    let mut out = String::from(
+        "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill } from './wire'\nimport type { LegacyNote } from './book'\n\n",
+    );
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_model_api_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/model_api.ts");
+    let want = model_api_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/model_api.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// Which generated file declares a route-table type by name, so the route
+/// table's own generator (`routes_declarations`) can import each from where
+/// it lives rather than repeating its declaration.
+fn generated_file_of(name: &str) -> &'static str {
+    match name {
+        "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" => "notifications",
+        "OkOr" => "common",
+        "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
+        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" => "orders",
+        "Appended" | "BookAppend" | "ImportReport" | "WatchStatus" | "LegacyNote" => "book",
+        "StatusAnswer" => "status",
+        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" => "model_api",
+        "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
+        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" => "markets",
+        "HistoryAnswer" => "chart",
+        other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
+    }
+}
+
 /// The route table, generated to `web/src/lib/generated/routes.ts` -- a route
 /// added, moved or given a different request or answer type fails the page's
 /// type check on `call()`.
 fn routes_declarations() -> String {
-    let mut out = String::from("// Generated from the server's route table (`api_routes!`). Do not edit: change the\n// route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.\n\nimport type { NotificationIds, NotificationsAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotificationsClearAnswer } from './notifications'\n\nexport interface Routes {\n");
-    for e in crate::http::route_table() {
+    let table = crate::http::route_table();
+    let mut names: Vec<&str> = table.iter().flat_map(|e| [e.query, e.body, Some(e.answer)]).flatten().collect();
+    names.sort();
+    names.dedup();
+    let mut by_file: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for n in names {
+        by_file.entry(generated_file_of(n)).or_default().push(n);
+    }
+    let mut out = String::from("// Generated from the server's route table (`api_routes!`). Do not edit: change the\n// route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.\n\n");
+    for (file, names) in by_file {
+        out.push_str(&format!("import type {{ {} }} from './{}'\n", names.join(", "), file));
+    }
+    out.push_str("\nexport interface Routes {\n");
+    for e in table {
         let key = format!("{} {}", e.method.to_uppercase(), e.path);
         let mut fields = Vec::new();
         if let Some(q) = e.query {

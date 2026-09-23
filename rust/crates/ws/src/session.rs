@@ -41,7 +41,7 @@ pub const REFUSED_LOGIN_MESSAGE: &str = "Saved login refused. Connect Wealthsimp
 
 /// The identity keys a session, a token/info answer, or a captured login may
 /// carry, under either spelling `identity_canonical_id` is seen written.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
 pub struct IdentityKeys {
     #[serde(deserialize_with = "lenient::text", skip_serializing_if = "String::is_empty")]
@@ -79,7 +79,7 @@ impl IdentityKeys {
 
 /// The expiry kept exactly as it was read: an ISO instant most of the time,
 /// but a bare unix timestamp on an older session.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(untagged)]
 pub enum Expiry {
     Unix(f64),

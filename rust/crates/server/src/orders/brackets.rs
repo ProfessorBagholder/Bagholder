@@ -180,8 +180,8 @@ pub(super) fn cancel_exit(app: &Arc<App>, order_id: &str) -> String {
         _ => return String::new(),
     }
     let r = cancel_order(app, order_id);
-    let e = f(&r, "error");
-    if tr(&r, "ok") || e.contains("not open") {
+    let e = r.error.unwrap_or_default();
+    if r.ok || e.contains("not open") {
         return String::new();
     }
     if e.is_empty() {
@@ -835,14 +835,14 @@ pub fn bracket_loop(app: &Arc<App>) {
     }
 }
 
-pub fn cancel_bracket(app: &Arc<App>, bracket_id: &str) -> Value {
+pub fn cancel_bracket(app: &Arc<App>, bracket_id: &str) -> OrderActionAnswer {
     let b = match bracket(app, bracket_id) {
         Some(b) => b,
-        None => return json!({"ok": false, "error": "No such bracket."}),
+        None => return OrderActionAnswer::err("No such bracket."),
     };
     if !b.status.is_live() {
-        return json!({"ok": false, "error": "That bracket is not live."});
+        return OrderActionAnswer::err("That bracket is not live.");
     }
     end_bracket(app, &b, "cancelled by the user", "");
-    json!({"ok": true, "id": b.id})
+    OrderActionAnswer::accepted(b.id)
 }
