@@ -5,8 +5,8 @@
 // them verbatim.
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
-import { lookup } from '../api'
-import type { ChartHistory, DayBar, TimeBar } from '../generated/chart'
+import { lookup, query } from '../api'
+import type { ChartHistory, DayBar, HistoryQuery, TimeBar } from '../generated/chart'
 
 export type { DayBar, TimeBar } from '../generated/chart'
 // A daily (or weekly/monthly) bar has a `date`; an intraday one has a `time`
@@ -66,34 +66,27 @@ function chartSpan(t: Trade): { from: string; to: string } {
 }
 
 // bars still being read are not the answer: asked again when they are in
-const histories = lookup<ChartHistory>({ keep: (a) => !a.pending })
+const histories = lookup('GET /api/history', { keep: (a) => 'pending' in a && !a.pending })
 /** A server started again may have other bars, or a source it did not have: ask it. */
 export function forgetHistory(): void {
   histories.forget()
 }
-/** The chart's own question, as the server is asked it; also names what it watches while the answer is pending. */
-export function historyQuery(t: Trade, tf: string): string {
+/** The chart's own question, as the server is asked it. */
+export function historyQuery(t: Trade, tf: string): HistoryQuery {
   const sp = chartSpan(t)
-  return (
-    'symbol=' + encodeURIComponent(t.symbol) +
-    '&exchange=' + encodeURIComponent(t.exchange || '') +
-    '&currency=' + encodeURIComponent(t.currency || '') +
-    '&kind=' + encodeURIComponent(t.kind || '') +
-    '&from=' + sp.from + '&to=' + sp.to + '&tf=' + tf
-  )
+  return { symbol: t.symbol, exchange: t.exchange || '', currency: t.currency || '', kind: t.kind || '', from: sp.from, to: sp.to, tf }
+}
+
+/** The same question as the document key a chart watches while its answer is pending. */
+export function historyKey(t: Trade, tf: string): string {
+  return 'history:' + query(historyQuery(t, tf))
 }
 
 /** A trade's bars. `signal` is the reader's: a chart that closes stops waiting, and a request nobody waits for is dropped. */
 export async function loadHistory(t: Trade, tf: string, signal?: AbortSignal): Promise<History> {
-  const r = await histories.read('/api/history?' + historyQuery(t, tf), { key: t.id + '|' + tf, signal })
-  const ok = !!r.ok
-  return {
-    reason: (ok && r.reason) || '',
-    bars: (ok && r.bars) || [],
-    available: (ok && r.available) || [],
-    chartSymbol: (ok && r.chartSymbol) || t.symbol,
-    pending: ok && !!r.pending,
-  }
+  const r = await histories.read({ query: historyQuery(t, tf) }, { key: t.id + '|' + tf, signal })
+  if (!('bars' in r)) return { reason: '', bars: [], available: [], chartSymbol: t.symbol, pending: false }
+  return { reason: r.reason, bars: r.bars as Bar[], available: r.available, chartSymbol: r.chartSymbol || t.symbol, pending: r.pending }
 }
 
 export function underlyingOf(t: Trade): string {

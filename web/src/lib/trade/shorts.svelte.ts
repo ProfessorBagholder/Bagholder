@@ -3,7 +3,8 @@
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
 import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'
-import { lookup, query, type Answer } from '../api'
+import { lookup, type Answer } from '../api'
+import type { ShortsAnswer } from '../generated/markets'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -23,27 +24,27 @@ export function shortsKey(t: Trade): string {
 }
 
 // a reading is good for half an hour; the run of past reports for as long as the page is open
-const readings = lookup<ShortsPayload>({ keepMs: SHORTS_KEEP_MS })
-const trends = lookup<ShortsPayload>()
+const readings = lookup('GET /api/shorts', { keepMs: SHORTS_KEEP_MS })
+const trends = lookup('GET /api/shorts')
 // the answer each shown reading was made from, to tell a new reading from the one shown
-const shownFrom = new Map<string, Answer<ShortsPayload>>()
+const shownFrom = new Map<string, Answer<ShortsAnswer>>()
 
 export async function ensureShorts(t: Trade): Promise<void> {
   const sym = discSymbol(t)
   const key = shortsKey(t)
   if (!sym) return
-  const q = query({ symbol: sym, exchange: t.exchange, currency: t.currency })
-  const d = await readings.read('/api/shorts?' + q, { key })
+  const q = { symbol: sym, exchange: t.exchange || '', currency: t.currency || '', name: '', trend: false }
+  const d = await readings.read({ query: q }, { key })
   // the reading already shown: nothing to write, and its trend stays on it
   if (shortsStore[key] && shownFrom.get(key) === d) return
   shownFrom.set(key, d)
   shortsStore[key] = Object.assign({ at: Date.now() }, d.ok ? structuredClone(d) : { ok: false }) as ShortsRec
   // the run of past reports comes free with a US listing's answer; a Canadian one is a
   // file per reporting date, asked for once the figures are on screen
-  if (d.ok && d.covered && !(d.shorts?.series || []).length) {
-    const more = await trends.read('/api/shorts?' + q + '&trend=1', { key })
+  if ('covered' in d && d.covered && !(d.shorts?.series || []).length) {
+    const more = await trends.read({ query: { ...q, trend: true } }, { key })
     const rec = shortsStore[key]
-    if (more.ok && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
+    if ('covered' in more && more.covered && rec?.shorts) rec.shorts.series = more.shorts?.series || []
   }
 }
 

@@ -28,12 +28,13 @@ fn root() -> PathBuf {
 fn payload(snapshot: &Value, market: &Value, journal: &Value, today: &str, filters: &Value) -> Value {
     let journal = journal.as_object().cloned().unwrap_or_default();
     let base = build_base(snapshot, market, &journal, Some(today));
-    let view = build_view(&base, Some(filters));
+    let filters = bagholder_model::filters::clean_filters(Some(filters));
+    let view = build_view(&base, Some(&filters));
     let first = view.trades.first().map(|t| t.id.clone());
     json!({
         "view": view.to_value(),
-        "wire": view_of(&base, Some(filters), Detail::Only(None)).to_value(),
-        "wireWithDetail": first.as_deref().map(|id| view_of(&base, Some(filters), Detail::Only(Some(id))).to_value()),
+        "wire": view_of(&base, Some(&filters), Detail::Only(None)).to_value(),
+        "wireWithDetail": first.as_deref().map(|id| view_of(&base, Some(&filters), Detail::Only(Some(id))).to_value()),
         "tradeDetail": first.as_deref().and_then(|id| trade_detail(&base, id)),
     })
 }

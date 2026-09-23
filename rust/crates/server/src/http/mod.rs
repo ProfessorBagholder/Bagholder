@@ -36,7 +36,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
-use serde_json::json;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -56,7 +55,7 @@ pub struct AppState {
 /// `{"ok": true}`, or `{"ok": false, "error": "…"}`: a soft refusal (still
 /// 200) that several routes across `login`, `session` and `update` answer in
 /// this one shape.
-#[derive(Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 pub struct OkOr {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,44 +83,97 @@ const BODY_LIMIT: usize = 32 * 1024 * 1024;
 const ROUTE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One entry in the route table (`api_routes!`): how the page calls a route
-/// and the TypeScript names of what it exchanges, for `routes.ts`. Read by
+/// and the TypeScript names of what it exchanges, for `routes.ts`. The names
+/// are read from the handler's own signature (`Signature`), so the table cannot
+/// say one thing while the handler takes or answers another. Read by
 /// `tests_types.rs`, which only runs under `#[cfg(test)]`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub struct RouteEntry {
     pub method: &'static str,
     pub path: &'static str,
-    pub query: Option<&'static str>,
-    pub body: Option<&'static str>,
-    pub answer: &'static str,
+    pub query: Option<String>,
+    pub body: Option<String>,
+    pub answer: String,
 }
 
-/// One module's routes, and the table entries a converted module contributes
-/// (empty for a module still on `Api<Value>`).
+impl RouteEntry {
+    /// The entry for `handler` at `method` `path`.
+    pub fn of<M, H: Signature<M>>(_handler: H, method: &'static str, path: &'static str) -> RouteEntry {
+        let (query, body, answer) = H::names();
+        RouteEntry { method, path, query, body, answer }
+    }
+}
+
+/// The TypeScript name of a type the page is sent or sends.
+fn ts_name<T: ts_rs::TS>() -> String {
+    T::ident(&ts_rs::Config::new())
+}
+
+/// What a route's answer is, whichever way the handler returns it.
+pub trait Answered {
+    type Answer: ts_rs::TS;
+}
+impl<A: ts_rs::TS> Answered for Api<A> {
+    type Answer = A;
+}
+impl<A: ts_rs::TS> Answered for Result<(StatusCode, Json<A>), ApiError> {
+    type Answer = A;
+}
+
+/// A handler's query, body and answer, read from its signature. `M` only tells
+/// the shapes apart: a handler takes the state and at most one of a query or a body.
+pub trait Signature<M> {
+    fn names() -> (Option<String>, Option<String>, String);
+}
+impl<F, Fut> Signature<(State<AppState>,)> for F
+where
+    F: Fn(State<AppState>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    fn names() -> (Option<String>, Option<String>, String) {
+        (None, None, ts_name::<<Fut::Output as Answered>::Answer>())
+    }
+}
+impl<F, Fut, Q: ts_rs::TS> Signature<(State<AppState>, Params<Q>)> for F
+where
+    F: Fn(State<AppState>, Params<Q>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    fn names() -> (Option<String>, Option<String>, String) {
+        (Some(ts_name::<Q>()), None, ts_name::<<Fut::Output as Answered>::Answer>())
+    }
+}
+impl<F, Fut, B: ts_rs::TS> Signature<(State<AppState>, Body<B>)> for F
+where
+    F: Fn(State<AppState>, Body<B>) -> Fut,
+    Fut: std::future::Future,
+    Fut::Output: Answered,
+{
+    fn names() -> (Option<String>, Option<String>, String) {
+        (None, Some(ts_name::<B>()), ts_name::<<Fut::Output as Answered>::Answer>())
+    }
+}
+
+/// One module's routes, and the table entries it contributes.
 pub struct Routed {
     pub router: Router<AppState>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub table: Vec<RouteEntry>,
 }
 
-/// A method/path declared with its handler and the TypeScript names of its
-/// query, body and answer, in one place: it both adds the axum route and
-/// pushes the route's table entry. `query`/`body` are left out for a route
-/// that reads neither.
+/// Each route declared once, by method, path and handler: it adds the axum
+/// route and the route's table entry, whose types come from the handler.
 macro_rules! api_routes {
-    ($($method:ident $path:literal => $handler:expr $(, query: $query:literal)? $(, body: $body:literal)?, answer: $answer:literal);* $(;)?) => {{
+    ($($method:ident $path:literal => $handler:path);* $(;)?) => {{
         #[allow(unused_mut)]
         let mut router = axum::Router::new();
         #[allow(unused_mut)]
         let mut table = Vec::new();
         $(
             router = router.route($path, axum::routing::$method($handler));
-            #[allow(unused_mut, unused_assignments)]
-            let mut query = None;
-            $(query = Some($query);)?
-            #[allow(unused_mut, unused_assignments)]
-            let mut body = None;
-            $(body = Some($body);)?
-            table.push($crate::http::RouteEntry { method: stringify!($method), path: $path, query, body, answer: $answer });
+            table.push($crate::http::RouteEntry::of($handler, stringify!($method), $path));
         )*
         $crate::http::Routed { router, table }
     }};
@@ -188,7 +240,7 @@ async fn not_found() -> ApiError {
 }
 
 fn refused(code: StatusCode) -> Response {
-    (code, Json(json!({"ok": false}))).into_response()
+    (code, Json(OkOr { ok: false, error: None })).into_response()
 }
 
 /// The gate: loopback only unless the server was bound elsewhere on purpose, the

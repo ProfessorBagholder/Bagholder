@@ -21,7 +21,6 @@
 //! each starting their own.
 
 use rusqlite::Connection;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -91,8 +90,9 @@ impl ModelCache {
     /// page is sent it. Asked again for the same base, filters and trade it is the
     /// same object: a second tab, a reload, a filter set and cleared cost nothing.
     /// Views of an earlier base are dropped the first time a newer one is asked for.
-    pub fn view(&self, base: &Arc<Base>, filters: Option<&Value>, detail: Option<&str>) -> Arc<View> {
-        let key = format!("{}|{}", bagholder_model::filters::clean_filters(filters).key(), detail.unwrap_or(""));
+    pub fn view(&self, base: &Arc<Base>, filters: Option<&bagholder_model::filters::Filters>, detail: Option<&str>) -> Arc<View> {
+        let cleaned = filters.cloned().unwrap_or_default();
+        let key = format!("{}|{}", cleaned.key(), detail.unwrap_or(""));
         {
             let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
             views.retain(|s| Arc::ptr_eq(&s.base, base));
@@ -219,7 +219,7 @@ impl ModelCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -297,8 +297,10 @@ mod tests {
         let base = cache.base(&conn, TODAY).unwrap();
         let all = cache.view(&base, None, None);
         assert!(Arc::ptr_eq(&all, &cache.view(&base, None, None)), "the same base and filters: not built again");
-        assert!(Arc::ptr_eq(&all, &cache.view(&base, Some(&json!({})), None)), "no filters, spelled another way");
-        let winners = cache.view(&base, Some(&json!({"lists": {"result": ["Winners"]}})), None);
+        let empty = bagholder_model::filters::clean_filters(Some(&json!({})));
+        assert!(Arc::ptr_eq(&all, &cache.view(&base, Some(&empty), None)), "no filters, spelled another way");
+        let winners_f = bagholder_model::filters::clean_filters(Some(&json!({"lists": {"result": ["Winners"]}})));
+        let winners = cache.view(&base, Some(&winners_f), None);
         assert!(!Arc::ptr_eq(&all, &winners));
         assert!(Arc::ptr_eq(&all, &cache.view(&base, None, None)), "and the first is still kept beside it");
         market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.10), ..Default::default() }, "tmx", "2026-03-02T15:00:00Z").unwrap();

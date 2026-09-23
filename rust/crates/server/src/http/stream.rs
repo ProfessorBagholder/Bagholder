@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use super::extract::trimmed;
 use super::{blocking, Api, AppState, Body, Params};
@@ -79,11 +79,17 @@ pub struct Watch {
     docs: Map<String, Value>,
 }
 
+/// The stream watch's own answer -- just whether the id was one still open.
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct WatchAck {
+    pub ok: bool,
+}
+
 /// `POST /api/events/watch`
-pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api<Value> {
+pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api<WatchAck> {
     let app = state.app;
     let ok = blocking(move || app.events.watch(&app, w.id, w.docs.into_iter().collect())).await?;
-    Ok(Json(json!({"ok": ok})))
+    Ok(Json(WatchAck { ok }))
 }
 
 /// A body written by a synchronous producer on a thread of its own, for the two

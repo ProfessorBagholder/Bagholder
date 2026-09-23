@@ -15,7 +15,7 @@
       "error": "",
       "summaryReady": false,
       "protocol": "2026-09-19.1",
-      "startedAt": "<started-at>",
+      "startedAt": "<startedAt>",
       "version": "1.46.3",
       "latestVersion": "",
       "updateAvailable": false,
@@ -44,6 +44,90 @@
       "newsReading": [],
       "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23",
       "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23"
+    }
+  },
+  "model_live_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "today": "2026-09-23",
+      "currency": "CAD",
+      "market": {
+        "fxLast": "",
+        "benchmarkLast": ""
+      },
+      "positions": [],
+      "positionsSummary": {
+        "count": 0,
+        "book": 0.0,
+        "mv": 0.0,
+        "unreal": 0.0
+      },
+      "portfolio": {
+        "allocation": [],
+        "sectors": [],
+        "regions": [],
+        "marketValue": 0.0,
+        "costBasis": 0.0,
+        "unrealized": 0.0,
+        "unrealizedPct": null,
+        "positionCount": 0,
+        "accountCount": 0,
+        "nav": null,
+        "navAccounts": 0,
+        "marginUsed": 0.0,
+        "marginUsedBy": {},
+        "marginUsedPct": null,
+        "availableMargin": null,
+        "availableMarginUnavailable": [],
+        "hasMargin": false,
+        "cash": 0.0,
+        "cashPct": null,
+        "dayChange": null,
+        "dayChangePct": null
+      },
+      "status": {
+        "ok": true,
+        "connected": false,
+        "email": "",
+        "lastSync": "",
+        "activityCount": 0,
+        "accountCount": 0,
+        "capturing": false,
+        "syncing": false,
+        "listingsFilling": false,
+        "syncStep": "",
+        "error": "",
+        "summaryReady": false,
+        "protocol": "2026-09-19.1",
+        "startedAt": "<startedAt>",
+        "version": "1.46.3",
+        "latestVersion": "",
+        "updateAvailable": false,
+        "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
+        "canUpdate": false,
+        "updateBy": "app",
+        "loginView": false,
+        "ordersLive": false,
+        "openOrders": 0,
+        "updating": "",
+        "updateError": "",
+        "notify": {
+          "fills": false,
+          "problems": false,
+          "connection": false,
+          "updates": false,
+          "releasesHeld": false,
+          "releasesWatched": false,
+          "releasesAll": false,
+          "disclosuresHeld": false,
+          "disclosuresWatched": false,
+          "disclosuresAll": false,
+          "native": "",
+          "unread": 0
+        },
+        "newsReading": []
+      }
     }
   },
   "book": {
@@ -125,6 +209,27 @@
       "watching": false,
       "lastScan": "",
       "files": []
+    }
+  },
+  "watch_set_no_path": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "Folder path required"
+    }
+  },
+  "watch_scan_no_folder": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "No folder is being watched",
+      "status": {
+        "ok": true,
+        "path": "",
+        "watching": false,
+        "lastScan": "",
+        "files": []
+      }
     }
   },
   "watch_clear": {
@@ -231,6 +336,41 @@
       "percentChange": null
     }
   },
+  "listing_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "news_symbol_missing": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "watchlist_add_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "watchlist_remove_missing_symbol": {
+    "status": 200,
+    "body": {
+      "ok": false,
+      "error": "symbol required"
+    }
+  },
+  "tiles_set_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "tiles": []
+    }
+  },
   "filings_missing_symbol": {
     "status": 400,
     "body": {
@@ -268,7 +408,7 @@
         "Other"
       ],
       "profileNo": "",
-      "fetchedAt": "<fetched-at>",
+      "fetchedAt": "<fetchedAt>",
       "refreshed": false,
       "sourceUnavailable": false,
       "filings": []

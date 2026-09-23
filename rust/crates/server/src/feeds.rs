@@ -4,7 +4,7 @@
 //! records, the intraday archive, the watched folder and the chart history.
 
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -233,17 +233,40 @@ fn refresh_quote_symbols(app: &Arc<App>, what: &str, sym: &str) -> bool {
     }
 }
 
-pub fn watch_add(app: &Arc<App>, body: &Value) -> Value {
+/// `POST /api/watchlist/add`, `POST /api/watchlist/remove`: refused, or the
+/// watchlist as it stands after.
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum WatchlistAnswer {
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        watchlist: Vec<bagholder_store::feeds::WatchedListing>,
+    },
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
+}
+
+impl WatchlistAnswer {
+    fn err(e: impl Into<String>) -> WatchlistAnswer {
+        WatchlistAnswer::Err { ok: false, error: e.into() }
+    }
+}
+
+pub fn watch_add(app: &Arc<App>, body: &Value) -> WatchlistAnswer {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return WatchlistAnswer::err("symbol required");
     }
     let ex = f(body, "exchange");
     let inst = instruments::find(&sym, &ex);
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
     let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "name"));
     let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "currency"));
-    let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &f(body, "securityId"), &now_iso()).ok().flatten().unwrap_or(json!({}));
+    let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &f(body, "securityId"), &now_iso()).ok().flatten().unwrap_or_default();
     let is_inst = inst.is_some();
     let crypto = ex.to_uppercase() == "CRYPTO";
     let sym2 = sym.clone();
@@ -256,29 +279,45 @@ pub fn watch_add(app: &Arc<App>, body: &Value) -> Value {
         }
         if let Some(c) = conn(&a) {
             let ctx = exposure::Ctx { conn: &c, pool: a.store(), today: today() };
-            exposure::share_exposure(&ctx, &f(&row, "symbol"), &f(&row, "exchange"), &f(&row, "currency"));
+            exposure::share_exposure(&ctx, &row.symbol, &row.exchange, &row.currency);
         }
     });
-    json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
+    WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
 }
 
-pub fn watch_remove(app: &Arc<App>, body: &Value) -> Value {
+pub fn watch_remove(app: &Arc<App>, body: &Value) -> WatchlistAnswer {
     let sym = tmx_symbol(&f(body, "symbol"));
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return WatchlistAnswer::err("symbol required");
     }
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
     let ex = f(body, "exchange");
     let _ = sf::remove_watch(&c, &sym, &ex);
     // a row kept under Wealthsimple's form
     let _ = sf::remove_watch(&c, &f(body, "symbol").trim().to_uppercase(), &ex);
     let _ = sf::forget_news(&c, &sym, &ex);
-    json!({"ok": true, "watchlist": sf::list_watchlist(&c).unwrap_or_default()})
+    WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
+}
+
+/// `POST /api/tiles/set`: refused, or the tab's row as it stands after.
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum TilesAnswer {
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        tiles: Vec<bagholder_model::wire::MarketTile>,
+    },
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
 }
 
 /// The Markets tab's tile row, only instruments the
 /// directory knows, twelve at most.
-pub fn tiles_set(app: &Arc<App>, tiles: &[bagholder_model::input::TileRef]) -> Value {
+pub fn tiles_set(app: &Arc<App>, tiles: &[bagholder_model::input::TileRef]) -> TilesAnswer {
     let mut rows: Vec<bagholder_model::input::TileRef> = Vec::new();
     let mut seen: HashSet<&'static str> = HashSet::new();
     for r in tiles {
@@ -289,16 +328,16 @@ pub fn tiles_set(app: &Arc<App>, tiles: &[bagholder_model::input::TileRef]) -> V
         }
     }
     if rows.len() > TILES_MAX {
-        return json!({"ok": false, "error": format!("at most {} tiles", TILES_MAX)});
+        return TilesAnswer::Err { ok: false, error: format!("at most {} tiles", TILES_MAX) };
     }
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = match conn(app) { Some(c) => c, None => return TilesAnswer::Err { ok: false, error: "store unavailable".into() } };
     let _ = bagholder_store::admin::save_tiles(&c, &rows);
     let a = app.clone();
     spawn("tiles-fetch", move || {
         refresh_quote_symbols(&a, "tiles", "");
     });
     let tiles = base(app).map(|b| bagholder_model::markets::tile_rows(&b)).unwrap_or_default();
-    json!({"ok": true, "tiles": tiles})
+    TilesAnswer::Ok { ok: true, tiles }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +427,32 @@ pub fn news_loop(app: Arc<App>) {
 /// a ticker neither held nor watched has no rows until asked for. The rows are
 /// stored under the listing (tagged as neither held nor watched, so they show
 /// only under its chip) and the model reloads.
-pub fn news_symbol_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> Value {
+/// `GET /api/news/symbol`: refused, or how many rows the search found and
+/// where.
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum NewsSymbolAnswer {
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        count: usize,
+        source: String,
+        exchange: String,
+    },
+}
+
+impl NewsSymbolAnswer {
+    fn err(e: impl Into<String>) -> NewsSymbolAnswer {
+        NewsSymbolAnswer::Err { ok: false, error: e.into() }
+    }
+}
+
+pub fn news_symbol_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str) -> NewsSymbolAnswer {
     news_symbol_payload_with(app, symbol, exchange, currency, &news::LIVE_READERS, &|c, sym, today| bagholder_market::tmx::tmx_listing(c, sym, today))
 }
 
@@ -399,12 +463,12 @@ pub fn news_symbol_payload_with(
     currency: &str,
     readers: &news::Readers,
     listing_of: &dyn Fn(&Connection, &str, &str) -> Option<Value>,
-) -> Value {
+) -> NewsSymbolAnswer {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return NewsSymbolAnswer::err("symbol required");
     }
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "the wire did not answer"}) };
+    let c = match conn(app) { Some(c) => c, None => return NewsSymbolAnswer::err("the wire did not answer") };
     let (today_s, now, _) = bagholder_market::clock_now();
     let clock = news::Clock { today: today_s.clone(), now: now as i64 };
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
@@ -448,11 +512,11 @@ pub fn news_symbol_payload_with(
     }
     let (src, rows) = match news::read_listing(&c, readers, &sym, &ex, &ccy, &name, true, &clock, None) {
         Ok(got) => got,
-        Err(_) => return json!({"ok": false, "error": "the wire did not answer"}),
+        Err(_) => return NewsSymbolAnswer::err("the wire did not answer"),
     };
-    let rows = match rows { Some(r) => r, None => return json!({"ok": false, "error": "the wire did not answer"}) };
+    let rows = match rows { Some(r) => r, None => return NewsSymbolAnswer::err("the wire did not answer") };
     let _ = sf::trim_news(&c, news::KEEP);
-    json!({"ok": true, "count": rows.len(), "source": src.as_str(), "exchange": ex})
+    NewsSymbolAnswer::Ok { ok: true, count: rows.len(), source: src.as_str().to_string(), exchange: ex }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +619,7 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<Value> {
     }
     if has("watched") || has("all") {
         if let Some(c) = conn(app) {
-            rows.extend(sf::list_watchlist(&c).unwrap_or_default());
+            rows.extend(sf::list_watchlist(&c).unwrap_or_default().into_iter().map(|w| serde_json::to_value(w).unwrap_or_default()));
         }
     }
     let mut out = Vec::new();
@@ -739,7 +803,7 @@ pub fn in_release_scope(app: &Arc<App>, c: &Connection, sym: &str, scopes: Optio
         }
     }
     if scopes.iter().any(|x| x == "watched") {
-        return sf::list_watchlist(c).map(|w| w.iter().any(|w| same(&f(w, "symbol")))).unwrap_or(false);
+        return sf::list_watchlist(c).map(|w| w.iter().any(|w| same(&w.symbol))).unwrap_or(false);
     }
     false
 }
@@ -1949,14 +2013,55 @@ pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
     ShortsFeed { ok: true, rows, reading: app.feeds.shorts_left.load(Ordering::SeqCst) > 0 }
 }
 
+/// `GET /api/listing`: refused, the holding's own id when the symbol is one
+/// held, or the listing's page in full.
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum ListingAnswer {
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+    },
+    Held {
+        #[ts(type = "true")]
+        ok: bool,
+        symbol: String,
+        #[serde(rename = "positionId")]
+        position_id: String,
+    },
+    Full {
+        #[ts(type = "true")]
+        ok: bool,
+        symbol: String,
+        exchange: String,
+        currency: String,
+        kind: String,
+        name: String,
+        #[serde(rename = "securityId")]
+        security_id: String,
+        #[ts(type = "unknown[]")]
+        fills: Vec<Value>,
+        price: Option<f64>,
+        #[serde(rename = "percentChange")]
+        percent_change: Option<f64>,
+    },
+}
+
+impl ListingAnswer {
+    fn err(e: impl Into<String>) -> ListingAnswer {
+        ListingAnswer::Err { ok: false, error: e.into() }
+    }
+}
+
 /// What the page for one listing needs, held or
 /// not.
-pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, name: &str) -> Value {
+pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, name: &str) -> ListingAnswer {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return ListingAnswer::err("symbol required");
     }
-    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": false, "error": "store unavailable"}) };
+    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return ListingAnswer::err("store unavailable") };
     let day = today();
     let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
     let positions: Vec<ListedRow> = b.positions.iter().filter(|p| named(&p.symbol)).map(|p| ListedRow { id: p.id.clone(), symbol: p.symbol.clone(), exchange: p.exchange.clone(), currency: p.currency.clone(), kind: p.kind.to_string(), name: p.name.clone(), security_id: p.security_id.clone(), fills: vec![] }).collect();
@@ -2007,10 +2112,10 @@ pub fn listing_payload_in(
     currency: &str,
     name: &str,
     peek_quote: &dyn Fn(&bagholder_model::input::Listing) -> Option<bagholder_market::quotes::Glance>,
-) -> Value {
+) -> ListingAnswer {
     let sym = tmx_symbol(symbol).trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return ListingAnswer::err("symbol required");
     }
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
     let exu = ex.to_uppercase();
@@ -2022,7 +2127,7 @@ pub fn listing_payload_in(
         exu.is_empty() || there.is_empty() || there == exu
     };
     if let Some(h) = positions.iter().find(|p| same(p)) {
-        return json!({"ok": true, "symbol": sym, "positionId": h.id});
+        return ListingAnswer::Held { ok: true, symbol: sym, position_id: h.id.clone() };
     }
     let trades: Vec<&ListedRow> = trades.iter().filter(|t| same(t)).collect();
     let watched = watchlist.iter().find(|w| same(w));
@@ -2050,14 +2155,13 @@ pub fn listing_payload_in(
             if !known.name.is_empty() { known.name.clone() } else if meta.0 != sym { meta.0.clone() } else { String::new() }
         }
     };
-    let mut out = json!({"ok": true, "symbol": sym, "exchange": ex, "currency": ccy, "kind": kind, "name": nm,
-                         "securityId": known.security_id, "fills": fills, "price": null, "percentChange": null});
+    let (mut price, mut percent_change) = (None, None);
     if kind == "Shares" {
         let q = peek_quote(&bagholder_model::input::Listing::new(sym.clone(), ex.clone(), ccy.clone(), kind.clone())).unwrap_or_default();
-        out["price"] = json!(q.price);
-        out["percentChange"] = json!(q.percent_change);
+        price = q.price;
+        percent_change = q.percent_change;
     }
-    out
+    ListingAnswer::Full { ok: true, symbol: sym, exchange: ex, currency: ccy, kind, name: nm, security_id: known.security_id.clone(), fills, price, percent_change }
 }
 
 /// The shares held and the listings watched whose
@@ -2413,17 +2517,45 @@ pub fn qs_one(query: &str, name: &str) -> String {
 /// and cached on demand.
 /// Whether the intraday bars this chart asked for are still being read. What the
 /// chart watches (`docs`) in place of asking for its history again every few seconds.
-pub fn history_pending(app: &Arc<App>, query: &str) -> bool {
-    let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
-    let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
-    let start: String = qs_one(query, "from").chars().take(10).collect();
-    let tf = or(qs_one(query, "tf"), "1d");
+pub fn history_pending(app: &Arc<App>, q: &HistoryQuery) -> bool {
+    let (rec, start, _, tf) = q.read();
     if !history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
         return false;
     }
     let inst = history::chart_instrument(&rec);
     let (today_s, now, _) = bagholder_market::clock_now();
     conn(app).map_or(false, |c| !history::intraday_ready(&c, &inst, &tf, &start, &today_s, now))
+}
+
+/// A chart's question: the listing, the span and the timeframe. The page asks
+/// `GET /api/history` with it, and watches `history:<the same query>`.
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+#[serde(default)]
+pub struct HistoryQuery {
+    pub symbol: String,
+    pub exchange: String,
+    pub currency: String,
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub tf: String,
+}
+
+impl HistoryQuery {
+    /// Read from a query string, as the `history:` document key carries it.
+    pub fn parse(query: &str) -> HistoryQuery {
+        let one = |k: &str| qs_one(query, k);
+        HistoryQuery { symbol: one("symbol"), exchange: one("exchange"), currency: one("currency"), kind: one("kind"), from: one("from"), to: one("to"), tf: one("tf") }
+    }
+
+    /// The listing (CAD and Shares when unsaid), the span's two days and the
+    /// timeframe (daily when unsaid), each trimmed as a query value is.
+    fn read(&self) -> (bagholder_model::input::Listing, String, String, String) {
+        let or = |v: &str, d: &str| { let v = v.trim(); if v.is_empty() { d.to_string() } else { v.to_string() } };
+        let rec = bagholder_model::input::Listing::new(self.symbol.trim().to_string(), self.exchange.trim().to_string(), or(&self.currency, "CAD"), or(&self.kind, "Shares"));
+        let day = |d: &str| d.trim().chars().take(10).collect::<String>();
+        (rec, day(&self.from), day(&self.to), or(&self.tf, "1d"))
+    }
 }
 
 /// What a chart is sent for a span: the answer `history_payload` builds on
@@ -2453,12 +2585,8 @@ pub enum HistoryAnswer {
     Refused(OkOr),
 }
 
-pub fn history_payload(app: &Arc<App>, query: &str) -> HistoryAnswer {
-    let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
-    let rec = bagholder_model::input::Listing::new(qs_one(query, "symbol"), qs_one(query, "exchange"), or(qs_one(query, "currency"), "CAD"), or(qs_one(query, "kind"), "Shares"));
-    let start: String = qs_one(query, "from").chars().take(10).collect();
-    let end: String = qs_one(query, "to").chars().take(10).collect();
-    let tf = or(qs_one(query, "tf"), "1d");
+pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
+    let (rec, start, end, tf) = q.read();
     if rec.symbol.is_empty() || start.chars().count() != 10 || end.chars().count() != 10 || !history::TIMEFRAMES.contains(&tf.as_str()) {
         return HistoryAnswer::Refused(OkOr::err("symbol, from, to and a known tf are required"));
     }
@@ -2993,7 +3121,7 @@ mod tests {
         let quote = move |_: &bagholder_model::input::Listing| {
             Some(bagholder_market::quotes::Glance { price: Some(q.0), percent_change: Some(q.1), ..Default::default() })
         };
-        listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)
+        serde_json::to_value(listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)).unwrap()
     }
 
     #[test]

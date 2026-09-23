@@ -195,7 +195,7 @@ test('the watch-folder box shows an error for a bad path, then the watch, Scan n
 
   await page.route('**/api/watch', (route) => {
     if (route.request().method() !== 'POST') return route.continue()
-    return route.fulfill({ json: { ok: true, watching: true, path: '/some/watched/folder', files: [] } })
+    return route.fulfill({ json: { ok: true, path: '/some/watched/folder', status: { ok: true, path: '/some/watched/folder', watching: true, lastScan: '', files: [] } } })
   })
   await page.getByPlaceholder('/Users/you/Downloads/wealthsimple').fill('/some/watched/folder')
   await page.getByRole('button', { name: 'Watch folder' }).click()
@@ -203,7 +203,7 @@ test('the watch-folder box shows an error for a bad path, then the watch, Scan n
   await expect(page.getByRole('button', { name: 'Scan now' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Stop watching' })).toBeVisible()
 
-  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ok: true, watching: true, path: '/some/watched/folder', lastScan: '2026-09-20T12:00:00Z', files: [{ file: 'a.csv', format: 'legacy', added: 2, duplicates: 1 }] } }))
+  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ok: true, path: '/some/watched/folder', files: [{ file: 'a.csv', format: 'legacy', added: 2, duplicates: 1 }], status: { ok: true, path: '/some/watched/folder', watching: true, lastScan: '2026-09-20T12:00:00Z', files: [{ file: 'a.csv', format: 'legacy', added: 2, duplicates: 1, scannedAt: '2026-09-20T12:00:00Z' }] } } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
   await expect(page.locator('#modalDlg')).toContainText('a.csv')
   await expect(page.locator('#modalDlg')).toContainText('legacy · 2 new · 1 dup')

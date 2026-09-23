@@ -163,11 +163,11 @@ pub(super) fn place_exit(app: &Arc<App>, b: &Bracket, kind: OrderType, price: Op
         return (String::new(), String::new());
     }
     let r = submit_order(app, &mut row, &req);
-    if !tr(&r, "ok") {
-        let e = f(&r, "error");
+    if !r.ok {
+        let e = r.error.unwrap_or_default();
         return (String::new(), if e.is_empty() { "not sent".into() } else { e });
     }
-    (f(&r, "id"), String::new())
+    (r.id.unwrap_or_default(), String::new())
 }
 
 /// Cancel an exit that rests; nothing to do, and no error, for one that does not.
@@ -330,7 +330,7 @@ pub(super) fn stop_allowed(app: &Arc<App>, security_id: &str) -> bool {
         None => return false,
     };
     let ok = match gql(app, &sess, "FetchSecurityMarketData", json!({"id": security_id})) {
-        Ok(d) => parse_market_data(&d)["orderTypes"].as_array().map_or(false, |a| a.iter().any(|t| t == "STOP")),
+        Ok(d) => parse_market_data(&serde_json::from_value(d).unwrap_or_default()).order_types.iter().any(|t| t == "STOP"),
         Err(e) => {
             log(&format!("bagholder bracket: order types for {} unknown: {}", security_id, e));
             return false;
@@ -474,8 +474,8 @@ pub(super) struct Tape {
 }
 
 impl Tape {
-    pub(super) fn of(q: &Value) -> Tape {
-        Tape { last: on(q, "last"), bid: on(q, "bid"), open: f(q, "marketStatus").to_uppercase() == "OPEN" }
+    pub(super) fn of(q: &TicketQuoteDetail) -> Tape {
+        Tape { last: q.last, bid: q.bid, open: q.market_status.to_uppercase() == "OPEN" }
     }
 }
 
@@ -719,7 +719,7 @@ pub(super) fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Quotes by security id, fetched here when None.
-pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, Value>>) -> Value {
+pub fn bracket_tick(app: &Arc<App>, quotes: Option<HashMap<String, TicketQuoteDetail>>) -> Value {
     if app.orders.bracket_lock.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return json!({"ok": false, "skipped": "running"});
     }

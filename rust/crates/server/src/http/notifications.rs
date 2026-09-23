@@ -7,12 +7,12 @@ use crate::{app, notify};
 
 pub fn routes() -> Routed {
     api_routes! {
-        get "/api/notifications" => list, answer: "NotificationsAnswer";
-        post "/api/notifications/settings" => settings, body: "NotifySettingsPatch", answer: "NotifySettingsAnswer";
-        post "/api/notifications/test" => test, answer: "NotifyTestAnswer";
-        post "/api/notifications/read" => read, body: "NotificationIds", answer: "NotificationsReadAnswer";
-        post "/api/notifications/seen" => seen, body: "NotificationIds", answer: "NotificationsSeenAnswer";
-        post "/api/notifications/clear" => clear, answer: "NotificationsClearAnswer";
+        get "/api/notifications" => list;
+        post "/api/notifications/settings" => settings;
+        post "/api/notifications/test" => test;
+        post "/api/notifications/read" => read;
+        post "/api/notifications/seen" => seen;
+        post "/api/notifications/clear" => clear;
     }
 }
 

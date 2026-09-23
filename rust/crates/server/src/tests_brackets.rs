@@ -162,7 +162,7 @@ fn ticket(over: Value) -> Value {
 
 fn entry(over: Value) -> (String, Value) {
     let r = od::place_order(&app(), &ticket(over));
-    assert!(tv(&r, "ok"), "{}", r);
+    assert!(tv(&r, "ok"), "{:?}", r);
     (sv(&r, "id"), get_bracket(&sv(&r, "bracketId")))
 }
 
@@ -173,7 +173,7 @@ fn q(last: f64, bid: Option<f64>, status: &str) -> Value {
 fn tick(quote: Option<Value>) -> Value {
     let mut m = HashMap::new();
     if let Some(v) = quote {
-        m.insert("sec-s-us".to_string(), v);
+        m.insert("sec-s-us".to_string(), serde_json::from_value(v).unwrap());
     }
     od::bracket_tick(&app(), Some(m))
 }
@@ -508,7 +508,7 @@ fn test_a_sell_from_the_ticket_ends_the_bracket_on_those_shares_first() {
     let stop = sv(&get_bracket(&id), "slOrderId");
     clear();
     let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "stopLoss": null, "takeProfit": null})));
-    assert!(tv(&r, "ok"), "{}", r);
+    assert!(tv(&r, "ok"), "{:?}", r);
     let o = ops();
     assert_eq!(o[0], "SoOrdersOrderCancel", "the resting stop goes first");
     assert_eq!(o[o.len() - 1], "SoOrdersOrderCreate", "then the sell");
@@ -527,7 +527,7 @@ fn test_selling_part_of_the_shares_keeps_the_bracket_on_the_rest() {
     let id = sv(&b, "id");
     let first = sv(&get_bracket(&id), "slOrderId");
     let r = od::place_order(&app(), &ticket(json!({"side": "SELL", "quantity": 10, "stopLoss": null, "takeProfit": null})));
-    assert!(tv(&r, "ok"), "{}", r);
+    assert!(tv(&r, "ok"), "{:?}", r);
     let b = get_bracket(&id);
     assert_eq!((sv(&b, "status"), fv(&b, "quantity"), sv(&b, "slOrderId")), ("armed".into(), 15.0, "".into()));
     update_order(&first, json!({"status": "cancelled"}));

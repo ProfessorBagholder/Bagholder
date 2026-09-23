@@ -15,7 +15,7 @@
   import { titleComing } from '../trade/discStore.svelte'
   import Mseg from './Mseg.svelte'
   import GridHead from './GridHead.svelte'
-  import { request } from '../api'
+  import { call } from '../api'
   import { searchSymbols } from '../api'
   import { escapable } from '../escape'
 
@@ -215,7 +215,7 @@
         const items = (store.model?.markets?.news || []).some((n) => n.tags.some((t) => bareSymbol(t.symbol).toUpperCase() === only.symbol))
         if (kind !== 'disc' && !items) {
           reading = only.symbol
-          request<{ ok: boolean; exchange?: string }>('GET', '/api/news/symbol?symbol=' + encodeURIComponent(only.symbol) + '&exchange=' + encodeURIComponent(only.exchange) + '&currency=' + encodeURIComponent(only.currency || '')).then((r) => {
+          call('GET /api/news/symbol', { query: { symbol: only.symbol, exchange: only.exchange, currency: only.currency || '', name: '' } }).then((r) => {
             reading = ''
             if (r && r.ok && r.exchange && sym === only) only.exchange = String(r.exchange).toUpperCase()
             // the items it read reach the card as rows inserted into the news

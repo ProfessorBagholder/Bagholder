@@ -85,6 +85,7 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
     let req = |method: Method, uri: &str, body: Option<Value>| from_the_page(app, method, uri, body);
     vec![
         ("status", req(Method::GET, "/api/status", None)),
+        ("model_live_empty", req(Method::GET, "/api/model?only=live", None)),
         ("book", req(Method::GET, "/api/book", None)),
         ("data", req(Method::GET, "/api/data", None)),
         ("trade_missing", req(Method::GET, "/api/trade?id=golden-no-such-trade", None)),
@@ -92,6 +93,8 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("groups", req(Method::POST, "/api/groups", Some(json!({"groups": []})))),
         ("notes", req(Method::POST, "/api/notes", Some(json!({"notes": {}})))),
         ("watch_status", req(Method::GET, "/api/watch", None)),
+        ("watch_set_no_path", req(Method::POST, "/api/watch", Some(json!({"path": ""})))),
+        ("watch_scan_no_folder", req(Method::POST, "/api/watch/scan", None)),
         ("watch_clear", req(Method::POST, "/api/watch/clear", None)),
         ("import_no_text", req(Method::POST, "/api/import", Some(json!({"text": ""})))),
         ("notifications_list", req(Method::GET, "/api/notifications", None)),
@@ -101,6 +104,11 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("notifications_seen", req(Method::POST, "/api/notifications/seen", Some(json!({"ids": [999_999_999]})))),
         ("symbols_search_empty", req(Method::GET, "/api/symbols/search?q=", None)),
         ("symbols_quote_empty", req(Method::GET, "/api/symbols/quote", None)),
+        ("listing_missing_symbol", req(Method::GET, "/api/listing", None)),
+        ("news_symbol_missing", req(Method::GET, "/api/news/symbol", None)),
+        ("watchlist_add_missing_symbol", req(Method::POST, "/api/watchlist/add", Some(json!({})))),
+        ("watchlist_remove_missing_symbol", req(Method::POST, "/api/watchlist/remove", Some(json!({})))),
+        ("tiles_set_empty", req(Method::POST, "/api/tiles/set", Some(json!({"tiles": []})))),
         ("filings_missing_symbol", req(Method::GET, "/api/filings?symbol=%20", None)),
         ("filings_no_documents", req(Method::GET, "/api/filings?symbol=GOLDEN", None)),
         ("filings_feed_empty", req(Method::GET, "/api/filings/feed", None)),
@@ -137,17 +145,41 @@ fn seed_refreshable_session(app: &Arc<App>) {
 
 /// Blanks the store's own path (this test's temp folder) and the app's own
 /// start time (now, every run).
+/// Blanks any nested `startedAt` or `fetchedAt` key, wherever it sits: both
+/// are `now` on every run, never a route's own data.
+fn scrub_timestamps(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for key in ["startedAt", "fetchedAt"] {
+                if let Some(x) = m.get_mut(key) {
+                    if x.is_string() {
+                        *x = json!(format!("<{}>", key));
+                    }
+                }
+            }
+            for x in m.values_mut() {
+                scrub_timestamps(x);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                scrub_timestamps(x);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Blanks the store's own path (this test's temp folder), at the top level
+/// only: `path` is meaningful data on some routes (`WatchStatus`, `ScanReport`).
 fn scrub(mut v: Value) -> Value {
     if let Some(b) = v.get_mut("body") {
         if let Some(p) = b.get_mut("path") {
-            *p = json!("<db-path>");
+            if p.is_string() {
+                *p = json!("<db-path>");
+            }
         }
-        if let Some(s) = b.get_mut("startedAt") {
-            *s = json!("<started-at>");
-        }
-        if let Some(s) = b.get_mut("fetchedAt") {
-            *s = json!("<fetched-at>");
-        }
+        scrub_timestamps(b);
     }
     v
 }

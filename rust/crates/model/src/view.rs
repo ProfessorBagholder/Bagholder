@@ -4,14 +4,13 @@
 //! Per-instrument figures stay in the instrument's own currency; everything
 //! that adds instruments together is CAD.
 
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::activity::{Flag, Kind};
 use crate::base::Base;
 use crate::dates::shift_date;
 use crate::exposure::exposure_slices;
-use crate::filters::{clean_filters, date_bounds, in_date_scope, position_matches, trade_matches, Filters, BENCHMARK_LABELS};
+use crate::filters::{date_bounds, in_date_scope, position_matches, trade_matches, Filters, BENCHMARK_LABELS};
 use crate::fx::to_cad;
 use crate::nav::{annualized, drawdown, yearly_returns, Point};
 use crate::stats::{by_symbol, grade_buckets, metrics, month_label, monthly, payments_per_year, review_queue, GRADES};
@@ -376,13 +375,15 @@ impl Detail<'_> {
 }
 
 /// The view with every row's detail.
-pub fn build_view(base: &Base, filters: Option<&Value>) -> View {
+pub fn build_view(base: &Base, filters: Option<&Filters>) -> View {
     view_of(base, filters, Detail::All)
 }
 
-/// The view as the page is sent it.
-pub fn view_of(base: &Base, filters: Option<&Value>, detail: Detail) -> View {
-    let f = clean_filters(filters);
+/// The view as the page is sent it. `filters` is already cleaned -- the one
+/// place that reads a page's raw filters JSON is `clean_filters` itself,
+/// called once at the edge (the HTTP route, the event stream).
+pub fn view_of(base: &Base, filters: Option<&Filters>, detail: Detail) -> View {
+    let f = filters.cloned().unwrap_or_default();
     let today = base.today.as_str();
 
     let trades: Vec<&Trade> = base.trades.iter().filter(|t| trade_matches(t, &f, today)).collect();

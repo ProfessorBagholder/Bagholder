@@ -32,7 +32,7 @@ use crate::orders::OrdersDoc;
 /// page is sent only what moved in it (usually the bid, the ask and the last).
 #[derive(Default)]
 pub struct DocsState {
-    quotes: std::sync::Mutex<std::collections::HashMap<String, Value>>,
+    quotes: std::sync::Mutex<std::collections::HashMap<String, crate::orders::TicketQuote>>,
 }
 
 const QUOTE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -101,7 +101,7 @@ pub enum Doc {
     Fear(FearDoc),
     /// `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the
     /// first answer.
-    Quote(Value),
+    Quote(crate::orders::TicketQuote),
     History(HistoryPending),
 }
 
@@ -147,7 +147,7 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         // `fear:<index>`: the fear and greed meter
         k if k.starts_with("fear:") => Some(Doc::Fear(crate::feeds::fear_stored(app, &k["fear:".len()..]))),
         k if k.starts_with("quote:") => app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned().map(Doc::Quote),
-        k if k.starts_with("history:") => Some(Doc::History(HistoryPending { pending: crate::feeds::history_pending(app, &k["history:".len()..]) })),
+        k if k.starts_with("history:") => Some(Doc::History(HistoryPending { pending: crate::feeds::history_pending(app, &crate::feeds::HistoryQuery::parse(&k["history:".len()..])) })),
         _ => None,
     }
 }

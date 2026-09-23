@@ -299,27 +299,27 @@ async function importFiles(list: FileList | null): Promise<void> {
 export function openFolder(): void {
   ui.menuOpen = false
   ui.modal = 'folder'
-  request<WatchStatus>('GET', '/api/watch').then((w) => {
+  call('GET /api/watch').then((w) => {
     ui.watch = w && w.ok ? w : null
   })
 }
 export function watchFolder(): void {
   ui.busy = 'folder'
   ui.folderError = ''
-  request('POST', '/api/watch', { path: ui.folderPath }).then((r) => {
+  call('POST /api/watch', { body: { path: ui.folderPath } }).then((r) => {
     ui.busy = ''
-    if (!r || !r.ok) ui.folderError = (r && (r.error as string)) || 'Could not watch that folder.'
+    if (!r || !r.ok || !('status' in r)) ui.folderError = (r && 'error' in r && r.error) || 'Could not watch that folder.'
     else {
-      ui.watch = r as unknown as WatchStatus
+      ui.watch = r.status
     }
   })
 }
 export function scanFolder(): void {
   ui.busy = 'folder'
-  request('POST', '/api/watch/scan', {}).then((r) => {
+  call('POST /api/watch/scan').then((r) => {
     ui.busy = ''
     if (r && r.ok) {
-      ui.watch = r as unknown as WatchStatus
+      ui.watch = r.status
     }
   })
 }

@@ -251,10 +251,7 @@ impl Feed {
         let mut out: Vec<Message> = Vec::new();
         let (filters, detail) = (self.filters.clone(), self.detail.clone());
         let app = self.app.clone();
-        let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let filters = filters.map(|f| serde_json::to_value(&f).unwrap_or(Value::Null));
-            app.view(filters.as_ref(), detail.as_deref())
-        })) {
+        let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || app.view(filters.as_ref(), detail.as_deref()))) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
         };

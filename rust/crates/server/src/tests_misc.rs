@@ -185,9 +185,9 @@ fn test_update_check_flags_only_a_newer_release() {
 #[test]
 fn test_history_endpoint_validates_and_serves_bars() {
     let _g = guard();
-    assert!(matches!(crate::feeds::history_payload(&app(), "symbol=RDDY"), crate::feeds::HistoryAnswer::Refused(_)));
+    assert!(matches!(crate::feeds::history_payload(&app(), &crate::feeds::HistoryQuery::parse("symbol=RDDY")), crate::feeds::HistoryAnswer::Refused(_)));
     assert!(matches!(
-        crate::feeds::history_payload(&app(), "symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h"),
+        crate::feeds::history_payload(&app(), &crate::feeds::HistoryQuery::parse("symbol=RDDY&exchange=TSX&currency=CAD&kind=Shares&from=2026-08-25&to=2026-09-05&tf=2h")),
         crate::feeds::HistoryAnswer::Refused(_)
     ));
 }
@@ -286,7 +286,7 @@ fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twel
     app().invalidate();
     let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
     let too_many_tiles: Vec<bagholder_model::input::TileRef> = too_many.iter().map(|v| bagholder_model::input::TileRef { symbol: v["symbol"].as_str().unwrap().to_string(), exchange: v["exchange"].as_str().unwrap().to_string() }).collect();
-    assert_eq!(crate::feeds::tiles_set(&app(), &too_many_tiles)["ok"], false);
+    assert_eq!(serde_json::to_value(crate::feeds::tiles_set(&app(), &too_many_tiles)).unwrap()["ok"], false);
     let b = app().base().unwrap();
     let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
     assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
@@ -414,12 +414,12 @@ fn test_a_ticker_the_app_has_never_seen_is_placed_before_a_wire_is_asked() {
     let readers = Readers { wire: &wire, extra: &extra };
     // a CSE listing no directory carries: TMX's resolver places it and the news is read under that form
     bagholder_store::tables::set_meta(&c, "tmx_form:QIMC", "@:CNX").unwrap();
-    let out = crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| None);
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "QIMC", "", "", &readers, &|_, _, _| None)).unwrap();
     assert_eq!((out["source"].as_str().unwrap(), seen.lock().unwrap().1.clone()), ("tmx", Some("QIMC:CNX".to_string())));
     *seen.lock().unwrap() = (vec![], None);
     // TMX cannot place it: Nasdaq, whose items name the symbols they belong to
     bagholder_store::tables::set_meta(&c, "tmx_form:KO", &format!("none@{}", today)).unwrap();
-    let out = crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| None);
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "KO", "", "", &readers, &|_, _, _| None)).unwrap();
     assert_eq!((out["source"].as_str().unwrap(), out["exchange"].as_str().unwrap(), seen.lock().unwrap().1.is_some()), ("nasdaq", "NASDAQ", false));
 }
 
@@ -442,7 +442,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
         Ok(Some(vec![]))
     };
     let listing = |_: &Connection, _: &str, _: &str| Some(json!({"symbol": "SXHI", "name": "Ninepoint SpaceX HighShares ETF", "exchange": "TSX", "currency": "CAD"}));
-    let out = crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing);
+    let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing)).unwrap();
     assert_eq!(out["exchange"], "TSX");
     let got = read.lock().unwrap().clone();
     assert_eq!(got.0, Some(("SXHI".to_string(), "TSX".to_string(), "CAD".to_string())));

@@ -23,7 +23,8 @@ fn cases() -> Vec<Value> {
 fn view(doc: &Value, filters: &Value, detail: Option<&str>) -> View {
     let journal = doc.get("journal").and_then(|j| j.as_object()).cloned().unwrap_or_default();
     let base = build_base(&doc["snapshot"], &doc["market"], &journal, doc["today"].as_str());
-    view_of(&base, Some(filters), Detail::Only(detail))
+    let filters = bagholder_model::filters::clean_filters(Some(filters));
+    view_of(&base, Some(&filters), Detail::Only(detail))
 }
 
 /// The two differs on one pair; a disagreement is described, not panicked on, so a

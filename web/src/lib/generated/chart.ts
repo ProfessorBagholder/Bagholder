@@ -12,3 +12,5 @@ export type ChartBars = Array<DayBar> | Array<TimeBar>;
 export type ChartHistory = { ok: boolean, symbol: string, chartSymbol: string, source: string, tf: string, available: Array<string>, bars: ChartBars, pending: boolean, reason: string, };
 
 export type HistoryAnswer = ChartHistory | OkOr;
+
+export type HistoryQuery = { symbol: string, exchange: string, currency: string, kind: string, from: string, to: string, tf: string, };

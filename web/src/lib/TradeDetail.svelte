@@ -12,7 +12,7 @@
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { store, saveJournal, server, detail } from './state.svelte'
   import { openTicket } from './ticket/ticket.svelte'
-  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyQuery, TIMEFRAMES, type Bar, type History } from './trade/chart'
+  import { chartColors, chartTfFor, setChartTf, listingTicker, loadHistory, historyKey, TIMEFRAMES, type Bar, type History } from './trade/chart'
   import { watchDoc } from './live'
   import { tradeChart } from './actions/tradeChart'
   import ShortInterest from './trade/ShortInterest.svelte'
@@ -64,7 +64,7 @@
           },
         }
         stopWatching?.()
-        stopWatching = watchDoc('history:' + historyQuery(t, want), {}, { data: flag })
+        stopWatching = watchDoc(historyKey(t, want), {}, { data: flag })
         return
       }
       loaded = { tf, hist: h, provisional: false }

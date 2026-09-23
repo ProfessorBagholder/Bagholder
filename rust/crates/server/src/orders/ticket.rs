@@ -30,7 +30,22 @@ pub(super) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Se
     }
 }
 
-pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<Value> {
+/// One account the ticket may place against, as it offers accounts:
+/// tradable, self-directed, open.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+#[diff(key = id)]
+pub struct OrderAccount {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub margin: bool,
+    pub currency: String,
+    pub margin_account_id: String,
+}
+
+pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<OrderAccount> {
     let owned: Vec<Value>;
     let list: &[Value] = match accounts {
         Some(a) => a,
@@ -52,10 +67,14 @@ pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<Value> 
         let nick_src = if tr(a, "nickname") { f(a, "nickname") } else { typ.clone() };
         let nick = bagholder_model::value::norm_account_name(&nick_src);
         let margin = typ.contains("MARGIN");
-        out.push(json!({
-            "id": f(a, "id"), "name": nick, "type": typ, "margin": margin, "currency": f(a, "currency"),
-            "marginAccountId": if margin { f(a, "id") } else { f(a, "marginAccountId") },
-        }));
+        out.push(OrderAccount {
+            id: f(a, "id"),
+            name: nick,
+            kind: typ.clone(),
+            margin,
+            currency: f(a, "currency"),
+            margin_account_id: if margin { f(a, "id") } else { f(a, "marginAccountId") },
+        });
     }
     out
 }
@@ -78,7 +97,35 @@ pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Opti
     same.into_iter().next().map(|r| serde_json::to_value(&r).unwrap())
 }
 
-pub fn parse_quote(node: &Value) -> Option<Value> {
+/// A ticket's own quote, as `GET /api/order/quote` and the ticket's live
+/// document show it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TicketQuoteDetail {
+    pub security_id: String,
+    pub symbol: String,
+    pub name: String,
+    pub exchange: String,
+    pub currency: String,
+    pub security_type: String,
+    pub buyable: bool,
+    pub sellable: bool,
+    pub trade_eligible: bool,
+    pub status: String,
+    pub last: Option<f64>,
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub bid_size: Option<f64>,
+    pub ask_size: Option<f64>,
+    pub mid: Option<f64>,
+    pub change: Option<f64>,
+    pub change_pct: Option<f64>,
+    pub market_status: String,
+    pub quoted_as_of: String,
+    pub multiplier: Option<f64>,
+}
+
+pub fn parse_quote(node: &Value) -> Option<TicketQuoteDetail> {
     if !node.is_object() || !tr(node, "id") {
         return None;
     }
@@ -106,62 +153,75 @@ pub fn parse_quote(node: &Value) -> Option<Value> {
         _ => None,
     };
     let multiplier = if opt.as_object().map_or(false, |m| !m.is_empty()) { on(opt, "multiplier") } else { None };
-    Some(json!({
-        "securityId": f(node, "id"),
-        "symbol": f(stock, "symbol"),
-        "name": f(stock, "name"),
-        "exchange": f(stock, "primaryExchange"),
-        "currency": s(or_v(q.get("currency"), node.get("currency"))).to_uppercase(),
-        "securityType": f(node, "securityType"),
-        "buyable": tr(node, "buyable"),
-        "sellable": tr(node, "sellable"),
-        "tradeEligible": tr(node, "wsTradeEligible"),
-        "status": f(node, "status"),
-        "last": jo(last),
-        "bid": jo(bid),
-        "ask": jo(ask),
-        "bidSize": jo(on(q, "bidSize")),
-        "askSize": jo(on(q, "askSize")),
-        "mid": jo(mid),
-        "change": jo(change),
-        "changePct": jo(change_pct),
-        "marketStatus": f(q, "marketStatus"),
-        "quotedAsOf": f(q, "quotedAsOf"),
-        "multiplier": jo(multiplier),
-    }))
+    Some(TicketQuoteDetail {
+        security_id: f(node, "id"),
+        symbol: f(stock, "symbol"),
+        name: f(stock, "name"),
+        exchange: f(stock, "primaryExchange"),
+        currency: s(or_v(q.get("currency"), node.get("currency"))).to_uppercase(),
+        security_type: f(node, "securityType"),
+        buyable: tr(node, "buyable"),
+        sellable: tr(node, "sellable"),
+        trade_eligible: tr(node, "wsTradeEligible"),
+        status: f(node, "status"),
+        last,
+        bid,
+        ask,
+        bid_size: on(q, "bidSize"),
+        ask_size: on(q, "askSize"),
+        mid,
+        change,
+        change_pct,
+        market_status: f(q, "marketStatus"),
+        quoted_as_of: f(q, "quotedAsOf"),
+        multiplier,
+    })
 }
 
-pub fn parse_market_data(data: &Value) -> Value {
-    let empty = json!({});
-    let sec = data.get("security").filter(|v| v.is_object()).unwrap_or(&empty);
-    let subtypes: Vec<String> = sec
-        .get("allowedOrderSubtypes")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter(|x| truthy(Some(x))).map(|x| s(Some(x)).to_uppercase()).collect())
-        .unwrap_or_default();
-    let rates = sec.get("marginRates").filter(|v| v.is_object()).unwrap_or(&empty);
-    let mut rate = on(rates, "clientMarginRate");
+/// The order types the ticket offers, and the margin rate, from
+/// `FetchSecurityMarketData`.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketData {
+    pub order_types: Vec<String>,
+    pub margin_rate: Option<f64>,
+}
+
+pub fn parse_market_data(data: &bagholder_ws::wire::SecurityMarketData) -> MarketData {
+    let sec = data.security.clone().unwrap_or_default();
+    let subtypes: Vec<String> = sec.allowed_order_subtypes.iter().filter(|x| !x.is_empty()).map(|x| x.to_uppercase()).collect();
+    let mut rate = sec.margin_rates.and_then(|r| r.client_margin_rate);
     if let Some(r) = rate {
         if r > 1.0 {
             rate = Some(r / 100.0);
         }
     }
-    let types: Vec<&str> = ORDER_EXEC_TYPES.iter().copied().filter(|t| subtypes.iter().any(|x| x == t)).collect();
-    json!({"orderTypes": types, "marginRate": jo(rate)})
+    let order_types: Vec<String> = ORDER_EXEC_TYPES.iter().filter(|t| subtypes.iter().any(|x| x == *t)).map(|t| t.to_string()).collect();
+    MarketData { order_types, margin_rate: rate }
 }
 
-pub fn parse_buying_power(data: &Value) -> Value {
-    let empty = json!({});
-    let mut view = data;
-    for k in ["account", "financials", "current", "tradingBalanceViewV2"] {
-        view = view.get(k).filter(|v| v.is_object()).unwrap_or(&empty);
-    }
-    let bp = view.get("buyingPower").filter(|v| v.is_object()).unwrap_or(&empty);
-    let cash = view.get("cash").filter(|v| v.is_object()).unwrap_or(&empty);
-    json!({"buyingPower": jo(on(bp, "quantity")), "cash": jo(on(cash, "quantity")), "currency": s(or_v(bp.get("currency"), cash.get("currency")))})
+/// The buying power and cash on one account, from
+/// `FetchTradingBalanceBuyingPower`.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuyingPowerFigures {
+    pub buying_power: Option<f64>,
+    pub cash: Option<f64>,
+    /// Read from the answer but not carried into the ticket's own quote,
+    /// exactly as the untyped parser left it -- kept here since the two
+    /// currencies (buying power's, cash's) are not always the same.
+    pub currency: String,
 }
 
-pub fn fetch_quotes(app: &Arc<App>, sess: &bagholder_ws::session::Session, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
+pub fn parse_buying_power(data: &bagholder_ws::wire::TradingBalanceBuyingPower) -> BuyingPowerFigures {
+    let view = data.account.clone().and_then(|a| a.financials).and_then(|f| f.current).and_then(|c| c.trading_balance_view_v2).unwrap_or_default();
+    let bp = view.buying_power.unwrap_or_default();
+    let cash = view.cash.unwrap_or_default();
+    let currency = if !bp.currency.is_empty() { bp.currency } else { cash.currency };
+    BuyingPowerFigures { buying_power: bp.quantity, cash: cash.quantity, currency }
+}
+
+pub fn fetch_quotes(app: &Arc<App>, sess: &bagholder_ws::session::Session, security_ids: &[String]) -> Result<HashMap<String, TicketQuoteDetail>, CallError> {
     let ids: Vec<String> = security_ids.iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     let mut out = HashMap::new();
     if ids.is_empty() {
@@ -171,7 +231,7 @@ pub fn fetch_quotes(app: &Arc<App>, sess: &bagholder_ws::session::Session, secur
     if let Some(a) = data.get("securities").and_then(|v| v.as_array()) {
         for node in a {
             if let Some(q) = parse_quote(node) {
-                out.insert(f(&q, "securityId"), q);
+                out.insert(q.security_id.clone(), q);
             }
         }
     }
@@ -228,66 +288,112 @@ pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, sym
     sec
 }
 
-pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> Value {
+/// `GET /api/order/quote`, and the ticket's own live document (`quote:…`).
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketQuoteOk {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub quote: TicketQuoteDetail,
+    pub order_types: Vec<String>,
+    pub margin_rate: Option<f64>,
+    pub accounts: Vec<OrderAccount>,
+    pub account: Option<OrderAccount>,
+    pub buying_power: Option<f64>,
+    pub cash: Option<f64>,
+    pub margin_available: Option<f64>,
+    pub fx_usd_cad: Option<f64>,
+    pub live: bool,
+}
+
+/// The full quote, or why there is none, in the ticket's own words.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(untagged)]
+pub enum TicketQuote {
+    Ok(TicketQuoteOk),
+    Refused(crate::http::OkOr),
+}
+
+impl bagholder_model::patch::Diff for TicketQuote {
+    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
+        match (self, new) {
+            (TicketQuote::Ok(a), TicketQuote::Ok(b)) => a.diff(b, path, ops),
+            // a refusal never becomes another shape while the same page holds it
+            _ => bagholder_model::patch::as_json(self, new, path, ops),
+        }
+    }
+}
+
+impl TicketQuote {
+    fn err(e: impl Into<String>) -> TicketQuote {
+        TicketQuote::Refused(crate::http::OkOr::err(e))
+    }
+}
+
+pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> TicketQuote {
     let name_of = || if symbol.is_empty() { security_id.to_string() } else { symbol.to_string() };
     let mut sec = resolve_security(app, symbol, security_id);
     if sec.is_none() && exchange.is_empty() {
-        return json!({"ok": false, "error": format!("No listing stored for {}.", name_of())});
+        return TicketQuote::err(format!("No listing stored for {}.", name_of()));
     }
     let sess = match ticket_session(app) {
         Some(s) => s,
-        None => return json!({"ok": false, "error": "Not connected."}),
+        None => return TicketQuote::err("Not connected."),
     };
     if sec.is_none() {
         sec = lookup_listing(app, &sess, &symbol.trim().to_uppercase(), exchange);
     }
     let sec = match sec {
         Some(s) => s,
-        None => return json!({"ok": false, "error": format!("No listing stored for {}.", name_of())}),
+        None => return TicketQuote::err(format!("No listing stored for {}.", name_of())),
     };
     let sid = f(&sec, "id");
     let mut quotes = match fetch_quotes(app, &sess, &[sid.clone()]) {
         Ok(q) => q,
-        Err(CallError::NotAuthorized) => return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again."}),
-        Err(e) => return json!({"ok": false, "error": format!("Quote failed: {}", err_text(&e))}),
+        Err(CallError::NotAuthorized) => return TicketQuote::err("Wealthsimple refused the session. Connect Wealthsimple again."),
+        Err(e) => return TicketQuote::err(format!("Quote failed: {}", err_text(&e))),
     };
     let mut quote = match quotes.remove(&sid) {
         Some(q) => q,
         None => {
             let label = if tr(&sec, "symbol") { f(&sec, "symbol") } else { sid.clone() };
-            return json!({"ok": false, "error": format!("Wealthsimple has no quote for {}.", label)});
+            return TicketQuote::err(format!("Wealthsimple has no quote for {}.", label));
         }
     };
-    for (qk, sk) in [("symbol", "symbol"), ("name", "name"), ("exchange", "primaryExchange")] {
-        if f(&quote, qk).is_empty() {
-            set(&mut quote, qk, json!(f(&sec, sk)));
-        }
+    if quote.symbol.is_empty() {
+        quote.symbol = f(&sec, "symbol");
     }
-    if f(&quote, "currency").is_empty() {
-        set(&mut quote, "currency", json!(f(&sec, "currency").to_uppercase()));
+    if quote.name.is_empty() {
+        quote.name = f(&sec, "name");
     }
-    let mut md = json!({"orderTypes": ORDER_EXEC_TYPES, "marginRate": null});
+    if quote.exchange.is_empty() {
+        quote.exchange = f(&sec, "primaryExchange");
+    }
+    if quote.currency.is_empty() {
+        quote.currency = f(&sec, "currency").to_uppercase();
+    }
+    let mut md = MarketData::default();
     match gql(app, &sess, "FetchSecurityMarketData", json!({"id": sid})) {
-        Ok(d) => md = parse_market_data(&d),
+        Ok(d) => md = parse_market_data(&serde_json::from_value(d).unwrap_or_default()),
         Err(e) => log(&format!("bagholder ticket: market data for {} failed: {}", sid, e)),
     }
     let accounts = order_accounts(app, None);
-    let acct = accounts.iter().find(|a| f(a, "id") == account_id).cloned();
-    let mut balance = json!({"buyingPower": null, "cash": null, "currency": ""});
+    let acct = accounts.iter().find(|a| a.id == account_id).cloned();
+    let mut balance = BuyingPowerFigures::default();
     if let Some(a) = &acct {
-        let cur = if f(&quote, "currency").is_empty() { "CAD".to_string() } else { f(&quote, "currency") };
-        match gql(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": f(a, "id"), "currency": cur, "securityId": sid})) {
-            Ok(d) => balance = parse_buying_power(&d),
-            Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", f(a, "id"), e)),
+        let cur = if quote.currency.is_empty() { "CAD".to_string() } else { quote.currency.clone() };
+        match gql(app, &sess, "FetchTradingBalanceBuyingPower", json!({"accountCanonicalId": a.id, "currency": cur, "securityId": sid})) {
+            Ok(d) => balance = parse_buying_power(&serde_json::from_value(d).unwrap_or_default()),
+            Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", a.id, e)),
         }
     }
-    let mut margin_available = Value::Null;
+    let mut margin_available = None;
     if let Some(a) = &acct {
-        if tr(a, "marginAccountId") {
+        if !a.margin_account_id.is_empty() {
             for m in must(bagholder_store::tables::margin(&db(app))) {
-                if m.account_id == f(a, "marginAccountId") {
+                if m.account_id == a.margin_account_id {
                     if let Some(bp) = m.buying_power {
-                        margin_available = json!(bp);
+                        margin_available = Some(bp);
                     }
                 }
             }
@@ -295,27 +401,24 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
     }
     let fx_map = must(bagholder_store::tables::fx_rates(&db(app), "USDCAD"));
     let fx_usd_cad = if fx_map.is_empty() {
-        Value::Null
+        None
     } else {
         let fx: bagholder_model::fx::Fx = fx_map.into_iter().collect();
-        json!(bagholder_model::fx::rate_on(&fx, &bagholder_model::clock::today_local()))
+        Some(bagholder_model::fx::rate_on(&fx, &bagholder_model::clock::today_local()))
     };
-    let order_types = match md.get("orderTypes") {
-        Some(Value::Array(a)) if !a.is_empty() => Value::Array(a.clone()),
-        _ => json!(ORDER_EXEC_TYPES),
-    };
-    json!({
-        "ok": true,
-        "quote": quote,
-        "orderTypes": order_types,
-        "marginRate": gv(&md, "marginRate"),
-        "accounts": accounts,
-        "account": acct,
-        "buyingPower": gv(&balance, "buyingPower"),
-        "cash": gv(&balance, "cash"),
-        "marginAvailable": margin_available,
-        "fxUsdCad": fx_usd_cad,
-        "live": orders_live(),
+    let order_types = if !md.order_types.is_empty() { md.order_types } else { ORDER_EXEC_TYPES.iter().map(|s| s.to_string()).collect() };
+    TicketQuote::Ok(TicketQuoteOk {
+        ok: true,
+        quote,
+        order_types,
+        margin_rate: md.margin_rate,
+        accounts,
+        account: acct,
+        buying_power: balance.buying_power,
+        cash: balance.cash,
+        margin_available,
+        fx_usd_cad,
+        live: orders_live(),
     })
 }
 
@@ -337,7 +440,7 @@ fn page_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error>
 }
 
 /// The stop an entry asks for, as the ticket sends it.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TicketStop {
     pub kind: Option<String>,
@@ -349,7 +452,7 @@ pub struct TicketStop {
 }
 
 /// The target an entry asks for.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TicketTarget {
     #[serde(deserialize_with = "page_num")]
@@ -365,7 +468,7 @@ fn leg<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -
 
 /// `POST /api/order`: the order ticket, as the page sends it. Nothing here is trusted:
 /// `ticket_order` checks every field and says what is wrong with the first that is.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Ticket {
     #[serde(deserialize_with = "page_text")]
@@ -430,7 +533,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     if has_stop && !positive(stop_price) {
         return Err("A stop price is required.".into());
     }
-    let acct = match order_accounts(app, None).into_iter().find(|a| f(a, "id") == t.account_id) {
+    let acct = match order_accounts(app, None).into_iter().find(|a| a.id == t.account_id) {
         Some(a) => a,
         None => return Err("Choose an account.".into()),
     };
@@ -464,7 +567,7 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     }
     let oid = format!("order-{}", uuid4());
     let mut req = json!({
-        "canonicalAccountId": f(&acct, "id"),
+        "canonicalAccountId": acct.id.clone(),
         "externalId": oid,
         "executionType": kind.as_str(),
         "orderType": format!("{}_QUANTITY", side),
@@ -482,8 +585,8 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     let order = Order {
         id: oid,
         created_at: now_iso(),
-        account_id: f(&acct, "id"),
-        account: f(&acct, "name"),
+        account_id: acct.id.clone(),
+        account: acct.name.clone(),
         security_id: f(&sec, "id"),
         symbol: f(&sec, "symbol"),
         currency,
@@ -509,7 +612,41 @@ pub fn order_request(app: &Arc<App>, body: &Value) -> Result<(Value, Value), Str
 
 /// Write the order, then send it; what became of it is written over what was written.
 /// With orders off it is written as `dry` and nothing is sent.
-pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
+/// `POST /api/order`: what a placed (or refused) order is answered as.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceTicketAnswer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub order: Option<Order>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ws_order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bracket_id: Option<String>,
+}
+
+impl PlaceTicketAnswer {
+    fn err(e: impl Into<String>) -> PlaceTicketAnswer {
+        PlaceTicketAnswer { ok: false, error: Some(e.into()), ..PlaceTicketAnswer::default() }
+    }
+    fn err_with_id(e: impl Into<String>, id: impl Into<String>) -> PlaceTicketAnswer {
+        PlaceTicketAnswer { ok: false, error: Some(e.into()), id: Some(id.into()), ..PlaceTicketAnswer::default() }
+    }
+}
+
+pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> PlaceTicketAnswer {
     let id = row.id.clone();
     let now_is = |status: OrderStatus, error: &str| {
         patch_order(app, &id, OrderPatch { status: Some(status), error: Some(error.into()), ..OrderPatch::default() });
@@ -518,11 +655,11 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
         row.status = OrderStatus::Dry;
         must(so::typed::insert_order(&db(app), row, &now_iso()));
         log(&format!("bagholder order (dry run, not sent): {}", bagholder_store::tables::json_text_sorted(req)));
-        return json!({"ok": true, "id": id, "status": "dry", "order": row});
+        return PlaceTicketAnswer { ok: true, id: Some(id), status: Some("dry".into()), order: Some(row.clone()), ..PlaceTicketAnswer::default() };
     }
     let sess = match ticket_session(app) {
         Some(s) => s,
-        None => return json!({"ok": false, "error": "Not connected."}),
+        None => return PlaceTicketAnswer::err("Not connected."),
     };
     row.status = OrderStatus::Sending;
     must(so::typed::insert_order(&db(app), row, &now_iso()));
@@ -530,13 +667,13 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
         Ok(d) => d,
         Err(CallError::NotAuthorized) => {
             now_is(OrderStatus::Failed, "Wealthsimple refused the session.");
-            return json!({"ok": false, "error": "Wealthsimple refused the session. Connect Wealthsimple again.", "id": id});
+            return PlaceTicketAnswer::err_with_id("Wealthsimple refused the session. Connect Wealthsimple again.", id);
         }
         Err(e) => {
             let msg = err_text(&e);
             now_is(OrderStatus::Failed, &msg);
             log(&format!("bagholder order: {} failed: {}", id, msg));
-            return json!({"ok": false, "error": format!("Order failed: {}", msg), "id": id});
+            return PlaceTicketAnswer::err_with_id(format!("Order failed: {}", msg), id);
         }
     };
     let empty = json!({});
@@ -544,7 +681,7 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
     if let Some(msg) = result.get("errors").filter(|v| truthy(Some(v))).and_then(first_error) {
         now_is(OrderStatus::Rejected, &msg);
         log(&format!("bagholder order: {} rejected: {}", id, msg));
-        return json!({"ok": false, "error": format!("Wealthsimple rejected the order: {}", msg), "id": id});
+        return PlaceTicketAnswer::err_with_id(format!("Wealthsimple rejected the order: {}", msg), id);
     }
     let ws_id = f(result.get("order").filter(|v| truthy(Some(v))).unwrap_or(&empty), "orderId");
     patch_order(app, &id, OrderPatch { status: Some(OrderStatus::Sent), ws_order_id: Some(ws_id.clone()), ..OrderPatch::default() });
@@ -554,16 +691,16 @@ pub fn submit_order(app: &Arc<App>, row: &mut Order, req: &Value) -> Value {
     spawn("bagholder-order-refresh", move || {
         let _ = catch_unwind(AssertUnwindSafe(|| refresh_orders(&a, &rid)));
     });
-    json!({"ok": true, "id": id, "status": "sent", "wsOrderId": ws_id})
+    PlaceTicketAnswer { ok: true, id: Some(id), status: Some("sent".into()), ws_order_id: Some(ws_id), ..PlaceTicketAnswer::default() }
 }
 
 /// Place what a ticket asks for. A sale first takes its shares out from under any
 /// bracket guarding them -- the bracket ended, or kept on what is left -- so that the
 /// bracket's own exits and this sale never sell the same shares twice.
-pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> Value {
+pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> PlaceTicketAnswer {
     let (mut row, req) = match ticket_order(app, t) {
         Ok(x) => x,
-        Err(e) => return json!({"ok": false, "error": e}),
+        Err(e) => return PlaceTicketAnswer::err(e),
     };
     if row.side == Side::Sell {
         let mut left = row.quantity.unwrap_or(0.0);
@@ -584,16 +721,16 @@ pub fn place_ticket(app: &Arc<App>, t: &Ticket) -> Value {
         }
     }
     let mut r = submit_order(app, &mut row, &req);
-    if tr(&r, "ok") && (row.stop_loss.is_some() || row.take_profit.is_some()) {
+    if r.ok && (row.stop_loss.is_some() || row.take_profit.is_some()) {
         let b = create_bracket(app, &row);
-        set(&mut r, "bracketId", json!(b.id));
+        r.bracket_id = Some(b.id);
     }
     r
 }
 
 /// `place_ticket`, from JSON: how the tests ask.
 #[cfg(test)]
-pub fn place_order(app: &Arc<App>, body: &Value) -> Value {
+pub fn place_order(app: &Arc<App>, body: &Value) -> PlaceTicketAnswer {
     place_ticket(app, &Ticket::from_json(body))
 }
 

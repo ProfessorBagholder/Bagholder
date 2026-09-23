@@ -155,7 +155,7 @@ fn test_tradable_accounts_are_open_self_directed_securities_accounts() {
     let accts = o::order_accounts(&app(), None);
     let ids: Vec<String> = accts.iter().map(|a| st(a, "id")).collect();
     assert_eq!(ids, ["acct-margin", "acct-tfsa"], "crypto, managed and closed accounts are not offered");
-    let m: HashMap<String, Value> = accts.iter().map(|a| (st(a, "id"), a["margin"].clone())).collect();
+    let m: HashMap<String, Value> = accts.iter().map(|a| (st(a, "id"), json!(a.margin))).collect();
     assert!(crate::app::truthy(m.get("acct-margin")));
     assert!(!crate::app::truthy(m.get("acct-tfsa")));
 }
@@ -183,10 +183,12 @@ fn test_the_quote_card_is_read_from_wealthsimples_summary() {
     assert!((n(&q, "changePct") - 1.98 / 163.42).abs() < 1e-9);
     assert_eq!(st(&q, "marketStatus"), "OPEN");
     assert!(o::parse_quote(&json!({"stock": {}})).is_none(), "no id, no quote");
-    let md = o::parse_market_data(&json!({"security": {"allowedOrderSubtypes": ["LIMIT", "FRACTIONAL", "MARKET"], "marginRates": {"clientMarginRate": 30}}}));
-    assert_eq!(md["orderTypes"], json!(["MARKET", "LIMIT"]), "only the ticket's types, in the ticket's order");
+    let md_in = serde_json::from_value(json!({"security": {"allowedOrderSubtypes": ["LIMIT", "FRACTIONAL", "MARKET"], "marginRates": {"clientMarginRate": 30}}})).unwrap();
+    let md = o::parse_market_data(&md_in);
+    assert_eq!(md.order_types, vec!["MARKET".to_string(), "LIMIT".to_string()], "only the ticket's types, in the ticket's order");
     assert!((n(&md, "marginRate") - 0.30).abs() < 1e-7, "a percentage becomes a fraction");
-    let bp = o::parse_buying_power(&json!({"account": {"financials": {"current": {"tradingBalanceViewV2": {"buyingPower": {"quantity": 12680.45, "currency": "USD"}, "cash": {"quantity": 3420.18, "currency": "USD"}}}}}}));
+    let bp_in = serde_json::from_value(json!({"account": {"financials": {"current": {"tradingBalanceViewV2": {"buyingPower": {"quantity": 12680.45, "currency": "USD"}, "cash": {"quantity": 3420.18, "currency": "USD"}}}}}})).unwrap();
+    let bp = o::parse_buying_power(&bp_in);
     assert_eq!((n(&bp, "buyingPower"), n(&bp, "cash"), st(&bp, "currency")), (12680.45, 3420.18, "USD".into()));
 }
 
@@ -232,10 +234,10 @@ fn test_ticket_on_a_never_held_symbol_asks_wealthsimple_once_and_keeps_the_listi
         _ => panic!("{}", op),
     });
     set_session(Some(tok()));
-    let r = o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE");
+    let r = jv(&o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE"));
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(st(&r["quote"], "securityId"), "sec-s-bbai");
-    let again = o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE");
+    let again = jv(&o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE"));
     unpatch();
     assert_eq!(again["ok"], json!(true));
     assert_eq!(*searches.lock().unwrap(), vec!["BBAI".to_string()], "Wealthsimple's search is asked once");
@@ -249,7 +251,7 @@ fn test_ticket_quote_for_a_listing_wealthsimple_lacks_says_so() {
     let _g = setup();
     set_session(Some(tok()));
     set_gql(|_, _| Ok(json!({"securitySearch": {"results": []}})));
-    let r = o::ticket_quote(&app(), "NEWCO", "", "acct-margin", "NYSE");
+    let r = jv(&o::ticket_quote(&app(), "NEWCO", "", "acct-margin", "NYSE"));
     unpatch();
     assert_eq!(r["ok"], json!(false));
     assert!(st(&r, "error").contains("No listing stored for NEWCO"), "{}", r);
@@ -278,10 +280,10 @@ fn test_collateral_account_names_the_margin_account_it_backs() {
     bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
     let kept: HashMap<String, bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
     assert_eq!(kept["acct-tfsa"].margin_account_id, "acct-margin", "the link survives the store");
-    let by_id: HashMap<String, Value> = o::order_accounts(&app(), None).into_iter().map(|a| (st(&a, "id"), a)).collect();
-    assert_eq!(st(&by_id["acct-margin"], "marginAccountId"), "acct-margin");
-    assert_eq!(st(&by_id["acct-tfsa"], "marginAccountId"), "acct-margin");
-    assert_eq!(st(&by_id["acct-rrsp"], "marginAccountId"), "");
+    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app(), None).into_iter().map(|a| (a.id.clone(), a)).collect();
+    assert_eq!(by_id["acct-margin"].margin_account_id, "acct-margin");
+    assert_eq!(by_id["acct-tfsa"].margin_account_id, "acct-margin");
+    assert_eq!(by_id["acct-rrsp"].margin_account_id, "");
 }
 
 fn qnc_summary() -> Value {
@@ -303,7 +305,7 @@ fn test_ticket_quote_on_a_collateral_account_carries_the_margin_it_backs() {
         _ => panic!("{}", op),
     });
     set_session(Some(tok()));
-    let r = o::ticket_quote(&app(), "QNC", "", "acct-tfsa", "");
+    let r = jv(&o::ticket_quote(&app(), "QNC", "", "acct-tfsa", ""));
     unpatch();
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(n(&r, "cash"), 500.0);
@@ -329,7 +331,7 @@ fn test_ticket_quote_answers_with_everything_the_panel_shows() {
     set_session(Some(tok()));
     // Orders are live by default; the test process runs with BAGHOLDER_DRY_ORDERS=1, so the switch is set here.
     set_live(Some(true));
-    let r = o::ticket_quote(&app(), "QNC", "", "acct-margin", "");
+    let r = jv(&o::ticket_quote(&app(), "QNC", "", "acct-margin", ""));
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(st(&r["quote"], "symbol"), "QNC");
     assert_eq!(r["orderTypes"], json!(["MARKET", "LIMIT", "STOP_LIMIT"]));
@@ -400,7 +402,7 @@ fn test_under_the_dry_setting_a_submit_is_recorded_and_nothing_is_sent() {
     let _g = setup();
     set_gql(|_, _| panic!("must not be called"));
     set_live(Some(false));
-    let r = o::place_order(&app(), &ticket(json!({})));
+    let r = jv(&o::place_order(&app(), &ticket(json!({}))));
     assert_eq!(crate::status::status(&app()).orders_live, false);
     unpatch();
     assert_eq!(r["ok"], json!(true));
@@ -424,7 +426,7 @@ fn test_by_default_the_order_goes_to_wealthsimple_and_the_answer_is_kept() {
     });
     set_live(Some(true));
     set_session(Some(tok()));
-    let r = o::place_order(&app(), &ticket(json!({})));
+    let r = jv(&o::place_order(&app(), &ticket(json!({}))));
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!((st(&r, "status"), st(&r, "wsOrderId")), ("sent".into(), "ws-123".into()));
     {
@@ -435,7 +437,7 @@ fn test_by_default_the_order_goes_to_wealthsimple_and_the_answer_is_kept() {
     let row = get_order(&st(&r, "id"));
     assert_eq!((st(&row, "status"), st(&row, "wsOrderId")), ("sent".into(), "ws-123".into()));
     set_gql(|_, _| Ok(json!({"soOrdersCreateOrder": {"errors": [{"code": "ORDER.insufficient_funds", "message": "Insufficient funds"}], "order": null}})));
-    let r2 = o::place_order(&app(), &ticket(json!({})));
+    let r2 = jv(&o::place_order(&app(), &ticket(json!({}))));
     assert_eq!(r2["ok"], json!(false));
     assert!(st(&r2, "error").contains("Insufficient funds"));
     let row2 = get_order(&st(&r2, "id"));
@@ -854,7 +856,7 @@ impl Engine {
 
     fn entry(&self, over: Value) -> (String, Value) {
         self.live();
-        let r = o::place_order(&app(), &ticket(over));
+        let r = jv(&o::place_order(&app(), &ticket(over)));
         self.off();
         assert_eq!(r["ok"], json!(true), "{}", r);
         (st(&r, "id"), get_bracket(&st(&r, "bracketId")))
@@ -864,7 +866,7 @@ impl Engine {
         self.live();
         let mut m = HashMap::new();
         if let Some(q) = quote {
-            m.insert("sec-s-us".to_string(), q);
+            m.insert("sec-s-us".to_string(), serde_json::from_value(q).unwrap());
         }
         let r = o::bracket_tick(&app(), Some(m));
         self.off();

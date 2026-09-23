@@ -7,7 +7,7 @@
   import { ICONS } from '../icons'
   import Icon from './Icon.svelte'
   import { n2, signedPct } from './util'
-  import { request } from '../api'
+  import { call } from '../api'
   import { focusOnMount } from '../actions/focus'
   import { escapable } from '../escape'
 
@@ -42,7 +42,7 @@
 
   async function postTiles(next: MarketTile[]) {
     order = next.slice()
-    const r = await request<{ ok?: boolean }>('POST', '/api/tiles/set', { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) })
+    const r = await call('POST /api/tiles/set', { body: { tiles: next.map((t) => ({ symbol: t.symbol, exchange: t.exchange })) } })
     if (!r || !r.ok) order = null // refused: back to what the server has
   }
   // The saved row reaches the page as a change to the tiles, and each tile's price as

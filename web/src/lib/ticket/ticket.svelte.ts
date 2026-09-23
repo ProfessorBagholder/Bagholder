@@ -5,7 +5,7 @@ import { watchDoc } from '../live'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
 import { computeVals, tick, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
-import { request } from '../api'
+import { call } from '../api'
 
 // The order ticket's live state. Opened from a ⌘K row's Buy/Sell (or the trade
 // detail); the quote is polled while open; submit posts to /api/order. A draft is
@@ -182,7 +182,7 @@ export async function submit() {
   }
   t.busy = true
   t.submitError = ''
-  const r = await request('POST', '/api/order', body)
+  const r = await call('POST /api/order', { body })
   const cur = ticketStore.t
   if (!cur) return
   cur.busy = false

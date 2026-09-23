@@ -1,11 +1,10 @@
 //! Golden ops (stage 5d7c): the exact patch operations pinned for a realistic
 //! change to each document the stream carries -- the header status, the
 //! orders panel, the bell, a ticket's quote, a listing's disclosures, the
-//! fear gauge and the short-interest feed. `docs`, `events`, `status` and
-//! `notify` are now typed, so each before/after pair is built as the real
-//! struct and compared with `patch::typed` (`Diff::diff`), the same call
-//! `Feed::step` makes; only the ticket's quote is still an ad hoc `Value`
-//! (see the report) and is compared with `patch::diff` as it always was.
+//! fear gauge and the short-interest feed. `docs`, `events`, `status`,
+//! `notify` and the ticket's quote are all typed, so each before/after pair
+//! is built as the real struct and compared with `patch::typed`
+//! (`Diff::diff`), the same call `Feed::step` makes.
 //! Every expected op below is unchanged from the untyped differ this test
 //! pinned before the conversion: a difference here would have been
 //! stop-and-report material (see `d7c-design.md`).
@@ -23,10 +22,6 @@ use crate::feeds::{FearDoc, ShortsFeedRow, ShortsFeed};
 use crate::notify::{NotifySettings, NotifyStatus};
 use crate::orders::{OrderCard, OrdersDoc};
 use crate::status::Status;
-
-fn diff(old: &impl serde::Serialize, new: &impl serde::Serialize) -> Vec<Value> {
-    patch::diff(&serde_json::to_value(old).unwrap(), &serde_json::to_value(new).unwrap())
-}
 
 fn tdiff<T: Diff>(old: &T, new: &T) -> Vec<Value> {
     patch::typed(old, new)
@@ -147,26 +142,36 @@ fn test_a_notification_inserted_then_marked_read() {
 
 // --- a ticket's quote: a tick -----------------------------------------------
 
-fn quote(bid: f64, ask: f64, last: f64) -> Value {
-    json!({
-        "ok": true,
-        "quote": {"securityId": "sec-1", "symbol": "QNC", "name": "Quantum eMotion", "exchange": "TSX-V", "currency": "CAD",
-                   "last": last, "bid": bid, "ask": ask, "mid": (bid + ask) / 2.0},
-        "orderTypes": ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"],
-        "marginRate": null,
-        "accounts": [],
-        "account": null,
-        "buyingPower": 500.0,
-        "cash": 500.0,
-        "marginAvailable": null,
-        "fxUsdCad": 1.38,
-        "live": true,
+fn quote(bid: f64, ask: f64, last: f64) -> crate::orders::TicketQuote {
+    crate::orders::TicketQuote::Ok(crate::orders::TicketQuoteOk {
+        ok: true,
+        quote: crate::orders::TicketQuoteDetail {
+            security_id: "sec-1".into(),
+            symbol: "QNC".into(),
+            name: "Quantum eMotion".into(),
+            exchange: "TSX-V".into(),
+            currency: "CAD".into(),
+            last: Some(last),
+            bid: Some(bid),
+            ask: Some(ask),
+            mid: Some((bid + ask) / 2.0),
+            ..Default::default()
+        },
+        order_types: vec!["MARKET".into(), "LIMIT".into(), "STOP".into(), "STOP_LIMIT".into()],
+        margin_rate: None,
+        accounts: vec![],
+        account: None,
+        buying_power: Some(500.0),
+        cash: Some(500.0),
+        margin_available: None,
+        fx_usd_cad: Some(1.38),
+        live: true,
     })
 }
 
 #[test]
 fn test_a_quote_tick_is_the_moved_fields_alone() {
-    let ops = diff(&quote(1.74, 1.76, 1.75), &quote(1.75, 1.77, 1.76));
+    let ops = tdiff(&quote(1.74, 1.76, 1.75), &quote(1.75, 1.77, 1.76));
     assert_eq!(ops, vec![
         json!(["set", ["quote", "last"], 1.76]),
         json!(["set", ["quote", "bid"], 1.75]),

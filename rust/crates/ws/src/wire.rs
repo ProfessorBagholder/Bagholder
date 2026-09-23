@@ -395,3 +395,70 @@ pub struct SecurityAnswer {
 pub struct SecuritiesAnswer {
     pub securities: Option<Vec<serde_json::Value>>,
 }
+
+/// `FetchSecurityMarketData`: the ticket's order types and margin rate for
+/// one security.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SecurityMarketData {
+    pub security: Option<MarketDataSecurity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MarketDataSecurity {
+    #[serde(deserialize_with = "lenient::texts")]
+    pub allowed_order_subtypes: Vec<String>,
+    pub margin_rates: Option<MarginRates>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MarginRates {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub client_margin_rate: Option<f64>,
+}
+
+/// `FetchTradingBalanceBuyingPower`: the ticket's buying power and cash on
+/// one account, in the ticket's currency.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TradingBalanceBuyingPower {
+    pub account: Option<TradingBalanceAccount>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TradingBalanceAccount {
+    pub financials: Option<TradingBalanceFinancials>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TradingBalanceFinancials {
+    pub current: Option<TradingBalanceCurrent>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TradingBalanceCurrent {
+    pub trading_balance_view_v2: Option<TradingBalanceView>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TradingBalanceView {
+    pub buying_power: Option<BalanceAmount>,
+    pub cash: Option<BalanceAmount>,
+}
+
+/// Wealthsimple's trading-balance figure: `quantity` and `currency`, not
+/// `Money`'s `amount` -- a different shape for the same idea.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BalanceAmount {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    pub quantity: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    pub currency: String,
+}

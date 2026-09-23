@@ -203,7 +203,7 @@ pub(super) fn feed_order_row(app: &Arc<App>, node: &Value) -> Order {
     let empty = json!({});
     let sec = node.get("security").filter(|v| v.is_object()).unwrap_or(&empty);
     let stock = sec.get("stock").filter(|v| v.is_object()).unwrap_or(&empty);
-    let acct = order_accounts(app, None).into_iter().find(|a| f(a, "id") == f(node, "canonicalAccountId"));
+    let acct = order_accounts(app, None).into_iter().find(|a| a.id == f(node, "canonicalAccountId"));
     let security_id = s(or_v(node.get("securityId"), sec.get("id")));
     let mut symbol = must(so::symbol_for_security(&db(app), &security_id));
     if symbol.is_empty() {
@@ -214,7 +214,7 @@ pub(super) fn feed_order_row(app: &Arc<App>, node: &Value) -> Order {
         id: f(node, "id"),
         created_at: f(node, "createdAtUtc"),
         account_id: f(node, "canonicalAccountId"),
-        account: acct.map(|a| f(&a, "name")).unwrap_or_default(),
+        account: acct.map(|a| a.name).unwrap_or_default(),
         security_id,
         symbol,
         currency: f(node, "securityCurrency").to_uppercase(),

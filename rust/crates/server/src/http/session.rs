@@ -11,14 +11,14 @@ use crate::{login, session, update};
 
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
-        post "/api/login/start" => login_start, answer: "StartLoginAnswer";
-        post "/api/login/cancel" => login_cancel, answer: "CancelLoginAnswer";
-        post "/api/login/input" => login_input, body: "LoginInput", answer: "OkOr";
-        post "/api/capture" => capture, body: "Capture", answer: "OkOr";
-        post "/api/refresh" => refresh, answer: "RefreshAnswer";
-        post "/api/sync" => sync, answer: "SyncAnswer";
-        post "/api/disconnect" => disconnect, answer: "OkOr";
-        post "/api/update" => start_update, answer: "OkOr";
+        post "/api/login/start" => login_start;
+        post "/api/login/cancel" => login_cancel;
+        post "/api/login/input" => login_input;
+        post "/api/capture" => capture;
+        post "/api/refresh" => refresh;
+        post "/api/sync" => sync;
+        post "/api/disconnect" => disconnect;
+        post "/api/update" => start_update;
     };
     routed.router = routed.router.route("/api/login/frame", get(login_frame));
     routed

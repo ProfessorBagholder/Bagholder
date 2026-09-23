@@ -2,12 +2,12 @@
 //! filings, short interest, news, fear and greed, chart history, the watchlist
 //! and the Markets tab's tiles.
 
-use axum::extract::{RawQuery, State};
+use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use ts_rs::TS;
 
 use super::extract::{flag, text, trimmed};
@@ -16,27 +16,24 @@ use crate::feeds;
 
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
-        get "/api/symbols/quote" => symbol_quote, query: "Listing", answer: "GlanceAnswer";
-        get "/api/filings" => filings, query: "Filings", answer: "FilingsAnswer";
-        get "/api/filings/feed" => filings_feed, query: "Scope", answer: "FilingsFeed";
-        get "/api/filings/enrich" => filings_enrich, query: "Document", answer: "EnrichAnswer";
-        get "/api/fear" => fear, query: "Fear", answer: "FearAnswer";
-        get "/api/shorts" => shorts, query: "ShortsQuery", answer: "ShortsAnswer";
-        get "/api/shorts/feed" => shorts_feed, answer: "ShortsFeed";
-        get "/api/history" => history, answer: "HistoryAnswer";
-        post "/api/markets/refresh" => markets_refresh, answer: "OkOr";
+        get "/api/symbols/search" => symbol_search;
+        get "/api/symbols/quote" => symbol_quote;
+        get "/api/listing" => listing;
+        get "/api/filings" => filings;
+        get "/api/filings/feed" => filings_feed;
+        get "/api/filings/enrich" => filings_enrich;
+        get "/api/news/symbol" => news_symbol;
+        get "/api/fear" => fear;
+        get "/api/shorts" => shorts;
+        get "/api/shorts/feed" => shorts_feed;
+        get "/api/history" => history;
+        post "/api/markets/refresh" => markets_refresh;
+        post "/api/watchlist/add" => watchlist_add;
+        post "/api/watchlist/remove" => watchlist_remove;
+        post "/api/tiles/set" => tiles_set;
     };
-    // not yet in the table: search and news reach a market-data provider
-    // directly, and the listing/watchlist/tiles routes still answer `Value`
-    routed.router = routed
-        .router
-        .route("/api/symbols/search", get(symbol_search))
-        .route("/api/listing", get(listing))
-        .route("/api/filings/doc", get(filings_doc))
-        .route("/api/news/symbol", get(news_symbol))
-        .route("/api/watchlist/add", post(watchlist_add))
-        .route("/api/watchlist/remove", post(watchlist_remove))
-        .route("/api/tiles/set", post(tiles_set));
+    // `filings/doc` answers a document (a PDF, or a page of it) rather than JSON
+    routed.router = routed.router.route("/api/filings/doc", get(filings_doc));
     routed
 }
 
@@ -57,15 +54,36 @@ fn some(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-#[derive(Deserialize)]
-struct Search {
+#[derive(Deserialize, TS)]
+pub struct Search {
     #[serde(default)]
     q: String,
 }
 
-async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<Value> {
+/// `GET /api/symbols/search`: the exchanges' own directories -- a match
+/// carries only what its source gave (`kind` and `rank` from the built-in
+/// instrument list, neither from Nasdaq or TSX's own search).
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+pub enum SymbolSearchAnswer {
+    Ok {
+        #[ts(type = "true")]
+        ok: bool,
+        #[ts(type = "unknown[]")]
+        matches: Vec<Value>,
+    },
+    Err {
+        #[ts(type = "false")]
+        ok: bool,
+        error: String,
+        #[ts(type = "unknown[]")]
+        matches: Vec<Value>,
+    },
+}
+
+async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
     let pool = state.app.store();
-    answer(move || bagholder_market::search::symbol_search(&pool, &s.q)).await
+    answer(move || serde_json::from_value(bagholder_market::search::symbol_search(&pool, &s.q)).unwrap_or(SymbolSearchAnswer::Ok { ok: true, matches: vec![] })).await
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
@@ -97,7 +115,7 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
 }
 
 /// `GET /api/listing`: one listing's own page, held or not.
-async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> super::Api<Value> {
+async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::ListingAnswer> {
     answer(move || feeds::listing_payload(&state.app, &l.symbol, &l.exchange, &l.currency, &l.name)).await
 }
 
@@ -206,14 +224,14 @@ async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsF
     answer(move || feeds::shorts_feed(&state.app)).await
 }
 
-async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> super::Api<Value> {
+async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::NewsSymbolAnswer> {
     answer(move || feeds::news_symbol_payload(&state.app, &l.symbol, &l.exchange, &l.currency)).await
 }
 
 /// `GET /api/history`: a chart's bars. Its parameters are read by the history
 /// module itself, which is also handed them by the documents (`history:<query>`).
-async fn history(State(state): State<AppState>, RawQuery(query): RawQuery) -> Api<feeds::HistoryAnswer> {
-    answer(move || feeds::history_payload(&state.app, query.as_deref().unwrap_or(""))).await
+async fn history(State(state): State<AppState>, Params(q): Params<feeds::HistoryQuery>) -> Api<feeds::HistoryAnswer> {
+    answer(move || feeds::history_payload(&state.app, &q)).await
 }
 
 async fn markets_refresh(State(state): State<AppState>) -> Api<OkOr> {
@@ -223,22 +241,42 @@ async fn markets_refresh(State(state): State<AppState>) -> Api<OkOr> {
 // The three writes below hand their body to the module that owns the rows; it
 // becomes a typed request with the typed watchlist and tiles (stage 5).
 
-async fn watchlist_add(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> super::Api<Value> {
-    answer(move || feeds::watch_add(&state.app, &Value::Object(body))).await
+/// `POST /api/watchlist/add`, `POST /api/watchlist/remove`: the listing to
+/// follow or drop; `add` alone reads `name`, `currency` and `securityId`.
+#[derive(Deserialize, Serialize, Default, TS)]
+#[serde(default)]
+pub struct WatchlistBody {
+    #[serde(deserialize_with = "text")]
+    symbol: String,
+    #[serde(deserialize_with = "text")]
+    exchange: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    currency: Option<String>,
+    #[serde(rename = "securityId", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    security_id: Option<String>,
 }
 
-async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> super::Api<Value> {
-    answer(move || feeds::watch_remove(&state.app, &Value::Object(body))).await
+async fn watchlist_add(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
+    answer(move || feeds::watch_add(&state.app, &serde_json::to_value(&body).unwrap())).await
+}
+
+async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
+    answer(move || feeds::watch_remove(&state.app, &serde_json::to_value(&body).unwrap())).await
 }
 
 /// What `POST /api/tiles/set` accepts: the tile row, in order.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, TS)]
 #[serde(default)]
-struct TilesSet {
+pub struct TilesSet {
     #[serde(deserialize_with = "bagholder_model::lenient::list")]
     tiles: Vec<bagholder_model::input::TileRef>,
 }
 
-async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> super::Api<Value> {
+async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api<feeds::TilesAnswer> {
     answer(move || feeds::tiles_set(&state.app, &body.tiles)).await
 }

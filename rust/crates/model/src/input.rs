@@ -223,7 +223,7 @@ pub struct UniverseRow {
 }
 
 /// A tile the person put in the Markets tab's row.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
 #[serde(default)]
 pub struct TileRef {
     #[serde(deserialize_with = "lenient::text")]

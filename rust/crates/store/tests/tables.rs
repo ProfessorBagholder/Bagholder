@@ -170,19 +170,19 @@ fn test_add_list_remove() {
     let d = db();
     let row = feeds::add_watch(&d.conn, "shop", "tsx", "Shopify Inc.", "cad", "", "2026-09-11T14:00:00Z").unwrap().unwrap();
     assert_eq!(
-        (row["symbol"].as_str(), row["exchange"].as_str(), row["name"].as_str(), row["currency"].as_str(), row["addedAt"].as_str()),
-        (Some("SHOP"), Some("TSX"), Some("Shopify Inc."), Some("CAD"), Some("2026-09-11T14:00:00Z"))
+        (row.symbol.as_str(), row.exchange.as_str(), row.name.as_str(), row.currency.as_str(), row.added_at.as_str()),
+        ("SHOP", "TSX", "Shopify Inc.", "CAD", "2026-09-11T14:00:00Z")
     );
     feeds::add_watch(&d.conn, "NVDA", "NASDAQ", "", "USD", "", "2026-09-11T14:01:00Z").unwrap();
-    let syms = |d: &Db| feeds::list_watchlist(&d.conn).unwrap().iter().map(|w| w["symbol"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let syms = |d: &Db| feeds::list_watchlist(&d.conn).unwrap().iter().map(|w| w.symbol.clone()).collect::<Vec<_>>();
     assert_eq!(syms(&d), vec!["SHOP", "NVDA"], "in the order they were added");
     let again = feeds::add_watch(&d.conn, "SHOP", "TSX", "", "", "", "2026-09-12T00:00:00Z").unwrap().unwrap();
-    assert_eq!((again["addedAt"].as_str(), again["name"].as_str()), (Some("2026-09-11T14:00:00Z"), Some("Shopify Inc.")), "adding a followed listing again keeps its place and its name");
-    assert_eq!(feeds::add_watch(&d.conn, "NVDA", "NASDAQ", "NVIDIA Corp", "", "", "2026-09-12T00:00:00Z").unwrap().unwrap()["name"], "NVIDIA Corp", "a blank name is filled in");
+    assert_eq!((again.added_at.as_str(), again.name.as_str()), ("2026-09-11T14:00:00Z", "Shopify Inc."), "adding a followed listing again keeps its place and its name");
+    assert_eq!(feeds::add_watch(&d.conn, "NVDA", "NASDAQ", "NVIDIA Corp", "", "", "2026-09-12T00:00:00Z").unwrap().unwrap().name, "NVIDIA Corp", "a blank name is filled in");
     assert!(feeds::remove_watch(&d.conn, "shop", "tsx").unwrap());
     assert!(!feeds::remove_watch(&d.conn, "SHOP", "TSX").unwrap());
     assert_eq!(syms(&d), vec!["NVDA"]);
-    assert_eq!(feeds::list_watchlist(&d.conn).unwrap()[0]["symbol"], "NVDA", "the snapshot carries it to the model");
+    assert_eq!(feeds::list_watchlist(&d.conn).unwrap()[0].symbol, "NVDA", "the snapshot carries it to the model");
 }
 
 /// TilesTest, the store half: the rows the model builds from the saved tiles

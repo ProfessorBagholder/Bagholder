@@ -7,9 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use bagholder_model::lenient;
 
-/// One Wealthsimple account, as the store keeps it.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// One Wealthsimple account, as the store keeps it. Named `BrokerAccount` on
+/// the page: `Account` there is already the model's own derived view
+/// (`rust/crates/model/src/wire.rs`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default, rename_all = "camelCase")]
+#[ts(rename = "BrokerAccount")]
 pub struct Account {
     #[serde(deserialize_with = "lenient::text")]
     pub id: String,

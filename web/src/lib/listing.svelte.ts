@@ -8,7 +8,7 @@
 // (`/api/listing`); its price, where the watchlist carries it, is the model's own and
 // moves with it.
 
-import { lookup, query } from './api'
+import { lookup } from './api'
 import { bareSymbol } from './sym'
 import type { Fill, Model, Trade } from './model'
 
@@ -27,7 +27,7 @@ interface Known {
 const LISTING_DAYS = 365
 const known = $state<Record<string, Known>>({})
 // asked once while the page is open; a failed lookup is asked again the next time the page opens
-const listings = lookup<Partial<Known> & { positionId?: string | null }>()
+const listings = lookup('GET /api/listing')
 const applied = new Set<string>()
 
 export function listingId(o: { symbol?: string; exchange?: string | null }): string {
@@ -88,18 +88,18 @@ export function listingAsTrade(id: string, model: Model | null): Trade | null {
 export async function loadListing(id: string, held: (positionId: string) => void): Promise<void> {
   if (!isListingId(id)) return
   const l = entry(id)
-  const d = await listings.read('/api/listing?' + query({ symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name }), { key: id })
-  if (!d.ok) {
+  const d = await listings.read({ query: { symbol: l.symbol, exchange: l.exchange, currency: l.currency, name: l.name } }, { key: id })
+  if (!d.ok || 'error' in d) {
     l.fills = []
     return
   }
-  if (d.positionId) return held(d.positionId)
+  if ('positionId' in d) return held(d.positionId)
   if (applied.has(id)) return
   applied.add(id)
   for (const k of ['exchange', 'currency', 'name', 'kind', 'securityId'] as const) {
     if (!l[k] && d[k]) l[k] = d[k] as string
   }
-  l.fills = d.fills ?? []
+  l.fills = d.fills as Fill[]
   l.price = d.price ?? null
   l.percentChange = d.percentChange ?? null
 }

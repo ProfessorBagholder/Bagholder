@@ -1,14 +1,14 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { Appended, BookAppend, ImportReport, WatchStatus } from './book'
-import type { HistoryAnswer } from './chart'
+import type { Appended, Book, BookAppend, ImportReport, ScanWithStatus, WatchFolder, WatchSetAnswer, WatchStatus } from './book'
+import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
-import type { Fear, FearAnswer, GlanceAnswer, Listing, ShortsAnswer, ShortsFeed, ShortsQuery } from './markets'
-import type { Clear, DataSummary, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
+import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
+import type { Clear, DataSummary, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
-import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, RefreshAndOrders } from './orders'
+import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
 import type { StatusAnswer } from './status'
 
@@ -34,17 +34,27 @@ export interface Routes {
   'POST /api/bracket/cancel': { body: Named; answer: OrderActionAnswer }
   'POST /api/book/append': { body: BookAppend; answer: Appended }
   'POST /api/orders/refresh': { answer: RefreshAndOrders }
+  'GET /api/order/quote': { query: QuoteOf; answer: TicketQuote }
+  'POST /api/order': { body: Ticket; answer: PlaceTicketAnswer }
+  'GET /api/symbols/search': { query: Search; answer: SymbolSearchAnswer }
   'GET /api/symbols/quote': { query: Listing; answer: GlanceAnswer }
+  'GET /api/listing': { query: Listing; answer: ListingAnswer }
   'GET /api/filings': { query: Filings; answer: FilingsAnswer }
   'GET /api/filings/feed': { query: Scope; answer: FilingsFeed }
   'GET /api/filings/enrich': { query: Document; answer: EnrichAnswer }
+  'GET /api/news/symbol': { query: Listing; answer: NewsSymbolAnswer }
   'GET /api/fear': { query: Fear; answer: FearAnswer }
   'GET /api/shorts': { query: ShortsQuery; answer: ShortsAnswer }
   'GET /api/shorts/feed': { answer: ShortsFeed }
-  'GET /api/history': { answer: HistoryAnswer }
+  'GET /api/history': { query: HistoryQuery; answer: HistoryAnswer }
   'POST /api/markets/refresh': { answer: OkOr }
+  'POST /api/watchlist/add': { body: WatchlistBody; answer: WatchlistAnswer }
+  'POST /api/watchlist/remove': { body: WatchlistBody; answer: WatchlistAnswer }
+  'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }
   'GET /api/status': { answer: StatusAnswer }
+  'GET /api/model': { query: ModelQuery; answer: ModelViewAnswer }
   'GET /api/trade': { query: TradeQuery; answer: TradeAnswer }
+  'GET /api/book': { answer: Book }
   'GET /api/data': { answer: DataSummary }
   'POST /api/data/clear': { body: Clear; answer: DataSummary }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
@@ -52,4 +62,7 @@ export interface Routes {
   'POST /api/notes': { body: Notes; answer: NotesAnswer }
   'POST /api/import': { body: Import; answer: ImportReport }
   'POST /api/watch/clear': { answer: WatchStatus }
+  'GET /api/watch': { answer: WatchStatus }
+  'POST /api/watch': { body: WatchFolder; answer: WatchSetAnswer }
+  'POST /api/watch/scan': { answer: ScanWithStatus }
 }

@@ -14,7 +14,7 @@ use crate::tables::LegacyNotes;
 
 /// One security position, for the export: a text column that was `NULL` in
 /// the database is absent on the wire, not an empty string.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BookBalance {
     pub account_id: Option<String>,
@@ -26,18 +26,19 @@ pub struct BookBalance {
 /// One day's net liquidation value, for the export: no account id, because
 /// that is the map key it is filed under (or omitted entirely, for the
 /// identity-wide series).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BookNav {
     pub date: String,
     pub equity: Option<f64>,
     pub currency: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub net_deposits: Option<f64>,
 }
 
 /// The stored rows as they are, for the phones and for export.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Book {
     pub ok: bool,

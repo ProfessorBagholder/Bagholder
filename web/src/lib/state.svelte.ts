@@ -2,7 +2,7 @@ import type { Model } from './model'
 import { filters } from './filters.svelte'
 import { connect, disconnect, onChange, onRestart } from './live'
 import { forgetHistory } from './trade/chart'
-import { post, call } from './api'
+import { call } from './api'
 import { leaveSub, route } from './router.svelte'
 import { flash } from './ui.svelte'
 
@@ -121,7 +121,7 @@ export async function addWatch(m: { symbol: string; exchange: string; name: stri
     mk.watchlist.unshift({ symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency, last: null, priceChange: null, percentChange: null, sector: '', kind: 'Shares', positionId: null })
   }
   try {
-    const d = await post('/api/watchlist/add', m)
+    const d = await call('POST /api/watchlist/add', { body: { symbol: m.symbol, exchange: m.exchange, name: m.name, currency: m.currency } })
     if (!d.ok) throw new Error('add failed')
     // the row's quote and sector arrive as a change to that row when the server has them
   } catch {
@@ -137,7 +137,7 @@ export async function removeWatch(symbol: string, exchange: string): Promise<voi
   if (!mk) return
   mk.watchlist = mk.watchlist.filter((w) => !(w.symbol === symbol && w.exchange === exchange))
   try {
-    const d = await post('/api/watchlist/remove', { symbol, exchange })
+    const d = await call('POST /api/watchlist/remove', { body: { symbol, exchange } })
     if (!d.ok) throw new Error('remove failed')
   } catch {
     resync()

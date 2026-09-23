@@ -8,6 +8,7 @@
 
 use rusqlite::{Connection, Result, Row};
 use std::collections::HashSet;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use bagholder_model::value::FSum;
@@ -154,18 +155,34 @@ pub fn replace_exposure(conn: &Connection, key: &str, rec: &ExposureRecord, now:
 // watchlist
 // --------------------------------------------------------------------------
 
-fn watch_from_row(r: &Row) -> Result<Value> {
-    Ok(json!({
-        "symbol": text(r, "symbol")?,
-        "exchange": text(r, "exchange")?,
-        "name": text(r, "name")?,
-        "currency": text(r, "currency")?,
-        "securityId": text(r, "security_id")?,
-        "addedAt": text(r, "added_at")?,
-    }))
+/// One row of the watchlist, as the page shows it. Not the model's own
+/// `WatchRow` (a stripped-down view the derived model carries for pricing):
+/// this is the stored row itself, with the id and the timestamp it was
+/// followed at.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, ts_rs::TS)]
+pub struct WatchedListing {
+    pub symbol: String,
+    pub exchange: String,
+    pub name: String,
+    pub currency: String,
+    #[serde(rename = "securityId")]
+    pub security_id: String,
+    #[serde(rename = "addedAt")]
+    pub added_at: String,
 }
 
-pub fn list_watchlist(conn: &Connection) -> Result<Vec<Value>> {
+fn watch_from_row(r: &Row) -> Result<WatchedListing> {
+    Ok(WatchedListing {
+        symbol: text(r, "symbol")?,
+        exchange: text(r, "exchange")?,
+        name: text(r, "name")?,
+        currency: text(r, "currency")?,
+        security_id: text(r, "security_id")?,
+        added_at: text(r, "added_at")?,
+    })
+}
+
+pub fn list_watchlist(conn: &Connection) -> Result<Vec<WatchedListing>> {
     let mut stmt = conn.prepare("SELECT * FROM watchlist ORDER BY added_at, symbol")?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
@@ -185,7 +202,7 @@ pub fn add_watch(
     currency: &str,
     security_id: &str,
     now: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<WatchedListing>> {
     let sym = up(symbol);
     let ex = up(exchange);
     if sym.is_empty() {

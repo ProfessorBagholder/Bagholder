@@ -12,32 +12,32 @@ use super::extract::trimmed;
 use super::{api_routes, blocking, with_store, Api, ApiError, AppState, Body, Params, Routed};
 use std::sync::Arc;
 
-use crate::app::{self, truthy, App};
+use crate::app::{self, App};
 use crate::{feeds, session};
 
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
-        get "/api/status" => status, answer: "StatusAnswer";
-        get "/api/trade" => trade, query: "TradeQuery", answer: "TradeAnswer";
-        get "/api/data" => data, answer: "DataSummary";
-        post "/api/data/clear" => data_clear, body: "Clear", answer: "DataSummary";
-        post "/api/journal" => journal, body: "JournalEntryRequest", answer: "JournalAnswer";
-        post "/api/groups" => groups, body: "Groups", answer: "GroupsAnswer";
-        post "/api/notes" => notes, body: "Notes", answer: "NotesAnswer";
-        post "/api/import" => import, body: "Import", answer: "ImportReport";
-        post "/api/watch/clear" => watch_clear, answer: "WatchStatus";
+        get "/api/status" => status;
+        get "/api/model" => model;
+        get "/api/trade" => trade;
+        get "/api/book" => book;
+        get "/api/data" => data;
+        post "/api/data/clear" => data_clear;
+        post "/api/journal" => journal;
+        post "/api/groups" => groups;
+        post "/api/notes" => notes;
+        post "/api/import" => import;
+        post "/api/watch/clear" => watch_clear;
     };
-    // not yet in the table: `/api/model` (stage 5d7d's Filters typing, §3, is
-    // unfinished), `/api/book` (`Book` reaches into `bagholder_store::broker::Account`
-    // and `bagholder_model::securities::Security`, neither typed for the page yet),
-    // and `/api/watch`'s GET (shares its path with the POST below) and
-    // `/api/watch/scan`, which answer with their own status code
+    // `/api/watch`'s GET and POST share one path, which `api_routes!` cannot
+    // declare twice; their entries are read from the handlers all the same
     routed.router = routed
         .router
-        .route("/api/model", get(model))
-        .route("/api/book", get(book))
         .route("/api/watch", get(watch_status).post(watch_set))
         .route("/api/watch/scan", axum::routing::post(watch_scan));
+    routed.table.push(super::RouteEntry::of(watch_status, "get", "/api/watch"));
+    routed.table.push(super::RouteEntry::of(watch_set, "post", "/api/watch"));
+    routed.table.push(super::RouteEntry::of(watch_scan, "post", "/api/watch/scan"));
     routed
 }
 
@@ -45,8 +45,8 @@ async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswe
     super::answer(move || crate::status::answer(&state.app)).await
 }
 
-#[derive(Deserialize)]
-struct ModelQuery {
+#[derive(Deserialize, TS)]
+pub struct ModelQuery {
     /// the page's filters, as the JSON it keeps them in
     #[serde(default, deserialize_with = "trimmed")]
     filters: Option<String>,
@@ -61,11 +61,46 @@ struct ModelQuery {
     markets: Option<String>,
 }
 
+/// `GET /api/model`, `only=live`: only the sections that move on a price
+/// tick, not the whole view.
+#[derive(Serialize, TS)]
+pub struct ModelLiveAnswer {
+    ok: bool,
+    today: String,
+    currency: &'static str,
+    market: bagholder_model::wire::MarketDates,
+    positions: Vec<bagholder_model::wire::Position>,
+    #[serde(rename = "positionsSummary")]
+    positions_summary: bagholder_model::wire::PositionsSummary,
+    portfolio: bagholder_model::wire::Portfolio,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    markets: Option<bagholder_model::wire::Markets>,
+    status: crate::status::Status,
+}
+
+/// `GET /api/model`: the whole view, with the header's status riding beside it.
+#[derive(Serialize, TS)]
+pub struct ModelAnswer {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    view: bagholder_model::wire::View,
+    status: crate::status::Status,
+}
+
+/// `GET /api/model`'s answer: the slim `only=live` shape, or the whole view.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum ModelViewAnswer {
+    Live(ModelLiveAnswer),
+    Full(Box<ModelAnswer>),
+}
+
 /// `GET /api/model`: the whole view for a set of filters. The Svelte page gets its
 /// view over `/api/events`; this is what the legacy page and the phones read.
-async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> super::Api<Value> {
+async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> Api<ModelViewAnswer> {
     let app = state.app;
-    let built = blocking(move || -> Result<Value, ApiError> {
+    let built = blocking(move || -> Result<ModelViewAnswer, ApiError> {
         if let (Ok(conn), Ok(base)) = (app.open(), app.base()) {
             let (today, now, _) = bagholder_market::clock_now();
             if bagholder_market::refresh::is_stale(&conn, &today, &bagholder_model::symbols_of::payer_symbols(&base)) {
@@ -85,23 +120,27 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
                 }
             }
         }
-        let filters = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        // the page's filters, parsed once, the way the event stream's `Feed` does
+        let raw = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        let filters = raw.map(|v| bagholder_model::filters::clean_filters(Some(&v)));
         let view = app.view(filters.as_ref(), q.trade.as_deref()).map_err(|e| ApiError::Model(e.to_string()))?;
-        let mut payload = if q.only.as_deref() == Some("live") {
-            // only these sections are written out of the shared view, not the whole of it
-            let mut live = serde_json::json!({
-                "ok": view.ok, "today": view.today, "currency": view.currency, "market": view.market,
-                "positions": view.positions, "positionsSummary": view.positions_summary, "portfolio": view.portfolio,
-            });
-            if q.markets.is_some() {
-                live["markets"] = serde_json::to_value(&view.markets).map_err(|e| ApiError::Model(e.to_string()))?;
-            }
-            live
+        let status = crate::status::status(&app);
+        let answer = if q.only.as_deref() == Some("live") {
+            ModelViewAnswer::Live(ModelLiveAnswer {
+                ok: view.ok,
+                today: view.today.clone(),
+                currency: view.currency,
+                market: view.market.clone(),
+                positions: view.positions.clone(),
+                positions_summary: view.positions_summary.clone(),
+                portfolio: view.portfolio.clone(),
+                markets: q.markets.is_some().then(|| view.markets.clone()),
+                status,
+            })
         } else {
-            view.to_value()
+            ModelViewAnswer::Full(Box::new(ModelAnswer { view: (*view).clone(), status }))
         };
-        payload["status"] = serde_json::to_value(crate::status::status(&app)).unwrap_or(Value::Null);
-        Ok(payload)
+        Ok(answer)
     })
     .await??;
     Ok(Json(built))
@@ -291,10 +330,6 @@ pub struct Import {
     name: String,
 }
 
-fn to_value<T: serde::Serialize>(v: &T) -> Value {
-    serde_json::to_value(v).unwrap_or(Value::Null)
-}
-
 async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api<bagholder_store::csvimport::ImportReport> {
     if bagholder_model::textrules::trim_space(&i.text).is_empty() {
         return Err(ApiError::BadRequest("text required".into()));
@@ -316,40 +351,57 @@ async fn watch_status(State(state): State<AppState>) -> Api<bagholder_store::csv
     with_store(&state, |conn| bagholder_store::csvimport::status(conn)).await
 }
 
-#[derive(Deserialize, Default)]
-struct WatchFolder {
+#[derive(Deserialize, Default, TS)]
+pub struct WatchFolder {
     #[serde(default)]
     path: String,
 }
 
-async fn watch_set(State(state): State<AppState>, Body(w): Body<WatchFolder>) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
+/// A folder scanned, with the watch status it left: `POST /api/watch` (once
+/// the path is accepted) and `POST /api/watch/scan` answer this shape.
+#[derive(Serialize, TS)]
+pub struct ScanWithStatus {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    report: bagholder_store::csvimport::ScanReport,
+    status: bagholder_store::csvimport::WatchStatus,
+}
+
+/// `POST /api/watch`: the path refused (`WatchSet`, with `ok: false`), or
+/// accepted and scanned at once.
+#[derive(Serialize, TS)]
+#[serde(untagged)]
+pub enum WatchSetAnswer {
+    Refused(bagholder_store::csvimport::WatchSet),
+    Scanned(ScanWithStatus),
+}
+
+async fn watch_set(State(state): State<AppState>, Body(w): Body<WatchFolder>) -> Result<(axum::http::StatusCode, Json<WatchSetAnswer>), ApiError> {
     let app = state.app;
-    let out = blocking(move || -> rusqlite::Result<(bool, Value)> {
+    let out = blocking(move || -> rusqlite::Result<(bool, WatchSetAnswer)> {
         let conn = app.open()?;
         let set = bagholder_store::csvimport::set_watch_folder(&conn, &w.path)?;
         if !set.ok {
-            return Ok((false, to_value(&set)));
+            return Ok((false, WatchSetAnswer::Refused(set)));
         }
-        let result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        let mut result = to_value(&result);
-        result["status"] = to_value(&bagholder_store::csvimport::status(&conn)?);
-        Ok((true, result))
+        let report = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+        let status = bagholder_store::csvimport::status(&conn)?;
+        Ok((true, WatchSetAnswer::Scanned(ScanWithStatus { report, status })))
     })
     .await??;
     Ok((if out.0 { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(out.1)))
 }
 
-async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
+async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::StatusCode, Json<ScanWithStatus>), ApiError> {
     let app = state.app;
-    let result = blocking(move || -> rusqlite::Result<Value> {
+    let out = blocking(move || -> rusqlite::Result<ScanWithStatus> {
         let conn = app.open()?;
-        let result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        let mut result = to_value(&result);
-        result["status"] = to_value(&bagholder_store::csvimport::status(&conn)?);
-        Ok(result)
+        let report = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+        let status = bagholder_store::csvimport::status(&conn)?;
+        Ok(ScanWithStatus { report, status })
     })
     .await??;
-    Ok((if truthy(result.get("ok")) { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(result)))
+    Ok((if out.report.ok { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(out)))
 }
 
 async fn watch_clear(State(state): State<AppState>) -> Api<bagholder_store::csvimport::WatchStatus> {

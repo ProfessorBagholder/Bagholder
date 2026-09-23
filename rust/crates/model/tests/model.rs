@@ -58,7 +58,8 @@ fn sent<T: serde::Serialize>(rows: &[T]) -> Vec<Value> {
 }
 
 fn build_view(base: &Base, filters: Option<&Value>) -> Value {
-    bagholder_model::view::build_view(base, filters).to_value()
+    let cleaned = bagholder_model::filters::clean_filters(filters);
+    bagholder_model::view::build_view(base, Some(&cleaned)).to_value()
 }
 
 /// The view as sent: no row's legs and fills, or only the open one's.

@@ -20,8 +20,10 @@ use bagholder_store::tables::LegacyNote;
 use bagholder_store::feeds::{Notification, NotificationExtra};
 
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
-use crate::http::orders::{Adjust, Modify, Named, RefreshAndOrders};
-use crate::orders::{Appended, OrderActionAnswer, OrderCard, OrdersDoc, RefreshOrdersAnswer};
+use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
+use crate::orders::{
+    Appended, OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
+};
 
 fn declarations() -> String {
     let config = ts_rs::Config::new().with_large_int("number");
@@ -30,9 +32,10 @@ fn declarations() -> String {
     }
     let decls: Vec<String> = decls![
         Side, OrderType, OrderStatus, Role, Source, BracketStatus, SlKind, TrailUnit, SlMode, StopLoss, TakeProfit, Order, OrderCard, Bracket, OrdersDoc,
-        OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders,
+        OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
+        PlaceTicketAnswer,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -61,7 +64,7 @@ fn chart_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer];
+    let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer, crate::feeds::HistoryQuery];
     let mut out = String::from("// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
@@ -125,10 +128,12 @@ fn markets_declarations() -> String {
     let decls: Vec<String> = decls![
         GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc,
         ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
-        crate::feeds::FearAnswer, crate::feeds::ShortsAnswer,
+        crate::feeds::FearAnswer, crate::feeds::ShortsAnswer, crate::feeds::ListingAnswer, crate::feeds::NewsSymbolAnswer, crate::feeds::WatchlistAnswer, crate::feeds::TilesAnswer,
         crate::http::markets::Listing, crate::http::markets::Fear, crate::http::markets::ShortsQuery, crate::http::markets::GlanceAnswer,
+        crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::TilesSet,
+        bagholder_store::feeds::WatchedListing, bagholder_model::input::TileRef,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { MarketTile } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -156,8 +161,14 @@ fn book_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended, crate::orders::BookAppend, LegacyNote];
-    let mut out = String::from("// Generated from rust/crates/store/src/activities.rs, rust/crates/store/src/csvimport.rs and the\n// server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\n");
+    let decls: Vec<String> = decls![
+        ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended, crate::orders::BookAppend, LegacyNote,
+        bagholder_store::broker::Account, bagholder_model::securities::Security, bagholder_store::book::BookBalance, bagholder_store::book::BookNav, bagholder_store::book::Book,
+        crate::http::model::WatchFolder, crate::http::model::ScanWithStatus, crate::http::model::WatchSetAnswer,
+    ];
+    let mut out = String::from(
+        "// Generated from rust/crates/store/src/activities.rs, rust/crates/store/src/csvimport.rs, book.rs,\n// broker.rs and the server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\nimport type { TradeGroup } from './model_api'\n\n",
+    );
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -314,9 +325,10 @@ fn model_api_declarations() -> String {
         crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::DataSummary, crate::http::model::Clear,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
         crate::http::model::Notes, crate::http::model::NotesAnswer, crate::http::model::Import,
+        crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
     ];
     let mut out = String::from(
-        "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill } from './wire'\nimport type { LegacyNote } from './book'\n\n",
+        "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { LegacyNote } from './book'\nimport type { Status } from './status'\n\n",
     );
     for d in decls {
         out.push_str("export ");
@@ -346,13 +358,14 @@ fn generated_file_of(name: &str) -> &'static str {
         "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" => "notifications",
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
-        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" => "orders",
+        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" => "orders",
         "Appended" | "BookAppend" | "ImportReport" | "WatchStatus" | "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" => "model_api",
+        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" | "ModelQuery" | "ModelViewAnswer" => "model_api",
+        "Book" | "WatchFolder" | "ScanWithStatus" | "WatchSetAnswer" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
-        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" => "markets",
-        "HistoryAnswer" => "chart",
+        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
+        "HistoryAnswer" | "HistoryQuery" => "chart",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }
@@ -362,7 +375,7 @@ fn generated_file_of(name: &str) -> &'static str {
 /// type check on `call()`.
 fn routes_declarations() -> String {
     let table = crate::http::route_table();
-    let mut names: Vec<&str> = table.iter().flat_map(|e| [e.query, e.body, Some(e.answer)]).flatten().collect();
+    let mut names: Vec<&str> = table.iter().flat_map(|e| [e.query.as_deref(), e.body.as_deref(), Some(e.answer.as_str())]).flatten().collect();
     names.sort();
     names.dedup();
     let mut by_file: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
@@ -377,10 +390,10 @@ fn routes_declarations() -> String {
     for e in table {
         let key = format!("{} {}", e.method.to_uppercase(), e.path);
         let mut fields = Vec::new();
-        if let Some(q) = e.query {
+        if let Some(q) = &e.query {
             fields.push(format!("query: {}", q));
         }
-        if let Some(b) = e.body {
+        if let Some(b) = &e.body {
             fields.push(format!("body: {}", b));
         }
         fields.push(format!("answer: {}", e.answer));

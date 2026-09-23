@@ -4,9 +4,9 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde_json::json;
 
 use crate::app::log;
+use crate::http::OkOr;
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -52,6 +52,6 @@ impl IntoResponse for ApiError {
             ApiError::Failed(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
             ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()),
         };
-        (code, Json(json!({"ok": false, "error": message}))).into_response()
+        (code, Json(OkOr::err(message))).into_response()
     }
 }

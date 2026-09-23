@@ -56,11 +56,17 @@ type RouteKey = keyof Routes
 /** What `key` takes besides its answer: `{ query }`, `{ body }`, both or neither. */
 type RouteInput<K extends RouteKey> = Omit<Routes[K], 'answer'>
 
-export function call<K extends RouteKey>(key: K, input?: RouteInput<K>, signal?: AbortSignal): Promise<Answer<Routes[K]['answer']>> {
+/** The method, the URL and the body `key` is sent with, for `input`. */
+function routed<K extends RouteKey>(key: K, input?: RouteInput<K>): { method: 'GET' | 'POST'; url: string; body?: unknown } {
   const [method, path] = key.split(' ', 2) as ['GET' | 'POST', string]
   const given = input as { query?: Record<string, Param>; body?: unknown } | undefined
   const q = given?.query ? query(given.query) : ''
-  return request<Routes[K]['answer']>(method, q ? path + '?' + q : path, given?.body, signal)
+  return { method, url: q ? path + '?' + q : path, body: given?.body }
+}
+
+export function call<K extends RouteKey>(key: K, input?: RouteInput<K>, signal?: AbortSignal): Promise<Answer<Routes[K]['answer']>> {
+  const r = routed(key, input)
+  return request<Routes[K]['answer']>(r.method, r.url, r.body, signal)
 }
 
 // ---- what is looked up on demand ---------------------------------------------------
@@ -71,16 +77,18 @@ export function call<K extends RouteKey>(key: K, input?: RouteInput<K>, signal?:
 // never kept, so it is asked again; and a request nobody is waiting for any more is
 // dropped -- a reader gives the signal that says it has stopped waiting.
 
-export interface Lookup<T> {
-  /** The answer to `path`, kept under `key` (the path itself when none is given). */
-  read(path: string, opts?: { key?: string; signal?: AbortSignal }): Promise<Answer<T>>
+export interface Lookup<T, I> {
+  /** The route's answer to `input`, kept under `key` (the URL itself when none is given). */
+  read(input: I, opts?: { key?: string; signal?: AbortSignal }): Promise<Answer<T>>
   /** The kept answer, if there is one and it is young enough. */
   peek(key: string): Answer<T> | undefined
   /** Drop what is kept (the server was started again; the answers were the old one's). */
   forget(): void
 }
 
-export function lookup<T = Record<string, unknown>>(rules: { keepMs?: number; keep?: (a: Answer<T>) => boolean } = {}): Lookup<T> {
+/** On-demand reads of one GET route of the table. */
+export function lookup<K extends RouteKey>(route: K, rules: { keepMs?: number; keep?: (a: Answer<Routes[K]['answer']>) => boolean } = {}): Lookup<Routes[K]['answer'], RouteInput<K>> {
+  type T = Routes[K]['answer']
   const kept = new Map<string, { at: number; answer: Answer<T> }>()
   const flying = new Map<string, { answer: Promise<Answer<T>>; readers: number; stop: AbortController }>()
   const peek = (key: string) => {
@@ -89,7 +97,8 @@ export function lookup<T = Record<string, unknown>>(rules: { keepMs?: number; ke
     if (rules.keepMs != null && Date.now() - k.at >= rules.keepMs) return undefined
     return k.answer
   }
-  function read(path: string, opts: { key?: string; signal?: AbortSignal } = {}): Promise<Answer<T>> {
+  function read(input: RouteInput<K>, opts: { key?: string; signal?: AbortSignal } = {}): Promise<Answer<T>> {
+    const path = routed(route, input).url
     const key = opts.key ?? path
     const have = peek(key)
     if (have) return Promise.resolve(have)
@@ -133,11 +142,11 @@ export function lookup<T = Record<string, unknown>>(rules: { keepMs?: number; ke
 // short-interest lookups: one implementation, and an answer is kept for the
 // session, since a listing does not change while the page is open.
 
-const searches = lookup<{ matches?: SymbolMatch[] }>()
+const searches = lookup('GET /api/symbols/search')
 
 export async function searchSymbols(text: string): Promise<SymbolMatch[]> {
   const q = text.trim()
   if (!q) return []
-  const r = await searches.read('/api/symbols/search?' + query({ q }), { key: q.toLowerCase() })
-  return r.ok ? (r.matches ?? []) : [] // a failed lookup is not remembered
+  const r = await searches.read({ query: { q } }, { key: q.toLowerCase() })
+  return r.ok ? (r.matches as SymbolMatch[]) : [] // a failed lookup is not remembered
 }

@@ -88,32 +88,34 @@ describe('what is looked up on demand', () => {
     return calls
   }
 
+  const hq = (symbol: string) => ({ query: { symbol, exchange: '', currency: '', kind: '', from: '', to: '', tf: '' } })
+
   it('asks once for the same thing asked twice at once, and keeps a good answer', async () => {
     const calls = slowFetch()
-    const bars = lookup<{ n?: number }>()
-    const a = bars.read('/api/history?x=1')
-    const b = bars.read('/api/history?x=1')
+    const bars = lookup('GET /api/history')
+    const a = bars.read(hq('1'))
+    const b = bars.read(hq('1'))
     expect(calls.length).toBe(1)
     calls[0].answer({ ok: true, n: 3 })
     expect(await a).toEqual({ ok: true, n: 3 })
     expect(await b).toEqual({ ok: true, n: 3 })
-    expect(await bars.read('/api/history?x=1')).toEqual({ ok: true, n: 3 })
+    expect(await bars.read(hq('1'))).toEqual({ ok: true, n: 3 })
     expect(calls.length).toBe(1)
     bars.forget()
-    void bars.read('/api/history?x=1')
+    void bars.read(hq('1'))
     expect(calls.length).toBe(2)
   })
 
   it('never keeps a failure, nor an answer its rule says is not final', async () => {
     const calls = slowFetch()
-    const bars = lookup<{ pending?: boolean }>({ keep: (a) => !a.pending })
-    const first = bars.read('/p')
+    const bars = lookup('GET /api/history', { keep: (a) => !('pending' in a && a.pending) })
+    const first = bars.read(hq('p'))
     calls[0].answer({ ok: false, error: 'no' })
     expect((await first).ok).toBe(false)
-    const second = bars.read('/p')
+    const second = bars.read(hq('p'))
     calls[1].answer({ ok: true, pending: true })
     await second
-    void bars.read('/p')
+    void bars.read(hq('p'))
     expect(calls.length).toBe(3)
   })
 
@@ -121,15 +123,15 @@ describe('what is looked up on demand', () => {
     vi.useFakeTimers()
     try {
       const calls = slowFetch()
-      const shorts = lookup({ keepMs: 30 * 60_000 })
-      const first = shorts.read('/s')
+      const shorts = lookup('GET /api/shorts', { keepMs: 30 * 60_000 })
+      const first = shorts.read({ query: { symbol: 's', exchange: '', currency: '', name: '', trend: false } })
       calls[0].answer({ ok: true })
       await first
       vi.advanceTimersByTime(29 * 60_000)
-      await shorts.read('/s')
+      await shorts.read({ query: { symbol: 's', exchange: '', currency: '', name: '', trend: false } })
       expect(calls.length).toBe(1)
       vi.advanceTimersByTime(2 * 60_000)
-      void shorts.read('/s')
+      void shorts.read({ query: { symbol: 's', exchange: '', currency: '', name: '', trend: false } })
       expect(calls.length).toBe(2)
     } finally {
       vi.useRealTimers()
@@ -138,11 +140,11 @@ describe('what is looked up on demand', () => {
 
   it('drops a request when the last reader stops waiting, and not before', async () => {
     const calls = slowFetch()
-    const bars = lookup()
+    const bars = lookup('GET /api/history')
     const one = new AbortController()
     const two = new AbortController()
-    const a = bars.read('/h', { signal: one.signal })
-    const b = bars.read('/h', { signal: two.signal })
+    const a = bars.read(hq('h'), { signal: one.signal })
+    const b = bars.read(hq('h'), { signal: two.signal })
     one.abort()
     expect(await a).toEqual({ ok: false, error: 'aborted' })
     expect(calls[0].signal.aborted).toBe(false)
@@ -150,7 +152,7 @@ describe('what is looked up on demand', () => {
     expect(await b).toEqual({ ok: false, error: 'aborted' })
     expect(calls[0].signal.aborted).toBe(true)
     // and the next reader asks afresh
-    void bars.read('/h')
+    void bars.read(hq('h'))
     expect(calls.length).toBe(2)
   })
 })

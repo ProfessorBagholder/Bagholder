@@ -21,7 +21,7 @@ mod versions;
 
 use std::path::{Path, PathBuf};
 
-use app::{f, log, spawn};
+use app::{log, spawn};
 
 const PORTS: [u16; 3] = [8765, 8766, 8767];
 const ACTIVITY_PULL_SEC: i64 = 24 * 60 * 60;
@@ -151,11 +151,11 @@ fn serve() -> i32 {
     // rows added before the bare-ticker convention (Wealthsimple's `.TO` on a dual listing) take it now
     if let Ok(conn) = a.open() {
         for w in bagholder_store::feeds::list_watchlist(&conn).unwrap_or_default() {
-            let sym = f(&w, "symbol");
+            let sym = w.symbol.clone();
             let bare = bagholder_model::venues::tmx_symbol(&sym);
             if !bare.is_empty() && bare != sym {
-                let _ = bagholder_store::feeds::remove_watch(&conn, &sym, &f(&w, "exchange"));
-                let _ = bagholder_store::feeds::add_watch(&conn, &bare, &f(&w, "exchange"), &f(&w, "name"), &f(&w, "currency"), &f(&w, "securityId"), &f(&w, "addedAt"));
+                let _ = bagholder_store::feeds::remove_watch(&conn, &sym, &w.exchange);
+                let _ = bagholder_store::feeds::add_watch(&conn, &bare, &w.exchange, &w.name, &w.currency, &w.security_id, &w.added_at);
             }
         }
     }

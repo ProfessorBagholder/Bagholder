@@ -2,7 +2,6 @@
 //! `BAGHOLDER_DRY_ORDERS` set nothing is placed (`orders::orders_live`).
 
 use axum::extract::State;
-use axum::routing::get;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -11,19 +10,17 @@ use super::{answer, api_routes, Api, AppState, Body, Params, Routed};
 use crate::orders;
 
 pub fn routes() -> Routed {
-    let mut routed = api_routes! {
-        get "/api/orders" => list, answer: "OrdersDoc";
-        post "/api/order/cancel" => cancel, body: "Named", answer: "OrderActionAnswer";
-        post "/api/order/modify" => modify, body: "Modify", answer: "OrderActionAnswer";
-        post "/api/bracket/adjust" => bracket_adjust, body: "Adjust", answer: "OrderActionAnswer";
-        post "/api/bracket/cancel" => bracket_cancel, body: "Named", answer: "OrderActionAnswer";
-        post "/api/book/append" => book_append, body: "BookAppend", answer: "Appended";
-        post "/api/orders/refresh" => refresh, answer: "RefreshAndOrders";
-    };
-    // not yet in the table: `place_ticket` and `ticket_quote` still answer
-    // `Value` (stage 5d7d's ticket-quote wire typing, §3, is unfinished)
-    routed.router = routed.router.route("/api/order/quote", get(quote)).route("/api/order", axum::routing::post(place));
-    routed
+    api_routes! {
+        get "/api/orders" => list;
+        post "/api/order/cancel" => cancel;
+        post "/api/order/modify" => modify;
+        post "/api/bracket/adjust" => bracket_adjust;
+        post "/api/bracket/cancel" => bracket_cancel;
+        post "/api/book/append" => book_append;
+        post "/api/orders/refresh" => refresh;
+        get "/api/order/quote" => quote;
+        post "/api/order" => place;
+    }
 }
 
 async fn list(State(state): State<AppState>) -> Api<orders::OrdersDoc> {
@@ -76,8 +73,8 @@ async fn refresh(State(state): State<AppState>) -> Api<RefreshAndOrders> {
     .await
 }
 
-#[derive(Deserialize)]
-struct QuoteOf {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct QuoteOf {
     #[serde(default, deserialize_with = "text")]
     symbol: String,
     #[serde(default, deserialize_with = "text")]
@@ -88,13 +85,13 @@ struct QuoteOf {
     exchange: String,
 }
 
-async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> super::Api<Value> {
+async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
     answer(move || orders::ticket_quote(&state.app, &q.symbol, &q.security, &q.account, &q.exchange)).await
 }
 
 /// `POST /api/order`. The body is read as a ticket; `place_ticket` checks it field by
 /// field and answers each refusal in the words the ticket shows.
-async fn place(State(state): State<AppState>, Body(ticket): Body<orders::Ticket>) -> super::Api<Value> {
+async fn place(State(state): State<AppState>, Body(ticket): Body<orders::Ticket>) -> Api<orders::PlaceTicketAnswer> {
     answer(move || orders::place_ticket(&state.app, &ticket)).await
 }
 
