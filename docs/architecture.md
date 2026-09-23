@@ -232,10 +232,9 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 
 ## 18. Changes to `SPEC.md`
 
-These passages of `SPEC.md` describe an old implementation or contradict this design, and change with it. The ones marked **for the owner** change what the person sees or what the app does with their money or notes, so they are decided by the owner; the rest follow from this design.
+These passages of `SPEC.md` describe an old implementation or contradict this design, and change with it. Everything else in `SPEC.md`, including every decision the owner has made about what the app shows and how it trades, stands.
 
 - Payout frequency (§1, §2 Distribution rate): never assumed. The spec's "12 is assumed" goes; the app finds the frequency out (§9, "Finding out what no single source says").
-- **For the owner — a watched stop's order** (§Brackets): it fires as a market sell, which can fill far away on a thin listing; a limit order a set distance through the bid fills almost always and never at any price. Which one a trader wants is the owner's call.
 - An unavailable source (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card, as every failure is shown.
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
 - Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
