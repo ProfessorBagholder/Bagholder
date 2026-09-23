@@ -35,7 +35,7 @@ These are directions the design serves now, not ones bolted on later:
 3. **Money moves.** Placing orders and guarding positions is safety-critical; the broker, not the app, is the truth about an order; and an automated action must be bounded.
 4. **Many readers, one truth.** The page, agents and scripts see the same figures, computed one way, with access limited to what each is allowed to do.
 5. **Live and frugal.** What is on screen is current within seconds of the world changing, and the app does only the work a change requires.
-6. **Private, durable, self-contained.** One person's data on their machine, backed up without them having to think about it; one program that keeps running and updates safely.
+6. **Private, durable, self-contained.** One person's data on their machine, never lost to an update; one program that keeps running and updates safely.
 
 ## 4. The shape
 
@@ -58,7 +58,7 @@ These are directions the design serves now, not ones bolted on later:
                                                            page · agents · CLI · notifications
 ```
 
-- **The book**: what the person's money did, what they wrote, and every fact a figure was computed from. Precious; backed up automatically.
+- **The book**: what the person's money did, what they wrote, and every fact a figure was computed from. Nothing in it can be fetched again.
 - **The market cache**: what the world's sources said that can be asked again. Losing it loses only time.
 - **Sources**: one adapter per outside source, turning what it sends into records or market data, and saying when it no longer can.
 - **The engine**: computes every figure in `SPEC.md` from the book and the cache. One implementation.
@@ -99,7 +99,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 
 **Money and quantities are exact.** Amounts and quantities are decimals, never binary floating point; every amount carries its currency and the types do not allow adding two currencies; conversion uses the Bank of Canada's published rate for that currency on the transaction's day (§7). Ratios and returns, which are statistics, are floating point.
 
-**The data is protected without the person thinking about it.** The book is backed up automatically on a schedule, with SQLite's own backup mechanism (never a copy of a live file), kept for a set period, and restoring one is tested. Before every schema migration the book is snapshotted, migrations are tested against stored copies of every past schema, and an update that is rolled back restores that snapshot.
+**Schema changes never lose data.** Migrations are numbered, run in order, refuse a book written by a newer version, and are tested against stored copies of every past schema. Before a migration the book is snapshotted, and an update that is rolled back restores that snapshot (§16).
 
 *Why:* the old book was a table of Wealthsimple rows with derivations mixed in; floating-point money was summed with error compensation so five implementations would agree on the last digit; a missing rate was the constant 1.35 and every non-USD currency was treated as CAD; bad rows were dropped or read as zero.
 
@@ -171,7 +171,7 @@ The part that moves money is built the way order systems are built.
 - The server answers only its own machine unless the person turns on remote access. Every request is checked for its Host and Origin, and every write carries a token that proves it came from the app's own page, so another website open in the same browser cannot reach it.
 - Remote access (from another device) goes through a secure tunnel or reverse proxy the person already trusts; the app does not manage certificates itself. A device is paired, receives its own token, and can be revoked.
 - Tokens carry access classes: what their holder may read and do. The page's own session has them all; a paired device and an AI agent (§14) have only what the person granted.
-- **Broker credentials** live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a backup or a moved book never carries them.
+- **Broker credentials** live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a copied or moved book never carries them.
 
 **Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the operating system's channel or the browser's.
 
@@ -220,7 +220,7 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 
 - **One program, run as a service.** A single binary serves the page and runs the engine and background work. It installs itself as the operating system's service (launchd, systemd, a Windows service), so it starts at boot and after a crash; while it runs, brackets are guarded.
 - **Updates are safe.** Releases are signed and the binary checks the signature with a key built into it. An update waits until no order or bracket action is in progress, snapshots the book, swaps the binary, and returns to the previous version and snapshot if the new one does not come up. The container never updates itself; it says a new image is available.
-- **One data folder** holds the book, the market cache, backups and settings.
+- **One data folder** holds the book, the market cache and settings.
 - **Resource use is bounded**: work follows §13, each host is paced, every cache has a limit.
 
 ## 17. How the design is held
@@ -235,9 +235,8 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 These passages of `SPEC.md` describe an old implementation or contradict this design, and change with it. The ones marked **for the owner** change what the person sees or what the app does with their money or notes, so they are decided by the owner; the rest follow from this design.
 
 - Payout frequency (§1, §2 Distribution rate): never assumed. The spec's "12 is assumed" goes; the app finds the frequency out (§9, "Finding out what no single source says").
-- **For the owner — Clear data** (§4, the menu): it deletes the journal, which nothing can fetch again. This design has Clear data remove only what can be fetched or derived again, makes deleting the journal a separate action, and takes a backup first.
 - **For the owner — a watched stop's order** (§Brackets): it fires as a market sell, which can fill far away on a thin listing; a limit order a set distance through the bid fills almost always and never at any price. Which one a trader wants is the owner's call.
-- **For the owner — an unavailable source** (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card.
+- An unavailable source (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card, as every failure is shown.
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
 - Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
 - Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/corporate-events.md`).

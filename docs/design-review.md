@@ -25,7 +25,7 @@ These are wrong today, whatever the design.
 - A fill can be double-booked when read-backs run at once; booking and marking are not one transaction (`readback.rs:318-320, 452`).
 - With the container port published beyond loopback, anyone on the network can place orders (`http/mod.rs:267-295`).
 - An update's rollback can leave no working copy, and never restores the book (`update.rs:448-451, 593-652`).
-- Broker rows are rewritten at every start (`store/src/relabel.rs:45-136`). Clear data deletes the person's own entries, imports and booked fills (`admin.rs:283-286`). Bad rows are dropped or read as zero (`lenient.rs:20-23`, `base.rs:69-71`).
+- Broker rows are rewritten at every start (`store/src/relabel.rs:45-136`). Bad rows are dropped or read as zero (`lenient.rs:20-23`, `base.rs:69-71`).
 - Trade ids are built from dates, quantities and prices, so a revised row or a re-inferred split renames earlier trades and cuts their notes loose (`fifo.rs:123-136, 547-600`).
 
 ## Part by part
@@ -35,7 +35,7 @@ These are wrong today, whatever the design.
 | Instrument, issuer and account identity (§5) | Rebuild: Bagholder ids and reference tables in place of Wealthsimple ids and bare symbols | large |
 | Source records, transactions, reconciliation (§6) | Rebuild: append-only records with revisions; derived, versioned transactions; links in place of rewriting | large |
 | Money and quantities (§6) | Rebuild: decimals with currency, no constant rate, every currency converted | large |
-| Two stores, migrations, backups (§6, §16) | Change: split the file; numbered migrations, snapshots, tests on real old databases; automatic backups | medium |
+| Two stores and migrations (§6, §16) | Change: split the file; numbered migrations, a snapshot before each, tests on real old databases | medium |
 | Database plumbing | Keep | — |
 | Engine purity and entry point (§8) | Change: today's date and zone rules as inputs; ticker tables out of the engine; typed entry point | small–medium |
 | Engine's figure rules (FIFO, trades, cashflow, stats, filters) | Keep the rules; change their types and inputs to Bagholder's own transactions | medium |
@@ -58,7 +58,7 @@ The foundation (identity, the record, money) is most of the work, and everything
 
 Each stage starts with its design reviewed by someone who did not build it, and its tests written from `SPEC.md` and real source replies.
 
-1. **The foundation**: identity, the book (records, transactions, links, facts used, adjustments), decimal money, the two stores, migrations and automatic backups.
+1. **The foundation**: identity, the book (records, transactions, links, facts used, adjustments), decimal money, the two stores and migrations.
 2. **The engine on the foundation**: stable trade ids, facts found rather than guessed (rates, payout frequency), contract terms, corporate events as records, Bagholder's own equity series, cases written from the spec, change reporting.
 3. **Sources and brokers**: the adapter contract with checking and health; the broker interface with Wealthsimple as its first adapter.
 4. **Execution**: state machines, event logs, one gate for every exit, safety limits, tests against a misbehaving fake broker.
