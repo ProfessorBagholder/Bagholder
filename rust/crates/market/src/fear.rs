@@ -6,10 +6,12 @@
 //! score a publisher gives without a rating is named on that same publisher's
 //! scale, which is the scale the score was made on.
 
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::http::{get_text, UA};
-use bagholder_model::value::{field_s, get, num};
+use bagholder_model::lenient;
+use bagholder_store::feeds::{Gauge, GaugePart, GaugePoint, GaugeReading};
 
 pub const STOCK_URL: &str = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata";
 pub const CRYPTO_URL: &str = "https://api.alternative.me/fng/?limit={}";
@@ -37,16 +39,6 @@ const PARTS: [(&str, &str); 7] = [
 
 /// The scale both publishers name their own scores on.
 const BANDS: [(f64, &str); 4] = [(25.0, "Extreme fear"), (45.0, "Fear"), (56.0, "Neutral"), (76.0, "Greed")];
-
-fn opt(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
-}
 
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
@@ -116,113 +108,187 @@ fn moment(text: &str) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", uy, um, ud, rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
-fn reading(label: &str, score: Option<&Value>) -> Option<Value> {
-    let n = opt(score)?;
-    Some(json!({"label": label, "score": round1(n), "rating": band(Some(n))}))
+/// CNN's answer: the reading now with the readings it compares itself against,
+/// its history, and its indicators.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CnnAnswer {
+    fear_and_greed: CnnNow,
+    fear_and_greed_historical: CnnHistory,
+    market_momentum_sp125: CnnPart,
+    stock_price_strength: CnnPart,
+    stock_price_breadth: CnnPart,
+    put_call_options: CnnPart,
+    market_volatility_vix_50: CnnPart,
+    junk_bond_demand: CnnPart,
+    safe_haven_demand: CnnPart,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CnnNow {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    score: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    rating: String,
+    #[serde(deserialize_with = "lenient::text")]
+    timestamp: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_close: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_1_week: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_1_month: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    previous_1_year: Option<f64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CnnHistory {
+    data: Value,
+}
+
+/// One point of a publisher's history: milliseconds and a score.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CnnPoint {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    x: Option<f64>,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    y: Option<f64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CnnPart {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    score: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    rating: String,
+}
+
+impl CnnAnswer {
+    /// The indicators in the order CNN's own page lists them, under its names.
+    fn parts(&self) -> [(&CnnPart, &'static str); 7] {
+        [
+            (&self.market_momentum_sp125, PARTS[0].1),
+            (&self.stock_price_strength, PARTS[1].1),
+            (&self.stock_price_breadth, PARTS[2].1),
+            (&self.put_call_options, PARTS[3].1),
+            (&self.market_volatility_vix_50, PARTS[4].1),
+            (&self.junk_bond_demand, PARTS[5].1),
+            (&self.safe_haven_demand, PARTS[6].1),
+        ]
+    }
+}
+
+/// Alternative.me's answer: one reading a day, newest first.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CryptoAnswer {
+    data: Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CryptoDay {
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    value: Option<f64>,
+    #[serde(deserialize_with = "lenient::text")]
+    value_classification: String,
+    #[serde(deserialize_with = "lenient::maybe_number")]
+    timestamp: Option<f64>,
+}
+
+fn reading(label: &str, score: Option<f64>) -> Option<GaugeReading> {
+    let n = score?;
+    Some(GaugeReading { label: label.to_string(), score: round1(n), rating: band(Some(n)) })
 }
 
 /// The reading now, the readings it compares itself
 /// against, its seven indicators, and a year of daily readings.
-pub fn parse_stocks(data: &Value) -> Value {
-    let fg = data.get("fear_and_greed").cloned().unwrap_or_else(|| json!({}));
-    let score = match opt(get(&fg, "score")) { Some(s) => s, None => return json!({}) };
-
-    let earlier: Vec<Value> = [
-        ("Previous close", "previous_close"),
-        ("A week ago", "previous_1_week"),
-        ("A month ago", "previous_1_month"),
-        ("A year ago", "previous_1_year"),
+pub fn parse_stocks(data: &Value) -> Option<Gauge> {
+    let answer: CnnAnswer = CnnAnswer::deserialize(data).unwrap_or_default();
+    let fg = &answer.fear_and_greed;
+    let score = fg.score?;
+    let previous: Vec<GaugeReading> = [
+        ("Previous close", fg.previous_close),
+        ("A week ago", fg.previous_1_week),
+        ("A month ago", fg.previous_1_month),
+        ("A year ago", fg.previous_1_year),
     ]
-    .iter()
-    .filter_map(|(label, key)| reading(label, get(&fg, key)))
+    .into_iter()
+    .filter_map(|(label, n)| reading(label, n))
     .collect();
-
-    let mut parts = Vec::new();
-    for (key, name) in PARTS {
-        let part = data.get(key).cloned().unwrap_or_else(|| json!({}));
-        if let Some(value) = opt(get(&part, "score")) {
-            parts.push(json!({
-                "name": name,
-                "score": round1(value),
-                "rating": rating(&field_s(&part, "rating"), Some(value)),
-            }));
-        }
-    }
-
-    let mut series: Vec<Value> = Vec::new();
-    let points = data
-        .get("fear_and_greed_historical")
-        .and_then(|h| h.get("data"))
-        .and_then(|d| d.as_array())
-        .cloned()
-        .unwrap_or_default();
-    for point in points {
-        let d = day(opt(get(&point, "x")));
-        if let (false, Some(v)) = (d.is_empty(), opt(get(&point, "y"))) {
-            series.push(json!({"date": d, "score": round1(v)}));
-        }
-    }
-    series.sort_by_key(|r| field_s(r, "date"));
-
-    json!({
-        "index": "stocks",
-        "source": "CNN",
-        "score": round1(score),
-        "rating": rating(&field_s(&fg, "rating"), Some(score)),
-        "asOf": moment(&field_s(&fg, "timestamp")),
-        "previous": earlier,
-        "parts": parts,
-        "series": series,
+    let parts: Vec<GaugePart> = answer
+        .parts()
+        .into_iter()
+        .filter_map(|(part, name)| {
+            let value = part.score?;
+            Some(GaugePart { name: name.to_string(), score: round1(value), rating: rating(&part.rating, Some(value)) })
+        })
+        .collect();
+    let mut series: Vec<GaugePoint> = lenient::rows::<CnnPoint>(&answer.fear_and_greed_historical.data)
+        .into_iter()
+        .filter_map(|p| {
+            let date = day(p.x);
+            match (date.is_empty(), p.y) {
+                (false, Some(v)) => Some(GaugePoint { date, score: round1(v) }),
+                _ => None,
+            }
+        })
+        .collect();
+    series.sort_by(|a, b| a.date.cmp(&b.date));
+    Some(Gauge {
+        index: "stocks".into(),
+        source: "CNN".into(),
+        score: round1(score),
+        rating: rating(&fg.rating, Some(score)),
+        as_of: moment(&fg.timestamp),
+        previous,
+        parts,
+        series,
     })
 }
 
 /// One reading a day, newest first. What it is compared
 /// against is its own earlier days; it publishes no indicators.
-pub fn parse_crypto(data: &Value) -> Value {
-    let mut rows: Vec<Value> = Vec::new();
-    for row in data.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default() {
-        let ts = opt(get(&row, "timestamp")).map(|t| t * 1000.0);
-        let d = day(ts);
-        if let (false, Some(v)) = (d.is_empty(), opt(get(&row, "value"))) {
-            rows.push(json!({
-                "date": d,
-                "score": round1(v),
-                "rating": rating(&field_s(&row, "value_classification"), Some(v)),
-            }));
-        }
-    }
-    if rows.is_empty() {
-        return json!({});
-    }
-    let now = rows[0].clone();
-    let at = |i: usize, label: &str| -> Option<Value> {
-        rows.get(i).map(|r| json!({"label": label, "score": r.get("score"), "rating": field_s(r, "rating")}))
-    };
-    let earlier: Vec<Value> = [(1usize, "Yesterday"), (7, "A week ago"), (30, "A month ago"), (365, "A year ago")]
-        .iter()
-        .filter_map(|(i, l)| at(*i, l))
+pub fn parse_crypto(data: &Value) -> Option<Gauge> {
+    let answer: CryptoAnswer = CryptoAnswer::deserialize(data).unwrap_or_default();
+    // (date, score, rating), newest first as published
+    let days: Vec<(String, f64, String)> = lenient::rows::<CryptoDay>(&answer.data)
+        .into_iter()
+        .filter_map(|r| {
+            let date = day(r.timestamp.map(|t| t * 1000.0));
+            match (date.is_empty(), r.value) {
+                (false, Some(v)) => Some((date, round1(v), rating(&r.value_classification, Some(v)))),
+                _ => None,
+            }
+        })
         .collect();
-    let mut series: Vec<Value> = rows
-        .iter()
-        .map(|r| json!({"date": field_s(r, "date"), "score": r.get("score")}))
+    let now = days.first()?;
+    let previous: Vec<GaugeReading> = [(1usize, "Yesterday"), (7, "A week ago"), (30, "A month ago"), (365, "A year ago")]
+        .into_iter()
+        .filter_map(|(i, label)| days.get(i).map(|(_, score, rating)| GaugeReading { label: label.to_string(), score: *score, rating: rating.clone() }))
         .collect();
-    series.sort_by_key(|r| field_s(r, "date"));
-
-    json!({
-        "index": "crypto",
-        "source": "Alternative.me",
-        "score": now.get("score"),
-        "rating": field_s(&now, "rating"),
-        "asOf": format!("{}T00:00:00Z", field_s(&now, "date")),
-        "previous": earlier,
-        "parts": [],
-        "series": series,
+    let mut series: Vec<GaugePoint> = days.iter().map(|(date, score, _)| GaugePoint { date: date.clone(), score: *score }).collect();
+    series.sort_by(|a, b| a.date.cmp(&b.date));
+    Some(Gauge {
+        index: "crypto".into(),
+        source: "Alternative.me".into(),
+        score: now.1,
+        rating: now.2.clone(),
+        as_of: format!("{}T00:00:00Z", now.0),
+        previous,
+        parts: vec![],
+        series,
     })
 }
 
 /// One index as its publisher gives it now, or nothing where it
 /// did not answer.
-pub fn read(index: &str) -> Value {
+pub fn read(index: &str) -> Option<Gauge> {
     let which = index.trim().to_lowercase();
     let stock_headers = [
         ("User-Agent", UA),
@@ -234,15 +300,12 @@ pub fn read(index: &str) -> Value {
     let text = match which.as_str() {
         "stocks" => get_text(STOCK_URL, &stock_headers),
         "crypto" => get_text(&CRYPTO_URL.replace("{}", &DAYS.to_string()), &crypto_headers),
-        _ => return json!({}),
+        _ => return None,
     };
-    let data: Value = match text.ok().and_then(|t| serde_json::from_str(&t).ok()) {
-        Some(d) => d,
-        None => return json!({}),
-    };
+    let data: Value = serde_json::from_str(&text.ok()?).ok()?;
     match which.as_str() {
         "stocks" => parse_stocks(&data),
         "crypto" => parse_crypto(&data),
-        _ => json!({}),
+        _ => None,
     }
 }

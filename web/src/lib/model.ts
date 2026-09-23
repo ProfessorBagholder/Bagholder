@@ -98,18 +98,6 @@ export interface ShortsResp {
   shorts?: Shorts
 }
 
-export interface FearReading { label: string; score: number; rating: string }
-export interface FearPart { name: string; score: number; rating: string }
-export interface FearGauge {
-  index: string
-  source: string
-  score: number
-  rating: string
-  asOf: string
-  previous: FearReading[]
-  parts: FearPart[]
-  series: { date: string; score: number }[]
-}
 
 // A ranked short-interest row from /api/shorts/feed (and a single /api/shorts hit).
 export interface ShortsFeedRow {

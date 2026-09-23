@@ -69,7 +69,7 @@ pub fn read(app: &Arc<App>, key: &str, _params: &Value) -> Option<Value> {
         }
         // `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the first answer
         // `fear:<index>`: the fear and greed meter
-        k if k.starts_with("fear:") => Some(crate::feeds::fear_stored(app, &k["fear:".len()..])),
+        k if k.starts_with("fear:") => Some(serde_json::to_value(crate::feeds::fear_stored(app, &k["fear:".len()..])).unwrap_or(Value::Null)),
         k if k.starts_with("quote:") => app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned(),
         k if k.starts_with("history:") => Some(serde_json::json!({"pending": crate::feeds::history_pending(app, &k["history:".len()..])})),
         _ => None,

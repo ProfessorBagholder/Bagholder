@@ -167,7 +167,11 @@ struct Fear {
 }
 
 async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api {
-    answer(move || feeds::fear_payload(&state.app, q.index.as_deref().unwrap_or("stocks"))).await
+    answer(move || match feeds::fear_payload(&state.app, q.index.as_deref().unwrap_or("stocks")) {
+        Ok(d) => serde_json::to_value(d).unwrap_or(Value::Null),
+        Err(e) => json!({"ok": false, "error": e}),
+    })
+    .await
 }
 
 #[derive(Deserialize)]

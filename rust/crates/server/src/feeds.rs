@@ -18,7 +18,7 @@ use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator};
+use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge};
 use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, set_meta};
 
@@ -1680,39 +1680,39 @@ pub const FEAR_STALE_MIN: f64 = 15.0;
 pub const FEAR_VERSION: i64 = 1;
 
 /// One index read from its publisher and kept.
-pub fn read_fear(app: &Arc<App>, index: &str) -> Value {
-    let rec = fear::read(index);
-    if truthy(Some(&rec)) {
-        if let Some(c) = conn(app) {
-            let _ = sf::save_gauge(&c, index, &rec, &now_iso(), FEAR_VERSION);
-        }
+pub fn read_fear(app: &Arc<App>, index: &str) -> Option<StoredGauge> {
+    let rec = StoredGauge { gauge: fear::read(index)?, fetched_at: now_iso(), read_version: FEAR_VERSION };
+    if let Some(c) = conn(app) {
+        let _ = sf::save_gauge(&c, index, &rec.gauge, &rec.fetched_at, FEAR_VERSION);
     }
-    rec
+    Some(rec)
 }
 
-fn fear_stale(rec: &Value) -> bool {
-    if (num(rec.get("readVersion"), Some(0.0)).unwrap_or(0.0) as i64) < FEAR_VERSION {
+fn fear_stale(rec: &StoredGauge) -> bool {
+    if rec.read_version < FEAR_VERSION {
         return true;
     }
-    match parse_instant(&f(rec, "fetchedAt")) {
+    match parse_instant(&rec.fetched_at) {
         Some(then) => now_unix() - then > FEAR_STALE_MIN * 60.0,
         None => true,
     }
 }
 
-fn has_score(rec: &Option<Value>) -> bool {
-    rec.as_ref().map(|r| truthy(Some(r)) && !r.get("score").map(|v| v.is_null()).unwrap_or(true)).unwrap_or(false)
+/// One index's meter, as a page is sent it.
+#[derive(Clone, Debug, serde::Serialize, ts_rs::TS)]
+pub struct FearDoc {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub gauge: Option<StoredGauge>,
 }
 
 /// One index's meter, from the store at once.
-pub fn fear_payload(app: &Arc<App>, index: &str) -> Value {
+pub fn fear_payload(app: &Arc<App>, index: &str) -> Result<FearDoc, String> {
     let which = index.trim().to_lowercase();
     if !fear::INDEXES.contains(&which.as_str()) {
-        return json!({"ok": false, "error": "no such index"});
+        return Err("no such index".into());
     }
-    let held = conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
-    if has_score(&held) {
-        let held = held.unwrap();
+    if let Some(held) = conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
         if fear_stale(&held) {
             let w = which.clone();
             let a = app.clone();
@@ -1720,20 +1720,17 @@ pub fn fear_payload(app: &Arc<App>, index: &str) -> Value {
                 read_fear(&a, &w);
             });
         }
-        return json!({"ok": true, "gauge": held});
+        return Ok(FearDoc { ok: true, gauge: Some(held) });
     }
-    let rec = read_fear(app, &which);
-    if truthy(Some(&rec)) { json!({"ok": true, "gauge": rec}) } else { json!({"ok": false, "error": "the index did not answer"}) }
+    let rec = read_fear(app, &which).ok_or_else(|| "the index did not answer".to_string())?;
+    Ok(FearDoc { ok: true, gauge: Some(rec) })
 }
 
 /// The meter as it is held, never waiting on its publisher: what a page showing it is
 /// sent (`docs`).
-pub fn fear_stored(app: &Arc<App>, index: &str) -> Value {
+pub fn fear_stored(app: &Arc<App>, index: &str) -> FearDoc {
     let which = index.trim().to_lowercase();
-    match conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) {
-        Some(g) if has_score(&Some(g.clone())) => json!({"ok": true, "gauge": g}),
-        _ => json!({"ok": true, "gauge": Value::Null}),
-    }
+    FearDoc { ok: true, gauge: conn(app).and_then(|c| sf::gauge(&c, &which).ok().flatten()) }
 }
 
 /// A page has started showing the meter `index`: read it when it is missing or
@@ -1748,7 +1745,7 @@ pub fn fear_shown(app: Arc<App>, doc: String, index: String) {
         app.single_flight(&doc.clone(), (), || {
             while app.events.watched(&doc) && !app.stopping() {
                 let held = conn(&app).and_then(|c| sf::gauge(&c, &which).ok().flatten());
-                if !(has_score(&held) && !fear_stale(held.as_ref().unwrap())) {
+                if held.as_ref().map_or(true, fear_stale) {
                     read_fear(&app, &which);
                 }
                 if app.wait(Duration::from_secs(FEAR_STALE_MIN as u64 * 60)) {

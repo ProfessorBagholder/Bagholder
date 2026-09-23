@@ -19,30 +19,7 @@ fn text(r: &Row, name: &str) -> Result<String> {
     Ok(r.get::<_, Option<String>>(name)?.unwrap_or_default())
 }
 
-fn real(r: &Row, name: &str) -> Result<Value> {
-    Ok(match r.get::<_, Option<f64>>(name)? { Some(v) => json!(v), None => Value::Null })
-}
-
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) if s.is_empty() => None,
-        Some(x) => { let n = num(Some(x), f64::NAN); if n.is_nan() { None } else { Some(n) } }
-    }
-}
-
 fn up(s: &str) -> String { s.trim().to_uppercase() }
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
 
 // --------------------------------------------------------------------------
 // exposure
@@ -711,60 +688,103 @@ pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Opt
 // gauges
 // --------------------------------------------------------------------------
 
+/// One published index's reading as its publisher gives it: the score now on
+/// the publisher's own scale, the readings it compares itself against, its
+/// indicators where it publishes them, and its daily history, oldest first.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Gauge {
+    pub index: String,
+    pub source: String,
+    pub score: f64,
+    pub rating: String,
+    pub as_of: String,
+    pub previous: Vec<GaugeReading>,
+    pub parts: Vec<GaugePart>,
+    pub series: Vec<GaugePoint>,
+}
+
+/// An earlier reading the publisher compares the one now against.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct GaugeReading {
+    pub label: String,
+    pub score: f64,
+    pub rating: String,
+}
+
+/// One of the indicators the publisher builds its score from.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct GaugePart {
+    pub name: String,
+    pub score: f64,
+    pub rating: String,
+}
+
+/// One day's reading.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct GaugePoint {
+    pub date: String,
+    pub score: f64,
+}
+
+/// A reading as stored: when it was read, and by which version of the reading.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredGauge {
+    #[serde(flatten)]
+    pub gauge: Gauge,
+    pub fetched_at: String,
+    pub read_version: i64,
+}
+
+/// What a gauge's row keeps beyond its columns.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct GaugeRest {
+    previous: Vec<GaugeReading>,
+    parts: Vec<GaugePart>,
+    series: Vec<GaugePoint>,
+}
+
 /// `save_gauge`: one published index's reading. What the publisher gives
 /// beyond the score travels in the payload.
-pub fn save_gauge(conn: &Connection, name: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
+pub fn save_gauge(conn: &Connection, name: &str, rec: &Gauge, now: &str, version: i64) -> Result<()> {
     crate::atomically(conn, || {
         let key = name.trim().to_lowercase();
-        let mut rest = Map::new();
-        if let Some(m) = rec.as_object() {
-            for (k, v) in m {
-                if !["index", "source", "score", "rating", "asOf"].contains(&k.as_str()) {
-                    rest.insert(k.clone(), v.clone());
-                }
-            }
-        }
+        let rest = GaugeRest { previous: rec.previous.clone(), parts: rec.parts.clone(), series: rec.series.clone() };
         conn.execute(
             "INSERT OR REPLACE INTO gauges (name, source, score, rating, as_of, payload, read_version, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rusqlite::params![
-                key,
-                field_s(rec, "source"),
-                opt_num(get(rec, "score")),
-                field_s(rec, "rating"),
-                field_s(rec, "asOf"),
-                crate::tables::json_text(&Value::Object(rest)),
-                version,
-                now,
-            ],
+            rusqlite::params![key, rec.source, rec.score, rec.rating, rec.as_of, serde_json::to_string(&rest).unwrap_or_default(), version, now],
         )?;
         Ok(())
     })
 }
 
-pub fn gauge(conn: &Connection, name: &str) -> Result<Option<Value>> {
+/// One index's stored reading; nothing where none is stored, or where the one
+/// stored has no score.
+pub fn gauge(conn: &Connection, name: &str) -> Result<Option<StoredGauge>> {
     let key = name.trim().to_lowercase();
     let mut stmt = conn.prepare("SELECT * FROM gauges WHERE name = ?")?;
     let mut rows = stmt.query([key])?;
     let r = match rows.next()? { Some(r) => r, None => return Ok(None) };
+    let score: Option<f64> = r.get("score")?;
+    let score = match score { Some(s) => s, None => return Ok(None) };
     let payload: Option<String> = r.get("payload")?;
-    let rest: Value = match payload {
-        Some(p) if !p.is_empty() => serde_json::from_str(&p).unwrap_or_else(|_| json!({})),
-        _ => json!({}),
-    };
-    let mut out = Map::new();
-    out.insert("index".into(), json!(text(r, "name")?));
-    out.insert("source".into(), json!(text(r, "source")?));
-    out.insert("score".into(), real(r, "score")?);
-    out.insert("rating".into(), json!(text(r, "rating")?));
-    out.insert("asOf".into(), json!(text(r, "as_of")?));
-    out.insert("fetchedAt".into(), json!(text(r, "fetched_at")?));
-    out.insert("readVersion".into(), json!(r.get::<_, Option<i64>>("read_version")?.unwrap_or(0)));
-    if let Some(m) = rest.as_object() {
-        for (k, v) in m {
-            out.insert(k.clone(), v.clone());
-        }
-    }
-    Ok(Some(Value::Object(out)))
+    let rest: GaugeRest = payload.as_deref().and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default();
+    Ok(Some(StoredGauge {
+        gauge: Gauge {
+            index: text(r, "name")?,
+            source: text(r, "source")?,
+            score,
+            rating: text(r, "rating")?,
+            as_of: text(r, "as_of")?,
+            previous: rest.previous,
+            parts: rest.parts,
+            series: rest.series,
+        },
+        fetched_at: text(r, "fetched_at")?,
+        read_version: r.get::<_, Option<i64>>("read_version")?.unwrap_or(0),
+    }))
 }
 
 // --------------------------------------------------------------------------
@@ -930,24 +950,14 @@ pub fn mark_notifications_seen(conn: &Connection, ids: &[i64], now: &str) -> Res
 // --------------------------------------------------------------------------
 
 /// `replace_universe`.
-pub fn replace_universe(conn: &Connection, key: &str, rows: &[Value], now: &str) -> Result<()> {
+pub fn replace_universe(conn: &Connection, key: &str, rows: &[bagholder_model::input::UniverseRow], now: &str) -> Result<()> {
     crate::atomically(conn, || {
         let changed = crate::gens::replace_if_changed(conn, "SELECT symbol, name, value, percent_change, sector, country FROM universes WHERE key = ?", rusqlite::params![key], || {
         conn.execute("DELETE FROM universes WHERE key = ?", [key])?;
-        for r in rows {
-            // the row is kept when its symbol is present and non-empty
-            if !r.get("symbol").map(truthy).unwrap_or(false) {
-                continue;
-            }
-            // the value and the change are stored as they came, not coerced
-            let value = crate::activities::to_sql(r.get("value").unwrap_or(&Value::Null));
-            let change = crate::activities::to_sql(r.get("percentChange").unwrap_or(&Value::Null));
+        for r in rows.iter().filter(|r| !r.symbol.is_empty()) {
             conn.execute(
                 "INSERT OR REPLACE INTO universes (key, symbol, name, value, percent_change, sector, country, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    key, field_s(r, "symbol"), field_s(r, "name"), value.as_ref(), change.as_ref(),
-                    field_s(r, "sector"), field_s(r, "country"), now,
-                ],
+                rusqlite::params![key, r.symbol, r.name, r.value, r.percent_change, r.sector, r.country, now],
             )?;
         }
         Ok(())

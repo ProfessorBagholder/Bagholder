@@ -73,13 +73,13 @@ fn test_news_and_a_universe_read_again_unchanged_are_not_a_change() {
     feeds::replace_news(&conn, "QNC", "TSX-V", &story, "2026-09-20T10:15:00Z").unwrap();
     assert_eq!(gen(&conn, "news"), n);
 
-    let rows = [json!({"symbol": "AAA", "name": "Aaa Corp", "value": 10.0, "percentChange": 1.5, "sector": "Energy", "country": "CA"})];
+    let rows = [bagholder_model::input::UniverseRow { symbol: "AAA".into(), name: "Aaa Corp".into(), value: 10.0, percent_change: Some(1.5), sector: "Energy".into(), country: "CA".into() }];
     feeds::replace_universe(&conn, "tsx60", &rows, "2026-09-20T10:00:00Z").unwrap();
     let u = gen(&conn, "universes");
     feeds::replace_universe(&conn, "tsx60", &rows, "2026-09-20T10:30:00Z").unwrap();
     assert_eq!(gen(&conn, "universes"), u);
     let mut ticked = rows.clone();
-    ticked[0]["percentChange"] = json!(1.6);
+    ticked[0].percent_change = Some(1.6);
     feeds::replace_universe(&conn, "tsx60", &ticked, "2026-09-20T11:00:00Z").unwrap();
     assert!(gen(&conn, "universes") > u);
 }

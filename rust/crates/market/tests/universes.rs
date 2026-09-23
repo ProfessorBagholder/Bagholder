@@ -12,19 +12,19 @@ fn rows_data() -> Value {
         {"symbol": "ABC", "name": "No country", "lastsale": "$2.00", "pctchange": "0.1%", "marketCap": "100.00", "sector": "Telecommunications", "country": ""},
     ]}})
 }
-fn syms(rows: &[Value]) -> Vec<&str> { rows.iter().map(|r| r["symbol"].as_str().unwrap()).collect() }
+fn syms(rows: &[bagholder_model::input::UniverseRow]) -> Vec<&str> { rows.iter().map(|r| r.symbol.as_str()).collect() }
 
 #[test]
 fn test_rows_are_parsed_and_sectors_folded() {
     let rows = universes::parse_screener(&rows_data());
-    let first: Vec<(Value, Value, Value, Value, Value, Value)> = rows[..2].iter().map(|r| (r["symbol"].clone(), r["last"].clone(), r["percentChange"].clone(), r["cap"].clone(), r["sector"].clone(), r["country"].clone())).collect();
+    let first: Vec<(&str, Option<f64>, Option<f64>, f64, &str, &str)> = rows[..2].iter().map(|r| (r.symbol.as_str(), r.last, r.percent_change, r.cap, r.sector.as_str(), r.country.as_str())).collect();
     assert_eq!(first, vec![
-        (json!("NVDA"), json!(219.41), json!(0.808), json!(5.35e12), json!("Information Technology"), json!("United States")),
-        (json!("JPM"), json!(210.0), json!(-0.5), json!(6e11), json!("Financials"), json!("United States")),
+        ("NVDA", Some(219.41), Some(0.808), 5.35e12, "Information Technology", "United States"),
+        ("JPM", Some(210.0), Some(-0.5), 6e11, "Financials", "United States"),
     ]);
-    let sectors: Vec<&str> = rows[4..].iter().map(|r| r["sector"].as_str().unwrap()).collect();
+    let sectors: Vec<&str> = rows[4..].iter().map(|r| r.sector.as_str()).collect();
     assert_eq!(sectors, ["Not classified", "Communication Services"]);
-    assert!(rows[4]["percentChange"].is_null());
+    assert_eq!(rows[4].percent_change, None);
 }
 
 #[test]
@@ -32,14 +32,14 @@ fn test_us_and_international_are_the_largest_by_cap() {
     let rows = universes::parse_screener(&rows_data());
     assert_eq!(syms(&universes::us_rows(&rows, 5)), ["NVDA", "JPM"]);
     assert_eq!(syms(&universes::intl_rows(&rows, 5)), ["TSM"]);
-    assert_eq!(universes::us_rows(&rows, 1)[0]["value"].as_f64(), Some(5.35e12));
+    assert_eq!(universes::us_rows(&rows, 1)[0].value, 5.35e12);
 }
 
 #[test]
 fn test_constituents_and_tile_quote() {
     let cons = universes::parse_constituents(&json!({"data": {"constituents": [{"symbol": "RY", "quotedMarketValue": 398317400940u64, "longName": "Royal Bank of Canada", "weight": 9.823, "exchange": "TSX"}, {"weight": 1}]}}));
-    assert_eq!(cons, vec![json!({"symbol": "RY", "name": "Royal Bank of Canada", "weight": 9.823, "cap": 398317400940.0, "exchange": "TSX"})]);
+    assert_eq!(cons, vec![universes::Constituent { symbol: "RY".into(), name: "Royal Bank of Canada".into(), weight: 9.823, cap: 398317400940.0, exchange: "TSX".into() }]);
     let q = universes::parse_tile_quote(&json!({"data": {"getQuoteBySymbol": {"symbol": "RY", "name": "Royal Bank", "price": 180.1, "percentChange": 0.42, "sector": "Financial Services"}}}));
-    assert_eq!(q, Some(json!({"percentChange": 0.42, "sector": "Financials", "name": "Royal Bank"})));
+    assert_eq!(q, Some(universes::TileQuote { percent_change: Some(0.42), sector: "Financials".into(), name: "Royal Bank".into() }));
     assert_eq!(universes::parse_tile_quote(&json!({"data": {"getQuoteBySymbol": null}})), None);
 }

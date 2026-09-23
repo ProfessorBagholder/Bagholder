@@ -3,7 +3,7 @@
   // "what it is made of" reading rows, and the history line with its hover. The
   // gauge is read from /api/fear?index=…, cached per index, and a slow response is
   // guarded by a request id so it cannot overwrite a newer selection.
-  import type { FearGauge } from '../model'
+  import type { FearDoc } from '../generated/markets'
   import { relTime } from '../fmt'
   import { n2, shortDay } from './util'
   import { watchDoc } from '../live'
@@ -30,7 +30,7 @@
   // The meter is sent while this card shows it: what is held at once, and the fresh
   // reading when the server has it -- it reads the publisher only while some page
   // shows the meter.
-  const docs = $state<Record<string, { data: { ok: boolean; gauge: FearGauge | null } | null }>>({})
+  const docs = $state<Record<string, { data: FearDoc | null }>>({})
   $effect(() => {
     const ix = fearIndex
     if (!docs[ix]) docs[ix] = { data: null }

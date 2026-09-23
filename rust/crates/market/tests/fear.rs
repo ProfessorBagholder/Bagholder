@@ -24,8 +24,6 @@ fn crypto() -> Value {
     json!({"data": [{"value": "51", "value_classification": "Neutral", "timestamp": "1789516800"},
                     {"value": "69", "value_classification": "Greed", "timestamp": "1789430400"}]})
 }
-fn s(v: &Value) -> &str { v.as_str().unwrap_or("") }
-fn f(v: &Value) -> f64 { v.as_f64().unwrap() }
 
 #[test]
 fn test_a_score_is_named_on_the_publishers_own_scale() {
@@ -41,39 +39,38 @@ fn test_the_publishers_own_word_is_kept_where_it_gives_one() {
 
 #[test]
 fn test_the_reading_its_comparisons_its_seven_indicators_and_its_history() {
-    let rec = fear::parse_stocks(&cnn());
-    assert_eq!((s(&rec["index"]), s(&rec["source"]), f(&rec["score"]), s(&rec["rating"])), ("stocks", "CNN", 28.7, "Fear"));
-    assert_eq!(s(&rec["asOf"]), "2026-09-15T23:59:51Z");
-    let prev: Vec<(&str, f64, &str)> = rec["previous"].as_array().unwrap().iter().map(|r| (s(&r["label"]), f(&r["score"]), s(&r["rating"]))).collect();
+    let rec = fear::parse_stocks(&cnn()).unwrap();
+    assert_eq!((rec.index.as_str(), rec.source.as_str(), rec.score, rec.rating.as_str()), ("stocks", "CNN", 28.7, "Fear"));
+    assert_eq!(rec.as_of, "2026-09-15T23:59:51Z");
+    let prev: Vec<(&str, f64, &str)> = rec.previous.iter().map(|r| (r.label.as_str(), r.score, r.rating.as_str())).collect();
     assert_eq!(prev, vec![("Previous close", 31.1, "Fear"), ("A week ago", 39.1, "Fear"), ("A month ago", 64.3, "Greed"), ("A year ago", 64.5, "Greed")]);
-    let parts = rec["parts"].as_array().unwrap();
-    let names: Vec<&str> = parts.iter().map(|p| s(&p["name"])).collect();
+    let names: Vec<&str> = rec.parts.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["Market momentum", "Stock price strength", "Stock price breadth", "Put and call options", "Market volatility", "Junk bond demand", "Safe haven demand"]);
-    assert_eq!(f(&parts[0]["score"]), 22.8, "the 125-day momentum CNN's own page names");
-    assert_eq!(f(&parts[4]["score"]), 50.0, "and the VIX's 50-day average");
-    let dates: Vec<&str> = rec["series"].as_array().unwrap().iter().map(|p| s(&p["date"])).collect();
+    assert_eq!(rec.parts[0].score, 22.8, "the 125-day momentum CNN's own page names");
+    assert_eq!(rec.parts[4].score, 50.0, "and the VIX's 50-day average");
+    let dates: Vec<&str> = rec.series.iter().map(|p| p.date.as_str()).collect();
     assert_eq!(dates, ["2025-09-16", "2026-09-15"], "oldest first");
 }
 
 #[test]
 fn test_an_answer_with_no_score_is_no_reading() {
-    assert_eq!(fear::parse_stocks(&json!({"fear_and_greed": {}})), json!({}));
-    assert_eq!(fear::parse_stocks(&Value::Null), json!({}));
+    assert_eq!(fear::parse_stocks(&json!({"fear_and_greed": {}})), None);
+    assert_eq!(fear::parse_stocks(&Value::Null), None);
 }
 
 #[test]
 fn test_the_days_own_reading_and_the_days_behind_it() {
-    let rec = fear::parse_crypto(&crypto());
-    assert_eq!((s(&rec["index"]), s(&rec["source"]), f(&rec["score"]), s(&rec["rating"])), ("crypto", "Alternative.me", 51.0, "Neutral"));
-    assert_eq!(s(&rec["asOf"]), "2026-09-16T00:00:00Z");
-    let prev: Vec<(&str, f64)> = rec["previous"].as_array().unwrap().iter().map(|r| (s(&r["label"]), f(&r["score"]))).collect();
+    let rec = fear::parse_crypto(&crypto()).unwrap();
+    assert_eq!((rec.index.as_str(), rec.source.as_str(), rec.score, rec.rating.as_str()), ("crypto", "Alternative.me", 51.0, "Neutral"));
+    assert_eq!(rec.as_of, "2026-09-16T00:00:00Z");
+    let prev: Vec<(&str, f64)> = rec.previous.iter().map(|r| (r.label.as_str(), r.score)).collect();
     assert_eq!(prev, vec![("Yesterday", 69.0)], "only the days the publisher gave");
-    assert_eq!(rec["parts"], json!([]));
-    let dates: Vec<&str> = rec["series"].as_array().unwrap().iter().map(|p| s(&p["date"])).collect();
+    assert!(rec.parts.is_empty());
+    let dates: Vec<&str> = rec.series.iter().map(|p| p.date.as_str()).collect();
     assert_eq!(dates, ["2026-09-15", "2026-09-16"]);
 }
 
 #[test]
 fn test_an_empty_answer_is_no_reading() {
-    assert_eq!(fear::parse_crypto(&json!({"data": []})), json!({}));
+    assert_eq!(fear::parse_crypto(&json!({"data": []})), None);
 }

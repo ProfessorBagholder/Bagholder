@@ -191,7 +191,7 @@ pub struct NewsRow {
 }
 
 /// One constituent of a market universe (the heatmaps beyond the book).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UniverseRow {
     #[serde(deserialize_with = "lenient::text")]
