@@ -25,9 +25,9 @@ type: string, title: string, date: string, dateText: string, size: string, url: 
 
 export type SourceStatus = { available: boolean, matched: boolean, filer: boolean, error: string, };
 
-export type FilingsDoc = { ok: true, symbol: string, available: boolean, sources: { [key in Regulator]?: SourceStatus }, categories: Array<string>, fetchedAt: string, everRead: boolean, summaryStatus: string, reading: Array<string>, filings: Array<Filing>, };
+export type FilingsDoc = { ok: true, symbol: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, fetchedAt: string, everRead: boolean, summaryStatus: string, reading: Array<string>, filings: Array<Filing>, };
 
-export type FilingsPayload = { ok: true, symbol: string, available: boolean, sources: { [key in Regulator]?: SourceStatus }, categories: Array<string>, profileNo: string, fetchedAt: string, refreshed: boolean, sourceUnavailable: boolean, filings: Array<Filing>, };
+export type FilingsPayload = { ok: true, symbol: string, available: boolean, sources: { [key in string]: SourceStatus }, categories: Array<string>, profileNo: string, fetchedAt: string, refreshed: boolean, sourceUnavailable: boolean, filings: Array<Filing>, };
 
 export type FeedFiling = { symbol: string, exchange: string, subject: string, summary: string, enrichedAt: string, 
 /**

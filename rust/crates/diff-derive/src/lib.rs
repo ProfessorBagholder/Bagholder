@@ -87,16 +87,22 @@ fn container(input: &DeriveInput) -> syn::Result<Container> {
 struct Field {
     rename: Option<String>,
     skip_if: Option<syn::ExprPath>,
+    /// `#[serde(flatten)]`: this field's own fields merge into the parent's
+    /// JSON object at the parent's own level, so it is compared at the
+    /// parent's own path, under no name of its own.
+    flatten: bool,
 }
 
 fn field(f: &syn::Field) -> syn::Result<Field> {
-    let mut out = Field { rename: None, skip_if: None };
+    let mut out = Field { rename: None, skip_if: None, flatten: false };
     for attr in f.attrs.iter().filter(|a| a.path().is_ident("serde")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("rename") {
                 out.rename = Some(meta.value()?.parse::<LitStr>()?.value());
             } else if meta.path.is_ident("skip_serializing_if") {
                 out.skip_if = Some(meta.value()?.parse::<LitStr>()?.parse()?);
+            } else if meta.path.is_ident("flatten") {
+                out.flatten = true;
             } else if meta.path.is_ident("default") || meta.path.is_ident("deserialize_with") || meta.path.is_ident("alias") {
                 // how it is read, not how it is written
                 if meta.input.peek(syn::Token![=]) {
@@ -128,6 +134,12 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             for f in &named.named {
                 let ident = f.ident.as_ref().unwrap();
                 let a = field(f)?;
+                if a.flatten {
+                    // its fields join the parent's own JSON object: compared at the
+                    // parent's own path, under no name of its own
+                    steps.push(quote!(#patch::Diff::diff(&self.#ident, &new.#ident, path, ops);));
+                    continue;
+                }
                 let raw = ident.to_string();
                 let raw = raw.strip_prefix("r#").unwrap_or(&raw);
                 let json = match (&a.rename, &c.rename_all) {
@@ -158,18 +170,35 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         }
         (Some(k), _) => {
             let Data::Struct(s) = &input.data else { unreachable!() };
-            let f = s.fields.iter().find(|f| f.ident.as_ref() == Some(k)).ok_or_else(|| syn::Error::new_spanned(k, "no such field"))?;
-            let a = field(f)?;
-            let raw = k.to_string();
-            let json = match (&a.rename, &c.rename_all) {
-                (Some(r), _) => r.clone(),
-                (None, Some(rule)) => renamed(rule, &raw, k.span())?,
-                (None, None) => raw,
-            };
-            quote! {
-                const KEY: Option<&'static str> = Some(#json);
-                fn row_key(&self) -> Option<String> {
-                    #patch::key_of(&self.#k)
+            match s.fields.iter().find(|f| f.ident.as_ref() == Some(k)) {
+                Some(f) => {
+                    let a = field(f)?;
+                    let raw = k.to_string();
+                    let json = match (&a.rename, &c.rename_all) {
+                        (Some(r), _) => r.clone(),
+                        (None, Some(rule)) => renamed(rule, &raw, k.span())?,
+                        (None, None) => raw,
+                    };
+                    quote! {
+                        const KEY: Option<&'static str> = Some(#json);
+                        fn row_key(&self) -> Option<String> {
+                            #patch::key_of(&self.#k)
+                        }
+                    }
+                }
+                // not a field of this struct itself: it lives in the field whose own
+                // fields join this one's JSON object, and this struct's rows are told
+                // apart exactly as that field's are
+                None => {
+                    let flat = s.fields.iter().find(|f| field(f).map(|a| a.flatten).unwrap_or(false)).ok_or_else(|| syn::Error::new_spanned(k, "no such field"))?;
+                    let fident = flat.ident.as_ref().unwrap();
+                    let fty = &flat.ty;
+                    quote! {
+                        const KEY: Option<&'static str> = <#fty as #patch::Diff>::KEY;
+                        fn row_key(&self) -> Option<String> {
+                            #patch::Diff::row_key(&self.#fident)
+                        }
+                    }
                 }
             }
         }

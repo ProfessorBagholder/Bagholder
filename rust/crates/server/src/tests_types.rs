@@ -166,3 +166,33 @@ fn test_the_pages_book_types_are_the_servers() {
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/book.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }
+
+/// The header's status, generated to `web/src/lib/generated/status.ts` -- a
+/// field renamed, added or made nullable on `Status`, `NotifyStatus` or
+/// `NotifySettings` fails the page's type check.
+fn status_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::NotifyStatus, crate::status::Status];
+    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\n");
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_status_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/status.ts");
+    let want = status_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/status.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}

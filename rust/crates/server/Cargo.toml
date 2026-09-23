@@ -8,6 +8,7 @@ edition.workspace = true
 # model's are: the two sides of the wire cannot drift
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 bagholder-model = { path = "../model" }
+bagholder-diff-derive = { path = "../diff-derive" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
 bagholder-ws = { path = "../ws" }

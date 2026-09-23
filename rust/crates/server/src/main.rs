@@ -398,3 +398,5 @@ mod tests_brackets;
 mod tests_orders;
 #[cfg(test)]
 mod tests_types;
+#[cfg(test)]
+mod tests_docs_golden;

@@ -51,7 +51,7 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
             // looking is not missed
             rx.borrow_and_update();
             let (back, messages) = blocking(move || {
-                let messages = feed.step(&crate::status::payload);
+                let messages = feed.step(&crate::status::status);
                 (feed, messages)
             })
             .await

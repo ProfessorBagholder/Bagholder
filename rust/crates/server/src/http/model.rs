@@ -32,7 +32,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn status(State(state): State<AppState>) -> Api {
-    super::answer(move || crate::status::payload(&state.app)).await
+    super::answer(move || serde_json::to_value(crate::status::answer(&state.app)).unwrap_or(Value::Null)).await
 }
 
 #[derive(Deserialize)]

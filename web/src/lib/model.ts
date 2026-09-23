@@ -7,6 +7,7 @@
 // status, and the documents read on demand: short interest, filings, fear and greed).
 
 import type * as wire from './generated/wire'
+import type { Status } from './generated/status'
 
 export type {
   Kind, Kpi, Annualized, Drawdown, YearRow, GradeBucket, Grades, BySymbolRow, QueueRow, MonthlyBar,
@@ -18,6 +19,8 @@ export type {
 export type {
   Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
 } from './generated/filings'
+
+export type { Status, NotifyStatus, NotifySettings } from './generated/status'
 
 export type {
   ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
@@ -46,34 +49,6 @@ export type Trade = wire.Trade & {
   cost?: number
   last?: number | null
   percentChange?: number | null
-}
-
-export interface Notify {
-  unread: number
-  [k: string]: unknown
-}
-export interface Status {
-  ok: boolean
-  connected: boolean
-  email: string
-  version: string
-  lastSync: string
-  syncing: boolean
-  syncStep: string
-  error: string
-  openOrders: number
-  updateAvailable: boolean
-  canUpdate: boolean
-  latestVersion: string
-  updateUrl: string
-  updateBy: string
-  updating: string
-  updateError: string
-  /** the listings the server's news pass has still to read (`*` is the market's feed) */
-  newsReading: string[]
-  protocol: string
-  notify: Notify
-  [k: string]: unknown
 }
 
 /** The model as the stream delivers it: the view, with the header's status beside it. */

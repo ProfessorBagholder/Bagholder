@@ -57,19 +57,19 @@ fn insert_local(conn: &Connection, row: Value) {
 fn test_status_carries_the_data_version_so_the_page_can_reload() {
     let _g = guard();
     let conn = app_ref().open().unwrap();
-    let v0 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
+    let v0 = crate::status::answer(&app()).data_version;
     assert!(!v0.is_empty());
     let price = 4.75 + (app::now_unix() % 1000.0) / 1e4;
     bagholder_store::market::upsert_quote(&conn, "RDDY", &bagholder_store::market::QuoteRecord { price: Some(price), ..Default::default() }, "tmx", &app::now_iso()).unwrap();
-    let v1 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
+    let v1 = crate::status::answer(&app()).data_version;
     assert_ne!(v0, v1);
     bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2026-09-30".into(), pay_date: "2026-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
-    let v2 = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
+    let v2 = crate::status::answer(&app()).data_version;
     // the shared home may already hold this row: then a second, later one moves it
     if v1 == v2 {
         bagholder_store::market::upsert_distributions(&conn, "RDDY", &[bagholder_store::market::DistributionRecord { ex_date: "2099-09-30".into(), pay_date: "2099-10-05".into(), amount: Some(0.2), currency: "CAD".into() }], "tmx").unwrap();
     }
-    assert_ne!(v1, crate::status::payload(&app())["dataVersion"].as_str().unwrap());
+    assert_ne!(v1, crate::status::answer(&app()).data_version);
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
     let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
     app().invalidate();
@@ -80,7 +80,7 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
 #[test]
 fn test_status_version_changes_with_the_date_so_the_page_refetches_at_midnight() {
     let _g = guard();
-    let v = crate::status::payload(&app())["dataVersion"].as_str().unwrap().to_string();
+    let v = crate::status::answer(&app()).data_version;
     assert!(v.ends_with(&format!("|{}", bagholder_model::clock::today_local())), "{}", v);
 }
 

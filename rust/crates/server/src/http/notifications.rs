@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::json;
 
 use super::{with_store, Api, AppState, Body};
 use crate::{app, notify};
@@ -33,9 +33,9 @@ async fn list(State(state): State<AppState>) -> Api {
 }
 
 /// `POST /api/notifications/settings`: the switches that changed, by name.
-async fn settings(State(state): State<AppState>, Body(patch): Body<Map<String, Value>>) -> Api {
+async fn settings(State(state): State<AppState>, Body(patch): Body<notify::NotifySettingsPatch>) -> Api {
     with_store(&state, move |conn| {
-        notify::set_settings(conn, &Value::Object(patch))?;
+        notify::set_settings(conn, &patch)?;
         Ok(json!({"ok": true, "settings": notify::status(conn)?}))
     })
     .await
@@ -45,7 +45,7 @@ async fn test(State(state): State<AppState>) -> Api {
     let app = state.app.clone();
     with_store(&state, move |conn| {
         let row = notify::test_notification(&app, conn);
-        Ok(json!({"ok": row.is_some(), "id": row.as_ref().and_then(|r| r.get("id").cloned()).unwrap_or(json!(0))}))
+        Ok(json!({"ok": row.is_some(), "id": row.as_ref().map(|r| json!(r.id)).unwrap_or(json!(0))}))
     })
     .await
 }

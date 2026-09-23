@@ -18,7 +18,7 @@ macro_rules! words {
     // `$first` is what a row that does not say is: the word the store itself would write
     ($(#[$doc:meta])* $name:ident, $first:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ts_rs::TS)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ts_rs::TS, bagholder_diff_derive::Diff)]
         pub enum $name {
             #[ts(rename = "")]
             Unset,
@@ -125,8 +125,9 @@ pub(crate) fn lenient_num<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Opti
 
 /// One order: a ticket written here before it was sent, or an order read back from
 /// Wealthsimple that was placed elsewhere.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase", default)]
+#[diff(key = id)]
 pub struct Order {
     pub id: String,
     pub created_at: String,
@@ -170,7 +171,7 @@ pub struct Order {
 }
 
 /// The stop an entry asked for.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StopLoss {
     pub kind: SlKind,
@@ -182,7 +183,7 @@ pub struct StopLoss {
 }
 
 /// The target an entry asked for.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TakeProfit {
     #[serde(deserialize_with = "lenient_num")]
@@ -220,8 +221,9 @@ impl OrderPatch {
 
 /// The exits held for an entry: a stop, a target, or both, placed once the entry fills
 /// and kept to the shares it filled.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase", default)]
+#[diff(key = id)]
 pub struct Bracket {
     pub id: String,
     pub order_id: String,

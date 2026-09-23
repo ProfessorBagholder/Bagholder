@@ -207,6 +207,7 @@ name = "bagholder-server"
 version = "1.45.0"
 dependencies = [
  "axum",
+ "bagholder-diff-derive",
  "bagholder-market",
  "bagholder-model",
  "bagholder-store",
@@ -228,6 +229,7 @@ dependencies = [
 name = "bagholder-store"
 version = "1.45.0"
 dependencies = [
+ "bagholder-diff-derive",
  "bagholder-model",
  "indexmap",
  "regex",

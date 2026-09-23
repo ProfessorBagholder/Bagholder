@@ -191,9 +191,9 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 fn test_a_feed_with_nothing_new_has_nothing_to_say() {
     let _g = guard();
     let mut feed = crate::events::Feed::open(app(), None, None);
-    let first = feed.step(&crate::status::payload);
+    let first = feed.step(&crate::status::status);
     assert_eq!(first.iter().map(|m| m.0).collect::<Vec<_>>(), ["snapshot"]);
-    assert!(feed.step(&crate::status::payload).is_empty(), "the same view and the same status: no message at all");
+    assert!(feed.step(&crate::status::status).is_empty(), "the same view and the same status: no message at all");
 }
 
 #[test]
@@ -201,16 +201,16 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
     std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
     let conn = app_ref().open().unwrap();
-    crate::notify::set_settings(&conn, &json!({"fills": true})).unwrap();
+    crate::notify::set_settings(&conn, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
     bagholder_store::feeds::clear_notifications(&conn).unwrap();
     let mut feed = crate::events::Feed::open(app(), None, None);
     assert!(app().events.watch(&app(), feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
-    let first = feed.step(&crate::status::payload);
+    let first = feed.step(&crate::status::status);
     let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");
     assert_eq!((bell.0, &bell.1["data"]), ("snapshot", &json!({"rows": [], "unread": 0})));
 
     let row = crate::notify::emit(&app(), &conn, "fills", "order:9:filled", "Order filled · QNC", "Bought 5 at 1.75", None).expect("fills are on");
-    let next = feed.step(&crate::status::payload);
+    let next = feed.step(&crate::status::status);
     let change = next.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell is told");
     assert_eq!(change.0, "patch");
     let ops = change.1["ops"].as_array().unwrap();
@@ -218,7 +218,7 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let inserted = ops.iter().find(|op| op[0] == "rows").expect("a row inserted, not the list again");
     let added = inserted[4].as_object().unwrap();
     assert_eq!(added.len(), 1);
-    assert_eq!(added.values().next().unwrap()["title"], row["title"]);
+    assert_eq!(added.values().next().unwrap()["title"], json!(row.title));
 }
 
 /// `GET /api/book` answers exactly what `bagholder_store::book::book` builds,

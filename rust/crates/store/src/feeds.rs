@@ -478,7 +478,7 @@ pub fn trim_news(conn: &Connection, keep: i64) -> Result<()> {
 pub fn filing_key(symbol: &str) -> String { up(symbol) }
 
 /// The regulator a document was filed with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 pub enum Regulator {
     #[serde(rename = "SEDAR+")]
     Sedar,
@@ -504,8 +504,9 @@ impl Regulator {
 }
 
 /// A document a regulator lists for an issuer.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = id)]
 pub struct FiledDocument {
     pub id: String,
     pub source: Regulator,
@@ -523,8 +524,9 @@ pub struct FiledDocument {
 }
 
 /// A filed document as stored, with what a reading made of it.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = id)]
 pub struct Filing {
     #[serde(flatten)]
     #[ts(flatten)]
@@ -720,7 +722,7 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
 // --------------------------------------------------------------------------
 
 /// "us" or "ca": the regulator's own market for a listing's short selling.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "lowercase")]
 pub enum ShortMarket {
     #[default]
@@ -739,7 +741,7 @@ impl ShortMarket {
 
 /// Whether a short volume report covers one trading day (the US) or a
 /// half-month period (Canada).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "lowercase")]
 pub enum VolumeSpan {
     Day,
@@ -757,7 +759,8 @@ impl VolumeSpan {
 
 /// One reporting date's short position, as the run behind a listing's current
 /// figure.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = date)]
 pub struct ShortPoint {
     pub date: String,
     pub shares: f64,
@@ -767,8 +770,9 @@ pub struct ShortPoint {
 /// still sold short and the short part of its recent trading. Neither
 /// measure is estimated -- every figure here is the regulator's own, or
 /// `daysToCover`, the one number the app derives from them.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
 pub struct Shorts {
     pub symbol: String,
     pub exchange: String,
@@ -821,8 +825,9 @@ impl Default for Shorts {
 
 /// A listing's short selling as stored: when it was read, and by which
 /// version of the reading.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
 pub struct StoredShorts {
     #[serde(flatten)]
     pub shorts: Shorts,
@@ -948,7 +953,7 @@ pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Opt
 /// One published index's reading as its publisher gives it: the score now on
 /// the publisher's own scale, the readings it compares itself against, its
 /// indicators where it publishes them, and its daily history, oldest first.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct Gauge {
     pub index: String,
@@ -962,7 +967,8 @@ pub struct Gauge {
 }
 
 /// An earlier reading the publisher compares the one now against.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = label)]
 pub struct GaugeReading {
     pub label: String,
     pub score: f64,
@@ -970,7 +976,8 @@ pub struct GaugeReading {
 }
 
 /// One of the indicators the publisher builds its score from.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = name)]
 pub struct GaugePart {
     pub name: String,
     pub score: f64,
@@ -978,14 +985,15 @@ pub struct GaugePart {
 }
 
 /// One day's reading.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[diff(key = date)]
 pub struct GaugePoint {
     pub date: String,
     pub score: f64,
 }
 
 /// A reading as stored: when it was read, and by which version of the reading.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredGauge {
     #[serde(flatten)]
@@ -1101,23 +1109,66 @@ pub fn mark_told(conn: &Connection, scope: &str, events: &[String], now: &str) -
 // notifications
 // --------------------------------------------------------------------------
 
-fn notification(r: &Row) -> Result<Value> {
+/// A notification's extra: the symbol it is about, the venue when it names
+/// one, the moment the thing itself happened, and where to open it. Every
+/// field absent, as every caller that has none leaves it, is stored and
+/// shown as `{}`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotificationExtra {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub symbol: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub exchange: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub doc: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+/// One notification, as the bell and the notification stream carry it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase", default)]
+#[diff(key = id)]
+pub struct Notification {
+    pub id: i64,
+    pub at: String,
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub body: String,
+    pub extra: NotificationExtra,
+    pub seen_at: String,
+    pub read_at: String,
+}
+
+impl Default for Notification {
+    fn default() -> Notification {
+        Notification { id: 0, at: String::new(), kind: String::new(), key: String::new(), title: String::new(), body: String::new(), extra: NotificationExtra::default(), seen_at: String::new(), read_at: String::new() }
+    }
+}
+
+fn notification(r: &Row) -> Result<Notification> {
     let extra: Option<String> = r.get("extra")?;
-    let extra: Value = match extra {
-        Some(e) if !e.is_empty() => serde_json::from_str(&e).unwrap_or_else(|_| json!({})),
-        _ => json!({}),
+    let extra: NotificationExtra = match extra {
+        Some(e) if !e.is_empty() => serde_json::from_str(&e).unwrap_or_default(),
+        _ => NotificationExtra::default(),
     };
-    Ok(json!({
-        "id": r.get::<_, i64>("id")?,
-        "at": text(r, "at")?,
-        "kind": text(r, "kind")?,
-        "key": text(r, "key")?,
-        "title": text(r, "title")?,
-        "body": text(r, "body")?,
-        "extra": extra,
-        "seenAt": text(r, "seen_at")?,
-        "readAt": text(r, "read_at")?,
-    }))
+    Ok(Notification {
+        id: r.get::<_, i64>("id")?,
+        at: text(r, "at")?,
+        kind: text(r, "kind")?,
+        key: text(r, "key")?,
+        title: text(r, "title")?,
+        body: text(r, "body")?,
+        extra,
+        seen_at: text(r, "seen_at")?,
+        read_at: text(r, "read_at")?,
+    })
 }
 
 /// `add_notification`: one row, keyed so the same event is never stored
@@ -1131,14 +1182,14 @@ pub fn add_notification(
     key: &str,
     title: &str,
     body: &str,
-    extra: Option<&Value>,
+    extra: Option<&NotificationExtra>,
     seen: bool,
     now: &str,
-) -> Result<Option<Value>> {
-    let extra = extra.cloned().unwrap_or_else(|| json!({}));
+) -> Result<Option<Notification>> {
+    let extra = extra.cloned().unwrap_or_default();
     let n = conn.execute(
         "INSERT OR IGNORE INTO notifications(at, kind, key, title, body, extra, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&extra), if seen { Some(now) } else { None }],
+        rusqlite::params![now, kind, key, title, body, crate::tables::json_text(&serde_json::to_value(&extra).unwrap()), if seen { Some(now) } else { None }],
     )?;
     if n == 0 {
         return Ok(None);
@@ -1162,7 +1213,7 @@ pub fn list_notifications(
     unseen: bool,
     limit: i64,
     newest: bool,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Notification>> {
     let mut sql = String::from("SELECT * FROM notifications WHERE id > ?");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(after_id)];
     if !since.is_empty() {

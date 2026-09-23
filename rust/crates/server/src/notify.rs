@@ -12,13 +12,17 @@
 //! keeps the history, fed by a stream of every row as it is made.
 
 use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use std::sync::Arc;
+
+use bagholder_diff_derive::Diff;
+use ts_rs::TS;
 
 use crate::app::{log, now_iso, App};
 
@@ -50,12 +54,152 @@ fn icon(app: &App) -> PathBuf {
     app.root.join("favicon.png")
 }
 
+/// A JSON value that reads as a plain boolean, or as `false` for anything
+/// else -- absent, `null`, a stray non-boolean a hand-edited store might
+/// carry. Every switch was always read this leniently (`app::truthy`).
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(matches!(Option::<Value>::deserialize(d)?, Some(Value::Bool(true))))
+}
+
+/// A JSON value that reads as `Some(bool)` only when it is a plain boolean;
+/// anything else -- absent, `null`, a non-boolean -- reads as `None`, which a
+/// patch leaves untouched. Unknown keys are already ignored by serde itself.
+fn lenient_bool_patch<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<bool>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::Bool(b)) => Some(b),
+        _ => None,
+    })
+}
+
+/// One switch per notification kind or Releases/Disclosures scope, in
+/// `setting_keys()` order. Every kind is off until turned on from the menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, TS, Diff)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotifySettings {
+    #[serde(deserialize_with = "lenient_bool")]
+    pub fills: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub problems: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub connection: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub updates: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub releases_held: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub releases_watched: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub releases_all: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub disclosures_held: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub disclosures_watched: bool,
+    #[serde(deserialize_with = "lenient_bool")]
+    pub disclosures_all: bool,
+}
+
+impl NotifySettings {
+    fn get(&self, key: &str) -> bool {
+        match key {
+            "fills" => self.fills,
+            "problems" => self.problems,
+            "connection" => self.connection,
+            "updates" => self.updates,
+            "releasesHeld" => self.releases_held,
+            "releasesWatched" => self.releases_watched,
+            "releasesAll" => self.releases_all,
+            "disclosuresHeld" => self.disclosures_held,
+            "disclosuresWatched" => self.disclosures_watched,
+            "disclosuresAll" => self.disclosures_all,
+            _ => false,
+        }
+    }
+
+    fn set(&mut self, key: &str, v: bool) {
+        match key {
+            "fills" => self.fills = v,
+            "problems" => self.problems = v,
+            "connection" => self.connection = v,
+            "updates" => self.updates = v,
+            "releasesHeld" => self.releases_held = v,
+            "releasesWatched" => self.releases_watched = v,
+            "releasesAll" => self.releases_all = v,
+            "disclosuresHeld" => self.disclosures_held = v,
+            "disclosuresWatched" => self.disclosures_watched = v,
+            "disclosuresAll" => self.disclosures_all = v,
+            _ => {}
+        }
+    }
+}
+
+/// `POST /api/notifications/settings`: the switches that changed, by name.
+/// Unknown keys and non-booleans are ignored, as they always were.
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotifySettingsPatch {
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub fills: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub problems: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub connection: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub updates: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub releases_held: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub releases_watched: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub releases_all: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub disclosures_held: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub disclosures_watched: Option<bool>,
+    #[serde(deserialize_with = "lenient_bool_patch")]
+    pub disclosures_all: Option<bool>,
+}
+
+impl NotifySettingsPatch {
+    fn apply(&self, on: &mut NotifySettings) {
+        for k in setting_keys() {
+            if let Some(v) = self.get(k) {
+                on.set(k, v);
+            }
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<bool> {
+        match key {
+            "fills" => self.fills,
+            "problems" => self.problems,
+            "connection" => self.connection,
+            "updates" => self.updates,
+            "releasesHeld" => self.releases_held,
+            "releasesWatched" => self.releases_watched,
+            "releasesAll" => self.releases_all,
+            "disclosuresHeld" => self.disclosures_held,
+            "disclosuresWatched" => self.disclosures_watched,
+            "disclosuresAll" => self.disclosures_all,
+            _ => None,
+        }
+    }
+}
+
+/// The kinds, the native channel, and the unread count -- what the header's
+/// stream carries, and `GET /api/notifications` besides.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+pub struct NotifyStatus {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub settings: NotifySettings,
+    pub native: String,
+    pub unread: i64,
+}
+
 /// Every kind off until it is turned on from the menu.
-pub fn settings(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn settings(conn: &Connection) -> Result<NotifySettings> {
     let raw = bagholder_store::tables::get_meta(conn, SETTINGS_KEY, "")?;
-    let parsed: Value = serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap_or_else(|_| json!({}));
-    let m = parsed.as_object().cloned().unwrap_or_default();
-    Ok(setting_keys().into_iter().map(|k| (k.to_string(), json!(crate::app::truthy(m.get(k))))).collect())
+    Ok(serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap_or_default())
 }
 
 /// Whether any Releases notification set is on.
@@ -65,7 +209,7 @@ pub fn any_release_scope(conn: &Connection) -> bool {
 
 fn scopes(conn: &Connection, keys: &[&str], prefix: &str) -> Vec<String> {
     let on = settings(conn).unwrap_or_default();
-    keys.iter().filter(|k| on.get(**k).and_then(|v| v.as_bool()).unwrap_or(false)).map(|k| k[prefix.len()..].to_lowercase()).collect()
+    keys.iter().filter(|k| on.get(k)).map(|k| k[prefix.len()..].to_lowercase()).collect()
 }
 
 pub fn disclosure_scopes(conn: &Connection) -> Vec<String> {
@@ -80,32 +224,28 @@ pub fn kind_on(conn: &Connection, kind: &str) -> bool {
     match kind {
         "disclosures" => !disclosure_scopes(conn).is_empty(),
         "releases" => !release_scopes(conn).is_empty(),
-        k => settings(conn).ok().and_then(|m| m.get(k).and_then(|v| v.as_bool())).unwrap_or(false),
+        k => settings(conn).map(|s| s.get(k)).unwrap_or(false),
     }
 }
 
-/// Unknown keys and non-booleans are ignored.
-pub fn set_settings(conn: &Connection, patch: &Value) -> Result<Map<String, Value>> {
+pub fn set_settings(conn: &Connection, patch: &NotifySettingsPatch) -> Result<NotifySettings> {
     let mut cur = settings(conn)?;
-    if let Some(p) = patch.as_object() {
-        for (k, v) in p {
-            if setting_keys().contains(&k.as_str()) {
-                if let Value::Bool(b) = v {
-                    cur.insert(k.clone(), json!(b));
-                }
-            }
-        }
-    }
-    bagholder_store::tables::set_meta(conn, SETTINGS_KEY, &bagholder_store::tables::json_text(&Value::Object(cur.clone())))?;
+    patch.apply(&mut cur);
+    bagholder_store::tables::set_meta(conn, SETTINGS_KEY, &bagholder_store::tables::json_text(&serde_json::to_value(&cur).unwrap()))?;
     Ok(cur)
 }
 
+/// The `notifications` document: the bell, as a page showing it is sent.
+#[derive(Clone, Debug, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsDoc {
+    pub rows: Vec<bagholder_store::feeds::Notification>,
+    pub unread: i64,
+}
+
 /// The kinds, the native channel, and the unread count.
-pub fn status(conn: &Connection) -> Result<Value> {
-    let mut out = settings(conn)?;
-    out.insert("native".into(), json!(native_channel()));
-    out.insert("unread".into(), json!(bagholder_store::feeds::unread_notifications(conn)?));
-    Ok(Value::Object(out))
+pub fn status(conn: &Connection) -> Result<NotifyStatus> {
+    Ok(NotifyStatus { settings: settings(conn)?, native: native_channel(), unread: bagholder_store::feeds::unread_notifications(conn)? })
 }
 
 fn which(name: &str) -> Option<PathBuf> {
@@ -236,14 +376,14 @@ impl NotifyState {
 
 /// One notification, if its kind is on and this key has not
 /// been told before.
-pub fn emit(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
+pub fn emit(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
     if !KINDS.contains(&kind) || !kind_on(conn, kind) {
         return None;
     }
     post(app, conn, kind, key, title, body, extra)
 }
 
-pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Option<Value> {
+pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Option<bagholder_store::feeds::Notification> {
     let stamp = {
         let now = crate::app::now_unix();
         let micros = ((now.fract()) * 1_000_000.0) as i64;
@@ -252,12 +392,12 @@ pub fn test_notification(app: &Arc<App>, conn: &Connection) -> Option<Value> {
     post(app, conn, "test", &format!("test:{}", stamp), APP_NAME, "Notifications reach you here.", None)
 }
 
-fn post(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<Value>) -> Option<Value> {
+fn post(app: &Arc<App>, conn: &Connection, kind: &str, key: &str, title: &str, body: &str, extra: Option<bagholder_store::feeds::NotificationExtra>) -> Option<bagholder_store::feeds::Notification> {
     let channel = native_channel();
     // posted from here, the row is the server's own to show: seen from the start
     let row = bagholder_store::feeds::add_notification(conn, kind, key, title, body, extra.as_ref(), !channel.is_empty(), &now_iso()).ok()??;
     if !channel.is_empty() {
-        enqueue(app.clone(), crate::app::f(&row, "title"), crate::app::f(&row, "body"), channel);
+        enqueue(app.clone(), row.title.clone(), row.body.clone(), channel);
     }
     app.notify.wake_streams();
     Some(row)
@@ -545,18 +685,18 @@ pub fn stream<W: FnMut(&str) -> bool>(app: &Arc<App>, after: Option<i64>, mut wr
                 continue;
             }
             for r in rows {
-                let id = r["id"].as_i64().unwrap_or(0);
+                let id = r.id;
                 last = last.max(id);
-                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
+                if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&serde_json::to_value(&r).unwrap()))) {
                     return;
                 }
             }
             continue;
         }
         for r in rows {
-            let id = r["id"].as_i64().unwrap_or(0);
+            let id = r.id;
             last = last.max(id);
-            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&r))) {
+            if !write(&format!("id: {}\ndata: {}\n\n", id, bagholder_store::tables::json_text(&serde_json::to_value(&r).unwrap()))) {
                 return;
             }
         }
@@ -568,6 +708,7 @@ mod tests {
 
     use super::*;
     use crate::app::f;
+    use serde_json::json;
     use bagholder_store::feeds as st;
     use std::ffi::OsStr;
     use std::sync::MutexGuard;
@@ -605,20 +746,29 @@ mod tests {
         (g, app, conn)
     }
 
-    fn set(conn: &Connection, v: Value) -> Map<String, Value> {
-        set_settings(conn, &v).unwrap()
+    fn set(conn: &Connection, v: Value) -> NotifySettings {
+        set_settings(conn, &serde_json::from_value(v).unwrap()).unwrap()
     }
 
-    fn off() -> Map<String, Value> {
-        setting_keys().into_iter().map(|k| (k.to_string(), json!(false))).collect()
+    fn off() -> NotifySettings {
+        NotifySettings::default()
+    }
+
+    /// A notification row, as the tests read it: its own JSON.
+    fn v(r: &bagholder_store::feeds::Notification) -> Value {
+        serde_json::to_value(r).unwrap()
     }
 
     fn list(conn: &Connection) -> Vec<Value> {
-        st::list_notifications(conn, 0, "", false, 1000, false).unwrap()
+        st::list_notifications(conn, 0, "", false, 1000, false).unwrap().iter().map(v).collect()
     }
 
-    fn id(v: &Value) -> i64 {
-        v["id"].as_i64().unwrap()
+    fn id(x: &Value) -> i64 {
+        x["id"].as_i64().unwrap()
+    }
+
+    fn idn(r: &bagholder_store::feeds::Notification) -> i64 {
+        r.id
     }
 
     fn argv(c: &Command) -> Vec<String> {
@@ -635,13 +785,10 @@ mod tests {
         assert_eq!(settings(&conn).unwrap(), off());
         let out = set(&conn, json!({"fills": true, "bogus": true, "updates": "yes"}));
         let mut want = off();
-        want.insert("fills".into(), json!(true));
+        want.fills = true;
         assert_eq!(out, want, "unknown keys and non-booleans are ignored");
         assert_eq!(settings(&conn).unwrap(), out);
-        let mut st_want = out.clone();
-        st_want.insert("native".into(), json!(""));
-        st_want.insert("unread".into(), json!(0));
-        assert_eq!(status(&conn).unwrap(), Value::Object(st_want), "the kinds, the channel and the unread count");
+        assert_eq!(status(&conn).unwrap(), NotifyStatus { settings: out, native: String::new(), unread: 0 }, "the kinds, the channel and the unread count");
         assert_eq!(channel_for("", "macos", &|_| true, false), "mac");
         assert_eq!(channel_for("", "windows", &|n| n == "powershell", false), "windows");
         assert_eq!(channel_for("", "linux", &|n| n == "notify-send", true), "linux");
@@ -654,7 +801,7 @@ mod tests {
         let (_g, app, conn) = setup();
         assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).is_none());
         set(&conn, json!({"fills": true}));
-        let row = emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap();
+        let row = v(&emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "Bought 5 at 1.75", None).unwrap());
         assert_eq!((f(&row, "kind"), f(&row, "title"), f(&row, "body"), f(&row, "seenAt"), f(&row, "readAt")), ("fills".into(), "Order filled · QNC".into(), "Bought 5 at 1.75".into(), String::new(), String::new()));
         assert!(emit(&app, &conn, "fills", "order:1:filled", "Order filled · QNC", "again", None).is_none(), "the same event is never told twice");
         assert!(emit(&app, &conn, "bogus", "x", "t", "b", None).is_none(), "an unknown kind is nothing");
@@ -662,7 +809,7 @@ mod tests {
         set(&conn, json!({"disclosuresWatched": true}));
         assert_eq!(disclosure_scopes(&conn), vec!["watched".to_string()]);
         assert!(emit(&app, &conn, "disclosures", "f1", "t", "b", None).is_some(), "any set on: the kind is told");
-        assert!(id(&test_notification(&app, &conn).unwrap()) > id(&row), "the test goes out whatever the kinds say");
+        assert!(idn(&test_notification(&app, &conn).unwrap()) > id(&row), "the test goes out whatever the kinds say");
         assert_eq!(list(&conn).len(), 3);
     }
 
@@ -670,13 +817,13 @@ mod tests {
     fn test_seen_rows_are_not_listed_again_and_the_oldest_are_pruned() {
         let (_g, app, conn) = setup();
         set(&conn, json!({"fills": true}));
-        let ids: Vec<i64> = (0..3).map(|i| id(&emit(&app, &conn, "fills", &format!("k{}", i), "t", "b", None).unwrap())).collect();
+        let ids: Vec<i64> = (0..3).map(|i| idn(&emit(&app, &conn, "fills", &format!("k{}", i), "t", "b", None).unwrap())).collect();
         assert_eq!(st::mark_notifications_seen(&conn, &[ids[0]], &now_iso()).unwrap(), 1);
-        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[1..]);
-        assert_eq!(st::list_notifications(&conn, ids[1], "", false, 1000, false).unwrap().iter().map(id).collect::<Vec<_>>(), ids[2..]);
+        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().iter().map(idn).collect::<Vec<_>>(), ids[1..]);
+        assert_eq!(st::list_notifications(&conn, ids[1], "", false, 1000, false).unwrap().iter().map(idn).collect::<Vec<_>>(), ids[2..]);
         // NOTIFICATIONS_KEPT is a constant of the store crate and cannot be lowered here: four rows stay
         emit(&app, &conn, "fills", "k9", "t", "b", None);
-        let newest: Vec<String> = st::list_notifications(&conn, 0, "", false, 1000, true).unwrap().iter().map(|r| f(r, "key")).collect();
+        let newest: Vec<String> = st::list_notifications(&conn, 0, "", false, 1000, true).unwrap().iter().map(|r| r.key.clone()).collect();
         assert_eq!(newest, ["k9", "k2", "k1", "k0"], "the history reads newest first");
         assert_eq!(st::unread_notifications(&conn).unwrap(), 4);
         assert_eq!(st::mark_notifications_read(&conn, Some(&[ids[2]]), &now_iso()).unwrap(), 1);
@@ -724,26 +871,26 @@ mod tests {
         let (_g, app, conn) = setup();
         *test_hooks::HEARTBEAT_MS.lock().unwrap() = Some(50);
         set(&conn, json!({"fills": true}));
-        let old = emit(&app, &conn, "fills", "old", "Old", "b", None).unwrap();
-        st::mark_notifications_seen(&conn, &[id(&old)], &now_iso()).unwrap();
-        let first = emit(&app, &conn, "fills", "first", "First", "b", None).unwrap();
-        let rx = open_stream(&app, Some(id(&old)), 2);
+        let old = idn(&emit(&app, &conn, "fills", "old", "Old", "b", None).unwrap());
+        st::mark_notifications_seen(&conn, &[old], &now_iso()).unwrap();
+        let first = idn(&emit(&app, &conn, "fills", "first", "First", "b", None).unwrap());
+        let rx = open_stream(&app, Some(old), 2);
         let (hello, row1, ping) = (next(&rx), next(&rx), next(&rx));
-        let second = emit(&app, &conn, "fills", "second", "Second", "b", None).unwrap();
+        let second = idn(&emit(&app, &conn, "fills", "second", "Second", "b", None).unwrap());
         let row2 = next_row(&rx);
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the reader gone: the stream ends");
         assert_eq!(hello, ": bagholder\n\n");
-        assert!(row1.starts_with(&format!("id: {}\ndata: ", id(&first))) && row1.contains("\"title\": \"First\""), "{}", row1);
+        assert!(row1.starts_with(&format!("id: {}\ndata: ", first)) && row1.contains("\"title\": \"First\""), "{}", row1);
         assert_eq!(ping, ": ping\n\n", "nothing new by the heartbeat: a comment keeps the connection");
-        assert!(row2.starts_with(&format!("id: {}\ndata: ", id(&second))), "{}", row2);
+        assert!(row2.starts_with(&format!("id: {}\ndata: ", second)), "{}", row2);
 
         *test_hooks::CHANNEL.lock().unwrap() = Some("mac".into());
         *test_hooks::DELIVERED.lock().unwrap() = Some(vec![]);
         let rx = open_stream(&app, None, 1);
         assert_eq!((next(&rx), next(&rx)), (": bagholder\n\n".to_string(), ": ping\n\n".to_string()), "no id: only what is made after the stream opens");
-        let third = emit(&app, &conn, "fills", "third", "Third", "b", None).unwrap();
+        let third = idn(&emit(&app, &conn, "fills", "third", "Third", "b", None).unwrap());
         let chunk = next_row(&rx);
-        assert!(chunk.starts_with(&format!("id: {}\n", id(&third))) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
+        assert!(chunk.starts_with(&format!("id: {}\n", third)) && chunk.contains("\"seenAt\": \"20"), "a row the server posts itself still reaches the history, already seen");
     }
 
     fn order() -> Value {
@@ -833,9 +980,9 @@ mod tests {
         while std::time::Instant::now() < deadline && test_hooks::DELIVERED.lock().unwrap().as_ref().unwrap().is_empty() {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_ne!(f(&row, "seenAt"), "", "the server shows it: no page shows it too");
+        assert_ne!(row.seen_at, "", "the server shows it: no page shows it too");
         assert_eq!(test_hooks::DELIVERED.lock().unwrap().clone().unwrap(), vec![("mac".to_string(), "Order filled · QNC".to_string(), "Bought 5 at 1.75".to_string())]);
-        assert_eq!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap(), Vec::<Value>::new(), "nothing left for a page");
+        assert!(st::list_notifications(&conn, 0, "", true, 1000, false).unwrap().is_empty(), "nothing left for a page");
     }
 
     #[test]
@@ -931,7 +1078,7 @@ mod tests {
 
         /// The rows the store holds, newest first.
         fn posted(app: &Arc<App>) -> Vec<Value> {
-            st::list_notifications(&app.open().unwrap(), 0, "", false, 50, true).unwrap()
+            st::list_notifications(&app.open().unwrap(), 0, "", false, 50, true).unwrap().iter().map(v).collect()
         }
 
         /// A release as a wire hands it over.
@@ -978,7 +1125,7 @@ mod tests {
         // can act on: the notice carries the amount, when it goes ex and is paid, and the one it
         // replaces, from the issuer's own declared record, and it opens the release itself.
         let (_g, app, c) = setup();
-        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         bagholder_store::market::upsert_distributions(
             &c,
             "RDDY",
@@ -1118,7 +1265,7 @@ mod tests {
         // date. It is one event and is told once, and meeting it again -- a week later, under another
         // id, from a source whose results dropped it and brought it back -- tells nothing.
         let (_g, app, c) = setup();
-        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let head = "Harvest ETFs Announces September 2026 Distributions";
         let older = wire_release("tmx:0", "An older release", "u0", "2026-09-01T11:30:00Z");
         let first = wire_release("tmx:1", head, "u1", "2026-09-14T11:30:00Z");
@@ -1142,7 +1289,7 @@ mod tests {
         // A source read for the first time brings history. That history is recorded as met, so the
         // same releases returning under other ids on later passes are recognised rather than rung.
         let (_g, app, c) = setup();
-        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let old: Vec<bagholder_store::feeds::NewsItem> = (0..3).map(|i| wire_release(&format!("tmx:{}", i), &format!("Release number {}", i), "u", &format!("2026-08-{:02}T11:30:00Z", 10 + i))).collect();
         crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &old, &old.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
         // every one of them comes back under another source's ids, dated later, as a search's results shift
@@ -1159,7 +1306,7 @@ mod tests {
         // event. The stream now records what it has met, so the second copy is recognised; and
         // something that just happened is still told, through the same mark.
         let (_g, app, c) = setup();
-        set_settings(&c, &json!({"releasesAll": true})).unwrap();
+        set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
         let head = "Harvest ETFs Announces August 2026 Distributions";
         let a = wire_release("tmx:1", head, "u1", "2026-08-24T11:30:00Z");
         crate::feeds::note_wire_releases(&app, &c, "RDDY", "TSX", &[a.clone()], &["tmx:1".to_string()]);   // the first read: history

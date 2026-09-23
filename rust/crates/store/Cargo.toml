@@ -8,6 +8,7 @@ edition.workspace = true
 # model's are: the two sides of the wire cannot drift
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }
 bagholder-model = { path = "../model" }
+bagholder-diff-derive = { path = "../diff-derive" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # SQLite itself, built from source so a copy of the app carries its own and

@@ -5,12 +5,14 @@
 
 use rusqlite::Connection;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use ts_rs::TS;
+
+use bagholder_diff_derive::Diff;
 
 use bagholder_market::disclosures::{self, Gathered, SourceOutcome};
 use bagholder_market::{edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
@@ -659,8 +661,9 @@ fn feed_scope(key: &str) -> Vec<String> {
 
 /// One filing as a feed across listings carries it: the filing itself, with
 /// which listing it belongs to.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = id)]
 pub struct FeedFiling {
     #[serde(flatten)]
     #[ts(flatten)]
@@ -670,7 +673,7 @@ pub struct FeedFiling {
 }
 
 /// The newest disclosures across a set of listings, as a page shows them.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct FilingsFeed {
     #[ts(type = "true")]
@@ -953,21 +956,17 @@ fn newest_of<T: Notable>(rows: &[T]) -> &T {
     sorted[0]
 }
 
-/// A notification's extra: the symbol, the moment and the link, in one map.
-fn notice_extra<T: Notable>(sym: &str, exchange: Option<&str>, rows: &[T]) -> Value {
-    let mut out = Map::new();
-    out.insert("symbol".into(), json!(sym));
-    if let Some(ex) = exchange {
-        out.insert("exchange".into(), json!(ex));
+/// A notification's extra: the symbol, the moment and the link, in one struct.
+fn notice_extra<T: Notable>(sym: &str, exchange: Option<&str>, rows: &[T]) -> bagholder_store::feeds::NotificationExtra {
+    let (moment, link) = (notice_moment(rows), notice_link(rows));
+    bagholder_store::feeds::NotificationExtra {
+        symbol: sym.to_string(),
+        exchange: exchange.unwrap_or_default().to_string(),
+        at: f(&moment, "at"),
+        url: f(&link, "url"),
+        doc: f(&link, "doc"),
+        source: f(&link, "source"),
     }
-    for part in [notice_moment(rows), notice_link(rows)] {
-        if let Some(m) = part.as_object() {
-            for (k, v) in m {
-                out.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    Value::Object(out)
 }
 
 /// What a release *is*, independent of the id, the source and the date each
@@ -1308,7 +1307,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
 }
 
 /// A source's outcome the last time a listing's disclosures were refreshed.
-#[derive(Clone, Debug, Default, Serialize, TS)]
+#[derive(Clone, Debug, Default, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceStatus {
     pub available: bool,
@@ -1317,7 +1316,10 @@ pub struct SourceStatus {
     pub error: String,
 }
 
-fn source_status(c: &Connection, sym: &str) -> BTreeMap<Regulator, SourceStatus> {
+/// `#[derive(Diff)]` compares a map field as the model's own `BTreeMap<String,
+/// V>`, so a source's status lives under its regulator's own JSON key
+/// (`"SEDAR+"`, `"SEC"`) rather than under `Regulator` itself.
+fn source_status(c: &Connection, sym: &str) -> BTreeMap<String, SourceStatus> {
     let stored: BTreeMap<Regulator, SourceOutcome> = serde_json::from_str(&get_meta(c, &format!("filings_sources:{}", sym), "").unwrap_or_default()).unwrap_or_default();
     let have: HashSet<Regulator> = sf::filings_for(c, sym).unwrap_or_default().iter().map(|r| r.doc.source).collect();
     let mut out = BTreeMap::new();
@@ -1330,7 +1332,7 @@ fn source_status(c: &Connection, sym: &str) -> BTreeMap<Regulator, SourceStatus>
         // say the source is unavailable rather than assert the listing has no filer.
         let reached = st.map(|s| s.available).unwrap_or(dep);
         let error = st.map(|s| s.error.clone()).unwrap_or_default();
-        out.insert(source, SourceStatus {
+        out.insert(source.as_str().to_string(), SourceStatus {
             available: dep && reached,
             matched: have.contains(&source),
             filer: st.map(|s| s.filer).unwrap_or(false) || have.contains(&source),
@@ -1373,14 +1375,14 @@ fn set_reading(app: &Arc<App>, sym: &str, ids: Vec<String>) {
 }
 
 /// What `filings_stored` sends a page showing a listing's disclosures.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct FilingsDoc {
     #[ts(type = "true")]
     pub ok: bool,
     pub symbol: String,
     pub available: bool,
-    pub sources: BTreeMap<Regulator, SourceStatus>,
+    pub sources: BTreeMap<String, SourceStatus>,
     pub categories: Vec<String>,
     pub fetched_at: String,
     pub ever_read: bool,
@@ -1447,14 +1449,14 @@ pub fn filings_shown(app: Arc<App>, doc: String, symbol: String, name: String, e
 }
 
 /// What `filings_payload` returns: the `GET /api/filings?…&refresh=1` answer.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct FilingsPayload {
     #[ts(type = "true")]
     pub ok: bool,
     pub symbol: String,
     pub available: bool,
-    pub sources: BTreeMap<Regulator, SourceStatus>,
+    pub sources: BTreeMap<String, SourceStatus>,
     pub categories: Vec<String>,
     pub profile_no: String,
     pub fetched_at: String,
@@ -1688,7 +1690,7 @@ fn fear_stale(rec: &StoredGauge) -> bool {
 }
 
 /// One index's meter, as a page is sent it.
-#[derive(Clone, Debug, serde::Serialize, ts_rs::TS)]
+#[derive(Clone, Debug, serde::Serialize, ts_rs::TS, Diff)]
 pub struct FearDoc {
     #[ts(type = "true")]
     pub ok: bool,
@@ -1840,8 +1842,9 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
 
 /// One listing's short selling as a feed across listings carries it: the
 /// listing it belongs to, and the holding it opens.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
+#[diff(key = symbol)]
 pub struct ShortsFeedRow {
     #[serde(flatten)]
     #[ts(flatten)]
@@ -1853,7 +1856,7 @@ pub struct ShortsFeedRow {
 
 /// Every held or watched listing's stored short selling, each marked held or
 /// watched.
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, Serialize, TS, Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortsFeed {
     #[ts(type = "true")]

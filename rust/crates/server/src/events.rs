@@ -214,19 +214,23 @@ pub struct Feed {
     _watching: Watching,
     registered: Registered,
     wanted: Arc<Mutex<Wanted>>,
-    filters: Option<Value>,
+    filters: Option<bagholder_model::filters::Filters>,
     detail: Option<String>,
-    sent: Option<(Arc<bagholder_model::wire::View>, Value)>,
-    sent_docs: std::collections::BTreeMap<String, Value>,
+    sent: Option<(Arc<bagholder_model::wire::View>, crate::status::Status)>,
+    sent_docs: std::collections::BTreeMap<String, crate::docs::Doc>,
 }
 
 /// One message on the stream: its event name and its data.
 pub type Message = (&'static str, Value);
 
 impl Feed {
+    /// `filters` is the page's filters as it keeps them, cleaned once here rather
+    /// than on every step: the page's own object, in the words a person or an
+    /// older page might still send, is not looked at again until it connects anew.
     pub fn open(app: Arc<App>, filters: Option<Value>, detail: Option<String>) -> Feed {
         let bus = app.events.clone();
         let (registered, wanted) = Registered::new(&bus);
+        let filters = filters.map(|f| bagholder_model::filters::clean_filters(Some(&f)));
         Feed { app, _watching: Watching::new(&bus), registered, wanted, filters, detail, sent: None, sent_docs: Default::default() }
     }
 
@@ -243,33 +247,33 @@ impl Feed {
     /// What differs now from what this page was last sent: nothing when nothing
     /// does. Reads the store and may rebuild a layer of the model, so it runs off
     /// the runtime's own threads.
-    pub fn step(&mut self, status: &dyn Fn(&Arc<App>) -> Value) -> Vec<Message> {
+    pub fn step(&mut self, status: &dyn Fn(&Arc<App>) -> crate::status::Status) -> Vec<Message> {
         let mut out: Vec<Message> = Vec::new();
         let (filters, detail) = (self.filters.clone(), self.detail.clone());
         let app = self.app.clone();
-        let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || app.view(filters.as_ref(), detail.as_deref()))) {
+        let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let filters = filters.map(|f| serde_json::to_value(&f).unwrap_or(Value::Null));
+            app.view(filters.as_ref(), detail.as_deref())
+        })) {
             Ok(Ok(v)) => Some(v),
             _ => None, // the store is busy or the model failed: say nothing, try at the next change
         };
         if let Some(view) = view {
-            let mut now = status(&self.app);
-            // the two version strings are how a polling page learned that something
-            // moved; this page is told what moved, so they would only be noise here
-            if let Some(o) = now.as_object_mut() {
-                o.remove("dataVersion");
-                o.remove("coreVersion");
-            }
+            // the two version strings a polling page learns something moved by are
+            // not on `Status` at all: this page is told what moved, so they would
+            // only be noise here
+            let now = status(&self.app);
             match &self.sent {
                 None => {
                     let mut whole = view.to_value();
-                    whole["status"] = now.clone();
+                    whole["status"] = serde_json::to_value(&now).unwrap_or(Value::Null);
                     out.push(("snapshot", serde_json::json!({"doc": "model", "data": whole})));
                 }
                 Some((was, was_status)) => {
                     // compared as the model's own values, row by row by each row's id; the
                     // same view object, or a part both views share, is not compared at all
                     let mut ops = patch::typed(was, &view);
-                    ops.extend(patch::diff_under(&["status"], was_status, &now));
+                    ops.extend(patch::typed_under(&["status"], was_status, &now));
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
                     }
@@ -280,13 +284,14 @@ impl Feed {
         // the documents this page is showing now
         let want: Wanted = self.wanted.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.sent_docs.retain(|k, _| want.contains_key(k));
-        for (key, params) in &want {
+        for key in want.keys() {
             let app = &self.app;
-            let Ok(Some(now)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::docs::read(app, key, params))) else { continue };
+            let key2 = key.clone();
+            let Ok(Some(now)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::docs::read(app, &key2))) else { continue };
             match self.sent_docs.get(key) {
                 None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
                 Some(was) => {
-                    let ops = patch::diff(was, &now);
+                    let ops = patch::typed(was, &now);
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": key, "ops": ops})));
                     }
