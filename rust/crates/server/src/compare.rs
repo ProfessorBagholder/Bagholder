@@ -195,6 +195,13 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let mut out = String::new();
     writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes, benchmarks.").ok();
     writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).ok();
+    let mut changed_kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for id in &changes.changed {
+        if let Some(t) = engine_inputs_transaction(&book, id) {
+            *changed_kinds.entry(t.kind.as_str().to_string()).or_default() += 1;
+        }
+    }
+    writeln!(out, "  changed, by kind now: {changed_kinds:?}").ok();
 
     // trades, by the old key: a round trip is named for the row that opened it
     let mut new_by_old: BTreeMap<String, &bagholder_engine::trades::TradeFig> = BTreeMap::new();
@@ -374,6 +381,10 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let _ = std::fs::remove_dir_all(&scratch);
     let _: Option<RecordId> = None;
     Ok(out)
+}
+
+fn engine_inputs_transaction(book: &Book, id: &TransactionId) -> Option<bagholder_core::transaction::Transaction> {
+    book.transaction(id).ok().flatten()
 }
 
 fn figures_symbol(engine: &Engine, i: InstrumentId) -> String {
