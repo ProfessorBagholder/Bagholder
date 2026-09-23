@@ -179,15 +179,13 @@ pub fn append_manual(app: &Arc<App>, body: &BookAppend) -> Value {
     let rows: Vec<ActivityRow> = rows.into_iter().map(normalize_local_row).collect();
     let conn = db(app);
     let result = must(bagholder_store::merge::merge_local_rows(&conn, &rows, &uuid4));
-    let mut snap = snapshot(app);
-    if !tr(&snap, "syncedAt") {
-        let stamp = now_iso();
-        must(bagholder_store::tables::set_meta(&conn, "synced_at", &stamp));
-        snap = snapshot(app);
+    let mut synced = must(bagholder_store::tables::get_meta(&conn, "synced_at", ""));
+    if synced.is_empty() {
+        synced = now_iso();
+        must(bagholder_store::tables::set_meta(&conn, "synced_at", &synced));
     }
     {
         let mut st = app.state.lock().unwrap();
-        let synced = f(&snap, "syncedAt");
         if !synced.is_empty() {
             st.last_sync = synced;
         }

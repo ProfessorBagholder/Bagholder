@@ -86,6 +86,22 @@ pub fn truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     })
 }
 
+/// The entries of an object whose value reads as `T`, sorted by key: a value
+/// that is not an object, or does not read as `T`, drops its entry rather
+/// than failing the whole map -- the same rule `rows` applies to a list.
+pub fn objmap<T: serde::de::DeserializeOwned>(v: &Value) -> std::collections::BTreeMap<String, T> {
+    match v {
+        Value::Object(m) => m.iter().filter(|(_, x)| x.is_object()).filter_map(|(k, x)| Some((k.clone(), T::deserialize(x).ok()?))).collect(),
+        _ => Default::default(),
+    }
+}
+
+/// A field whose wire type is an object of objects: null, absent or anything
+/// that is not an object reads as empty, as `list` does for an array.
+pub fn map<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<std::collections::BTreeMap<String, T>, D::Error> {
+    Ok(objmap(&Value::deserialize(d)?))
+}
+
 /// A field that is one row, many, or none: a bare object is one row, an
 /// array many rows, anything else none.
 pub fn one_or_many<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {

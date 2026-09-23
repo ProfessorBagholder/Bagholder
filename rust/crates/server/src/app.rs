@@ -215,12 +215,16 @@ impl App {
         // journal. The save moves the journal's counter, so the next build has them.
         static CARRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !CARRIED.swap(true, Ordering::SeqCst) {
-            let notes = bagholder_store::snapshot::notes_part(&conn)?;
-            if !notes.is_empty() && bagholder_store::snapshot::journal(&conn)?.is_empty() {
-                let groups = bagholder_store::snapshot::groups_part(&conn)?;
-                let migrated = bagholder_model::symbols_of::migrate_legacy_notes(&base.book.fifo.closed, &groups, &notes);
+            let notes = bagholder_store::tables::trade_notes(&conn)?;
+            if !notes.is_empty() && bagholder_store::admin::journal(&conn)?.is_empty() {
+                let groups = bagholder_store::tables::trade_groups(&conn)?;
+                let groups_val: Vec<Value> = groups.iter().map(|g| serde_json::to_value(g).unwrap_or(Value::Null)).collect();
+                let notes_val: Value = serde_json::to_value(&notes).unwrap_or(Value::Null);
+                let notes_map = notes_val.as_object().cloned().unwrap_or_default();
+                let migrated = bagholder_model::symbols_of::migrate_legacy_notes(&base.book.fifo.closed, &groups_val, &notes_map);
                 if !migrated.is_empty() {
-                    bagholder_store::admin::save_journal(&conn, Some(&Value::Object(migrated)))?;
+                    let journal = bagholder_model::input::journal_from(&migrated);
+                    bagholder_store::admin::save_journal(&conn, &journal)?;
                     return self.model.base(&conn, &today);
                 }
             }

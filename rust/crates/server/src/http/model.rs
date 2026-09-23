@@ -4,7 +4,7 @@
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::extract::trimmed;
@@ -114,54 +114,57 @@ async fn trade(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> 
 
 /// `GET /api/book`: the stored rows as they are, for the phones and for export.
 async fn book(State(state): State<AppState>) -> Api {
-    with_store(&state, |conn| {
-        let book = bagholder_store::snapshot::snapshot(conn, true)?;
-        let or = |k: &str, d: Value| book.get(k).filter(|v| truthy(Some(v))).cloned().unwrap_or(d);
-        Ok(json!({
-            "ok": true,
-            "activities": or("activities", json!([])),
-            "accounts": or("accounts", json!([])),
-            "balances": or("balances", json!([])),
-            "navHistory": or("navHistory", json!([])),
-            "navByAccount": or("navByAccount", json!({})),
-            "syncedAt": or("syncedAt", json!("")),
-            "tradeGroups": or("tradeGroups", json!([])),
-            "notes": or("notes", json!({})),
-            "securities": or("securities", json!([])),
-        }))
-    })
-    .await
+    with_store(&state, |conn| Ok(to_value(&bagholder_store::book::book(conn)?))).await
 }
 
 /// The row counts the Data & storage dialog shows before a wipe.
-fn data_summary(app: &Arc<App>, conn: &rusqlite::Connection) -> rusqlite::Result<Value> {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataSummary {
+    ok: bool,
+    path: String,
+    activities: i64,
+    first_activity: String,
+    last_activity: String,
+    accounts: i64,
+    balances: i64,
+    nav_days: i64,
+    securities: i64,
+    journal: usize,
+    fx_days: i64,
+    benchmark_days: i64,
+    filings: i64,
+    synced_at: String,
+    session_present: bool,
+}
+
+fn data_summary(app: &Arc<App>, conn: &rusqlite::Connection) -> rusqlite::Result<DataSummary> {
     let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
-    let journal_raw = bagholder_store::tables::get_meta(conn, "journal_v2", "")?;
-    let journal_n = serde_json::from_str::<Value>(&journal_raw).ok().and_then(|v| v.as_object().map(|m| m.len())).unwrap_or(0);
+    let journal = bagholder_store::admin::journal(conn)?;
     let (first_act, last_act): (Option<String>, Option<String>) =
         conn.query_row("SELECT MIN(transaction_date), MAX(transaction_date) FROM activities", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(json!({
-        "ok": true,
-        "path": app.db_path().display().to_string(),
-        "activities": count("SELECT COUNT(*) FROM activities")?,
-        "firstActivity": first_act.unwrap_or_default(),
-        "lastActivity": last_act.unwrap_or_default(),
-        "accounts": count("SELECT COUNT(*) FROM accounts")?,
-        "balances": count("SELECT COUNT(*) FROM balances")?,
-        "navDays": count("SELECT COUNT(*) FROM nav_history")?,
-        "securities": count("SELECT COUNT(*) FROM securities")?,
-        "journal": journal_n,
-        "fxDays": count("SELECT COUNT(*) FROM fx_rates")?,
-        "benchmarkDays": count("SELECT COUNT(*) FROM benchmark_prices")?,
-        "filings": count("SELECT COUNT(*) FROM filings")?,
-        "syncedAt": bagholder_store::tables::get_meta(conn, "synced_at", "")?,
-        "sessionPresent": session::load_session(app).is_some(),
-    }))
+    Ok(DataSummary {
+        ok: true,
+        path: app.db_path().display().to_string(),
+        activities: count("SELECT COUNT(*) FROM activities")?,
+        first_activity: first_act.unwrap_or_default(),
+        last_activity: last_act.unwrap_or_default(),
+        accounts: count("SELECT COUNT(*) FROM accounts")?,
+        balances: count("SELECT COUNT(*) FROM balances")?,
+        nav_days: count("SELECT COUNT(*) FROM nav_history")?,
+        securities: count("SELECT COUNT(*) FROM securities")?,
+        journal: journal.len(),
+        fx_days: count("SELECT COUNT(*) FROM fx_rates")?,
+        benchmark_days: count("SELECT COUNT(*) FROM benchmark_prices")?,
+        filings: count("SELECT COUNT(*) FROM filings")?,
+        synced_at: bagholder_store::tables::get_meta(conn, "synced_at", "")?,
+        session_present: session::load_session(app).is_some(),
+    })
 }
 
 async fn data(State(state): State<AppState>) -> Api {
     let app = state.app.clone();
-    with_store(&state, move |conn| data_summary(&app, conn)).await
+    with_store(&state, move |conn| Ok(to_value(&data_summary(&app, conn)?))).await
 }
 
 /// What `POST /api/data/clear` removes besides the synced rows.
@@ -190,49 +193,49 @@ async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> A
             st.last_sync.clear();
             st.error.clear();
         }
-        data_summary(&app, conn)
+        Ok(to_value(&data_summary(&app, conn)?))
     })
     .await
 }
 
 /// One trade's journal entry. A field left out is cleared, as the page sends all three.
 #[derive(Deserialize, Default)]
-struct JournalEntry {
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    thesis: Value,
-    #[serde(default)]
-    tags: Value,
-    #[serde(default)]
-    grade: Value,
+#[serde(default)]
+struct JournalEntryRequest {
+    #[serde(deserialize_with = "trimmed")]
+    id: Option<String>,
+    #[serde(flatten)]
+    entry: bagholder_model::input::JournalEntry,
 }
 
-async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntry>) -> Api {
-    let id = e.id.trim().to_string();
-    if id.is_empty() {
+async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryRequest>) -> Api {
+    let id = e.id.unwrap_or_default();
+    if id.trim().is_empty() {
         return Err(ApiError::BadRequest("id required".into()));
     }
-    let entry = json!({"thesis": e.thesis, "tags": e.tags, "grade": e.grade});
-    with_store(&state, move |conn| Ok(json!({"ok": true, "journal": bagholder_store::admin::save_journal_entry(conn, &id, Some(&entry))?}))).await
+    with_store(&state, move |conn| Ok(json!({"ok": true, "journal": bagholder_store::admin::save_journal_entry(conn, &id, Some(&e.entry))?}))).await
 }
 
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Groups {
-    groups: Option<Value>,
+    #[serde(deserialize_with = "bagholder_model::lenient::list")]
+    groups: Vec<bagholder_model::input::TradeGroup>,
 }
 
 async fn groups(State(state): State<AppState>, Body(g): Body<Groups>) -> Api {
-    with_store(&state, move |conn| Ok(json!({"ok": true, "groups": bagholder_store::tables::save_trade_groups(conn, g.groups.as_ref())?}))).await
+    with_store(&state, move |conn| Ok(json!({"ok": true, "groups": bagholder_store::tables::save_trade_groups(conn, &g.groups)?}))).await
 }
 
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Notes {
-    notes: Option<Value>,
+    #[serde(deserialize_with = "bagholder_model::lenient::map")]
+    notes: std::collections::BTreeMap<String, bagholder_store::tables::LegacyNote>,
 }
 
 async fn notes(State(state): State<AppState>, Body(n): Body<Notes>) -> Api {
-    with_store(&state, move |conn| Ok(json!({"ok": true, "notes": bagholder_store::tables::save_trade_notes(conn, n.notes.as_ref())?}))).await
+    with_store(&state, move |conn| Ok(json!({"ok": true, "notes": bagholder_store::tables::save_trade_notes(conn, &n.notes)?}))).await
 }
 
 /// A CSV the page read from a file the person chose.

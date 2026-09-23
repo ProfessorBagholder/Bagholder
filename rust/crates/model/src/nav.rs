@@ -24,7 +24,7 @@ pub struct Point {
 }
 
 /// One day of net asset value as the store holds it.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NavRow {
     #[serde(deserialize_with = "lenient::text")]

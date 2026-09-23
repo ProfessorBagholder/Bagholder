@@ -389,14 +389,14 @@ fn store_scenario(
     .unwrap();
     bagholder_store::admin::upsert_securities(&conn, &securities, "2026-09-22T00:00:00Z").unwrap();
 
-    let snap = bagholder_store::snapshot::snapshot(&conn, true).unwrap();
-    out.insert("store/activities".into(), snap["activities"].clone());
-    out.insert("store/accounts".into(), snap["accounts"].clone());
-    out.insert("store/balances".into(), snap["balances"].clone());
-    out.insert("store/margin".into(), snap["margin"].clone());
-    out.insert("store/navHistory".into(), snap["navHistory"].clone());
-    out.insert("store/navByAccount".into(), snap["navByAccount"].clone());
-    out.insert("store/securities".into(), snap["securities"].clone());
+    let b = bagholder_store::book::book(&conn).unwrap();
+    out.insert("store/activities".into(), json!(b.activities));
+    out.insert("store/accounts".into(), json!(b.accounts));
+    out.insert("store/balances".into(), json!(b.balances));
+    out.insert("store/margin".into(), json!(bagholder_store::tables::margin(&conn).unwrap()));
+    out.insert("store/navHistory".into(), json!(b.nav_history));
+    out.insert("store/navByAccount".into(), json!(b.nav_by_account));
+    out.insert("store/securities".into(), json!(b.securities));
 }
 
 fn answers() -> Value {

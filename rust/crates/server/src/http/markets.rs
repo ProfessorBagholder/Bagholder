@@ -221,6 +221,14 @@ async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<Map<St
     answer(move || feeds::watch_remove(&state.app, &Value::Object(body))).await
 }
 
-async fn tiles_set(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
-    answer(move || feeds::tiles_set(&state.app, &Value::Object(body))).await
+/// What `POST /api/tiles/set` accepts: the tile row, in order.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct TilesSet {
+    #[serde(deserialize_with = "bagholder_model::lenient::list")]
+    tiles: Vec<bagholder_model::input::TileRef>,
+}
+
+async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api {
+    answer(move || feeds::tiles_set(&state.app, &body.tiles)).await
 }

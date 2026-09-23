@@ -3,7 +3,11 @@
 //! performs.
 
 use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+use bagholder_model::input::{Journal, JournalEntry, TileRef};
+use bagholder_model::securities::Security;
 
 /// `SYNC_META_KEYS`: the bookmarks a wipe clears so the next sync starts
 /// from zero.
@@ -46,23 +50,8 @@ pub fn upsert_securities(conn: &Connection, rows: &[bagholder_model::securities:
     })
 }
 
-pub fn list_securities(conn: &Connection) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare("SELECT * FROM securities ORDER BY id")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let uid: Option<String> = r.get("underlying_id")?;
-        out.push(json!({
-            "id": r.get::<_, String>("id")?,
-            "symbol": r.get::<_, Option<String>>("symbol")?.unwrap_or_default(),
-            "name": r.get::<_, Option<String>>("name")?.unwrap_or_default(),
-            "primaryExchange": r.get::<_, Option<String>>("primary_exchange")?.unwrap_or_default(),
-            "primaryMic": r.get::<_, Option<String>>("primary_mic")?.unwrap_or_default(),
-            "currency": r.get::<_, Option<String>>("currency")?.unwrap_or_default(),
-            "underlyingId": match uid { Some(u) if !u.is_empty() => json!(u), _ => Value::Null },
-        }));
-    }
-    Ok(out)
+pub fn list_securities(conn: &Connection) -> Result<Vec<Security>> {
+    crate::rows::securities(conn)
 }
 
 /// `missing_security_ids`: the ids the table does not hold, in the order
@@ -104,49 +93,108 @@ pub fn needs_security_id_backfill(conn: &Connection) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// A raw entry validated: a grade outside A/B/C/F is no grade, and an entry
+/// left with no thesis, grade or tags is no entry at all.
+fn clean_journal_entry(e: &JournalEntry) -> Option<JournalEntry> {
+    let mut grade = e.grade.trim().to_uppercase();
+    if !matches!(grade.as_str(), "A" | "B" | "C" | "F") {
+        grade = String::new();
+    }
+    let mut tags: Vec<String> = Vec::new();
+    for t in &e.tags {
+        let s = t.trim().to_string();
+        if !s.is_empty() && !tags.contains(&s) {
+            tags.push(s);
+        }
+    }
+    if e.thesis.is_empty() && grade.is_empty() && tags.is_empty() {
+        return None;
+    }
+    Some(JournalEntry { thesis: e.thesis.clone(), tags, grade })
+}
+
+/// A raw journal, validated: a blank-trimmed key holds nothing, as does an
+/// invalid entry.
+fn clean_journal(raw: &BTreeMap<String, JournalEntry>) -> Journal {
+    let mut out = Journal::new();
+    for (key, val) in raw {
+        let kid = key.trim().to_string();
+        if kid.is_empty() {
+            continue;
+        }
+        if let Some(clean) = clean_journal_entry(val) {
+            out.insert(kid, clean);
+        }
+    }
+    out
+}
+
+/// The journal as the stored text holds it, read leniently and validated.
+pub fn journal(conn: &Connection) -> Result<Journal> {
+    let raw = crate::tables::get_meta(conn, crate::tables::JOURNAL_META, "")?;
+    if raw.is_empty() {
+        return Ok(Journal::new());
+    }
+    let parsed: BTreeMap<String, JournalEntry> = match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => bagholder_model::lenient::objmap(&v),
+        Err(_) => BTreeMap::new(),
+    };
+    Ok(clean_journal(&parsed))
+}
+
+/// Sorted, so the stored text is the same byte for byte whichever order the
+/// entries arrived in.
+fn write_journal(conn: &Connection, j: &Journal) -> Result<()> {
+    let sorted: BTreeMap<&String, &JournalEntry> = j.iter().collect();
+    let text = crate::tables::json_text(&serde_json::to_value(&sorted).unwrap_or(Value::Null));
+    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &text)
+}
+
 /// `save_journal`.
-pub fn save_journal(conn: &Connection, entries: Option<&Value>) -> Result<Map<String, Value>> {
-    let clean = crate::snapshot::clean_journal(entries.filter(|v| v.is_object()));
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(clean.clone())))?;
+pub fn save_journal(conn: &Connection, entries: &Journal) -> Result<Journal> {
+    let mut clean = Journal::new();
+    for (key, val) in entries {
+        let kid = key.trim().to_string();
+        if kid.is_empty() {
+            continue;
+        }
+        if let Some(c) = clean_journal_entry(val) {
+            clean.insert(kid, c);
+        }
+    }
+    write_journal(conn, &clean)?;
     Ok(clean)
 }
 
 /// `save_journal_entry`: merge one entry. An entry with no thesis, grade
 /// or tags deletes the key.
-pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&Value>) -> Result<Map<String, Value>> {
+pub fn save_journal_entry(conn: &Connection, key: &str, entry: Option<&JournalEntry>) -> Result<Journal> {
     let kid = key.trim().to_string();
-    let mut current = crate::snapshot::journal(conn)?;
+    let mut current = journal(conn)?;
     if kid.is_empty() {
         return Ok(current);
     }
-    let one = entry.map(|e| crate::snapshot::clean_journal(Some(&json!({ kid.clone(): e }))));
-    match one.and_then(|m| m.get(&kid).cloned()) {
+    match entry.and_then(clean_journal_entry) {
         Some(clean) => { current.insert(kid, clean); }
-        None => {
-            // `Map::remove` under `preserve_order` is a swap-remove: it moves
-            // the last entry into the hole and the stored journal comes back
-            // in a different order every time a key is deleted. The map is
-            // rebuilt instead.
-            let mut kept = Map::new();
-            for (k, v) in current.iter() {
-                if *k != kid {
-                    kept.insert(k.clone(), v.clone());
-                }
-            }
-            current = kept;
-        }
+        None => { current.remove(&kid); }
     }
-    crate::tables::set_meta(conn, crate::tables::JOURNAL_META, &crate::tables::json_text(&Value::Object(current.clone())))?;
+    write_journal(conn, &current)?;
     Ok(current)
 }
 
 /// `save_tiles`: the Markets tile row, in order. Saving it is what the
 /// tab's plus, cross and drag do.
-pub fn save_tiles(conn: &Connection, rows: &[Value]) -> Result<Value> {
-    let raw = crate::tables::json_text(&Value::Array(rows.to_vec()));
-    let clean = crate::snapshot::tiles_from(&raw);
-    let clean = if clean.is_null() { Value::Array(vec![]) } else { clean };
-    crate::tables::set_meta(conn, crate::snapshot::TILES_META, &crate::tables::json_text(&clean))?;
+pub fn save_tiles(conn: &Connection, rows: &[TileRef]) -> Result<Vec<TileRef>> {
+    let mut clean: Vec<TileRef> = Vec::new();
+    for r in rows {
+        let sym = r.symbol.trim().to_uppercase();
+        if sym.is_empty() {
+            continue;
+        }
+        clean.push(TileRef { symbol: sym, exchange: r.exchange.trim().to_uppercase() });
+    }
+    let text = crate::tables::json_text(&serde_json::to_value(&clean).unwrap_or(Value::Array(vec![])));
+    crate::tables::set_meta(conn, crate::rows::TILES_META, &text)?;
     Ok(clean)
 }
 

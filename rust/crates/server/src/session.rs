@@ -9,7 +9,7 @@ use std::time::Duration;
 use bagholder_ws::fetch;
 use bagholder_ws::session::{CallError, Client, Session};
 
-use crate::app::{f, log, now_iso, now_unix, spawn, today_utc, App};
+use crate::app::{log, now_iso, now_unix, spawn, today_utc, App};
 
 pub const PORTFOLIO_REFRESH_MINUTES: u64 = 5;
 /// A sync that has failed this many times in a row is told, once.
@@ -455,18 +455,15 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> Vec<Str
             let mut walk_ok = true;
             let mut mapped = Vec::new();
             set_step(app, "Attaching listing ids…");
-            let snap = bagholder_store::snapshot::snapshot(&conn, true).map_err(|e| e.to_string())?;
             let mut ids: Vec<String> = Vec::new();
-            for a in snap.get("accounts").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-                let id = f(&a, "id").trim().to_string();
-                if !id.is_empty() && !ids.contains(&id) {
-                    ids.push(id);
+            for a in bagholder_store::tables::accounts(&conn).map_err(|e| e.to_string())? {
+                if !a.id.is_empty() && !ids.contains(&a.id) {
+                    ids.push(a.id);
                 }
             }
             if ids.is_empty() {
-                for a in snap.get("activities").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-                    let id = f(&a, "accountId").trim().to_string();
-                    if !id.is_empty() && !ids.contains(&id) {
+                for id in bagholder_store::book::distinct_activity_account_ids(&conn).map_err(|e| e.to_string())? {
+                    if !ids.contains(&id) {
                         ids.push(id);
                     }
                 }
@@ -495,16 +492,7 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> Vec<Str
                 bagholder_store::tables::set_meta(&conn, "security_id_backfill_done", "1").map_err(|e| e.to_string())?;
             }
         }
-        let snap = bagholder_store::snapshot::snapshot(&conn, true).map_err(|e| e.to_string())?;
-        let mut wanted: Vec<String> = Vec::new();
-        for key in ["activities", "balances"] {
-            for r in snap.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-                let sid = f(&r, "securityId").trim().to_string();
-                if !sid.is_empty() && !wanted.contains(&sid) {
-                    wanted.push(sid);
-                }
-            }
-        }
+        let wanted = bagholder_store::book::distinct_security_ids(&conn).map_err(|e| e.to_string())?;
         let mut pending = bagholder_store::admin::missing_security_ids(&conn, &wanted).map_err(|e| e.to_string())?;
         let mut seen: Vec<String> = Vec::new();
         let mut to_upsert: Vec<bagholder_model::securities::Security> = Vec::new();

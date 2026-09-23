@@ -239,7 +239,7 @@ fn test_days_to_cover_uses_the_volume_of_the_listings_own_market() {
 fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
     let c = conn();
     for day in ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"] {
-        bagholder_store::tables::upsert_benchmark_prices(&c, Some(&json!({day: 100.0})), "TSX").unwrap();
+        bagholder_store::tables::upsert_benchmark_prices(&c, &[(day.to_string(), 100.0)].into_iter().collect(), "TSX").unwrap();
     }
     let ca = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
@@ -635,8 +635,8 @@ fn test_a_listing_the_report_carries_is_read_from_the_report() {
 #[test]
 fn test_days_to_cover_follows_from_what_the_exchange_says_was_traded() {
     let c = conn();
-    let prices: serde_json::Map<String, Value> = (17..28).map(|d| (format!("2026-08-{:02}", d), json!(100.0))).collect();
-    bagholder_store::tables::upsert_benchmark_prices(&c, Some(&Value::Object(prices)), "TSX").unwrap();
+    let prices: std::collections::BTreeMap<String, f64> = (17..28).map(|d| (format!("2026-08-{:02}", d), 100.0)).collect();
+    bagholder_store::tables::upsert_benchmark_prices(&c, &prices, "TSX").unwrap();
     let rec = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
     assert!(days > 0);

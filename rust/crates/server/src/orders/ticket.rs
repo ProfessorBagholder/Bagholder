@@ -31,11 +31,11 @@ pub(super) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Se
 }
 
 pub fn order_accounts(app: &Arc<App>, accounts: Option<&[Value]>) -> Vec<Value> {
-    let owned;
+    let owned: Vec<Value>;
     let list: &[Value] = match accounts {
         Some(a) => a,
         None => {
-            owned = snapshot(app).get("accounts").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+            owned = must(bagholder_store::tables::accounts(&db(app))).iter().map(|a| serde_json::to_value(a).unwrap_or(Value::Null)).collect();
             &owned
         }
     };
@@ -64,8 +64,8 @@ pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Opti
     let rows = must(bagholder_store::admin::list_securities(&db(app)));
     let sid = security_id.trim();
     if !sid.is_empty() {
-        if let Some(r) = rows.iter().find(|r| f(r, "id") == sid) {
-            return Some(r.clone());
+        if let Some(r) = rows.iter().find(|r| r.id == sid) {
+            return Some(serde_json::to_value(r).unwrap());
         }
         return Some(json!({"id": sid, "symbol": symbol.trim().to_uppercase(), "name": "", "primaryExchange": "", "primaryMic": "", "currency": "", "underlyingId": null}));
     }
@@ -73,9 +73,9 @@ pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Opti
     if sym.is_empty() {
         return None;
     }
-    let mut same: Vec<Value> = rows.into_iter().filter(|r| f(r, "symbol").to_uppercase() == sym).collect();
-    same.sort_by_key(|r| (if f(r, "id").starts_with("sec-s-") { 0 } else { 1 }, f(r, "id")));
-    same.into_iter().next()
+    let mut same: Vec<bagholder_model::securities::Security> = rows.into_iter().filter(|r| r.symbol.to_uppercase() == sym).collect();
+    same.sort_by_key(|r| (if r.id.starts_with("sec-s-") { 0 } else { 1 }, r.id.clone()));
+    same.into_iter().next().map(|r| serde_json::to_value(&r).unwrap())
 }
 
 pub fn parse_quote(node: &Value) -> Option<Value> {
@@ -284,10 +284,11 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
     let mut margin_available = Value::Null;
     if let Some(a) = &acct {
         if tr(a, "marginAccountId") {
-            let snap = snapshot(app);
-            for m in snap.get("margin").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-                if f(&m, "accountId") == f(a, "marginAccountId") && m.get("buyingPower").map_or(false, |v| !v.is_null()) {
-                    margin_available = jo(on(&m, "buyingPower"));
+            for m in must(bagholder_store::tables::margin(&db(app))) {
+                if m.account_id == f(a, "marginAccountId") {
+                    if let Some(bp) = m.buying_power {
+                        margin_available = json!(bp);
+                    }
                 }
             }
         }
@@ -296,7 +297,7 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
     let fx_usd_cad = if fx_map.is_empty() {
         Value::Null
     } else {
-        let fx: bagholder_model::fx::Fx = fx_map.iter().filter_map(|(k, v)| v.as_f64().map(|x| (k.clone(), x))).collect();
+        let fx: bagholder_model::fx::Fx = fx_map.into_iter().collect();
         json!(bagholder_model::fx::rate_on(&fx, &bagholder_model::clock::today_local()))
     };
     let order_types = match md.get("orderTypes") {

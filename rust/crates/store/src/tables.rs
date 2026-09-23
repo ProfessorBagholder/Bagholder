@@ -3,39 +3,14 @@
 //! journal is kept in.
 
 use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
-use bagholder_model::value::{field_s, get, num, s as vs};
+use bagholder_model::input::TradeGroup;
 
 pub const FX_PAIR: &str = "USDCAD";
 pub const BENCHMARK_SYMBOL: &str = "SP500";
 pub const JOURNAL_META: &str = "journal_v2";
-
-/// A number that is absent rather than zero.
-fn opt_num(v: Option<&Value>) -> Option<f64> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) if s.is_empty() => None,
-        Some(x) => {
-            let n = num(Some(x), f64::NAN);
-            if n.is_nan() { None } else { Some(n) }
-        }
-    }
-}
-
-fn either_val<'a>(row: &'a Value, camel: &str, snake: &str) -> Option<&'a Value> {
-    match get(row, camel) {
-        Some(v) => Some(v),
-        None => get(row, snake),
-    }
-}
-
-fn arr(v: Option<&Value>) -> Vec<Value> {
-    match v {
-        Some(Value::Array(a)) => a.clone(),
-        _ => vec![],
-    }
-}
 
 // --------------------------------------------------------------------------
 // meta
@@ -189,50 +164,22 @@ pub fn nav_last_dates(conn: &Connection) -> Result<std::collections::BTreeMap<St
     Ok(out)
 }
 
-/// `_nav_point_from_row`: `netDeposits` is present only when the row has
-/// one, because a missing figure is not zero.
-pub fn nav_history(conn: &Connection, account_id: &str) -> Result<Vec<Value>> {
-    let mut stmt = conn.prepare(
-        "SELECT date, equity, currency, net_deposits FROM nav_history WHERE account_id = ? ORDER BY date",
-    )?;
-    let mut rows = stmt.query([account_id])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let currency: Option<String> = r.get(2)?;
-        let currency = currency.filter(|c| !c.is_empty()).unwrap_or_else(|| "CAD".into());
-        let mut rec = serde_json::Map::new();
-        rec.insert("date".into(), json!(r.get::<_, Option<String>>(0)?));
-        rec.insert("equity".into(), match r.get::<_, Option<f64>>(1)? {
-            Some(v) => json!(v),
-            None => Value::Null,
-        });
-        rec.insert("currency".into(), json!(currency));
-        if let Some(d) = r.get::<_, Option<f64>>(3)? {
-            rec.insert("netDeposits".into(), json!(d));
-        }
-        out.push(Value::Object(rec));
-    }
-    Ok(out)
-}
-
 // --------------------------------------------------------------------------
 // FX and benchmark series
 // --------------------------------------------------------------------------
 
 /// `_clean_date_map`: an ISO day mapped to a positive number, and
 /// nothing else.
-pub fn clean_date_map(raw: Option<&Value>) -> Vec<(String, f64)> {
+pub fn clean_date_map(raw: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
-    let m = match raw { Some(Value::Object(m)) => m, _ => return out };
-    for (key, val) in m {
+    for (key, val) in raw {
         let d: String = key.trim().chars().take(10).collect();
         let b = d.as_bytes();
         if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
             continue;
         }
-        match opt_num(Some(val)) {
-            Some(v) if v > 0.0 => out.push((d, v)),
-            _ => continue,
+        if *val > 0.0 {
+            out.push((d, *val));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -240,17 +187,17 @@ pub fn clean_date_map(raw: Option<&Value>) -> Vec<(String, f64)> {
     out
 }
 
-fn date_series(conn: &Connection, sql: &str, key: &str) -> Result<Map<String, Value>> {
+fn date_series(conn: &Connection, sql: &str, key: &str) -> Result<BTreeMap<String, f64>> {
     let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query([key])?;
-    let mut out = Map::new();
+    let mut out = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        out.insert(r.get::<_, String>(0)?, json!(r.get::<_, f64>(1)?));
+        out.insert(r.get::<_, String>(0)?, r.get::<_, f64>(1)?);
     }
     Ok(out)
 }
 
-pub fn fx_rates(conn: &Connection, pair: &str) -> Result<Map<String, Value>> {
+pub fn fx_rates(conn: &Connection, pair: &str) -> Result<BTreeMap<String, f64>> {
     date_series(conn, "SELECT date, rate FROM fx_rates WHERE pair = ? ORDER BY date", pair)
 }
 
@@ -261,7 +208,7 @@ pub fn fx_last_date(conn: &Connection, pair: &str) -> Result<String> {
 
 /// `upsert_fx_rates`: `INSERT OR IGNORE`, so a rate already stored for a
 /// day is never rewritten.
-pub fn upsert_fx_rates(conn: &Connection, mapping: Option<&Value>, pair: &str) -> Result<usize> {
+pub fn upsert_fx_rates(conn: &Connection, mapping: &BTreeMap<String, f64>, pair: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let clean = clean_date_map(mapping);
         if clean.is_empty() {
@@ -277,7 +224,7 @@ pub fn upsert_fx_rates(conn: &Connection, mapping: Option<&Value>, pair: &str) -
     })
 }
 
-pub fn benchmark_prices(conn: &Connection, symbol: &str) -> Result<Map<String, Value>> {
+pub fn benchmark_prices(conn: &Connection, symbol: &str) -> Result<BTreeMap<String, f64>> {
     date_series(conn, "SELECT date, close FROM benchmark_prices WHERE symbol = ? ORDER BY date", symbol)
 }
 
@@ -299,7 +246,7 @@ pub fn benchmark_last_date(conn: &Connection, symbol: &str) -> Result<String> {
     Ok(d.unwrap_or_default())
 }
 
-pub fn upsert_benchmark_prices(conn: &Connection, mapping: Option<&Value>, symbol: &str) -> Result<usize> {
+pub fn upsert_benchmark_prices(conn: &Connection, mapping: &BTreeMap<String, f64>, symbol: &str) -> Result<usize> {
     crate::atomically(conn, || {
         let clean = clean_date_map(mapping);
         if clean.is_empty() {
@@ -321,22 +268,17 @@ pub fn upsert_benchmark_prices(conn: &Connection, mapping: Option<&Value>, symbo
 
 /// `_clean_trade_groups`: a group needs an id and at least one member,
 /// members are deduplicated, and the first group to claim an id keeps it.
-pub fn clean_trade_groups(raw: Option<&Value>) -> Vec<Value> {
-    let items = match raw { Some(Value::Array(a)) => a.clone(), _ => return vec![] };
+pub fn clean_trade_groups(raw: &[TradeGroup]) -> Vec<TradeGroup> {
     let mut out = Vec::new();
     let mut seen: Vec<String> = Vec::new();
-    for item in items {
-        if !item.is_object() {
-            continue;
-        }
-        let gid = field_s(&item, "id").trim().to_string();
-        let members = match item.get("members") { Some(Value::Array(m)) => m.clone(), _ => continue };
+    for item in raw {
+        let gid = item.id.trim().to_string();
         if gid.is_empty() || seen.contains(&gid) {
             continue;
         }
         let mut keys: Vec<String> = Vec::new();
-        for m in members {
-            let k = vs(Some(&m)).trim().to_string();
+        for m in &item.members {
+            let k = m.trim().to_string();
             if k.is_empty() || keys.contains(&k) {
                 continue;
             }
@@ -346,79 +288,91 @@ pub fn clean_trade_groups(raw: Option<&Value>) -> Vec<Value> {
             continue;
         }
         seen.push(gid.clone());
-        let locked = item.get("locked").map(truthy).unwrap_or(false);
-        out.push(json!({"id": gid, "locked": locked, "members": keys}));
+        out.push(TradeGroup { id: gid, locked: item.locked, members: keys });
     }
     out
 }
 
-/// Truthiness: null, false, zero, and an empty string, array or object are false.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-pub fn trade_groups(conn: &Connection) -> Result<Vec<Value>> {
+/// The trade groups the raw stored text holds, read leniently and cleaned:
+/// a row from an older or hand-edited database gets the same rules a save does.
+fn parsed_trade_groups(conn: &Connection) -> Result<Vec<TradeGroup>> {
     let raw = get_meta(conn, "trade_groups", "")?;
     if raw.is_empty() {
         return Ok(vec![]);
     }
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(v) => Ok(clean_trade_groups(Some(&v))),
-        Err(_) => Ok(vec![]),
-    }
+    let rows: Vec<TradeGroup> = match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => bagholder_model::lenient::rows(&v),
+        Err(_) => vec![],
+    };
+    Ok(clean_trade_groups(&rows))
 }
 
-pub fn save_trade_groups(conn: &Connection, groups: Option<&Value>) -> Result<Vec<Value>> {
+pub fn trade_groups(conn: &Connection) -> Result<Vec<TradeGroup>> {
+    parsed_trade_groups(conn)
+}
+
+pub fn save_trade_groups(conn: &Connection, groups: &[TradeGroup]) -> Result<Vec<TradeGroup>> {
     let clean = clean_trade_groups(groups);
-    set_meta(conn, "trade_groups", &json_text(&Value::Array(clean.clone())))?;
+    set_meta(conn, "trade_groups", &json_text(&serde_json::to_value(&clean).unwrap_or(Value::Array(vec![]))))?;
     Ok(clean)
 }
 
+/// A note kept on a trade by an older version of the page, before the journal.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LegacyNote {
+    #[serde(deserialize_with = "bagholder_model::lenient::text")]
+    pub thesis: String,
+    #[serde(deserialize_with = "bagholder_model::lenient::text")]
+    pub tag: String,
+    #[serde(deserialize_with = "bagholder_model::lenient::text")]
+    pub grade: String,
+    #[serde(deserialize_with = "bagholder_model::lenient::text")]
+    pub trade_id: String,
+}
+
+/// The legacy notes, by trade key.
+pub type LegacyNotes = BTreeMap<String, LegacyNote>;
+
 /// `_clean_trade_notes`: a note with nothing in it is not a note, and a
 /// grade outside A/B/C/F is no grade.
-pub fn clean_trade_notes(raw: Option<&Value>) -> Map<String, Value> {
-    let mut out = Map::new();
-    let m = match raw { Some(Value::Object(m)) => m, _ => return out };
-    for (key, val) in m {
+pub fn clean_trade_notes(raw: &BTreeMap<String, LegacyNote>) -> LegacyNotes {
+    let mut out = LegacyNotes::new();
+    for (key, val) in raw {
         let kid = key.trim().to_string();
-        if kid.is_empty() || !val.is_object() {
+        if kid.is_empty() {
             continue;
         }
-        let thesis = field_s(val, "thesis");
-        let tag = field_s(val, "tag");
-        let mut grade = field_s(val, "grade");
+        let mut grade = val.grade.clone();
         if !matches!(grade.as_str(), "A" | "B" | "C" | "F") {
             grade = String::new();
         }
-        if thesis.is_empty() && tag.is_empty() && grade.is_empty() {
+        if val.thesis.is_empty() && val.tag.is_empty() && grade.is_empty() {
             continue;
         }
-        out.insert(kid.clone(), json!({"thesis": thesis, "tag": tag, "grade": grade, "tradeId": kid}));
+        out.insert(kid.clone(), LegacyNote { thesis: val.thesis.clone(), tag: val.tag.clone(), grade, trade_id: kid });
     }
     out
 }
 
-pub fn trade_notes(conn: &Connection) -> Result<Map<String, Value>> {
+fn raw_trade_notes(conn: &Connection) -> Result<BTreeMap<String, LegacyNote>> {
     let raw = get_meta(conn, "trade_notes", "")?;
     if raw.is_empty() {
-        return Ok(Map::new());
+        return Ok(BTreeMap::new());
     }
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(v) => Ok(clean_trade_notes(Some(&v))),
-        Err(_) => Ok(Map::new()),
-    }
+    Ok(match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => bagholder_model::lenient::objmap(&v),
+        Err(_) => BTreeMap::new(),
+    })
 }
 
-pub fn save_trade_notes(conn: &Connection, notes: Option<&Value>) -> Result<Map<String, Value>> {
-    let clean = clean_trade_notes(notes.filter(|v| v.is_object()));
-    set_meta(conn, "trade_notes", &json_text(&Value::Object(clean.clone())))?;
+pub fn trade_notes(conn: &Connection) -> Result<LegacyNotes> {
+    Ok(clean_trade_notes(&raw_trade_notes(conn)?))
+}
+
+pub fn save_trade_notes(conn: &Connection, notes: &BTreeMap<String, LegacyNote>) -> Result<LegacyNotes> {
+    let clean = clean_trade_notes(notes);
+    set_meta(conn, "trade_notes", &json_text(&serde_json::to_value(&clean).unwrap_or(Value::Object(Map::new()))))?;
     Ok(clean)
 }
 
@@ -469,16 +423,6 @@ pub fn margin(conn: &Connection) -> Result<Vec<crate::broker::Margin>> {
         })
     })?;
     rows.collect()
-}
-
-/// Kept for callers holding a raw array of rows.
-pub fn as_rows(v: Option<&Value>) -> Vec<Value> {
-    arr(v)
-}
-
-/// Kept so callers can read either spelling without importing the helper.
-pub fn field_either(row: &Value, camel: &str, snake: &str) -> Option<Value> {
-    either_val(row, camel, snake).cloned()
 }
 
 // --------------------------------------------------------------------------

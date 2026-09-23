@@ -50,8 +50,7 @@ fn list_orders() -> Vec<Value> {
     so::list_orders(&conn(), 200).unwrap()
 }
 fn activities() -> Vec<Value> {
-    let s = bagholder_store::snapshot::snapshot(&conn(), true).unwrap();
-    s["activities"].as_array().cloned().unwrap_or_default()
+    bagholder_store::activities::all_activities(&conn()).unwrap().iter().map(|r| serde_json::to_value(r).unwrap()).collect()
 }
 fn apply_ws(rows: &[Value]) -> bagholder_store::merge::Applied {
     let rows: Vec<bagholder_store::activities::ActivityRow> = rows.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
@@ -234,8 +233,8 @@ fn test_ticket_on_a_never_held_symbol_asks_wealthsimple_once_and_keeps_the_listi
     unpatch();
     assert_eq!(again["ok"], json!(true));
     assert_eq!(*searches.lock().unwrap(), vec!["BBAI".to_string()], "Wealthsimple's search is asked once");
-    let stored: Vec<Value> = bagholder_store::admin::list_securities(&conn()).unwrap().into_iter().filter(|x| st(x, "id") == "sec-s-bbai").collect();
-    assert_eq!((st(&stored[0], "symbol"), st(&stored[0], "primaryExchange"), st(&stored[0], "currency")), ("BBAI".into(), "NYSE".into(), "USD".into()));
+    let stored: Vec<bagholder_model::securities::Security> = bagholder_store::admin::list_securities(&conn()).unwrap().into_iter().filter(|x| x.id == "sec-s-bbai").collect();
+    assert_eq!((stored[0].symbol.clone(), stored[0].primary_exchange.clone(), stored[0].currency.clone()), ("BBAI".into(), "NYSE".into(), "USD".into()));
     assert_eq!(st(&o::resolve_security(&app(), "BBAI", "").unwrap(), "id"), "sec-s-bbai", "a book symbol from now on");
 }
 
@@ -271,9 +270,8 @@ fn test_collateral_account_names_the_margin_account_it_backs() {
     assert_eq!(slim["acct-rrsp"].margin_account_id, "", "a feature that is not enabled links nothing");
     assert_eq!((slim["acct-margin"].margin_account_id.clone(), slim["acct-lira"].margin_account_id.clone()), (String::new(), String::new()));
     bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
-    let snap = bagholder_store::snapshot::snapshot(&conn(), false).unwrap();
-    let kept: HashMap<String, Value> = snap["accounts"].as_array().unwrap().iter().map(|a| (st(a, "id"), a.clone())).collect();
-    assert_eq!(st(&kept["acct-tfsa"], "marginAccountId"), "acct-margin", "the link survives the store");
+    let kept: HashMap<String, bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
+    assert_eq!(kept["acct-tfsa"].margin_account_id, "acct-margin", "the link survives the store");
     let by_id: HashMap<String, Value> = o::order_accounts(&app(), None).into_iter().map(|a| (st(&a, "id"), a)).collect();
     assert_eq!(st(&by_id["acct-margin"], "marginAccountId"), "acct-margin");
     assert_eq!(st(&by_id["acct-tfsa"], "marginAccountId"), "acct-margin");

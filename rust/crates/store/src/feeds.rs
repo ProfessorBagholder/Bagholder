@@ -387,10 +387,32 @@ pub fn replace_news(conn: &Connection, symbol: &str, exchange: &str, rows: &[New
     })
 }
 
+/// `_news_from_row`: an item with no kind is a story, which is what a
+/// row stored before releases were told apart is.
+fn news_from_row(r: &Row) -> Result<StoredNews> {
+    let kind = NewsKind::parse(&text(r, "kind")?);
+    let id = text(r, "id")?;
+    let source = text(r, "source")?;
+    let feed = Feed::parse(&source).or_else(|| Feed::of_id(&id));
+    Ok(StoredNews {
+        id,
+        symbol: text(r, "symbol")?,
+        exchange: text(r, "exchange")?,
+        feed,
+        headline: text(r, "headline")?,
+        wire: text(r, "wire")?,
+        url: text(r, "url")?,
+        published_at: text(r, "published_at")?,
+        fetched_at: text(r, "fetched_at")?,
+        kind,
+        summary: text(r, "summary")?,
+    })
+}
+
 /// `news_for`: a listing's stored items, newest first.
 pub fn news_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Vec<StoredNews>> {
     let mut stmt = conn.prepare("SELECT * FROM news WHERE symbol = ? AND exchange = ? ORDER BY published_at DESC, id")?;
-    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], crate::snapshot::news_from_row)?;
+    let rows = stmt.query_map(rusqlite::params![up(symbol), up(exchange)], news_from_row)?;
     rows.collect()
 }
 

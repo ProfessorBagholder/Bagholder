@@ -1,13 +1,13 @@
-//! The model's inputs read straight from the columns (`rows`) are what the model
-//! reads from the snapshot's JSON rows, part by part, for rows of every shape.
+//! The model's inputs read straight from the columns (`rows`), for rows of
+//! every shape: what the store's writers leave behind is what its readers
+//! come back with.
 
 mod common;
-use bagholder_model::base::Inputs;
-use bagholder_store::{market, rows, snapshot, tables};
+use bagholder_store::{rows, tables};
 use common::*;
 
 #[test]
-fn test_every_input_reads_the_same_with_and_without_json_between() {
+fn test_every_input_reads_cleanly_from_rows_of_every_shape() {
     let d = db();
     d.conn
         .execute_batch(
@@ -30,43 +30,28 @@ fn test_every_input_reads_the_same_with_and_without_json_between() {
         .unwrap();
     tables::set_meta(&d.conn, "trade_groups", r#"[{"id":"g1","members":["rt:a"," rt:b ","rt:a"]},{"id":"","members":["x"]},{"id":"g2","members":[]}]"#).unwrap();
     tables::set_meta(&d.conn, tables::JOURNAL_META, r#"{"rt:a":{"thesis":"t","tags":"a, b","grade":"b"},"rt:c":{"thesis":""},"  ":{"thesis":"x"}}"#).unwrap();
-    tables::set_meta(&d.conn, snapshot::TILES_META, r#"[{"symbol":" ry ","exchange":"tsx"},{"symbol":""},7]"#).unwrap();
-
-    let snap = snapshot::snapshot(&d.conn, false).unwrap();
-    let through_json = Inputs::from_snapshot(&snap, &market::market_data(&d.conn).unwrap(), &snapshot::journal(&d.conn).unwrap());
+    tables::set_meta(&d.conn, rows::TILES_META, r#"[{"symbol":" ry ","exchange":"tsx"},{"symbol":""},7]"#).unwrap();
 
     let c = &d.conn;
-    assert_eq!(*through_json.securities, rows::securities(c).unwrap());
-    assert_eq!(*through_json.accounts, rows::accounts(c).unwrap());
-    assert_eq!(*through_json.balances, rows::balances(c).unwrap());
-    assert_eq!(*through_json.margin, rows::margin(c).unwrap());
     let (nav, by_account) = rows::nav(c).unwrap();
-    assert_eq!((&*through_json.nav, &*through_json.nav_by_account), (&nav, &by_account));
-    assert_eq!(*through_json.exposures, rows::exposures(c).unwrap());
-    assert_eq!(*through_json.watchlist, rows::watchlist(c).unwrap());
-    assert_eq!(*through_json.news, rows::news(c).unwrap());
-    assert_eq!(*through_json.universes, rows::universes(c).unwrap());
-    assert_eq!(*through_json.distributions, rows::distributions(c).unwrap());
-    assert_eq!(*through_json.quotes, rows::quotes(c).unwrap());
-    assert_eq!(*through_json.fx, rows::fx(c, tables::FX_PAIR).unwrap());
-    assert_eq!(*through_json.benchmark, rows::benchmark(c, tables::BENCHMARK_SYMBOL).unwrap());
-    for sym in market::BENCHMARK_SYMBOLS {
-        assert_eq!(through_json.benchmarks[sym], rows::benchmark(c, sym).unwrap());
-    }
-    assert_eq!(*through_json.groups, rows::groups(c).unwrap());
-    assert_eq!(*through_json.journal, rows::journal(c).unwrap());
-    assert_eq!(*through_json.tiles, rows::tiles(c).unwrap());
-
-    // the rows are there to compare: none of the readings is empty
     assert_eq!((nav.len(), by_account.len(), rows::universes(c).unwrap().0.len()), (2, 2, 2));
     assert_eq!(rows::exposures(c).unwrap()["sec-1"].sectors, vec![("Tech".to_string(), 0.6), ("Energy".to_string(), 0.4)]);
     assert_eq!(rows::news(c).unwrap().iter().find(|n| n.id == "n2").unwrap().kind, "story");
     assert_eq!(rows::margin(c).unwrap()[1].currency, "CAD");
     assert_eq!(rows::groups(c).unwrap().len(), 1);
+    assert_eq!(rows::groups(c).unwrap()[0].members, vec!["rt:a".to_string(), "rt:b".to_string()]);
+    assert_eq!(rows::journal(c).unwrap().get("rt:a").map(|e| e.tags.clone()), Some(vec!["a".to_string(), "b".to_string()]));
     assert_eq!(rows::tiles(c).unwrap().unwrap().len(), 1);
+    assert_eq!(rows::securities(c).unwrap().len(), 2);
+    assert_eq!(rows::accounts(c).unwrap().len(), 2);
+    assert_eq!(rows::balances(c).unwrap().len(), 3);
+    assert_eq!(rows::watchlist(c).unwrap().len(), 2);
+    assert_eq!(rows::distributions(c).unwrap()["ZWC"].len(), 2);
+    assert_eq!(rows::quotes(c).unwrap().len(), 3);
+    assert_eq!(rows::fx(c, tables::FX_PAIR).unwrap().len(), 2);
+    assert_eq!(rows::benchmark(c, tables::BENCHMARK_SYMBOL).unwrap().len(), 1);
 
     // never saved is not saved empty
-    tables::set_meta(c, snapshot::TILES_META, "").unwrap();
+    tables::set_meta(c, rows::TILES_META, "").unwrap();
     assert_eq!(rows::tiles(c).unwrap(), None);
-    assert_eq!(*Inputs::from_snapshot(&snapshot::snapshot(c, false).unwrap(), &serde_json::json!({}), &Default::default()).tiles, None);
 }

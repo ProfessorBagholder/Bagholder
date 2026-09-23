@@ -8714,28 +8714,27 @@
   },
   "tables/get_meta/default": "fallback",
   "tables/get_meta/overwritten": "v2",
-  "tables/nav_history/identity": [
+  "tables/nav/identity": [
     {
       "date": "2024-01-01",
       "equity": 1000.0,
-      "currency": "CAD",
       "netDeposits": 100.0
     },
     {
       "date": "2024-01-02",
       "equity": 1010.0,
-      "currency": "CAD"
+      "netDeposits": null
     }
   ],
-  "tables/nav_history/nickname": [
-    {
-      "date": "2024-01-01",
-      "equity": 500.0,
-      "currency": "USD",
-      "netDeposits": 0.0
-    }
-  ],
-  "tables/nav_history/missing_account": [],
+  "tables/nav/by_account": {
+    "acct-x": [
+      {
+        "date": "2024-01-01",
+        "equity": 500.0,
+        "netDeposits": 0.0
+      }
+    ]
+  },
   "tables/nav_last_dates": [
     [
       "",
@@ -8911,14 +8910,6 @@
   "admin/needs_security_id_backfill/after_wealthsimple_row_no_sid": true,
   "admin/needs_security_id_backfill/mixed": true,
   "admin/save_journal": {
-    "trade-1": {
-      "thesis": "solid thesis",
-      "tags": [
-        "swing",
-        "earnings"
-      ],
-      "grade": "B"
-    },
     "trade-3": {
       "thesis": "dup tags",
       "tags": [
@@ -8926,31 +8917,39 @@
         "y"
       ],
       "grade": ""
+    },
+    "trade-1": {
+      "thesis": "solid thesis",
+      "tags": [
+        "swing",
+        "earnings"
+      ],
+      "grade": "B"
     }
   },
   "admin/save_journal_entry/set": {
-    "trade-1": {
-      "thesis": "solid thesis",
-      "tags": [
-        "swing",
-        "earnings"
-      ],
-      "grade": "B"
-    },
-    "trade-3": {
-      "thesis": "dup tags",
-      "tags": [
-        "x",
-        "y"
-      ],
-      "grade": ""
-    },
     "trade-4": {
       "thesis": "new entry",
       "tags": [
         "z"
       ],
       "grade": "A"
+    },
+    "trade-1": {
+      "thesis": "solid thesis",
+      "tags": [
+        "swing",
+        "earnings"
+      ],
+      "grade": "B"
+    },
+    "trade-3": {
+      "thesis": "dup tags",
+      "tags": [
+        "x",
+        "y"
+      ],
+      "grade": ""
     }
   },
   "admin/save_journal_entry/delete": {
@@ -8988,6 +8987,13 @@
     }
   },
   "admin/snapshot_journal": {
+    "trade-4": {
+      "thesis": "new entry",
+      "tags": [
+        "z"
+      ],
+      "grade": "A"
+    },
     "trade-3": {
       "thesis": "dup tags",
       "tags": [
@@ -8995,13 +9001,6 @@
         "y"
       ],
       "grade": ""
-    },
-    "trade-4": {
-      "thesis": "new entry",
-      "tags": [
-        "z"
-      ],
-      "grade": "A"
     }
   },
   "admin/clean_journal/junk": {
@@ -9116,7 +9115,10 @@
   },
   "admin/clear_synced_data/keep_journal=true/keep_market=true/synced_at": "",
   "admin/clear_synced_data/keep_journal=true/keep_market=true/security_id_backfill_done": "",
-  "snapshot/with_activities": {
+  "snapshot/exposures_part": {},
+  "snapshot/universes_part": {},
+  "book/book": {
+    "ok": true,
     "activities": [
       {
         "id": "<id>",
@@ -9168,19 +9170,6 @@
         "quantity": 10.0
       }
     ],
-    "margin": [
-      {
-        "accountId": "acct-a",
-        "buyingPower": 500.0,
-        "currency": "CAD",
-        "unavailable": "",
-        "fetchedAt": "2026-09-22T00:00:00Z"
-      }
-    ],
-    "exposures": {},
-    "watchlist": [],
-    "news": [],
-    "universes": {},
     "navHistory": [
       {
         "date": "2024-01-01",
@@ -9208,12 +9197,6 @@
       }
     ],
     "notes": {},
-    "tiles": [
-      {
-        "symbol": "AAA",
-        "exchange": "TSX"
-      }
-    ],
     "securities": [
       {
         "id": "<id>",
@@ -9226,162 +9209,10 @@
       }
     ]
   },
-  "snapshot/without_activities": {
-    "activities": [],
-    "accounts": [
-      {
-        "id": "<id>",
-        "nickname": "A",
-        "unifiedAccountType": "SelfDirected",
-        "currency": "CAD",
-        "status": "open",
-        "type": "SelfDirected",
-        "netLiquidationValue": 1000.0,
-        "marginAccountId": ""
-      }
-    ],
-    "balances": [
-      {
-        "accountId": "acct-a",
-        "custodianAccountId": "cust-1",
-        "securityId": "sec-1",
-        "quantity": 10.0
-      }
-    ],
-    "margin": [
-      {
-        "accountId": "acct-a",
-        "buyingPower": 500.0,
-        "currency": "CAD",
-        "unavailable": "",
-        "fetchedAt": "2026-09-22T00:00:00Z"
-      }
-    ],
-    "exposures": {},
-    "watchlist": [],
-    "news": [],
-    "universes": {},
-    "navHistory": [
-      {
-        "date": "2024-01-01",
-        "equity": 100.0,
-        "currency": "CAD"
-      }
-    ],
-    "navByAccount": {
-      "acct-a": [
-        {
-          "date": "2024-01-01",
-          "equity": 50.0,
-          "currency": "CAD"
-        }
-      ]
-    },
-    "syncedAt": "2026-09-22T00:00:00Z",
-    "tradeGroups": [
-      {
-        "id": "<id>",
-        "locked": false,
-        "members": [
-          "m1"
-        ]
-      }
-    ],
-    "notes": {},
-    "tiles": [
-      {
-        "symbol": "AAA",
-        "exchange": "TSX"
-      }
-    ],
-    "securities": [
-      {
-        "id": "<id>",
-        "symbol": "AAA",
-        "name": "AAA Inc",
-        "primaryExchange": "TSX",
-        "primaryMic": "XTSE",
-        "currency": "CAD",
-        "underlyingId": null
-      }
-    ]
-  },
-  "snapshot/accounts_part": [
-    {
-      "id": "acct-a",
-      "nickname": "A",
-      "unifiedAccountType": "SelfDirected",
-      "currency": "CAD",
-      "status": "open",
-      "type": "SelfDirected",
-      "netLiquidationValue": 1000.0,
-      "marginAccountId": ""
-    }
+  "book/distinct_activity_account_ids": [
+    "acct-a"
   ],
-  "snapshot/balances_part": [
-    {
-      "accountId": "acct-a",
-      "custodianAccountId": "cust-1",
-      "securityId": "sec-1",
-      "quantity": 10.0
-    }
-  ],
-  "snapshot/margin_part": [
-    {
-      "accountId": "acct-a",
-      "buyingPower": 500.0,
-      "currency": "CAD",
-      "unavailable": "",
-      "fetchedAt": "2026-09-22T00:00:00Z"
-    }
-  ],
-  "snapshot/nav_part": {
-    "nav": [
-      {
-        "date": "2024-01-01",
-        "equity": 100.0,
-        "currency": "CAD"
-      }
-    ],
-    "navByAccount": {
-      "acct-a": [
-        {
-          "date": "2024-01-01",
-          "equity": 50.0,
-          "currency": "CAD"
-        }
-      ]
-    }
-  },
-  "snapshot/groups_part": [
-    {
-      "id": "g1",
-      "locked": false,
-      "members": [
-        "m1"
-      ]
-    }
-  ],
-  "snapshot/notes_part": {},
-  "snapshot/securities_part": [
-    {
-      "id": "sec-a",
-      "symbol": "AAA",
-      "name": "AAA Inc",
-      "primaryExchange": "TSX",
-      "primaryMic": "XTSE",
-      "currency": "CAD",
-      "underlyingId": null
-    }
-  ],
-  "snapshot/watchlist_part": [],
-  "snapshot/news_part": [],
-  "snapshot/universes_part": {},
-  "snapshot/tiles_part": [
-    {
-      "symbol": "AAA",
-      "exchange": "TSX"
-    }
-  ],
-  "snapshot/synced_at_part": "2026-09-22T00:00:00Z"
+  "book/distinct_security_ids": [
+    "sec-1"
+  ]
 }

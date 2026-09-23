@@ -275,16 +275,13 @@ pub fn watch_remove(app: &Arc<App>, body: &Value) -> Value {
 
 /// The Markets tab's tile row, only instruments the
 /// directory knows, twelve at most.
-pub fn tiles_set(app: &Arc<App>, body: &Value) -> Value {
-    let mut rows: Vec<Value> = Vec::new();
+pub fn tiles_set(app: &Arc<App>, tiles: &[bagholder_model::input::TileRef]) -> Value {
+    let mut rows: Vec<bagholder_model::input::TileRef> = Vec::new();
     let mut seen: HashSet<&'static str> = HashSet::new();
-    for r in body.get("tiles").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-        if !r.is_object() {
-            continue;
-        }
-        if let Some(inst) = instruments::find(&f(&r, "symbol"), &f(&r, "exchange")) {
+    for r in tiles {
+        if let Some(inst) = instruments::find(&r.symbol, &r.exchange) {
             if seen.insert(inst.symbol) {
-                rows.push(json!({"symbol": inst.symbol, "exchange": inst.exchange}));
+                rows.push(bagholder_model::input::TileRef { symbol: inst.symbol.to_string(), exchange: inst.exchange.to_string() });
             }
         }
     }
@@ -470,9 +467,9 @@ pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
 pub fn instrument_meta(c: &Connection, symbol: &str) -> (String, String, String) {
     let sym = symbol.trim().to_uppercase();
     for sec in bagholder_store::admin::list_securities(c).unwrap_or_default() {
-        if f(&sec, "symbol").trim().to_uppercase() == sym {
-            let name = f(&sec, "name").trim().to_string();
-            return (if name.is_empty() { sym } else { name }, f(&sec, "primaryExchange").trim().to_string(), f(&sec, "currency").trim().to_string());
+        if sec.symbol.trim().to_uppercase() == sym {
+            let name = sec.name.trim().to_string();
+            return (if name.is_empty() { sym } else { name }, sec.primary_exchange.trim().to_string(), sec.currency.trim().to_string());
         }
     }
     (sym, String::new(), String::new())

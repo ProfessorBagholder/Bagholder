@@ -220,3 +220,15 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     assert_eq!(added.len(), 1);
     assert_eq!(added.values().next().unwrap()["title"], row["title"]);
 }
+
+/// `GET /api/book` answers exactly what `bagholder_store::book::book` builds,
+/// as `Book`'s own JSON -- the route does nothing to it besides serializing it.
+#[test]
+fn test_the_book_route_is_the_store_books_own_json() {
+    let _g = guard();
+    let conn = app_ref().open().unwrap();
+    let expected = serde_json::to_value(bagholder_store::book::book(&conn).unwrap()).unwrap();
+    let (code, body) = runtime().block_on(json_of(from_the_page(Method::GET, "/api/book", None)));
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, expected);
+}

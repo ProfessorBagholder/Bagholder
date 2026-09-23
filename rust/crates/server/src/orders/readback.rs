@@ -289,14 +289,7 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
         date = crate::app::today_utc();
     }
     let currency = [&order.currency, &upd.currency].into_iter().map(|c| c.trim().to_uppercase()).find(|c| !c.is_empty()).filter(|c| c == "CAD" || c == "USD").unwrap_or_else(|| "CAD".into());
-    let stored_accounts: Vec<bagholder_store::broker::Account> = snapshot(app)
-        .get("accounts")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
-        .collect();
+    let stored_accounts: Vec<bagholder_store::broker::Account> = must(bagholder_store::tables::accounts(&db(app)));
     let accts = bagholder_ws::mapping::Accounts::from_stored(&stored_accounts);
     let mult = bagholder_model::symbols::option_multiplier(&symbol);
     let buy = order.side == Side::Buy;
@@ -513,7 +506,7 @@ pub fn orders_doc(app: &Arc<App>, kick: bool) -> OrdersDoc {
     if kick {
         kick_orders_refresh(app);
     }
-    let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db(app))).iter().map(|s| (f(s, "id"), f(s, "primaryExchange"))).collect();
+    let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db(app))).iter().map(|s| (s.id.clone(), s.primary_exchange.clone())).collect();
     let orders = orders_all(app).into_iter().map(|order| OrderCard { exchange: exchanges.get(&order.security_id).cloned().unwrap_or_default(), order }).collect();
     OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at(app) }
 }

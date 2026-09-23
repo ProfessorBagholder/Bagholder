@@ -2,7 +2,7 @@
 //! about accounts, balances, listings, prices and the journal. Each is read
 //! leniently (`lenient`) once, here, and has its types from then on.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::activity::Kind;
@@ -116,15 +116,25 @@ impl Quote {
 pub type Quotes = HashMap<String, Quote>;
 
 /// What the person wrote about a trade.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct JournalEntry {
     #[serde(deserialize_with = "lenient::text")]
     pub thesis: String,
-    #[serde(deserialize_with = "lenient::texts")]
+    /// A page old enough to send tags as one comma-joined string still reads:
+    /// each piece around a comma is its own tag.
+    #[serde(deserialize_with = "tags_field")]
     pub tags: Vec<String>,
     #[serde(deserialize_with = "lenient::text")]
     pub grade: String,
+}
+
+fn tags_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => s.split(',').map(|t| crate::value::s(Some(&serde_json::Value::String(t.to_string())))).collect(),
+        serde_json::Value::Array(a) => a.iter().map(|x| crate::value::s(Some(x))).collect(),
+        _ => vec![],
+    })
 }
 
 /// The journal, by trade id (a round trip's `rt:…`, a saved group's id) or
@@ -132,11 +142,15 @@ pub struct JournalEntry {
 pub type Journal = HashMap<String, JournalEntry>;
 
 /// Trades the person grouped by hand, named by their members' keys.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TradeGroup {
     #[serde(deserialize_with = "lenient::text")]
     pub id: String,
+    /// Read from the stored row, carried through unread by the model, which
+    /// treats every saved group as locked regardless.
+    #[serde(deserialize_with = "lenient::truthy")]
+    pub locked: bool,
     #[serde(deserialize_with = "lenient::texts")]
     pub members: Vec<String>,
 }
@@ -209,7 +223,7 @@ pub struct UniverseRow {
 }
 
 /// A tile the person put in the Markets tab's row.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TileRef {
     #[serde(deserialize_with = "lenient::text")]

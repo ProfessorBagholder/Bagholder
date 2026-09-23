@@ -454,7 +454,8 @@ fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::R
     bagholder_store::tables::replace_nav(&conn, &typed(nav))?;
     bagholder_store::tables::set_meta(&conn, "synced_at", SYNCED)?;
     for (k, v) in kept_journal(b) {
-        bagholder_store::admin::save_journal_entry(&conn, &k, Some(&v))?;
+        let entry: bagholder_model::input::JournalEntry = serde_json::from_value(v).unwrap();
+        bagholder_store::admin::save_journal_entry(&conn, &k, Some(&entry))?;
     }
     let count = bagholder_store::activities::activity_count(&conn)?;
     println!("desktop: {} activities in {}", count, path.display());

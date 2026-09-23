@@ -220,14 +220,21 @@ fn test_a_row_moves_both() {
 // TilesTest
 // ---------------------------------------------------------------------------
 
-fn base_of(conn: &Connection, quotes: Option<Value>) -> bagholder_model::base::Base {
-    let snapshot = bagholder_store::snapshot::snapshot(conn, true).unwrap();
-    let mut market = bagholder_store::market::market_data(conn).unwrap();
+fn base_of(conn: &Connection, quotes: Option<Value>) -> std::sync::Arc<bagholder_model::base::Base> {
     if let Some(q) = quotes {
-        market["quotes"] = q;
+        for (key, v) in q.as_object().cloned().unwrap_or_default() {
+            let rec = bagholder_store::market::QuoteRecord {
+                price: v.get("price").and_then(|x| x.as_f64()),
+                price_change: v.get("priceChange").and_then(|x| x.as_f64()),
+                percent_change: v.get("percentChange").and_then(|x| x.as_f64()),
+                ..Default::default()
+            };
+            bagholder_store::market::upsert_quote(conn, &key, &rec, "test", "2026-01-01T00:00:00Z").unwrap();
+        }
     }
-    let journal = bagholder_store::snapshot::journal(conn).unwrap();
-    bagholder_model::base::build_base(&snapshot, &market, &journal, None)
+    let cache = crate::model_cache::ModelCache::new();
+    let today = bagholder_model::clock::today_local();
+    cache.base(conn, &today).unwrap()
 }
 
 /// The model half; the store half is in crates/store/tests/tables.rs.
@@ -242,7 +249,8 @@ fn test_the_row_is_the_default_until_saved_and_then_what_was_saved() {
         .collect();
     assert_eq!(got, want);
     let before = crate::versions::data_version(&d.conn).unwrap();
-    bagholder_store::admin::save_tiles(&d.conn, &[json!({"symbol": "tnx", "exchange": "index"}), json!({"symbol": "usdcad", "exchange": "fx"}), json!({"symbol": "", "exchange": "x"}), json!("junk")]).unwrap();
+    let tiles_in: Vec<bagholder_model::input::TileRef> = bagholder_model::lenient::rows(&json!([{"symbol": "tnx", "exchange": "index"}, {"symbol": "usdcad", "exchange": "fx"}, {"symbol": "", "exchange": "x"}, "junk"]));
+    bagholder_store::admin::save_tiles(&d.conn, &tiles_in).unwrap();
     assert_ne!(crate::versions::data_version(&d.conn).unwrap(), before, "the row is part of the data version");
     let r = rows(&d);
     let got: Vec<(String, String, String, i64)> = r.iter().map(|t| (app::f(t, "symbol"), app::f(t, "label"), app::f(t, "kind"), t["decimals"].as_i64().unwrap())).collect();
@@ -255,7 +263,7 @@ fn test_the_row_is_the_default_until_saved_and_then_what_was_saved() {
 #[test]
 fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
     let d = db();
-    bagholder_store::admin::save_tiles(&d.conn, &[json!({"symbol": "SPX", "exchange": "Index"})]).unwrap();
+    bagholder_store::admin::save_tiles(&d.conn, &[bagholder_model::input::TileRef { symbol: "SPX".into(), exchange: "Index".into() }]).unwrap();
     let base = base_of(&d.conn, None);
     let q: Vec<(String, String, String)> = bagholder_model::markets::quote_symbols(&base).into_iter().map(|r| (r.quote_key.unwrap_or_default(), r.yahoo.unwrap_or_default(), r.kind)).collect();
     assert_eq!(q, vec![("SPX@INDEX".to_string(), "^GSPC".to_string(), "Instrument".to_string())], "quoted through the watch path");
@@ -270,18 +278,19 @@ fn test_the_row_reads_its_quotes_where_a_watched_instrument_would() {
 fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twelve() {
     let _g = guard();
     let conn = app_ref().open().unwrap();
-    let saved = bagholder_store::tables::get_meta(&conn, bagholder_store::snapshot::TILES_META, "").unwrap();
-    bagholder_store::admin::save_tiles(&conn, &[json!({"symbol": "VIX", "exchange": "Index"}), json!({"symbol": "GC", "exchange": "COMEX"})]).unwrap();
+    let saved = bagholder_store::tables::get_meta(&conn, bagholder_store::rows::TILES_META, "").unwrap();
+    bagholder_store::admin::save_tiles(&conn, &[bagholder_model::input::TileRef { symbol: "VIX".into(), exchange: "Index".into() }, bagholder_model::input::TileRef { symbol: "GC".into(), exchange: "COMEX".into() }]).unwrap();
     app().invalidate();
     let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
-    assert_eq!(crate::feeds::tiles_set(&app(), &json!({"tiles": too_many}))["ok"], false);
+    let too_many_tiles: Vec<bagholder_model::input::TileRef> = too_many.iter().map(|v| bagholder_model::input::TileRef { symbol: v["symbol"].as_str().unwrap().to_string(), exchange: v["exchange"].as_str().unwrap().to_string() }).collect();
+    assert_eq!(crate::feeds::tiles_set(&app(), &too_many_tiles)["ok"], false);
     let b = app().base().unwrap();
     let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
     assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
     if saved.is_empty() {
-        conn.execute("DELETE FROM meta WHERE key = ?", [bagholder_store::snapshot::TILES_META]).unwrap();
+        conn.execute("DELETE FROM meta WHERE key = ?", [bagholder_store::rows::TILES_META]).unwrap();
     } else {
-        bagholder_store::tables::set_meta(&conn, bagholder_store::snapshot::TILES_META, &saved).unwrap();
+        bagholder_store::tables::set_meta(&conn, bagholder_store::rows::TILES_META, &saved).unwrap();
     }
     app().invalidate();
 }

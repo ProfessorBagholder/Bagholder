@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use bagholder_model::base::{self, Base, Inputs, Layers};
 use bagholder_model::wire::View;
-use bagholder_store::{activities, gens, market, rows, snapshot, tables};
+use bagholder_store::{activities, gens, market, rows, tables};
 
 type Gens = BTreeMap<String, i64>;
 
@@ -167,7 +167,7 @@ impl ModelCache {
         part!("news", ["news"], i.news = Arc::new(rows::news(conn)?));
         part!("universes", ["universes"], i.universes = Arc::new(rows::universes(conn)?));
         part!("tiles", ["tiles"], i.tiles = Arc::new(rows::tiles(conn)?));
-        part!("synced", ["synced"], i.synced_at = snapshot::synced_at_part(conn)?);
+        part!("synced", ["synced"], i.synced_at = tables::get_meta(conn, "synced_at", "")?);
         drop(tx);
 
         let day_turned = c.today != today;
@@ -328,7 +328,8 @@ mod tests {
         let (_d, conn, cache) = seeded();
         let (before, _) = cache.base_and_work(&conn, TODAY).unwrap();
         let id = before.trades[0].id.clone();
-        bagholder_store::admin::save_journal_entry(&conn, &id, Some(&json!({"thesis": "held through the quarter", "tags": ["swing"], "grade": "B"}))).unwrap();
+        let entry: bagholder_model::input::JournalEntry = serde_json::from_value(json!({"thesis": "held through the quarter", "tags": ["swing"], "grade": "B"})).unwrap();
+        bagholder_store::admin::save_journal_entry(&conn, &id, Some(&entry)).unwrap();
         let (after, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert_eq!(work.read, vec!["journal"]);
         assert!(!work.built.contains(&"book"));
@@ -370,10 +371,11 @@ mod tests {
         market::upsert_quote(&conn, "QNC", &bagholder_store::market::QuoteRecord { price: Some(2.25), ..Default::default() }, "tmx", "2026-03-02T15:05:00Z").unwrap();
         let (layered, _) = cache.base_and_work(&conn, TODAY).unwrap();
 
-        let snap = snapshot::snapshot(&conn, true).unwrap();
-        let mkt = market::market_data(&conn).unwrap();
-        let journal = snapshot::journal(&conn).unwrap();
-        let scratch = bagholder_model::base::build_base(&snap, &mkt, &journal, Some(TODAY));
+        // built from scratch through the exact same typed reads, on a cache
+        // that has never seen this connection: the incremental path and the
+        // cold path must land on the same base.
+        let scratch_cache = ModelCache::new();
+        let (scratch, _) = scratch_cache.base_and_work(&conn, TODAY).unwrap();
         let view = |b: &Base| bagholder_model::view::build_view(b, None).to_value();
         assert_eq!(view(&layered), view(&scratch));
     }

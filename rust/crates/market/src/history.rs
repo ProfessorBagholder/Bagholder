@@ -505,8 +505,7 @@ pub fn ensure_history(
 }
 
 fn read_fx(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeMap<String, f64>> {
-    let m = bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)?;
-    Ok(m.into_iter().filter_map(|(k, v)| v.as_f64().map(|f| (k, f))).collect())
+    bagholder_store::tables::fx_rates(conn, bagholder_store::tables::FX_PAIR)
 }
 
 /// Weekly (Monday start) or monthly bars from daily

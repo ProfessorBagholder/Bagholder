@@ -31,11 +31,8 @@ impl Db {
     pub fn ensure(&self) {
         bagholder_store::relabel::ensure(&self.conn).unwrap();
     }
-    pub fn snapshot(&self) -> Value {
-        bagholder_store::snapshot::snapshot(&self.conn, true).unwrap()
-    }
     pub fn activities(&self) -> Vec<Value> {
-        self.snapshot()["activities"].as_array().unwrap().clone()
+        bagholder_store::activities::all_activities(&self.conn).unwrap().iter().map(|r| serde_json::to_value(r).unwrap()).collect()
     }
     pub fn apply(&self, rows: &[Value]) -> bagholder_store::merge::Applied {
         let id = self.new_id();

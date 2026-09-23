@@ -153,7 +153,7 @@ fn answers() -> Value {
     // market's own trading days seeded so the average and days-to-cover are
     // real figures rather than blanks
     for day in ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"] {
-        bagholder_store::tables::upsert_benchmark_prices(&c, Some(&json!({day: 100.0})), "TSX").unwrap();
+        bagholder_store::tables::upsert_benchmark_prices(&c, &[(day.to_string(), 100.0)].into_iter().collect(), "TSX").unwrap();
     }
     let ca_position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
     let ca_volume = shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None);

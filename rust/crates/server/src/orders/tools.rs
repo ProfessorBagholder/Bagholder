@@ -219,10 +219,6 @@ pub(super) fn emit(app: &Arc<App>, kind: &str, key: &str, title: &str, body: &st
     notify::emit(app, &db(app), kind, key, title, body, None);
 }
 
-pub(super) fn snapshot(app: &Arc<App>) -> Value {
-    must(bagholder_store::snapshot::snapshot(&db(app), false))
-}
-
 pub(super) fn connected_not_syncing(app: &Arc<App>) -> bool {
     let st = app.state.lock().unwrap();
     st.connected && !st.syncing

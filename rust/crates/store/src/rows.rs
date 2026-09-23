@@ -205,15 +205,39 @@ pub fn benchmark(conn: &Connection, symbol: &str) -> Result<BTreeMap<String, f64
 }
 
 pub fn groups(conn: &Connection) -> Result<Vec<TradeGroup>> {
-    Ok(bagholder_model::lenient::rows(&Value::Array(crate::snapshot::groups_part(conn)?)))
+    crate::tables::trade_groups(conn)
 }
 
 pub fn journal(conn: &Connection) -> Result<Journal> {
-    Ok(bagholder_model::input::journal_from(&crate::snapshot::journal(conn)?))
+    crate::admin::journal(conn)
+}
+
+pub const TILES_META: &str = "market_tiles";
+
+/// `_tiles_from`: the saved Markets tile row, or `None` when it has
+/// never been saved -- which is not the same as an empty row.
+fn tiles_from(raw: &str) -> Option<Vec<TileRef>> {
+    if raw.is_empty() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    let rows = parsed.as_array().cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for r in rows {
+        if !r.is_object() {
+            continue;
+        }
+        let sym = bagholder_model::value::field_s(&r, "symbol").trim().to_string();
+        if sym.is_empty() {
+            continue;
+        }
+        out.push(TileRef { symbol: sym.to_uppercase(), exchange: bagholder_model::value::field_s(&r, "exchange").trim().to_uppercase() });
+    }
+    Some(out)
 }
 
 /// Never saved is `None`, which is not the same as saved empty.
 pub fn tiles(conn: &Connection) -> Result<Option<Vec<TileRef>>> {
-    let saved = crate::snapshot::tiles_part(conn)?;
-    Ok((!saved.is_null()).then(|| bagholder_model::lenient::rows(&saved)))
+    let raw = crate::tables::get_meta(conn, TILES_META, "")?;
+    Ok(tiles_from(&raw))
 }

@@ -21,10 +21,22 @@
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-store --test golden_store`,
 //! then read the diff in `tests/golden/store.json` before committing it.
 
-use bagholder_store::{activities, admin, csvimport, merge, snapshot, tables};
+use bagholder_model::input::{TileRef, TradeGroup};
+use bagholder_store::tables::LegacyNote;
+use bagholder_store::{activities, admin, book, csvimport, merge, rows, snapshot, tables};
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use std::cell::Cell;
+use std::collections::BTreeMap;
+
+/// A `Value` object read as a lenient reader would, before it is stored: a
+/// value that is not a number, or does not spell one, drops its entry.
+fn lenient_num_map(v: &Value) -> BTreeMap<String, f64> {
+    match v {
+        Value::Object(m) => m.iter().filter_map(|(k, x)| bagholder_model::lenient::opt_num(x).map(|n| (k.clone(), n))).collect(),
+        _ => BTreeMap::new(),
+    }
+}
 
 fn norm(v: Value) -> Value {
     match v {
@@ -681,15 +693,15 @@ fn tables_scenario(out: &mut Map<String, Value>) {
         json!({"accountId": "", "date": "2024-01-03", "equity": null, "currency": "CAD"}), // no equity: dropped
     ];
     tables::replace_nav(&conn, &common_typed_nav(&points)).unwrap();
-    out.insert("tables/nav_history/identity".into(), json!(tables::nav_history(&conn, "").unwrap()));
-    out.insert("tables/nav_history/nickname".into(), json!(tables::nav_history(&conn, "acct-x").unwrap()));
-    out.insert("tables/nav_history/missing_account".into(), json!(tables::nav_history(&conn, "nope").unwrap()));
+    let (nav_identity, nav_by_account) = rows::nav(&conn).unwrap();
+    out.insert("tables/nav/identity".into(), json!(nav_identity));
+    out.insert("tables/nav/by_account".into(), json!(nav_by_account));
     let mut lasts: Vec<(String, String)> = tables::nav_last_dates(&conn).unwrap().into_iter().collect();
     lasts.sort();
     out.insert("tables/nav_last_dates".into(), json!(lasts));
 
-    // clean_date_map: junk keys and values
-    let dirty = json!({
+    // clean_date_map: junk keys and values, as a lenient reader would parse them first
+    let dirty_raw = json!({
         "2024-01-01": 1.5,
         "2024-01-02": "2.5",
         "2024-01-02T00:00:00Z": 9.0,
@@ -699,19 +711,20 @@ fn tables_scenario(out: &mut Map<String, Value>) {
         "2024-01-05": "junk",
         "2024-01-06": null,
     });
-    out.insert("tables/clean_date_map".into(), json!(tables::clean_date_map(Some(&dirty))));
-    out.insert("tables/clean_date_map/none".into(), json!(tables::clean_date_map(None)));
+    let dirty = lenient_num_map(&dirty_raw);
+    out.insert("tables/clean_date_map".into(), json!(tables::clean_date_map(&dirty)));
+    out.insert("tables/clean_date_map/none".into(), json!(tables::clean_date_map(&BTreeMap::new())));
 
-    let n1 = tables::upsert_fx_rates(&conn, Some(&dirty), tables::FX_PAIR).unwrap();
+    let n1 = tables::upsert_fx_rates(&conn, &dirty, tables::FX_PAIR).unwrap();
     out.insert("tables/upsert_fx_rates/inserted".into(), json!(n1));
     out.insert("tables/fx_rates".into(), json!(tables::fx_rates(&conn, tables::FX_PAIR).unwrap()));
     out.insert("tables/fx_last_date".into(), json!(tables::fx_last_date(&conn, tables::FX_PAIR).unwrap()));
     // insert or ignore: a repeat write with a different value never rewrites the day
-    tables::upsert_fx_rates(&conn, Some(&json!({"2024-01-01": 99.0})), tables::FX_PAIR).unwrap();
+    tables::upsert_fx_rates(&conn, &lenient_num_map(&json!({"2024-01-01": 99.0})), tables::FX_PAIR).unwrap();
     out.insert("tables/fx_rates/insert_or_ignore".into(), json!(tables::fx_rates(&conn, tables::FX_PAIR).unwrap().get("2024-01-01")));
     out.insert("tables/fx_last_date/missing_pair".into(), json!(tables::fx_last_date(&conn, "NOPAIR").unwrap()));
 
-    let n2 = tables::upsert_benchmark_prices(&conn, Some(&dirty), tables::BENCHMARK_SYMBOL).unwrap();
+    let n2 = tables::upsert_benchmark_prices(&conn, &dirty, tables::BENCHMARK_SYMBOL).unwrap();
     out.insert("tables/upsert_benchmark_prices/inserted".into(), json!(n2));
     out.insert("tables/benchmark_prices".into(), json!(tables::benchmark_prices(&conn, tables::BENCHMARK_SYMBOL).unwrap()));
     out.insert(
@@ -720,8 +733,8 @@ fn tables_scenario(out: &mut Map<String, Value>) {
     );
     out.insert("tables/benchmark_last_date".into(), json!(tables::benchmark_last_date(&conn, tables::BENCHMARK_SYMBOL).unwrap()));
 
-    // trade groups: junk inputs
-    let groups = json!([
+    // trade groups: junk inputs, as a lenient reader would parse them first
+    let groups_raw = json!([
         {"id": "g1", "locked": true, "members": ["a|b|1.00000000", "c|d|2.00000000", "a|b|1.00000000"]},
         {"id": "g1", "members": ["dup-id-ignored"]},
         {"id": "", "members": ["x"]},
@@ -730,24 +743,26 @@ fn tables_scenario(out: &mut Map<String, Value>) {
         {"id": "g3", "members": "not-an-array"},
         "not-an-object",
     ]);
-    let saved_groups = tables::save_trade_groups(&conn, Some(&groups)).unwrap();
+    let groups: Vec<TradeGroup> = bagholder_model::lenient::rows(&groups_raw);
+    let saved_groups = tables::save_trade_groups(&conn, &groups).unwrap();
     out.insert("tables/save_trade_groups".into(), json!(saved_groups));
     out.insert("tables/trade_groups".into(), json!(tables::trade_groups(&conn).unwrap()));
-    out.insert("tables/clean_trade_groups/direct".into(), json!(tables::clean_trade_groups(Some(&groups))));
-    out.insert("tables/clean_trade_groups/none".into(), json!(tables::clean_trade_groups(None)));
+    out.insert("tables/clean_trade_groups/direct".into(), json!(tables::clean_trade_groups(&groups)));
+    out.insert("tables/clean_trade_groups/none".into(), json!(tables::clean_trade_groups(&[])));
 
-    let notes = json!({
+    let notes_raw = json!({
         "trade-1": {"thesis": "good setup", "tag": "swing", "grade": "A"},
         "trade-2": {"thesis": "", "tag": "", "grade": "Z"},
         "trade-3": {"thesis": "", "tag": "", "grade": ""},
         "  ": {"thesis": "blank key trimmed away"},
         "trade-4": "not-an-object",
     });
-    let saved_notes = tables::save_trade_notes(&conn, Some(&notes)).unwrap();
+    let notes: BTreeMap<String, LegacyNote> = bagholder_model::lenient::objmap(&notes_raw);
+    let saved_notes = tables::save_trade_notes(&conn, &notes).unwrap();
     out.insert("tables/save_trade_notes".into(), json!(saved_notes));
     out.insert("tables/trade_notes".into(), json!(tables::trade_notes(&conn).unwrap()));
-    out.insert("tables/clean_trade_notes/direct".into(), json!(tables::clean_trade_notes(Some(&notes))));
-    out.insert("tables/clean_trade_notes/none".into(), json!(tables::clean_trade_notes(None)));
+    out.insert("tables/clean_trade_notes/direct".into(), json!(tables::clean_trade_notes(&notes)));
+    out.insert("tables/clean_trade_notes/none".into(), json!(tables::clean_trade_notes(&BTreeMap::new())));
 
     // json_text / json_text_sorted through the store's own writer, on richer values
     let richer = json!({"z": 1.0, "a": [0.1, 1e21, "caf\u{e9}", null, true, false], "m": {"nested": "value"}});
@@ -833,34 +848,38 @@ fn admin_scenario(out: &mut Map<String, Value>) {
     out.insert("admin/needs_security_id_backfill/mixed".into(), json!(admin::needs_security_id_backfill(&conn).unwrap()));
 
     // journal
-    out.insert("admin/save_journal".into(), Value::Object(admin::save_journal(&conn, Some(&json!({
+    let entries: bagholder_model::input::Journal = bagholder_model::lenient::objmap(&json!({
         "trade-1": {"thesis": "solid thesis", "grade": "b", "tags": "swing,earnings"},
         "trade-2": {"thesis": "", "grade": "", "tags": []},
         "  ": {"thesis": "blank key"},
         "trade-3": {"thesis": "dup tags", "tags": ["x", "x", "y"]},
-    }))).unwrap()));
-    out.insert("admin/save_journal_entry/set".into(), Value::Object(admin::save_journal_entry(&conn, "trade-4", Some(&json!({"thesis": "new entry", "grade": "A", "tags": ["z"]}))).unwrap()));
-    out.insert("admin/save_journal_entry/delete".into(), Value::Object(admin::save_journal_entry(&conn, "trade-1", None).unwrap()));
-    out.insert("admin/save_journal_entry/blank_key_noop".into(), Value::Object(admin::save_journal_entry(&conn, "  ", Some(&json!({"thesis": "x"}))).unwrap()));
-    out.insert("admin/snapshot_journal".into(), Value::Object(snapshot::journal(&conn).unwrap()));
-    out.insert("admin/clean_journal/junk".into(), Value::Object(snapshot::clean_journal(Some(&json!({
-        "k1": {"thesis": "", "grade": "F", "tags": []},
-        "k2": "not-an-object",
-        "k3": {"thesis": "", "grade": "nope", "tags": []},
-    })))));
+    })).into_iter().collect();
+    out.insert("admin/save_journal".into(), json!(admin::save_journal(&conn, &entries).unwrap()));
+    let entry_of = |v: Value| -> bagholder_model::input::JournalEntry { serde_json::from_value(v).unwrap() };
+    out.insert("admin/save_journal_entry/set".into(), json!(admin::save_journal_entry(&conn, "trade-4", Some(&entry_of(json!({"thesis": "new entry", "grade": "A", "tags": ["z"]})))).unwrap()));
+    out.insert("admin/save_journal_entry/delete".into(), json!(admin::save_journal_entry(&conn, "trade-1", None).unwrap()));
+    out.insert("admin/save_journal_entry/blank_key_noop".into(), json!(admin::save_journal_entry(&conn, "  ", Some(&entry_of(json!({"thesis": "x"})))).unwrap()));
+    out.insert("admin/snapshot_journal".into(), json!(admin::journal(&conn).unwrap()));
+    let junk_conn = fresh_conn();
+    tables::set_meta(&junk_conn, tables::JOURNAL_META, r#"{"k1": {"thesis": "", "grade": "F", "tags": []}, "k2": "not-an-object", "k3": {"thesis": "", "grade": "nope", "tags": []}}"#).unwrap();
+    out.insert("admin/clean_journal/junk".into(), json!(admin::journal(&junk_conn).unwrap()));
 
     // tiles
-    let saved_tiles = admin::save_tiles(&conn, &[
-        json!({"symbol": " aaa ", "exchange": "tsx"}),
-        json!({"symbol": "", "exchange": "x"}), // no symbol, dropped
-        json!({"symbol": "bbb"}),
-        json!("not-an-object"),
-    ]).unwrap();
-    out.insert("admin/save_tiles".into(), saved_tiles);
-    out.insert("admin/tiles_part".into(), snapshot::tiles_part(&conn).unwrap());
-    out.insert("admin/tiles_from/empty".into(), snapshot::tiles_from(""));
-    out.insert("admin/tiles_from/bad_json".into(), snapshot::tiles_from("not json"));
-    out.insert("admin/tiles_from/not_array".into(), snapshot::tiles_from("{}"));
+    let tiles_in: Vec<TileRef> = bagholder_model::lenient::rows(&json!([
+        {"symbol": " aaa ", "exchange": "tsx"},
+        {"symbol": "", "exchange": "x"}, // no symbol, dropped
+        {"symbol": "bbb"},
+        "not-an-object",
+    ]));
+    let saved_tiles = admin::save_tiles(&conn, &tiles_in).unwrap();
+    out.insert("admin/save_tiles".into(), json!(saved_tiles));
+    out.insert("admin/tiles_part".into(), json!(rows::tiles(&conn).unwrap()));
+    let empty_conn = fresh_conn();
+    out.insert("admin/tiles_from/empty".into(), json!(rows::tiles(&empty_conn).unwrap()));
+    tables::set_meta(&empty_conn, rows::TILES_META, "not json").unwrap();
+    out.insert("admin/tiles_from/bad_json".into(), json!(rows::tiles(&empty_conn).unwrap()));
+    tables::set_meta(&empty_conn, rows::TILES_META, "{}").unwrap();
+    out.insert("admin/tiles_from/not_array".into(), json!(rows::tiles(&empty_conn).unwrap()));
 
     // pull window clock
     out.insert("admin/seconds_until_pull_window".into(), json!({
@@ -897,26 +916,29 @@ fn clear_synced_data_scenario(out: &mut Map<String, Value>) {
         tables::replace_balances(&conn, &common_typed_balances()).unwrap();
         tables::replace_margin(&conn, &common_typed_margin(), "2026-09-22T00:00:00Z").unwrap();
         tables::replace_nav(&conn, &common_typed_nav(&[json!({"accountId": "", "date": "2024-01-01", "equity": 100.0, "currency": "CAD"})])).unwrap();
-        tables::upsert_fx_rates(&conn, Some(&json!({"2024-01-01": 1.35})), tables::FX_PAIR).unwrap();
-        tables::upsert_benchmark_prices(&conn, Some(&json!({"2024-01-01": 5000.0})), tables::BENCHMARK_SYMBOL).unwrap();
-        tables::save_trade_groups(&conn, Some(&json!([{"id": "g1", "members": ["m1"]}]))).unwrap();
-        tables::save_trade_notes(&conn, Some(&json!({"t1": {"thesis": "x", "grade": "A"}}))).unwrap();
-        admin::save_journal(&conn, Some(&json!({"t1": {"thesis": "journal entry", "grade": "A"}}))).unwrap();
+        tables::upsert_fx_rates(&conn, &lenient_num_map(&json!({"2024-01-01": 1.35})), tables::FX_PAIR).unwrap();
+        tables::upsert_benchmark_prices(&conn, &lenient_num_map(&json!({"2024-01-01": 5000.0})), tables::BENCHMARK_SYMBOL).unwrap();
+        let groups: Vec<TradeGroup> = bagholder_model::lenient::rows(&json!([{"id": "g1", "members": ["m1"]}]));
+        tables::save_trade_groups(&conn, &groups).unwrap();
+        let notes: BTreeMap<String, LegacyNote> = bagholder_model::lenient::objmap(&json!({"t1": {"thesis": "x", "grade": "A"}}));
+        tables::save_trade_notes(&conn, &notes).unwrap();
+        let journal: bagholder_model::input::Journal = bagholder_model::lenient::objmap(&json!({"t1": {"thesis": "journal entry", "grade": "A"}})).into_iter().collect();
+        admin::save_journal(&conn, &journal).unwrap();
         tables::set_meta(&conn, "synced_at", "2026-09-22T00:00:00Z").unwrap();
         tables::set_meta(&conn, "last_activity_pull", "2026-09-22T00:00:00Z").unwrap();
         tables::set_meta(&conn, "security_id_backfill_done", "1").unwrap();
 
         admin::clear_synced_data(&conn, keep_journal, keep_market).unwrap();
-        let snap = snapshot::snapshot(&conn, true).unwrap();
+        let b = book::book(&conn).unwrap();
         let key = format!("admin/clear_synced_data/keep_journal={}/keep_market={}", keep_journal, keep_market);
-        out.insert(format!("{}/activities", key), snap["activities"].clone());
-        out.insert(format!("{}/accounts", key), snap["accounts"].clone());
-        out.insert(format!("{}/balances", key), snap["balances"].clone());
-        out.insert(format!("{}/margin", key), snap["margin"].clone());
-        out.insert(format!("{}/navHistory", key), snap["navHistory"].clone());
-        out.insert(format!("{}/tradeGroups", key), snap["tradeGroups"].clone());
-        out.insert(format!("{}/notes", key), snap["notes"].clone());
-        out.insert(format!("{}/journal", key), Value::Object(snapshot::journal(&conn).unwrap()));
+        out.insert(format!("{}/activities", key), json!(b.activities));
+        out.insert(format!("{}/accounts", key), json!(b.accounts));
+        out.insert(format!("{}/balances", key), json!(b.balances));
+        out.insert(format!("{}/margin", key), json!(tables::margin(&conn).unwrap()));
+        out.insert(format!("{}/navHistory", key), json!(b.nav_history));
+        out.insert(format!("{}/tradeGroups", key), json!(b.trade_groups));
+        out.insert(format!("{}/notes", key), json!(b.notes));
+        out.insert(format!("{}/journal", key), json!(admin::journal(&conn).unwrap()));
         out.insert(format!("{}/fx_rates", key), json!(tables::fx_rates(&conn, tables::FX_PAIR).unwrap()));
         out.insert(format!("{}/benchmark_prices", key), json!(tables::benchmark_prices(&conn, tables::BENCHMARK_SYMBOL).unwrap()));
         out.insert(format!("{}/synced_at", key), json!(tables::get_meta(&conn, "synced_at", "").unwrap()));
@@ -925,10 +947,20 @@ fn clear_synced_data_scenario(out: &mut Map<String, Value>) {
 }
 
 // --------------------------------------------------------------------------
-// snapshot: the whole thing, and each part
+// snapshot: exposures and universes, still read as JSON; the book export
 // --------------------------------------------------------------------------
 
 fn snapshot_scenario(out: &mut Map<String, Value>) {
+    let conn = fresh_conn();
+    out.insert("snapshot/exposures_part".into(), json!(snapshot::exposures_part(&conn).unwrap()));
+    out.insert("snapshot/universes_part".into(), json!(snapshot::universes_part(&conn).unwrap()));
+}
+
+// --------------------------------------------------------------------------
+// book: the stored rows as they are, for `GET /api/book` and for export
+// --------------------------------------------------------------------------
+
+fn book_scenario(out: &mut Map<String, Value>) {
     let conn = fresh_conn();
     let new_id = deterministic_id();
     merge::apply_wealthsimple_mapped(
@@ -945,9 +977,12 @@ fn snapshot_scenario(out: &mut Map<String, Value>) {
         json!({"accountId": "acct-a", "date": "2024-01-01", "equity": 50.0, "currency": "CAD"}),
     ]))
     .unwrap();
-    tables::save_trade_groups(&conn, Some(&json!([{"id": "g1", "members": ["m1"]}]))).unwrap();
-    admin::save_journal(&conn, Some(&json!({"snap-1": {"thesis": "x", "grade": "A"}}))).unwrap();
-    admin::save_tiles(&conn, &[json!({"symbol": "AAA", "exchange": "TSX"})]).unwrap();
+    let groups: Vec<TradeGroup> = bagholder_model::lenient::rows(&json!([{"id": "g1", "members": ["m1"]}]));
+    tables::save_trade_groups(&conn, &groups).unwrap();
+    let journal: bagholder_model::input::Journal = bagholder_model::lenient::objmap(&json!({"snap-1": {"thesis": "x", "grade": "A"}})).into_iter().collect();
+    admin::save_journal(&conn, &journal).unwrap();
+    let tiles_in: Vec<TileRef> = bagholder_model::lenient::rows(&json!([{"symbol": "AAA", "exchange": "TSX"}]));
+    admin::save_tiles(&conn, &tiles_in).unwrap();
     let secs: Vec<bagholder_model::securities::Security> = serde_json::from_value(json!([
         {"id": "sec-a", "symbol": "AAA", "name": "AAA Inc", "primaryExchange": "TSX", "primaryMic": "XTSE", "currency": "CAD"},
     ]))
@@ -955,26 +990,12 @@ fn snapshot_scenario(out: &mut Map<String, Value>) {
     admin::upsert_securities(&conn, &secs, "2026-09-22T00:00:00Z").unwrap();
     tables::set_meta(&conn, "synced_at", "2026-09-22T00:00:00Z").unwrap();
 
-    let mut full = snapshot::snapshot(&conn, true).unwrap();
-    scrub_ids(&mut full);
-    out.insert("snapshot/with_activities".into(), full);
-    let mut bare = snapshot::snapshot(&conn, false).unwrap();
-    scrub_ids(&mut bare);
-    out.insert("snapshot/without_activities".into(), bare);
+    let mut b = json!(book::book(&conn).unwrap());
+    scrub_ids(&mut b);
+    out.insert("book/book".into(), b);
 
-    out.insert("snapshot/accounts_part".into(), json!(snapshot::accounts_part(&conn).unwrap()));
-    out.insert("snapshot/balances_part".into(), json!(snapshot::balances_part(&conn).unwrap()));
-    out.insert("snapshot/margin_part".into(), json!(snapshot::margin_part(&conn).unwrap()));
-    let (nav, nav_by_account) = snapshot::nav_part(&conn).unwrap();
-    out.insert("snapshot/nav_part".into(), json!({"nav": nav, "navByAccount": nav_by_account}));
-    out.insert("snapshot/groups_part".into(), json!(snapshot::groups_part(&conn).unwrap()));
-    out.insert("snapshot/notes_part".into(), json!(snapshot::notes_part(&conn).unwrap()));
-    out.insert("snapshot/securities_part".into(), json!(snapshot::securities_part(&conn).unwrap()));
-    out.insert("snapshot/watchlist_part".into(), json!(snapshot::watchlist_part(&conn).unwrap()));
-    out.insert("snapshot/news_part".into(), json!(snapshot::news_part(&conn).unwrap()));
-    out.insert("snapshot/universes_part".into(), json!(snapshot::universes_part(&conn).unwrap()));
-    out.insert("snapshot/tiles_part".into(), snapshot::tiles_part(&conn).unwrap());
-    out.insert("snapshot/synced_at_part".into(), json!(snapshot::synced_at_part(&conn).unwrap()));
+    out.insert("book/distinct_activity_account_ids".into(), json!(book::distinct_activity_account_ids(&conn).unwrap()));
+    out.insert("book/distinct_security_ids".into(), json!(book::distinct_security_ids(&conn).unwrap()));
 }
 
 // --------------------------------------------------------------------------
@@ -992,6 +1013,7 @@ fn answers() -> Value {
     admin_scenario(&mut out);
     clear_synced_data_scenario(&mut out);
     snapshot_scenario(&mut out);
+    book_scenario(&mut out);
     Value::Object(out)
 }
 

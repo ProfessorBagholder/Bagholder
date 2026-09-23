@@ -29,14 +29,6 @@ pub const TMX_INDICES: [(&str, &str); 2] = [("TSX", "^TSX"), ("TSX60", "^TX60")]
 
 const TMX_HISTORY_QUERY: &str = "query getTimeSeriesData($symbol: String!, $freq: String, $interval: Int, $start: String, $end: String) { getTimeSeriesData(symbol: $symbol, freq: $freq, interval: $interval, start: $start, end: $end) { dateTime open high low close volume } }";
 
-fn series_to_value(s: &Series) -> Value {
-    let mut m = serde_json::Map::new();
-    for (k, v) in s {
-        m.insert(k.clone(), json!(v));
-    }
-    Value::Object(m)
-}
-
 /// A week before the stored day, which is the overlap every top-up takes.
 fn from_a_week_before(last: &str, fallback: &str) -> String {
     if last.is_empty() || parse_iso(last).is_none() {
@@ -51,7 +43,7 @@ pub fn refresh_fx(conn: &Connection) -> usize {
     let url = format!("{}?start_date={}", BOC_URL, start);
     let text = match get_text(&url, &[]) { Ok(t) => t, Err(_) => return 0 };
     let rates = parse_boc_json(&text);
-    upsert_fx_rates(conn, Some(&series_to_value(&rates)), FX_PAIR).unwrap_or(0)
+    upsert_fx_rates(conn, &rates, FX_PAIR).unwrap_or(0)
 }
 
 /// The S&P 500's closes. FRED serves the trailing
@@ -69,7 +61,7 @@ pub fn refresh_benchmark(conn: &Connection) -> usize {
         let cutoff = from_a_week_before(&last, "");
         mapping.retain(|d, _| *d >= cutoff);
     }
-    upsert_benchmark_prices(conn, Some(&series_to_value(&mapping)), BENCHMARK_SYMBOL).unwrap_or(0)
+    upsert_benchmark_prices(conn, &mapping, BENCHMARK_SYMBOL).unwrap_or(0)
 }
 
 /// One index's daily closes, appended from a week
@@ -93,7 +85,7 @@ pub fn refresh_tmx_index(conn: &Connection, key: &str) -> usize {
     if mapping.is_empty() {
         return 0;
     }
-    upsert_benchmark_prices(conn, Some(&series_to_value(&mapping)), key).unwrap_or(0)
+    upsert_benchmark_prices(conn, &mapping, key).unwrap_or(0)
 }
 
 /// The S&P/TSX Composite and the S&P/TSX 60.

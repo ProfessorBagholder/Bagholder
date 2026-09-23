@@ -651,13 +651,11 @@ fn test_refresh_reads_only_stale_listings_and_replaces_their_rows() {
     answers.lock().unwrap().insert("SHOP".into(), vec![row("tmx:2", "Two", "2026-09-11T16:00:00Z", "CNW", "story")]);
     let later = at(2026, 9, 11, 16, 0);
     news::refresh(&open, &readers, &listings, &Clock::at(later), None, None, None, news::LISTINGS_AT_ONCE).unwrap();
-    let snap = bagholder_store::snapshot::snapshot(&d.conn, false).unwrap();
-    let rows: Vec<[String; 3]> = snap["news"].as_array().unwrap().iter().map(|r| [s(&r["id"]).to_string(), s(&r["symbol"]).to_string(), s(&r["wire"]).to_string()]).collect();
+    let rows: Vec<[String; 3]> = bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| [r.id.clone(), r.symbol.clone(), r.wire.clone()]).collect();
     assert_eq!(rows, vec![["tmx:2".to_string(), "SHOP".into(), "CNW".into()], ["nasdaq:9".to_string(), "NVDA".into(), "Zacks".into()]],
                "newest first; a listing's rows are replaced by its wire's latest");
     bagholder_store::feeds::forget_news(&d.conn, "SHOP", "TSX").unwrap();
-    let snap = bagholder_store::snapshot::snapshot(&d.conn, false).unwrap();
-    assert_eq!(ids(snap["news"].as_array().unwrap()), vec!["nasdaq:9"]);
+    assert_eq!(bagholder_store::rows::news(&d.conn).unwrap().iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec!["nasdaq:9"]);
     assert_eq!(news::stale(&d.conn, &[listing("SHOP", "TSX", "CAD", "")], later, 15).unwrap(), vec![listing("SHOP", "TSX", "CAD", "")], "forgotten means stale");
 }
 

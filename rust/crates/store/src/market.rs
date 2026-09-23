@@ -398,15 +398,19 @@ pub fn mark_bars_fetched(conn: &Connection, symbol: &str, tf: &str, start_ts: i6
 /// `BENCHMARK_SYMBOLS`.
 pub const BENCHMARK_SYMBOLS: [&str; 3] = ["SP500", "TSX", "TSX60"];
 
+fn series_value(m: std::collections::BTreeMap<String, f64>) -> Value {
+    Value::Object(m.into_iter().map(|(k, v)| (k, json!(v))).collect())
+}
+
 /// `market_data`: what `build_base` is handed.
 pub fn market_data(conn: &Connection) -> Result<Value> {
     let mut benchmarks = Map::new();
     for sym in BENCHMARK_SYMBOLS.iter() {
-        benchmarks.insert((*sym).to_string(), Value::Object(crate::tables::benchmark_prices(conn, sym)?));
+        benchmarks.insert((*sym).to_string(), series_value(crate::tables::benchmark_prices(conn, sym)?));
     }
     Ok(json!({
-        "fx": crate::tables::fx_rates(conn, crate::tables::FX_PAIR)?,
-        "benchmark": crate::tables::benchmark_prices(conn, crate::tables::BENCHMARK_SYMBOL)?,
+        "fx": series_value(crate::tables::fx_rates(conn, crate::tables::FX_PAIR)?),
+        "benchmark": series_value(crate::tables::benchmark_prices(conn, crate::tables::BENCHMARK_SYMBOL)?),
         "benchmarks": benchmarks,
         "distributions": distributions(conn)?,
         "quotes": quotes(conn)?,
