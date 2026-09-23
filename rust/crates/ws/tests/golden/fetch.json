@@ -3,16 +3,28 @@
     {
       "id": "acc-a",
       "nickname": "A",
+      "unifiedAccountType": "",
       "currency": "CAD",
       "status": "open",
-      "type": "SelfDirected"
+      "type": "SelfDirected",
+      "netLiquidationValue": null,
+      "marginAccountId": "",
+      "linkedAccountId": null,
+      "custodianAccountIds": [],
+      "featureNames": []
     },
     {
       "id": "acc-b",
       "nickname": "B",
+      "unifiedAccountType": "",
       "currency": "USD",
       "status": "open",
-      "type": "SelfDirected"
+      "type": "SelfDirected",
+      "netLiquidationValue": null,
+      "marginAccountId": "",
+      "linkedAccountId": null,
+      "custodianAccountIds": [],
+      "featureNames": []
     }
   ],
   "fetch_all_accounts/request_variables": [
@@ -29,44 +41,96 @@
     }
   ],
   "fetch_activities_for_account/result": [
-    {
-      "canonicalId": "ws-fetch-0001",
-      "occurredAt": "2024-05-01T10:00:00Z",
-      "accountId": "acc-a",
-      "type": "DIY_BUY",
-      "subType": "BUY",
-      "status": "POSTED",
-      "assetSymbol": "AAA",
-      "assetQuantity": "10",
-      "amount": "100",
-      "amountSign": "negative",
-      "currency": "CAD"
-    },
-    {
-      "canonicalId": "ws-fetch-0002",
-      "occurredAt": "2024-05-02T10:00:00Z",
-      "accountId": "acc-a",
-      "type": "DIY_SELL",
-      "subType": "SELL",
-      "status": "POSTED",
-      "assetSymbol": "AAA",
-      "assetQuantity": "5",
-      "amount": "60",
-      "amountSign": "positive",
-      "currency": "CAD"
-    },
-    {
-      "canonicalId": "ws-fetch-0003",
-      "occurredAt": "2024-05-03T10:00:00Z",
-      "accountId": "acc-a",
-      "type": "DEPOSIT",
-      "subType": "EFT",
-      "status": "POSTED",
-      "assetQuantity": "0",
-      "amount": "50",
-      "amountSign": "positive",
-      "currency": "CAD"
-    }
+    [
+      {
+        "canonicalId": "ws-fetch-0001",
+        "occurredAt": "2024-05-01T10:00:00Z",
+        "transactionDate": "2024-05-01",
+        "settlementDate": "2024-05-01",
+        "accountId": "acc-a",
+        "bookId": "acc-a",
+        "fifoId": "acc-a",
+        "accountType": "",
+        "activityType": "Trade",
+        "activitySubType": "BUY",
+        "description": "Buy 10 AAA @ 10",
+        "direction": "DEBIT",
+        "symbol": "AAA",
+        "name": "AAA",
+        "currency": "CAD",
+        "quantity": 10.0,
+        "unitPrice": 10.0,
+        "commission": 0.0,
+        "netCashAmount": -100.0,
+        "category": "trade",
+        "balance": null,
+        "source": "wealthsimple",
+        "rawType": "DIY_BUY",
+        "aftType": "",
+        "counterSymbol": "",
+        "securityId": null
+      }
+    ],
+    [
+      {
+        "canonicalId": "ws-fetch-0002",
+        "occurredAt": "2024-05-02T10:00:00Z",
+        "transactionDate": "2024-05-02",
+        "settlementDate": "2024-05-02",
+        "accountId": "acc-a",
+        "bookId": "acc-a",
+        "fifoId": "acc-a",
+        "accountType": "",
+        "activityType": "Trade",
+        "activitySubType": "SELL",
+        "description": "Sell 5 AAA @ 12",
+        "direction": "CREDIT",
+        "symbol": "AAA",
+        "name": "AAA",
+        "currency": "CAD",
+        "quantity": -5.0,
+        "unitPrice": 12.0,
+        "commission": 0.0,
+        "netCashAmount": 60.0,
+        "category": "trade",
+        "balance": null,
+        "source": "wealthsimple",
+        "rawType": "DIY_SELL",
+        "aftType": "",
+        "counterSymbol": "",
+        "securityId": null
+      }
+    ],
+    [
+      {
+        "canonicalId": "ws-fetch-0003",
+        "occurredAt": "2024-05-03T10:00:00Z",
+        "transactionDate": "2024-05-03",
+        "settlementDate": "2024-05-03",
+        "accountId": "acc-a",
+        "bookId": "acc-a",
+        "fifoId": "acc-a",
+        "accountType": "",
+        "activityType": "Deposit",
+        "activitySubType": "deposit",
+        "description": "Deposit",
+        "direction": "CREDIT",
+        "symbol": "",
+        "name": "",
+        "currency": "CAD",
+        "quantity": 0.0,
+        "unitPrice": 0.0,
+        "commission": 0.0,
+        "netCashAmount": 50.0,
+        "category": "deposit",
+        "balance": null,
+        "source": "wealthsimple",
+        "rawType": "DEPOSIT",
+        "aftType": "",
+        "counterSymbol": "",
+        "securityId": null
+      }
+    ]
   ],
   "fetch_activities_for_account/request_variables": [
     {
@@ -107,7 +171,7 @@
       "accountId": "bal-01",
       "custodianAccountId": "cust-bal-01",
       "securityId": "sec-1",
-      "quantity": "10"
+      "quantity": 10.0
     },
     {
       "accountId": "bal-01",
@@ -119,7 +183,7 @@
       "accountId": "bal-05",
       "custodianAccountId": "cust-bal-05",
       "securityId": "sec-3",
-      "quantity": "2.5"
+      "quantity": 2.5
     }
   ],
   "fetch_balances/chunk_sizes": [
@@ -163,17 +227,17 @@
   ],
   "fetch_margin/result": [
     {
+      "accountId": "margin-ok",
       "buyingPower": 999.99,
       "currency": "CAD",
       "unavailable": "",
-      "accountId": "margin-ok",
       "fetchedAt": "2026-09-22T00:00:00Z"
     },
     {
+      "accountId": "margin-unavailable",
       "buyingPower": null,
       "currency": "CAD",
       "unavailable": "UnavailableSecurities (1 securities)",
-      "accountId": "margin-unavailable",
       "fetchedAt": "2026-09-22T00:00:00Z"
     }
   ],

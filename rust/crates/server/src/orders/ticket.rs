@@ -12,7 +12,7 @@ pub const ORDER_TIFS: [&str; 2] = ["DAY", "UNTIL_CANCEL"];
 pub(super) const ORDER_TRADABLE_TYPES: [&str; 1] = ["SELF_DIRECTED"];
 pub(super) const ORDER_UNTRADABLE_MARKERS: [&str; 3] = ["CRYPTO", "PREDICTIONS", "MANAGED"];
 
-pub(super) fn ticket_session(app: &Arc<App>) -> Option<Value> {
+pub(super) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Session> {
     #[cfg(test)]
     {
         let _ = app;
@@ -20,12 +20,12 @@ pub(super) fn ticket_session(app: &Arc<App>) -> Option<Value> {
     }
     #[allow(unreachable_code)]
     let sess = load_session(app)?;
-    if f(&sess, "access_token").is_empty() {
+    if sess.access_token.is_empty() {
         return None;
     }
     ensure_fresh_token(app, Some(sess.clone()));
     match load_session(app) {
-        Some(v) if v.as_object().map_or(false, |m| !m.is_empty()) => Some(v),
+        Some(v) if !v.access_token.is_empty() || !v.refresh_token.is_empty() => Some(v),
         _ => Some(sess),
     }
 }
@@ -161,7 +161,7 @@ pub fn parse_buying_power(data: &Value) -> Value {
     json!({"buyingPower": jo(on(bp, "quantity")), "cash": jo(on(cash, "quantity")), "currency": s(or_v(bp.get("currency"), cash.get("currency")))})
 }
 
-pub fn fetch_quotes(app: &Arc<App>, sess: &Value, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
+pub fn fetch_quotes(app: &Arc<App>, sess: &bagholder_ws::session::Session, security_ids: &[String]) -> Result<HashMap<String, Value>, CallError> {
     let ids: Vec<String> = security_ids.iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     let mut out = HashMap::new();
     if ids.is_empty() {
@@ -212,7 +212,7 @@ pub fn parse_listing_search(data: &Value, symbol: &str, exchange: &str) -> Optio
     None
 }
 
-pub fn lookup_listing(app: &Arc<App>, sess: &Value, symbol: &str, exchange: &str) -> Option<Value> {
+pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, symbol: &str, exchange: &str) -> Option<Value> {
     let data = match gql(app, sess, "FetchSecuritySearchResult", json!({"query": symbol.trim()})) {
         Ok(d) => d,
         Err(e) => {
@@ -222,7 +222,8 @@ pub fn lookup_listing(app: &Arc<App>, sess: &Value, symbol: &str, exchange: &str
     };
     let sec = parse_listing_search(&data, symbol, exchange);
     if let Some(sec) = &sec {
-        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(sec), &now_iso()));
+        let typed: bagholder_model::securities::Security = serde_json::from_value(sec.clone()).unwrap_or_default();
+        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(&typed), &now_iso()));
     }
     sec
 }

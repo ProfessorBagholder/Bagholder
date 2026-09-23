@@ -1,16 +1,15 @@
-//! One pull from Wealthsimple.
+//! What the session needs of the clock, and the account rows the fetch layer
+//! hands back reduced to what the store keeps.
 //!
-//! It only ever inserts rows the broker sent and the store has not seen, or
-//! replaces one the broker itself revised. It never rebuilds the activity
-//! table, and nothing Bagholder derives is written back into it.
+//! The pull itself lives in `crates/server/src/session.rs`'s `sync_body`; this
+//! crate only reads and maps what Wealthsimple sends.
 
 use rusqlite::Connection;
-use serde_json::{json, Value};
 
-use crate::fetch;
-use crate::mapping;
-use crate::session::{CallError, Client};
-use bagholder_model::value::{field_s, get};
+use bagholder_store::broker::Account;
+
+use crate::session::Session;
+use crate::wire::AccountNode;
 
 /// Refresh this far ahead of the stated
 /// expiry rather than waiting for a call to be refused.
@@ -144,19 +143,19 @@ fn redact_words(msg: &str) -> String {
     out
 }
 
-pub fn expires_at_unix(sess: &Value) -> Option<f64> {
-    let raw = get(sess, "expires_at")?;
-    match raw {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) if s.trim().is_empty() => None,
-        Value::String(s) => {
+pub fn expires_at_unix(sess: &Session) -> Option<f64> {
+    match sess.expires_at.as_ref()? {
+        crate::session::Expiry::Unix(f) => Some(*f),
+        crate::session::Expiry::Text(s) => {
             let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
             if let Ok(f) = s.parse::<f64>() {
                 return Some(f);
             }
             parse_instant(s)
         }
-        _ => None,
     }
 }
 
@@ -184,14 +183,14 @@ fn parse_instant(s: &str) -> Option<f64> {
 }
 
 /// Seconds from `now` until the token should be refreshed; zero when it already should.
-pub fn seconds_until_token_refresh(sess: &Value, now: f64) -> f64 {
+pub fn seconds_until_token_refresh(sess: &Session, now: f64) -> f64 {
     match expires_at_unix(sess) {
         None => 0.0,
         Some(exp) => (exp - TOKEN_REFRESH_MARGIN_SEC - now).max(0.0),
     }
 }
 
-pub fn token_refresh_needed(sess: &Value, now: f64) -> bool {
+pub fn token_refresh_needed(sess: &Session, now: f64) -> bool {
     match expires_at_unix(sess) {
         None => true,
         Some(exp) => now >= exp - TOKEN_REFRESH_MARGIN_SEC,
@@ -235,99 +234,52 @@ pub fn incremental_start_date(conn: &Connection) -> rusqlite::Result<String> {
     Ok(bagholder_model::dates::shift_date(&day, -PULL_OVERLAP_DAYS))
 }
 
-pub struct SyncOutcome {
-    pub inserted: usize,
-    pub linked: usize,
-    pub revised: usize,
-    pub skipped: usize,
-    pub accounts: usize,
-    pub balances: usize,
-    pub synced_at: String,
-    pub email: String,
-}
-
-fn now_stamp(now_unix: i64) -> String {
-    let days = now_unix.div_euclid(86400);
-    let rem = now_unix.rem_euclid(86400);
-    let (y, m, d) = bagholder_model::dates::from_days(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
-}
-
 /// The custodian account id a Margin Boost
 /// feature points at.
 ///
 /// An account Wealthsimple lets back a margin account as collateral carries
 /// the feature MARGIN_BOOST, and its metadata names the margin account's
 /// custodian account.
-pub fn margin_boost_target(acc: &Value) -> String {
-    let features = match acc.get("accountFeatures").and_then(|v| v.as_array()) { Some(f) => f, None => return String::new() };
-    for f in features {
-        if !f.is_object() || field_s(f, "name").to_uppercase() != "MARGIN_BOOST" {
+pub fn margin_boost_target(acc: &AccountNode) -> String {
+    for f in &acc.account_features {
+        if f.name.to_uppercase() != "MARGIN_BOOST" {
             continue;
         }
-        let enabled = f.get("enabled").map(truthy).unwrap_or(false);
-        if !enabled || f.get("functional") == Some(&Value::Bool(false)) {
+        if !f.enabled || f.functional == Some(false) {
             continue;
         }
-        let md = f.get("metadata").filter(|m| m.is_object()).cloned().unwrap_or(Value::Null);
-        return field_s(&md, "targetMarginAccountId");
+        return f.metadata.as_ref().map(|m| m.target_margin_account_id.clone()).unwrap_or_default();
     }
     String::new()
 }
 
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
+fn slim_account(acc: &AccountNode) -> Account {
+    Account {
+        id: acc.id.clone(),
+        nickname: acc.nickname.clone(),
+        unified_account_type: acc.unified_account_type.clone(),
+        currency: acc.currency.clone(),
+        status: acc.status.clone(),
+        kind: acc.kind.clone(),
+        net_liquidation_value: acc.financials.as_ref().and_then(|f| f.current_combined.as_ref()).and_then(|c| c.net_liquidation_value.as_ref()).and_then(|m| m.amount),
+        margin_account_id: String::new(),
     }
-}
-
-pub fn slim_account(acc: &Value) -> Value {
-    let nlv = acc
-        .get("financials")
-        .and_then(|f| f.get("currentCombined"))
-        .and_then(|c| c.get("netLiquidationValue"))
-        .and_then(|m| m.get("amount"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    json!({
-        "id": acc.get("id").cloned().unwrap_or(Value::Null),
-        "nickname": field_s(acc, "nickname"),
-        "unifiedAccountType": field_s(acc, "unifiedAccountType"),
-        "currency": field_s(acc, "currency"),
-        "status": field_s(acc, "status"),
-        "type": field_s(acc, "type"),
-        "netLiquidationValue": nlv,
-    })
 }
 
 /// The stored shape of every account, each
 /// collateral account naming the margin account it backs.
-pub fn slim_accounts(accounts: &[Value]) -> Vec<Value> {
+pub fn slim_accounts(accounts: &[AccountNode]) -> Vec<Account> {
     // the custodian account id resolved back to the account that owns it
     let mut custodian: Vec<(String, String)> = Vec::new();
     for a in accounts {
-        if !a.is_object() {
-            continue;
-        }
-        if let Some(cs) = a.get("custodianAccounts").and_then(|v| v.as_array()) {
-            for c in cs {
-                let cid = field_s(c, "id");
-                if c.is_object() && !cid.is_empty() {
-                    custodian.push((cid, field_s(a, "id")));
-                }
+        for c in &a.custodian_accounts {
+            if !c.id.is_empty() {
+                custodian.push((c.id.clone(), a.id.clone()));
             }
         }
     }
     let mut out = Vec::new();
     for a in accounts {
-        if !a.is_object() {
-            continue;
-        }
         let mut row = slim_account(a);
         let target = margin_boost_target(a);
         let backs = if target.is_empty() {
@@ -335,79 +287,8 @@ pub fn slim_accounts(accounts: &[Value]) -> Vec<Value> {
         } else {
             custodian.iter().find(|(k, _)| *k == target).map(|(_, v)| v.clone()).unwrap_or_default()
         };
-        row.as_object_mut().unwrap().insert("marginAccountId".into(), json!(backs));
+        row.margin_account_id = backs;
         out.push(row);
     }
     out
-}
-
-/// The pull, without the state flags the server keeps in
-/// memory: one pull, and what it wrote.
-///
-/// The caller has already made sure the access token is fresh.
-pub fn run_sync(
-    client: &Client,
-    conn: &Connection,
-    sess: &Value,
-    identity: &str,
-    now_unix: i64,
-    new_id: &dyn Fn() -> String,
-) -> Result<SyncOutcome, CallError> {
-    let accounts = fetch::fetch_all_accounts(client, sess, identity)?;
-    let acc_by_id: Value = {
-        let mut m = serde_json::Map::new();
-        for a in &accounts {
-            let id = field_s(a, "id");
-            if !id.is_empty() {
-                m.insert(id, a.clone());
-            }
-        }
-        Value::Object(m)
-    };
-
-    let (start_date, _full) = activity_sync_bounds(conn).map_err(|e| CallError::Failed(e.to_string()))?;
-
-    let mut mapped: Vec<Value> = Vec::new();
-    for acc in &accounts {
-        let aid = field_s(acc, "id");
-        if aid.is_empty() {
-            continue;
-        }
-        let items = fetch::fetch_activities_for_account(client, sess, &aid, start_date.as_deref(), now_unix)?;
-        for it in &items {
-            mapped.extend(mapping::map_activity_rows(it, Some(&acc_by_id)));
-        }
-    }
-    // the CAD and USD sides of one account share a FIFO book
-    let pools = mapping::fifo_pool_ids(Some(&Value::Array(accounts.clone())));
-    for row in mapped.iter_mut() {
-        let aid = field_s(row, "accountId");
-        let pool = pools.get(&aid).cloned().unwrap_or(aid);
-        if let Value::Object(m) = row {
-            m.insert("fifoId".into(), json!(pool));
-        }
-    }
-
-    let ids: Vec<String> = accounts.iter().map(|a| field_s(a, "id")).filter(|i| !i.is_empty()).collect();
-    let balances = fetch::fetch_balances(client, sess, &ids)?;
-
-    let applied = bagholder_store::merge::apply_wealthsimple_mapped(conn, &mapped, new_id)
-        .map_err(|e| CallError::Failed(e.to_string()))?;
-
-    let synced = now_stamp(now_unix);
-    let slim = slim_accounts(&accounts);
-    bagholder_store::tables::replace_accounts(conn, &slim).map_err(|e| CallError::Failed(e.to_string()))?;
-    bagholder_store::tables::replace_balances(conn, &balances).map_err(|e| CallError::Failed(e.to_string()))?;
-    bagholder_store::tables::set_meta(conn, "synced_at", &synced).map_err(|e| CallError::Failed(e.to_string()))?;
-
-    Ok(SyncOutcome {
-        inserted: applied.inserted,
-        linked: applied.linked,
-        revised: applied.revised,
-        skipped: applied.skipped,
-        accounts: slim.len(),
-        balances: balances.len(),
-        synced_at: synced,
-        email: field_s(sess, "email"),
-    })
 }

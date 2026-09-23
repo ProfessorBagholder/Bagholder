@@ -23,11 +23,6 @@ fn opt_num(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-fn either(row: &Value, camel: &str, snake: &str) -> String {
-    let v = field_s(row, camel);
-    if v.is_empty() { field_s(row, snake) } else { v }
-}
-
 fn either_val<'a>(row: &'a Value, camel: &str, snake: &str) -> Option<&'a Value> {
     match get(row, camel) {
         Some(v) => Some(v),
@@ -70,29 +65,25 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 
 /// `replace_accounts`: the account list, replaced whole. A row with no
 /// id is not an account.
-pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
+pub fn replace_accounts(conn: &Connection, accounts: &[crate::broker::Account]) -> Result<()> {
     crate::atomically(conn, || {
         crate::gens::replace_if_changed(conn, "SELECT id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id FROM accounts", &[], || {
         conn.execute("DELETE FROM accounts", [])?;
         for acc in accounts {
-            if !acc.is_object() {
-                continue;
-            }
-            let aid = field_s(acc, "id");
-            if aid.is_empty() {
+            if acc.id.is_empty() {
                 continue;
             }
             conn.execute(
                 "INSERT INTO accounts (id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    aid,
-                    field_s(acc, "nickname"),
-                    either(acc, "unifiedAccountType", "unified_account_type"),
-                    field_s(acc, "currency"),
-                    field_s(acc, "status"),
-                    field_s(acc, "type"),
-                    opt_num(get(acc, "netLiquidationValue")),
-                    field_s(acc, "marginAccountId"),
+                    acc.id,
+                    acc.nickname,
+                    acc.unified_account_type,
+                    acc.currency,
+                    acc.status,
+                    acc.kind,
+                    acc.net_liquidation_value,
+                    acc.margin_account_id,
                 ],
             )?;
         }
@@ -103,22 +94,14 @@ pub fn replace_accounts(conn: &Connection, accounts: &[Value]) -> Result<()> {
 }
 
 /// `replace_balances`.
-pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
+pub fn replace_balances(conn: &Connection, balances: &[crate::broker::Balance]) -> Result<()> {
     crate::atomically(conn, || {
         crate::gens::replace_if_changed(conn, "SELECT account_id, custodian_account_id, security_id, quantity FROM balances", &[], || {
         conn.execute("DELETE FROM balances", [])?;
         for b in balances {
-            if !b.is_object() {
-                continue;
-            }
             conn.execute(
                 "INSERT INTO balances (account_id, custodian_account_id, security_id, quantity) VALUES (?, ?, ?, ?)",
-                rusqlite::params![
-                    either(b, "accountId", "account_id"),
-                    either(b, "custodianAccountId", "custodian_account_id"),
-                    either(b, "securityId", "security_id"),
-                    opt_num(get(b, "quantity")),
-                ],
+                rusqlite::params![b.account_id, b.custodian_account_id, b.security_id, b.quantity],
             )?;
         }
         Ok(())
@@ -130,25 +113,19 @@ pub fn replace_balances(conn: &Connection, balances: &[Value]) -> Result<()> {
 /// `replace_margin`: Wealthsimple's margin figures per account, replaced
 /// whole on every read -- buying power with its currency, or the reason it was
 /// unavailable. An account that answers nothing is not a row.
-pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
+pub fn replace_margin(conn: &Connection, rows: &[crate::broker::Margin], now: &str) -> Result<()> {
     crate::atomically(conn, || {
         let changed = crate::gens::replace_if_changed(conn, "SELECT account_id, buying_power, currency, unavailable FROM margin", &[], || {
         conn.execute("DELETE FROM margin", [])?;
         for m in rows {
-            if !m.is_object() || field_s(m, "accountId").is_empty() {
+            if m.account_id.is_empty() {
                 continue;
             }
-            let currency = { let c = field_s(m, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-            let fetched = { let f = field_s(m, "fetchedAt"); if f.is_empty() { now.to_string() } else { f } };
+            let currency = if m.currency.is_empty() { "CAD".to_string() } else { m.currency.clone() };
+            let fetched = if m.fetched_at.is_empty() { now.to_string() } else { m.fetched_at.clone() };
             conn.execute(
                 "INSERT INTO margin (account_id, buying_power, currency, unavailable, fetched_at) VALUES (?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    field_s(m, "accountId"),
-                    opt_num(get(m, "buyingPower")),
-                    currency,
-                    field_s(m, "unavailable"),
-                    fetched,
-                ],
+                rusqlite::params![m.account_id, m.buying_power, currency, m.unavailable, fetched],
             )?;
         }
         Ok(())
@@ -167,30 +144,19 @@ pub fn replace_margin(conn: &Connection, rows: &[Value], now: &str) -> Result<()
 
 /// `_write_nav_points`: a point with no date or no equity is not a
 /// point; an existing day is updated rather than duplicated.
-fn write_nav_points(conn: &Connection, points: &[Value]) -> Result<()> {
+fn write_nav_points(conn: &Connection, points: &[crate::broker::NavPoint]) -> Result<()> {
     crate::atomically(conn, || {
         for rec in points {
-            if !rec.is_object() {
-                continue;
-            }
-            let day: String = field_s(rec, "date").chars().take(10).collect();
+            let day: String = rec.date.chars().take(10).collect();
             if day.is_empty() {
                 continue;
             }
-            let equity = match opt_num(get(rec, "equity")) { Some(e) => e, None => continue };
-            let account_id = match get(rec, "accountId") {
-                Some(v) => vs(Some(v)),
-                None => field_s(rec, "account_id"),
-            };
-            let currency = { let c = field_s(rec, "currency"); if c.is_empty() { "CAD".to_string() } else { c } };
-            let deposits = match get(rec, "netDeposits") {
-                Some(v) => opt_num(Some(v)),
-                None => opt_num(get(rec, "net_deposits")),
-            };
+            let equity = match rec.equity { Some(e) => e, None => continue };
+            let currency = if rec.currency.is_empty() { "CAD".to_string() } else { rec.currency.clone() };
             conn.execute(
                 "INSERT INTO nav_history (account_id, date, equity, currency, net_deposits) VALUES (?, ?, ?, ?, ?) \
                  ON CONFLICT(account_id, date) DO UPDATE SET equity = excluded.equity, currency = excluded.currency, net_deposits = excluded.net_deposits",
-                rusqlite::params![account_id, day, equity, currency, deposits],
+                rusqlite::params![rec.account_id, day, equity, currency, rec.net_deposits],
             )?;
         }
         Ok(())
@@ -198,27 +164,27 @@ fn write_nav_points(conn: &Connection, points: &[Value]) -> Result<()> {
 }
 
 /// `upsert_nav`: insert or update daily values, deleting no day.
-pub fn upsert_nav(conn: &Connection, points: &[Value]) -> Result<()> {
+pub fn upsert_nav(conn: &Connection, points: &[crate::broker::NavPoint]) -> Result<()> {
     write_nav_points(conn, points)
 }
 
 /// `replace_nav`.
-pub fn replace_nav(conn: &Connection, points: &[Value]) -> Result<()> {
+pub fn replace_nav(conn: &Connection, points: &[crate::broker::NavPoint]) -> Result<()> {
     conn.execute("DELETE FROM nav_history", [])?;
     write_nav_points(conn, points)
 }
 
 /// `nav_last_dates`: the newest stored day per account. The empty string
 /// is the identity-wide series.
-pub fn nav_last_dates(conn: &Connection) -> Result<Map<String, Value>> {
+pub fn nav_last_dates(conn: &Connection) -> Result<std::collections::BTreeMap<String, String>> {
     let mut stmt = conn.prepare("SELECT account_id, MAX(date) AS last FROM nav_history GROUP BY account_id")?;
     let mut rows = stmt.query([])?;
-    let mut out = Map::new();
+    let mut out = std::collections::BTreeMap::new();
     while let Some(r) = rows.next()? {
         let last: Option<String> = r.get(1)?;
         let last = match last { Some(l) if !l.is_empty() => l, _ => continue };
         let aid: Option<String> = r.get(0)?;
-        out.insert(aid.unwrap_or_default(), json!(last));
+        out.insert(aid.unwrap_or_default(), last);
     }
     Ok(out)
 }

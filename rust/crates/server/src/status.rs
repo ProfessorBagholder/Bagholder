@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::app::{self, f, s, truthy, App};
+use crate::app::{self, s, truthy, App};
 use crate::{feeds, login, notify, orders, session, update, versions};
 
 pub fn payload(app: &Arc<App>) -> Value {
@@ -20,8 +20,8 @@ pub fn payload(app: &Arc<App>) -> Value {
     let can_update = update::can_update(app, None);
     let off = update::updates_off();
     let st = app.state.lock().unwrap();
-    let connected = st.connected && sess.as_ref().map(|x| truthy(x.get("access_token"))).unwrap_or(false);
-    let email = if !st.email.is_empty() { st.email.clone() } else { sess.as_ref().map(|x| f(x, "email")).unwrap_or_default() };
+    let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
+    let email = if !st.email.is_empty() { st.email.clone() } else { sess.as_ref().map(|x| x.email.clone()).unwrap_or_default() };
     json!({
         "ok": true,
         "connected": connected,

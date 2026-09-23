@@ -64,7 +64,11 @@ fn set_live(v: Option<bool>) {
     *seam::LIVE.lock().unwrap() = v;
 }
 fn set_session(v: Option<Value>) {
-    *seam::SESSION.lock().unwrap() = Some(v);
+    *seam::SESSION.lock().unwrap() = Some(v.map(|v| serde_json::from_value(v).unwrap()));
+}
+
+fn typed_rows<T: serde::de::DeserializeOwned>(rows: &[Value]) -> Vec<T> {
+    rows.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect()
 }
 fn unpatch() {
     seam::reset();
@@ -95,19 +99,19 @@ fn setup() -> MutexGuard<'static, ()> {
         s.connected = false;
         s.syncing = false;
     }
-    bagholder_store::tables::replace_accounts(&c, &[
+    bagholder_store::tables::replace_accounts(&c, &typed_rows(&[
         json!({"id": "acct-margin", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "non_registered"}),
         json!({"id": "acct-tfsa", "nickname": "TFSA", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa", "marginAccountId": "acct-margin"}),
         json!({"id": "acct-crypto", "nickname": "Crypto", "unifiedAccountType": "SELF_DIRECTED_CRYPTO", "currency": "CAD", "status": "open", "type": "crypto"}),
         json!({"id": "acct-old", "nickname": "Old", "unifiedAccountType": "SELF_DIRECTED_RRSP", "currency": "CAD", "status": "closed", "type": "rrsp"}),
         json!({"id": "acct-managed", "nickname": "Managed", "unifiedAccountType": "MANAGED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa"}),
-    ]).unwrap();
-    bagholder_store::admin::upsert_securities(&c, &[
+    ])).unwrap();
+    bagholder_store::admin::upsert_securities(&c, &typed_rows(&[
         json!({"id": "sec-o-1", "symbol": "QNC", "name": "", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": "sec-s-us"}),
         json!({"id": "sec-s-us", "symbol": "QNC", "name": "Quantum Emotion Corp", "primaryExchange": "NYSE", "primaryMic": "XNYS", "currency": "USD", "underlyingId": null}),
         json!({"id": "sec-s-ca", "symbol": "QNC.TO", "name": "Quantum Emotion Corp", "primaryExchange": "TSX-V", "primaryMic": "XTSX", "currency": "CAD", "underlyingId": null}),
-    ], &now_iso()).unwrap();
-    bagholder_store::tables::replace_margin(&c, &[json!({"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"})], &now_iso()).unwrap();
+    ]), &now_iso()).unwrap();
+    bagholder_store::tables::replace_margin(&c, &typed_rows(&[json!({"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"})]), &now_iso()).unwrap();
     g
 }
 
@@ -251,7 +255,7 @@ fn test_ticket_quote_for_a_listing_wealthsimple_lacks_says_so() {
 #[test]
 fn test_collateral_account_names_the_margin_account_it_backs() {
     let _g = setup();
-    let raw = vec![
+    let raw: Vec<bagholder_ws::wire::AccountNode> = typed_rows(&[
         json!({"id": "acct-margin", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "non_registered",
          "custodianAccounts": [{"id": "cust-margin-1"}], "accountFeatures": [{"name": "MARGIN", "enabled": true, "functional": true, "metadata": null}]}),
         json!({"id": "acct-tfsa", "nickname": "TFSA", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa",
@@ -259,12 +263,12 @@ fn test_collateral_account_names_the_margin_account_it_backs() {
         json!({"id": "acct-rrsp", "nickname": "RRSP", "unifiedAccountType": "SELF_DIRECTED_RRSP", "currency": "CAD", "status": "open", "type": "rrsp",
          "custodianAccounts": [{"id": "cust-rrsp-1"}], "accountFeatures": [{"name": "MARGIN_BOOST", "enabled": false, "functional": false, "metadata": {"__typename": "MarginBoostFeatureMetadata", "targetMarginAccountId": "cust-margin-1"}}]}),
         json!({"id": "acct-lira", "nickname": "LIRA", "unifiedAccountType": "SELF_DIRECTED_LIRA", "currency": "CAD", "status": "open", "type": "lira", "custodianAccounts": [], "accountFeatures": []}),
-    ];
+    ]);
     let slim_v = bagholder_ws::sync::slim_accounts(&raw);
-    let slim: HashMap<String, Value> = slim_v.iter().map(|a| (st(a, "id"), a.clone())).collect();
-    assert_eq!(st(&slim["acct-tfsa"], "marginAccountId"), "acct-margin");
-    assert_eq!(st(&slim["acct-rrsp"], "marginAccountId"), "", "a feature that is not enabled links nothing");
-    assert_eq!((st(&slim["acct-margin"], "marginAccountId"), st(&slim["acct-lira"], "marginAccountId")), (String::new(), String::new()));
+    let slim: HashMap<String, bagholder_store::broker::Account> = slim_v.iter().map(|a| (a.id.clone(), a.clone())).collect();
+    assert_eq!(slim["acct-tfsa"].margin_account_id, "acct-margin");
+    assert_eq!(slim["acct-rrsp"].margin_account_id, "", "a feature that is not enabled links nothing");
+    assert_eq!((slim["acct-margin"].margin_account_id.clone(), slim["acct-lira"].margin_account_id.clone()), (String::new(), String::new()));
     bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
     let snap = bagholder_store::snapshot::snapshot(&conn(), false).unwrap();
     let kept: HashMap<String, Value> = snap["accounts"].as_array().unwrap().iter().map(|a| (st(a, "id"), a.clone())).collect();
@@ -787,7 +791,7 @@ struct Engine {
 fn engine() -> (MutexGuard<'static, ()>, Engine) {
     let g = setup();
     let c = conn();
-    bagholder_store::tables::replace_balances(&c, &[json!({"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25})]).unwrap();
+    bagholder_store::tables::replace_balances(&c, &typed_rows(&[json!({"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25})])).unwrap();
     bagholder_store::tables::set_meta(&c, "balances_read_at", "").unwrap();
     app_ref().orders.stop_allowed_cache.lock().unwrap().clear();
     app_ref().orders.bracket_said.lock().unwrap().clear();
@@ -1057,8 +1061,9 @@ fn test_an_option_order_from_the_feed_is_named_by_its_contract() {
     let _g = setup();
     let item = json!({"occurredAt": "2026-08-05T16:12:17.268Z", "canonicalId": "ws-opt-1", "status": "POSTED", "type": "OPTIONS_BUY", "subType": "BUYTOOPEN",
         "assetSymbol": "QNC 20NOV26 3.00 CALL", "assetQuantity": 5, "amount": -150, "accountId": "acct-1", "currency": "CAD", "securityId": "sec-o-1"});
-    let mapped = bagholder_ws::mapping::map_activity(&item, None).expect("mapped");
-    apply_ws(&[mapped]);
+    let typed_item: bagholder_ws::wire::ActivityItem = serde_json::from_value(item).unwrap();
+    let mapped = bagholder_ws::mapping::map_activity(&typed_item, &bagholder_ws::mapping::Accounts::default()).expect("mapped");
+    apply_ws(&bagholder_store::broker::MappedActivity::to_rows(&[mapped]));
     let node = json!({"id": "order-opt", "orderId": "ws-7", "canonicalAccountId": "acct-tfsa", "createdAtUtc": "2026-08-05T16:16:16Z", "status": "SUBMITTED", "side": "SELL", "executionType": "LIMIT",
         "submittedQuantity": 40, "limitPrice": 0.25, "securityCurrency": "USD", "securityId": "sec-o-1", "symbol": "QNC", "security": {"id": "sec-o-1", "stock": {"symbol": "QNC", "name": "Quantum Emotion Corp"}}});
     set_gql(move |op, _| match op {

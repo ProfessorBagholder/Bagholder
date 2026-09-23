@@ -3,16 +3,16 @@
 //! written (docs/architecture.md, rule 6).
 
 use rusqlite::Connection;
-use serde_json::json;
 
+use bagholder_store::broker::Account;
 use bagholder_store::{atomically, open_db, relabel, tables};
 
 fn journal_mode(conn: &Connection) -> String {
     conn.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap().to_lowercase()
 }
 
-fn account(id: &str) -> serde_json::Value {
-    json!({"id": id, "nickname": id, "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa"})
+fn account(id: &str) -> Account {
+    Account { id: id.into(), nickname: id.into(), unified_account_type: "SELF_DIRECTED_TFSA".into(), currency: "CAD".into(), status: "open".into(), kind: "tfsa".into(), ..Default::default() }
 }
 
 fn ids(conn: &Connection) -> Vec<String> {

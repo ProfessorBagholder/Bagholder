@@ -5,16 +5,23 @@
 //! `Client::graphql` error mapping, and what the results look like once
 //! written into a fresh store through the same pipeline
 //! `crates/server/src/session.rs`'s `sync_body` uses
-//! (`mapping::map_activity_rows` + `fifo_pool_ids`, `merge::apply_wealthsimple_mapped`,
+//! (`mapping::map_activity_rows` + `mapping::Accounts`, `merge::apply_wealthsimple_mapped`,
 //! `tables::replace_accounts`/`replace_balances`/`replace_margin`/`upsert_nav`,
 //! `admin::upsert_securities`).
 //!
 //! After an intended change to any of these: rebuild the golden with
 //! `BAGHOLDER_BLESS=1 cargo test -p bagholder-ws --test golden_fetch`,
 //! then read the diff in `tests/golden/fetch.json` before committing it.
+//!
+//! `fetch_all_accounts/result` and `fetch_activities_for_account/result` are
+//! Deserialize-only wire types now (`AccountNode`, `ActivityItem`), so per the
+//! stage's plan these two keys alone record a different, explicitly allowed
+//! shape: `sync::slim_accounts` plus each node's id/linked id/custodian
+//! ids/feature names, and each item's `mapping::map_activity_rows` output.
 
 mod common;
 
+use bagholder_ws::wire::AccountNode;
 use bagholder_ws::{fetch, mapping, sync};
 use common::{fixture, graphql, graphql_errors, ok_json, Req};
 use rusqlite::Connection;
@@ -34,12 +41,39 @@ fn vars_of(reqs: &[Req]) -> Vec<Value> {
     reqs.iter().map(|r| r.body["variables"].clone()).collect()
 }
 
+fn sess(v: Value) -> bagholder_ws::session::Session {
+    serde_json::from_value(v).unwrap()
+}
+
+fn rows_json(rows: Vec<bagholder_store::broker::MappedActivity>) -> Value {
+    Value::Array(bagholder_store::broker::MappedActivity::to_rows(&rows))
+}
+
+/// The allowed replacement for `fetch_all_accounts/result`: the stored shape
+/// plus the identifying fields a typed `AccountNode` still carries.
+fn account_node_summary(nodes: &[AccountNode]) -> Value {
+    let slim = sync::slim_accounts(nodes);
+    Value::Array(
+        nodes
+            .iter()
+            .zip(slim)
+            .map(|(node, acc)| {
+                let mut m = serde_json::to_value(&acc).unwrap().as_object().unwrap().clone();
+                m.insert("linkedAccountId".into(), json!(node.linked_account.as_ref().map(|l| l.id.clone())));
+                m.insert("custodianAccountIds".into(), json!(node.custodian_accounts.iter().map(|c| c.id.clone()).collect::<Vec<_>>()));
+                m.insert("featureNames".into(), json!(node.account_features.iter().map(|f| f.name.clone()).collect::<Vec<_>>()));
+                Value::Object(m)
+            })
+            .collect(),
+    )
+}
+
 const IDENTITY: &str = "ident-1";
 const TODAY_MULTI_YEAR: &str = "2021-02-10";
 const TODAY_MID_YEAR: &str = "2024-09-01";
 
 /// `fetch_all_accounts`: two pages, one edge's node null.
-fn accounts_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn accounts_scenario(out: &mut Map<String, Value>) -> Vec<AccountNode> {
     let fx = fixture(Box::new(|req| {
         let cursor = req.body["variables"]["cursor"].clone();
         if cursor.is_null() {
@@ -59,9 +93,9 @@ fn accounts_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
             }}}))
         }
     }));
-    let sess = json!({"access_token": "tok"});
-    let accounts = fetch::fetch_all_accounts(&fx.client(), &sess, IDENTITY).unwrap();
-    out.insert("fetch_all_accounts/result".into(), json!(accounts));
+    let s = sess(json!({"access_token": "tok"}));
+    let accounts = fetch::fetch_all_accounts(&fx.client(), &s, IDENTITY).unwrap();
+    out.insert("fetch_all_accounts/result".into(), account_node_summary(&accounts));
     out.insert("fetch_all_accounts/request_variables".into(), json!(vars_of(&fx.requests())));
     accounts
 }
@@ -69,7 +103,7 @@ fn accounts_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
 /// `fetch_activities_for_account`: three pages, a null node on page one, and a
 /// third page that says `hasNextPage: true` but carries no cursor -- which
 /// must stop the walk rather than loop forever.
-fn activities_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn activities_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_ws::wire::ActivityItem> {
     let fx = fixture(Box::new(|req| {
         let cursor = req.body["variables"]["cursor"].clone();
         match cursor.as_str() {
@@ -95,16 +129,20 @@ fn activities_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
             _ => panic!("unexpected cursor {:?}", cursor),
         }
     }));
-    let sess = json!({"access_token": "tok"});
-    let items = fetch::fetch_activities_for_account(&fx.client(), &sess, "acc-a", None, 1_789_000_000).unwrap();
-    out.insert("fetch_activities_for_account/result".into(), json!(items));
+    let s = sess(json!({"access_token": "tok"}));
+    let items = fetch::fetch_activities_for_account(&fx.client(), &s, "acc-a", None, 1_789_000_000).unwrap();
+    let none = mapping::Accounts::default();
+    out.insert(
+        "fetch_activities_for_account/result".into(),
+        Value::Array(items.iter().map(|it| rows_json(mapping::map_activity_rows(it, &none))).collect()),
+    );
     out.insert("fetch_activities_for_account/request_variables".into(), json!(vars_of(&fx.requests())));
     items
 }
 
 /// `fetch_balances`: 23 ids, chunked 20 + 3; balance as an array, as a single
 /// object, and missing altogether.
-fn balances_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn balances_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_store::broker::Balance> {
     let ids: Vec<String> = (1..=23).map(|i| format!("bal-{:02}", i)).collect();
     let fx = fixture(Box::new(|req| {
         let list = req.body["variables"]["ids"].as_array().cloned().unwrap_or_default();
@@ -129,10 +167,10 @@ fn balances_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
             .collect();
         graphql(json!({"accounts": accounts}))
     }));
-    let sess = json!({"access_token": "tok"});
-    let balances = fetch::fetch_balances(&fx.client(), &sess, &ids).unwrap();
+    let s = sess(json!({"access_token": "tok"}));
+    let balances = fetch::fetch_balances(&fx.client(), &s, &ids).unwrap();
     let reqs = fx.requests();
-    out.insert("fetch_balances/result".into(), json!(balances));
+    out.insert("fetch_balances/result".into(), serde_json::to_value(&balances).unwrap());
     out.insert("fetch_balances/chunk_sizes".into(), json!(reqs.iter().map(|r| r.body["variables"]["ids"].as_array().map(|a| a.len()).unwrap_or(0)).collect::<Vec<_>>()));
     out.insert("fetch_balances/request_variables".into(), json!(vars_of(&reqs)));
     balances
@@ -140,7 +178,7 @@ fn balances_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
 
 /// `fetch_margin`: one available account, one unavailable, one whose request
 /// answers a GraphQL error -- which must not fail the whole call.
-fn margin_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn margin_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_store::broker::Margin> {
     let fx = fixture(Box::new(|req| {
         match req.body["variables"]["accountId"].as_str().unwrap_or("") {
             "margin-ok" => graphql(json!({"account": {"financials": {"current": {"marginV3": {"trading": {"buyingPower": {
@@ -154,10 +192,10 @@ fn margin_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
             other => panic!("unexpected accountId {}", other),
         }
     }));
-    let sess = json!({"access_token": "tok"});
+    let s = sess(json!({"access_token": "tok"}));
     let ids = vec!["margin-ok".to_string(), "margin-unavailable".to_string(), "margin-error".to_string()];
-    let rows = fetch::fetch_margin(&fx.client(), &sess, &ids, "2026-09-22T00:00:00Z");
-    out.insert("fetch_margin/result".into(), json!(rows));
+    let rows = fetch::fetch_margin(&fx.client(), &s, &ids, "2026-09-22T00:00:00Z");
+    out.insert("fetch_margin/result".into(), serde_json::to_value(&rows).unwrap());
     out.insert("fetch_margin/request_variables".into(), json!(vars_of(&fx.requests())));
     rows
 }
@@ -165,7 +203,7 @@ fn margin_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
 /// `fetch_nav_history` (identity-wide): `since` is `None`, so the walk covers
 /// every year up to `today`; year 2020 pages twice and revises one date on the
 /// second page.
-fn nav_history_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn nav_history_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_store::broker::NavPoint> {
     let fx = fixture(Box::new(|req| {
         let start = req.body["variables"]["startDate"].as_str().unwrap_or("").to_string();
         let cursor = req.body["variables"]["cursor"].clone();
@@ -186,24 +224,24 @@ fn nav_history_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
             graphql(json!({"identity": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {"hasNextPage": false}}}}}))
         }
     }));
-    let sess = json!({"access_token": "tok"});
-    let points = fetch::fetch_nav_history(&fx.client(), &sess, IDENTITY, None, TODAY_MULTI_YEAR).unwrap();
-    out.insert("fetch_nav_history/result".into(), json!(points));
+    let s = sess(json!({"access_token": "tok"}));
+    let points = fetch::fetch_nav_history(&fx.client(), &s, IDENTITY, None, TODAY_MULTI_YEAR).unwrap();
+    out.insert("fetch_nav_history/result".into(), serde_json::to_value(&points).unwrap());
     out.insert("fetch_nav_history/request_variables".into(), json!(vars_of(&fx.requests())));
     points
 }
 
 /// `fetch_account_nav_history`: `since` mid-year, one page, one year.
-fn account_nav_history_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
+fn account_nav_history_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_store::broker::NavPoint> {
     let fx = fixture(Box::new(|_req| {
         graphql(json!({"account": {"financials": {"historicalDaily": {
             "edges": [{"node": {"date": "2024-07-01", "netLiquidationValueV2": {"amount": "300", "currency": "USD"}, "netDepositsV2": {"amount": "30", "currency": "USD"}}}],
             "pageInfo": {"hasNextPage": false}
         }}}}))
     }));
-    let sess = json!({"access_token": "tok"});
-    let points = fetch::fetch_account_nav_history(&fx.client(), &sess, "acc-b", Some("2024-06-15"), TODAY_MID_YEAR).unwrap();
-    out.insert("fetch_account_nav_history/result".into(), json!(points));
+    let s = sess(json!({"access_token": "tok"}));
+    let points = fetch::fetch_account_nav_history(&fx.client(), &s, "acc-b", Some("2024-06-15"), TODAY_MID_YEAR).unwrap();
+    out.insert("fetch_account_nav_history/result".into(), serde_json::to_value(&points).unwrap());
     out.insert("fetch_account_nav_history/request_variables".into(), json!(vars_of(&fx.requests())));
     points
 }
@@ -212,7 +250,7 @@ fn account_nav_history_scenario(out: &mut Map<String, Value>) -> Vec<Value> {
 /// `FetchSecurities` call errors and falls back to one `FetchSecurity` call
 /// per id, one of which also errors.
 fn securities_scenario(out: &mut Map<String, Value>) {
-    let sess = json!({"access_token": "tok"});
+    let s = sess(json!({"access_token": "tok"}));
     // Each `fixture()` takes the same process-wide lock for its whole life,
     // so the first stand-in server must be dropped before the second is
     // created -- two live at once would deadlock this thread against itself.
@@ -224,8 +262,8 @@ fn securities_scenario(out: &mut Map<String, Value>) {
                 {"id": "sec-b", "currency": "USD", "optionDetails": {"underlyingSecurity": {"id": "sec-a"}}},
             ]}))
         }));
-        let ok = fetch::fetch_securities(&fx_ok.client(), &sess, &["sec-a".to_string(), "sec-b".to_string()]);
-        out.insert("fetch_securities/batch_ok/result".into(), json!(ok));
+        let ok = fetch::fetch_securities(&fx_ok.client(), &s, &["sec-a".to_string(), "sec-b".to_string()]);
+        out.insert("fetch_securities/batch_ok/result".into(), serde_json::to_value(&ok).unwrap());
         out.insert("fetch_securities/batch_ok/request_variables".into(), json!(vars_of(&fx_ok.requests())));
     }
 
@@ -240,9 +278,9 @@ fn securities_scenario(out: &mut Map<String, Value>) {
             }
         }
     }));
-    let fallback = fetch::fetch_securities(&fx_fallback.client(), &sess, &["sec-x".to_string(), "sec-y".to_string()]);
+    let fallback = fetch::fetch_securities(&fx_fallback.client(), &s, &["sec-x".to_string(), "sec-y".to_string()]);
     let reqs = fx_fallback.requests();
-    out.insert("fetch_securities/batch_error_fallback/result".into(), json!(fallback));
+    out.insert("fetch_securities/batch_error_fallback/result".into(), serde_json::to_value(&fallback).unwrap());
     out.insert(
         "fetch_securities/batch_error_fallback/operations".into(),
         json!(reqs.iter().map(|r| r.body["operationName"].clone()).collect::<Vec<_>>()),
@@ -254,29 +292,29 @@ fn securities_scenario(out: &mut Map<String, Value>) {
 /// a message, an `errors` entry that only carries an `error` key, and a
 /// response with `data: null` and no `errors` at all.
 fn graphql_error_scenarios(out: &mut Map<String, Value>) {
-    let sess = json!({"access_token": "tok"});
+    let s = sess(json!({"access_token": "tok"}));
 
     // Each `fixture()` holds the process-wide lock for its whole life, so
     // every one here is scoped to its own block and dropped before the next
     // is created -- two alive at once would deadlock this thread.
     {
         let fx = fixture(Box::new(|_| (401, vec![], serde_json::to_vec(&json!({"error": "unauthorized"})).unwrap())));
-        let err = fx.client().graphql(&sess, "FetchSecurity", &json!({}), None).unwrap_err();
+        let err = fx.client().graphql::<Value>(&s, "FetchSecurity", &json!({}), None).unwrap_err();
         out.insert("graphql_error/401".into(), json!(format!("{:?}", err)));
     }
     {
         let fx = fixture(Box::new(|_| ok_json(json!({"errors": [{"message": "field X does not exist"}]}))));
-        let err = fx.client().graphql(&sess, "FetchSecurity", &json!({}), None).unwrap_err();
+        let err = fx.client().graphql::<Value>(&s, "FetchSecurity", &json!({}), None).unwrap_err();
         out.insert("graphql_error/errors_array_message".into(), json!(format!("{:?}", err)));
     }
     {
         let fx = fixture(Box::new(|_| ok_json(json!({"errors": [{"error": "rate_limited"}]}))));
-        let err = fx.client().graphql(&sess, "FetchSecurity", &json!({}), None).unwrap_err();
+        let err = fx.client().graphql::<Value>(&s, "FetchSecurity", &json!({}), None).unwrap_err();
         out.insert("graphql_error/errors_object_error_key".into(), json!(format!("{:?}", err)));
     }
     {
         let fx = fixture(Box::new(|_| ok_json(json!({"data": null}))));
-        let err = fx.client().graphql(&sess, "FetchSecurity", &json!({}), None).unwrap_err();
+        let err = fx.client().graphql::<Value>(&s, "FetchSecurity", &json!({}), None).unwrap_err();
         out.insert("graphql_error/data_null".into(), json!(format!("{:?}", err)));
     }
 }
@@ -296,39 +334,25 @@ fn id_gen() -> impl Fn() -> String {
 /// each write, so the dump is the same on every run.
 fn store_scenario(
     out: &mut Map<String, Value>,
-    accounts: &[Value],
-    activity_items: &[Value],
-    balances: &[Value],
-    margin: &[Value],
-    nav_identity: &[Value],
-    nav_account: &[Value],
+    accounts: &[AccountNode],
+    activity_items: &[bagholder_ws::wire::ActivityItem],
+    balances: &[bagholder_store::broker::Balance],
+    margin: &[bagholder_store::broker::Margin],
+    nav_identity: &[bagholder_store::broker::NavPoint],
+    nav_account: &[bagholder_store::broker::NavPoint],
 ) {
     let conn = Connection::open_in_memory().unwrap();
     bagholder_store::relabel::ensure(&conn).unwrap();
 
-    let acc_by_id: Value = {
-        let mut m = Map::new();
-        for a in accounts {
-            let id = a.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if !id.is_empty() {
-                m.insert(id, a.clone());
-            }
-        }
-        Value::Object(m)
-    };
-    let mut mapped: Vec<Value> = Vec::new();
+    let accts = mapping::Accounts::from_nodes(accounts);
+    let mut mapped: Vec<bagholder_store::broker::MappedActivity> = Vec::new();
     for it in activity_items {
-        mapped.extend(mapping::map_activity_rows(it, Some(&acc_by_id)));
-    }
-    let pools = mapping::fifo_pool_ids(Some(&Value::Array(accounts.to_vec())));
-    for row in mapped.iter_mut() {
-        let aid = row.get("accountId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let pool = pools.get(&aid).cloned().unwrap_or_else(|| aid.clone());
-        row["fifoId"] = json!(pool);
+        mapped.extend(mapping::map_activity_rows(it, &accts));
     }
 
     let new_id = id_gen();
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &mapped, &new_id).unwrap();
+    let rows = bagholder_store::broker::MappedActivity::to_rows(&mapped);
+    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &new_id).unwrap();
 
     bagholder_store::tables::replace_accounts(&conn, &sync::slim_accounts(accounts)).unwrap();
     bagholder_store::tables::replace_balances(&conn, balances).unwrap();
@@ -336,26 +360,19 @@ fn store_scenario(
 
     // identity-wide points carry accountId "", per-nickname points the
     // nickname -- exactly as `fetch_nickname_nav_history` assembles them.
-    let mut combined: Vec<Value> = nav_identity
+    let mut combined: Vec<bagholder_store::broker::NavPoint> = nav_identity
         .iter()
-        .map(|r| {
-            let mut m = r.as_object().cloned().unwrap_or_default();
-            m.insert("accountId".into(), json!(""));
-            Value::Object(m)
-        })
+        .map(|r| bagholder_store::broker::NavPoint { account_id: String::new(), ..r.clone() })
         .collect();
-    combined.extend(nav_account.iter().map(|r| {
-        let mut m = r.as_object().cloned().unwrap_or_default();
-        m.insert("accountId".into(), json!("B"));
-        Value::Object(m)
-    }));
+    combined.extend(nav_account.iter().map(|r| bagholder_store::broker::NavPoint { account_id: "B".into(), ..r.clone() }));
     bagholder_store::tables::upsert_nav(&conn, &combined).unwrap();
 
-    let securities = json!([
+    let securities: Vec<bagholder_model::securities::Security> = serde_json::from_value(json!([
         {"id": "sec-a", "symbol": "AAA", "name": "AAA Inc", "primaryExchange": "TSX", "primaryMic": "XTSE", "currency": "CAD"},
         {"id": "sec-b", "symbol": "", "name": "", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": "sec-a"},
-    ]);
-    bagholder_store::admin::upsert_securities(&conn, securities.as_array().unwrap(), "2026-09-22T00:00:00Z").unwrap();
+    ]))
+    .unwrap();
+    bagholder_store::admin::upsert_securities(&conn, &securities, "2026-09-22T00:00:00Z").unwrap();
 
     let snap = bagholder_store::snapshot::snapshot(&conn, true).unwrap();
     out.insert("store/activities".into(), snap["activities"].clone());

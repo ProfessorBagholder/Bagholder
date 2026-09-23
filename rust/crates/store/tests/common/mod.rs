@@ -76,6 +76,17 @@ pub fn ws_row() -> Value {
     json!({"canonicalId": "ws-cid-aaa-001", "occurredAt": "2024-06-15T13:45:22.123Z", "transactionDate": "2024-06-15", "settlementDate": "2024-06-15", "accountId": "acct-1", "bookId": "acct-1", "fifoId": "acct-1", "accountType": "", "activityType": "Trade", "activitySubType": "BUY", "description": "Buy 10 AAA @ 10", "direction": "DEBIT", "symbol": "AAA", "name": "AAA", "currency": "CAD", "quantity": 10.0, "unitPrice": 10.0, "commission": 0.0, "netCashAmount": -100.0, "category": "trade", "balance": null, "source": "wealthsimple", "rawType": "DIY_BUY", "aftType": "", "counterSymbol": "", "securityId": null})
 }
 
+/// A `json!` literal read as the typed row a writer now takes; every writer's
+/// row type is lenient, so this never fails on a shape a test itself wrote.
+pub fn typed<T: serde::de::DeserializeOwned>(v: Value) -> T {
+    serde_json::from_value(v).unwrap()
+}
+
+/// As `typed`, for a list of rows.
+pub fn typed_rows<T: serde::de::DeserializeOwned>(rows: &[Value]) -> Vec<T> {
+    rows.iter().map(|v| typed(v.clone())).collect()
+}
+
 pub fn with(mut row: Value, over: Value) -> Value {
     for (k, v) in over.as_object().unwrap() {
         row[k] = v.clone();

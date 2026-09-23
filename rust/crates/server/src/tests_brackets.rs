@@ -67,8 +67,12 @@ fn set_meta(k: &str, v: &str) {
     tb::set_meta(&db(), k, v).unwrap()
 }
 
+fn typed_rows<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {
+    v.as_array().unwrap().iter().map(|x| serde_json::from_value(x.clone()).unwrap()).collect()
+}
+
 fn replace_balances(rows: Value) {
-    tb::replace_balances(&db(), rows.as_array().unwrap()).unwrap()
+    tb::replace_balances(&db(), &typed_rows(&rows)).unwrap()
 }
 
 fn fake(op: &str, vars: &Value) -> Result<Value, CallError> {
@@ -124,23 +128,23 @@ fn setup() -> MutexGuard<'static, ()> {
     for t in ["orders", "brackets", "activities", "balances", "margin", "securities", "accounts"] {
         c.execute(&format!("DELETE FROM {}", t), []).unwrap();
     }
-    tb::replace_accounts(&c, json!([
+    tb::replace_accounts(&c, &typed_rows(&json!([
         {"id": "acct-margin", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "non_registered"},
         {"id": "acct-tfsa", "nickname": "TFSA", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa", "marginAccountId": "acct-margin"},
         {"id": "acct-crypto", "nickname": "Crypto", "unifiedAccountType": "SELF_DIRECTED_CRYPTO", "currency": "CAD", "status": "open", "type": "crypto"},
         {"id": "acct-old", "nickname": "Old", "unifiedAccountType": "SELF_DIRECTED_RRSP", "currency": "CAD", "status": "closed", "type": "rrsp"},
         {"id": "acct-managed", "nickname": "Managed", "unifiedAccountType": "MANAGED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa"}
-    ]).as_array().unwrap()).unwrap();
-    bagholder_store::admin::upsert_securities(&c, json!([
+    ]))).unwrap();
+    bagholder_store::admin::upsert_securities(&c, &typed_rows(&json!([
         {"id": "sec-o-1", "symbol": "QNC", "name": "", "primaryExchange": "", "primaryMic": "", "currency": "USD", "underlyingId": "sec-s-us"},
         {"id": "sec-s-us", "symbol": "QNC", "name": "Quantum Emotion Corp", "primaryExchange": "NYSE", "primaryMic": "XNYS", "currency": "USD", "underlyingId": null},
         {"id": "sec-s-ca", "symbol": "QNC.TO", "name": "Quantum Emotion Corp", "primaryExchange": "TSX-V", "primaryMic": "XTSX", "currency": "CAD", "underlyingId": null}
-    ]).as_array().unwrap(), &now()).unwrap();
-    tb::replace_margin(&c, json!([{"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"}]).as_array().unwrap(), &now()).unwrap();
-    tb::replace_balances(&c, json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]).as_array().unwrap()).unwrap();
+    ])), &now()).unwrap();
+    tb::replace_margin(&c, &typed_rows(&json!([{"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"}])), &now()).unwrap();
+    tb::replace_balances(&c, &typed_rows(&json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]))).unwrap();
     tb::set_meta(&c, "balances_read_at", "").unwrap();
     *lk(&seam::GQL) = Some(Arc::new(fake));
-    *lk(&seam::SESSION) = Some(Some(json!({"access_token": "t"})));
+    *lk(&seam::SESSION) = Some(Some(serde_json::from_value(json!({"access_token": "t"})).unwrap()));
     live(true);
     g
 }

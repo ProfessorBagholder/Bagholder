@@ -5,7 +5,7 @@
 //! comes back quoted on Alpha, which is a venue rather than the listing: both
 //! are followed to the record the page should name.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::lenient;
@@ -35,7 +35,7 @@ const MIC_MAP: [(&str, &str); 8] = [
 ];
 
 /// One security as Wealthsimple describes it.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Security {
     #[serde(deserialize_with = "lenient::text")]
@@ -51,8 +51,14 @@ pub struct Security {
     #[serde(deserialize_with = "lenient::text")]
     pub currency: String,
     /// An option's record points at what it is an option on.
-    #[serde(deserialize_with = "lenient::text")]
+    #[serde(deserialize_with = "lenient::text", serialize_with = "ser_underlying_id")]
     pub underlying_id: String,
+}
+
+/// `underlyingId` prints as `null`, never `""`: an option's own record has no
+/// underlying, and that absence is not the same as an unreadable one.
+fn ser_underlying_id<S: serde::Serializer>(v: &String, s: S) -> Result<S::Ok, S::Error> {
+    if v.is_empty() { s.serialize_none() } else { s.serialize_some(v) }
 }
 
 impl Security {

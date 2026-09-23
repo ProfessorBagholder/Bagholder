@@ -142,7 +142,7 @@ pub(super) fn parse_z(t: &str) -> Option<i64> {
     t.strip_suffix('Z').and_then(parse_ymdhms)
 }
 
-pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &Value, op: &str, vars: Value) -> Result<Value, CallError> {
+pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, sess: &bagholder_ws::session::Session, op: &str, vars: Value) -> Result<Value, CallError> {
     if !orders_live() && matches!(op, "SoOrdersOrderCreate" | "SoOrdersOrderCancel" | "SoOrdersOrderModify") {
         return Err(CallError::Failed("orders are off (BAGHOLDER_DRY_ORDERS)".into()));
     }
@@ -158,7 +158,7 @@ pub(super) fn gql(#[cfg_attr(test, allow(unused_variables))] app: &Arc<App>, ses
     #[cfg(not(test))]
     {
         let home = app.ws_home();
-        Client { home: &home }.graphql(sess, op, &vars, None)
+        Client { home: &home }.graphql::<Value>(sess, op, &vars, None)
     }
 }
 

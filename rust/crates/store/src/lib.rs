@@ -1,6 +1,7 @@
 //! The SQLite store: the database file every desktop copy reads and writes.
 
 pub mod bars;
+pub mod broker;
 pub mod pool;
 pub mod schema;
 pub mod relabel;

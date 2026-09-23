@@ -2,8 +2,7 @@
 //! (docs/architecture.md, rules 3 and 4). A write that changes nothing is not a
 //! change, so it must not send every open page to fetch the book again.
 
-use serde_json::json;
-
+use bagholder_store::broker::{Account, Balance, Margin};
 use bagholder_store::{feeds, gens, market, open_db, relabel, tables};
 
 fn db() -> (tempfile::TempDir, rusqlite::Connection) {
@@ -17,8 +16,8 @@ fn gen(conn: &rusqlite::Connection, name: &str) -> i64 {
     *gens::all(conn).unwrap().get(name).unwrap_or_else(|| panic!("no counter named {}", name))
 }
 
-fn margin_row(power: f64) -> serde_json::Value {
-    json!({"accountId": "a1", "buyingPower": power, "currency": "CAD", "unavailable": ""})
+fn margin_row(power: f64) -> Margin {
+    Margin { account_id: "a1".into(), buying_power: Some(power), currency: "CAD".into(), unavailable: String::new(), fetched_at: String::new() }
 }
 
 #[test]
@@ -47,8 +46,8 @@ fn test_margin_read_again_and_found_the_same_is_not_a_change() {
 #[test]
 fn test_accounts_and_balances_replaced_with_themselves_are_not_a_change() {
     let (_d, conn) = db();
-    let accounts = [json!({"id": "a1", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa", "netLiquidationValue": 5000.0})];
-    let balances = [json!({"accountId": "a1", "custodianAccountId": "c1", "securityId": "sec-1", "quantity": 10.0})];
+    let accounts = [Account { id: "a1".into(), nickname: "Trading".into(), unified_account_type: "SELF_DIRECTED_TFSA".into(), currency: "CAD".into(), status: "open".into(), kind: "tfsa".into(), net_liquidation_value: Some(5000.0), margin_account_id: String::new() }];
+    let balances = [Balance { account_id: "a1".into(), custodian_account_id: "c1".into(), security_id: "sec-1".into(), quantity: Some(10.0) }];
     tables::replace_accounts(&conn, &accounts).unwrap();
     tables::replace_balances(&conn, &balances).unwrap();
     let (a, b) = (gen(&conn, "accounts"), gen(&conn, "balances"));
@@ -56,7 +55,7 @@ fn test_accounts_and_balances_replaced_with_themselves_are_not_a_change() {
     tables::replace_balances(&conn, &balances).unwrap();
     assert_eq!((gen(&conn, "accounts"), gen(&conn, "balances")), (a, b));
     let mut moved = accounts.clone();
-    moved[0]["netLiquidationValue"] = json!(5100.0);
+    moved[0].net_liquidation_value = Some(5100.0);
     tables::replace_accounts(&conn, &moved).unwrap();
     assert!(gen(&conn, "accounts") > a, "a net liquidation value that moved is a change");
 }

@@ -169,11 +169,11 @@ pub fn parse_extended_order(data: &Value) -> Option<Reading> {
     })
 }
 
-pub(super) fn fetch_extended_order(app: &Arc<App>, sess: &Value, external_id: &str) -> Result<Option<Reading>, CallError> {
+pub(super) fn fetch_extended_order(app: &Arc<App>, sess: &bagholder_ws::session::Session, external_id: &str) -> Result<Option<Reading>, CallError> {
     Ok(parse_extended_order(&gql(app, sess, "FetchSoOrdersExtendedOrder", json!({"branchId": ORDER_BRANCH, "externalId": external_id}))?))
 }
 
-pub(super) fn fetch_order_feed(app: &Arc<App>, sess: &Value, identity: &str) -> Result<Vec<Value>, CallError> {
+pub(super) fn fetch_order_feed(app: &Arc<App>, sess: &bagholder_ws::session::Session, identity: &str) -> Result<Vec<Value>, CallError> {
     let mut out = Vec::new();
     let mut cursor = Value::Null;
     loop {
@@ -289,11 +289,19 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
         date = crate::app::today_utc();
     }
     let currency = [&order.currency, &upd.currency].into_iter().map(|c| c.trim().to_uppercase()).find(|c| !c.is_empty()).filter(|c| c == "CAD" || c == "USD").unwrap_or_else(|| "CAD".into());
-    let accounts = snapshot(app).get("accounts").cloned().unwrap_or(json!([]));
+    let stored_accounts: Vec<bagholder_store::broker::Account> = snapshot(app)
+        .get("accounts")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+        .collect();
+    let accts = bagholder_ws::mapping::Accounts::from_stored(&stored_accounts);
     let mult = bagholder_model::symbols::option_multiplier(&symbol);
     let buy = order.side == Side::Buy;
     let account_id = &order.account_id;
-    let fifo = bagholder_ws::mapping::fifo_pool_ids(Some(&accounts)).get(account_id).cloned().unwrap_or_else(|| account_id.clone());
+    let fifo = accts.pool(account_id);
     let act = json!({
         "id": uuid4(),
         "occurredAt": date,
@@ -302,7 +310,7 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
         "accountId": account_id,
         "bookId": account_id,
         "fifoId": fifo,
-        "accountType": bagholder_ws::mapping::account_type(account_id, Some(&accounts)),
+        "accountType": bagholder_ws::mapping::account_type(account_id, &accts),
         "activityType": "Trade",
         "activitySubType": order.side.as_str(),
         "description": format!("{} {} {} @ {}", if buy { "Buy" } else { "Sell" }, qty_text(filled), symbol, rp(Some(price))),
@@ -384,7 +392,7 @@ pub fn refresh_orders(app: &Arc<App>, only_id: &str) -> Value {
         }
     }
     if only_id.is_empty() {
-        let identity = identity_from(&sess);
+        let identity = sess.identity();
         if !identity.is_empty() {
             let rows = orders_all(app);
             let mut known: HashSet<String> = rows.iter().map(|o| o.id.clone()).collect();

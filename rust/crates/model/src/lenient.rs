@@ -57,3 +57,42 @@ pub fn rows<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {
         _ => vec![],
     }
 }
+
+/// A field whose wire type is a list: null, absent or anything that is not an
+/// array reads as empty; each element that is an object and reads as `T` is
+/// kept, others dropped -- the same rule as `rows`.
+pub fn list<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
+    Ok(rows(&Value::deserialize(d)?))
+}
+
+/// A nested object: null, absent, anything that is not an object, or an
+/// object that fails to read as `T`, is `None`.
+pub fn maybe_object<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(if v.is_object() { T::deserialize(&v).ok() } else { None })
+}
+
+/// Truthiness as Wealthsimple's own booleans are read: null or absent is
+/// false; a number, string, array or object follows the general rule
+/// (nonzero, non-empty); a bool is itself.
+pub fn truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::Null => false,
+        Value::Bool(b) => b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    })
+}
+
+/// A field that is one row, many, or none: a bare object is one row, an
+/// array many rows, anything else none.
+pub fn one_or_many<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(match v {
+        Value::Array(_) => rows(&v),
+        Value::Object(_) => T::deserialize(&v).ok().into_iter().collect(),
+        _ => vec![],
+    })
+}

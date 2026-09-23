@@ -4,17 +4,18 @@
 mod common;
 use bagholder_store::{admin, feeds, schema, snapshot, tables};
 use common::*;
+
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
 #[test]
 fn test_margin_rows_round_trip_and_clear_with_the_synced_data() {
     let d = db();
-    tables::replace_margin(&d.conn, &[
+    tables::replace_margin(&d.conn, &typed_rows(&[
         json!({"accountId": "acct-1", "buyingPower": 6817.33, "currency": "CAD"}),
         json!({"accountId": "acct-2", "buyingPower": null, "currency": "CAD", "unavailable": "UnavailableSecurities (2 securities)"}),
         json!({"accountId": "", "buyingPower": 1.0}),
-    ], "2026-09-10T14:00:00Z").unwrap();
+    ]), "2026-09-10T14:00:00Z").unwrap();
     let snap = d.snapshot();
     let rows = snap["margin"].as_array().unwrap();
     let got: Vec<(Value, Value, Value)> = rows.iter().map(|r| (r["accountId"].clone(), r["buyingPower"].clone(), r["unavailable"].clone())).collect();
@@ -24,7 +25,7 @@ fn test_margin_rows_round_trip_and_clear_with_the_synced_data() {
     ]);
     assert!(rows.iter().all(|r| !r["fetchedAt"].as_str().unwrap_or("").is_empty()));
     // the data version moving with a new reading is the server crate's `data_version`
-    tables::replace_margin(&d.conn, &[json!({"accountId": "acct-1", "buyingPower": 6900.0, "currency": "CAD"})], "2026-09-10T15:00:00Z").unwrap();
+    tables::replace_margin(&d.conn, &typed_rows(&[json!({"accountId": "acct-1", "buyingPower": 6900.0, "currency": "CAD"})]), "2026-09-10T15:00:00Z").unwrap();
     assert_eq!(d.snapshot()["margin"][0]["buyingPower"], json!(6900.0));
     admin::clear_synced_data(&d.conn, true, true).unwrap();
     assert_eq!(d.snapshot()["margin"], json!([]));
@@ -33,7 +34,7 @@ fn test_margin_rows_round_trip_and_clear_with_the_synced_data() {
 #[test]
 fn test_snapshot_includes_securities() {
     let d = db();
-    admin::upsert_securities(&d.conn, &[json!({"id": "sec-s-ch", "symbol": "CH", "name": "Charbone Corporation", "primaryExchange": "TSX Venture Exchange", "primaryMic": "XTSV", "currency": "CAD"})], "2026-09-10T14:00:00Z").unwrap();
+    admin::upsert_securities(&d.conn, &typed_rows(&[json!({"id": "sec-s-ch", "symbol": "CH", "name": "Charbone Corporation", "primaryExchange": "TSX Venture Exchange", "primaryMic": "XTSV", "currency": "CAD"})]), "2026-09-10T14:00:00Z").unwrap();
     let snap = d.snapshot();
     let secs = snap["securities"].as_array().unwrap();
     assert_eq!(secs.len(), 1);
@@ -133,13 +134,13 @@ fn keys(v: &Value) -> HashSet<String> {
 #[test]
 fn test_replace_nav_by_account_and_snapshot() {
     let d = db();
-    tables::replace_nav(&d.conn, &[
+    tables::replace_nav(&d.conn, &typed_rows(&[
         json!({"date": "2024-01-01", "equity": 10, "currency": "CAD", "netDeposits": 1, "accountId": ""}),
-        json!({"date": "2024-01-02", "equity": 11, "net_deposits": 2}),
+        json!({"date": "2024-01-02", "equity": 11, "netDeposits": 2}),
         json!({"date": "2024-01-01", "equity": 5, "currency": "CAD", "accountId": "TFSA"}),
-        json!({"date": "2024-01-02", "equity": 6, "account_id": "TFSA", "netDeposits": 3}),
+        json!({"date": "2024-01-02", "equity": 6, "accountId": "TFSA", "netDeposits": 3}),
         json!({"date": "2024-01-01", "equity": 7, "accountId": "RRSP"}),
-    ]).unwrap();
+    ])).unwrap();
     let snap = d.snapshot();
     assert_eq!(dates(&snap["navHistory"]), vec!["2024-01-01", "2024-01-02"]);
     assert_eq!(f(&snap["navHistory"][0]["equity"]), 10.0);
@@ -147,10 +148,10 @@ fn test_replace_nav_by_account_and_snapshot() {
     assert_eq!(f(&snap["navByAccount"]["TFSA"][0]["equity"]), 5.0);
     assert_eq!(f(&snap["navByAccount"]["TFSA"][1]["netDeposits"]), 3.0);
     assert!(snap["navByAccount"]["TFSA"][0].get("accountId").is_none());
-    tables::replace_nav(&d.conn, &[
+    tables::replace_nav(&d.conn, &typed_rows(&[
         json!({"date": "2024-06-01", "equity": 20, "accountId": ""}),
         json!({"date": "2024-06-01", "equity": 8, "accountId": "TFSA"}),
-    ]).unwrap();
+    ])).unwrap();
     let snap = d.snapshot();
     assert_eq!(dates(&snap["navHistory"]), vec!["2024-06-01"]);
     assert_eq!(keys(&snap["navByAccount"]), ["TFSA"].iter().map(|s| s.to_string()).collect());
@@ -159,19 +160,19 @@ fn test_replace_nav_by_account_and_snapshot() {
 #[test]
 fn test_upsert_nav_keeps_existing_days() {
     let d = db();
-    tables::replace_nav(&d.conn, &[
+    tables::replace_nav(&d.conn, &typed_rows(&[
         json!({"date": "2024-01-01", "equity": 10, "accountId": ""}),
         json!({"date": "2024-01-01", "equity": 5, "accountId": "TFSA"}),
-    ]).unwrap();
-    tables::upsert_nav(&d.conn, &[
+    ])).unwrap();
+    tables::upsert_nav(&d.conn, &typed_rows(&[
         json!({"date": "2024-01-02", "equity": 11, "accountId": ""}),
         json!({"date": "2024-01-01", "equity": 6, "accountId": "TFSA"}),
-    ]).unwrap();
+    ])).unwrap();
     let snap = d.snapshot();
     assert_eq!(dates(&snap["navHistory"]), vec!["2024-01-01", "2024-01-02"]);
     assert_eq!(f(&snap["navHistory"][1]["equity"]), 11.0);
     assert_eq!(f(&snap["navByAccount"]["TFSA"][0]["equity"]), 6.0);
-    assert_eq!(Value::Object(tables::nav_last_dates(&d.conn).unwrap()), json!({"": "2024-01-02", "TFSA": "2024-01-01"}));
+    assert_eq!(json!(tables::nav_last_dates(&d.conn).unwrap()), json!({"": "2024-01-02", "TFSA": "2024-01-01"}));
 }
 
 /// WatchlistTest. The data-version assertion is the server crate's.

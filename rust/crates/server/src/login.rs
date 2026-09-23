@@ -452,7 +452,10 @@ pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<Val
             body.insert(k.into(), oauth[k].clone());
         }
     }
-    let ident = bagholder_ws::session::identity_from(&oauth);
+    let ident = {
+        let ids: bagholder_ws::session::IdentityKeys = serde_json::from_value(oauth.clone()).unwrap_or_default();
+        ids.identity()
+    };
     if !ident.is_empty() {
         body.insert("identity_canonical_id".into(), json!(ident));
     }

@@ -17,7 +17,7 @@ use serde_json::{json, Map, Value};
 use bagholder_store::orders as so;
 use bagholder_store::orders::{Bracket, BracketPatch, BracketStatus, Order, OrderPatch, OrderStatus, OrderType, Role, Side, SlKind, Source, SlMode, StopLoss, TakeProfit, TrailUnit};
 use serde::Deserialize;
-use bagholder_ws::session::{identity_from, CallError};
+use bagholder_ws::session::CallError;
 // the one real caller is compiled out of test builds, where no call reaches the network
 #[cfg(not(test))]
 use bagholder_ws::session::Client;
@@ -33,7 +33,7 @@ pub mod seam {
     pub type Gql = Arc<dyn Fn(&str, &Value) -> Result<Value, CallError> + Send + Sync>;
     pub static GQL: Mutex<Option<Gql>> = Mutex::new(None);
     pub static LIVE: Mutex<Option<bool>> = Mutex::new(None);
-    pub static SESSION: Mutex<Option<Option<Value>>> = Mutex::new(None);
+    pub static SESSION: Mutex<Option<Option<bagholder_ws::session::Session>>> = Mutex::new(None);
     /// 0: a spawned thread never runs; 1: it runs inline.
     pub static SPAWN_INLINE: AtomicBool = AtomicBool::new(false);
     pub fn reset() {

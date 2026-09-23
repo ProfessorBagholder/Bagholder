@@ -2,7 +2,7 @@
 //! Wealthsimple session and the work in flight, the derived model it serves,
 //! and the small tools every part of the server shares.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
@@ -352,13 +352,6 @@ pub fn truthy(v: Option<&Value>) -> bool {
         Some(Value::String(t)) => !t.is_empty(),
         Some(Value::Array(a)) => !a.is_empty(),
         Some(Value::Object(m)) => !m.is_empty(),
-    }
-}
-
-pub fn obj(v: Value) -> Map<String, Value> {
-    match v {
-        Value::Object(m) => m,
-        _ => Map::new(),
     }
 }
 

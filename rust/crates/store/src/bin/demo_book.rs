@@ -431,6 +431,13 @@ fn write_pull(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> std::io::Re
     Ok(())
 }
 
+/// Every row here comes from a `json!` literal built above; reading it back
+/// as the typed row the store now takes is exactly what a lenient reader is
+/// for, and it never fails on a shape this file itself just wrote.
+fn typed<T: serde::de::DeserializeOwned>(rows: &[Value]) -> Vec<T> {
+    rows.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect()
+}
+
 fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::Result<()> {
     std::fs::create_dir_all(dir).expect("create the data directory");
     let path = dir.join("bagholder.db");
@@ -439,12 +446,12 @@ fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::R
     let n = Cell::new(0u64);
     let new_id = || { n.set(n.get() + 1); format!("00000000-0000-4000-8000-{:012}", n.get()) };
     bagholder_store::merge::apply_wealthsimple_mapped(&conn, &b.acts, &new_id)?;
-    bagholder_store::admin::upsert_securities(&conn, lst, SYNCED)?;
-    bagholder_store::tables::replace_accounts(&conn, &accounts())?;
-    bagholder_store::admin::upsert_securities(&conn, &cash_securities(), SYNCED)?;
-    bagholder_store::tables::replace_balances(&conn, &balances())?;
-    bagholder_store::tables::replace_margin(&conn, &margin(), SYNCED)?;
-    bagholder_store::tables::replace_nav(&conn, nav)?;
+    bagholder_store::admin::upsert_securities(&conn, &typed(lst), SYNCED)?;
+    bagholder_store::tables::replace_accounts(&conn, &typed(&accounts()))?;
+    bagholder_store::admin::upsert_securities(&conn, &typed(&cash_securities()), SYNCED)?;
+    bagholder_store::tables::replace_balances(&conn, &typed(&balances()))?;
+    bagholder_store::tables::replace_margin(&conn, &typed(&margin()), SYNCED)?;
+    bagholder_store::tables::replace_nav(&conn, &typed(nav))?;
     bagholder_store::tables::set_meta(&conn, "synced_at", SYNCED)?;
     for (k, v) in kept_journal(b) {
         bagholder_store::admin::save_journal_entry(&conn, &k, Some(&v))?;

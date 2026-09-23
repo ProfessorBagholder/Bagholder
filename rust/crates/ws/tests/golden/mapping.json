@@ -10501,7 +10501,7 @@
       "currency": "CAD",
       "status": "open",
       "type": "SelfDirected",
-      "netLiquidationValue": "1000.50",
+      "netLiquidationValue": 1000.5,
       "marginAccountId": ""
     },
     {
@@ -10521,7 +10521,7 @@
       "currency": "CAD",
       "status": "open",
       "type": "SelfDirected",
-      "netLiquidationValue": "10.00",
+      "netLiquidationValue": 10.0,
       "marginAccountId": ""
     },
     {
@@ -10561,7 +10561,7 @@
       "currency": "CAD",
       "status": "closed",
       "type": "SelfDirected",
-      "netLiquidationValue": "0",
+      "netLiquidationValue": 0.0,
       "marginAccountId": ""
     },
     {
@@ -10581,7 +10581,7 @@
       "currency": "CAD",
       "status": "open",
       "type": "SelfDirected",
-      "netLiquidationValue": "999.99",
+      "netLiquidationValue": 999.99,
       "marginAccountId": "acc-margin-open"
     },
     {
@@ -10619,16 +10619,8 @@
     "acc-usd-1": "acc-cad-1"
   },
   "nav_account_groups": {
-    "Trading": [
-      "acc-cad-1",
-      "acc-usd-1"
-    ],
-    "Shared": [
-      "acc-nick-a",
-      "acc-nick-b"
-    ],
-    "SELF_DIRECTED_RRSP": [
-      "acc-no-nickname"
+    "Margin": [
+      "acc-margin-open"
     ],
     "ObsoleteAccount": [
       "acc-only-type"
@@ -10636,8 +10628,12 @@
     "OldMargin": [
       "acc-margin-closed"
     ],
-    "Margin": [
-      "acc-margin-open"
+    "SELF_DIRECTED_RRSP": [
+      "acc-no-nickname"
+    ],
+    "Shared": [
+      "acc-nick-a",
+      "acc-nick-b"
     ],
     "TFSA": [
       "acc-tfsa-boost"
@@ -10647,6 +10643,10 @@
     ],
     "TFSA3": [
       "acc-feature-nonfunctional"
+    ],
+    "Trading": [
+      "acc-cad-1",
+      "acc-usd-1"
     ]
   },
   "margin_account_ids": [

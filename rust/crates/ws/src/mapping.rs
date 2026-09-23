@@ -5,10 +5,12 @@
 //! is, which corporate action replaced a ticker -- is what the whole model
 //! then works from, and the stored copy is never rewritten afterwards.
 
-use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use bagholder_model::value::{compact, field_s, get, num};
+use bagholder_model::value::compact;
+use bagholder_store::broker::{Account, MappedActivity};
+
+use crate::wire::AccountNode;
 
 pub const MONTHS: [&str; 12] =
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
@@ -33,12 +35,10 @@ const CODE_CHANGE_BLOBS: [&str; 7] = [
     "NAMECHANGE",
 ];
 
-fn upper(v: &Value, key: &str) -> String {
-    field_s(v, key).to_uppercase()
-}
+use crate::wire::ActivityItem;
 
-fn n(v: &Value, key: &str) -> f64 {
-    num(get(v, key), 0.0)
+fn up(s: &str) -> String {
+    s.to_uppercase()
 }
 
 fn date_only(occurred: &str) -> String {
@@ -51,9 +51,8 @@ fn date_only(occurred: &str) -> String {
 
 /// An `EXCHANGE:` prefix is a venue, not part of
 /// the ticker.
-pub fn asset_symbol(item: &Value) -> String {
-    let raw = field_s(item, "assetSymbol");
-    let raw = raw.trim();
+pub fn asset_symbol(item: &ActivityItem) -> String {
+    let raw = item.asset_symbol.trim();
     let raw = if raw.to_uppercase().starts_with("EXCHANGE:") {
         raw.splitn(2, ':').nth(1).unwrap_or(raw)
     } else {
@@ -62,9 +61,8 @@ pub fn asset_symbol(item: &Value) -> String {
     raw.to_uppercase().trim().to_string()
 }
 
-pub fn counter_symbol(item: &Value) -> String {
-    let raw = field_s(item, "counterAssetSymbol");
-    let raw = raw.trim();
+pub fn counter_symbol(item: &ActivityItem) -> String {
+    let raw = item.counter_asset_symbol.trim();
     let raw = if raw.to_uppercase().starts_with("EXCHANGE:") {
         raw.splitn(2, ':').nth(1).unwrap_or(raw)
     } else {
@@ -74,52 +72,44 @@ pub fn counter_symbol(item: &Value) -> String {
 }
 
 /// `(type, subType, the four type fields joined)`.
-fn type_blob(item: &Value) -> (String, String, String) {
-    let typ = upper(item, "type").replace('-', "_");
-    let sub = upper(item, "subType").replace('-', "_");
-    let parts: Vec<String> = [
-        typ.clone(),
-        sub.clone(),
-        field_s(item, "aftTransactionType"),
-        field_s(item, "aftTransactionCategory"),
-    ]
-    .into_iter()
-    .filter(|x| !x.is_empty())
-    .map(|x| compact(&x))
-    .collect();
+fn type_blob(item: &ActivityItem) -> (String, String, String) {
+    let typ = up(&item.kind).replace('-', "_");
+    let sub = up(&item.sub_type).replace('-', "_");
+    let parts: Vec<String> = [typ.clone(), sub.clone(), item.aft_transaction_type.clone(), item.aft_transaction_category.clone()]
+        .into_iter()
+        .filter(|x| !x.is_empty())
+        .map(|x| compact(&x))
+        .collect();
     let blob = parts.join("_");
     (typ, sub, blob)
 }
 
 /// A corporate action, or a distribution that
 /// delivers shares rather than cash.
-pub fn is_corp_share_move(item: &Value) -> bool {
+pub fn is_corp_share_move(item: &ActivityItem) -> bool {
     let (typ, _sub, blob) = type_blob(item);
     if CORP_BLOBS.iter().any(|k| blob.contains(k)) {
         return true;
     }
-    let qty = n(item, "assetQuantity").abs();
-    let cash = n(item, "amount").abs();
+    let qty = item.asset_quantity.abs();
+    let cash = item.amount.abs();
     qty != 0.0
         && !asset_symbol(item).is_empty()
         && cash == 0.0
         && (compact(&typ).contains("DIVIDEND") || blob.contains("DISTRIBUT"))
 }
 
-pub fn is_code_change(item: &Value) -> bool {
+pub fn is_code_change(item: &ActivityItem) -> bool {
     let (_, _, blob) = type_blob(item);
     CODE_CHANGE_BLOBS.iter().any(|k| blob.contains(k))
 }
 
 /// Whether this row should not be stored.
-pub fn skip_activity(item: &Value) -> bool {
-    if !item.is_object() {
+pub fn skip_activity(item: &ActivityItem) -> bool {
+    if item.occurred_at.trim().is_empty() {
         return true;
     }
-    if field_s(item, "occurredAt").trim().is_empty() {
-        return true;
-    }
-    let status = compact(&field_s(item, "status"));
+    let status = compact(&item.status);
     let (typ, sub, blob) = type_blob(item);
 
     // Corporate actions often land as processed or empty, not posted.
@@ -149,11 +139,11 @@ pub fn skip_activity(item: &Value) -> bool {
 
 /// An OCC-ish display, so an option rolls up into
 /// the ticker it is written on.
-pub fn option_symbol(item: &Value) -> String {
+pub fn option_symbol(item: &ActivityItem) -> String {
     let under = asset_symbol(item);
-    let contract = field_s(item, "contractType");
-    let strike = get(item, "strikePrice");
-    let expiry = field_s(item, "expiryDate");
+    let contract = item.contract_type.clone();
+    let strike = item.strike_price;
+    let expiry = item.expiry_date.clone();
     if contract.is_empty() || strike.is_none() || expiry.is_empty() || under.is_empty() {
         return under;
     }
@@ -168,7 +158,7 @@ pub fn option_symbol(item: &Value) -> String {
         _ => return under,
     };
     let mon = MONTHS[month - 1];
-    let strike_f = match num(strike, f64::NAN) { v if !v.is_nan() => v, _ => return under };
+    let strike_f = match strike { Some(v) => v, None => return under };
     let cp = match contract.to_uppercase().as_str() {
         "C" | "CALL" => "CALL",
         "P" | "PUT" => "PUT",
@@ -179,10 +169,10 @@ pub fn option_symbol(item: &Value) -> String {
 
 /// Buys, withdrawals and the source side of a
 /// transfer are negative; sells, deposits and income positive.
-pub fn signed_cash(item: &Value) -> f64 {
-    let amount = n(item, "amount").abs();
-    let typ = upper(item, "type").replace('-', "_");
-    let sub = upper(item, "subType").replace('-', "_");
+pub fn signed_cash(item: &ActivityItem) -> f64 {
+    let amount = item.amount.abs();
+    let typ = up(&item.kind).replace('-', "_");
+    let sub = up(&item.sub_type).replace('-', "_");
     if ["DIY_BUY", "OPTIONS_BUY", "WITHDRAWAL"].contains(&typ.as_str())
         || (typ == "INTERNAL_TRANSFER" && sub.contains("SOURCE"))
     {
@@ -193,90 +183,129 @@ pub fn signed_cash(item: &Value) -> f64 {
     {
         return amount;
     }
-    let sign = field_s(item, "amountSign").trim().to_lowercase();
+    let sign = item.amount_sign.trim().to_lowercase();
     if ["negative", "debit", "-", "neg"].contains(&sign.as_str()) {
         return -amount;
     }
     if ["positive", "credit", "+", "pos"].contains(&sign.as_str()) {
         return amount;
     }
-    match get(item, "amount") {
-        None => 0.0,
-        Some(Value::String(s)) if s.is_empty() => 0.0,
-        Some(v) => num(Some(v), 0.0),
+    item.amount
+}
+
+/// The names and pools every activity row is mapped against: the nickname
+/// and broker type each account is known by, and the FIFO pool every account
+/// id resolves to, computed once rather than per row.
+#[derive(Default)]
+pub struct Accounts {
+    nick_or_type: HashMap<String, String>,
+    pools: HashMap<String, String>,
+}
+
+impl Accounts {
+    /// Built from the Wealthsimple accounts a sync just fetched.
+    pub fn from_nodes(nodes: &[AccountNode]) -> Self {
+        let mut nick_or_type = HashMap::new();
+        for a in nodes {
+            if a.id.is_empty() {
+                continue;
+            }
+            nick_or_type.insert(a.id.clone(), nick_of_node(a));
+        }
+        Accounts { nick_or_type, pools: fifo_pool_ids_from_nodes(nodes) }
+    }
+
+    /// Built from the store's own saved accounts, which carry no
+    /// `linkedAccount` -- a shared nickname is still enough to pool them.
+    pub fn from_stored(rows: &[Account]) -> Self {
+        let mut nick_or_type = HashMap::new();
+        let mut by_nick: Vec<(String, Vec<String>)> = Vec::new();
+        let mut order: Vec<String> = Vec::new();
+        for a in rows {
+            if a.id.is_empty() {
+                continue;
+            }
+            nick_or_type.insert(a.id.clone(), nick_of_stored(a));
+            if !order.contains(&a.id) {
+                order.push(a.id.clone());
+            }
+            let nick = a.nickname.trim().to_string();
+            if !nick.is_empty() {
+                match by_nick.iter_mut().find(|(k, _)| *k == nick) {
+                    Some((_, v)) => v.push(a.id.clone()),
+                    None => by_nick.push((nick, vec![a.id.clone()])),
+                }
+            }
+        }
+        let pools = union_pools(&order, &[], &by_nick);
+        Accounts { nick_or_type, pools }
+    }
+
+    fn account_type(&self, id: &str) -> String {
+        self.nick_or_type.get(id).cloned().unwrap_or_default()
+    }
+
+    /// The FIFO book an account id belongs to; an id nothing knows about is
+    /// its own pool.
+    pub fn pool(&self, id: &str) -> String {
+        self.pools.get(id).cloned().unwrap_or_else(|| id.to_string())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nick_or_type.is_empty()
     }
 }
 
-fn accounts_list(accounts: Option<&Value>) -> Vec<Value> {
-    match accounts {
-        Some(Value::Array(a)) => a.iter().filter(|x| x.is_object()).cloned().collect(),
-        Some(Value::Object(m)) => m.values().filter(|x| x.is_object()).cloned().collect(),
-        _ => vec![],
+fn nick_of_node(a: &AccountNode) -> String {
+    for v in [&a.nickname, &a.unified_account_type, &a.kind] {
+        if !v.is_empty() {
+            return v.clone();
+        }
     }
+    String::new()
+}
+
+fn nick_of_stored(a: &Account) -> String {
+    for v in [&a.nickname, &a.unified_account_type, &a.kind] {
+        if !v.is_empty() {
+            return v.clone();
+        }
+    }
+    String::new()
 }
 
 /// The nickname, else what the broker calls it.
-pub fn account_type(account_id: &str, accounts: Option<&Value>) -> String {
-    let recs = accounts_list(accounts);
-    if recs.is_empty() {
+pub fn account_type(account_id: &str, accounts: &Accounts) -> String {
+    if accounts.is_empty() {
         return String::new();
     }
-    // a map is keyed by id; a list is searched
-    if let Some(Value::Object(m)) = accounts {
-        if let Some(rec) = m.get(account_id) {
-            return nick_of(rec);
-        }
-    }
-    for a in &recs {
-        if field_s(a, "id") == account_id {
-            return nick_of(a);
-        }
-    }
-    String::new()
-}
-
-fn nick_of(rec: &Value) -> String {
-    for k in ["nickname", "unifiedAccountType", "type"] {
-        let v = field_s(rec, k);
-        if !v.is_empty() {
-            return v;
-        }
-    }
-    String::new()
+    accounts.account_type(account_id)
 }
 
 /// The nickname a NAV filter names, and the
 /// Wealthsimple ids behind it. The CAD and USD sides of one account share a
 /// nickname and so share a group.
-pub fn nav_account_groups(accounts: Option<&Value>) -> Map<String, Value> {
-    let mut groups: Map<String, Value> = Map::new();
-    for acc in accounts_list(accounts) {
-        let aid = field_s(&acc, "id").trim().to_string();
+pub fn nav_account_groups(nodes: &[AccountNode]) -> BTreeMap<String, Vec<String>> {
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for acc in nodes {
+        let aid = acc.id.trim().to_string();
         if aid.is_empty() {
             continue;
         }
-        let nick = nick_of(&acc).trim().to_string();
+        let nick = nick_of_node(acc).trim().to_string();
         if nick.is_empty() {
             continue;
         }
-        let bucket = groups.entry(nick).or_insert_with(|| Value::Array(vec![]));
-        let arr = bucket.as_array_mut().unwrap();
-        if !arr.iter().any(|x| x.as_str() == Some(aid.as_str())) {
-            arr.push(json!(aid));
+        let bucket = groups.entry(nick).or_default();
+        if !bucket.iter().any(|x| x == &aid) {
+            bucket.push(aid);
         }
     }
     groups
 }
 
-/// The CAD and USD sides of one Wealthsimple
-/// account share a single FIFO book.
-///
-/// A linked pair and a shared nickname both collapse to one root id; distinct
-/// nicknames stay separate.
-pub fn fifo_pool_ids(accounts: Option<&Value>) -> HashMap<String, String> {
-    let recs = accounts_list(accounts);
+fn union_pools(order: &[String], links: &[(String, String)], by_nick: &[(String, Vec<String>)]) -> HashMap<String, String> {
     let mut parent: HashMap<String, String> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
 
     fn find(parent: &mut HashMap<String, String>, x: &str) -> String {
         parent.entry(x.to_string()).or_insert_with(|| x.to_string());
@@ -301,32 +330,19 @@ pub fn fifo_pool_ids(accounts: Option<&Value>) -> HashMap<String, String> {
         }
     }
 
-    let mut by_nick: Vec<(String, Vec<String>)> = Vec::new();
-    for a in &recs {
-        let aid = field_s(a, "id");
-        if aid.is_empty() {
-            continue;
-        }
-        if !order.contains(&aid) {
-            order.push(aid.clone());
-        }
-        find(&mut parent, &aid);
-        let lid = a.get("linkedAccount").filter(|l| l.is_object()).map(|l| field_s(l, "id")).unwrap_or_default();
-        if !lid.is_empty() {
-            if !order.contains(&lid) {
-                order.push(lid.clone());
-            }
-            union(&mut parent, &aid, &lid);
-        }
-        let nick = field_s(a, "nickname").trim().to_string();
-        if !nick.is_empty() {
-            match by_nick.iter_mut().find(|(k, _)| *k == nick) {
-                Some((_, v)) => v.push(aid.clone()),
-                None => by_nick.push((nick, vec![aid.clone()])),
-            }
-        }
+    for id in order {
+        find(&mut parent, id);
     }
-    for (_, ids) in &by_nick {
+    for (a, b) in links {
+        if !order.contains(a) {
+            find(&mut parent, a);
+        }
+        if !order.contains(b) {
+            find(&mut parent, b);
+        }
+        union(&mut parent, a, b);
+    }
+    for (_, ids) in by_nick {
         if let Some((root, rest)) = ids.split_first() {
             for other in rest {
                 union(&mut parent, root, other);
@@ -334,11 +350,46 @@ pub fn fifo_pool_ids(accounts: Option<&Value>) -> HashMap<String, String> {
         }
     }
     let keys: Vec<String> = parent.keys().cloned().collect();
-    keys.iter().map(|k| (k.clone(), find(&mut parent, k))) .collect()
+    keys.iter().map(|k| (k.clone(), find(&mut parent, k))).collect()
 }
 
-fn is_option(item: &Value) -> bool {
-    !field_s(item, "contractType").is_empty()
+/// The CAD and USD sides of one Wealthsimple
+/// account share a single FIFO book.
+///
+/// A linked pair and a shared nickname both collapse to one root id; distinct
+/// nicknames stay separate.
+pub fn fifo_pool_ids_from_nodes(nodes: &[AccountNode]) -> HashMap<String, String> {
+    let mut order: Vec<String> = Vec::new();
+    let mut links: Vec<(String, String)> = Vec::new();
+    let mut by_nick: Vec<(String, Vec<String>)> = Vec::new();
+    for a in nodes {
+        let aid = a.id.clone();
+        if aid.is_empty() {
+            continue;
+        }
+        if !order.contains(&aid) {
+            order.push(aid.clone());
+        }
+        let lid = a.linked_account.as_ref().map(|l| l.id.clone()).unwrap_or_default();
+        if !lid.is_empty() {
+            if !order.contains(&lid) {
+                order.push(lid.clone());
+            }
+            links.push((aid.clone(), lid));
+        }
+        let nick = a.nickname.trim().to_string();
+        if !nick.is_empty() {
+            match by_nick.iter_mut().find(|(k, _)| *k == nick) {
+                Some((_, v)) => v.push(aid.clone()),
+                None => by_nick.push((nick, vec![aid.clone()])),
+            }
+        }
+    }
+    union_pools(&order, &links, &by_nick)
+}
+
+fn is_option(item: &ActivityItem) -> bool {
+    !item.contract_type.is_empty()
 }
 
 fn is_to_close(sub: &str) -> bool {
@@ -369,7 +420,7 @@ fn g(v: f64) -> String {
 }
 
 /// What the row is called in the ledger.
-fn human_desc(_item: &Value, typ: &str, sub: &str, symbol: &str, qty: f64, px: f64, _cash: f64) -> String {
+fn human_desc(typ: &str, sub: &str, symbol: &str, qty: f64, px: f64) -> String {
     let t = typ.to_uppercase().replace('-', "_");
     let s = sub.to_uppercase().replace('-', "_");
     let csub = compact(sub);
@@ -450,30 +501,27 @@ fn title_case(s: &str) -> String {
 /// One GraphQL row becomes two when a code
 /// change names a different ticker -- the old one going out, the new one
 /// coming in.
-pub fn map_activity_rows(item: &Value, accounts: Option<&Value>) -> Vec<Value> {
-    if !item.is_object() {
-        return vec![];
-    }
+pub fn map_activity_rows(item: &ActivityItem, accounts: &Accounts) -> Vec<MappedActivity> {
     let src = asset_symbol(item);
     let dst = counter_symbol(item);
-    let qty = n(item, "assetQuantity").abs();
+    let qty = item.asset_quantity.abs();
     if !src.is_empty() && !dst.is_empty() && src != dst && qty != 0.0 && is_corp_share_move(item) {
-        let cid = { let c = field_s(item, "canonicalId").trim().to_string(); if c.is_empty() { "swap".to_string() } else { c } };
+        let cid = { let c = item.canonical_id.trim().to_string(); if c.is_empty() { "swap".to_string() } else { c } };
         let mut rows = Vec::new();
         for (symbol, signed, sign, suffix) in [
             (src.clone(), -qty, "negative", ":out"),
             (dst.clone(), qty, "positive", ":in"),
         ] {
-            let mut m = item.as_object().cloned().unwrap_or_default();
-            m.insert("assetSymbol".into(), json!(symbol));
-            m.insert("counterAssetSymbol".into(), json!(""));
-            m.insert("type".into(), json!("STKDIS"));
-            m.insert("subType".into(), json!("STKDIS"));
-            m.insert("assetQuantity".into(), json!(signed));
-            m.insert("amount".into(), json!(0));
-            m.insert("amountSign".into(), json!(sign));
-            m.insert("canonicalId".into(), json!(format!("{}{}", cid, suffix)));
-            if let Some(r) = map_activity(&Value::Object(m), accounts) {
+            let mut leg = item.clone();
+            leg.asset_symbol = symbol;
+            leg.counter_asset_symbol = String::new();
+            leg.kind = "STKDIS".into();
+            leg.sub_type = "STKDIS".into();
+            leg.asset_quantity = signed;
+            leg.amount = 0.0;
+            leg.amount_sign = sign.to_string();
+            leg.canonical_id = format!("{}{}", cid, suffix);
+            if let Some(r) = map_activity(&leg, accounts) {
                 rows.push(r);
             }
         }
@@ -487,29 +535,29 @@ pub fn map_activity_rows(item: &Value, accounts: Option<&Value>) -> Vec<Value> {
 
 /// One `ActivityFeedItem` as a ledger row, or
 /// nothing when the row is not one the book keeps.
-pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
+pub fn map_activity(item: &ActivityItem, accounts: &Accounts) -> Option<MappedActivity> {
     if skip_activity(item) {
         return None;
     }
-    let occurred = field_s(item, "occurredAt").trim().to_string();
+    let occurred = item.occurred_at.trim().to_string();
     let transaction_date = date_only(&occurred);
     if transaction_date.is_empty() {
         return None;
     }
 
-    let account_id = field_s(item, "accountId");
-    let typ = upper(item, "type").replace('-', "_");
-    let sub = upper(item, "subType").replace('-', "_");
+    let account_id = item.account_id.clone();
+    let typ = up(&item.kind).replace('-', "_");
+    let sub = up(&item.sub_type).replace('-', "_");
     let ctyp = compact(&typ);
-    let qty_raw = n(item, "assetQuantity");
+    let qty_raw = item.asset_quantity;
     let qty_abs = qty_raw.abs();
     let cash = signed_cash(item);
-    let amount_abs = n(item, "amount").abs();
-    let fees = n(item, "fees").abs();
+    let amount_abs = item.amount.abs();
+    let fees = item.fees.abs();
     let is_opt = is_option(item);
     let mut symbol = if is_opt { option_symbol(item) } else { asset_symbol(item) };
 
-    let mut cur = upper(item, "currency");
+    let mut cur = up(&item.currency);
     if cur != "CAD" && cur != "USD" {
         cur = if is_opt { "USD".into() } else { "CAD".into() };
     }
@@ -645,11 +693,11 @@ pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
         activity_type = "STKDIS".into();
         category = "trade".into();
         unit_price = 0.0;
-        let sign = field_s(item, "amountSign").trim().to_lowercase();
+        let sign = item.amount_sign.trim().to_lowercase();
         let mut outgoing = qty_raw < 0.0 || ["negative", "debit", "-", "neg"].contains(&sign.as_str());
         // A lone international code change names the old ticker with a positive
         // quantity. Those shares were replaced, not bought.
-        if !outgoing && is_code_change(item) && counter_symbol(item).is_empty() && !compact(&field_s(item, "type")).contains("STKDIS") {
+        if !outgoing && is_code_change(item) && counter_symbol(item).is_empty() && !compact(&item.kind).contains("STKDIS") {
             outgoing = true;
         }
         if outgoing {
@@ -660,8 +708,8 @@ pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
             quantity = qty_abs;
         }
     } else {
-        activity_type = { let t = field_s(item, "type"); if t.is_empty() { "Other".into() } else { t } };
-        activity_sub = { let s = field_s(item, "subType"); if s.is_empty() { "other".into() } else { s } };
+        activity_type = { let t = item.kind.clone(); if t.is_empty() { "Other".into() } else { t } };
+        activity_sub = { let s = item.sub_type.clone(); if s.is_empty() { "other".into() } else { s } };
         category = "other".into();
     }
 
@@ -669,7 +717,7 @@ pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
         quantity = -qty_abs;
     }
 
-    let sign = field_s(item, "amountSign").trim().to_lowercase();
+    let sign = item.amount_sign.trim().to_lowercase();
     let direction = if ["negative", "debit", "-", "neg"].contains(&sign.as_str()) || cash < 0.0 {
         "DEBIT"
     } else if ["positive", "credit", "+", "pos"].contains(&sign.as_str()) || cash > 0.0 {
@@ -678,51 +726,48 @@ pub fn map_activity(item: &Value, accounts: Option<&Value>) -> Option<Value> {
         ""
     };
 
-    let mut cid = field_s(item, "canonicalId").trim().to_string();
+    let mut cid = item.canonical_id.trim().to_string();
     if bagholder_store::activities::looks_like_homemade_id(&cid) {
         cid = String::new();
     }
 
-    let desc = human_desc(item, &typ, &sub, &symbol, quantity, unit_price, cash);
+    let desc = human_desc(&typ, &sub, &symbol, quantity, unit_price);
     let name = {
-        let a = field_s(item, "aftOriginatorName");
+        let a = item.aft_originator_name.clone();
         if !a.is_empty() { a } else {
-            let i = field_s(item, "institutionName");
+            let i = item.institution_name.clone();
             if !i.is_empty() { i } else { symbol.clone() }
         }
     };
-    let fifo_id = match accounts {
-        Some(_) => fifo_pool_ids(accounts).get(&account_id).cloned().unwrap_or_else(|| account_id.clone()),
-        None => account_id.clone(),
-    };
-    let security_id = field_s(item, "securityId").trim().to_string();
+    let fifo_id = if accounts.is_empty() { account_id.clone() } else { accounts.pool(&account_id) };
+    let security_id = item.security_id.trim().to_string();
 
-    Some(json!({
-        "canonicalId": if cid.is_empty() { Value::Null } else { json!(cid) },
-        "occurredAt": occurred,
-        "transactionDate": transaction_date,
-        "settlementDate": transaction_date,
-        "accountId": account_id,
-        "bookId": account_id,
-        "fifoId": fifo_id,
-        "accountType": account_type(&account_id, accounts),
-        "activityType": activity_type,
-        "activitySubType": activity_sub,
-        "description": desc,
-        "direction": direction,
-        "symbol": symbol,
-        "name": name,
-        "currency": cur,
-        "quantity": quantity,
-        "unitPrice": unit_price,
-        "commission": fees,
-        "netCashAmount": cash,
-        "category": category,
-        "balance": Value::Null,
-        "source": "wealthsimple",
-        "rawType": field_s(item, "type"),
-        "aftType": field_s(item, "aftTransactionType"),
-        "counterSymbol": counter_symbol(item),
-        "securityId": if security_id.is_empty() { Value::Null } else { json!(security_id) },
-    }))
+    Some(MappedActivity {
+        canonical_id: if cid.is_empty() { None } else { Some(cid) },
+        occurred_at: occurred,
+        transaction_date: transaction_date.clone(),
+        settlement_date: transaction_date,
+        account_id: account_id.clone(),
+        book_id: account_id.clone(),
+        fifo_id,
+        account_type: account_type(&account_id, accounts),
+        activity_type,
+        activity_sub_type: activity_sub,
+        description: desc,
+        direction: direction.to_string(),
+        symbol,
+        name,
+        currency: cur,
+        quantity,
+        unit_price,
+        commission: fees,
+        net_cash_amount: cash,
+        category,
+        balance: None,
+        source: "wealthsimple".into(),
+        raw_type: item.kind.clone(),
+        aft_type: item.aft_transaction_type.clone(),
+        counter_symbol: counter_symbol(item),
+        security_id: if security_id.is_empty() { None } else { Some(security_id) },
+    })
 }

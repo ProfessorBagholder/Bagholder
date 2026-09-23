@@ -5,8 +5,6 @@
 use rusqlite::{Connection, Result};
 use serde_json::{json, Map, Value};
 
-use bagholder_model::value::{field_s, get};
-
 /// `SYNC_META_KEYS`: the bookmarks a wipe clears so the next sync starts
 /// from zero.
 pub const SYNC_META_KEYS: [&str; 3] = ["synced_at", "last_activity_pull", "security_id_backfill_done"];
@@ -16,31 +14,16 @@ pub const SYNC_META_KEYS: [&str; 3] = ["synced_at", "last_activity_pull", "secur
 pub const ACTIVITY_PULL_HOUR: u32 = 14;
 pub const ACTIVITY_PULL_MINUTE: u32 = 0;
 
-fn either(row: &Value, camel: &str, snake: &str) -> String {
-    let v = field_s(row, camel);
-    if v.is_empty() { field_s(row, snake) } else { v }
-}
-
-/// `upsert_securities`.
-pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result<()> {
+/// `upsert_securities`. Nothing passes a per-row `fetchedAt` today (the
+/// caller stamps them all at once), but a row that carries one keeps it.
+pub fn upsert_securities(conn: &Connection, rows: &[bagholder_model::securities::Security], now: &str) -> Result<()> {
     crate::atomically(conn, || {
-        for raw in rows {
-            if !raw.is_object() {
-                continue;
-            }
-            let sid = field_s(raw, "id").trim().to_string();
+        for sec in rows {
+            let sid = sec.id.trim().to_string();
             if sid.is_empty() {
                 continue;
             }
-            // the camelCase key wins only when it is present at all, even
-            // when empty
-            let under = match get(raw, "underlyingId") {
-                Some(v) => bagholder_model::value::s(Some(v)),
-                None => field_s(raw, "underlying_id"),
-            }
-            .trim()
-            .to_string();
-            let fetched = { let f = either(raw, "fetchedAt", "fetched_at"); if f.is_empty() { now.to_string() } else { f } };
+            let under = sec.underlying_id.trim().to_string();
             conn.execute(
                 "INSERT INTO securities (id, symbol, name, primary_exchange, primary_mic, currency, underlying_id, fetched_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
@@ -49,13 +32,13 @@ pub fn upsert_securities(conn: &Connection, rows: &[Value], now: &str) -> Result
                  currency = excluded.currency, underlying_id = excluded.underlying_id, fetched_at = excluded.fetched_at",
                 rusqlite::params![
                     sid,
-                    field_s(raw, "symbol"),
-                    field_s(raw, "name"),
-                    either(raw, "primaryExchange", "primary_exchange"),
-                    either(raw, "primaryMic", "primary_mic"),
-                    field_s(raw, "currency"),
+                    sec.symbol,
+                    sec.name,
+                    sec.primary_exchange,
+                    sec.primary_mic,
+                    sec.currency,
                     if under.is_empty() { None } else { Some(under) },
-                    fetched,
+                    now,
                 ],
             )?;
         }

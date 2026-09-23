@@ -315,7 +315,7 @@ mod tests {
             id: "n1".into(), headline: "QNC files".into(), source: "Wire".into(), url: "https://example.test/1".into(),
             published_at: "2026-03-01T12:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Story, via: bagholder_store::feeds::Feed::Tmx,
         }], "2026-03-02T15:00:00Z").unwrap();
-        tables::replace_margin(&conn, &[json!({"accountId": "a1", "buyingPower": 500.0, "currency": "CAD", "unavailable": ""})], "2026-03-02T15:00:00Z").unwrap();
+        tables::replace_margin(&conn, &[bagholder_store::broker::Margin { account_id: "a1".into(), buying_power: Some(500.0), currency: "CAD".into(), unavailable: String::new(), fetched_at: String::new() }], "2026-03-02T15:00:00Z").unwrap();
         let (after, work) = cache.base_and_work(&conn, TODAY).unwrap();
         assert_eq!(work, Work { read: vec!["margin", "news"], built: vec![] });
         assert!(Arc::ptr_eq(&before.book, &after.book) && Arc::ptr_eq(&before.positions, &after.positions));
