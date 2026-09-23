@@ -674,9 +674,18 @@ impl<'a> Matcher<'a> {
         self.out.unapplied.push((t.id.clone(), gaps));
     }
 
+    /// A transaction took out more than was held: what it did close is waiting on
+    /// what the rest was. The holding it emptied is flat afterwards, so nothing
+    /// later waits on it.
     fn beyond(&mut self, t: &Transaction, account: AccountId, instrument: InstrumentId, qty: Dec) {
         self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty });
-        self.taint(account, instrument, &Gaps::of(Gap::BeyondHeld(t.id.clone())));
+        let gap = Gap::BeyondHeld(t.id.clone());
+        let closer = Closer::Transaction(t.id.clone());
+        for trip in self.out.trips.values_mut().filter(|tr| tr.closed.contains(&t.id)) {
+            for s in trip.slices.iter_mut().filter(|s| s.closed_by == closer && s.instrument == instrument && s.account == account) {
+                s.taint.add(gap.clone());
+            }
+        }
     }
 
     /// Every contract past its expiry before `day` with lots still open: closed

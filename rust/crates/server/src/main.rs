@@ -6,7 +6,9 @@
 //! `http`.
 
 mod app;
+mod compare;
 mod docs;
+mod engine_inputs;
 mod events;
 mod feeds;
 mod http;
@@ -233,6 +235,10 @@ fn main() {
     // from a database kept today; nothing the app runs calls it yet
     if args.first().map(String::as_str) == Some("import-book") {
         std::process::exit(legacy_import::cli(&args[1..]));
+    }
+    // the new engine beside the old model on the same data (docs/plans/stage-2-engine.md)
+    if args.first().map(String::as_str) == Some("compare-figures") {
+        std::process::exit(compare::cli(&args[1..]));
     }
     let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
     if child || update::updates_off() {

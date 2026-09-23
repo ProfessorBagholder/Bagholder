@@ -12,10 +12,14 @@ bagholder-diff-derive = { path = "../diff-derive" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
 bagholder-ws = { path = "../ws" }
-# the book the app moves onto in stage 2 (docs/plans/stage-1-foundation.md); for now
-# only `bagholder import-book` writes it, from the database kept today
+# the book the app moves onto at the switch (docs/design-review.md, stage 3); for
+# now only `bagholder import-book` writes it, from the database kept today, and
+# `bagholder compare-figures` reads it
 bagholder-book = { path = "../book" }
 bagholder-core = { path = "../core" }
+# the engine the app moves onto at the switch; for now `compare-figures` runs it
+# beside the old model (docs/plans/stage-2-engine.md)
+bagholder-engine = { path = "../engine" }
 jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"

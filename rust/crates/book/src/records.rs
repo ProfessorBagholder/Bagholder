@@ -551,6 +551,19 @@ impl Book {
         Ok(out)
     }
 
+    /// Every live record's source key: what orders the transactions no instant
+    /// separates (`bagholder_engine::ledger`).
+    pub fn live_record_keys(&self) -> Result<BTreeMap<RecordId, String>> {
+        let mut stmt = self.conn().prepare_cached("SELECT id, source_key FROM source_records WHERE state = 'live'")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (id, key) = row?;
+            out.insert(text::parsed("source_records", "id", &id, RecordId::parse)?, key);
+        }
+        Ok(out)
+    }
+
     /// The live records of a source, oldest first.
     pub fn live_records(&self, source: &SourceName) -> Result<Vec<RecordId>> {
         let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND state = 'live' ORDER BY first_received_at, rowid")?;

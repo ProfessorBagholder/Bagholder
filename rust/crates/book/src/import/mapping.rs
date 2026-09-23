@@ -235,6 +235,11 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
     };
 
     let ty = opt(&row.activity_type).unwrap_or("");
+    // Wealthsimple's notice of a distribution to come, listing the units held on
+    // the record date with no cash, which the earlier app stored as a share
+    // movement: it is a dividend of no cash (a notice, not a payment), and it
+    // moves no position
+    let ty = if ty == "STKDIS" && opt(&row.raw_type) == Some("DIVIDEND") { "Dividend" } else { ty };
     let sub = opt(&row.activity_sub_type).unwrap_or("");
     let quantity = number("quantity", &row.quantity)?;
     let cash_stated = number("cash", &row.net_cash_amount)?;
