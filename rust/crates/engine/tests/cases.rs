@@ -348,6 +348,21 @@ fn run(path: &Path) -> Vec<String> {
                 }
             }
         }
+        for want in arr(&expect, "income") {
+            let sc = e.scope(&Filters::default());
+            let account = b.ids.account(s(&want, "account").unwrap());
+            let instrument = b.ids.instrument(s(&want, "instrument").unwrap());
+            let Some(h) = sc.cashflow.holdings.iter().find(|h| f.positions[h.position].account == account && f.positions[h.position].instrument == instrument) else {
+                c.fail(format!("no income holding {} {}", s(&want, "account").unwrap(), s(&want, "instrument").unwrap()));
+                continue;
+            };
+            if let Some(v) = want.get("all_time") {
+                c.money("income all time", v, &Ok(h.all_time.total));
+            }
+            if let Some(v) = want.get("trailing_year") {
+                c.money("income trailing year", v, &Ok(h.trailing_year.total));
+            }
+        }
         for want in arr(&expect, "checks") {
             let account = b.ids.account(s(&want, "account").unwrap());
             let Some(chk) = f.checks.iter().find(|x| x.account == account) else {

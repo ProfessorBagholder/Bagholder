@@ -729,7 +729,8 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
         .filter(|(_, p)| p.direction == Direction::Long && rates.contains_key(&p.instrument) && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
         .map(|(pi, p)| {
             let rate = rates.get(&p.instrument).cloned();
-            let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && keep(&rows[*i])));
+            // what this holding paid: its instrument, into its own account
+            let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && rows[*i].account == p.account && keep(&rows[*i])));
             let annual: Fig<Money> = match &rate {
                 Some(r) => r.annual_per_unit().and_then(|a| Ok(a.times(p.qty)?)),
                 None => Err(Gaps::none()),

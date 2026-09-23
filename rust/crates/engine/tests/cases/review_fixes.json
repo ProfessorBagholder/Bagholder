@@ -128,6 +128,21 @@
     "expect": {"trades": [{"opened_by": "t1", "pnl": "150.00"}]}
   },
   {
+    "name": "a holding's income is what was paid into its own account",
+    "spec": "SPEC.md §4 Cashflow Positions: one row per open long position per account; YTD and All time received from it",
+    "working": ["X held in A and in B; 100 paid into each: each holding's all-time income is 100, not 200"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "a1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "b1", "account": "B", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "a2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"},
+      {"id": "b2", "account": "B", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "dividend", "instrument": "X", "qty": "10", "cash": "100"}
+    ],
+    "expect": {"income": [{"account": "A", "instrument": "X", "all_time": "100.00", "trailing_year": "100.00"}, {"account": "B", "instrument": "X", "all_time": "100.00"}]}
+  },
+  {
     "name": "a read taken before a day's 16:30 does not show that day unpublished",
     "spec": "docs/plans/stage-2-engine.md, rates: a read that could not yet see a day's rate says nothing of that day",
     "working": [
