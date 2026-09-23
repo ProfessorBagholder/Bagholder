@@ -57,14 +57,14 @@ struct Search {
     q: String,
 }
 
-async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> Api {
+async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> Api<Value> {
     let pool = state.app.store();
     answer(move || bagholder_market::search::symbol_search(&pool, &s.q)).await
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
 /// its price and day change, not stored.
-async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
+async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<Value> {
     let app = state.app;
     answer(move || {
         let mut glance = bagholder_market::quotes::Glance::default();
@@ -81,7 +81,7 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
 }
 
 /// `GET /api/listing`: one listing's own page, held or not.
-async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
+async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<Value> {
     answer(move || feeds::listing_payload(&state.app, &l.symbol, &l.exchange, &l.currency, &l.name)).await
 }
 
@@ -94,7 +94,7 @@ struct Filings {
     refresh: bool,
 }
 
-async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api {
+async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api<Value> {
     let l = q.listing;
     if l.symbol.is_empty() {
         return Err(ApiError::BadRequest("symbol required".into()));
@@ -108,7 +108,7 @@ struct Scope {
     scope: String,
 }
 
-async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api {
+async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api<Value> {
     answer(move || serde_json::to_value(feeds::filings_feed(&state.app, &s.scope, 200)).unwrap_or(Value::Null)).await
 }
 
@@ -155,7 +155,7 @@ async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>,
     }
 }
 
-async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api {
+async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api<Value> {
     let (symbol, id) = d.named()?;
     answer(move || feeds::filings_enrich(&state.app, &symbol, &id)).await
 }
@@ -166,7 +166,7 @@ struct Fear {
     index: Option<String>,
 }
 
-async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api {
+async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api<Value> {
     answer(move || match feeds::fear_payload(&state.app, q.index.as_deref().unwrap_or("stocks")) {
         Ok(d) => serde_json::to_value(d).unwrap_or(Value::Null),
         Err(e) => json!({"ok": false, "error": e}),
@@ -183,7 +183,7 @@ struct Shorts {
     trend: bool,
 }
 
-async fn shorts(State(state): State<AppState>, Params(q): Params<Shorts>) -> Api {
+async fn shorts(State(state): State<AppState>, Params(q): Params<Shorts>) -> Api<Value> {
     let l = q.listing;
     answer(move || match feeds::shorts_payload(&state.app, &l.symbol, some(&l.exchange), some(&l.currency), q.trend) {
         Ok(d) => serde_json::to_value(d).unwrap_or(Value::Null),
@@ -192,32 +192,32 @@ async fn shorts(State(state): State<AppState>, Params(q): Params<Shorts>) -> Api
     .await
 }
 
-async fn shorts_feed(State(state): State<AppState>) -> Api {
+async fn shorts_feed(State(state): State<AppState>) -> Api<Value> {
     answer(move || serde_json::to_value(feeds::shorts_feed(&state.app)).unwrap_or(Value::Null)).await
 }
 
-async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {
+async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<Value> {
     answer(move || feeds::news_symbol_payload(&state.app, &l.symbol, &l.exchange, &l.currency)).await
 }
 
 /// `GET /api/history`: a chart's bars. Its parameters are read by the history
 /// module itself, which is also handed them by the documents (`history:<query>`).
-async fn history(State(state): State<AppState>, RawQuery(query): RawQuery) -> Api {
+async fn history(State(state): State<AppState>, RawQuery(query): RawQuery) -> Api<Value> {
     answer(move || feeds::history_payload(&state.app, query.as_deref().unwrap_or(""))).await
 }
 
-async fn markets_refresh(State(state): State<AppState>) -> Api {
+async fn markets_refresh(State(state): State<AppState>) -> Api<Value> {
     answer(move || feeds::kick_universes(&state.app)).await
 }
 
 // The three writes below hand their body to the module that owns the rows; it
 // becomes a typed request with the typed watchlist and tiles (stage 5).
 
-async fn watchlist_add(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
+async fn watchlist_add(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api<Value> {
     answer(move || feeds::watch_add(&state.app, &Value::Object(body))).await
 }
 
-async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api {
+async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<Map<String, Value>>) -> Api<Value> {
     answer(move || feeds::watch_remove(&state.app, &Value::Object(body))).await
 }
 
@@ -229,6 +229,6 @@ struct TilesSet {
     tiles: Vec<bagholder_model::input::TileRef>,
 }
 
-async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api {
+async fn tiles_set(State(state): State<AppState>, Body(body): Body<TilesSet>) -> Api<Value> {
     answer(move || feeds::tiles_set(&state.app, &body.tiles)).await
 }

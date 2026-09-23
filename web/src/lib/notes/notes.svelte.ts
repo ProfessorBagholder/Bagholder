@@ -4,7 +4,7 @@
 // happened (`at`, a day or a full timestamp), and its link (a filed document id
 // with its source, or an external url). Drives the timestamp word and the click
 // target, exactly as ledger.html's noteWhenWord/noteOpen read n.extra.
-import { post } from '../api'
+import { call } from '../api'
 import { watchDoc, type Holder } from '../live'
 import { arrived } from './channel.svelte'
 
@@ -67,7 +67,7 @@ export async function markAllRead(): Promise<void> {
   const now = new Date().toISOString()
   doc.data.rows.forEach((n) => { if (!n.readAt) n.readAt = now })
   doc.data.unread = 0
-  await post('/api/notifications/read')
+  await call('POST /api/notifications/read', { body: { ids: null } })
 }
 
 export async function clearNotes(): Promise<void> {
@@ -75,5 +75,5 @@ export async function clearNotes(): Promise<void> {
     doc.data.rows.splice(0)
     doc.data.unread = 0
   }
-  await post('/api/notifications/clear')
+  await call('POST /api/notifications/clear')
 }

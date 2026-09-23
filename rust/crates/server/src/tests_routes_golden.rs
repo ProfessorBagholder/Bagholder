@@ -1,0 +1,142 @@
+//! Golden (characterisation) test for the HTTP routes ahead of the
+//! `Value` -> typed-answer conversion (stage 5d7d): the exact JSON answer
+//! for one representative request per route, pinned before any route is
+//! converted so a change in shape -- not just a change in the Rust type
+//! that builds it -- is caught.
+//!
+//! On an app and a store of its own, not `tests_common`'s shared one: every
+//! other test in this binary shares one app and one store (serialized by
+//! `tests_common::guard`), and several insert accounts, securities or
+//! activities that would otherwise show up in `/api/book` and `/api/data`
+//! here, in whatever order the suite happens to run. `tests_common::guard`
+//! is still taken, only to serialize the process-wide environment
+//! variables this test sets (`BAGHOLDER_DRY_ORDERS`, `notify::MODE_ENV`)
+//! against the shared app's own tests setting them.
+//!
+//! Only routes whose one representative request neither reaches the
+//! network nor opens a real socket are exercised here: the local reads and
+//! writes of `http::model` and `http::notifications`, and the two
+//! `http::markets` lookups whose empty input answers before any request
+//! goes out. `http::orders`, `http::session` and the rest of
+//! `http::markets` reach Wealthsimple or a market-data provider even to
+//! build a "not connected" answer in some branches, or kick a background
+//! refresh; they stay untyped until stage 5d7d has a way to fake those
+//! upstreams for a test.
+//!
+//! After an intended change to one of these routes' answer shape:
+//! `BAGHOLDER_BLESS=1 cargo test -p bagholder-server tests_routes_golden`,
+//! then read the diff in `tests/golden/routes.json` before committing it.
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{header, Method, Request};
+use serde_json::{json, Map, Value};
+use tower::ServiceExt;
+
+use crate::app::App;
+use crate::http::{router, AppState};
+
+/// An app on a temp home of its own -- nothing another test wrote is in it,
+/// and nothing this test writes is seen by another.
+fn isolated() -> Arc<App> {
+    let dir = std::env::temp_dir().join(format!("bh-routes-golden-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let app = App::new(dir, root, "127.0.0.1".into());
+    bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+    app
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
+}
+
+fn from_the_page(app: &Arc<App>, method: Method, uri: &str, body: Option<Value>) -> Request<Body> {
+    let host = format!("127.0.0.1:{}", *app.port.lock().unwrap());
+    let mut req = Request::builder().method(method).uri(uri).header(header::HOST, host).header("sec-fetch-site", "same-origin");
+    let text = body.map(|b| b.to_string());
+    if text.is_some() {
+        req = req.header(header::CONTENT_TYPE, "application/json");
+    }
+    let mut req = req.body(Body::from(text.unwrap_or_default())).unwrap();
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000))));
+    req
+}
+
+async fn json_of(app: Arc<App>, req: Request<Body>) -> Value {
+    let res = router(AppState { app }).oneshot(req).await.unwrap();
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    json!({"status": status, "body": body})
+}
+
+/// One route's name, and the request that answers it without touching the
+/// network or opening a socket.
+fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
+    let req = |method: Method, uri: &str, body: Option<Value>| from_the_page(app, method, uri, body);
+    vec![
+        ("status", req(Method::GET, "/api/status", None)),
+        ("book", req(Method::GET, "/api/book", None)),
+        ("data", req(Method::GET, "/api/data", None)),
+        ("trade_missing", req(Method::GET, "/api/trade?id=golden-no-such-trade", None)),
+        ("journal", req(Method::POST, "/api/journal", Some(json!({"id": "golden-journal", "grade": "B", "tags": ["golden"], "thesis": "golden fixture"})))),
+        ("groups", req(Method::POST, "/api/groups", Some(json!({"groups": []})))),
+        ("notes", req(Method::POST, "/api/notes", Some(json!({"notes": {}})))),
+        ("watch_status", req(Method::GET, "/api/watch", None)),
+        ("notifications_list", req(Method::GET, "/api/notifications", None)),
+        ("notifications_settings", req(Method::POST, "/api/notifications/settings", Some(json!({"fills": true})))),
+        ("notifications_test", req(Method::POST, "/api/notifications/test", None)),
+        ("notifications_read", req(Method::POST, "/api/notifications/read", Some(json!({"ids": [999_999_999]})))),
+        ("notifications_seen", req(Method::POST, "/api/notifications/seen", Some(json!({"ids": [999_999_999]})))),
+        ("symbols_search_empty", req(Method::GET, "/api/symbols/search?q=", None)),
+        ("symbols_quote_empty", req(Method::GET, "/api/symbols/quote", None)),
+    ]
+}
+
+/// Blanks the store's own path (this test's temp folder) and the app's own
+/// start time (now, every run).
+fn scrub(mut v: Value) -> Value {
+    if let Some(b) = v.get_mut("body") {
+        if let Some(p) = b.get_mut("path") {
+            *p = json!("<db-path>");
+        }
+        if let Some(s) = b.get_mut("startedAt") {
+            *s = json!("<started-at>");
+        }
+    }
+    v
+}
+
+#[test]
+fn test_routes_golden() {
+    let _g = crate::tests_common::guard();
+    std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
+    // "browser" keeps `notifications_test` from reaching this machine's own notifications
+    std::env::set_var(crate::notify::MODE_ENV, "browser");
+    let app = isolated();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/routes.json");
+    let got: Map<String, Value> = runtime().block_on(async {
+        let mut m = Map::new();
+        for (name, req) in cases(&app) {
+            m.insert(name.to_string(), scrub(json_of(app.clone(), req).await));
+        }
+        m
+    });
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, serde_json::to_string_pretty(&Value::Object(got)).unwrap() + "\n").unwrap();
+        return;
+    }
+    let want: Map<String, Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default();
+    let mut names: Vec<&String> = got.keys().chain(want.keys()).collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        assert_eq!(got.get(name), want.get(name), "route {} answers differently than the golden pins", name);
+    }
+}

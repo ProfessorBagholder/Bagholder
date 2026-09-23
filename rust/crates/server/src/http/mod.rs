@@ -35,7 +35,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::json;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -52,14 +53,67 @@ pub struct AppState {
     pub app: Arc<App>,
 }
 
-/// What a JSON route answers.
-pub type Api = Result<Json<Value>, ApiError>;
+/// What a JSON route answers: `Value` while a module is still untyped, the
+/// route's own answer type once it is converted (stage 5d7d).
+pub type Api<T> = Result<Json<T>, ApiError>;
 
 /// The most a request body may be. The page's largest is a CSV import.
 const BODY_LIMIT: usize = 32 * 1024 * 1024;
 /// The longest a route that answers once may take: the slowest are a forced
 /// re-read of a listing's filings and an order's round trip to Wealthsimple.
 const ROUTE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// One entry in the route table (`api_routes!`): how the page calls a route
+/// and the TypeScript names of what it exchanges, for `routes.ts`. Read by
+/// `tests_types.rs`, which only runs under `#[cfg(test)]`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct RouteEntry {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub query: Option<&'static str>,
+    pub body: Option<&'static str>,
+    pub answer: &'static str,
+}
+
+/// One module's routes, and the table entries a converted module contributes
+/// (empty for a module still on `Api<Value>`).
+pub struct Routed {
+    pub router: Router<AppState>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub table: Vec<RouteEntry>,
+}
+
+/// A method/path declared with its handler and the TypeScript names of its
+/// query, body and answer, in one place: it both adds the axum route and
+/// pushes the route's table entry. `query`/`body` are left out for a route
+/// that reads neither.
+macro_rules! api_routes {
+    ($($method:ident $path:literal => $handler:expr $(, query: $query:literal)? $(, body: $body:literal)?, answer: $answer:literal);* $(;)?) => {{
+        #[allow(unused_mut)]
+        let mut router = axum::Router::new();
+        #[allow(unused_mut)]
+        let mut table = Vec::new();
+        $(
+            router = router.route($path, axum::routing::$method($handler));
+            #[allow(unused_mut, unused_assignments)]
+            let mut query = None;
+            $(query = Some($query);)?
+            #[allow(unused_mut, unused_assignments)]
+            let mut body = None;
+            $(body = Some($body);)?
+            table.push($crate::http::RouteEntry { method: stringify!($method), path: $path, query, body, answer: $answer });
+        )*
+        $crate::http::Routed { router, table }
+    }};
+}
+pub(crate) use api_routes;
+
+/// The route table: every route `api_routes!` declared, from every module —
+/// what `tests_types.rs` turns into `web/src/lib/generated/routes.ts`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn route_table() -> Vec<RouteEntry> {
+    notifications::routes().table
+}
 
 /// Run synchronous work on the blocking pool. Work that panics is a 500; the
 /// panic itself has been logged by the process's hook.
@@ -68,12 +122,12 @@ pub async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'stat
 }
 
 /// Synchronous work that answers a JSON value.
-pub async fn answer(work: impl FnOnce() -> Value + Send + 'static) -> Api {
+pub async fn answer<T: Serialize + Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Api<T> {
     Ok(Json(blocking(work).await?))
 }
 
 /// Synchronous work on a connection to the store.
-pub async fn with_store(state: &AppState, work: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value> + Send + 'static) -> Api {
+pub async fn with_store<T: Serialize + Send + 'static>(state: &AppState, work: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T> + Send + 'static) -> Api<T> {
     let app = state.app.clone();
     Ok(Json(blocking(move || app.open().and_then(|conn| work(&conn))).await??))
 }
@@ -84,7 +138,7 @@ pub fn router(state: AppState) -> Router {
         .merge(markets::routes())
         .merge(orders::routes())
         .merge(session::routes())
-        .merge(notifications::routes())
+        .merge(notifications::routes().router)
         .route("/api/events/watch", post(stream::watch))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, ROUTE_TIMEOUT));
     let streams = Router::new()

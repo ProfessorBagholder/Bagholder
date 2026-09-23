@@ -3,7 +3,7 @@
 // is this browser asked to, under the browser's own permission, which it gives only on
 // a click. The kinds are the server's settings; the permission is this browser's.
 
-import { post } from '../api'
+import { call } from '../api'
 import { store } from '../state.svelte'
 import { ui } from '../ui.svelte'
 import { panel } from '../orders/orders.svelte'
@@ -54,7 +54,7 @@ function ask(): Promise<boolean> {
 function save(patch: Record<string, boolean>): void {
   const cur = store.model?.status?.notify
   if (cur) Object.assign(cur, patch)
-  void post('/api/notifications/settings', patch)
+  void call('POST /api/notifications/settings', { body: patch })
 }
 
 export async function notifyToggle(kind: string): Promise<void> {
@@ -71,7 +71,7 @@ export async function notifyTest(): Promise<void> {
   const c = channel()
   if (c === 'unavailable' || c === 'denied') return
   if (c === 'default' && !(await ask())) return
-  void post('/api/notifications/test')
+  void call('POST /api/notifications/test')
 }
 
 /** What a notification leads to when it is about an order or a listing the book holds. */
@@ -99,11 +99,11 @@ export function arrived(n: Note): void {
   if (ui.notesOpen) {
     // the panel is open: it is read as it lands
     n.readAt = new Date().toISOString()
-    void post('/api/notifications/read', { ids: [n.id] })
+    void call('POST /api/notifications/read', { body: { ids: [n.id] } })
   }
   if (channel() !== 'granted' || n.seenAt) return
   n.seenAt = new Date().toISOString()
-  void post('/api/notifications/seen', { ids: [n.id] })
+  void call('POST /api/notifications/seen', { body: { ids: [n.id] } })
   let banner: Notification
   try {
     banner = new Notification(n.title, { body: n.body || '', icon: '/favicon.png', tag: 'bh-' + n.id })

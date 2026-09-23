@@ -400,3 +400,5 @@ mod tests_orders;
 mod tests_types;
 #[cfg(test)]
 mod tests_docs_golden;
+#[cfg(test)]
+mod tests_routes_golden;

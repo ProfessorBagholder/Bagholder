@@ -24,17 +24,17 @@ pub fn routes() -> Router<AppState> {
         .route("/api/update", post(start_update))
 }
 
-async fn login_start(State(state): State<AppState>) -> Api {
+async fn login_start(State(state): State<AppState>) -> Api<Value> {
     answer(move || login::start_login_browser(&state.app)).await
 }
 
-async fn login_cancel(State(state): State<AppState>) -> Api {
+async fn login_cancel(State(state): State<AppState>) -> Api<Value> {
     answer(move || login::cancel_login(&state.app)).await
 }
 
 /// `POST /api/login/input`: a click, a key or a scroll on the streamed window,
 /// passed to the browser as the DevTools event it names.
-async fn login_input(State(state): State<AppState>, Body(event): Body<Map<String, Value>>) -> Api {
+async fn login_input(State(state): State<AppState>, Body(event): Body<Map<String, Value>>) -> Api<Value> {
     answer(move || login::login_input(&state.app, &Value::Object(event))).await
 }
 
@@ -47,16 +47,16 @@ async fn login_frame(State(state): State<AppState>) -> Result<Response, ApiError
 }
 
 /// `POST /api/capture`: tokens handed over by hand (the fallback to the window).
-async fn capture(State(state): State<AppState>, Body(tokens): Body<Map<String, Value>>) -> Api {
+async fn capture(State(state): State<AppState>, Body(tokens): Body<Map<String, Value>>) -> Api<Value> {
     answer(move || session::capture_tokens(&state.app, &Value::Object(tokens))).await
 }
 
-async fn refresh(State(state): State<AppState>) -> Api {
+async fn refresh(State(state): State<AppState>) -> Api<Value> {
     answer(move || session::refresh_now(&state.app)).await
 }
 
 /// `POST /api/sync`: start a pull; its progress reaches the page as status changes.
-async fn sync(State(state): State<AppState>) -> Api {
+async fn sync(State(state): State<AppState>) -> Api<Value> {
     let app = state.app;
     answer(move || {
         if session::load_session(&app).is_none() {
@@ -72,11 +72,11 @@ async fn sync(State(state): State<AppState>) -> Api {
     .await
 }
 
-async fn disconnect(State(state): State<AppState>) -> Api {
+async fn disconnect(State(state): State<AppState>) -> Api<Value> {
     blocking(move || session::delete_session(&state.app)).await?;
     Ok(Json(json!({"ok": true})))
 }
 
-async fn start_update(State(state): State<AppState>) -> Api {
+async fn start_update(State(state): State<AppState>) -> Api<Value> {
     answer(move || update::start_update(&state.app)).await
 }

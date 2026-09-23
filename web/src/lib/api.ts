@@ -9,6 +9,7 @@
 // things looked up on demand.
 
 import type { SymbolMatch } from './model'
+import type { Routes } from './generated/routes'
 
 export type Answer<T = Record<string, unknown>> = T & { ok?: boolean; error?: string }
 
@@ -42,6 +43,24 @@ export function get<T = Record<string, unknown>>(path: string, params?: Record<s
 
 export function post<T = Record<string, unknown>>(path: string, body?: unknown): Promise<Answer<T>> {
   return request<T>('POST', path, body ?? {})
+}
+
+// ---- the route table -----------------------------------------------------------
+// `Routes` (generated/routes.ts) is the server's own account of every route: a
+// key of `'METHOD /path'`, and the query, body and answer it carries. `call`
+// splits the key back into a method and a path and sends what the route
+// declares, so a route the server no longer answers this way, or answers
+// differently, fails `npm run check` here rather than at the network.
+
+type RouteKey = keyof Routes
+/** What `key` takes besides its answer: `{ query }`, `{ body }`, both or neither. */
+type RouteInput<K extends RouteKey> = Omit<Routes[K], 'answer'>
+
+export function call<K extends RouteKey>(key: K, input?: RouteInput<K>, signal?: AbortSignal): Promise<Answer<Routes[K]['answer']>> {
+  const [method, path] = key.split(' ', 2) as ['GET' | 'POST', string]
+  const given = input as { query?: Record<string, Param>; body?: unknown } | undefined
+  const q = given?.query ? query(given.query) : ''
+  return request<Routes[K]['answer']>(method, q ? path + '?' + q : path, given?.body, signal)
 }
 
 // ---- what is looked up on demand ---------------------------------------------------

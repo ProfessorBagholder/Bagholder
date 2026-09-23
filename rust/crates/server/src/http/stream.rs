@@ -80,7 +80,7 @@ pub struct Watch {
 }
 
 /// `POST /api/events/watch`
-pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api {
+pub async fn watch(axum::extract::State(state): axum::extract::State<AppState>, Body(w): Body<Watch>) -> Api<Value> {
     let app = state.app;
     let ok = blocking(move || app.events.watch(&app, w.id, w.docs.into_iter().collect())).await?;
     Ok(Json(json!({"ok": ok})))

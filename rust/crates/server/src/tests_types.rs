@@ -16,6 +16,7 @@ use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderT
 
 use bagholder_store::activities::ActivityRow;
 use bagholder_store::csvimport::{CsvFile, ImportReport, ScanReport, ScannedFile, Skipped, StatusFile, WatchSet, WatchStatus};
+use bagholder_store::feeds::{Notification, NotificationExtra};
 
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::orders::{Appended, OrderCard, OrdersDoc};
@@ -195,4 +196,72 @@ fn test_the_pages_status_types_are_the_servers() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/status.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The notification list's own types, generated to `web/src/lib/generated/notifications.ts`
+/// -- a field renamed, added or made nullable on any of these fails the page's type check.
+fn notifications_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![
+        NotificationExtra, Notification, crate::notify::NotifySettingsPatch, crate::notify::NotificationIds,
+        crate::notify::NotificationsAnswer, crate::notify::NotifySettingsAnswer, crate::notify::NotifyTestAnswer,
+        crate::notify::NotificationsReadAnswer, crate::notify::NotificationsSeenAnswer, crate::notify::NotificationsClearAnswer,
+    ];
+    let mut out = String::from(
+        "// Generated from rust/crates/store/src/feeds.rs and the server's notify module. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_notifications_types`.\n\nimport type { NotifyStatus } from './status'\n\n",
+    );
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_notifications_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/notifications.ts");
+    let want = notifications_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/notifications.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The route table, generated to `web/src/lib/generated/routes.ts` -- a route
+/// added, moved or given a different request or answer type fails the page's
+/// type check on `call()`.
+fn routes_declarations() -> String {
+    let mut out = String::from("// Generated from the server's route table (`api_routes!`). Do not edit: change the\n// route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.\n\nimport type { NotificationIds, NotificationsAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotificationsClearAnswer } from './notifications'\n\nexport interface Routes {\n");
+    for e in crate::http::route_table() {
+        let key = format!("{} {}", e.method.to_uppercase(), e.path);
+        let mut fields = Vec::new();
+        if let Some(q) = e.query {
+            fields.push(format!("query: {}", q));
+        }
+        if let Some(b) = e.body {
+            fields.push(format!("body: {}", b));
+        }
+        fields.push(format!("answer: {}", e.answer));
+        out.push_str(&format!("  '{}': {{ {} }}\n", key, fields.join("; ")));
+    }
+    out.push_str("}\n");
+    out
+}
+
+#[test]
+fn test_the_pages_routes_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/routes.ts");
+    let want = routes_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/routes.ts is not what the server's route table generates: run with BAGHOLDER_BLESS=1 and check the page");
 }

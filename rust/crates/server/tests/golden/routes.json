@@ -1,0 +1,217 @@
+{
+  "status": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "connected": false,
+      "email": "",
+      "lastSync": "",
+      "activityCount": 0,
+      "accountCount": 0,
+      "capturing": false,
+      "syncing": false,
+      "listingsFilling": false,
+      "syncStep": "",
+      "error": "",
+      "summaryReady": false,
+      "protocol": "2026-09-19.1",
+      "startedAt": "<started-at>",
+      "version": "1.46.3",
+      "latestVersion": "",
+      "updateAvailable": false,
+      "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
+      "canUpdate": false,
+      "updateBy": "app",
+      "loginView": false,
+      "ordersLive": false,
+      "openOrders": 0,
+      "updating": "",
+      "updateError": "",
+      "notify": {
+        "fills": false,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      },
+      "newsReading": [],
+      "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23",
+      "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23"
+    }
+  },
+  "book": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "activities": [],
+      "accounts": [],
+      "balances": [],
+      "navHistory": [],
+      "navByAccount": {},
+      "syncedAt": "",
+      "tradeGroups": [],
+      "notes": {},
+      "securities": []
+    }
+  },
+  "data": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "path": "<db-path>",
+      "activities": 0,
+      "firstActivity": "",
+      "lastActivity": "",
+      "accounts": 0,
+      "balances": 0,
+      "navDays": 0,
+      "securities": 0,
+      "journal": 0,
+      "fxDays": 0,
+      "benchmarkDays": 0,
+      "filings": 0,
+      "syncedAt": "",
+      "sessionPresent": false
+    }
+  },
+  "trade_missing": {
+    "status": 404,
+    "body": {
+      "ok": false,
+      "error": "no such trade"
+    }
+  },
+  "journal": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "journal": {
+        "golden-journal": {
+          "thesis": "golden fixture",
+          "tags": [
+            "golden"
+          ],
+          "grade": "B"
+        }
+      }
+    }
+  },
+  "groups": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "groups": []
+    }
+  },
+  "notes": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "notes": {}
+    }
+  },
+  "watch_status": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "path": "<db-path>",
+      "watching": false,
+      "lastScan": "",
+      "files": []
+    }
+  },
+  "notifications_list": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "settings": {
+        "fills": false,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      },
+      "kinds": [
+        "fills",
+        "problems",
+        "connection",
+        "updates",
+        "releases",
+        "disclosures"
+      ],
+      "rows": [],
+      "unread": 0
+    }
+  },
+  "notifications_settings": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "settings": {
+        "fills": true,
+        "problems": false,
+        "connection": false,
+        "updates": false,
+        "releasesHeld": false,
+        "releasesWatched": false,
+        "releasesAll": false,
+        "disclosuresHeld": false,
+        "disclosuresWatched": false,
+        "disclosuresAll": false,
+        "native": "",
+        "unread": 0
+      }
+    }
+  },
+  "notifications_test": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "id": 1
+    }
+  },
+  "notifications_read": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "read": 0
+    }
+  },
+  "notifications_seen": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "seen": 0
+    }
+  },
+  "symbols_search_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "matches": []
+    }
+  },
+  "symbols_quote_empty": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "price": null,
+      "priceChange": null,
+      "percentChange": null
+    }
+  }
+}

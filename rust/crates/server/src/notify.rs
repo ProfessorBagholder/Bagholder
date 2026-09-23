@@ -134,28 +134,38 @@ impl NotifySettings {
 
 /// `POST /api/notifications/settings`: the switches that changed, by name.
 /// Unknown keys and non-booleans are ignored, as they always were.
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct NotifySettingsPatch {
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub fills: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub problems: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub connection: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub updates: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub releases_held: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub releases_watched: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub releases_all: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub disclosures_held: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub disclosures_watched: Option<bool>,
     #[serde(deserialize_with = "lenient_bool_patch")]
+    #[ts(optional)]
     pub disclosures_all: Option<bool>,
 }
 
@@ -246,6 +256,59 @@ pub struct NotificationsDoc {
 /// The kinds, the native channel, and the unread count.
 pub fn status(conn: &Connection) -> Result<NotifyStatus> {
     Ok(NotifyStatus { settings: settings(conn)?, native: native_channel(), unread: bagholder_store::feeds::unread_notifications(conn)? })
+}
+
+/// `GET /api/notifications`: the settings, kinds, the list and the unread
+/// count -- everything the bell's panel needs, opened cold.
+#[derive(Serialize, TS)]
+pub struct NotificationsAnswer {
+    pub ok: bool,
+    pub settings: NotifyStatus,
+    pub kinds: Vec<String>,
+    pub rows: Vec<bagholder_store::feeds::Notification>,
+    pub unread: i64,
+}
+
+/// `POST /api/notifications/settings`.
+#[derive(Serialize, TS)]
+pub struct NotifySettingsAnswer {
+    pub ok: bool,
+    pub settings: NotifyStatus,
+}
+
+/// `POST /api/notifications/test`.
+#[derive(Serialize, TS)]
+pub struct NotifyTestAnswer {
+    pub ok: bool,
+    pub id: i64,
+}
+
+/// `POST /api/notifications/read`.
+#[derive(Serialize, TS)]
+pub struct NotificationsReadAnswer {
+    pub ok: bool,
+    pub read: usize,
+}
+
+/// `POST /api/notifications/seen`.
+#[derive(Serialize, TS)]
+pub struct NotificationsSeenAnswer {
+    pub ok: bool,
+    pub seen: usize,
+}
+
+/// `POST /api/notifications/clear`.
+#[derive(Serialize, TS)]
+pub struct NotificationsClearAnswer {
+    pub ok: bool,
+    pub cleared: usize,
+}
+
+/// Notifications by id, for `read` and `seen`. For `read`, no ids at all
+/// means every one.
+#[derive(Clone, Debug, Default, Deserialize, TS)]
+pub struct NotificationIds {
+    pub ids: Option<Vec<i64>>,
 }
 
 fn which(name: &str) -> Option<PathBuf> {
