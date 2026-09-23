@@ -1,0 +1,333 @@
+{
+  "parse_us_volume": {
+    "A": {
+      "shortVolume": 380591.095732,
+      "totalVolume": 631970.726692
+    },
+    "GME": {
+      "shortVolume": 2250985.897562,
+      "totalVolume": 3542062.253804
+    }
+  },
+  "parse_ca_positions": {
+    "QNC": {
+      "venue": "TSXV",
+      "shares": 2667164.0,
+      "change": 64077.0,
+      "name": "QUANTUM EMOTION CORP."
+    },
+    "TGIF": {
+      "venue": "CSE",
+      "shares": 72000.0,
+      "change": 68990.0,
+      "name": "1933 INDUSTRIES INC."
+    }
+  },
+  "parse_ca_volume_ok": {
+    "QNC": {
+      "venue": "TSXV",
+      "shortVolume": 1197633.0,
+      "volumePct": 21.319,
+      "totalVolume": 5617679.065622215
+    },
+    "TGIF": {
+      "venue": "CSE",
+      "shortVolume": 5000.0,
+      "volumePct": 0.0,
+      "totalVolume": null
+    }
+  },
+  "parse_ca_volume_err": "new-line character seen in unquoted field",
+  "parse_cboe_directory": {
+    "HBIX": 6900000.0
+  },
+  "parse_cboe_directory_not_json": null,
+  "parse_us_position": {
+    "asOf": "2026-08-31",
+    "shares": 56990026.0,
+    "previous": 54036583.0,
+    "change": 2953443.0,
+    "previousOf": "2026-08-14",
+    "averageVolume": 5864237.0,
+    "series": [
+      {
+        "date": "2026-08-14",
+        "shares": 54036583.0
+      },
+      {
+        "date": "2026-08-31",
+        "shares": 56990026.0
+      }
+    ]
+  },
+  "parse_us_position_empty": {},
+  "us_volume_from_present": {
+    "volumeOf": "2026-09-14",
+    "volumeSpan": "day",
+    "shortVolume": 2250985.897562,
+    "totalVolume": 3542062.253804,
+    "volumePct": 63.550150626080956
+  },
+  "us_volume_from_missing": {},
+  "ca_position_from_present": {
+    "asOf": "2026-08-31",
+    "shares": 2667164.0,
+    "change": 64077.0,
+    "previous": 2603087.0,
+    "previousOf": "2026-08-15",
+    "venue": "TSXV",
+    "issuer": "QUANTUM EMOTION CORP."
+  },
+  "ca_position_from_venue_mismatch": {},
+  "ca_position_from_missing": {},
+  "ca_volume_from_present": {
+    "volumeOf": "2026-09-01/2026-09-15",
+    "volumeSpan": "period",
+    "shortVolume": 1197633.0,
+    "totalVolume": 5617679.065622215,
+    "volumePct": 21.319
+  },
+  "ca_volume_from_absent_with_traded": {
+    "volumeOf": "2026-09-01/2026-09-15",
+    "volumeSpan": "period",
+    "shortVolume": 0.0,
+    "totalVolume": 1519546.0,
+    "volumePct": 0.0
+  },
+  "ca_volume_from_absent_without_traded": {},
+  "ca_volume_from_venue_mismatch": {},
+  "ca_series_with": [
+    {
+      "date": "2026-07-31",
+      "shares": 100.0
+    },
+    {
+      "date": "2026-08-15",
+      "shares": 200.0
+    },
+    {
+      "date": "2026-08-31",
+      "shares": 300.0
+    }
+  ],
+  "ca_series_with_other_venue": [],
+  "fund_units_hbix": 6900000.0,
+  "fund_units_bcbn_company": null,
+  "fund_units_nopr_no_price": null,
+  "fund_units_odds_not_whole": null,
+  "fund_units_other_venue": null,
+  "fund_units_tmx_has_it": 4200.0,
+  "finish_us_with_issuer_and_float": {
+    "shares": 56990026.0,
+    "asOf": "2026-08-31",
+    "averageVolume": 5864237.0,
+    "symbol": "GME",
+    "exchange": "NYSE",
+    "market": "us",
+    "source": "FINRA",
+    "name": "GameStop Corp.",
+    "float": 400000000.0,
+    "ofFloat": 14.247506500000002,
+    "daysToCover": 9.7
+  },
+  "finish_us_no_issuer_no_float": {
+    "shares": 50.0,
+    "asOf": "2026-08-31",
+    "symbol": "RKLB",
+    "exchange": "NASDAQ",
+    "market": "us",
+    "source": "FINRA",
+    "float": null,
+    "ofFloat": null,
+    "averageVolume": null,
+    "daysToCover": null
+  },
+  "finish_ca_trend": {
+    "asOf": "2026-09-15",
+    "shares": 2667164.0,
+    "change": 64077.0,
+    "previous": 2603087.0,
+    "previousOf": "2026-08-31",
+    "volumeOf": "2026-09-01/2026-09-15",
+    "volumeSpan": "period",
+    "shortVolume": 1197633.0,
+    "totalVolume": 5617679.065622215,
+    "volumePct": 21.319,
+    "series": [
+      {
+        "date": "2026-07-31",
+        "shares": 100.0
+      },
+      {
+        "date": "2026-08-15",
+        "shares": 200.0
+      },
+      {
+        "date": "2026-08-31",
+        "shares": 300.0
+      },
+      {
+        "date": "2026-09-15",
+        "shares": 400.0
+      }
+    ],
+    "symbol": "QNC",
+    "exchange": "TSX-V",
+    "market": "ca",
+    "source": "CIRO",
+    "name": "QUANTUM EMOTION CORP.",
+    "float": 212448707.0,
+    "ofFloat": 1.2554390363976187,
+    "averageVolume": 802525.5808031736,
+    "daysToCover": 3.3
+  },
+  "finish_ca_no_trend": {
+    "asOf": "2026-09-15",
+    "shares": 2667164.0,
+    "change": 64077.0,
+    "previous": 2603087.0,
+    "previousOf": "2026-08-31",
+    "volumeOf": "2026-09-01/2026-09-15",
+    "volumeSpan": "period",
+    "shortVolume": 1197633.0,
+    "totalVolume": 5617679.065622215,
+    "volumePct": 21.319,
+    "symbol": "QNC",
+    "exchange": "TSX-V",
+    "market": "ca",
+    "source": "CIRO",
+    "name": "QUANTUM EMOTION CORP.",
+    "float": 212448707.0,
+    "ofFloat": 1.2554390363976187,
+    "averageVolume": 802525.5808031736,
+    "daysToCover": 3.3
+  },
+  "store_shorts_for_after_save": {
+    "symbol": "GME",
+    "exchange": "NYSE",
+    "fetchedAt": "2026-09-15T12:00:00Z",
+    "readVersion": 1.0,
+    "market": "us",
+    "asOf": "2026-08-31",
+    "shares": 56990026.0,
+    "previous": null,
+    "previousOf": null,
+    "change": null,
+    "float": 400000000.0,
+    "ofFloat": 14.247506500000002,
+    "averageVolume": 5864237.0,
+    "daysToCover": 9.7,
+    "volumeOf": null,
+    "volumeSpan": null,
+    "shortVolume": null,
+    "totalVolume": null,
+    "volumePct": null,
+    "name": "GameStop Corp.",
+    "series": []
+  },
+  "store_series_kept_when_a_later_save_omits_it": {
+    "symbol": "QNC",
+    "exchange": "TSX-V",
+    "fetchedAt": "2026-09-15T12:30:00Z",
+    "readVersion": 2.0,
+    "market": "ca",
+    "asOf": "2026-09-15",
+    "shares": 2667164.0,
+    "previous": 2603087.0,
+    "previousOf": "2026-08-31",
+    "change": 64077.0,
+    "float": 212448707.0,
+    "ofFloat": 1.2554390363976187,
+    "averageVolume": 802525.5808031736,
+    "daysToCover": 3.3,
+    "volumeOf": "2026-09-01/2026-09-15",
+    "volumeSpan": "period",
+    "shortVolume": 1197633.0,
+    "totalVolume": 5617679.065622215,
+    "volumePct": 21.319,
+    "name": "QUANTUM EMOTION CORP.",
+    "series": [
+      {
+        "date": "2026-07-31",
+        "shares": 100.0
+      },
+      {
+        "date": "2026-08-15",
+        "shares": 200.0
+      },
+      {
+        "date": "2026-08-31",
+        "shares": 300.0
+      },
+      {
+        "date": "2026-09-15",
+        "shares": 400.0
+      }
+    ]
+  },
+  "store_all_shorts": [
+    {
+      "symbol": "GME",
+      "exchange": "NYSE",
+      "fetchedAt": "2026-09-15T12:00:00Z",
+      "readVersion": 1.0,
+      "market": "us",
+      "asOf": "2026-08-31",
+      "shares": 56990026.0,
+      "previous": null,
+      "previousOf": null,
+      "change": null,
+      "float": 400000000.0,
+      "ofFloat": 14.247506500000002,
+      "averageVolume": 5864237.0,
+      "daysToCover": 9.7,
+      "volumeOf": null,
+      "volumeSpan": null,
+      "shortVolume": null,
+      "totalVolume": null,
+      "volumePct": null,
+      "name": "GameStop Corp.",
+      "series": []
+    },
+    {
+      "symbol": "QNC",
+      "exchange": "TSX-V",
+      "fetchedAt": "2026-09-15T12:30:00Z",
+      "readVersion": 2.0,
+      "market": "ca",
+      "asOf": "2026-09-15",
+      "shares": 2667164.0,
+      "previous": 2603087.0,
+      "previousOf": "2026-08-31",
+      "change": 64077.0,
+      "float": 212448707.0,
+      "ofFloat": 1.2554390363976187,
+      "averageVolume": 802525.5808031736,
+      "daysToCover": 3.3,
+      "volumeOf": "2026-09-01/2026-09-15",
+      "volumeSpan": "period",
+      "shortVolume": 1197633.0,
+      "totalVolume": 5617679.065622215,
+      "volumePct": 21.319,
+      "name": "QUANTUM EMOTION CORP.",
+      "series": [
+        {
+          "date": "2026-07-31",
+          "shares": 100.0
+        },
+        {
+          "date": "2026-08-15",
+          "shares": 200.0
+        },
+        {
+          "date": "2026-08-31",
+          "shares": 300.0
+        },
+        {
+          "date": "2026-09-15",
+          "shares": 400.0
+        }
+      ]
+    }
+  ]
+}
