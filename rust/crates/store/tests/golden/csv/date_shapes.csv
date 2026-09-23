@@ -1,0 +1,9 @@
+transaction_date,activity_type,activity_sub_type,symbol,quantity,unit_price,net_cash_amount
+2024-05-01,Trade,BUY,ISO,1,1,-1
+2024/05/02,Trade,BUY,YMD,1,1,-1
+2024.05.03,Trade,BUY,YMDDOT,1,1,-1
+04-May-2024,Trade,BUY,DMONY,1,1,-1
+May-05-2024,Trade,BUY,MONDY,1,1,-1
+06/07/2024,Trade,BUY,DMY,1,1,-1
+45410,Trade,BUY,SERIAL,1,1,-1
+not-a-date,Trade,BUY,BAD,1,1,-1

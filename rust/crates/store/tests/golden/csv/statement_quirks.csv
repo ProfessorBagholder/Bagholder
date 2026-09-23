@@ -1,0 +1,4 @@
+date,transaction,description,amount,balance
+"2024-04-01",BUY,"Buy, with a comma in description","($1,234.56)","$10,000.00"
+As of 2024-04-30 balances
+2024-04-02,FEE,"Monthly fee",($5.00),"$9,995.00"

@@ -1,0 +1,4 @@
+date,transaction,description,amount,balance
+2024-02-01,BUY,AAPL - Apple Inc: 10 shares at $150.00 per share,"($1,500.00)","$8,500.00"
+2024-02-02,DIV,AAPL: Dividend,"$5.00","$8,505.00"
+2024-02-03,DIS,STOCK DIVIDEND AAPL,"$0.00","$8,505.00"
