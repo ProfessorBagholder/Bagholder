@@ -24,6 +24,10 @@ pub struct Identity {
     /// A trade whose round trip a correction joined into another's: the trade
     /// that keeps the round trip, for the reason the book records.
     pub joined: Vec<(TradeId, TradeId)>,
+    /// Trades anchored on a transaction that opens no round trip any more (a
+    /// correction made it a close, or its round trip is keyed another way): the
+    /// book orphans them, their notes kept for the person to re-attach.
+    pub unclaimed: Vec<TradeId>,
 }
 
 /// The trade anchored on each opening.
@@ -54,5 +58,7 @@ pub fn identify(ledger: &Ledger, matched: &Matched) -> Identity {
             None => out.needs_trade.push(key.clone()),
         }
     }
+    let openings: std::collections::BTreeSet<&TripKey> = matched.trips.values().flat_map(|t| t.openings.iter()).collect();
+    out.unclaimed = anchored.iter().filter(|(k, _)| !openings.contains(k)).map(|(_, t)| *t).collect();
     out
 }

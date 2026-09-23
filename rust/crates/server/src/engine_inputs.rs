@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use bagholder_book::facts::DistributionKind as BookKind;
 use bagholder_book::Book;
 use bagholder_core::names::SourceName;
-use bagholder_engine::input::{AccountInfo, Declared, DeclaredRead, DistributionKind, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Read, AccountInfo, Declared, DeclaredRead, DistributionKind, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -50,7 +50,7 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
 
 /// The facts the book keeps.
 pub fn facts(book: &Book) -> Result<Facts, String> {
-    let rates = Rates { by_currency: book.rates().map_err(err)?, published: book.rate_series().map_err(err)?, holidays: book.bank_holidays().map_err(err)?, covered: book.rate_reads().map_err(err)? };
+    let rates = Rates { by_currency: book.rates().map_err(err)?, published: book.rate_series().map_err(err)?, holidays: book.bank_holidays().map_err(err)?, covered: book.rate_reads().map_err(err)?.into_iter().map(|(c, reads)| (c, reads.into_iter().map(|(first, last, at)| Read { first, last, at }).collect())).collect() };
     let declared = book
         .declared()
         .map_err(err)?

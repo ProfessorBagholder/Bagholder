@@ -24,9 +24,15 @@ fn is_weekend(d: Date) -> bool {
     matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday)
 }
 
-/// Whether the Bank does not publish on `d`, as far as the Bank itself says.
-fn not_published(rates: &Rates, currency: Currency, d: Date) -> bool {
-    is_weekend(d) || rates.holidays.contains(&d) || rates.covered.get(&currency).is_some_and(|spans| spans.iter().any(|(from, to)| *from <= d && d <= *to))
+/// Whether the Bank does not publish on `d`, as far as the Bank itself says: a
+/// weekend, its holiday, or a day a completed read covered and found no rate
+/// for, read after that day's rate was due.
+fn not_published(rates: &Rates, clock: &Clock, currency: Currency, d: Date) -> bool {
+    is_weekend(d)
+        || rates.holidays.contains(&d)
+        || rates.covered.get(&currency).is_some_and(|reads| {
+            reads.iter().any(|r| r.first <= d && d <= r.last && published_by(clock, d).is_some_and(|due| r.at >= due))
+        })
 }
 
 /// The moment the Bank publishes a business day's rate: 16:30 in its zone.
@@ -63,7 +69,7 @@ pub fn rate(rates: &Rates, clock: &Clock, currency: Currency, day: Date) -> Fig<
         if let Some(r) = series.and_then(|s| s.get(&d)) {
             return Ok(*r);
         }
-        if !not_published(rates, currency, d) {
+        if !not_published(rates, clock, currency, d) {
             // the business day that governs `day`, without its rate
             return Err(waiting(clock, currency, d));
         }
@@ -98,7 +104,7 @@ pub fn live_rate(rates: &Rates, clock: &Clock, currency: Currency) -> Fig<(Dec, 
             break;
         }
         let due = published_by(clock, d).is_some_and(|at| clock.now >= at);
-        if due && !not_published(rates, currency, d) {
+        if due && !not_published(rates, clock, currency, d) {
             return Err(Gaps::of(Gap::RateMissing { currency, day: d }));
         }
         d = match d.yesterday() {

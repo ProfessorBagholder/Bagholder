@@ -18,7 +18,7 @@ use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject
 use bagholder_core::record::Problem;
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, Broker, ConnectionId, Currency, Dec, GroupId, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
-use bagholder_engine::input::{AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, DistributionKind, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, DistributionKind, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Sourced};
 use bagholder_engine::{Change, Engine};
 
 /// Labels to ids: the same label is the same id throughout a case.
@@ -200,7 +200,9 @@ pub fn build(case: &Value) -> Built {
     for (c, spans) in obj(case, "covered") {
         for span in spans.as_array().unwrap() {
             let span = span.as_array().unwrap();
-            rates.covered.entry(ccy(&c)).or_default().push((day(span[0].as_str().unwrap()), day(span[1].as_str().unwrap())));
+            // a read is taken at the case's moment unless it says when
+            let read_at = span.get(2).and_then(Value::as_str).map(at).unwrap_or_else(|| case_now(case));
+            rates.covered.entry(ccy(&c)).or_default().push(Read { first: day(span[0].as_str().unwrap()), last: day(span[1].as_str().unwrap()), at: read_at });
         }
     }
     rates.published = arr(case, "published").iter().map(|c| ccy(c.as_str().unwrap())).collect();
@@ -290,7 +292,7 @@ pub fn build(case: &Value) -> Built {
     }
     let today = day(s(case, "today").unwrap());
     let bank = TimeZone::get("America/Toronto").unwrap();
-    let now = s(case, "now").map(at).unwrap_or_else(|| today.at(23, 0, 0, 0).to_zoned(bank.clone()).unwrap().timestamp());
+    let now = case_now(case);
     let clock = Clock { today, now, home: TimeZone::get(s(case, "home").unwrap_or("America/Edmonton")).unwrap(), bank };
     Built { inputs: Inputs { ledger, facts, market, clock }, tx, ids }
 }
@@ -308,3 +310,10 @@ pub fn engine(b: &mut Built) -> Engine {
     e
 }
 
+
+/// The case's present moment: its `now`, else the end of its `today` in the
+/// Bank's zone.
+pub fn case_now(case: &Value) -> Timestamp {
+    let today = day(s(case, "today").unwrap());
+    s(case, "now").map(at).unwrap_or_else(|| today.at(23, 0, 0, 0).to_zoned(TimeZone::get("America/Toronto").unwrap()).unwrap().timestamp())
+}

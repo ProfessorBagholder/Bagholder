@@ -441,6 +441,9 @@ struct Matcher<'a> {
     event_groups: BTreeMap<TransactionId, TransactionId>,
     /// Holdings touched since their units were last recorded.
     dirty: BTreeSet<(AccountId, InstrumentId)>,
+    /// Contracts whose record has an expiry, assignment or exercise row, on any
+    /// day: the broker's own row says how they ended.
+    ended_on_record: BTreeSet<(AccountId, InstrumentId)>,
 }
 
 impl<'a> Matcher<'a> {
@@ -481,11 +484,13 @@ impl<'a> Matcher<'a> {
         let current = if deposited { book.deposit_trip.clone() } else { book.trip.clone() };
         let this = TripKey { opening: opening.clone(), instrument };
         let key = joins.or(current).unwrap_or_else(|| this.clone());
+        // a round trip given by the caller (a roll's continuation, or a round
+        // trip of its own) becomes the holding's current one only when it has none:
+        // what is bought later joins the round trip already open
         let book = self.book(account, instrument);
-        if deposited {
-            book.deposit_trip = Some(key.clone());
-        } else {
-            book.trip = Some(key.clone());
+        let slot = if deposited { &mut book.deposit_trip } else { &mut book.trip };
+        if slot.is_none() {
+            *slot = Some(key.clone());
         }
         let trip = self.out.trips.entry(key.clone()).or_insert_with(|| Trip {
             key: key.clone(),
@@ -514,7 +519,14 @@ impl<'a> Matcher<'a> {
         let deposited = flags.contains(&Flag::Deposited);
         let trip = self.trip_for(account, instrument, direction, deposited, opened_by, joins);
         let lot = Lot { trip: trip.clone(), opened_by: opened_by.clone(), day, at, direction, qty, value, fee, flags };
-        self.book(account, instrument).lots.push_back(lot);
+        let book = self.book(account, instrument);
+        // lots keep first in first out by the day they were bought: one moved in
+        // from another account, or a spin-off's child, can be older than the last
+        let older = book.lots.back().is_some_and(|last| (lot.day, lot.at) < (last.day, last.at));
+        book.lots.push_back(lot);
+        if older {
+            book.lots.make_contiguous().sort_by(|a, b| (a.day, a.at).cmp(&(b.day, b.at)));
+        }
         let tr = self.trip_mut(&trip);
         tr.open_lots += 1;
         tr.fills.insert(opened_by.clone());
@@ -701,6 +713,11 @@ impl<'a> Matcher<'a> {
             for (account, instrument) in books {
                 let lots: Vec<(Direction, Dec)> = self.book(account, instrument).lots.iter().map(|l| (l.direction, l.qty)).collect();
                 if lots.is_empty() {
+                    continue;
+                }
+                // the record says how it ended, whenever the broker dated its row:
+                // that row closes it, and nothing here stands in for it
+                if self.ended_on_record.contains(&(account, instrument)) {
                     continue;
                 }
                 if !self.expired_worthless(instrument, expiry) {
@@ -961,7 +978,8 @@ impl<'a> Matcher<'a> {
                     // account, each lot keeping its cost and the day it was bought
                     for mut l in lots {
                         l.flags.insert(Flag::Transferred);
-                        self.open_lot(dest, dest_instr, &to, l.day, l.at, l.direction, l.qty, l.value, l.fee, l.flags, None);
+                        let own = TripKey { opening: to.clone(), instrument: dest_instr };
+                        self.open_lot(dest, dest_instr, &to, l.day, l.at, l.direction, l.qty, l.value, l.fee, l.flags, Some(own));
                     }
                 }
             }
@@ -1014,7 +1032,8 @@ impl<'a> Matcher<'a> {
             // delivering shares not held opens a short: the contract obliges it
             let v = fig_share(&value, left, shares);
             let f = share(fee, left, shares).unwrap_or(fee);
-            self.open_lot(account, under, &t.id, t.trade_date, t.occurred_at, opens, left, v, f, flags, None);
+            let own = TripKey { opening: t.id.clone(), instrument: under };
+            self.open_lot(account, under, &t.id, t.trade_date, t.occurred_at, opens, left, v, f, flags, Some(own));
         }
     }
 
@@ -1175,7 +1194,8 @@ impl<'a> Matcher<'a> {
                         Err(g) => Err(g),
                     };
                     let flags = BTreeSet::from([Flag::FromEvent]);
-                    self.open_lot(account, to, anchor, pday, pat, Direction::Long, child_qty, value, Money::zero(currency), flags, None);
+                    let own = TripKey { opening: anchor.clone(), instrument: to };
+                    self.open_lot(account, to, anchor, pday, pat, Direction::Long, child_qty, value, Money::zero(currency), flags, Some(own));
                     child_left = child_left.checked_sub(child_qty)?;
                     held_left = held_left.checked_sub(pq)?;
                 }
@@ -1268,6 +1288,12 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         links_in: ledger.transfer_links.iter().map(|(_, i)| i.clone()).collect(),
         event_groups: BTreeMap::new(),
         dirty: BTreeSet::new(),
+        ended_on_record: ledger
+            .transactions
+            .iter()
+            .filter(|t| matches!(t.kind, Kind::OptionExpiry | Kind::OptionAssignment | Kind::OptionExercise))
+            .filter_map(|t| t.instrument.map(|i| (t.account, i)))
+            .collect(),
     };
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name

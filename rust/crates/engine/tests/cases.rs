@@ -405,6 +405,14 @@ fn run(path: &Path) -> Vec<String> {
                 c.fail(format!("needs_trade: expected {v}, got {}", fresh.identity().needs_trade.len()));
             }
         }
+        if let Some(v) = expect.get("unclaimed") {
+            let fresh = Engine::build(b.inputs.clone());
+            let got: BTreeSet<TradeId> = fresh.identity().unclaimed.iter().copied().collect();
+            let want: BTreeSet<TradeId> = v.as_array().unwrap().iter().map(|p| b.ids.trade(p.as_str().unwrap())).collect();
+            if got != want {
+                c.fail(format!("unclaimed: expected {want:?}, got {got:?}"));
+            }
+        }
         if let Some(v) = expect.get("joined") {
             let fresh = Engine::build(b.inputs.clone());
             let got: BTreeSet<(TradeId, TradeId)> = fresh.identity().joined.iter().cloned().collect();

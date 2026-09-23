@@ -81,7 +81,7 @@ fn the_first_rate_for_a_day_stands_and_a_later_different_one_is_kept_beside_it()
     let rates = f.book.rates().unwrap();
     assert_eq!(rates[&usd][&day("2026-01-05")], d("1.41"), "the first stands");
     assert_eq!(f.book.rate_conflicts().unwrap().len(), 1);
-    assert_eq!(f.book.rate_reads().unwrap()[&usd], vec![(day("2025-12-29"), day("2026-01-05")), (day("2026-01-02"), day("2026-01-05"))]);
+    assert_eq!(f.book.rate_reads().unwrap()[&usd], vec![(day("2025-12-29"), day("2026-01-05"), t0()), (day("2026-01-02"), day("2026-01-05"), at("2026-01-06T12:00:00Z"))]);
     // an observation outside the read's span is refused, and nothing of the read is written
     assert!(f.book.store_rates(usd, &[(day("2026-02-02"), d("1.5"))], (day("2026-01-01"), day("2026-01-31")), &boc(), t0()).is_err());
     assert_eq!(f.book.rate_reads().unwrap()[&usd].len(), 2);
@@ -186,4 +186,29 @@ fn a_supersede_moves_an_adjustment_to_the_transaction_that_replaced_the_one_it_e
     let raw = f.book.store_superseding(&broker, &f.incoming("raw-event", &text), &[event_record], "the broker's row", t0()).unwrap();
     let all = f.book.adjustments().unwrap();
     assert_eq!(all[0].applies_to, TransactionId::new(raw.record, Leg::named("trade")));
+}
+
+#[test]
+fn a_spin_offs_second_child_and_an_events_marker_open_trades_the_adjustment_names() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "PARENT"), "100", "-1000", "2026-01-02T15:00:00Z")]));
+    // the event row names the first child; the second child is named only by the adjustment
+    let child = |isin: &str, sym: &str, qty: &str| json!({"leg": "trade", "account": "a1", "kind": "corporate-event", "instrument": share(isin, sym), "quantity": qty, "at": "2026-03-02T11:00:00Z", "date": "2026-03-02"});
+    let event = f.store(&Spelled::v(1), "spin-c", &legs(vec![child("CA0000000002", "C", "50")]));
+    f.store(&Spelled::v(1), "spin-d", &legs(vec![child("CA0000000003", "D", "20")]));
+    let applies = TransactionId::new(event.record, Leg::named("trade"));
+    f.store(
+        &Spelled { source: "issuer", version: 1 },
+        "notice",
+        &json!({"legs": [], "adjustments": [{"applies_to": applies.to_string(), "legs": [
+            {"from": [["isin", "CA0000000001"]], "to": [["isin", "CA0000000002"]], "units_per_unit": "0.5", "cost_share": "0.2"},
+            {"from": [["isin", "CA0000000001"]], "to": [["isin", "CA0000000003"]], "units_per_unit": "0.2", "cost_share": "0.1"}
+        ]}]}),
+    );
+    let d_instrument = f.book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Isin, "CA0000000003")).unwrap().unwrap();
+    f.book.open_trade(&Opening { transaction: applies.clone(), instrument: d_instrument }, None, t0()).unwrap();
+    // an instrument no adjustment on the event names is still refused
+    let parent = f.book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Isin, "CA0000000001")).unwrap().unwrap();
+    assert!(f.book.open_trade(&Opening { transaction: applies, instrument: parent }, None, t0()).is_err());
 }

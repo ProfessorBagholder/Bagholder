@@ -179,13 +179,14 @@ impl Book {
     }
 
     /// The spans completed reads covered, per currency.
-    pub fn rate_reads(&self) -> Result<BTreeMap<Currency, Vec<(jiff::civil::Date, jiff::civil::Date)>>> {
-        let mut stmt = self.conn().prepare_cached("SELECT currency, first_day, last_day FROM fx_reads ORDER BY currency, first_day")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-        let mut out: BTreeMap<Currency, Vec<(jiff::civil::Date, jiff::civil::Date)>> = BTreeMap::new();
+    pub fn rate_reads(&self) -> Result<BTreeMap<Currency, Vec<(jiff::civil::Date, jiff::civil::Date, jiff::Timestamp)>>> {
+        let mut stmt = self.conn().prepare_cached("SELECT currency, first_day, last_day, received_at FROM fx_reads ORDER BY currency, first_day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        let mut out: BTreeMap<Currency, Vec<(jiff::civil::Date, jiff::civil::Date, jiff::Timestamp)>> = BTreeMap::new();
         for row in rows {
-            let (c, a, b) = row?;
-            out.entry(parse_currency("fx_reads", "currency", &c)?).or_default().push((parse_day("fx_reads", "first_day", &a)?, parse_day("fx_reads", "last_day", &b)?));
+            let (c, a, b, at) = row?;
+            let at = at.parse().map_err(|_| text::corrupt("fx_reads", "received_at", &at, "not an instant"))?;
+            out.entry(parse_currency("fx_reads", "currency", &c)?).or_default().push((parse_day("fx_reads", "first_day", &a)?, parse_day("fx_reads", "last_day", &b)?, at));
         }
         Ok(out)
     }
@@ -449,6 +450,18 @@ impl Book {
             ));
         }
         Ok(out)
+    }
+
+    /// Whether a live adjustment on `tx` moves units into `instrument`.
+    pub(crate) fn adjustment_moves(&self, tx: &TransactionId, instrument: InstrumentId) -> Result<bool> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM adjustments a JOIN adjustment_legs l ON l.record_id = a.record_id AND l.leg = a.leg
+             JOIN source_records s ON s.id = a.record_id
+             WHERE s.state = 'live' AND a.applies_record = ? AND a.applies_leg = ? AND l.to_instrument = ?",
+            params![tx.record.to_string(), tx.leg.as_str(), instrument.to_string()],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
     }
 
     pub(crate) fn move_adjustment(&self, key: &AdjustmentKey, to: &TransactionId) -> Result<()> {

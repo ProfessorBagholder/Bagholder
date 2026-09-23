@@ -88,8 +88,17 @@ pub struct Rates {
     /// The days the Bank's own schedule says it does not publish (its holidays).
     pub holidays: BTreeSet<Date>,
     /// Per currency, the spans of days completed reads of the Bank's series
-    /// covered: a weekday inside one without a rate was not published.
-    pub covered: BTreeMap<Currency, Vec<(Date, Date)>>,
+    /// covered, and when each read was received: a weekday inside one without a
+    /// rate was not published, if that day's 16:30 Eastern had passed by then.
+    pub covered: BTreeMap<Currency, Vec<Read>>,
+}
+
+/// One completed read of a series.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Read {
+    pub first: Date,
+    pub last: Date,
+    pub at: Timestamp,
 }
 
 /// What kind of distribution a fund declared.

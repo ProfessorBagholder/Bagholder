@@ -34,20 +34,22 @@ impl Book {
                 return Ok(t);
             }
             let tx = &opening.transaction;
-            match self.transaction(tx)? {
-                None => return Err(BookError::Refused(format!("no transaction {tx} to open a trade on"))),
-                // a trade opens on a position moving: a dividend or a deposit opens nothing
-                Some(t) if t.instrument.is_none() || t.quantity.is_none_or(|q| q.is_zero()) => {
-                    return Err(BookError::Refused(format!("transaction {tx} moves no position, so it opens no trade")));
+            let Some(t) = self.transaction(tx)? else {
+                return Err(BookError::Refused(format!("no transaction {tx} to open a trade on")));
+            };
+            // a corporate event opens what an adjustment on it says it moved: a
+            // spin-off's child, a stock dividend on a marker stating no units
+            let adjusted = t.kind == Kind::CorporateEvent && self.adjustment_moves(tx, opening.instrument)?;
+            // a trade opens on a position moving: a dividend or a deposit of cash opens nothing
+            if !adjusted && (t.instrument.is_none() || t.quantity.is_none_or(|q| q.is_zero())) {
+                return Err(BookError::Refused(format!("transaction {tx} moves no position, so it opens no trade")));
+            }
+            if !adjusted && t.instrument != Some(opening.instrument) {
+                let delivers = matches!(t.kind, Kind::OptionAssignment | Kind::OptionExercise)
+                    && t.instrument.map(|i| self.option_terms(i)).transpose()?.flatten().is_some_and(|terms| terms.underlying == opening.instrument);
+                if !delivers {
+                    return Err(BookError::Refused(format!("transaction {tx} moves no position of instrument {}", opening.instrument)));
                 }
-                Some(t) if t.instrument != Some(opening.instrument) => {
-                    let delivers = matches!(t.kind, Kind::OptionAssignment | Kind::OptionExercise)
-                        && t.instrument.map(|i| self.option_terms(i)).transpose()?.flatten().is_some_and(|terms| terms.underlying == opening.instrument);
-                    if !delivers {
-                        return Err(BookError::Refused(format!("transaction {tx} moves no position of instrument {}", opening.instrument)));
-                    }
-                }
-                Some(_) => {}
             }
             let id = TradeId::from_uuid(new_uuid(at));
             self.conn().execute(
@@ -90,6 +92,15 @@ impl Book {
         self.atomically(|| {
             drop(self.trade(trade)?);
             self.orphan(trade, &format!("its round trip joined trade {keeps}"))
+        })
+    }
+
+    /// Orphan a trade whose anchor opens no round trip any more (the engine
+    /// names it, `Identity::unclaimed`); its journal is kept.
+    pub fn orphan_unclaimed(&self, trade: TradeId) -> Result<()> {
+        self.atomically(|| {
+            drop(self.trade(trade)?);
+            self.orphan(trade, "the transaction it opened on no longer opens a round trip")
         })
     }
 

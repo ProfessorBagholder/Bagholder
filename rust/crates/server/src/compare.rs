@@ -115,7 +115,7 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
         // the old table was appended from every read of the Bank's series since
         // its first day: one complete read of its span
         if let (Some(a), Some(b)) = (s.keys().next().copied(), s.keys().next_back().copied()) {
-            rates.covered.insert(Currency::USD, vec![(a, b)]);
+            rates.covered.insert(Currency::USD, vec![bagholder_engine::input::Read { first: a, last: b, at: bagholder_core::jiff::Timestamp::now() }]);
         }
         rates.published.insert(Currency::USD);
     }
@@ -185,6 +185,10 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     }
     for (joined, keeps) in engine.identity().joined.clone() {
         book.orphan_joined(joined, keeps).map_err(err)?;
+    }
+    let unclaimed = engine.identity().unclaimed.clone();
+    for trade in &unclaimed {
+        book.orphan_unclaimed(*trade).map_err(err)?;
     }
     engine.apply(Change::Trades(book.trades().map_err(err)?));
 
