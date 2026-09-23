@@ -91,10 +91,12 @@ struct Field {
     /// JSON object at the parent's own level, so it is compared at the
     /// parent's own path, under no name of its own.
     flatten: bool,
+    /// `#[serde(skip_serializing)]`: never on the wire, so never diffed either.
+    skip: bool,
 }
 
 fn field(f: &syn::Field) -> syn::Result<Field> {
-    let mut out = Field { rename: None, skip_if: None, flatten: false };
+    let mut out = Field { rename: None, skip_if: None, flatten: false, skip: false };
     for attr in f.attrs.iter().filter(|a| a.path().is_ident("serde")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("rename") {
@@ -103,6 +105,8 @@ fn field(f: &syn::Field) -> syn::Result<Field> {
                 out.skip_if = Some(meta.value()?.parse::<LitStr>()?.parse()?);
             } else if meta.path.is_ident("flatten") {
                 out.flatten = true;
+            } else if meta.path.is_ident("skip_serializing") || meta.path.is_ident("skip") {
+                out.skip = true;
             } else if meta.path.is_ident("default") || meta.path.is_ident("deserialize_with") || meta.path.is_ident("alias") {
                 // how it is read, not how it is written
                 if meta.input.peek(syn::Token![=]) {
@@ -134,6 +138,9 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             for f in &named.named {
                 let ident = f.ident.as_ref().unwrap();
                 let a = field(f)?;
+                if a.skip {
+                    continue;
+                }
                 if a.flatten {
                     // its fields join the parent's own JSON object: compared at the
                     // parent's own path, under no name of its own

@@ -410,7 +410,9 @@ fn test_under_the_dry_setting_a_submit_is_recorded_and_nothing_is_sent() {
     let rows = list_orders();
     assert_eq!(rows.len(), 1);
     assert_eq!((st(&rows[0], "id"), st(&rows[0], "status"), st(&rows[0], "side"), st(&rows[0], "type"), n(&rows[0], "quantity")), (st(&r, "id"), "dry".into(), "BUY".into(), "LIMIT".into(), 25.0));
-    assert_eq!(st(&rows[0]["request"], "executionType"), "LIMIT");
+    // `request` is stored but never sent to the page, so it is read back through the typed store, not the JSON row
+    let stored = so::typed::get_order(&conn(), &st(&r, "id")).unwrap().unwrap();
+    assert_eq!(stored.request.get("executionType").and_then(|v| v.as_str()), Some("LIMIT"));
     assert_eq!(n(&rows[0]["stopLoss"], "price"), 157.13);
     assert_eq!(get_order(&st(&r, "id"))["takeProfit"], json!({"price": 181.94}));
 }
@@ -925,7 +927,7 @@ fn test_edit_sends_wealthsimples_modify_with_the_new_price_and_quantity() {
     set_gql(fake.clone());
     set_live(Some(true));
     set_session(Some(tok()));
-    let r = o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(164.0)));
+    let r = o::modify_order(&app(), &oid, Some(30.0), Some(164.0));
     unpatch();
     assert!(r.ok, "{:?}", r);
     assert_eq!(*sent.lock().unwrap(), vec![("SoOrdersOrderModify".to_string(), json!({"input": {"externalId": oid, "newLimitPrice": 164.0, "newQuantity": 30.0}}))]);
@@ -936,27 +938,27 @@ fn test_edit_sends_wealthsimples_modify_with_the_new_price_and_quantity() {
     set_gql(fake);
     set_live(Some(true));
     set_session(Some(tok()));
-    assert!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0))).ok);
+    assert!(o::modify_order(&app(), &oid, Some(30.0), Some(165.0)).ok);
     assert_eq!(sent.lock().unwrap().last().unwrap().1["input"], json!({"externalId": oid, "newLimitPrice": 165.0}));
-    assert_eq!(o::modify_order(&app(), &oid, Some(&json!(30)), Some(&json!(165.0))).unchanged, Some(true));
+    assert_eq!(o::modify_order(&app(), &oid, Some(30.0), Some(165.0)).unchanged, Some(true));
     unpatch();
     set_live(Some(true)); // the default
-    assert!(st(&o::modify_order(&app(), &oid, Some(&json!(0)), Some(&json!(165.0))), "error").contains("more than zero"));
-    assert_eq!(st(&o::modify_order(&app(), "nope", Some(&json!(1)), Some(&json!(1))), "error"), "No such order.");
+    assert!(st(&o::modify_order(&app(), &oid, Some(0.0), Some(165.0)), "error").contains("more than zero"));
+    assert_eq!(st(&o::modify_order(&app(), "nope", Some(1.0), Some(1.0)), "error"), "No such order.");
     set_gql(|_, _| Ok(json!({"soOrdersModifyOrder": {"errors": [{"code": "x", "message": "Too late"}]}})));
     set_session(Some(tok()));
-    assert!(st(&o::modify_order(&app(), &oid, Some(&json!(31)), Some(&json!(165.0))), "error").contains("Too late"));
+    assert!(st(&o::modify_order(&app(), &oid, Some(31.0), Some(165.0)), "error").contains("Too late"));
     unpatch();
     set_live(Some(true));
     assert_eq!(n(&get_order(&oid), "quantity"), 30.0, "a refused change changes nothing");
     update_order(&oid, json!({"status": "filled"}));
-    assert!(st(&o::modify_order(&app(), &oid, Some(&json!(31)), Some(&json!(165.0))), "error").contains("not open"));
+    assert!(st(&o::modify_order(&app(), &oid, Some(31.0), Some(165.0)), "error").contains("not open"));
     unpatch();
 }
 
-fn adjust(e: &Engine, id: &str, leg: &str, price: Option<Value>, trail: Option<Value>, remove: bool) -> Value {
+fn adjust(e: &Engine, id: &str, leg: &str, price: Option<f64>, trail: Option<f64>, remove: bool) -> Value {
     e.live();
-    let r = o::adjust_bracket(&app(), id, leg, price.as_ref(), trail.as_ref(), remove);
+    let r = o::adjust_bracket(&app(), id, leg, price, trail, remove);
     e.off();
     jv(&r)
 }
@@ -970,7 +972,7 @@ fn test_adjusting_a_resting_stop_cancels_it_and_the_engine_places_the_new_level(
     let b = get_bracket(&st(&b, "id"));
     let first = st(&b, "slOrderId");
     e.clear();
-    let r = adjust(&e, &st(&b, "id"), "sl", Some(json!(160.0)), None, false);
+    let r = adjust(&e, &st(&b, "id"), "sl", Some(160.0), None, false);
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(e.ops(), ["SoOrdersOrderCancel"]);
     let b = get_bracket(&st(&b, "id"));
@@ -989,14 +991,14 @@ fn test_adjusting_the_target_and_a_trailing_stop() {
     update_order(&oid, json!({"status": "filled", "filledQty": 25, "avgFill": 165.4}));
     e.tick(None);
     let id = st(&b, "id");
-    assert_eq!(adjust(&e, &id, "tp", Some(json!(190.0)), None, false)["ok"], json!(true));
-    assert_eq!(adjust(&e, &id, "sl", None, Some(json!(10)), false)["ok"], json!(true));
+    assert_eq!(adjust(&e, &id, "tp", Some(190.0), None, false)["ok"], json!(true));
+    assert_eq!(adjust(&e, &id, "sl", None, Some(10.0), false)["ok"], json!(true));
     let b = get_bracket(&id);
     assert_eq!(n(&b, "tpPrice"), 190.0);
     assert_eq!((n(&b, "slTrail"), n(&b, "slPrice")), (10.0, 148.86), "ten percent under the high of 165.40");
-    assert!(st(&adjust(&e, &id, "tp", Some(json!(0)), None, false), "error").contains("required"));
-    assert!(st(&adjust(&e, &id, "x", Some(json!(1)), None, false), "error").contains("Which leg"));
-    assert_eq!(st(&adjust(&e, "nope", "tp", Some(json!(1)), None, false), "error"), "No such bracket.");
+    assert!(st(&adjust(&e, &id, "tp", Some(0.0), None, false), "error").contains("required"));
+    assert!(st(&adjust(&e, &id, "x", Some(1.0), None, false), "error").contains("Which leg"));
+    assert_eq!(st(&adjust(&e, "nope", "tp", Some(1.0), None, false), "error"), "No such bracket.");
 }
 
 #[test]
@@ -1014,7 +1016,7 @@ fn test_a_placed_target_moved_is_cancelled_and_watched_again() {
     assert_eq!(st(&b, "status"), "target_placed");
     let tp = st(&b, "tpOrderId");
     e.clear();
-    assert_eq!(adjust(&e, &id, "tp", Some(json!(185.0)), None, false)["ok"], json!(true));
+    assert_eq!(adjust(&e, &id, "tp", Some(185.0), None, false)["ok"], json!(true));
     assert_eq!(e.ops(), ["SoOrdersOrderCancel"]);
     let b = get_bracket(&id);
     assert_eq!((st(&b, "status"), n(&b, "tpPrice"), st(&b, "tpOrderId")), ("armed".into(), 185.0, String::new()));

@@ -5,7 +5,6 @@
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -26,7 +25,7 @@ use bagholder_store::market as sf_market;
 use bagholder_store::rows;
 use bagholder_store::tables::{get_meta, set_meta};
 
-use crate::app::{f, log, now_iso, now_unix, parse_instant, spawn, truthy, App, ENRICH_VERSION};
+use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, ENRICH_VERSION};
 use crate::http::OkOr;
 use crate::notify;
 
@@ -88,9 +87,9 @@ enum ExposureJob {
 
 /// The exposure record of every held security
 /// that has none or an old one, four at a time, each shown as it lands.
-pub fn refresh_exposures(app: &Arc<App>) -> Value {
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
-    let b = match base(app) { Some(b) => b, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
+pub fn refresh_exposures(app: &Arc<App>) {
+    let c = match conn(app) { Some(c) => c, None => return };
+    let b = match base(app) { Some(b) => b, None => return };
     let mut secs: HashMap<String, Security> = HashMap::new();
     for sec in rows::securities(&c).unwrap_or_default() {
         if !sec.id.is_empty() {
@@ -133,17 +132,14 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
     let mut jobs: Vec<ExposureJob> = todo.iter().map(|sid| ExposureJob::Sec(secs[sid].clone())).collect();
     jobs.extend(unders.into_iter().map(|(u, cc)| ExposureJob::Under(u, cc)));
     jobs.extend(watched.into_iter().map(|(sy, e, cc)| ExposureJob::Watch(sy, e, cc)));
-    let held_n = held.len();
     drop(ctx);
     if jobs.is_empty() {
-        return json!({"ok": true, "held": held_n, "refreshed": 0});
+        return;
     }
     let queue = Arc::new(Mutex::new(jobs.into_iter().collect::<std::collections::VecDeque<_>>()));
-    let done = Arc::new(AtomicI64::new(0));
     let mut handles = Vec::new();
     for _ in 0..EXPOSURE_WORKERS {
         let queue = queue.clone();
-        let done = done.clone();
         let today_s = today_s.clone();
         let app = app.clone();
         let h = std::thread::Builder::new().name("bagholder-exposure".into()).spawn(move || {
@@ -175,7 +171,6 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
                         format!("bagholder exposure: {} (an option's underlying) classified", under)
                     }
                 };
-                done.fetch_add(1, Ordering::SeqCst);
                 log(&line);
                 // each record shows as soon as it lands
             }
@@ -187,7 +182,6 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
     for h in handles {
         let _ = h.join();
     }
-    json!({"ok": true, "held": held_n, "refreshed": done.load(Ordering::SeqCst)})
 }
 
 /// Soon after start and every half hour.
@@ -256,17 +250,17 @@ impl WatchlistAnswer {
     }
 }
 
-pub fn watch_add(app: &Arc<App>, body: &Value) -> WatchlistAnswer {
-    let sym = tmx_symbol(&f(body, "symbol"));
+pub fn watch_add(app: &Arc<App>, body: &crate::http::markets::WatchlistBody) -> WatchlistAnswer {
+    let sym = tmx_symbol(&body.symbol);
     if sym.is_empty() {
         return WatchlistAnswer::err("symbol required");
     }
-    let ex = f(body, "exchange");
+    let ex = body.exchange.clone();
     let inst = instruments::find(&sym, &ex);
     let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
-    let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "name"));
-    let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| f(body, "currency"));
-    let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &f(body, "securityId"), &now_iso()).ok().flatten().unwrap_or_default();
+    let name = inst.map(|i| i.name.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| body.name.clone().unwrap_or_default());
+    let ccy = inst.map(|i| i.currency.to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| body.currency.clone().unwrap_or_default());
+    let row = sf::add_watch(&c, &sym, &ex, &name, &ccy, &body.security_id.clone().unwrap_or_default(), &now_iso()).ok().flatten().unwrap_or_default();
     let is_inst = inst.is_some();
     let crypto = ex.to_uppercase() == "CRYPTO";
     let sym2 = sym.clone();
@@ -285,16 +279,16 @@ pub fn watch_add(app: &Arc<App>, body: &Value) -> WatchlistAnswer {
     WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
 }
 
-pub fn watch_remove(app: &Arc<App>, body: &Value) -> WatchlistAnswer {
-    let sym = tmx_symbol(&f(body, "symbol"));
+pub fn watch_remove(app: &Arc<App>, body: &crate::http::markets::WatchlistBody) -> WatchlistAnswer {
+    let sym = tmx_symbol(&body.symbol);
     if sym.is_empty() {
         return WatchlistAnswer::err("symbol required");
     }
     let c = match conn(app) { Some(c) => c, None => return WatchlistAnswer::err("store unavailable") };
-    let ex = f(body, "exchange");
+    let ex = body.exchange.clone();
     let _ = sf::remove_watch(&c, &sym, &ex);
     // a row kept under Wealthsimple's form
-    let _ = sf::remove_watch(&c, &f(body, "symbol").trim().to_uppercase(), &ex);
+    let _ = sf::remove_watch(&c, &body.symbol.trim().to_uppercase(), &ex);
     let _ = sf::forget_news(&c, &sym, &ex);
     WatchlistAnswer::Ok { ok: true, watchlist: sf::list_watchlist(&c).unwrap_or_default() }
 }
@@ -462,7 +456,7 @@ pub fn news_symbol_payload_with(
     exchange: &str,
     currency: &str,
     readers: &news::Readers,
-    listing_of: &dyn Fn(&Connection, &str, &str) -> Option<Value>,
+    listing_of: &dyn Fn(&Connection, &str, &str) -> Option<bagholder_model::wire::SymbolMatch>,
 ) -> NewsSymbolAnswer {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
@@ -491,12 +485,12 @@ pub fn news_symbol_payload_with(
         listing = listing_of(&c, &sym, &today_s);
     }
     if let Some(l) = &listing {
-        if name.is_empty() && f(l, "name").to_uppercase() != sym {
-            name = f(l, "name");
+        if name.is_empty() && l.name.to_uppercase() != sym {
+            name = l.name.clone();
         }
         if ex.is_empty() {
-            ex = f(l, "exchange");
-            ccy = f(l, "currency");
+            ex = l.exchange.clone();
+            ccy = l.currency.clone();
         }
     }
     if ex.is_empty() {
@@ -590,10 +584,32 @@ fn providers_cover(sym: &str, ex: &str, ccy: &str) -> bool {
     (sedar::available() && sedar::covers(sym, ex, ccy)) || (edgar::available() && edgar::covers(sym, ex, ccy))
 }
 
+/// A ticker as a filings sweep or read considers it: its symbol, venue and
+/// what kind of instrument it is, before it is known to be one the sweep
+/// tracks.
+#[derive(Clone, Debug, Default)]
+struct FilingCandidate {
+    symbol: String,
+    exchange: String,
+    currency: String,
+    kind: String,
+    name: String,
+}
+
+/// A ticker known for filings: what a sweep or a single read fetches and
+/// files it under.
+#[derive(Clone, Debug, Default)]
+pub struct FilingSymbol {
+    pub symbol: String,
+    pub name: String,
+    pub exchange: String,
+    pub currency: String,
+}
+
 /// The tickers to watch for filings.
-pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<Value> {
+pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymbol> {
     let has = |k: &str| scopes.iter().any(|x| x == k);
-    let mut rows: Vec<Value> = Vec::new();
+    let mut rows: Vec<FilingCandidate> = Vec::new();
     let mut b = None;
     if has("held") || has("all") {
         match app.base() {
@@ -602,16 +618,22 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<Value> {
         }
     }
     if let Some(b) = &b {
-        rows.extend(bagholder_model::symbols_of::held_symbols(b).iter().map(|l| l.to_value()));
+        rows.extend(bagholder_model::symbols_of::held_symbols(b).iter().map(|l| FilingCandidate {
+            symbol: l.symbol.clone(),
+            exchange: l.exchange.clone(),
+            currency: l.currency.clone(),
+            kind: l.kind.clone(),
+            name: String::new(),
+        }));
         if has("all") {
             for t in b.trades.iter() {
-                let mut rec = json!({"symbol": t.symbol, "exchange": t.exchange, "currency": t.currency, "kind": t.kind});
-                if f(&rec, "kind") == "Options" {
-                    let under = bagholder_model::symbols::underlying_symbol(&f(&rec, "symbol"));
+                let mut rec = FilingCandidate { symbol: t.symbol.clone(), exchange: t.exchange.clone(), currency: t.currency.clone(), kind: t.kind.to_string(), name: String::new() };
+                if rec.kind == "Options" {
+                    let under = bagholder_model::symbols::underlying_symbol(&rec.symbol);
                     if under.is_empty() || under == "—" {
                         continue;
                     }
-                    rec = json!({"symbol": under, "exchange": rec["exchange"], "currency": rec["currency"], "kind": "Shares"});
+                    rec = FilingCandidate { symbol: under, exchange: rec.exchange, currency: rec.currency, kind: "Shares".to_string(), name: String::new() };
                 }
                 rows.push(rec);
             }
@@ -619,23 +641,27 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<Value> {
     }
     if has("watched") || has("all") {
         if let Some(c) = conn(app) {
-            rows.extend(sf::list_watchlist(&c).unwrap_or_default().into_iter().map(|w| serde_json::to_value(w).unwrap_or_default()));
+            rows.extend(sf::list_watchlist(&c).unwrap_or_default().into_iter().map(|w| FilingCandidate {
+                symbol: w.symbol,
+                exchange: w.exchange,
+                currency: w.currency,
+                kind: String::new(),
+                name: w.name,
+            }));
         }
     }
     let mut out = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for r in rows {
-        let sym = f(&r, "symbol").trim().to_uppercase();
-        let kind = f(&r, "kind");
-        if sym.is_empty() || seen.contains(&sym) || sym.contains(' ') || kind == "Options" || kind == "Crypto" {
+        let sym = r.symbol.trim().to_uppercase();
+        if sym.is_empty() || seen.contains(&sym) || sym.contains(' ') || r.kind == "Options" || r.kind == "Crypto" {
             continue;
         }
-        if !providers_cover(&sym, &f(&r, "exchange"), &f(&r, "currency")) {
+        if !providers_cover(&sym, &r.exchange, &r.currency) {
             continue;
         }
         seen.insert(sym.clone());
-        let name = f(&r, "name");
-        out.push(json!({"symbol": sym, "name": if name.is_empty() { Value::Null } else { json!(name) }, "exchange": f(&r, "exchange"), "currency": f(&r, "currency")}));
+        out.push(FilingSymbol { symbol: sym, name: r.name, exchange: r.exchange, currency: r.currency });
     }
     out
 }
@@ -651,7 +677,7 @@ pub fn sweep_filings(app: &Arc<App>) -> usize {
         return 0;
     }
     let mut told = 0;
-    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes).iter().map(|i| f(i, "symbol")).collect() };
+    let disc_syms: HashSet<String> = if scopes.is_empty() { HashSet::new() } else { known_filing_symbols(app, &scopes).iter().map(|i| i.symbol.clone()).collect() };
     let hold = !disc_syms.is_empty() && naming_held(&c, !can_name_documents());
     let mut both: Vec<String> = scopes.clone();
     for r in &rel_scopes {
@@ -660,7 +686,7 @@ pub fn sweep_filings(app: &Arc<App>) -> usize {
         }
     }
     for inst in known_filing_symbols(app, &both) {
-        let sym = f(&inst, "symbol");
+        let sym = inst.symbol.clone();
         if !filings_stale(&c, &sym, Some(FILINGS_SWEEP_AGE_MIN / 60.0)) {
             continue;
         }
@@ -668,8 +694,8 @@ pub fn sweep_filings(app: &Arc<App>) -> usize {
             continue;
         }
         let before: HashSet<[String; 5]> = sf::filings_for(&c, &sym).unwrap_or_default().iter().map(filing_mark).collect();
-        let name = f(&inst, "name");
-        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&f(&inst, "exchange")), Some(&f(&inst, "currency")));
+        let name = inst.name.clone();
+        let wrote = refresh_filings(app, &sym, if name.is_empty() { None } else { Some(&name) }, Some(&inst.exchange), Some(&inst.currency));
         if wrote < 0 {
             continue;
         }
@@ -758,9 +784,9 @@ pub fn filings_feed(app: &Arc<App>, scope: &str, limit: i64) -> FilingsFeed {
     };
     let mut rows: Vec<FeedFiling> = Vec::new();
     for inst in known_filing_symbols(app, &feed_scope(&key)) {
-        let sym = f(&inst, "symbol");
+        let sym = inst.symbol.clone();
         for r in fresh_filings(&c, &sym) {
-            rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: f(&inst, "exchange") });
+            rows.push(FeedFiling { filing: r, symbol: sym.clone(), exchange: inst.exchange.clone() });
         }
     }
     rows.sort_by(|a, b| b.filing.doc.date.cmp(&a.filing.doc.date));
@@ -993,8 +1019,17 @@ pub fn distribution_detail_in(c: &Connection, sym: &str) -> String {
 /// A release found today can have been published weeks ago -- the app reads a
 /// listing's back catalogue the first time it sees it -- and a notice that
 /// shows only when it was told reads as news that is not new.
-pub fn notice_moment<T: Notable>(rows: &[T]) -> Value {
-    json!({"at": newest_of(rows).moment()})
+pub fn notice_moment<T: Notable>(rows: &[T]) -> String {
+    newest_of(rows).moment()
+}
+
+/// Where a notification's rows can be read: the newest one's own page, and,
+/// for a filed document, the regulator it opens through.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NoticeLink {
+    pub url: String,
+    pub doc: String,
+    pub source: String,
 }
 
 /// Where a notification's rows can be read: the newest one's own page.
@@ -1002,16 +1037,16 @@ pub fn notice_moment<T: Notable>(rows: &[T]) -> Value {
 /// A filed document is opened through the app, which is what the Disclosures
 /// table does, so it opens the same way from here; anything else carries the
 /// source's own link.
-pub fn notice_link<T: Notable>(rows: &[T]) -> Value {
+pub fn notice_link<T: Notable>(rows: &[T]) -> NoticeLink {
     let newest = newest_of(rows);
     let url = newest.url();
     let id = newest.id();
     if let Some(source) = newest.filed_source() {
         if !id.is_empty() {
-            return json!({"url": url, "doc": id, "source": source});
+            return NoticeLink { url, doc: id, source };
         }
     }
-    if url.is_empty() { json!({}) } else { json!({"url": url}) }
+    NoticeLink { url, ..NoticeLink::default() }
 }
 
 /// The newest row by its own moment.
@@ -1023,14 +1058,14 @@ fn newest_of<T: Notable>(rows: &[T]) -> &T {
 
 /// A notification's extra: the symbol, the moment and the link, in one struct.
 fn notice_extra<T: Notable>(sym: &str, exchange: Option<&str>, rows: &[T]) -> bagholder_store::feeds::NotificationExtra {
-    let (moment, link) = (notice_moment(rows), notice_link(rows));
+    let (at, link) = (notice_moment(rows), notice_link(rows));
     bagholder_store::feeds::NotificationExtra {
         symbol: sym.to_string(),
         exchange: exchange.unwrap_or_default().to_string(),
-        at: f(&moment, "at"),
-        url: f(&link, "url"),
-        doc: f(&link, "doc"),
-        source: f(&link, "source"),
+        at,
+        url: link.url,
+        doc: link.doc,
+        source: link.source,
     }
 }
 
@@ -1286,9 +1321,9 @@ fn read_one_of(app: &Arc<App>, only: &str) -> bool {
     let c = match conn(app) { Some(c) => c, None => return false };
     let mut best: Option<(String, String, String)> = None;   // date, symbol, id
     let every = known_filing_symbols(app, &["held".to_string(), "watched".to_string()]);
-    let list: Vec<Value> = if only.is_empty() { every } else { vec![json!({"symbol": only})] };
+    let list: Vec<FilingSymbol> = if only.is_empty() { every } else { vec![FilingSymbol { symbol: only.to_string(), ..Default::default() }] };
     for inst in list {
-        let sym = f(&inst, "symbol");
+        let sym = inst.symbol;
         for r in sf::filings_for(&c, &sym).unwrap_or_default() {
             if !r.subject.is_empty() || r.enrich_final {
                 continue;
@@ -2040,8 +2075,7 @@ pub enum ListingAnswer {
         name: String,
         #[serde(rename = "securityId")]
         security_id: String,
-        #[ts(type = "unknown[]")]
-        fills: Vec<Value>,
+        fills: Vec<bagholder_model::wire::Fill>,
         price: Option<f64>,
         #[serde(rename = "percentChange")]
         percent_change: Option<f64>,
@@ -2077,7 +2111,7 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
             kind: t.kind.to_string(),
             name: t.name.clone(),
             security_id: t.security_id.clone(),
-            fills: t.fills.iter().flat_map(|fills| fills.iter()).map(|x| serde_json::to_value(x).unwrap_or(Value::Null)).collect(),
+            fills: t.fills.iter().flat_map(|fills| fills.iter()).cloned().collect(),
         })
         .collect();
     let watchlist: Vec<ListedRow> = b.watchlist.iter().filter(|w| named(&w.symbol)).map(|w| ListedRow { symbol: w.symbol.clone(), exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone(), ..ListedRow::default() }).collect();
@@ -2097,7 +2131,7 @@ pub struct ListedRow {
     pub kind: String,
     pub name: String,
     pub security_id: String,
-    pub fills: Vec<Value>,
+    pub fills: Vec<bagholder_model::wire::Fill>,
 }
 
 /// `listing_payload` over the book given, with the quote lookup given.
@@ -2147,8 +2181,8 @@ pub fn listing_payload_in(
         }
     }
     let kind = if known.kind.is_empty() { "Shares".to_string() } else { known.kind.clone() };
-    let mut fills: Vec<Value> = trades.iter().flat_map(|t| t.fills.iter().cloned()).collect();
-    fills.sort_by_key(|x| f(x, "when"));
+    let mut fills: Vec<bagholder_model::wire::Fill> = trades.iter().flat_map(|t| t.fills.iter().cloned()).collect();
+    fills.sort_by_key(|x| x.when.clone());
     let nm = {
         let n = name.trim().to_string();
         if !n.is_empty() { n } else {
@@ -2295,16 +2329,11 @@ fn payer_symbols(app: &Arc<App>) -> Vec<bagholder_model::input::Listing> {
 
 /// USD/CAD, S&P 500, declared distributions
 /// and quotes. Never fails.
-pub fn refresh_market_data(app: &Arc<App>) -> Value {
-    app.single_flight("market", json!({}), || {
-        let skipped = json!({"fx": 0, "benchmark": 0, "distributions": 0, "quotes": 0, "skipped": true});
-        let c = match conn(app) { Some(c) => c, None => return skipped };
-        let mut out = bagholder_market::refresh::refresh_all(&c, &payer_symbols(app));
-        let q = refresh_quotes(app);
-        out["quotes"] = json!(q);
-        if truthy(out.get("distributions")) || q > 0 {
-        }
-        out
+pub fn refresh_market_data(app: &Arc<App>) {
+    app.single_flight("market", (), || {
+        let c = match conn(app) { Some(c) => c, None => return };
+        bagholder_market::refresh::refresh_all(&c, &payer_symbols(app));
+        refresh_quotes(app);
     })
 }
 
@@ -2323,14 +2352,11 @@ pub fn refresh_quotes(app: &Arc<App>) -> usize {
 }
 
 /// The rates, benchmarks and distributions
-/// on their own clocks. Never fails; 0 when one is already running.
-pub fn refresh_periodic_market(app: &Arc<App>) -> Value {
-    app.single_flight("periodic", json!(0), || {
-        let c = match conn(app) { Some(c) => c, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
-        let out = bagholder_market::refresh::refresh_periodic(&c, &payer_symbols(app));
-        if truthy(out.get("fx")) || truthy(out.get("benchmark")) || truthy(out.get("distributions")) {
-        }
-        out
+/// on their own clocks. Never fails; nothing when one is already running.
+pub fn refresh_periodic_market(app: &Arc<App>) {
+    app.single_flight("periodic", (), || {
+        let c = match conn(app) { Some(c) => c, None => return };
+        bagholder_market::refresh::refresh_periodic(&c, &payer_symbols(app));
     })
 }
 
@@ -2632,7 +2658,9 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::f;
     use crate::tests_common::app;
+    use serde_json::{json, Value};
     use std::cell::Cell;
 
     fn store() -> Connection {

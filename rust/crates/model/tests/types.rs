@@ -28,7 +28,7 @@ fn declarations() -> String {
         Point, YearRow, Annualized, Drawdown, EquityBlock, BenchmarkRef,
         Allocation, ExposureSlice, Portfolio, PositionsSummary, Account,
         CashflowRow, CashflowTile, CashflowMonth, CashflowHolding, Cashflow,
-        HeldTile, UniverseTile, WatchItem, NewsTag, NewsItem, MarketTile, MarketInstrument, Markets,
+        HeldTile, UniverseTile, WatchItem, NewsTag, NewsItem, MarketTile, MarketInstrument, SymbolMatch, Markets,
         ListingInfo, Options, MarketDates, Unmatched, View,
     ];
     let mut out = String::from("// Generated from rust/crates/model (wire.rs and the types it names). Do not edit:\n// change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-model --test types`.\n\n");

@@ -228,7 +228,7 @@ pub fn fetch_tmx_quote(conn: &rusqlite::Connection, tmx_sym: &str, today: &str) 
 ///
 /// The public directories cover the TSX and Nasdaq registries alone, so this
 /// is how a CSE or Cboe Canada listing is found by name.
-pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Option<Value> {
+pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Option<bagholder_model::wire::SymbolMatch> {
     let bare = tmx_bare(&bagholder_model::venues::tmx_symbol(symbol));
     if bare.is_empty() || bare.contains(' ') {
         return None;
@@ -250,7 +250,7 @@ pub fn tmx_listing(conn: &rusqlite::Connection, symbol: &str, today: &str) -> Op
     } else {
         "CAD".into()
     };
-    Some(json!({"symbol": bare, "name": name, "exchange": venue, "currency": currency}))
+    Some(bagholder_model::wire::SymbolMatch { symbol: bare, name, exchange: venue.to_string(), currency, ..Default::default() })
 }
 
 /// The symbol a Canadian listing's declared

@@ -441,7 +441,9 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
         read.lock().unwrap().1.push(ask.name.clone());
         Ok(Some(vec![]))
     };
-    let listing = |_: &Connection, _: &str, _: &str| Some(json!({"symbol": "SXHI", "name": "Ninepoint SpaceX HighShares ETF", "exchange": "TSX", "currency": "CAD"}));
+    let listing = |_: &Connection, _: &str, _: &str| {
+        Some(bagholder_model::wire::SymbolMatch { symbol: "SXHI".into(), name: "Ninepoint SpaceX HighShares ETF".into(), exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() })
+    };
     let out = serde_json::to_value(crate::feeds::news_symbol_payload_with(&app(), "SXHI", "", "", &Readers { wire: &wire, extra: &extra }, &listing)).unwrap();
     assert_eq!(out["exchange"], "TSX");
     let got = read.lock().unwrap().clone();

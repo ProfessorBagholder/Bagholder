@@ -152,8 +152,11 @@ pub struct Order {
     pub status: OrderStatus,
     pub ws_order_id: String,
     pub error: String,
-    /// What was sent to Wealthsimple, kept as sent.
-    #[ts(type = "unknown")]
+    /// What was sent to Wealthsimple, kept as sent. Stored, but never sent to
+    /// the page: the ticket's own request body has no fixed shape, and the
+    /// page has no use for it.
+    #[serde(skip_serializing)]
+    #[ts(skip)]
     pub request: Value,
     pub updated_at: String,
     pub source: Source,

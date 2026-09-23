@@ -4,7 +4,7 @@ use super::*;
 
 /// Change a resting order's size or its limit. A stop order cannot be changed at
 /// Wealthsimple, only cancelled and placed again.
-pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, limit_price: Option<&Value>) -> OrderActionAnswer {
+pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<f64>, limit_price: Option<f64>) -> OrderActionAnswer {
     let refused = |e: &str| OrderActionAnswer::err(e);
     let row = match order(app, order_id) {
         Some(r) => r,
@@ -16,8 +16,8 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
     if row.kind == OrderType::Stop {
         return refused("A stop order cannot be changed; cancel it and place another.");
     }
-    let q = num(quantity, None);
-    let lp = order_tick(num(limit_price, None));
+    let q = quantity;
+    let lp = order_tick(limit_price);
     if q.map_or(false, |x| x <= 0.0) {
         return refused("Shares must be more than zero.");
     }
@@ -81,7 +81,7 @@ pub fn modify_order(app: &Arc<App>, order_id: &str, quantity: Option<&Value>, li
 /// Move a leg of a live bracket, give a trailing stop another trail, or take a leg off.
 /// A leg that rests at Wealthsimple is cancelled first, and the engine places it again
 /// at the new level; a bracket left with no leg is over.
-pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option<&Value>, trail: Option<&Value>, remove: bool) -> OrderActionAnswer {
+pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option<f64>, trail: Option<f64>, remove: bool) -> OrderActionAnswer {
     let refused = |e: String| OrderActionAnswer::err(e);
     let b = match bracket(app, bracket_id) {
         Some(b) => b,
@@ -95,7 +95,7 @@ pub fn adjust_bracket(app: &Arc<App>, bracket_id: &str, leg: &str, price: Option
         "tp" => false,
         _ => return refused("Which leg?".into()),
     };
-    let positive = |v: Option<&Value>| num(v, None).filter(|x| *x > 0.0);
+    let positive = |v: Option<f64>| v.filter(|x| *x > 0.0);
     let both_removed = |p: &mut BracketPatch| {
         p.status = Some(BracketStatus::Cancelled);
         p.outcome = Some("both legs removed".into());

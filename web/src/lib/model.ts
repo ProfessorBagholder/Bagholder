@@ -54,13 +54,11 @@ export type Trade = wire.Trade & {
 /** The model as the stream delivers it: the view, with the header's status beside it. */
 export type Model = wire.View & { status: Status }
 
-// A match from /api/symbols/search (watchlist add row, news/shorts lookup).
-export interface SymbolMatch {
-  symbol: string
-  exchange: string
-  name: string
-  currency: string
-  kind?: string
+/**
+ * A match from /api/symbols/search (watchlist add row, news/shorts lookup), with the
+ * price a watchlist row already carries when the add row shows it beside a holding.
+ */
+export type SymbolMatch = wire.SymbolMatch & {
   last?: number | null
   percentChange?: number | null
 }

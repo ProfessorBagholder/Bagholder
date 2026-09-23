@@ -148,5 +148,5 @@ export async function searchSymbols(text: string): Promise<SymbolMatch[]> {
   const q = text.trim()
   if (!q) return []
   const r = await searches.read({ query: { q } }, { key: q.toLowerCase() })
-  return r.ok ? (r.matches as SymbolMatch[]) : [] // a failed lookup is not remembered
+  return r.ok ? r.matches : [] // a failed lookup is not remembered
 }

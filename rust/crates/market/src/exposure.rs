@@ -1054,8 +1054,9 @@ pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Listed> {
     if clean.is_empty() {
         return None;
     }
-    let r = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>());
-    r.get("matches").and_then(|m| m.as_array()).and_then(|a| a.first()).and_then(|m| Listed::deserialize(m).ok())
+    let rows = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>()).ok()?;
+    let m = rows.first()?;
+    Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() })
 }
 
 fn cache_get(ctx: &Ctx, key: &str) -> Option<ExposureRecord> {

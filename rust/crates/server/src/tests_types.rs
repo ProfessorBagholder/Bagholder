@@ -133,7 +133,7 @@ fn markets_declarations() -> String {
         crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::TilesSet,
         bagholder_store::feeds::WatchedListing, bagholder_model::input::TileRef,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { MarketTile } from './wire'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { Fill, MarketTile, SymbolMatch } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());

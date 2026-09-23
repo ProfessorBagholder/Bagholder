@@ -13,7 +13,6 @@
 
 use rusqlite::{Connection, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -58,17 +57,65 @@ fn icon(app: &App) -> PathBuf {
 /// else -- absent, `null`, a stray non-boolean a hand-edited store might
 /// carry. Every switch was always read this leniently (`app::truthy`).
 fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
-    Ok(matches!(Option::<Value>::deserialize(d)?, Some(Value::Bool(true))))
+    Ok(LenientBool::deserialize(d)?.0.unwrap_or(false))
 }
 
 /// A JSON value that reads as `Some(bool)` only when it is a plain boolean;
 /// anything else -- absent, `null`, a non-boolean -- reads as `None`, which a
 /// patch leaves untouched. Unknown keys are already ignored by serde itself.
 fn lenient_bool_patch<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<bool>, D::Error> {
-    Ok(match Option::<Value>::deserialize(d)? {
-        Some(Value::Bool(b)) => Some(b),
-        _ => None,
-    })
+    Ok(LenientBool::deserialize(d)?.0)
+}
+
+/// A value read leniently for its boolean-ness: `Some(bool)` for a plain
+/// boolean, `None` for anything else a hand-edited store might carry.
+struct LenientBool(Option<bool>);
+
+impl<'de> Deserialize<'de> for LenientBool {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = LenientBool;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a boolean, or anything else")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(Some(v)))
+            }
+            fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_str<E>(self, _: &str) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(LenientBool(None))
+            }
+            fn visit_some<D2: serde::Deserializer<'de>>(self, d: D2) -> std::result::Result<Self::Value, D2::Error> {
+                d.deserialize_any(V)
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut m: A) -> std::result::Result<Self::Value, A::Error> {
+                while m.next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?.is_some() {}
+                Ok(LenientBool(None))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut s: A) -> std::result::Result<Self::Value, A::Error> {
+                while s.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(LenientBool(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 /// One switch per notification kind or Releases/Disclosures scope, in
@@ -411,9 +458,9 @@ where
 
 /// The id a stream item is known by when no other is given.
 #[cfg(test)]
-pub fn default_ident(i: &Value) -> String {
+pub fn default_ident(i: &serde_json::Value) -> String {
     match i {
-        Value::Object(_) => crate::app::f(i, "id"),
+        serde_json::Value::Object(_) => crate::app::f(i, "id"),
         other => crate::app::s(Some(other)),
     }
 }
@@ -771,7 +818,7 @@ mod tests {
 
     use super::*;
     use crate::app::f;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use bagholder_store::feeds as st;
     use std::ffi::OsStr;
     use std::sync::MutexGuard;
@@ -1289,21 +1336,22 @@ mod tests {
         let (_g, _app, _c) = setup();
         assert_eq!(crate::feeds::notice_moment(&[news_item("tmx:1", "", "", "", "2026-08-24T11:00:00Z"),
                                           news_item("tmx:2", "", "", "", "2026-08-31T07:00:00Z")]),
-                   json!({"at": "2026-08-31T07:00:00Z"}), "the newest of them");
-        assert_eq!(crate::feeds::notice_moment(&[filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "", "", "", "")]), json!({"at": "2026-09-08T16:22"}));
-        assert_eq!(crate::feeds::notice_moment(&[news_item("x", "", "", "", "")]), json!({"at": ""}));
+                   "2026-08-31T07:00:00Z", "the newest of them");
+        assert_eq!(crate::feeds::notice_moment(&[filing_full("sedar:1", bagholder_store::feeds::Regulator::Sedar, "2026-09-08T16:22", "", "", "", "")]), "2026-09-08T16:22");
+        assert_eq!(crate::feeds::notice_moment(&[news_item("x", "", "", "", "")]), "");
     }
 
     #[test]
     fn test_a_disclosure_notice_opens_the_document_it_is_about() {
+        use crate::feeds::NoticeLink;
         let (_g, _app, _c) = setup();
         assert_eq!(crate::feeds::notice_link(&[filing_full("sedar:9", bagholder_store::feeds::Regulator::Sedar, "2026-09-15T09:00", "", "", "", "https://www.sedarplus.ca/x?drmKey=9")]),
-                   json!({"url": "https://www.sedarplus.ca/x?drmKey=9", "doc": "sedar:9", "source": "SEDAR+"}));
+                   NoticeLink { url: "https://www.sedarplus.ca/x?drmKey=9".into(), doc: "sedar:9".into(), source: "SEDAR+".into() });
         assert_eq!(crate::feeds::notice_link(&[filing_full("sec:4", bagholder_store::feeds::Regulator::Sec, "2026-09-15T09:00", "", "", "", "https://www.sec.gov/x/4.htm")]),
-                   json!({"url": "https://www.sec.gov/x/4.htm", "doc": "sec:4", "source": "SEC"}), "the SEC serves its own documents");
+                   NoticeLink { url: "https://www.sec.gov/x/4.htm".into(), doc: "sec:4".into(), source: "SEC".into() }, "the SEC serves its own documents");
         assert_eq!(crate::feeds::notice_link(&[news_item("tmx:1", "", "", "https://money.tmx.com/en/quote/QNC/news/1", "2026-09-15T13:00:00Z")]),
-                   json!({"url": "https://money.tmx.com/en/quote/QNC/news/1"}));
-        assert_eq!(crate::feeds::notice_link(&[news_item("x", "", "", "", "2026-09-15T13:00:00Z")]), json!({}), "nothing to open, nothing claimed");
+                   NoticeLink { url: "https://money.tmx.com/en/quote/QNC/news/1".into(), ..NoticeLink::default() });
+        assert_eq!(crate::feeds::notice_link(&[news_item("x", "", "", "", "2026-09-15T13:00:00Z")]), NoticeLink::default(), "nothing to open, nothing claimed");
     }
 
     #[test]

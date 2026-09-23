@@ -7,7 +7,6 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use ts_rs::TS;
 
 use super::extract::{flag, text, trimmed};
@@ -63,27 +62,29 @@ pub struct Search {
 /// `GET /api/symbols/search`: the exchanges' own directories -- a match
 /// carries only what its source gave (`kind` and `rank` from the built-in
 /// instrument list, neither from Nasdaq or TSX's own search).
-#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(untagged)]
 pub enum SymbolSearchAnswer {
     Ok {
         #[ts(type = "true")]
         ok: bool,
-        #[ts(type = "unknown[]")]
-        matches: Vec<Value>,
+        matches: Vec<bagholder_model::wire::SymbolMatch>,
     },
     Err {
         #[ts(type = "false")]
         ok: bool,
         error: String,
-        #[ts(type = "unknown[]")]
-        matches: Vec<Value>,
+        matches: Vec<bagholder_model::wire::SymbolMatch>,
     },
 }
 
 async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
     let pool = state.app.store();
-    answer(move || serde_json::from_value(bagholder_market::search::symbol_search(&pool, &s.q)).unwrap_or(SymbolSearchAnswer::Ok { ok: true, matches: vec![] })).await
+    answer(move || match bagholder_market::search::symbol_search(&pool, &s.q) {
+        Ok(matches) => SymbolSearchAnswer::Ok { ok: true, matches },
+        Err(error) => SymbolSearchAnswer::Err { ok: false, error, matches: vec![] },
+    })
+    .await
 }
 
 /// `GET /api/symbols/quote`: a glance at a listing the watchlist's add row offers:
@@ -247,26 +248,26 @@ async fn markets_refresh(State(state): State<AppState>) -> Api<OkOr> {
 #[serde(default)]
 pub struct WatchlistBody {
     #[serde(deserialize_with = "text")]
-    symbol: String,
+    pub(crate) symbol: String,
     #[serde(deserialize_with = "text")]
-    exchange: String,
+    pub(crate) exchange: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    currency: Option<String>,
+    pub(crate) currency: Option<String>,
     #[serde(rename = "securityId", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    security_id: Option<String>,
+    pub(crate) security_id: Option<String>,
 }
 
 async fn watchlist_add(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
-    answer(move || feeds::watch_add(&state.app, &serde_json::to_value(&body).unwrap())).await
+    answer(move || feeds::watch_add(&state.app, &body)).await
 }
 
 async fn watchlist_remove(State(state): State<AppState>, Body(body): Body<WatchlistBody>) -> Api<feeds::WatchlistAnswer> {
-    answer(move || feeds::watch_remove(&state.app, &serde_json::to_value(&body).unwrap())).await
+    answer(move || feeds::watch_remove(&state.app, &body)).await
 }
 
 /// What `POST /api/tiles/set` accepts: the tile row, in order.

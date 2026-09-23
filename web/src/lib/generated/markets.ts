@@ -2,7 +2,7 @@
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.
 
 import type { OkOr } from './common'
-import type { MarketTile } from './wire'
+import type { Fill, MarketTile, SymbolMatch } from './wire'
 
 export type GaugeReading = { label: string, score: number, rating: string, };
 
@@ -51,7 +51,7 @@ export type FearAnswer = FearDoc | OkOr;
 
 export type ShortsAnswer = ShortsPayload | OkOr;
 
-export type ListingAnswer = { ok: false, error: string, } | { ok: true, symbol: string, positionId: string, } | { ok: true, symbol: string, exchange: string, currency: string, kind: string, name: string, securityId: string, fills: unknown[], price: number | null, percentChange: number | null, };
+export type ListingAnswer = { ok: false, error: string, } | { ok: true, symbol: string, positionId: string, } | { ok: true, symbol: string, exchange: string, currency: string, kind: string, name: string, securityId: string, fills: Array<Fill>, price: number | null, percentChange: number | null, };
 
 export type NewsSymbolAnswer = { ok: false, error: string, } | { ok: true, count: number, source: string, exchange: string, };
 
@@ -73,7 +73,7 @@ export type GlanceAnswer = { ok: boolean, price: number | null, priceChange: num
 
 export type Search = { q: string, };
 
-export type SymbolSearchAnswer = { ok: true, matches: unknown[], } | { ok: false, error: string, matches: unknown[], };
+export type SymbolSearchAnswer = { ok: true, matches: Array<SymbolMatch>, } | { ok: false, error: string, matches: Array<SymbolMatch>, };
 
 export type WatchlistBody = { symbol: string, exchange: string, name?: string, currency?: string, securityId?: string, };
 

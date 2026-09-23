@@ -5,7 +5,7 @@
 //! model had types. A field that may have nothing to say is an `Option`: `None`
 //! is `null` on the wire unless the field says it is left out.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use std::sync::Arc;
 
@@ -55,9 +55,9 @@ pub struct Leg {
 }
 
 /// One broker fill as the page prints it.
-#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 #[diff(key = id)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Fill {
     pub id: String,
     pub when: String,
@@ -78,13 +78,14 @@ pub struct Fill {
 }
 
 /// Which way a fill went: `BUY`, `SELL`, or blank when the row does not say.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 pub enum FillSide {
     #[serde(rename = "BUY")]
     Buy,
     #[serde(rename = "SELL")]
     Sell,
     #[serde(rename = "")]
+    #[default]
     Unsaid,
 }
 
@@ -735,6 +736,24 @@ pub struct MarketInstrument {
     pub exchange: &'static str,
     pub kind: &'static str,
     pub aliases: &'static [&'static str],
+}
+
+/// One hit from `GET /api/symbols/search`: what its source gave. `kind` and
+/// `rank` come only from the built-in instrument directory, neither from
+/// Nasdaq's or TSX's own search.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolMatch {
+    pub symbol: String,
+    pub name: String,
+    pub exchange: String,
+    pub currency: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rank: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]

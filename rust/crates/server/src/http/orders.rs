@@ -3,7 +3,6 @@
 
 use axum::extract::State;
 use serde::Deserialize;
-use serde_json::Value;
 
 use super::extract::text;
 use super::{answer, api_routes, Api, AppState, Body, Params, Routed};
@@ -106,40 +105,41 @@ async fn cancel(State(state): State<AppState>, Body(o): Body<Named>) -> Api<orde
 }
 
 /// A resting order's new size or limit. Either may be a number or the text the
-/// person typed; `modify_order` reads both.
+/// person typed; read leniently into the number it names.
 #[derive(Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
 pub struct Modify {
-    #[serde(default)]
     id: String,
+    #[serde(deserialize_with = "bagholder_model::lenient::maybe_number")]
     #[ts(type = "number | string | null")]
-    quantity: Option<Value>,
-    #[serde(rename = "limitPrice")]
+    quantity: Option<f64>,
+    #[serde(rename = "limitPrice", deserialize_with = "bagholder_model::lenient::maybe_number")]
     #[ts(type = "number | string | null")]
-    limit_price: Option<Value>,
+    limit_price: Option<f64>,
 }
 
 async fn modify(State(state): State<AppState>, Body(m): Body<Modify>) -> Api<orders::OrderActionAnswer> {
-    answer(move || orders::modify_order(&state.app, &m.id, m.quantity.as_ref(), m.limit_price.as_ref())).await
+    answer(move || orders::modify_order(&state.app, &m.id, m.quantity, m.limit_price)).await
 }
 
 /// One leg of a bracket moved, given a trail, or taken off.
 #[derive(Deserialize, Default, ts_rs::TS)]
+#[serde(default)]
 pub struct Adjust {
-    #[serde(default)]
     id: String,
-    #[serde(default)]
     leg: String,
+    #[serde(deserialize_with = "bagholder_model::lenient::maybe_number")]
     #[ts(optional, type = "number | string | null")]
-    price: Option<Value>,
+    price: Option<f64>,
+    #[serde(deserialize_with = "bagholder_model::lenient::maybe_number")]
     #[ts(optional, type = "number | string | null")]
-    trail: Option<Value>,
-    #[serde(default)]
+    trail: Option<f64>,
     #[ts(optional)]
     remove: Option<bool>,
 }
 
 async fn bracket_adjust(State(state): State<AppState>, Body(a): Body<Adjust>) -> Api<orders::OrderActionAnswer> {
-    answer(move || orders::adjust_bracket(&state.app, &a.id, &a.leg, a.price.as_ref(), a.trail.as_ref(), a.remove.unwrap_or(false))).await
+    answer(move || orders::adjust_bracket(&state.app, &a.id, &a.leg, a.price, a.trail, a.remove.unwrap_or(false))).await
 }
 
 async fn bracket_cancel(State(state): State<AppState>, Body(b): Body<Named>) -> Api<orders::OrderActionAnswer> {

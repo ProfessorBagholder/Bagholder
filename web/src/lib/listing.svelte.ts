@@ -99,7 +99,7 @@ export async function loadListing(id: string, held: (positionId: string) => void
   for (const k of ['exchange', 'currency', 'name', 'kind', 'securityId'] as const) {
     if (!l[k] && d[k]) l[k] = d[k] as string
   }
-  l.fills = d.fills as Fill[]
+  l.fills = d.fills
   l.price = d.price ?? null
   l.percentChange = d.percentChange ?? null
 }

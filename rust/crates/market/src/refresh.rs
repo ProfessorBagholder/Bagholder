@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 use bagholder_model::input::Listing;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::http::{get_text, post_json, TMX_HEADERS};
 use crate::parse::{parse_boc_json, parse_fred_csv, parse_stooq_csv, parse_tmx_history, Series};
@@ -115,16 +115,15 @@ impl Drop for Refreshing {
 }
 
 /// FX, the benchmarks and the declared distributions for
-/// the payer symbols. Never fails; the row counts written.
-pub fn refresh_all(conn: &Connection, symbols: &[Listing]) -> Value {
-    let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "skipped": true}) };
+/// the payer symbols. Never fails; nothing when another pass was already
+/// running.
+pub fn refresh_all(conn: &Connection, symbols: &[Listing]) {
+    let _guard = match Refreshing::claim() { Some(g) => g, None => return };
     let _ = bagholder_store::tables::set_meta(conn, "market_attempt_at", &crate::now_stamp());
-    json!({
-        "fx": refresh_fx(conn),
-        "benchmark": refresh_benchmark(conn) + refresh_tsx(conn),
-        "distributions": refresh_distributions(conn, symbols, false),
-        "skipped": false,
-    })
+    refresh_fx(conn);
+    refresh_benchmark(conn);
+    refresh_tsx(conn);
+    refresh_distributions(conn, symbols, false);
 }
 
 pub const RECORD_STALE_HOURS: f64 = 20.0;
@@ -213,11 +212,9 @@ pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
 /// USD/CAD and the benchmarks at most every six
 /// hours (sooner once today's rate is out, or a benchmark is stale), and every
 /// payer's distribution record past its hours.
-pub fn refresh_periodic(conn: &Connection, symbols: &[Listing]) -> Value {
-    let _guard = match Refreshing::claim() { Some(g) => g, None => return json!({"fx": 0, "benchmark": 0, "distributions": 0, "skipped": true}) };
+pub fn refresh_periodic(conn: &Connection, symbols: &[Listing]) {
+    let _guard = match Refreshing::claim() { Some(g) => g, None => return };
     let (today, now_unix, stamp) = crate::clock_now();
-    let mut fx = 0;
-    let mut bench = 0;
     let last = bagholder_store::tables::get_meta(conn, "market_attempt_at", "").unwrap_or_default();
     let old = match crate::quotes::instant_secs_public(&last) {
         Some(then) => now_unix - then > MARKET_ATTEMPT_HOURS * 3600.0,
@@ -225,11 +222,11 @@ pub fn refresh_periodic(conn: &Connection, symbols: &[Listing]) -> Value {
     };
     if old || fx_day_published_but_missing(conn, now_unix) || benchmark_stale(conn, &today) {
         let _ = bagholder_store::tables::set_meta(conn, "market_attempt_at", &stamp);
-        fx = refresh_fx(conn);
-        bench = refresh_benchmark(conn) + refresh_tsx(conn);
+        refresh_fx(conn);
+        refresh_benchmark(conn);
+        refresh_tsx(conn);
     }
-    let dist = refresh_distributions(conn, symbols, false);
-    json!({"fx": fx, "benchmark": bench, "distributions": dist, "skipped": false})
+    refresh_distributions(conn, symbols, false);
 }
 
 pub const STALE_DAYS: i64 = 4;

@@ -94,15 +94,33 @@ fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<String> {
     bagholder_market::client::request("GET", &url, &[], None, timeout).ok().map(|r| r.text())
 }
 
+/// One of DevTools' `/json/list` targets: a window, a tab, or the browser
+/// itself, as far as finding and talking to it needs.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct CdpTarget {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    web_socket_debugger_url: String,
+}
+
+/// `/json/list`'s targets a debug port answers, each with a socket to reach
+/// it; `None` where the reply is not a JSON array at all.
+fn parse_cdp_list(raw: &str) -> Option<Vec<CdpTarget>> {
+    let Value::Array(a) = serde_json::from_str::<Value>(raw).ok()? else { return None };
+    Some(a.into_iter().filter_map(|t| serde_json::from_value::<CdpTarget>(t).ok()).collect())
+}
+
 /// The DevTools targets.
-fn cdp_list(port: u16, timeout: Duration) -> Vec<Value> {
+fn cdp_list(port: u16, timeout: Duration) -> Vec<CdpTarget> {
     for path in ["/json/list", "/json"] {
         if let Some(raw) = http_get_local(port, path, timeout) {
             if raw.is_empty() {
                 continue;
             }
-            if let Ok(Value::Array(a)) = serde_json::from_str::<Value>(&raw) {
-                return a;
+            if let Some(targets) = parse_cdp_list(&raw) {
+                return targets;
             }
         }
     }
@@ -110,8 +128,8 @@ fn cdp_list(port: u16, timeout: Duration) -> Vec<Value> {
 }
 
 /// The login Chrome's open windows and tabs.
-fn cdp_pages(port: u16) -> Vec<Value> {
-    cdp_list(port, WINDOW_CHECK).into_iter().filter(|t| t.is_object() && f(t, "type") == "page" && !f(t, "id").is_empty()).collect()
+fn cdp_pages(port: u16) -> Vec<CdpTarget> {
+    cdp_list(port, WINDOW_CHECK).into_iter().filter(|t| t.kind == "page" && !t.id.is_empty()).collect()
 }
 
 // --- a WebSocket client, enough for DevTools --------------------------------------
@@ -431,7 +449,7 @@ fn cookies_from_document_cookie(text: &str) -> Vec<Value> {
         .collect()
 }
 
-pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<Value> {
+pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<crate::session::Capture> {
     let mut oauth: Option<Value> = None;
     let mut wssdi = String::new();
     for c in cookies {
@@ -449,39 +467,24 @@ pub fn tokens_from_cookie_list(_app: &Arc<App>, cookies: &[Value]) -> Option<Val
         }
     }
     let oauth = oauth.filter(|o| crate::app::truthy(o.get("access_token")))?;
-    let mut body = serde_json::Map::new();
-    for k in ["access_token", "refresh_token", "identity_canonical_id", "client_id", "session_id"] {
-        if crate::app::truthy(oauth.get(k)) {
-            body.insert(k.into(), oauth[k].clone());
-        }
-    }
-    let ident = {
-        let ids: bagholder_ws::session::IdentityKeys = serde_json::from_value(oauth.clone()).unwrap_or_default();
-        ids.identity()
-    };
-    if !ident.is_empty() {
-        body.insert("identity_canonical_id".into(), json!(ident));
-    }
-    if let Some(e) = oauth.get("expires_at").filter(|v| !v.is_null()) {
-        body.insert("expires_at".into(), e.clone());
-    }
+    let mut capture: crate::session::Capture = serde_json::from_value(oauth).unwrap_or_default();
     if !wssdi.is_empty() {
-        body.insert("wssdi".into(), json!(wssdi));
+        capture.wssdi = wssdi;
     }
-    Some(Value::Object(body))
+    Some(capture)
 }
 
 fn cookie_list(msg: Option<Value>) -> Vec<Value> {
     msg.and_then(|m| m.get("result").filter(|r| r.is_object()).and_then(|r| r.get("cookies")).and_then(|c| c.as_array()).cloned()).unwrap_or_default()
 }
 
-fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<Value> {
+fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<crate::session::Capture> {
     let mut ws = Ws::connect(ws_url, CAPTURE_CALL).ok()?;
-    let with_ua = |mut body: Value, ua: &str| {
+    let with_ua = |mut capture: crate::session::Capture, ua: &str| {
         if !ua.is_empty() {
-            body["user_agent"] = json!(ua);
+            capture.user_agent = ua.to_string();
         }
-        body
+        capture
     };
     let ua = ws.call("Browser.getVersion", None, CAPTURE_CALL).and_then(|v| v.get("result").map(|r| f(r, "userAgent").trim().to_string())).unwrap_or_default();
     if !ua.is_empty() {
@@ -505,12 +508,12 @@ fn cookies_from_target(app: &Arc<App>, ws_url: &str) -> Option<Value> {
     tokens_from_cookie_list(app, &cookies_from_document_cookie(&val)).map(|b| with_ua(b, &ua))
 }
 
-fn try_capture(app: &Arc<App>, port: u16) -> Option<Value> {
+fn try_capture(app: &Arc<App>, port: u16) -> Option<crate::session::Capture> {
     let targets = cdp_list(port, Duration::from_secs(1));
-    let (pages, others): (Vec<Value>, Vec<Value>) = targets.into_iter().filter(|t| !f(t, "webSocketDebuggerUrl").is_empty()).partition(|t| f(t, "type") == "page");
+    let (pages, others): (Vec<CdpTarget>, Vec<CdpTarget>) = targets.into_iter().filter(|t| !t.web_socket_debugger_url.is_empty()).partition(|t| t.kind == "page");
     for t in pages.into_iter().chain(others) {
-        if let Some(body) = cookies_from_target(app, &f(&t, "webSocketDebuggerUrl")) {
-            if crate::app::truthy(body.get("access_token")) {
+        if let Some(body) = cookies_from_target(app, &t.web_socket_debugger_url) {
+            if !body.access_token.is_empty() {
                 return Some(body);
             }
         }
@@ -533,13 +536,12 @@ fn capture_loop(app: &Arc<App>, pid: u32, attempt: i64) {
             return;
         }
         let body = if !cdp_pages(DEBUG_PORT).is_empty() { try_capture(app, DEBUG_PORT) } else { None };
-        if let Some(b) = body {
-            let rt = f(&b, "refresh_token");
+        if let Some(capture) = body {
+            let rt = capture.refresh_token.clone();
             if attempt_is(app, attempt) && Some(rt.clone()) != refused {
                 if !capturing(app) {
                     return;
                 }
-                let capture: crate::session::Capture = serde_json::from_value(b.clone()).unwrap_or_default();
                 if crate::session::capture_tokens(app, &capture).ok {
                     log("bagholder captured Wealthsimple session");
                     close_login_browser(app, Some(pid));
@@ -696,9 +698,9 @@ fn with_view<T>(app: &App, f_: impl FnOnce(&mut Ws) -> Option<T>) -> Option<T> {
             return None;
         }
     };
-    if v.ws.is_none() || v.target != f(&page, "id") {
-        v.ws = Ws::connect(&f(&page, "webSocketDebuggerUrl"), CAPTURE_CALL).ok();
-        v.target = f(&page, "id");
+    if v.ws.is_none() || v.target != page.id {
+        v.ws = Ws::connect(&page.web_socket_debugger_url, CAPTURE_CALL).ok();
+        v.target = page.id;
     }
     let ws = v.ws.as_mut()?;
     let out = f_(ws);
@@ -723,6 +725,22 @@ pub fn login_frame(app: &Arc<App>) -> Option<Vec<u8>> {
 
 fn screencast_params() -> Value {
     json!({"format": "jpeg", "quality": 60, "maxWidth": LOGIN_VIEW_SIZE.0, "maxHeight": LOGIN_VIEW_SIZE.1, "everyNthFrame": 1})
+}
+
+/// A `Page.screencastFrame` event: the frame itself and the session it must
+/// be acknowledged under.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ScreencastFrame {
+    method: String,
+    params: ScreencastFrameParams,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ScreencastFrameParams {
+    data: String,
+    session_id: Option<i64>,
 }
 
 /// A passkey sign-in refused the moment it is asked for, as Cancel in the
@@ -759,7 +777,7 @@ fn screenshot_loop(app: &Arc<App>, attempt: i64) {
             continue;
         }
         if ws.is_none() {
-            ws = cdp_pages(DEBUG_PORT).first().and_then(|p| Ws::connect(&f(p, "webSocketDebuggerUrl"), CAPTURE_CALL).ok());
+            ws = cdp_pages(DEBUG_PORT).first().and_then(|p| Ws::connect(&p.web_socket_debugger_url, CAPTURE_CALL).ok());
         }
         let shot = ws.as_mut().and_then(|w| w.call("Page.captureScreenshot", Some(json!({"format": "jpeg", "quality": 60})), CAPTURE_CALL));
         match shot.as_ref().and_then(|r| r.pointer("/result/data")).and_then(|d| d.as_str()) {
@@ -781,7 +799,7 @@ fn screencast_loop(app: &Arc<App>, attempt: i64) {
         }
         let pages = cdp_pages(DEBUG_PORT);
         let page = match pages.first() { Some(p) => p.clone(), None => { std::thread::sleep(Duration::from_millis(500)); continue } };
-        let mut ws = match Ws::connect(&f(&page, "webSocketDebuggerUrl"), CAPTURE_CALL) { Ok(w) => w, Err(_) => { std::thread::sleep(Duration::from_millis(500)); continue } };
+        let mut ws = match Ws::connect(&page.web_socket_debugger_url, CAPTURE_CALL) { Ok(w) => w, Err(_) => { std::thread::sleep(Duration::from_millis(500)); continue } };
         // A passkey sign-in opens Chromium's own passkey dialog, which is drawn
         // outside the page: the stream never shows it and the page's clicks
         // never reach it, so the page would wait on it for good. In every
@@ -804,17 +822,16 @@ fn screencast_loop(app: &Arc<App>, attempt: i64) {
             if op != 0x1 && op != 0x2 {
                 continue;
             }
-            let msg: Value = match serde_json::from_slice(&data) { Ok(m) => m, Err(_) => break };
-            if f(&msg, "method") != "Page.screencastFrame" {
+            let msg: ScreencastFrame = match serde_json::from_slice(&data) { Ok(m) => m, Err(_) => break };
+            if msg.method != "Page.screencastFrame" {
                 continue;
             }
-            let p = msg.get("params").cloned().unwrap_or(json!({}));
-            let frame = unb64(&f(&p, "data"));
+            let frame = unb64(&msg.params.data);
             if !frame.is_empty() {
                 publish_frame(app, frame);
             }
             // acknowledged without waiting for the answer
-            ws.fire("Page.screencastFrameAck", json!({"sessionId": p.get("sessionId").cloned().unwrap_or(Value::Null)}));
+            ws.fire("Page.screencastFrameAck", json!({"sessionId": msg.params.session_id}));
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -1039,7 +1056,7 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
         if let Some(u) = browser_ws() {
             if let Ok(mut ws) = Ws::connect(&u, Duration::from_secs(5)) {
                 if let Some(p) = cdp_pages(DEBUG_PORT).first() {
-                    ws.call("Target.activateTarget", Some(json!({"targetId": f(p, "id")})), Duration::from_secs(8));
+                    ws.call("Target.activateTarget", Some(json!({"targetId": p.id})), Duration::from_secs(8));
                 }
                 ws.close();
             }
@@ -1128,5 +1145,91 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
         let a2 = app.clone(); spawn("bagholder-screenshots", move || screenshot_loop(&a2, attempt));
     }
     StartLoginAnswer::ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests_common::{app, guard};
+
+    fn cookie(name: &str, value: &str) -> Value {
+        json!({"name": name, "value": value})
+    }
+
+    #[test]
+    fn test_parse_cdp_list_reads_each_targets_id_kind_and_socket() {
+        let raw = r#"[{"id": "1", "type": "page", "webSocketDebuggerUrl": "ws://x/1", "title": "t"}, {"id": "2", "type": "background_page"}]"#;
+        let out = parse_cdp_list(raw).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].id.as_str(), out[0].kind.as_str(), out[0].web_socket_debugger_url.as_str()), ("1", "page", "ws://x/1"));
+        assert_eq!((out[1].id.as_str(), out[1].kind.as_str(), out[1].web_socket_debugger_url.as_str()), ("2", "background_page", ""), "a missing field defaults empty");
+        assert!(parse_cdp_list("not json").is_none());
+        assert!(parse_cdp_list(r#"{"not": "an array"}"#).is_none());
+        assert_eq!(parse_cdp_list("[]").unwrap().len(), 0, "a valid, empty answer is nothing to retry over");
+    }
+
+    #[test]
+    fn test_a_screencast_frame_event_carries_its_data_and_session_to_ack() {
+        let raw = r#"{"method": "Page.screencastFrame", "params": {"data": "aGk=", "sessionId": 7}}"#;
+        let msg: ScreencastFrame = serde_json::from_str(raw).unwrap();
+        assert_eq!((msg.method.as_str(), msg.params.data.as_str(), msg.params.session_id), ("Page.screencastFrame", "aGk=", Some(7)));
+        let other: ScreencastFrame = serde_json::from_str(r#"{"method": "Page.frameNavigated"}"#).unwrap();
+        assert_eq!((other.method.as_str(), other.params.session_id), ("Page.frameNavigated", None), "no session on an unrelated event");
+    }
+
+    #[test]
+    fn test_a_cookie_value_that_is_or_decodes_to_json_carrying_an_access_token() {
+        assert_eq!(json_with_access_token(""), None);
+        assert_eq!(json_with_access_token("not json"), None);
+        assert_eq!(json_with_access_token(r#"{"other": 1}"#), None, "no access_token: not this cookie");
+        assert_eq!(json_with_access_token(r#"{"access_token": "a1"}"#), Some(json!({"access_token": "a1"})));
+        // URL-encoded, once and twice over, as the browser and a proxy might leave it
+        let encoded = r#"%7B%22access_token%22%3A%22a1%22%7D"#;
+        assert_eq!(json_with_access_token(encoded), Some(json!({"access_token": "a1"})));
+        let twice = r#"%257B%2522access_token%2522%253A%2522a1%2522%257D"#;
+        assert_eq!(json_with_access_token(twice), Some(json!({"access_token": "a1"})));
+    }
+
+    #[test]
+    fn test_cookies_from_document_cookie_splits_on_semicolons() {
+        assert_eq!(cookies_from_document_cookie(" a=1; b=2 ; c"), vec![json!({"name": "a", "value": "1"}), json!({"name": "b", "value": "2"})]);
+        assert!(cookies_from_document_cookie("").is_empty());
+    }
+
+    #[test]
+    fn test_cookie_list_reads_networks_getallcookies_answer() {
+        let msg = json!({"id": 1, "result": {"cookies": [{"name": "a", "value": "1"}]}});
+        assert_eq!(cookie_list(Some(msg)), vec![json!({"name": "a", "value": "1"})]);
+        assert!(cookie_list(None).is_empty());
+        assert!(cookie_list(Some(json!({"result": {}}))).is_empty());
+    }
+
+    #[test]
+    fn test_tokens_from_cookie_list_reads_the_oauth_cookie_over_any_other_and_the_device_cookie_beside_it() {
+        let _g = guard();
+        let cookies = vec![
+            cookie("other", r#"{"access_token": "a0", "refresh_token": "r0"}"#),
+            cookie(OAUTH_COOKIE, r#"{"access_token": "a1", "refresh_token": "r1", "client_id": "c1"}"#),
+            cookie(DEVICE_COOKIE, "device-1"),
+            cookie("unrelated", "plain text"),
+        ];
+        let capture = tokens_from_cookie_list(&app(), &cookies).expect("an access token was captured");
+        assert_eq!((capture.access_token.as_str(), capture.refresh_token.as_str(), capture.client_id.as_str(), capture.wssdi.as_str()), ("a1", "r1", "c1", "device-1"), "the named OAuth cookie wins over the first one found");
+    }
+
+    #[test]
+    fn test_tokens_from_cookie_list_falls_back_to_the_first_cookie_carrying_a_token() {
+        let _g = guard();
+        let cookies = vec![cookie("other", r#"{"access_token": "a0"}"#)];
+        assert_eq!(tokens_from_cookie_list(&app(), &cookies).unwrap().access_token, "a0");
+    }
+
+    #[test]
+    fn test_tokens_from_cookie_list_is_nothing_without_a_truthy_access_token() {
+        let _g = guard();
+        assert!(tokens_from_cookie_list(&app(), &[]).is_none());
+        assert!(tokens_from_cookie_list(&app(), &[cookie("x", r#"{"access_token": ""}"#)]).is_none());
+        assert!(tokens_from_cookie_list(&app(), &[cookie("x", "not json")]).is_none());
+    }
 }
 

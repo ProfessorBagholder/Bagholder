@@ -232,6 +232,8 @@ rateChange?: number | null, };
 
 export type MarketInstrument = { symbol: string, label: string, name: string, exchange: string, kind: string, aliases: Array<string>, };
 
+export type SymbolMatch = { symbol: string, name: string, exchange: string, currency: string, kind?: string, rank?: number, };
+
 export type Markets = { holdings: Array<HeldTile>, watchlist: Array<WatchItem>, news: Array<NewsItem>, universes: Record<string, Array<UniverseTile>>, tiles: Array<MarketTile>, instruments: Array<MarketInstrument>, };
 
 export type ListingInfo = { name: string, exchange: string, kind: Kind, currency: string, };

@@ -8,7 +8,7 @@ use bagholder_model::instruments::{find, implied_rate, kind_label, label, search
 use bagholder_model::markets::{tile_rows, watch_quote_key, watch_rows, watch_symbols};
 
 fn syms(text: &str, k: usize) -> Vec<String> {
-    search(text).iter().take(k).map(|r| r["symbol"].as_str().unwrap().to_string()).collect()
+    search(text).iter().take(k).map(|r| r.symbol.clone()).collect()
 }
 
 fn v(s: &[&str]) -> Vec<String> {
@@ -41,7 +41,7 @@ fn test_aliases_find_what_people_type() {
     assert!(search("V").is_empty(), "a single letter is not a search for every V");
     assert_eq!(syms("VI", 1), v(&["VIX"]));
     let row = &search("VIX")[0];
-    assert_eq!((&row["name"], &row["exchange"], &row["currency"], &row["kind"]), (&json!("CBOE Volatility Index"), &json!("Index"), &json!("USD"), &json!("Index")));
+    assert_eq!((row.name.as_str(), row.exchange.as_str(), row.currency.as_str(), row.kind.as_deref()), ("CBOE Volatility Index", "Index", "USD", Some("Index")));
 }
 
 #[test]

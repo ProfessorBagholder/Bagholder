@@ -3,11 +3,11 @@
 //! for US listings, TSX's company directory for the TSX and the TSX-V, the
 //! three asked together -- remembered for the process.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use bagholder_model::value::field_s;
+use bagholder_model::wire::SymbolMatch;
 
 pub const NASDAQ_SEARCH_URL: &str = "https://api.nasdaq.com/api/autocomplete/slookup/10?search={}";
 pub const TSX_SEARCH_URL: &str = "https://www.tsx.com/json/company-directory/search/{}/{}";
@@ -32,7 +32,7 @@ fn s(v: Option<&Value>) -> String {
 
 /// US shares and ETFs on the exchanges
 /// Wealthsimple trades.
-pub fn parse_nasdaq_search(data: &Value) -> Vec<Value> {
+pub fn parse_nasdaq_search(data: &Value) -> Vec<SymbolMatch> {
     let mut out = Vec::new();
     let rows = match data { Value::Object(_) => data.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default(), _ => vec![] };
     for q in rows {
@@ -50,19 +50,19 @@ pub fn parse_nasdaq_search(data: &Value) -> Vec<Value> {
                 break;
             }
         }
-        out.push(json!({"symbol": sym, "name": name, "exchange": ex, "currency": "USD"}));
+        out.push(SymbolMatch { symbol: sym, name, exchange: ex.to_string(), currency: "USD".into(), ..SymbolMatch::default() });
     }
     out
 }
 
 /// That exchange's listings, one per issuer.
-pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<Value> {
+pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<SymbolMatch> {
     let rows = match data { Value::Object(_) => data.get("results").and_then(|d| d.as_array()).cloned().unwrap_or_default(), _ => vec![] };
     let mut out = Vec::new();
     for r in rows {
         let sym = if r.is_object() { s(r.get("symbol")).to_uppercase() } else { String::new() };
         if !sym.is_empty() {
-            out.push(json!({"symbol": sym, "name": s(r.get("name")), "exchange": exchange, "currency": "CAD"}));
+            out.push(SymbolMatch { symbol: sym, name: s(r.get("name")), exchange: exchange.to_string(), currency: "CAD".into(), ..SymbolMatch::default() });
         }
     }
     out
@@ -71,12 +71,12 @@ pub fn parse_tsx_search(data: &Value, exchange: &str) -> Vec<Value> {
 /// Exact symbols first, then symbols starting with the
 /// text, then the rest, each group in the order the sources gave; duplicates
 /// dropped; at most twelve.
-pub fn rank_search(text: &str, rows: Vec<Value>) -> Vec<Value> {
+pub fn rank_search(text: &str, rows: Vec<SymbolMatch>) -> Vec<SymbolMatch> {
     let key = bagholder_model::textrules::trim_space(text).to_uppercase();
     let mut seen: Vec<(String, String)> = Vec::new();
-    let mut out: Vec<Value> = Vec::new();
+    let mut out: Vec<SymbolMatch> = Vec::new();
     for r in rows {
-        let k = (field_s(&r, "symbol"), field_s(&r, "exchange"));
+        let k = (r.symbol.clone(), r.exchange.clone());
         if seen.contains(&k) {
             continue;
         }
@@ -84,12 +84,11 @@ pub fn rank_search(text: &str, rows: Vec<Value>) -> Vec<Value> {
         out.push(r);
     }
     // an instrument found by an alias ranks as the exact match it is
-    let rank = |r: &Value| -> f64 {
-        match r.get("rank") {
-            Some(v) if !v.is_null() => v.as_f64().unwrap_or(0.0),
-            _ => {
-                let sym = field_s(r, "symbol");
-                if sym == key { 0.0 } else if sym.starts_with(&key) { 1.0 } else { 2.0 }
+    let rank = |r: &SymbolMatch| -> f64 {
+        match r.rank {
+            Some(v) => v,
+            None => {
+                if r.symbol == key { 0.0 } else if r.symbol.starts_with(&key) { 1.0 } else { 2.0 }
             }
         }
     };
@@ -98,22 +97,23 @@ pub fn rank_search(text: &str, rows: Vec<Value>) -> Vec<Value> {
     out
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Vec<Value>>> {
-    static C: OnceLock<Mutex<HashMap<String, Vec<Value>>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, Vec<SymbolMatch>>> {
+    static C: OnceLock<Mutex<HashMap<String, Vec<SymbolMatch>>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// The listings the directories find for the text,
 /// remembered for the process. A source that fails leaves the others' answer;
-/// nothing is remembered when one failed.
-pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &str) -> Value {
+/// nothing is remembered when one failed. `Err` is every source's own failure,
+/// joined into one message.
+pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &str) -> Result<Vec<SymbolMatch>, String> {
     let text = bagholder_model::textrules::trim_space(text).to_string();
     if text.is_empty() {
-        return json!({"ok": true, "matches": []});
+        return Ok(vec![]);
     }
     let key = text.to_uppercase();
     if let Some(hit) = cache().lock().unwrap().get(&key) {
-        return json!({"ok": true, "matches": hit});
+        return Ok(hit.clone());
     }
     let (text, venues) = crate::parse::yahoo_split(&text);
     let q = crate::quotes::percent_encode(&text);
@@ -122,7 +122,7 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
         ("tsx", TSX_SEARCH_URL.replacen("{}", "tsx", 1).replacen("{}", &q, 1)),
         ("tsxv", TSX_SEARCH_URL.replacen("{}", "tsxv", 1).replacen("{}", &q, 1)),
     ];
-    let results: Vec<(String, Result<Vec<Value>, String>)> = std::thread::scope(|sc| {
+    let results: Vec<(String, Result<Vec<SymbolMatch>, String>)> = std::thread::scope(|sc| {
         let handles: Vec<_> = jobs
             .iter()
             .map(|(name, url)| {
@@ -143,7 +143,7 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
             .collect();
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (String::new(), Err("failed".into())))).collect()
     });
-    let mut answers: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut answers: HashMap<String, Vec<SymbolMatch>> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
     for (name, r) in results {
         match r {
@@ -154,9 +154,9 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
         }
     }
     if answers.is_empty() {
-        return json!({"ok": false, "error": format!("Search failed: {}", errors.join("; ")), "matches": []});
+        return Err(format!("Search failed: {}", errors.join("; ")));
     }
-    let mut found: Vec<Value> = jobs.iter().flat_map(|(n, _)| answers.get(*n).cloned().unwrap_or_default()).collect();
+    let mut found: Vec<SymbolMatch> = jobs.iter().flat_map(|(n, _)| answers.get(*n).cloned().unwrap_or_default()).collect();
     if found.is_empty() && text.chars().count() <= 6 && !text.contains(' ') {
         // the directories carry the TSX and Nasdaq registries alone, so a CSE
         // or Cboe Canada listing is in none of them: TMX is asked what it
@@ -172,7 +172,7 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
     all.extend(found);
     let mut rows = rank_search(&text, all);
     if let Some(v) = venues {
-        let kept: Vec<Value> = rows.iter().filter(|r| v.contains(&field_s(r, "exchange").to_uppercase().as_str())).cloned().collect();
+        let kept: Vec<SymbolMatch> = rows.iter().filter(|r| v.contains(&r.exchange.to_uppercase().as_str())).cloned().collect();
         if !kept.is_empty() {
             rows = kept;
         }
@@ -180,5 +180,54 @@ pub fn symbol_search(pool: &std::sync::Arc<bagholder_store::pool::Pool>, text: &
     if errors.is_empty() {
         cache().lock().unwrap().insert(key, rows.clone());
     }
-    json!({"ok": true, "matches": rows})
+    Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn m(symbol: &str, name: &str, exchange: &str, currency: &str) -> SymbolMatch {
+        SymbolMatch { symbol: symbol.into(), name: name.into(), exchange: exchange.into(), currency: currency.into(), ..SymbolMatch::default() }
+    }
+
+    #[test]
+    fn test_nasdaq_search_keeps_shares_and_etfs_and_drops_derivatives() {
+        let data = json!({"data": [
+            {"symbol": "AAPL", "name": "Apple Inc. Common Stock", "exchange": "NASDAQ-GS", "asset": "STOCKS"},
+            {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchange": "NASDAQ", "asset": "ETF"},
+            {"symbol": "AAPL.WS", "name": "Apple Warrants", "exchange": "NASDAQ-GS", "asset": "STOCKS"},
+            {"symbol": "XYZ", "name": "Some Bond", "exchange": "NASDAQ-GS", "asset": "BOND"},
+            {"symbol": "NOEX", "name": "No Exchange Match", "exchange": "OTC", "asset": "STOCKS"},
+        ]});
+        let out = parse_nasdaq_search(&data);
+        assert_eq!(out, vec![m("AAPL", "Apple Inc.", "NASDAQ", "USD"), m("SPY", "SPDR S&P 500 ETF Trust", "NASDAQ", "USD")]);
+    }
+
+    #[test]
+    fn test_tsx_search_reads_each_result_under_the_exchange_given() {
+        let data = json!({"results": [{"symbol": "shop", "name": "Shopify Inc."}, {"symbol": ""}]});
+        assert_eq!(parse_tsx_search(&data, "TSX"), vec![m("SHOP", "Shopify Inc.", "TSX", "CAD")]);
+    }
+
+    #[test]
+    fn test_rank_search_orders_exact_then_prefix_then_the_rest_and_drops_duplicates() {
+        let rows = vec![
+            m("SHOPIFY", "not exact", "TSX", ""),
+            m("SHOP", "Shopify Inc.", "TSX", ""),
+            m("SHOP", "duplicate, dropped", "TSX", ""),
+            SymbolMatch { rank: Some(0.0), ..m("AAPL", "Apple Inc.", "NASDAQ", "") },
+        ];
+        let out = rank_search("SHOP", rows);
+        assert_eq!(out.iter().map(|r| (r.symbol.clone(), r.exchange.clone())).collect::<Vec<_>>(),
+                   vec![("SHOP".into(), "TSX".into()), ("AAPL".into(), "NASDAQ".into()), ("SHOPIFY".into(), "TSX".into())],
+                   "an exact symbol match and an explicit rank of the same weight keep their given order; a prefix match ranks after both");
+    }
+
+    #[test]
+    fn test_rank_search_keeps_at_most_the_max() {
+        let rows: Vec<SymbolMatch> = (0..SEARCH_MAX + 5).map(|i| m(&format!("S{}", i), "", "TSX", "")).collect();
+        assert_eq!(rank_search("S", rows).len(), SEARCH_MAX);
+    }
 }
