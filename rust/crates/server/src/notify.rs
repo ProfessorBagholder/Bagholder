@@ -1117,10 +1117,9 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
+    #[ignore = "builds a real applet with osacompile, which needs Apple Events: a sandboxed run refuses them, so this runs on its own, outside it, with --ignored"]
     fn test_the_mac_applet_is_built_once_under_bagholders_name_and_icon() {
-        if !Path::new("/usr/bin/osacompile").exists() {
-            return; // the applet is built with macOS's own tools
-        }
+        assert!(Path::new("/usr/bin/osacompile").exists(), "the applet is built with macOS's own tools");
         let (_g, app, _conn) = setup();
         *app.port.lock().unwrap() = 8799;
         let appdir = mac_app(&app).expect("built");

@@ -8461,13 +8461,13 @@
       "path": "<dir>/canonical_basic.csv",
       "name": "canonical_basic.csv",
       "size": 204.0,
-      "mtime": 1790135548.0
+      "mtime": 1790000000.0
     },
     {
       "path": "<dir>/legacy_basic.csv",
       "name": "legacy_basic.csv",
       "size": 110.0,
-      "mtime": 1790135548.0
+      "mtime": 1790000000.0
     }
   ],
   "folder/scan_folder/first": {
@@ -8910,6 +8910,32 @@
   "admin/needs_security_id_backfill/after_wealthsimple_row_no_sid": true,
   "admin/needs_security_id_backfill/mixed": true,
   "admin/save_journal": {
+    "trade-1": {
+      "thesis": "solid thesis",
+      "tags": [
+        "swing",
+        "earnings"
+      ],
+      "grade": "B"
+    },
+    "trade-3": {
+      "thesis": "dup tags",
+      "tags": [
+        "x",
+        "y"
+      ],
+      "grade": ""
+    }
+  },
+  "admin/save_journal_entry/set": {
+    "trade-1": {
+      "thesis": "solid thesis",
+      "tags": [
+        "swing",
+        "earnings"
+      ],
+      "grade": "B"
+    },
     "trade-3": {
       "thesis": "dup tags",
       "tags": [
@@ -8918,38 +8944,12 @@
       ],
       "grade": ""
     },
-    "trade-1": {
-      "thesis": "solid thesis",
-      "tags": [
-        "swing",
-        "earnings"
-      ],
-      "grade": "B"
-    }
-  },
-  "admin/save_journal_entry/set": {
     "trade-4": {
       "thesis": "new entry",
       "tags": [
         "z"
       ],
       "grade": "A"
-    },
-    "trade-1": {
-      "thesis": "solid thesis",
-      "tags": [
-        "swing",
-        "earnings"
-      ],
-      "grade": "B"
-    },
-    "trade-3": {
-      "thesis": "dup tags",
-      "tags": [
-        "x",
-        "y"
-      ],
-      "grade": ""
     }
   },
   "admin/save_journal_entry/delete": {
@@ -8987,13 +8987,6 @@
     }
   },
   "admin/snapshot_journal": {
-    "trade-4": {
-      "thesis": "new entry",
-      "tags": [
-        "z"
-      ],
-      "grade": "A"
-    },
     "trade-3": {
       "thesis": "dup tags",
       "tags": [
@@ -9001,6 +8994,13 @@
         "y"
       ],
       "grade": ""
+    },
+    "trade-4": {
+      "thesis": "new entry",
+      "tags": [
+        "z"
+      ],
+      "grade": "A"
     }
   },
   "admin/clean_journal/junk": {

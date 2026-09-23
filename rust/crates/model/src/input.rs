@@ -139,7 +139,7 @@ fn tags_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::
 
 /// The journal, by trade id (a round trip's `rt:…`, a saved group's id) or
 /// position id.
-pub type Journal = HashMap<String, JournalEntry>;
+pub type Journal = std::collections::BTreeMap<String, JournalEntry>;
 
 /// Trades the person grouped by hand, named by their members' keys.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]

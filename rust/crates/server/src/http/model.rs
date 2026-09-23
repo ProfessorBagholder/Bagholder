@@ -274,7 +274,7 @@ pub struct JournalEntryRequest {
 #[derive(Serialize, TS)]
 pub struct JournalAnswer {
     ok: bool,
-    journal: std::collections::HashMap<String, bagholder_model::input::JournalEntry>,
+    journal: bagholder_model::input::Journal,
 }
 
 async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryRequest>) -> Api<JournalAnswer> {

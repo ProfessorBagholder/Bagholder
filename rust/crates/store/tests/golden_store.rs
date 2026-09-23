@@ -620,6 +620,13 @@ fn folder_scenario(out: &mut Map<String, Value>) {
     std::fs::write(tmp.path().join("._junk.csv"), "x").unwrap();
     std::fs::write(tmp.path().join("notes.txt"), "x").unwrap();
     std::fs::write(tmp.path().join("empty.csv"), "").unwrap();
+    // a copy's modified time is the platform's (macOS keeps the source's, Linux
+    // stamps the copy) and the source's is the checkout's: pin every file's own
+    let pinned = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000);
+    for entry in std::fs::read_dir(tmp.path()).unwrap() {
+        let file = std::fs::File::options().write(true).open(entry.unwrap().path()).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(pinned).set_accessed(pinned)).unwrap();
+    }
 
     fn tv<T: serde::Serialize>(v: &T) -> Value {
         serde_json::to_value(v).unwrap()
