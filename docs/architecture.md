@@ -97,7 +97,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 
 **The person can supply what no source has**: an adjustment record (a cost basis for shares transferred in, a spin-off's allocation, a missing split ratio), recorded as "entered by you", and replaceable by a sourced value later.
 
-**Money and quantities are exact.** Amounts and quantities are decimals, never binary floating point; every amount carries its currency and the types do not allow adding two currencies; conversion takes the day's rate for that currency pair and gives "unknown" when there is none. Ratios and returns, which are statistics, are floating point.
+**Money and quantities are exact.** Amounts and quantities are decimals, never binary floating point; every amount carries its currency and the types do not allow adding two currencies; conversion takes the Bank of Canada's published rate for that currency on the transaction's day, which the app fetches whenever it does not hold it; nothing is ever converted at a rate that was not published. Ratios and returns, which are statistics, are floating point.
 
 **The data is protected without the person thinking about it.** The book is backed up automatically on a schedule, with SQLite's own backup mechanism (never a copy of a live file), kept for a set period, and restoring one is tested. Before every schema migration the book is snapshotted, migrations are tested against stored copies of every past schema, and an update that is rolled back restores that snapshot.
 
@@ -109,7 +109,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 - **The person's home zone** is a setting, an input to the engine. "Today", a year's boundary and a month's are the person's, never the server's (a container runs in UTC).
 - **The day a broker files a row under** is part of that broker's mapping (Wealthsimple's is Alberta's).
 - **Each venue has its session hours and holidays**, used for which quotes can have moved, the bracket engine's session rules and a resting order's renewal.
-- **FX is by the Bank of Canada's business day**; the engine is told the rate, it never guesses one.
+- **FX is the Bank of Canada's published rate.** A transaction on a business day uses that day's rate; one on a weekend or holiday, when the Bank publishes none, uses the rate of the business day before it, which is the Canadian convention (the one the Canada Revenue Agency applies). A rate the app does not hold is fetched, and the figure waits for it; there is no stand-in rate and no cut-off window. The one moment a day's rate does not exist yet, a trade made before the Bank publishes at 16:30 Eastern, the figure is marked as awaiting that day's rate until it is published.
 - Display is in the viewer's zone. Zone rules come from the system's database with a built-in copy where there is none, and tests pin the rules (`docs/plans/time-zone-rules.md`).
 
 ## 8. The engine
@@ -186,7 +186,7 @@ Every failure has an owner and a place it shows:
 - a source failing or changing shape: on the card or chart it feeds, and in the header's status while it persists;
 - a broker session lapsing, a pull or part of a pull failing: the header, naming what failed;
 - an order or bracket problem: the order, the Orders panel, a notification;
-- a figure touched by an unknown (a missing rate, an unknown basis or event value): the figure says so;
+- a figure that is waiting on a fact the app is still finding out (a rate not yet published, a payout frequency, a corporate event's value): the figure says so while the app works on it;
 - the app itself (a book it cannot open, a migration that failed): the page says so instead of loading.
 
 Nothing is logged only to a terminal, and nothing is caught and discarded.
