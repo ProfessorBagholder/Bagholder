@@ -78,6 +78,56 @@
     "expect": {"unclaimed": ["T1"], "needs_trade": 1}
   },
   {
+    "name": "a consolidation with cash in lieu of the fraction: only the fraction is paid out",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: cash in lieu",
+    "working": [
+      "100 X bought for 1,000; one-for-eight: 12.5 units, cost 1,000",
+      "cash in lieu of the half unit at 40 (the leg's 0.04 of the 12.5 held): closes 0.5 at 20 against a cost of 1,000 × 0.5/12.5 = 40 → −20",
+      "12 sold for 1,200 against the 960 left → 240; the round trip: 220"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-12", "cash": "1200"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.125"}, {"from": "X", "cash_per_unit": "40", "units_per_unit": "0.04"}]}],
+    "expect": {"position_count": 0, "trade_count": 1, "trades": [{"opened_by": "t1", "pnl": "220.00"}]}
+  },
+  {
+    "name": "a merger for shares and cash: the cash comes off the cost, the holding continues as the new shares",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a merger for shares and cash",
+    "working": ["100 X cost 1,000; each X becomes 0.5 Y and 2 in cash: cost 1,000 − 200 = 800 on 50 Y; 50 Y sold for 1,000 → 200, one round trip named after Y"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}, {"id": "Y"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X", "qty": "-100"},
+      {"id": "t3", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:01Z", "kind": "corporate-event", "instrument": "Y", "qty": "50"},
+      {"id": "t4", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "Y", "qty": "-50", "cash": "1000"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "Y", "units_per_unit": "0.5", "cash_per_unit": "2"}]}],
+    "expect": {"position_count": 0, "trade_count": 1, "trades": [{"opened_by": "t1", "named_after": "Y", "pnl": "200.00"}]}
+  },
+  {
+    "name": "a return of capital lowers the cost",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a return of capital",
+    "working": ["100 X cost 1,000; 1.50 a unit returned: cost 850; sold for 1,000 → 150"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-100", "cash": "1000"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "cash_per_unit": "1.50"}]}],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": "150.00"}]}
+  },
+  {
     "name": "a read taken before a day's 16:30 does not show that day unpublished",
     "spec": "docs/plans/stage-2-engine.md, rates: a read that could not yet see a day's rate says nothing of that day",
     "working": [

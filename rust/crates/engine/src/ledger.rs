@@ -1132,17 +1132,13 @@ impl<'a> Matcher<'a> {
                 Ok(())
             }
             // a return of capital: cash per unit taken off the cost
-            (Some(to), Some(cash)) if to == from => {
-                let book = self.book(account, from);
-                for lot in book.lots.iter_mut() {
-                    let back = cash.times(lot.qty)?;
-                    lot.value = match &lot.value {
-                        Ok(v) if v.currency == back.currency => Ok(v.checked_sub(back)?),
-                        Ok(_) => Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))),
-                        Err(g) => Err(g.clone()),
-                    };
-                }
-                Ok(())
+            (Some(to), Some(cash)) if to == from => self.return_capital(account, from, cash, anchor),
+            // a merger for shares and cash: the cash per unit comes off the cost,
+            // and the holding continues as the new shares
+            (Some(_), Some(cash)) => {
+                self.return_capital(account, from, cash, anchor)?;
+                let shares = AdjustmentLeg { cash_per_unit: None, ..leg.clone() };
+                self.apply_leg(account, anchor, day, at, &shares, stated, before)
             }
             // the holding continues as another instrument, or a spin-off's child
             (Some(to), None) => {
@@ -1205,11 +1201,14 @@ impl<'a> Matcher<'a> {
                 }
                 Ok(())
             }
-            // a merger for cash, cash in lieu: units out at the cash per unit
+            // a merger for cash, cash in lieu: units out at the cash per unit; how
+            // many is the leg's share of the holding as it stands, else the units
+            // the broker states went out, never the whole holding by default
             (None, Some(cash)) => {
-                let out = match stated.get(&from) {
-                    Some(q) if q.is_negative() => q.abs(),
-                    _ => held,
+                let out = match (leg.units_per_unit, stated.get(&from)) {
+                    (Some(share), _) => held.checked_mul(share)?,
+                    (None, Some(q)) if q.is_negative() => q.abs(),
+                    _ => return Err(unknown()),
                 };
                 let currency = self.currency(from);
                 if cash.currency != currency {
@@ -1224,8 +1223,25 @@ impl<'a> Matcher<'a> {
                 Ok(())
             }
             (None, None) => Err(unknown()),
-            (Some(_), Some(_)) => Err(unknown()),
         }
+    }
+
+    /// Cash per unit paid back on a holding: taken off each lot's cost. A cost
+    /// that would go below nothing is a gain the record does not describe: a gap.
+    fn return_capital(&mut self, account: AccountId, instrument: InstrumentId, cash: Money, anchor: &TransactionId) -> Result<(), Gaps> {
+        let book = self.book(account, instrument);
+        for lot in book.lots.iter_mut().filter(|l| l.direction == Direction::Long) {
+            let back = cash.times(lot.qty)?;
+            lot.value = match &lot.value {
+                Ok(v) if v.currency != back.currency => Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))),
+                Ok(v) => match v.checked_sub(back)? {
+                    left if left.amount.is_negative() => Err(Gaps::of(Gap::Arithmetic(format!("{anchor} pays back more than the units cost")))),
+                    left => Ok(left),
+                },
+                Err(g) => Err(g.clone()),
+            };
+        }
+        Ok(())
     }
 
     /// A holding's lots rescaled from `held` units to `new_total`, each in
