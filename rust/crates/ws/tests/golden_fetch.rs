@@ -194,7 +194,8 @@ fn margin_scenario(out: &mut Map<String, Value>) -> Vec<bagholder_store::broker:
     }));
     let s = sess(json!({"access_token": "tok"}));
     let ids = vec!["margin-ok".to_string(), "margin-unavailable".to_string(), "margin-error".to_string()];
-    let rows = fetch::fetch_margin(&fx.client(), &s, &ids, "2026-09-22T00:00:00Z");
+    let (rows, failed) = fetch::fetch_margin(&fx.client(), &s, &ids, "2026-09-22T00:00:00Z");
+    assert_eq!(failed, vec![fetch::Failed { id: "margin-error".into(), error: "FetchAccountCurrentMarginBuyingPowerV2: margin service unavailable".into() }], "an account whose read fails is named, not dropped");
     out.insert("fetch_margin/result".into(), serde_json::to_value(&rows).unwrap());
     out.insert("fetch_margin/request_variables".into(), json!(vars_of(&fx.requests())));
     rows
@@ -262,7 +263,8 @@ fn securities_scenario(out: &mut Map<String, Value>) {
                 {"id": "sec-b", "currency": "USD", "optionDetails": {"underlyingSecurity": {"id": "sec-a"}}},
             ]}))
         }));
-        let ok = fetch::fetch_securities(&fx_ok.client(), &s, &["sec-a".to_string(), "sec-b".to_string()]);
+        let (ok, failed) = fetch::fetch_securities(&fx_ok.client(), &s, &["sec-a".to_string(), "sec-b".to_string()]);
+        assert!(failed.is_empty());
         out.insert("fetch_securities/batch_ok/result".into(), serde_json::to_value(&ok).unwrap());
         out.insert("fetch_securities/batch_ok/request_variables".into(), json!(vars_of(&fx_ok.requests())));
     }
@@ -278,7 +280,8 @@ fn securities_scenario(out: &mut Map<String, Value>) {
             }
         }
     }));
-    let fallback = fetch::fetch_securities(&fx_fallback.client(), &s, &["sec-x".to_string(), "sec-y".to_string()]);
+    let (fallback, failed) = fetch::fetch_securities(&fx_fallback.client(), &s, &["sec-x".to_string(), "sec-y".to_string()]);
+    assert_eq!(failed, vec![fetch::Failed { id: "sec-y".into(), error: "FetchSecurity: security lookup failed".into() }], "a listing that does not answer is named, not dropped");
     let reqs = fx_fallback.requests();
     out.insert("fetch_securities/batch_error_fallback/result".into(), serde_json::to_value(&fallback).unwrap());
     out.insert(

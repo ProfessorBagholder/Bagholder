@@ -244,6 +244,7 @@ dependencies = [
  "bagholder-market",
  "bagholder-model",
  "bagholder-store",
+ "bagholder-ws",
  "rusqlite",
  "serde",
  "serde_json",

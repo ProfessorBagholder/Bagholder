@@ -21,6 +21,7 @@ pub fn payload(app: &Arc<App>) -> Value {
     let off = update::updates_off();
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
+    let error = [st.error.as_str(), st.portfolio_error.as_str()].into_iter().filter(|e| !e.trim().is_empty()).collect::<Vec<_>>().join("; ");
     let email = if !st.email.is_empty() { st.email.clone() } else { sess.as_ref().map(|x| x.email.clone()).unwrap_or_default() };
     json!({
         "ok": true,
@@ -33,7 +34,7 @@ pub fn payload(app: &Arc<App>) -> Value {
         "syncing": st.syncing,
         "listingsFilling": st.listings_filling,
         "syncStep": st.sync_step,
-        "error": st.error,
+        "error": error,
         "dataVersion": format!("{}|{}", data_version, bagholder_model::clock::today_local()),
         // everything the model reads except the quotes: when this is unchanged but the
         // data version moved, only prices ticked (read by the legacy page, which polls)

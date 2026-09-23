@@ -551,8 +551,7 @@ impl<'a> Client<'a> {
             sess.expires_at = Some(Expiry::Text(stamped));
         }
         sess.client_id = cid;
-        let _ = self.home.save_session(sess);
-        Ok(())
+        self.home.save_session(sess).map_err(|e| format!("Could not save the Wealthsimple login: {}", e))
     }
 
     pub fn token_info(&self, sess: &Session) -> TokenInfo {

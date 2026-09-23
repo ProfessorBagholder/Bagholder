@@ -20,8 +20,14 @@ pub fn load_session(app: &Arc<App>) -> Option<Session> {
     app.ws_home().load_session()
 }
 
-pub fn save_session(app: &Arc<App>, sess: &Session) {
-    let _ = app.ws_home().save_session(sess);
+/// Writes the login; a failure is said in words the header can show.
+pub fn save_session(app: &Arc<App>, sess: &Session) -> Result<(), String> {
+    app.ws_home().save_session(sess).map_err(|e| format!("Could not save the Wealthsimple login: {}", e))
+}
+
+/// The sync's problems, one line: each part that did not answer, named.
+fn problems_line(problems: &[String]) -> String {
+    problems.join("; ")
 }
 
 fn set_error(app: &Arc<App>, msg: &str) {
@@ -137,10 +143,17 @@ pub fn delete_session(app: &Arc<App>) {
     st.last_sync.clear();
     st.capturing = false;
     st.error.clear();
+    st.portfolio_error.clear();
 }
 
 pub fn boot_session(app: &Arc<App>) {
-    let conn = match app.open() { Ok(c) => c, Err(_) => return };
+    let conn = match app.open() {
+        Ok(c) => c,
+        Err(e) => {
+            set_error(app, &format!("Could not open the database: {}", e));
+            return;
+        }
+    };
     let mut sess = match load_session(app) {
         Some(s) => s,
         None => {
@@ -151,6 +164,7 @@ pub fn boot_session(app: &Arc<App>) {
         }
     };
     let mut info_ok = false;
+    let mut saved = Ok(());
     if !sess.access_token.is_empty() {
         let info = token_info(app, &sess);
         info_ok = info.is_ok();
@@ -163,7 +177,7 @@ pub fn boot_session(app: &Arc<App>) {
             if !info.email.is_empty() {
                 sess.email = info.email.clone();
             }
-            save_session(app, &sess);
+            saved = save_session(app, &sess);
         }
     }
     let mut ok = info_ok;
@@ -178,8 +192,14 @@ pub fn boot_session(app: &Arc<App>) {
     } else if st.error.trim().is_empty() {
         st.error = if sess.refresh_token.is_empty() { "missing refresh token".into() } else { "Wealthsimple token refresh failed".into() };
     }
+    if let Err(e) = saved {
+        st.error = e;
+    }
     st.email = sess.email.clone();
-    st.last_sync = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
+    match bagholder_store::tables::get_meta(&conn, "synced_at", "") {
+        Ok(v) => st.last_sync = v,
+        Err(e) => st.error = format!("Could not read the database: {}", e),
+    }
 }
 
 /// Told once per expiry.
@@ -216,10 +236,9 @@ pub fn note_sync_failed(app: &Arc<App>, reason: &str) {
 }
 
 /// Per-filter-nickname daily equity: (points, public errors).
-fn fetch_nickname_nav_history(app: &Arc<App>, client: &Client, sess: &Session, accounts: &[bagholder_ws::wire::AccountNode], conn: &rusqlite::Connection) -> (Vec<bagholder_store::broker::NavPoint>, Vec<String>) {
+fn fetch_nickname_nav_history(app: &Arc<App>, client: &Client, sess: &Session, accounts: &[bagholder_ws::wire::AccountNode], last_by: &std::collections::BTreeMap<String, String>) -> (Vec<bagholder_store::broker::NavPoint>, Vec<String>) {
     let mut points = Vec::new();
     let mut errors = Vec::new();
-    let last_by = bagholder_store::tables::nav_last_dates(conn).unwrap_or_default();
     let today = today_utc();
     let groups = bagholder_ws::mapping::nav_account_groups(accounts);
     let mut names: Vec<&String> = groups.keys().collect();
@@ -240,8 +259,7 @@ fn fetch_nickname_nav_history(app: &Arc<App>, client: &Client, sess: &Session, a
             }
         }
         if let Some(public) = failed {
-            errors.push(format!("{}: {}", nick, public));
-            log(&format!("NAV history failed for {}: {}", nick, public));
+            errors.push(format!("Equity history for {} failed: {}", nick, public));
             continue;
         }
         for mut rec in fetch::merge_nav_points(&series) {
@@ -322,7 +340,10 @@ fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     if !email.is_empty() {
         sess.email = email.clone();
     }
-    save_session(app, &sess);
+    let mut problems: Vec<String> = Vec::new();
+    if let Err(e) = save_session(app, &sess) {
+        problems.push(e);
+    }
 
     if !force_activity && !bagholder_store::admin::activity_pull_due(&conn, now_unix() as i64).map_err(failed)? {
         let synced = bagholder_store::tables::get_meta(&conn, "synced_at", "").unwrap_or_default();
@@ -356,16 +377,26 @@ fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     set_step(app, "Fetching balances…");
     let ids: Vec<String> = accounts.iter().map(|a| a.id.clone()).filter(|i| !i.is_empty()).collect();
     let balances = fetch::fetch_balances(&client, &sess, &ids)?;
-    let margin = fetch::fetch_margin(&client, &sess, &fetch::margin_account_ids(&accounts), &now_iso());
+    let (margin, margin_failed) = fetch::fetch_margin(&client, &sess, &fetch::margin_account_ids(&accounts), &now_iso());
+    problems.extend(buying_power_problems(&accts, &margin_failed));
+    let margin = keep_unread_margin(&conn, margin, &margin_failed).map_err(failed)?;
     set_step(app, "Fetching equity history…");
     let last_by = bagholder_store::tables::nav_last_dates(&conn).map_err(failed)?;
     let since_all = last_by.get("").cloned();
-    let nav_history = fetch::fetch_nav_history(&client, &sess, &identity, since_all.as_deref(), &today_utc()).unwrap_or_default();
+    let nav_history = match fetch::fetch_nav_history(&client, &sess, &identity, since_all.as_deref(), &today_utc()) {
+        Ok(points) => points,
+        Err(CallError::NotAuthorized) => return Err(CallError::NotAuthorized),
+        Err(e) => {
+            problems.push(format!("Equity history failed: {}", bagholder_ws::sync::public_sync_error(&e.to_string())));
+            Vec::new()
+        }
+    };
     let mut combined: Vec<bagholder_store::broker::NavPoint> = nav_history
         .into_iter()
         .map(|mut r| { r.account_id = String::new(); r })
         .collect();
-    let (nick_pts, nav_errors) = fetch_nickname_nav_history(app, &client, &sess, &accounts, &conn);
+    let (nick_pts, nav_errors) = fetch_nickname_nav_history(app, &client, &sess, &accounts, &last_by);
+    problems.extend(nav_errors);
     combined.extend(nick_pts);
     let rows = bagholder_store::broker::MappedActivity::to_rows(&mapped);
     bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &crate::app::uuid4).map_err(failed)?;
@@ -378,34 +409,37 @@ fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     bagholder_store::tables::set_meta(&conn, "synced_at", &synced).map_err(failed)?;
     bagholder_store::admin::mark_activity_pulled(&conn, &synced).map_err(failed)?;
     drop(conn);
-    fill_listings(app, &sess, true);
-    let nav_line = if nav_errors.is_empty() { String::new() } else { format!("NAV history failed for {}", nav_errors.join("; ")) };
+    problems.extend(fill_listings(app, &sess, true));
+    for p in &problems {
+        log(&format!("Sync: {}", p));
+    }
     let mut st = app.state.lock().unwrap();
     st.connected = true;
     st.sync_fails = 0;
     st.email = email;
     st.last_sync = synced;
     st.capturing = false;
-    st.error = nav_line;
+    st.error = problems_line(&problems);
     st.sync_step.clear();
     Ok(true)
 }
 
-/// Stamp missing activity security ids and cache
-/// the listings the book names.
-pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> bool {
+/// Stamp missing activity security ids and cache the listings the book
+/// names; what could not be read is returned, one line per part.
+pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> Vec<String> {
     if sess.access_token.is_empty() {
-        return false;
+        return Vec::new();
     }
     {
         let mut st = app.state.lock().unwrap();
         if st.listings_filling || (st.syncing && !from_sync) {
-            return false;
+            return Vec::new();
         }
         st.listings_filling = true;
         st.sync_step = "Attaching listing ids…".into();
     }
-    let ok = (|| -> Result<(), String> {
+    let mut problems: Vec<String> = Vec::new();
+    let result = (|| -> Result<(), String> {
         let conn = app.open().map_err(|e| e.to_string())?;
         let home = app.ws_home();
         let client = Client { home: &home };
@@ -430,19 +464,15 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> bool {
                 }
             }
             for aid in ids {
+                let by = bagholder_ws::mapping::Accounts::from_stored(&bagholder_store::tables::accounts(&conn).map_err(|e| e.to_string())?);
                 let raw = match fetch::fetch_activities_for_account(&client, sess, &aid, None, now_unix() as i64) {
                     Ok(r) => r,
-                    Err(_) => {
+                    Err(e) => {
                         walk_ok = false;
+                        problems.push(format!("Listing ids for {} failed: {}", by.name(&aid), bagholder_ws::sync::public_sync_error(&e.to_string())));
                         continue;
                     }
                 };
-                let accts_rows: Vec<bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn)
-                    .map_err(|e| e.to_string())?
-                    .iter()
-                    .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
-                    .collect();
-                let by = bagholder_ws::mapping::Accounts::from_stored(&accts_rows);
                 for it in &raw {
                     mapped.extend(bagholder_ws::mapping::map_activity_rows(it, &by));
                 }
@@ -477,7 +507,10 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> bool {
             if batch.is_empty() {
                 break;
             }
-            let recs = fetch::fetch_securities(&client, sess, &batch);
+            let (recs, not_read) = fetch::fetch_securities(&client, sess, &batch);
+            if let Some(first) = not_read.first() {
+                problems.push(format!("Company names for {} {} failed: {}", not_read.len(), if not_read.len() == 1 { "listing" } else { "listings" }, bagholder_ws::sync::public_sync_error(&first.error)));
+            }
             let under: Vec<String> = recs.iter().map(|r| r.underlying_id.trim().to_string()).filter(|u| !u.is_empty() && !seen.contains(u)).collect();
             to_upsert.extend(recs);
             if !under.is_empty() {
@@ -488,12 +521,34 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> bool {
             bagholder_store::admin::upsert_securities(&conn, &to_upsert, &now_iso()).map_err(|e| e.to_string())?;
         }
         Ok(())
-    })()
-    .is_ok();
+    })();
+    if let Err(e) = result {
+        problems.push(format!("Listing names failed: {}", bagholder_ws::sync::public_sync_error(&e)));
+    }
     let mut st = app.state.lock().unwrap();
     st.listings_filling = false;
     st.sync_step.clear();
-    ok
+    problems
+}
+
+/// A line for each margin account whose buying power did not answer.
+fn buying_power_problems(accounts: &bagholder_ws::mapping::Accounts, failed: &[fetch::Failed]) -> Vec<String> {
+    failed.iter().map(|f| format!("Buying power for {} failed: {}", accounts.name(&f.id), bagholder_ws::sync::public_sync_error(&f.error))).collect()
+}
+
+/// The margin rows to store: those just read, and for an account whose read
+/// failed, the figures stored before -- a failed read is not a reason to drop
+/// what was known, and the failure is said beside it.
+fn keep_unread_margin(conn: &rusqlite::Connection, mut read: Vec<bagholder_store::broker::Margin>, failed: &[fetch::Failed]) -> rusqlite::Result<Vec<bagholder_store::broker::Margin>> {
+    if failed.is_empty() {
+        return Ok(read);
+    }
+    for kept in bagholder_store::tables::margin(conn)? {
+        if failed.iter().any(|f| f.id == kept.account_id) {
+            read.push(kept);
+        }
+    }
+    Ok(read)
 }
 
 /// Net liquidation values, balances and buying
@@ -511,7 +566,7 @@ pub fn refresh_portfolio(app: &Arc<App>) -> serde_json::Value {
     let sess = load_session(app);
     let identity = sess.as_ref().map(|s| s.identity()).unwrap_or_default();
     let sess = match sess { Some(s) if !s.access_token.is_empty() && !identity.is_empty() => s, _ => {
-        log("bagholder portfolio: no session to read with");
+        app.state.lock().unwrap().portfolio_error = "Portfolio refresh failed: no Wealthsimple login to read with".into();
         return json!({"ok": false, "skipped": "no session"});
     } };
     let home = app.ws_home();
@@ -526,19 +581,25 @@ pub fn refresh_portfolio(app: &Arc<App>) -> serde_json::Value {
         }
         let balances = fetch::fetch_balances(&client, &sess, &ids).map_err(|e| e.to_string())?;
         let now = now_iso();
-        let margin = fetch::fetch_margin(&client, &sess, &fetch::margin_account_ids(&accounts), &now);
+        let (margin, margin_failed) = fetch::fetch_margin(&client, &sess, &fetch::margin_account_ids(&accounts), &now);
+        let names = bagholder_ws::mapping::Accounts::from_nodes(&accounts);
+        let problems = buying_power_problems(&names, &margin_failed);
+        let margin = keep_unread_margin(&conn, margin, &margin_failed).map_err(|e| e.to_string())?;
         bagholder_store::tables::replace_accounts(&conn, &bagholder_ws::sync::slim_accounts(&accounts)).map_err(|e| e.to_string())?;
         bagholder_store::tables::replace_balances(&conn, &balances).map_err(|e| e.to_string())?;
         bagholder_store::tables::replace_margin(&conn, &margin, &now).map_err(|e| e.to_string())?;
         bagholder_store::tables::set_meta(&conn, "balances_read_at", &now).map_err(|e| e.to_string())?;
         let available = margin.iter().filter(|m| m.buying_power.is_some()).count();
         log(&format!("bagholder portfolio: {} accounts, {} balances, buying power for {} of {} margin accounts", ids.len(), balances.len(), available, margin.len()));
+        app.state.lock().unwrap().portfolio_error = problems_line(&problems);
         Ok(json!({"ok": true, "accounts": ids.len(), "balances": balances.len(), "margin": margin.len()}))
     };
     match run() {
         Ok(v) => v,
         Err(e) => {
-            log(&format!("bagholder portfolio: failed: {}", e));
+            let line = format!("Portfolio refresh failed: {}", bagholder_ws::sync::public_sync_error(&e));
+            log(&format!("bagholder portfolio: {}", line));
+            app.state.lock().unwrap().portfolio_error = line;
             json!({"ok": false, "skipped": "error"})
         }
     }
@@ -735,7 +796,10 @@ pub fn capture_tokens(app: &Arc<App>, body: &serde_json::Value) -> serde_json::V
         let err = if st.error.is_empty() { "Wealthsimple refused the captured login".to_string() } else { st.error.clone() };
         return json!({"ok": false, "error": err});
     }
-    save_session(app, &sess);
+    if let Err(e) = save_session(app, &sess) {
+        app.state.lock().unwrap().error = e.clone();
+        return json!({"ok": false, "error": e});
+    }
     {
         let mut st = app.state.lock().unwrap();
         st.connected = true;
@@ -747,4 +811,66 @@ pub fn capture_tokens(app: &Arc<App>, body: &serde_json::Value) -> serde_json::V
         run_sync(&a, true, true);
     });
     json!({"ok": true})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bagholder_store::broker::Margin;
+    use bagholder_ws::standin::{fixture, graphql, graphql_errors};
+    /// A Wealthsimple that answers everything but buying power and the
+    /// account-wide equity history.
+    fn half_answering() -> bagholder_ws::standin::Fixture {
+        fixture(Box::new(|req| match req.body["operationName"].as_str().unwrap_or("") {
+            "FetchAllAccountFinancials" => graphql(json!({"identity": {"accounts": {"edges": [{"node": {
+                "id": "m1", "nickname": "Margin", "unifiedAccountType": "SELF_DIRECTED_MARGIN", "status": "open", "currency": "CAD"
+            }}], "pageInfo": {"hasNextPage": false}}}})),
+            "FetchAccountsWithBalance" => graphql(json!({"accounts": []})),
+            "FetchActivityFeedItems" => graphql(json!({"activityFeedItems": {"edges": [], "pageInfo": {"hasNextPage": false}}})),
+            "FetchAccountHistoricalFinancials" => graphql(json!({"account": {"financials": {"historicalDaily": {"edges": [], "pageInfo": {}}}}})),
+            "FetchSecurities" => graphql(json!({"securities": []})),
+            "FetchAccountCurrentMarginBuyingPowerV2" => graphql_errors(json!([{"message": "margin service down"}])),
+            "IdentityHistoricalFinancialsQuery" => graphql_errors(json!([{"message": "history service down"}])),
+            other => panic!("unexpected operation {}", other),
+        }))
+    }
+
+    fn app() -> Arc<App> {
+        let app = crate::tests_common::app();
+        bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
+        let mut sess = Session { access_token: "tok".into(), refresh_token: "r".into(), ..Default::default() };
+        sess.ids.identity_canonical_id = "ident-1".into();
+        save_session(&app, &sess).unwrap();
+        {
+            let mut st = app.state.lock().unwrap();
+            st.connected = true;
+            st.error.clear();
+            st.portfolio_error.clear();
+        }
+        bagholder_store::tables::replace_margin(&app.open().unwrap(), &[Margin { account_id: "m1".into(), buying_power: Some(500.0), currency: "CAD".into(), ..Default::default() }], "2026-09-22T10:00:00Z").unwrap();
+        app
+    }
+
+    fn error_line(app: &Arc<App>) -> String {
+        crate::status::payload(app)["error"].as_str().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn test_a_part_of_the_pull_that_fails_is_said_and_keeps_what_was_known() {
+        let _g = crate::tests_common::guard();
+        let _ws = half_answering();
+        let app = app();
+
+        refresh_portfolio(&app);
+        let line = error_line(&app);
+        assert!(line.contains("Buying power for Margin failed") && line.contains("margin service down"), "{}", line);
+        let kept = bagholder_store::tables::margin(&app.open().unwrap()).unwrap();
+        assert_eq!(kept.iter().map(|m| (m.account_id.as_str(), m.buying_power)).collect::<Vec<_>>(), vec![("m1", Some(500.0))], "a failed read does not drop the figure stored before");
+
+        assert!(run_sync(&app, false, true));
+        let line = error_line(&app);
+        assert!(line.contains("Buying power for Margin failed"), "{}", line);
+        assert!(line.contains("Equity history failed") && line.contains("history service down"), "{}", line);
+        delete_session(&app);
+    }
 }

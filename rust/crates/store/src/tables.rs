@@ -423,58 +423,52 @@ pub fn save_trade_notes(conn: &Connection, notes: Option<&Value>) -> Result<Map<
 }
 
 /// The accounts and balances as the model's snapshot wants them.
-pub fn accounts(conn: &Connection) -> Result<Vec<Value>> {
+pub fn accounts(conn: &Connection) -> Result<Vec<crate::broker::Account>> {
     let mut stmt = conn.prepare(
         "SELECT id, nickname, unified_account_type, currency, status, type, net_liquidation_value, margin_account_id FROM accounts ORDER BY id",
     )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        out.push(json!({
-            "id": r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            "nickname": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            "unifiedAccountType": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            "currency": r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            "status": r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-            "type": r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-            "netLiquidationValue": match r.get::<_, Option<f64>>(6)? { Some(v) => json!(v), None => Value::Null },
-            "marginAccountId": r.get::<_, Option<String>>(7)?.unwrap_or_default(),
-        }));
-    }
-    Ok(out)
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::broker::Account {
+            id: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            nickname: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            unified_account_type: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            currency: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            status: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            kind: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            net_liquidation_value: r.get(6)?,
+            margin_account_id: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        })
+    })?;
+    rows.collect()
 }
 
-pub fn balances(conn: &Connection) -> Result<Vec<Value>> {
+pub fn balances(conn: &Connection) -> Result<Vec<crate::broker::Balance>> {
     let mut stmt =
         conn.prepare("SELECT account_id, custodian_account_id, security_id, quantity FROM balances ORDER BY id")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        out.push(json!({
-            "accountId": r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            "custodianAccountId": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            "securityId": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            "quantity": match r.get::<_, Option<f64>>(3)? { Some(v) => json!(v), None => Value::Null },
-        }));
-    }
-    Ok(out)
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::broker::Balance {
+            account_id: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            custodian_account_id: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            security_id: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            quantity: r.get(3)?,
+        })
+    })?;
+    rows.collect()
 }
 
-pub fn margin(conn: &Connection) -> Result<Vec<Value>> {
+pub fn margin(conn: &Connection) -> Result<Vec<crate::broker::Margin>> {
     let mut stmt = conn
         .prepare("SELECT account_id, buying_power, currency, unavailable, fetched_at FROM margin ORDER BY account_id")?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        out.push(json!({
-            "accountId": r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            "buyingPower": match r.get::<_, Option<f64>>(1)? { Some(v) => json!(v), None => Value::Null },
-            "currency": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            "unavailable": r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            "fetchedAt": r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-        }));
-    }
-    Ok(out)
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::broker::Margin {
+            account_id: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            buying_power: r.get(1)?,
+            currency: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            unavailable: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            fetched_at: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        })
+    })?;
+    rows.collect()
 }
 
 /// Kept for callers holding a raw array of rows.

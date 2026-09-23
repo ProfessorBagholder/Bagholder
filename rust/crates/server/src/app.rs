@@ -32,6 +32,8 @@ pub struct State {
     pub listings_filling: bool,
     pub sync_step: String,
     pub error: String,
+    /// What the reading of balances and buying power between syncs could not read; cleared by the next read that could.
+    pub portfolio_error: String,
     pub sync_fails: i64,
     pub sync_first_fail: String,
     pub login_attempt: i64,

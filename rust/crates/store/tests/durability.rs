@@ -16,7 +16,7 @@ fn account(id: &str) -> Account {
 }
 
 fn ids(conn: &Connection) -> Vec<String> {
-    tables::accounts(conn).unwrap().iter().map(|a| a["id"].as_str().unwrap().to_string()).collect()
+    tables::accounts(conn).unwrap().into_iter().map(|a| a.id).collect()
 }
 
 #[test]

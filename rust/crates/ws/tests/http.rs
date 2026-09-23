@@ -79,7 +79,8 @@ fn test_parse_margin_and_fetch_margin() {
     let answers = json!({"acct-1": available_json(), "acct-2": none_json(), "acct-3": unavailable_json()});
     let fx = fixture(Box::new(move |req| graphql(answers[req.body["variables"]["accountId"].as_str().unwrap()].clone())));
     let ids: Vec<String> = ["acct-1", "acct-2", "acct-3", ""].iter().map(|s| s.to_string()).collect();
-    let rows = fetch::fetch_margin(&fx.client(), &sess(json!({"access_token": "x"})), &ids, "2026-09-16T12:00:00Z");
+    let (rows, failed) = fetch::fetch_margin(&fx.client(), &sess(json!({"access_token": "x"})), &ids, "2026-09-16T12:00:00Z");
+    assert!(failed.is_empty());
     let calls = fx.requests();
     assert_eq!(calls.iter().map(|c| c.body["operationName"].clone()).collect::<Vec<_>>(), vec![json!("FetchAccountCurrentMarginBuyingPowerV2"); 3]);
     assert_eq!(calls.iter().map(|c| c.body["variables"]["currency"].clone()).collect::<Vec<_>>(), vec![json!("CAD"); 3]);

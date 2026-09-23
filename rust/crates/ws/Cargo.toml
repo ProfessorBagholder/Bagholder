@@ -10,3 +10,10 @@ bagholder-market = { path = "../market" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[features]
+# the stand-in Wealthsimple server tests point the client at
+standin = []
+
+[dev-dependencies]
+bagholder-ws = { path = ".", features = ["standin"] }

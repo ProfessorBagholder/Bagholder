@@ -371,20 +371,23 @@ struct MarginVars<'a> {
     currency: &'static str,
 }
 
-/// One buying-power request per margin account; only
-/// accounts that answer are rows. A failure is said once on the terminal.
-pub fn fetch_margin(client: &Client, sess: &Session, account_ids: &[String], now: &str) -> Vec<Margin> {
+/// A request that did not answer: the id it was for, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failed {
+    pub id: String,
+    pub error: String,
+}
+
+/// One buying-power request per margin account; the accounts that answer are
+/// rows, and each one that fails is named with its error.
+pub fn fetch_margin(client: &Client, sess: &Session, account_ids: &[String], now: &str) -> (Vec<Margin>, Vec<Failed>) {
     let mut rows = Vec::new();
-    let mut failed = 0;
-    let mut first_error = String::new();
+    let mut failed = Vec::new();
     for aid in account_ids.iter().filter(|a| !a.is_empty()) {
         let data: MarginAnswer = match client.graphql(sess, "FetchAccountCurrentMarginBuyingPowerV2", &MarginVars { account_id: aid, currency: "CAD" }, None) {
             Ok(d) => d,
             Err(e) => {
-                failed += 1;
-                if first_error.is_empty() {
-                    first_error = e.to_string();
-                }
+                failed.push(Failed { id: aid.clone(), error: e.to_string() });
                 continue;
             }
         };
@@ -394,10 +397,7 @@ pub fn fetch_margin(client: &Client, sess: &Session, account_ids: &[String], now
             rows.push(m);
         }
     }
-    if failed > 0 {
-        eprintln!("bagholder portfolio: buying power request failed for {} of {} accounts ({})", failed, account_ids.iter().filter(|a| !a.is_empty()).count(), first_error);
-    }
-    rows
+    (rows, failed)
 }
 
 /// `sec` is `None` for "no answer at all"; an empty object -- Wealthsimple's
@@ -428,13 +428,14 @@ struct SecurityVars<'a> {
     security_id: &'a str,
 }
 
-pub fn fetch_security(client: &Client, sess: &Session, security_id: &str) -> Option<Security> {
+/// One security by id; `None` when Wealthsimple has no record of it.
+pub fn fetch_security(client: &Client, sess: &Session, security_id: &str) -> Result<Option<Security>, CallError> {
     let sid = security_id.trim();
     if sid.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let data: SecurityAnswer = client.graphql(sess, "FetchSecurity", &SecurityVars { security_id: sid }, None).ok()?;
-    security_record(&data.security.unwrap_or(Value::Null), sid)
+    let data: SecurityAnswer = client.graphql(sess, "FetchSecurity", &SecurityVars { security_id: sid }, None)?;
+    Ok(security_record(&data.security.unwrap_or(Value::Null), sid))
 }
 
 pub const SECURITY_BATCH: usize = 50;
@@ -445,9 +446,9 @@ struct SecuritiesVars<'a> {
     ids: &'a [String],
 }
 
-/// One request per fifty ids; a failed batch
-/// falls back to one request per id.
-pub fn fetch_securities(client: &Client, sess: &Session, ids: &[String]) -> Vec<Security> {
+/// One request per fifty ids; a failed batch falls back to one request per
+/// id, and each id that still does not answer is named with its error.
+pub fn fetch_securities(client: &Client, sess: &Session, ids: &[String]) -> (Vec<Security>, Vec<Failed>) {
     let mut uniq: Vec<String> = Vec::new();
     for raw in ids {
         let sid = raw.trim().to_string();
@@ -456,6 +457,7 @@ pub fn fetch_securities(client: &Client, sess: &Session, ids: &[String]) -> Vec<
         }
     }
     let mut out = Vec::new();
+    let mut failed = Vec::new();
     for chunk in uniq.chunks(SECURITY_BATCH) {
         let rows: Option<Vec<Value>> = client
             .graphql::<SecuritiesAnswer>(sess, "FetchSecurities", &SecuritiesVars { ids: chunk }, None)
@@ -471,12 +473,14 @@ pub fn fetch_securities(client: &Client, sess: &Session, ids: &[String]) -> Vec<
             }
             None => {
                 for sid in chunk {
-                    if let Some(rec) = fetch_security(client, sess, sid) {
-                        out.push(rec);
+                    match fetch_security(client, sess, sid) {
+                        Ok(Some(rec)) => out.push(rec),
+                        Ok(None) => {}
+                        Err(e) => failed.push(Failed { id: sid.clone(), error: e.to_string() }),
                     }
                 }
             }
         }
     }
-    out
+    (out, failed)
 }

@@ -186,7 +186,10 @@ fn serve() -> i32 {
             let b = a.clone();
             spawn("bagholder-listings", move || {
                 if let Some(sess) = session::load_session(&b) {
-                    session::fill_listings(&b, &sess, false);
+                    let problems = session::fill_listings(&b, &sess, false);
+                    if !problems.is_empty() {
+                        b.state.lock().unwrap().error = problems.join("; ");
+                    }
                 }
             });
         }

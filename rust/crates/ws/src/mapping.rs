@@ -245,6 +245,12 @@ impl Accounts {
         self.nick_or_type.get(id).cloned().unwrap_or_default()
     }
 
+    /// What an account is called in a message: its nickname, else its type,
+    /// else its id.
+    pub fn name(&self, id: &str) -> String {
+        self.nick_or_type.get(id).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| id.to_string())
+    }
+
     /// The FIFO book an account id belongs to; an id nothing knows about is
     /// its own pool.
     pub fn pool(&self, id: &str) -> String {

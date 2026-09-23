@@ -33,5 +33,7 @@ name = "bagholder"
 path = "src/main.rs"
 
 [dev-dependencies]
+# the stand-in Wealthsimple server, for the sync's own tests
+bagholder-ws = { path = "../ws", features = ["standin"] }
 # a database of its own for the model cache tests, as the store's tests have
 tempfile = "3"
