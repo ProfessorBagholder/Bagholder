@@ -132,6 +132,8 @@ Every outside source is an adapter behind one contract:
 - **Its health.** Every request's outcome is recorded per source, and a source that fails, refuses or changes shape is visible where it matters (§14) while the rest carries on.
 - **Choice between sources is data**: an ordered chain per kind of instrument, the winner remembered. No ticker is special-cased in code.
 
+**Finding out what no single source says.** Where a figure needs a fact and the usual source does not carry it, the app goes looking in every source that can state it, rather than assuming or giving up. Payout frequency is the model case. A frequency the issuer *states* comes first: the fund's own page, its distribution announcements ("announces monthly distribution"), and its filed documents. A frequency *inferred* from the declared record's ex-dates, or from the payments received, comes after that. A new holding is looked up the moment it appears, so the person never sees a guess. A fund no source answers for yet is a problem the app keeps working on and shows as one; it is never a steady state and never replaced by a default. Which issuer sources state it is established from their real pages before it is built.
+
 A new source is a new adapter and its fixtures; nothing else changes.
 
 ## 10. Brokers
@@ -207,7 +209,7 @@ Nothing is logged only to a terminal, and nothing is caught and discarded.
 
 These passages of `SPEC.md` describe an old implementation or contradict this design, and change with it. The ones marked **for the owner** change what the person sees or what the app does with their money or notes, so they are decided by the owner; the rest follow from this design.
 
-- **For the owner — payout frequency when unknown** (§1, §2 Distribution rate): the spec assumes 12 payments a year when the record cannot say. This design shows the rate as unknown instead of assuming.
+- Payout frequency (§1, §2 Distribution rate): never assumed. The spec's "12 is assumed" goes; the app finds the frequency out (§9, "Finding out what no single source says").
 - **For the owner — Clear data** (§4, the menu): it deletes the journal, which nothing can fetch again. This design has Clear data remove only what can be fetched or derived again, makes deleting the journal a separate action, and takes a backup first.
 - **For the owner — a watched stop's order** (§Brackets): it fires as a market sell, which can fill far away on a thin listing; a limit order a set distance through the bid fills almost always and never at any price. Which one a trader wants is the owner's call.
 - **For the owner — an unavailable source** (§4 Disclosures, "Source off"): the spec shows nothing; §14 names it on the card.
