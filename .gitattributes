@@ -1,0 +1,7 @@
+# Every text file is checked out with LF, on Windows too: the tests compare files
+# byte for byte (the shared cases are what make-cases writes, exactly), and a
+# checkout that turns them into CRLF would fail them on that machine alone.
+* text=auto eol=lf
+# Windows batch files run under cmd, which wants CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
