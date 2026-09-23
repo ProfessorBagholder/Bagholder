@@ -45,8 +45,21 @@ fn sess(v: Value) -> bagholder_ws::session::Session {
     serde_json::from_value(v).unwrap()
 }
 
-fn rows_json(rows: Vec<bagholder_store::broker::MappedActivity>) -> Value {
-    Value::Array(bagholder_store::broker::MappedActivity::to_rows(&rows))
+/// A mapped row, in the shape the golden has always pinned -- the mapper's
+/// own `id` is always `""` (the store assigns the real one on insert), so it
+/// is dropped here rather than added to this golden as a new key.
+fn rows_json(rows: Vec<bagholder_store::activities::ActivityRow>) -> Value {
+    Value::Array(
+        rows.into_iter()
+            .map(|r| {
+                let mut v = serde_json::to_value(&r).unwrap_or(Value::Null);
+                if let Value::Object(m) = &mut v {
+                    m.remove("id");
+                }
+                v
+            })
+            .collect(),
+    )
 }
 
 /// The allowed replacement for `fetch_all_accounts/result`: the stored shape
@@ -348,14 +361,13 @@ fn store_scenario(
     bagholder_store::relabel::ensure(&conn).unwrap();
 
     let accts = mapping::Accounts::from_nodes(accounts);
-    let mut mapped: Vec<bagholder_store::broker::MappedActivity> = Vec::new();
+    let mut mapped: Vec<bagholder_store::activities::ActivityRow> = Vec::new();
     for it in activity_items {
         mapped.extend(mapping::map_activity_rows(it, &accts));
     }
 
     let new_id = id_gen();
-    let rows = bagholder_store::broker::MappedActivity::to_rows(&mapped);
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &new_id).unwrap();
+    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &mapped, &new_id).unwrap();
 
     bagholder_store::tables::replace_accounts(&conn, &sync::slim_accounts(accounts)).unwrap();
     bagholder_store::tables::replace_balances(&conn, balances).unwrap();

@@ -39,11 +39,13 @@ impl Db {
     }
     pub fn apply(&self, rows: &[Value]) -> bagholder_store::merge::Applied {
         let id = self.new_id();
-        bagholder_store::merge::apply_wealthsimple_mapped(&self.conn, rows, &id).unwrap()
+        let rows = typed_rows::<bagholder_store::activities::ActivityRow>(rows);
+        bagholder_store::merge::apply_wealthsimple_mapped(&self.conn, &rows, &id).unwrap()
     }
     pub fn insert_local(&self, row: Value) -> Value {
         let id = self.new_id();
-        bagholder_store::activities::insert_local(&self.conn, &row, &id).unwrap()
+        let row: bagholder_store::activities::ActivityRow = typed(row);
+        serde_json::to_value(bagholder_store::activities::insert_local(&self.conn, &row, &id).unwrap()).unwrap()
     }
     pub fn count(&self) -> i64 {
         bagholder_store::activities::activity_count(&self.conn).unwrap()

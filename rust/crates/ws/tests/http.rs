@@ -243,8 +243,7 @@ fn test_daily_path_does_not_page_whole_history_when_rows_exist() {
     let item: bagholder_ws::wire::ActivityItem = serde_json::from_value(item_json.clone()).unwrap();
     let row = mapping::map_activity(&item, &mapping::Accounts::default()).unwrap();
     let id = || "00000000-0000-4000-8000-000000000001".to_string();
-    let rows = bagholder_store::broker::MappedActivity::to_rows(&[row]);
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &id).unwrap();
+    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &[row], &id).unwrap();
     let (start, full) = sync::activity_sync_bounds(&conn).unwrap();
     assert!(!full);
     let start = start.expect("a start date");

@@ -8,7 +8,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bagholder_model::value::compact;
-use bagholder_store::broker::{Account, MappedActivity};
+use bagholder_store::activities::ActivityRow;
+use bagholder_store::broker::Account;
 
 use crate::wire::AccountNode;
 
@@ -507,7 +508,7 @@ fn title_case(s: &str) -> String {
 /// One GraphQL row becomes two when a code
 /// change names a different ticker -- the old one going out, the new one
 /// coming in.
-pub fn map_activity_rows(item: &ActivityItem, accounts: &Accounts) -> Vec<MappedActivity> {
+pub fn map_activity_rows(item: &ActivityItem, accounts: &Accounts) -> Vec<ActivityRow> {
     let src = asset_symbol(item);
     let dst = counter_symbol(item);
     let qty = item.asset_quantity.abs();
@@ -541,7 +542,7 @@ pub fn map_activity_rows(item: &ActivityItem, accounts: &Accounts) -> Vec<Mapped
 
 /// One `ActivityFeedItem` as a ledger row, or
 /// nothing when the row is not one the book keeps.
-pub fn map_activity(item: &ActivityItem, accounts: &Accounts) -> Option<MappedActivity> {
+pub fn map_activity(item: &ActivityItem, accounts: &Accounts) -> Option<ActivityRow> {
     if skip_activity(item) {
         return None;
     }
@@ -748,7 +749,8 @@ pub fn map_activity(item: &ActivityItem, accounts: &Accounts) -> Option<MappedAc
     let fifo_id = if accounts.is_empty() { account_id.clone() } else { accounts.pool(&account_id) };
     let security_id = item.security_id.trim().to_string();
 
-    Some(MappedActivity {
+    Some(ActivityRow {
+        id: String::new(),
         canonical_id: if cid.is_empty() { None } else { Some(cid) },
         occurred_at: occurred,
         transaction_date: transaction_date.clone(),

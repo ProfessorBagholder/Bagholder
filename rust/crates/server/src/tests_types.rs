@@ -14,8 +14,11 @@ use bagholder_store::feeds::{
 };
 use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
 
+use bagholder_store::activities::ActivityRow;
+use bagholder_store::csvimport::{CsvFile, ImportReport, ScanReport, ScannedFile, Skipped, StatusFile, WatchSet, WatchStatus};
+
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
-use crate::orders::{OrderCard, OrdersDoc};
+use crate::orders::{Appended, OrderCard, OrdersDoc};
 
 fn declarations() -> String {
     let config = ts_rs::Config::new().with_large_int("number");
@@ -133,4 +136,33 @@ fn test_the_pages_market_types_are_the_servers() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/markets.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The book's types -- an activity row, and the import/watch/append answers --
+/// generated to `web/src/lib/generated/book.ts`.
+fn book_declarations() -> String {
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended];
+    let mut out = String::from("// Generated from rust/crates/store/src/activities.rs, rust/crates/store/src/csvimport.rs and the\n// server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\n");
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_book_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/book.ts");
+    let want = book_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/book.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }

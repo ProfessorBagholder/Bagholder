@@ -300,33 +300,34 @@ pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
     let accts = bagholder_ws::mapping::Accounts::from_stored(&stored_accounts);
     let mult = bagholder_model::symbols::option_multiplier(&symbol);
     let buy = order.side == Side::Buy;
-    let account_id = &order.account_id;
-    let fifo = accts.pool(account_id);
-    let act = json!({
-        "id": uuid4(),
-        "occurredAt": date,
-        "transactionDate": date,
-        "settlementDate": date,
-        "accountId": account_id,
-        "bookId": account_id,
-        "fifoId": fifo,
-        "accountType": bagholder_ws::mapping::account_type(account_id, &accts),
-        "activityType": "Trade",
-        "activitySubType": order.side.as_str(),
-        "description": format!("{} {} {} @ {}", if buy { "Buy" } else { "Sell" }, qty_text(filled), symbol, rp(Some(price))),
-        "direction": if buy { "DEBIT" } else { "CREDIT" },
-        "symbol": symbol,
-        "name": symbol,
-        "currency": currency,
-        "quantity": if buy { filled } else { -filled },
-        "unitPrice": price,
-        "commission": 0.0,
-        "netCashAmount": if buy { -(filled * price * mult) } else { filled * price * mult },
-        "category": "trade",
-        "balance": null,
-        "securityId": order.security_id,
-        "source": "bagholder-fill",
-    });
+    let account_id = order.account_id.clone();
+    let fifo = accts.pool(&account_id);
+    let act = bagholder_store::activities::ActivityRow {
+        id: uuid4(),
+        occurred_at: date.clone(),
+        transaction_date: date.clone(),
+        settlement_date: date,
+        account_id: account_id.clone(),
+        book_id: account_id.clone(),
+        fifo_id: fifo,
+        account_type: bagholder_ws::mapping::account_type(&account_id, &accts),
+        activity_type: "Trade".into(),
+        activity_sub_type: order.side.as_str().to_string(),
+        description: format!("{} {} {} @ {}", if buy { "Buy" } else { "Sell" }, qty_text(filled), symbol, rp(Some(price))),
+        direction: if buy { "DEBIT" } else { "CREDIT" }.into(),
+        symbol: symbol.clone(),
+        name: symbol.clone(),
+        currency,
+        quantity: if buy { filled } else { -filled },
+        unit_price: price,
+        commission: 0.0,
+        net_cash_amount: if buy { -(filled * price * mult) } else { filled * price * mult },
+        category: "trade".into(),
+        balance: None,
+        security_id: if order.security_id.is_empty() { None } else { Some(order.security_id.clone()) },
+        source: "bagholder-fill".into(),
+        ..Default::default()
+    };
     let conn = db(app);
     must(bagholder_store::activities::insert_local(&conn, &act, &uuid4));
     must(so::mark_order_fill_booked(&conn, &order.id, filled, &now_iso()));

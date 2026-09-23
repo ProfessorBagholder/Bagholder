@@ -445,7 +445,7 @@ fn write_home(dir: &Path, b: &Book, lst: &[Value], nav: &[Value]) -> rusqlite::R
     bagholder_store::relabel::ensure(&conn)?;
     let n = Cell::new(0u64);
     let new_id = || { n.set(n.get() + 1); format!("00000000-0000-4000-8000-{:012}", n.get()) };
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &b.acts, &new_id)?;
+    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &typed(&b.acts), &new_id)?;
     bagholder_store::admin::upsert_securities(&conn, &typed(lst), SYNCED)?;
     bagholder_store::tables::replace_accounts(&conn, &typed(&accounts()))?;
     bagholder_store::admin::upsert_securities(&conn, &typed(&cash_securities()), SYNCED)?;

@@ -6181,7 +6181,8 @@
     "inserted": 1.0,
     "linked": 0.0,
     "skipped": 0.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 0.0
   },
   "merge/find_link_candidates/before": [
     {
@@ -6218,43 +6219,50 @@
     "inserted": 0.0,
     "linked": 1.0,
     "skipped": 0.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 0.0
   },
   "merge/apply/revision_v1": {
     "inserted": 1.0,
     "linked": 0.0,
     "skipped": 0.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 0.0
   },
   "merge/apply/revision_v2": {
     "inserted": 0.0,
     "linked": 0.0,
     "skipped": 0.0,
-    "revised": 1.0
+    "revised": 1.0,
+    "unidentified": 0.0
   },
   "merge/apply/revision_replay": {
     "inserted": 0.0,
     "linked": 0.0,
     "skipped": 1.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 0.0
   },
   "merge/apply/homemade_id": {
     "inserted": 0.0,
     "linked": 0.0,
     "skipped": 0.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 1.0
   },
   "merge/apply/null_canonical": {
     "inserted": 0.0,
     "linked": 0.0,
     "skipped": 0.0,
-    "revised": 0.0
+    "revised": 0.0,
+    "unidentified": 1.0
   },
   "merge/apply/replay_whole_batch": {
     "inserted": 0.0,
     "linked": 0.0,
     "skipped": 1.0,
-    "revised": 3.0
+    "revised": 3.0,
+    "unidentified": 2.0
   },
   "merge/activities_after_apply": [
     {

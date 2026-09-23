@@ -90,11 +90,15 @@ fn sort_key(a: &Value) -> String {
 /// storage order -- deterministic whether the row's id came from a random
 /// uuid (CSV import) or a counter (`Db::new_id`).
 fn dump_activities(conn: &Connection) -> Value {
-    let mut rows = activities::all_activities(conn).unwrap();
+    let mut rows: Vec<Value> = activities::all_activities(conn).unwrap().iter().map(|r| serde_json::to_value(r).unwrap()).collect();
     rows.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
     let mut v = Value::Array(rows);
     scrub_ids(&mut v);
     v
+}
+
+fn wsrow(v: Value) -> activities::ActivityRow {
+    serde_json::from_value(v).unwrap()
 }
 
 fn deterministic_id() -> impl Fn() -> String {
@@ -303,12 +307,15 @@ fn helpers_scenario(out: &mut Map<String, Value>) {
         "real": activities::is_real_account("acct-123"),
     }));
     out.insert("helpers/round_qty".into(), json!({
-        "plain": activities::round_qty(Some(&json!(1.123456789))),
-        "none": activities::round_qty(None),
-        "string": activities::round_qty(Some(&json!("2.5"))),
+        "plain": activities::round_qty(1.123456789),
+        "none": activities::round_qty(0.0),
+        "string": activities::round_qty(2.5),
     }));
 
-    let side_row = |sub: &str, ty: &str, qty: f64| activities::trade_side(&json!({"activitySubType": sub, "activityType": ty, "quantity": qty}));
+    let row_of = |v: Value| -> activities::ActivityRow { serde_json::from_value(v).unwrap() };
+    let side_row = |sub: &str, ty: &str, qty: f64| {
+        activities::trade_side(&activities::ActivityRow { activity_sub_type: sub.into(), activity_type: ty.into(), quantity: qty, ..Default::default() })
+    };
     out.insert("helpers/trade_side".into(), json!({
         "buy_sub": side_row("BUY", "Trade", 5.0),
         "sell_sub": side_row("SELL", "Trade", -5.0),
@@ -316,13 +323,13 @@ fn helpers_scenario(out: &mut Map<String, Value>) {
         "no_sub_negative_qty": side_row("", "Trade", -5.0),
     }));
 
-    let fmk = |row: &Value, inc: bool| { let (d, a, s, q, p, c) = activities::field_match_key(row, inc); json!([d, a, s, q, p, c]) };
-    let lmk = |row: &Value, inc: bool| { let (s, side, q, p, d, a) = activities::link_match_key(row, inc); json!([s, side, q, p, d, a]) };
-    let sample = json!({"transactionDate": "2024-05-01", "accountId": "acct-1", "symbol": " aaa ", "quantity": 10.0, "unitPrice": 25.5, "netCashAmount": -255.0, "activitySubType": "BUY", "activityType": "Trade"});
+    let fmk = |row: &activities::ActivityRow, inc: bool| { let (d, a, s, q, p, c) = activities::field_match_key(row, inc); json!([d, a, s, q, p, c]) };
+    let lmk = |row: &activities::ActivityRow, inc: bool| { let (s, side, q, p, d, a) = activities::link_match_key(row, inc); json!([s, side, q, p, d, a]) };
+    let sample = row_of(json!({"transactionDate": "2024-05-01", "accountId": "acct-1", "symbol": " aaa ", "quantity": 10.0, "unitPrice": 25.5, "netCashAmount": -255.0, "activitySubType": "BUY", "activityType": "Trade"}));
     out.insert("helpers/field_match_key".into(), json!({
         "with_account": fmk(&sample, true),
         "without_account": fmk(&sample, false),
-        "fake_account_still_included_if_asked": fmk(&json!({"transactionDate": "2024-05-01", "accountId": "manual", "symbol": "AAA", "quantity": 1.0}), true),
+        "fake_account_still_included_if_asked": fmk(&row_of(json!({"transactionDate": "2024-05-01", "accountId": "manual", "symbol": "AAA", "quantity": 1.0})), true),
     }));
     out.insert("helpers/link_match_key".into(), json!({
         "with_account": lmk(&sample, true),
@@ -330,21 +337,58 @@ fn helpers_scenario(out: &mut Map<String, Value>) {
     }));
 
     out.insert("helpers/canonical_from_row".into(), json!({
-        "wealthsimple_clean": activities::canonical_from_row(&json!({"canonicalId": "ws-1", "source": "wealthsimple"}), "wealthsimple"),
-        "wealthsimple_homemade": activities::canonical_from_row(&json!({"canonicalId": "a|b", "source": "wealthsimple"}), "wealthsimple"),
-        "wealthsimple_falls_back_to_id": activities::canonical_from_row(&json!({"id": "ws-old-1", "source": "wealthsimple"}), "wealthsimple"),
-        "wealthsimple_nothing": activities::canonical_from_row(&json!({"source": "wealthsimple"}), "wealthsimple"),
-        "not_wealthsimple": activities::canonical_from_row(&json!({"canonicalId": "ws-1"}), "csv"),
+        "wealthsimple_clean": activities::canonical_from_row(&row_of(json!({"canonicalId": "ws-1", "source": "wealthsimple"})), "wealthsimple"),
+        "wealthsimple_homemade": activities::canonical_from_row(&row_of(json!({"canonicalId": "a|b", "source": "wealthsimple"})), "wealthsimple"),
+        "wealthsimple_falls_back_to_id": activities::canonical_from_row(&row_of(json!({"id": "ws-old-1", "source": "wealthsimple"})), "wealthsimple"),
+        "wealthsimple_nothing": activities::canonical_from_row(&row_of(json!({"source": "wealthsimple"})), "wealthsimple"),
+        "not_wealthsimple": activities::canonical_from_row(&row_of(json!({"canonicalId": "ws-1"})), "csv"),
     }));
 
-    let cols = activities::insert_columns(
-        &json!({"occurredAt": "2024-05-01T10:00:00Z", "transactionDate": "2024-05-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 10.0, "unitPrice": 25.5, "netCashAmount": -255.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "securityId": "sec-1"}),
+    // What `insert_columns` used to hand back: all 27 columns, keyed by
+    // column name, for an assigned id and canonical id override -- rebuilt
+    // here from a normalized `ActivityRow` now that the store itself only
+    // ever needs the 19-column `Revisable` view of a row.
+    fn full_columns(row: activities::ActivityRow, assigned_id: &str, canonical_id: Option<&str>) -> Map<String, Value> {
+        let n = row.normalized();
+        let mut out = Map::new();
+        out.insert("id".into(), json!(assigned_id));
+        out.insert("canonical_id".into(), canonical_id.map(|c| json!(c)).unwrap_or(Value::Null));
+        out.insert("occurred_at".into(), json!(n.occurred_at));
+        out.insert("transaction_date".into(), json!(n.transaction_date));
+        out.insert("settlement_date".into(), json!(n.settlement_date));
+        out.insert("account_id".into(), json!(n.account_id));
+        out.insert("book_id".into(), json!(n.book_id));
+        out.insert("fifo_id".into(), json!(n.fifo_id));
+        out.insert("account_type".into(), json!(n.account_type));
+        out.insert("activity_type".into(), json!(n.activity_type));
+        out.insert("activity_sub_type".into(), json!(n.activity_sub_type));
+        out.insert("description".into(), json!(n.description));
+        out.insert("direction".into(), json!(n.direction));
+        out.insert("symbol".into(), json!(n.symbol));
+        out.insert("name".into(), json!(n.name));
+        out.insert("currency".into(), json!(n.currency));
+        out.insert("quantity".into(), json!(n.quantity));
+        out.insert("unit_price".into(), json!(n.unit_price));
+        out.insert("commission".into(), json!(n.commission));
+        out.insert("net_cash_amount".into(), json!(n.net_cash_amount));
+        out.insert("category".into(), json!(n.category));
+        out.insert("balance".into(), n.balance.map(|b| json!(b)).unwrap_or(Value::Null));
+        out.insert("source".into(), json!(n.source));
+        out.insert("raw_type".into(), json!(n.raw_type));
+        out.insert("aft_type".into(), json!(n.aft_type));
+        out.insert("counter_symbol".into(), json!(n.counter_symbol));
+        out.insert("security_id".into(), n.security_id.map(|s| json!(s)).unwrap_or(Value::Null));
+        out
+    }
+
+    let cols = full_columns(
+        row_of(json!({"occurredAt": "2024-05-01T10:00:00Z", "transactionDate": "2024-05-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 10.0, "unitPrice": 25.5, "netCashAmount": -255.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "securityId": "sec-1"})),
         "assigned-1",
         Some("cid-1"),
     );
     out.insert("helpers/insert_columns".into(), Value::Object(cols));
 
-    let cols_defaults = activities::insert_columns(&json!({"transactionDate": "2024-05-01"}), "assigned-2", None);
+    let cols_defaults = full_columns(row_of(json!({"transactionDate": "2024-05-01"})), "assigned-2", None);
     out.insert("helpers/insert_columns_defaults".into(), Value::Object(cols_defaults));
 
     out.insert("helpers/json_text".into(), json!({
@@ -363,18 +407,48 @@ fn helpers_scenario(out: &mut Map<String, Value>) {
 // csv: parse + import, per fixture file
 // --------------------------------------------------------------------------
 
+/// Before the typed conversion, `map_statement`/`map_canonical`/`map_legacy`
+/// each built a `json!` literal naming only the fields that source ever sets;
+/// a typed `ActivityRow` serializes every column. `parse_csv`'s golden pins
+/// that narrower, per-format shape, so it is rebuilt here from the typed row
+/// rather than widened.
+fn strip_unset_csv_fields(report: &mut Value) {
+    let fmt = report.get("format").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let keep: &[&str] = match fmt.as_str() {
+        "statement" => &[
+            "id", "occurredAt", "transactionDate", "settlementDate", "accountId", "bookId", "accountType",
+            "activityType", "activitySubType", "description", "direction", "symbol", "name", "currency",
+            "quantity", "unitPrice", "commission", "netCashAmount", "category", "balance", "source",
+        ],
+        "canonical" | "legacy" => &[
+            "id", "occurredAt", "transactionDate", "settlementDate", "accountId", "accountType", "activityType",
+            "activitySubType", "description", "direction", "symbol", "name", "currency", "quantity", "unitPrice",
+            "commission", "netCashAmount", "category", "source",
+        ],
+        _ => return,
+    };
+    if let Some(Value::Array(acts)) = report.get_mut("activities") {
+        for a in acts.iter_mut() {
+            if let Value::Object(m) = a {
+                *m = m.iter().filter(|(k, _)| keep.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+            }
+        }
+    }
+}
+
 fn csv_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     for name in CSV_FILES {
         let text = read_csv(name);
         let mut parsed = match csvimport::parse_csv(&text, name) {
-            Ok(v) => v,
+            Ok(v) => serde_json::to_value(&v).unwrap(),
             Err(e) => json!({"error": e}),
         };
+        strip_unset_csv_fields(&mut parsed);
         scrub_ids(&mut parsed);
         out.insert(format!("csv/{}/parse", name), parsed);
 
         let mut imported = match csvimport::import_text(conn, name, &text) {
-            Ok(v) => v,
+            Ok(v) => serde_json::to_value(&v).unwrap(),
             Err(e) => json!({"error": e}),
         };
         scrub_ids(&mut imported);
@@ -383,7 +457,7 @@ fn csv_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     }
     // re-importing the same file a second time: everything a duplicate
     let text = read_csv("canonical_basic.csv");
-    let mut again = csvimport::import_text(conn, "canonical_basic.csv", &text).unwrap();
+    let mut again = serde_json::to_value(&csvimport::import_text(conn, "canonical_basic.csv", &text).unwrap()).unwrap();
     scrub_ids(&mut again);
     out.insert("csv/canonical_basic.csv/reimport".into(), again);
 }
@@ -398,7 +472,7 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
         &std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/mapped.json")).unwrap(),
     )
     .unwrap();
-    let get = |k: &str| mapped[k].clone();
+    let get = |k: &str| -> activities::ActivityRow { serde_json::from_value(mapped[k].clone()).unwrap() };
     let new_id = deterministic_id();
 
     // fresh insert
@@ -415,12 +489,12 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     let r_rev1 = merge::apply_wealthsimple_mapped(conn, &[get("revision_v1")], &new_id).unwrap();
     let id_before = {
         let rows = activities::all_activities(conn).unwrap();
-        rows.iter().find(|a| a["canonicalId"] == "ws-002").unwrap()["id"].as_str().unwrap().to_string()
+        rows.iter().find(|a| a.canonical_id.as_deref() == Some("ws-002")).unwrap().id.clone()
     };
     let r_rev2 = merge::apply_wealthsimple_mapped(conn, &[get("revision_v2")], &new_id).unwrap();
     let id_after = {
         let rows = activities::all_activities(conn).unwrap();
-        rows.iter().find(|a| a["canonicalId"] == "ws-002").unwrap()["id"].as_str().unwrap().to_string()
+        rows.iter().find(|a| a.canonical_id.as_deref() == Some("ws-002")).unwrap().id.clone()
     };
     assert_eq!(id_before, id_after, "a revision keeps the stored row's own id");
     out.insert("merge/apply/revision_v1".into(), json!(r_rev1));
@@ -436,7 +510,7 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     out.insert("merge/apply/null_canonical".into(), json!(r_null));
 
     // idempotent: applying the whole batch again
-    let whole: Vec<Value> = ["fresh", "link_candidate", "revision_v1", "revision_v2", "homemade_id", "null_canonical"]
+    let whole: Vec<activities::ActivityRow> = ["fresh", "link_candidate", "revision_v1", "revision_v2", "homemade_id", "null_canonical"]
         .iter()
         .map(|k| get(k))
         .collect();
@@ -445,13 +519,15 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
 
     out.insert("merge/activities_after_apply".into(), dump_activities(conn));
 
-    // merge_local_rows: hand-entered rows, one a duplicate of what is already stored
+    // merge_local_rows: hand-entered rows, one a duplicate of what is already stored,
+    // and a default row -- the typed equivalent of the falsy/non-object rows a JSON
+    // input used to carry, which merge_local_rows still drops without counting
+    let row_of = |v: Value| -> activities::ActivityRow { serde_json::from_value(v).unwrap() };
     let hand = vec![
-        json!({"transactionDate": "2024-10-01", "occurredAt": "2024-10-01", "accountId": "manual", "symbol": "HAND", "quantity": 3.0, "unitPrice": 5.0, "netCashAmount": -15.0, "activityType": "Trade", "activitySubType": "BUY", "source": "manual"}),
-        json!({"transactionDate": "2024-10-01", "occurredAt": "2024-10-01", "accountId": "manual", "symbol": "HAND", "quantity": 3.0, "unitPrice": 5.0, "netCashAmount": -15.0, "activityType": "Trade", "activitySubType": "BUY", "source": "manual"}),
-        json!({"transactionDate": "2024-10-02", "occurredAt": "2024-10-02", "accountId": "", "symbol": "HAND2", "quantity": 1.0, "unitPrice": 2.0, "netCashAmount": -2.0, "activityType": "Trade", "activitySubType": "BUY", "source": "csv"}),
-        Value::Null,
-        json!("not an object"),
+        row_of(json!({"transactionDate": "2024-10-01", "occurredAt": "2024-10-01", "accountId": "manual", "symbol": "HAND", "quantity": 3.0, "unitPrice": 5.0, "netCashAmount": -15.0, "activityType": "Trade", "activitySubType": "BUY", "source": "manual"})),
+        row_of(json!({"transactionDate": "2024-10-01", "occurredAt": "2024-10-01", "accountId": "manual", "symbol": "HAND", "quantity": 3.0, "unitPrice": 5.0, "netCashAmount": -15.0, "activityType": "Trade", "activitySubType": "BUY", "source": "manual"})),
+        row_of(json!({"transactionDate": "2024-10-02", "occurredAt": "2024-10-02", "accountId": "", "symbol": "HAND2", "quantity": 1.0, "unitPrice": 2.0, "netCashAmount": -2.0, "activityType": "Trade", "activitySubType": "BUY", "source": "csv"})),
+        activities::ActivityRow::default(),
     ];
     let merged = merge::merge_local_rows(conn, &hand, &new_id).unwrap();
     out.insert("merge/merge_local_rows".into(), json!({"added": merged.added, "duplicates": merged.duplicates, "ok": merged.ok}));
@@ -465,11 +541,11 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     // insert_local directly
     let saved = activities::insert_local(
         conn,
-        &json!({"transactionDate": "2024-10-05", "occurredAt": "2024-10-05", "accountId": "manual", "symbol": "DIRECT", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "canonicalId": "should-be-dropped"}),
+        &row_of(json!({"transactionDate": "2024-10-05", "occurredAt": "2024-10-05", "accountId": "manual", "symbol": "DIRECT", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "canonicalId": "should-be-dropped"})),
         &new_id,
     )
     .unwrap();
-    out.insert("merge/insert_local".into(), saved);
+    out.insert("merge/insert_local".into(), serde_json::to_value(&saved).unwrap());
 
     out.insert("merge/activities_final".into(), dump_activities(conn));
     out.insert("merge/all_activities_count".into(), json!(activities::activity_count(conn).unwrap()));
@@ -478,9 +554,9 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     out.insert("merge/canonical_ids".into(), json!(ids));
 
     // activity_by_id for two ids, one real one missing
-    let some_id = activities::all_activities(conn).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let some_id = activities::all_activities(conn).unwrap()[0].id.clone();
     out.insert("merge/activity_by_id/found".into(), {
-        let mut v = activities::activity_by_id(conn, &some_id).unwrap().unwrap();
+        let mut v = serde_json::to_value(activities::activity_by_id(conn, &some_id).unwrap().unwrap()).unwrap();
         scrub_ids(&mut v);
         v
     });
@@ -493,12 +569,16 @@ fn merge_scenario(out: &mut Map<String, Value>, conn: &Connection) {
     // revisable_view of a row
     out.insert(
         "merge/revisable_view".into(),
-        Value::Object(merge::revisable_view(&get("revision_v2"))),
+        {
+            let mut v = serde_json::to_value(bagholder_store::activities::Revisable::of(&get("revision_v2").normalized())).unwrap();
+            v.as_object_mut().unwrap().remove("security_id");
+            v
+        },
     );
 }
 
-fn dump_activities_slice(rows: &[Value]) -> Value {
-    let mut rows = rows.to_vec();
+fn dump_activities_slice(rows: &[activities::ActivityRow]) -> Value {
+    let mut rows: Vec<Value> = rows.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
     rows.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
     let mut v = Value::Array(rows);
     scrub_ids(&mut v);
@@ -529,27 +609,31 @@ fn folder_scenario(out: &mut Map<String, Value>) {
     std::fs::write(tmp.path().join("notes.txt"), "x").unwrap();
     std::fs::write(tmp.path().join("empty.csv"), "").unwrap();
 
+    fn tv<T: serde::Serialize>(v: &T) -> Value {
+        serde_json::to_value(v).unwrap()
+    }
+
     let conn = fresh_conn();
     let set = csvimport::set_watch_folder(&conn, &dir).unwrap();
-    out.insert("folder/set_watch_folder".into(), redact(&set, &dir));
+    out.insert("folder/set_watch_folder".into(), redact(&tv(&set), &dir));
     out.insert("folder/watch_folder".into(), json!(csvimport::watch_folder(&conn).unwrap().replace(&dir, "<dir>")));
 
-    let mut listed = csvimport::list_csv_files(&dir);
-    listed.iter_mut().for_each(|v| *v = redact(v, &dir));
+    let listed = csvimport::list_csv_files(&dir);
+    let listed: Vec<Value> = listed.iter().map(|v| redact(&tv(v), &dir)).collect();
     out.insert("folder/list_csv_files".into(), json!(listed));
 
-    let mut first = redact(&csvimport::scan_folder(&conn, None, false).unwrap(), &dir);
+    let mut first = redact(&tv(&csvimport::scan_folder(&conn, None, false).unwrap()), &dir);
     scrub_scan_times(&mut first);
     out.insert("folder/scan_folder/first".into(), first);
-    let mut status1 = redact(&csvimport::status(&conn).unwrap(), &dir);
+    let mut status1 = redact(&tv(&csvimport::status(&conn).unwrap()), &dir);
     scrub_scan_times(&mut status1);
     out.insert("folder/status/after_first_scan".into(), status1);
 
-    let mut unchanged = redact(&csvimport::scan_folder(&conn, None, false).unwrap(), &dir);
+    let mut unchanged = redact(&tv(&csvimport::scan_folder(&conn, None, false).unwrap()), &dir);
     scrub_scan_times(&mut unchanged);
     out.insert("folder/scan_folder/second_unchanged".into(), unchanged);
 
-    let mut forced = redact(&csvimport::scan_folder(&conn, None, true).unwrap(), &dir);
+    let mut forced = redact(&tv(&csvimport::scan_folder(&conn, None, true).unwrap()), &dir);
     scrub_scan_times(&mut forced);
     out.insert("folder/scan_folder/forced".into(), forced);
 
@@ -557,22 +641,22 @@ fn folder_scenario(out: &mut Map<String, Value>) {
 
     csvimport::clear_watch_folder(&conn).unwrap();
     out.insert("folder/watch_folder_after_clear".into(), json!(csvimport::watch_folder(&conn).unwrap()));
-    let mut status_cleared = csvimport::status(&conn).unwrap();
+    let mut status_cleared = tv(&csvimport::status(&conn).unwrap());
     scrub_scan_times(&mut status_cleared);
     out.insert("folder/status_after_clear".into(), status_cleared);
 
     // no folder set at all
     let no_folder = csvimport::scan_folder(&conn, None, false).unwrap();
-    out.insert("folder/scan_folder/no_folder_set".into(), no_folder);
+    out.insert("folder/scan_folder/no_folder_set".into(), tv(&no_folder));
     // a folder that does not exist
     let missing = csvimport::scan_folder(&conn, Some("/no/such/folder/anywhere"), false).unwrap();
-    out.insert("folder/scan_folder/missing_folder".into(), missing);
+    out.insert("folder/scan_folder/missing_folder".into(), tv(&missing));
     // set_watch_folder with an empty path, and a path that is not a directory
-    out.insert("folder/set_watch_folder/empty".into(), csvimport::set_watch_folder(&conn, "").unwrap());
+    out.insert("folder/set_watch_folder/empty".into(), tv(&csvimport::set_watch_folder(&conn, "").unwrap()));
     let file_path = tmp.path().join("canonical_basic.csv");
     out.insert(
         "folder/set_watch_folder/not_a_directory".into(),
-        redact(&csvimport::set_watch_folder(&conn, file_path.to_str().unwrap()).unwrap(), &dir),
+        redact(&tv(&csvimport::set_watch_folder(&conn, file_path.to_str().unwrap()).unwrap()), &dir),
     );
 }
 
@@ -734,14 +818,14 @@ fn admin_scenario(out: &mut Map<String, Value>) {
     let new_id = deterministic_id();
     merge::apply_wealthsimple_mapped(
         &conn,
-        &[json!({"canonicalId": "backfill-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"})],
+        &[wsrow(json!({"canonicalId": "backfill-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"}))],
         &new_id,
     )
     .unwrap();
     out.insert("admin/needs_security_id_backfill/after_wealthsimple_row_no_sid".into(), json!(admin::needs_security_id_backfill(&conn).unwrap()));
     merge::apply_wealthsimple_mapped(
         &conn,
-        &[json!({"canonicalId": "backfill-2", "transactionDate": "2024-01-02", "occurredAt": "2024-01-02", "accountId": "acct-1", "symbol": "BBB", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "securityId": "sec-b"})],
+        &[wsrow(json!({"canonicalId": "backfill-2", "transactionDate": "2024-01-02", "occurredAt": "2024-01-02", "accountId": "acct-1", "symbol": "BBB", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple", "securityId": "sec-b"}))],
         &new_id,
     )
     .unwrap();
@@ -805,7 +889,7 @@ fn clear_synced_data_scenario(out: &mut Map<String, Value>) {
         let new_id = deterministic_id();
         merge::apply_wealthsimple_mapped(
             &conn,
-            &[json!({"canonicalId": "clear-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"})],
+            &[wsrow(json!({"canonicalId": "clear-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-1", "symbol": "AAA", "quantity": 1.0, "unitPrice": 1.0, "netCashAmount": -1.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"}))],
             &new_id,
         )
         .unwrap();
@@ -849,7 +933,7 @@ fn snapshot_scenario(out: &mut Map<String, Value>) {
     let new_id = deterministic_id();
     merge::apply_wealthsimple_mapped(
         &conn,
-        &[json!({"canonicalId": "snap-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-a", "symbol": "AAA", "quantity": 1.0, "unitPrice": 10.0, "netCashAmount": -10.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"})],
+        &[wsrow(json!({"canonicalId": "snap-1", "transactionDate": "2024-01-01", "occurredAt": "2024-01-01", "accountId": "acct-a", "symbol": "AAA", "quantity": 1.0, "unitPrice": 10.0, "netCashAmount": -10.0, "activityType": "Trade", "activitySubType": "BUY", "source": "wealthsimple"}))],
         &new_id,
     )
     .unwrap();

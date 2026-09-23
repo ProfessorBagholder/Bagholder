@@ -61,10 +61,6 @@ fn base(app: &Arc<App>) -> Option<Arc<Base>> {
     app.base().ok()
 }
 
-fn is_true(v: &Value, k: &str) -> bool {
-    truthy(v.get(k))
-}
-
 fn today() -> String {
     bagholder_market::clock_now().0
 }
@@ -2297,15 +2293,12 @@ pub fn market_loop(app: Arc<App>) {
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
 /// New or changed CSVs imported. Never fails.
-pub fn scan_watched_folder(app: &Arc<App>) -> Option<Value> {
+pub fn scan_watched_folder(app: &Arc<App>) -> Option<bagholder_store::csvimport::ScanReport> {
     let c = conn(app)?;
     if bagholder_store::csvimport::watch_folder(&c).ok()?.is_empty() {
         return None;
     }
-    let result = bagholder_store::csvimport::scan_folder(&c, None, false).ok()?;
-    if is_true(&result, "ok") && is_true(&result, "added") {
-    }
-    Some(result)
+    bagholder_store::csvimport::scan_folder(&c, None, false).ok()
 }
 
 pub fn watch_loop(app: Arc<App>) {

@@ -54,7 +54,8 @@ fn activities() -> Vec<Value> {
     s["activities"].as_array().cloned().unwrap_or_default()
 }
 fn apply_ws(rows: &[Value]) -> bagholder_store::merge::Applied {
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn(), rows, &uuid4).unwrap()
+    let rows: Vec<bagholder_store::activities::ActivityRow> = rows.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
+    bagholder_store::merge::apply_wealthsimple_mapped(&conn(), &rows, &uuid4).unwrap()
 }
 
 fn set_gql<F: Fn(&str, &Value) -> Result<Value, CallError> + Send + Sync + 'static>(f: F) {
@@ -694,7 +695,7 @@ fn test_a_filled_order_is_booked_as_one_local_sell_that_closes_the_position() {
     assert_eq!(bk.len(), 1, "exactly one local activity for the fill");
     let b = &bk[0];
     assert_eq!((st(b, "symbol"), st(b, "accountId"), n(b, "quantity"), n(b, "unitPrice")), ("QNC".into(), "acct-tfsa".into(), -5.0, 1.6374));
-    assert_eq!(bagholder_store::activities::trade_side(b), "SELL");
+    assert_eq!(bagholder_store::activities::trade_side(&serde_json::from_value(b.clone()).unwrap()), "SELL");
     assert_eq!(st(b, "transactionDate"), "2026-09-10");
     assert!(b.get("canonicalId").map_or(true, |v| v.is_null()), "a local row, not a fabricated Wealthsimple row");
     assert!(!bagholder_store::activities::looks_like_homemade_id(&st(b, "id")));
@@ -714,7 +715,7 @@ fn test_the_real_wealthsimple_sell_collapses_with_the_booked_row() {
     let result = apply_ws(&[ws_sell("ws-sell-9", 5.0, 1.6374, "QNC", "SELL", "Trade")]);
     assert_eq!((result.linked, result.inserted), (1, 0), "the synced sell links to the booked row, none inserted");
     assert_eq!(bagholder_store::activities::activity_count(&conn()).unwrap(), before);
-    let rows: Vec<Value> = activities().into_iter().filter(|a| bagholder_store::activities::trade_side(a) == "SELL" && st(a, "symbol") == "QNC").collect();
+    let rows: Vec<Value> = activities().into_iter().filter(|a| bagholder_store::activities::trade_side(&serde_json::from_value(a.clone()).unwrap()) == "SELL" && st(a, "symbol") == "QNC").collect();
     assert_eq!(rows.len(), 1);
     assert_eq!(st(&rows[0], "canonicalId"), "ws-sell-9");
     let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
@@ -1063,7 +1064,7 @@ fn test_an_option_order_from_the_feed_is_named_by_its_contract() {
         "assetSymbol": "QNC 20NOV26 3.00 CALL", "assetQuantity": 5, "amount": -150, "accountId": "acct-1", "currency": "CAD", "securityId": "sec-o-1"});
     let typed_item: bagholder_ws::wire::ActivityItem = serde_json::from_value(item).unwrap();
     let mapped = bagholder_ws::mapping::map_activity(&typed_item, &bagholder_ws::mapping::Accounts::default()).expect("mapped");
-    apply_ws(&bagholder_store::broker::MappedActivity::to_rows(&[mapped]));
+    apply_ws(&[serde_json::to_value(&mapped).unwrap()]);
     let node = json!({"id": "order-opt", "orderId": "ws-7", "canonicalAccountId": "acct-tfsa", "createdAtUtc": "2026-08-05T16:16:16Z", "status": "SUBMITTED", "side": "SELL", "executionType": "LIMIT",
         "submittedQuantity": 40, "limitPrice": 0.25, "securityCurrency": "USD", "securityId": "sec-o-1", "symbol": "QNC", "security": {"id": "sec-o-1", "stock": {"symbol": "QNC", "name": "Quantum Emotion Corp"}}});
     set_gql(move |op, _| match op {

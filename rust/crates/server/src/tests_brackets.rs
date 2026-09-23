@@ -658,6 +658,7 @@ fn test_a_watched_only_bracket_ends_when_the_activity_feed_shows_the_sale() {
     let (_oid, b) = watched_only();
     let act = json!({"id": "act-sale", "transactionDate": "2026-09-10", "occurredAt": "2026-09-10T15:00:00Z", "accountId": "acct-margin", "securityId": "sec-s-us", "symbol": "QNC",
         "quantity": 25, "unitPrice": 170.0, "netCashAmount": 4250.0, "activityType": "Trade", "activitySubType": "SELL", "source": "csv"});
+    let act: bagholder_store::activities::ActivityRow = serde_json::from_value(act).unwrap();
     bagholder_store::activities::insert_activity(&db(), &act, None, None, &crate::app::uuid4).unwrap();
     *lk(&bracket_seam::STOP_ALLOWED) = Some(false);
     t0();

@@ -30,6 +30,12 @@ fn problems_line(problems: &[String]) -> String {
     problems.join("; ")
 }
 
+/// A Wealthsimple row with no usable canonical id: said, not silently dropped.
+fn unidentified_line(n: usize) -> String {
+    let (noun, was) = if n == 1 { ("row", "was") } else { ("rows", "were") };
+    format!("{} Wealthsimple {} had no id and {} not stored", n, noun, was)
+}
+
 fn set_error(app: &Arc<App>, msg: &str) {
     app.state.lock().unwrap().error = msg.to_string();
 }
@@ -365,7 +371,7 @@ fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     let accounts = fetch::fetch_all_accounts(&client, &sess, &identity)?;
     let accts = bagholder_ws::mapping::Accounts::from_nodes(&accounts);
     let (start_date, _full) = bagholder_ws::sync::activity_sync_bounds(&conn).map_err(failed)?;
-    let mut mapped: Vec<bagholder_store::broker::MappedActivity> = Vec::new();
+    let mut mapped: Vec<bagholder_store::activities::ActivityRow> = Vec::new();
     set_step(app, "Syncing transactions");
     let now_i = now_unix() as i64;
     for acc in accounts.iter().filter(|a| !a.id.is_empty()) {
@@ -398,8 +404,10 @@ fn sync_body(app: &Arc<App>, force_activity: bool) -> Result<bool, CallError> {
     let (nick_pts, nav_errors) = fetch_nickname_nav_history(app, &client, &sess, &accounts, &last_by);
     problems.extend(nav_errors);
     combined.extend(nick_pts);
-    let rows = bagholder_store::broker::MappedActivity::to_rows(&mapped);
-    bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &crate::app::uuid4).map_err(failed)?;
+    let applied = bagholder_store::merge::apply_wealthsimple_mapped(&conn, &mapped, &crate::app::uuid4).map_err(failed)?;
+    if applied.unidentified > 0 {
+        problems.push(unidentified_line(applied.unidentified));
+    }
     let synced = now_iso();
     set_step(app, "Saving…");
     bagholder_store::tables::replace_accounts(&conn, &bagholder_ws::sync::slim_accounts(&accounts)).map_err(failed)?;
@@ -478,8 +486,10 @@ pub fn fill_listings(app: &Arc<App>, sess: &Session, from_sync: bool) -> Vec<Str
                 }
             }
             if !mapped.is_empty() {
-                let rows = bagholder_store::broker::MappedActivity::to_rows(&mapped);
-                bagholder_store::merge::apply_wealthsimple_mapped(&conn, &rows, &crate::app::uuid4).map_err(|e| e.to_string())?;
+                let applied = bagholder_store::merge::apply_wealthsimple_mapped(&conn, &mapped, &crate::app::uuid4).map_err(|e| e.to_string())?;
+                if applied.unidentified > 0 {
+                    problems.push(unidentified_line(applied.unidentified));
+                }
             }
             if walk_ok {
                 bagholder_store::tables::set_meta(&conn, "security_id_backfill_done", "1").map_err(|e| e.to_string())?;
@@ -872,5 +882,11 @@ mod tests {
         assert!(line.contains("Buying power for Margin failed"), "{}", line);
         assert!(line.contains("Equity history failed") && line.contains("history service down"), "{}", line);
         delete_session(&app);
+    }
+
+    #[test]
+    fn test_unidentified_line_is_singular_and_plural() {
+        assert_eq!(unidentified_line(1), "1 Wealthsimple row had no id and was not stored");
+        assert_eq!(unidentified_line(2), "2 Wealthsimple rows had no id and were not stored");
     }
 }

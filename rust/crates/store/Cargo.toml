@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
 # model's are: the two sides of the wire cannot drift
-ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }
 bagholder-model = { path = "../model" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
@@ -17,6 +17,9 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # the CSV importer's patterns
 regex = "1"
+# the CSV importer's per-type counts, insertion-ordered like the `Map` they
+# replace; already in the tree through serde_json's `preserve_order`
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

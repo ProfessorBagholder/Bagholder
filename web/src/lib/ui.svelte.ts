@@ -3,6 +3,9 @@
 import { store } from './state.svelte'
 import { request } from './api'
 
+// the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
+import type { Appended, ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
+
 export interface TradeForm {
   date: string
   account: string
@@ -14,16 +17,10 @@ export interface TradeForm {
   fees: string
   error: string
 }
-export interface ImportFileReport {
-  file: string
-  error?: string
-  format?: string
-  rows?: number
-  added?: number
-  duplicates?: number
-  skipped?: { row: number; message: string }[]
-  skippedCount?: number
-}
+/** One file's report from `/api/import`: the server's own shape, or, when the
+ * request itself failed, just a file name and an error -- so every field but
+ * `file` is read as optional, as the modal that lists these does. */
+export type ImportFileReport = Partial<ImportedFileReport> & { file: string; error?: string }
 export interface ImportReport {
   files: ImportFileReport[]
   added: number
@@ -49,7 +46,7 @@ export const ui = $state<{
   importReport: ImportReport | null
   folderPath: string
   folderError: string
-  watch: { watching: boolean; path: string; lastScan?: string; files?: { file: string; format?: string; added: number; duplicates: number }[] } | null
+  watch: WatchStatus | null
   connecting: boolean
   loginView: boolean
   /** the side panels: a notification's card opens the Orders panel, so they are not the app shell's alone */
@@ -230,7 +227,7 @@ export function saveTrade(accounts: { id: string; name: string }[]): void {
   const acc = accounts.find((a) => a.id === f.account)
   ui.busy = 'trade'
   f.error = ''
-  request('POST', '/api/book/append', {
+  request<Appended>('POST', '/api/book/append', {
     date: f.date,
     symbol: f.symbol.trim().toUpperCase(),
     side: f.side,
@@ -275,12 +272,12 @@ async function importFiles(list: FileList | null): Promise<void> {
   for (const file of files) {
     try {
       const text = await file.text()
-      const r = await request('POST', '/api/import', { name: file.name, text })
-      if (!r || !r.ok) report.files.push({ file: file.name, error: (r && (r.error as string)) || 'Import failed' })
+      const r = await request<ImportedFileReport>('POST', '/api/import', { name: file.name, text })
+      if (!r || !r.ok) report.files.push({ file: file.name, error: (r && r.error) || 'Import failed' })
       else {
-        report.files.push(r as unknown as ImportFileReport)
-        report.added += (r.added as number) || 0
-        report.duplicates += (r.duplicates as number) || 0
+        report.files.push(r)
+        report.added += r.added || 0
+        report.duplicates += r.duplicates || 0
       }
     } catch (e) {
       report.files.push({ file: file.name, error: String(e) })
@@ -292,8 +289,8 @@ async function importFiles(list: FileList | null): Promise<void> {
 export function openFolder(): void {
   ui.menuOpen = false
   ui.modal = 'folder'
-  request('GET', '/api/watch').then((w) => {
-    ui.watch = w && w.ok ? (w as typeof ui.watch) : null
+  request<WatchStatus>('GET', '/api/watch').then((w) => {
+    ui.watch = w && w.ok ? w : null
   })
 }
 export function watchFolder(): void {
@@ -303,7 +300,7 @@ export function watchFolder(): void {
     ui.busy = ''
     if (!r || !r.ok) ui.folderError = (r && (r.error as string)) || 'Could not watch that folder.'
     else {
-      ui.watch = r as typeof ui.watch
+      ui.watch = r as unknown as WatchStatus
     }
   })
 }
@@ -312,13 +309,13 @@ export function scanFolder(): void {
   request('POST', '/api/watch/scan', {}).then((r) => {
     ui.busy = ''
     if (r && r.ok) {
-      ui.watch = r as typeof ui.watch
+      ui.watch = r as unknown as WatchStatus
     }
   })
 }
 export function stopWatch(): void {
-  request('POST', '/api/watch/clear', {}).then((w) => {
-    ui.watch = w && w.ok ? (w as typeof ui.watch) : null
+  request<WatchStatus>('POST', '/api/watch/clear', {}).then((w) => {
+    ui.watch = w && w.ok ? w : null
     ui.folderPath = ''
   })
 }

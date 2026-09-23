@@ -7,14 +7,12 @@
 //! not guessed between.
 
 use rusqlite::{Connection, Result};
-use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 
-use bagholder_model::value::{field_s, get, num};
-
 use crate::activities::{
-    activity_by_id, all_activities, canonical_ids, field_match_key, insert_activity, insert_local,
-    is_real_account, link_match_key, looks_like_homemade_id,
+    activity_by_id, all_activities, by_canonical_id, canonical_from_row, canonical_ids, field_match_key,
+    insert_activity, insert_local, is_real_account, link_match_key, looks_like_homemade_id, unlinked, ActivityRow,
+    Revisable,
 };
 
 /// `_REVISABLE_COLUMNS`: what Wealthsimple revises on a row of its own.
@@ -28,44 +26,13 @@ pub const REVISABLE_COLUMNS: [&str; 18] = [
     "net_cash_amount", "category", "raw_type", "aft_type", "counter_symbol",
 ];
 
-fn either(row: &Value, camel: &str, snake: &str) -> String {
-    let v = field_s(row, camel);
-    if v.is_empty() { field_s(row, snake) } else { v }
-}
-
-/// `_differs`: numbers within a billionth are the same; everything else
-/// compares as text, with absent reading as empty.
-fn differs(a: &Value, b: &Value) -> bool {
-    let numeric = a.is_f64() || b.is_f64();
-    if numeric {
-        let (x, y) = (num(Some(a), f64::NAN), num(Some(b), f64::NAN));
-        if x.is_nan() || y.is_nan() {
-            return true;
-        }
-        return (x - y).abs() > 1e-9;
-    }
-    let sa = if a.is_null() { String::new() } else { bagholder_model::value::s(Some(a)) };
-    let sb = if b.is_null() { String::new() } else { bagholder_model::value::s(Some(b)) };
-    sa != sb
-}
-
 /// `find_link_candidates`: unlinked local rows matching symbol, side,
 /// quantity, price and date -- and the account when it is a real one.
-pub fn find_link_candidates(conn: &Connection, act: &Value) -> Result<Vec<Value>> {
-    let account = {
-        let v = field_s(act, "accountId");
-        if v.is_empty() { field_s(act, "account_id") } else { v }
-    };
-    let include_account = is_real_account(&account);
+pub fn find_link_candidates(conn: &Connection, act: &ActivityRow) -> Result<Vec<ActivityRow>> {
+    let include_account = is_real_account(&act.account_id);
     let target = link_match_key(act, include_account);
-
-    let mut stmt = conn.prepare(
-        "SELECT id, canonical_id, occurred_at, transaction_date, settlement_date, account_id, book_id, fifo_id, account_type, activity_type, activity_sub_type, description, direction, symbol, name, currency, quantity, unit_price, commission, net_cash_amount, category, balance, source, raw_type, aft_type, counter_symbol, security_id FROM activities WHERE canonical_id IS NULL OR canonical_id = ''",
-    )?;
-    let rows = stmt.query_map([], crate::activities::row_to_activity)?;
     let mut out = Vec::new();
-    for row in rows {
-        let mapped = row?;
+    for mapped in unlinked(conn)? {
         if link_match_key(&mapped, include_account) == target {
             out.push(mapped);
         }
@@ -93,61 +60,89 @@ pub fn stamp_canonical_id(conn: &Connection, activity_id: &str, canonical_id: &s
     Ok(n > 0)
 }
 
-/// The stored row's revisable columns, under their column names.
-fn stored_columns(conn: &Connection, cid: &str) -> Result<Option<Map<String, Value>>> {
-    let cols = crate::activities::COLUMNS;
-    let sql = format!("SELECT {} FROM activities WHERE canonical_id = ?", cols.join(", "));
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query([cid])?;
-    let row = match rows.next()? { Some(r) => r, None => return Ok(None) };
-    let mut out = Map::new();
-    for (i, c) in cols.iter().enumerate() {
-        let v = match row.get_ref(i)? {
-            rusqlite::types::ValueRef::Null => Value::Null,
-            rusqlite::types::ValueRef::Integer(n) => json!(n as f64),
-            rusqlite::types::ValueRef::Real(f) => json!(f),
-            rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t).to_string()),
-            rusqlite::types::ValueRef::Blob(_) => Value::Null,
-        };
-        out.insert((*c).to_string(), v);
+/// One field of a `Revisable`, as an update parameter -- the incoming value
+/// for every column except `security_id`, which is taken from the incoming
+/// row's own (normalized) security id rather than `Revisable`'s copy of it.
+fn revisable_param(r: &Revisable, security_id: &Option<String>, col: &str) -> Box<dyn rusqlite::ToSql> {
+    match col {
+        "occurred_at" => Box::new(r.occurred_at.clone()),
+        "transaction_date" => Box::new(r.transaction_date.clone()),
+        "settlement_date" => Box::new(r.settlement_date.clone()),
+        "activity_type" => Box::new(r.activity_type.clone()),
+        "activity_sub_type" => Box::new(r.activity_sub_type.clone()),
+        "description" => Box::new(r.description.clone()),
+        "direction" => Box::new(r.direction.clone()),
+        "symbol" => Box::new(r.symbol.clone()),
+        "name" => Box::new(r.name.clone()),
+        "currency" => Box::new(r.currency.clone()),
+        "quantity" => Box::new(r.quantity),
+        "unit_price" => Box::new(r.unit_price),
+        "commission" => Box::new(r.commission),
+        "net_cash_amount" => Box::new(r.net_cash_amount),
+        "category" => Box::new(r.category.clone()),
+        "raw_type" => Box::new(r.raw_type.clone()),
+        "aft_type" => Box::new(r.aft_type.clone()),
+        "counter_symbol" => Box::new(r.counter_symbol.clone()),
+        "security_id" => Box::new(security_id.clone()),
+        _ => Box::new(None::<String>),
     }
-    Ok(Some(out))
 }
 
 /// `_revise_wealthsimple_row`: replace the stored copy with the broker's
 /// current version when a revisable field changed.
-pub fn revise_wealthsimple_row(conn: &Connection, cid: &str, row: &Value) -> Result<bool> {
-    let incoming = crate::activities::insert_columns(row, "", Some(cid));
-    let stored = match stored_columns(conn, cid)? { Some(s) => s, None => return Ok(false) };
+pub fn revise_wealthsimple_row(conn: &Connection, cid: &str, row: &ActivityRow) -> Result<bool> {
+    let normalized = row.normalized();
+    let incoming = Revisable::of(&normalized);
+    let stored_row = match by_canonical_id(conn, cid)? { Some(r) => r, None => return Ok(false) };
+    let stored = Revisable::of(&stored_row);
 
-    let mut changed: Vec<&str> = REVISABLE_COLUMNS
-        .iter()
-        .copied()
-        .filter(|c| {
-            differs(
-                incoming.get(*c).unwrap_or(&Value::Null),
-                stored.get(*c).unwrap_or(&Value::Null),
-            )
-        })
-        .collect();
+    let mut changed: Vec<&str> = Vec::new();
+    macro_rules! diff_str {
+        ($f:ident, $name:expr) => {
+            if incoming.$f != stored.$f {
+                changed.push($name);
+            }
+        };
+    }
+    macro_rules! diff_num {
+        ($f:ident, $name:expr) => {
+            if (incoming.$f - stored.$f).abs() > 1e-9 {
+                changed.push($name);
+            }
+        };
+    }
+    diff_str!(occurred_at, "occurred_at");
+    diff_str!(transaction_date, "transaction_date");
+    diff_str!(settlement_date, "settlement_date");
+    diff_str!(activity_type, "activity_type");
+    diff_str!(activity_sub_type, "activity_sub_type");
+    diff_str!(description, "description");
+    diff_str!(direction, "direction");
+    diff_str!(symbol, "symbol");
+    diff_str!(name, "name");
+    diff_str!(currency, "currency");
+    diff_num!(quantity, "quantity");
+    diff_num!(unit_price, "unit_price");
+    diff_num!(commission, "commission");
+    diff_num!(net_cash_amount, "net_cash_amount");
+    diff_str!(category, "category");
+    diff_str!(raw_type, "raw_type");
+    diff_str!(aft_type, "aft_type");
+    diff_str!(counter_symbol, "counter_symbol");
     if changed.is_empty() {
         return Ok(false);
     }
     // a security id the broker now supplies is taken, but never replaced
-    let incoming_sid = incoming.get("security_id").cloned().unwrap_or(Value::Null);
-    let stored_sid = stored.get("security_id").cloned().unwrap_or(Value::Null);
-    let incoming_has = !matches!(&incoming_sid, Value::Null) && bagholder_model::value::s(Some(&incoming_sid)) != "";
-    let stored_has = !matches!(&stored_sid, Value::Null) && bagholder_model::value::s(Some(&stored_sid)) != "";
+    let incoming_has = incoming.security_id.as_deref().is_some_and(|s| !s.is_empty());
+    let stored_has = stored.security_id.as_deref().is_some_and(|s| !s.is_empty());
     if incoming_has && !stored_has {
         changed.push("security_id");
     }
 
     let sets = changed.iter().map(|c| format!("{} = ?", c)).collect::<Vec<_>>().join(", ");
     let sql = format!("UPDATE activities SET {} WHERE canonical_id = ?", sets);
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = changed
-        .iter()
-        .map(|c| crate::activities::to_sql(incoming.get(*c).unwrap_or(&Value::Null)))
-        .collect();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        changed.iter().map(|c| revisable_param(&incoming, &normalized.security_id, c)).collect();
     params.push(Box::new(cid.to_string()));
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
     conn.execute(&sql, refs.as_slice())?;
@@ -160,28 +155,27 @@ pub struct Applied {
     pub linked: usize,
     pub skipped: usize,
     pub revised: usize,
+    /// A row whose canonical id was empty or looked homemade: said, not
+    /// silently dropped.
+    pub unidentified: usize,
 }
 
 /// `apply_wealthsimple_mapped`.
-pub fn apply_wealthsimple_mapped(
-    conn: &Connection,
-    rows: &[Value],
-    new_id: &dyn Fn() -> String,
-) -> Result<Applied> {
+pub fn apply_wealthsimple_mapped(conn: &Connection, rows: &[ActivityRow], new_id: &dyn Fn() -> String) -> Result<Applied> {
     crate::atomically(conn, || {
         let mut out = Applied::default();
         let mut known: HashSet<String> = canonical_ids(conn)?.into_iter().collect();
 
         for raw in rows {
-            if !truthy(raw) {
+            if raw == &ActivityRow::default() {
                 continue;
             }
-            let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
-            row.insert("source".into(), json!("wealthsimple"));
-            let row = Value::Object(row);
+            let mut row = raw.clone();
+            row.source = "wealthsimple".into();
 
-            let cid = either(&row, "canonicalId", "canonical_id").trim().to_string();
+            let cid = row.canonical_id.clone().unwrap_or_default().trim().to_string();
             if cid.is_empty() || looks_like_homemade_id(&cid) {
+                out.unidentified += 1;
                 continue;
             }
             if known.contains(&cid) {
@@ -189,7 +183,7 @@ pub fn apply_wealthsimple_mapped(
                     out.revised += 1;
                     continue;
                 }
-                let sid = either(&row, "securityId", "security_id").trim().to_string();
+                let sid = row.security_id.clone().unwrap_or_default().trim().to_string();
                 if !sid.is_empty() {
                     conn.execute(
                         "UPDATE activities SET security_id = ? WHERE canonical_id = ? AND (security_id IS NULL OR security_id = '')",
@@ -201,8 +195,7 @@ pub fn apply_wealthsimple_mapped(
             }
             let matches = find_link_candidates(conn, &row)?;
             if matches.len() == 1 {
-                let id = field_s(&matches[0], "id");
-                if stamp_canonical_id(conn, &id, &cid)? {
+                if stamp_canonical_id(conn, &matches[0].id, &cid)? {
                     known.insert(cid.clone());
                     out.linked += 1;
                     continue;
@@ -216,30 +209,19 @@ pub fn apply_wealthsimple_mapped(
     })
 }
 
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
 #[derive(Debug, serde::Serialize)]
 pub struct Merged {
     pub ok: bool,
     pub added: usize,
     pub duplicates: usize,
-    pub activities: Vec<Value>,
+    pub activities: Vec<ActivityRow>,
 }
 
 /// `merge_local_rows`: a CSV or typed merge, on date, account, symbol,
 /// quantity, price and cash rather than on any id.
-pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> String) -> Result<Merged> {
+pub fn merge_local_rows(conn: &Connection, rows: &[ActivityRow], new_id: &dyn Fn() -> String) -> Result<Merged> {
     crate::atomically(conn, || {
-        let mut stored: Vec<Value> = Vec::new();
+        let mut stored: Vec<ActivityRow> = Vec::new();
         let mut added = 0usize;
         let mut duplicates = 0usize;
 
@@ -250,17 +232,16 @@ pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> 
 
         let mut incoming_seen: HashMap<Key, usize> = HashMap::new();
         for raw in rows {
-            if !truthy(raw) {
+            if raw == &ActivityRow::default() {
                 continue;
             }
-            let mut row: Map<String, Value> = match raw { Value::Object(m) => m.clone(), _ => continue };
-            let mut source = field_s(raw, "source");
+            let mut row = raw.clone();
+            let mut source = row.source.clone();
             if source.is_empty() {
                 source = "csv".into();
             }
             if source == "wealthsimple" {
-                let cid = crate::activities::canonical_from_row(raw, "wealthsimple");
-                if let Some(_cid) = cid {
+                if canonical_from_row(&row, "wealthsimple").is_some() {
                     let result = apply_wealthsimple_mapped(conn, std::slice::from_ref(raw), new_id)?;
                     added += result.inserted + result.linked;
                     if result.skipped > 0 {
@@ -270,10 +251,8 @@ pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> 
                 }
                 source = "csv".into();
             }
-            row.insert("source".into(), json!(source));
-            // as above: a swap-remove would shuffle the row's keys
-            let row: Map<String, Value> = row.into_iter().filter(|(k, _)| k != "canonicalId" && k != "canonical_id").collect();
-            let row = Value::Object(row);
+            row.source = source;
+            row.canonical_id = None;
 
             let k = Key::of(&row);
             let n = incoming_seen.entry(k.clone()).or_insert(0);
@@ -292,19 +271,10 @@ pub fn merge_local_rows(conn: &Connection, rows: &[Value], new_id: &dyn Fn() -> 
 }
 
 /// Re-exported so callers reading a single row back can use it.
-pub fn by_id(conn: &Connection, id: &str) -> Result<Option<Value>> {
+pub fn by_id(conn: &Connection, id: &str) -> Result<Option<ActivityRow>> {
     activity_by_id(conn, id)
 }
 
-/// Kept for the tool: a row's revisable view, for reporting a diff.
-pub fn revisable_view(row: &Value) -> Map<String, Value> {
-    let cols = crate::activities::insert_columns(row, "", None);
-    let mut out = Map::new();
-    for c in REVISABLE_COLUMNS {
-        out.insert(c.to_string(), cols.get(c).cloned().unwrap_or(Value::Null));
-    }
-    out
-}
 
 /// A field match key that can be a map key.
 ///
@@ -315,7 +285,7 @@ pub fn revisable_view(row: &Value) -> Map<String, Value> {
 pub struct Key(String, String, String, u64, u64, u64);
 
 impl Key {
-    pub fn of(row: &Value) -> Key {
+    pub fn of(row: &ActivityRow) -> Key {
         let (d, a, s, q, p, c) = field_match_key(row, true);
         Key(d, a, s, bits(q), bits(p), bits(c))
     }
@@ -323,9 +293,4 @@ impl Key {
 
 fn bits(v: f64) -> u64 {
     (if v == 0.0 { 0.0 } else { v }).to_bits()
-}
-
-/// Exposed for the tool's reporting.
-pub fn get_field<'a>(row: &'a Value, k: &str) -> Option<&'a Value> {
-    get(row, k)
 }

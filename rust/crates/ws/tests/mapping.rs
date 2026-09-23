@@ -24,7 +24,7 @@ fn ws_item(over: Value) -> ActivityItem {
     serde_json::from_value(item).unwrap()
 }
 
-fn map(item: &ActivityItem) -> bagholder_store::broker::MappedActivity {
+fn map(item: &ActivityItem) -> bagholder_store::activities::ActivityRow {
     mapping::map_activity(item, &mapping::Accounts::default()).expect("mapped row")
 }
 
@@ -38,14 +38,13 @@ fn db() -> Connection {
     conn
 }
 
-fn apply(conn: &Connection, rows: &[bagholder_store::broker::MappedActivity]) {
+fn apply(conn: &Connection, rows: &[bagholder_store::activities::ActivityRow]) {
     let n = std::cell::Cell::new(0u64);
     let id = || {
         n.set(n.get() + 1);
         format!("00000000-0000-4000-8000-{:012}", n.get())
     };
-    let rows = bagholder_store::broker::MappedActivity::to_rows(rows);
-    bagholder_store::merge::apply_wealthsimple_mapped(conn, &rows, &id).unwrap();
+    bagholder_store::merge::apply_wealthsimple_mapped(conn, rows, &id).unwrap();
 }
 
 #[test]

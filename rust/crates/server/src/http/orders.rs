@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::extract::text;
 use super::{answer, Api, AppState, Body, Params};
@@ -108,6 +108,6 @@ async fn bracket_cancel(State(state): State<AppState>, Body(b): Body<Named>) -> 
 }
 
 /// `POST /api/book/append`: a fill the person enters by hand.
-async fn book_append(State(state): State<AppState>, Body(row): Body<Map<String, Value>>) -> Api {
-    answer(move || orders::append_manual(&state.app, &Value::Object(row))).await
+async fn book_append(State(state): State<AppState>, Body(body): Body<orders::BookAppend>) -> Api {
+    answer(move || orders::append_manual(&state.app, &body)).await
 }

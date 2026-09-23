@@ -45,6 +45,7 @@ fn insert_local(conn: &Connection, row: Value) {
         n.set(n.get() + 1);
         format!("00000000-0000-4000-8000-{:012}", n.get())
     };
+    let row: bagholder_store::activities::ActivityRow = serde_json::from_value(row).unwrap();
     bagholder_store::activities::insert_local(conn, &row, &id).unwrap();
 }
 

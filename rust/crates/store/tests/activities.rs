@@ -4,7 +4,20 @@
 mod common;
 use bagholder_store::{activities, admin, merge, orders, tables};
 use common::*;
-use serde_json::{json, Value};
+use serde_json::json;
+
+/// A Wealthsimple row with no usable id is counted, not silently dropped
+/// (`Applied::unidentified`) -- one for an empty canonical id, one for a
+/// homemade-looking one.
+#[test]
+fn test_a_wealthsimple_row_with_no_usable_id_is_counted_unidentified() {
+    let d = db();
+    let no_cid = with(ws_row(), json!({"canonicalId": null}));
+    let homemade_cid = with(ws_row(), json!({"canonicalId": "a|b|1.0"}));
+    let result = d.apply(&[no_cid, homemade_cid]);
+    assert_eq!((result.inserted, result.linked, result.skipped, result.revised, result.unidentified), (0, 0, 0, 0, 2));
+    assert_eq!(d.count(), 0, "neither row is stored");
+}
 
 #[test]
 fn test_insert_if_new_by_canonical_id() {
@@ -61,11 +74,11 @@ fn test_manual_has_no_canonical_id() {
     let d = db();
     let row = json!({"id": "64d0ce97-3502-4bcb-9d97-383f23fbb50c", "occurredAt": "2024-07-01", "transactionDate": "2024-07-01", "settlementDate": "2024-07-01", "accountId": "manual", "bookId": "manual", "accountType": "Manual", "activityType": "Trade", "activitySubType": "BUY", "description": "Buy 3 ZZZ @ 12.5", "direction": "DEBIT", "symbol": "ZZZ", "name": "ZZZ", "currency": "CAD", "quantity": 3.0, "unitPrice": 12.5, "commission": 0.0, "netCashAmount": -37.5, "category": "trade", "balance": null, "source": "manual"});
     let id = d.new_id();
-    let result = merge::merge_local_rows(&d.conn, &[row], &id).unwrap();
+    let result = merge::merge_local_rows(&d.conn, &common::typed_rows(&[row]), &id).unwrap();
     let act = &result.activities[0];
-    assert!(!act["id"].as_str().unwrap().is_empty());
-    assert!(!activities::looks_like_homemade_id(act["id"].as_str().unwrap()));
-    assert!(matches!(act.get("canonicalId"), None | Some(Value::Null)) || act["canonicalId"] == "" || act["canonicalId"] == false);
+    assert!(!act.id.is_empty());
+    assert!(!activities::looks_like_homemade_id(&act.id));
+    assert!(act.canonical_id.is_none());
     let stored = &d.activities()[0];
     assert!(stored.get("canonicalId").map_or(true, |v| v.is_null()));
     assert_eq!(stored["source"], "manual");
@@ -131,7 +144,7 @@ fn test_link_single_manual_match_stamps_canonical_id() {
     let d = db();
     let manual = json!({"id": "007ede4e-969c-467c-9aa9-31acc30f5b6a", "occurredAt": "2024-06-15", "transactionDate": "2024-06-15", "settlementDate": "2024-06-15", "accountId": "acct-1", "bookId": "acct-1", "accountType": "", "activityType": "Trade", "activitySubType": "BUY", "description": "Buy 10 AAA @ 10", "direction": "DEBIT", "symbol": "AAA", "name": "AAA", "currency": "CAD", "quantity": 10.0, "unitPrice": 10.0, "commission": 0.0, "netCashAmount": -100.0, "category": "trade", "balance": null, "source": "manual"});
     let id = d.new_id();
-    merge::merge_local_rows(&d.conn, &[manual], &id).unwrap();
+    merge::merge_local_rows(&d.conn, &common::typed_rows(&[manual]), &id).unwrap();
     assert_eq!(d.count(), 1);
     d.apply(&[ws_row()]);
     let rows = d.activities();
@@ -198,7 +211,8 @@ fn test_the_models_reading_of_a_row_is_the_same_with_and_without_json_between() 
         json!({"id": "a3", "canonicalId": "c3", "transactionDate": "2026-01-07", "accountId": "acct-2", "bookId": "book-2", "activityType": "Deposit", "category": "deposit", "aftType": "misc_payments"}),
     ]);
     let as_json = activities::all_activities(&d.conn).unwrap();
-    let through_json: Vec<bagholder_model::activity::RawActivity> = as_json.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect();
+    let through_json: Vec<bagholder_model::activity::RawActivity> =
+        as_json.iter().map(|r| serde_json::from_value(serde_json::to_value(r).unwrap()).unwrap()).collect();
     let direct = activities::all_raw_activities(&d.conn).unwrap();
     assert_eq!(direct.len(), 3);
     assert_eq!(direct, through_json);

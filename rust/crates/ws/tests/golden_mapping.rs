@@ -43,15 +43,25 @@ fn accounts_raw() -> Vec<Value> {
 
 const NOW_UNIX: i64 = 1_789_000_000;
 
-/// `MappedActivity` rows, in their stored JSON shape (`to_rows`), so the
-/// golden keeps exactly the field set it always has.
-fn rows_json(rows: Vec<bagholder_store::broker::MappedActivity>) -> Value {
-    Value::Array(bagholder_store::broker::MappedActivity::to_rows(&rows))
+/// A mapped `ActivityRow`, in the JSON shape the golden has always pinned --
+/// the mapper's own `id` is always `""` (the store assigns the real one on
+/// insert), so it is dropped here rather than added to every cell in this
+/// golden as a new key.
+fn row_json(row: bagholder_store::activities::ActivityRow) -> Value {
+    let mut v = serde_json::to_value(&row).unwrap();
+    if let Value::Object(m) = &mut v {
+        m.remove("id");
+    }
+    v
 }
 
-fn single_json(row: Option<bagholder_store::broker::MappedActivity>) -> Value {
+fn rows_json(rows: Vec<bagholder_store::activities::ActivityRow>) -> Value {
+    Value::Array(rows.into_iter().map(row_json).collect())
+}
+
+fn single_json(row: Option<bagholder_store::activities::ActivityRow>) -> Value {
     match row {
-        Some(r) => bagholder_store::broker::MappedActivity::to_rows(&[r]).into_iter().next().unwrap(),
+        Some(r) => row_json(r),
         None => Value::Null,
     }
 }

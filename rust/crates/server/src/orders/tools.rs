@@ -103,10 +103,6 @@ pub(super) fn fmt_g(x: f64) -> String {
     }
 }
 
-pub(super) fn upper(v: Option<&Value>) -> String {
-    s(v).trim().to_uppercase()
-}
-
 pub(super) fn date_only(v: Option<&Value>) -> String {
     let t = s(v);
     let t = t.trim();

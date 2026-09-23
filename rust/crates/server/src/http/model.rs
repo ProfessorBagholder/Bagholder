@@ -244,6 +244,10 @@ struct Import {
     name: String,
 }
 
+fn to_value<T: serde::Serialize>(v: &T) -> Value {
+    serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
 async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api {
     if bagholder_model::textrules::trim_space(&i.text).is_empty() {
         return Err(ApiError::BadRequest("text required".into()));
@@ -252,7 +256,7 @@ async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api {
     let app = state.app;
     let report = blocking(move || -> Result<Value, ApiError> {
         let conn = app.open()?;
-        bagholder_store::csvimport::import_text(&conn, &name, &i.text).map_err(|e| {
+        bagholder_store::csvimport::import_text(&conn, &name, &i.text).map(|r| to_value(&r)).map_err(|e| {
             app::log(&format!("bagholder: import failed: {}", e));
             ApiError::Failed(e.to_string())
         })
@@ -262,7 +266,7 @@ async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api {
 }
 
 async fn watch_status(State(state): State<AppState>) -> Api {
-    with_store(&state, bagholder_store::csvimport::status).await
+    with_store(&state, |conn| bagholder_store::csvimport::status(conn).map(|s| to_value(&s))).await
 }
 
 #[derive(Deserialize, Default)]
@@ -276,11 +280,12 @@ async fn watch_set(State(state): State<AppState>, Body(w): Body<WatchFolder>) ->
     let out = blocking(move || -> rusqlite::Result<(bool, Value)> {
         let conn = app.open()?;
         let set = bagholder_store::csvimport::set_watch_folder(&conn, &w.path)?;
-        if set.get("ok") != Some(&json!(true)) {
-            return Ok((false, set));
+        if !set.ok {
+            return Ok((false, to_value(&set)));
         }
-        let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        result["status"] = bagholder_store::csvimport::status(&conn)?;
+        let result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+        let mut result = to_value(&result);
+        result["status"] = to_value(&bagholder_store::csvimport::status(&conn)?);
         Ok((true, result))
     })
     .await??;
@@ -291,8 +296,9 @@ async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::Status
     let app = state.app;
     let result = blocking(move || -> rusqlite::Result<Value> {
         let conn = app.open()?;
-        let mut result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        result["status"] = bagholder_store::csvimport::status(&conn)?;
+        let result = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
+        let mut result = to_value(&result);
+        result["status"] = to_value(&bagholder_store::csvimport::status(&conn)?);
         Ok(result)
     })
     .await??;
@@ -302,7 +308,7 @@ async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::Status
 async fn watch_clear(State(state): State<AppState>) -> Api {
     with_store(&state, |conn| {
         bagholder_store::csvimport::clear_watch_folder(conn)?;
-        bagholder_store::csvimport::status(conn)
+        bagholder_store::csvimport::status(conn).map(|s| to_value(&s))
     })
     .await
 }
