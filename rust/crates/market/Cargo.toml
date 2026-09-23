@@ -14,8 +14,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # client, not rustls or the platform stack. flate2 inflates gzip bodies.
 openssl = "0.10"
 flate2 = "1"
-# the exchange zone a Yahoo chart names, from the system's own tzdata
-tz-rs = "0.7"
 # the filing sources' page patterns
 regex = "1"
 # a headline's accents taken off, so `Québec` and `Quebec` are one word
@@ -24,4 +22,6 @@ unicode-normalization = "0.1"
 pdf-extract = "0.9"
 
 [dev-dependencies]
+# tests read the time zone rules built into jiff, never the machine's
+bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"

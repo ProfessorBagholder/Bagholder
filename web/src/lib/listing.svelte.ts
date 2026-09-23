@@ -10,6 +10,7 @@
 
 import { lookup } from './api'
 import { bareSymbol } from './sym'
+import { localDay } from './fmt'
 import type { Fill, Model, Trade } from './model'
 
 interface Known {
@@ -58,7 +59,7 @@ export function listingAsTrade(id: string, model: Model | null): Trade | null {
   // the quote the model already keeps for a watched listing, which moves with it
   const w = model?.markets.watchlist.find((x) => listingId(x) === id)
   const watched = w && w.last != null
-  const since = new Date(Date.now() - LISTING_DAYS * 86400000).toISOString().slice(0, 10)
+  const since = localDay(new Date(Date.now() - LISTING_DAYS * 86400000))
   return {
     ...l,
     id,

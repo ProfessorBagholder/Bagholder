@@ -2,6 +2,7 @@
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
 import { store } from './state.svelte'
 import { request, call } from './api'
+import { localDay } from './fmt'
 
 // the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
 import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
@@ -29,7 +30,7 @@ export interface ImportReport {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10)
+  return localDay()
 }
 function freshTradeForm(): TradeForm {
   return { date: today(), account: '', symbol: '', side: 'BUY', qty: '', price: '', currency: 'CAD', fees: '', error: '' }

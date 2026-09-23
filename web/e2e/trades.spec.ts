@@ -179,6 +179,25 @@ test.describe('Trade detail', () => {
     expect(after[0] < after[1]).toBe(true) // reversed to oldest first
   })
 
+  test('an execution\'s day and time are the viewer\'s, not the server\'s', async ({ page, request }) => {
+    // SPEC.md: execution times are shown in the viewer's local time. The browser runs
+    // in Toronto (playwright.config.ts); the server formats fills in Edmonton.
+    const model = await getModel(request)
+    const withFills = await Promise.all(model.trades.map(async (x: any) => ({ id: x.id, fills: (await (await request.get('/api/trade?id=' + encodeURIComponent(x.id))).json()).fills || [] })))
+    const t = withFills.find((x: any) => x.fills.some((f: any) => String(f.when).includes('T')))!
+    const at = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    const viewer = (when: string) => {
+      const p = Object.fromEntries(at.formatToParts(new Date(when)).map((x) => [x.type, x.value]))
+      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`
+    }
+    const want = t.fills.filter((f: any) => String(f.when).includes('T')).map((f: any) => viewer(f.when))
+    expect(want).not.toEqual(t.fills.filter((f: any) => String(f.when).includes('T')).map((f: any) => `${f.date} ${f.time}`))
+    await page.goto('/#trades/' + encodeURIComponent(t.id))
+    await ready(page)
+    const shown = (await page.locator('#page .scroll table tbody tr td:nth-child(1)').allTextContents()).map((x) => x.trim().replace(/\s+/g, ' '))
+    for (const w of want) expect(shown).toContain(w)
+  })
+
   test('an option execution\'s Side reads what the fill did in the trade, BUY TO OPEN then SELL TO CLOSE', async ({ page, request }) => {
     const model = await getModel(request)
     const t = model.trades.find((x: any) => x.kind === 'Options')

@@ -6,7 +6,7 @@
   // grid of the facts + executions table and the thesis / grade / tags card, then
   // the short-interest cards and the disclosures list.
   import type { Trade, Fill } from './model'
-  import { money, money0, pct, px, qty, hold, color } from './fmt'
+  import { money, money0, pct, px, qty, hold, color, localWhen } from './fmt'
   import { symText } from './sym'
   import { ICONS } from './icons'
   import { sort, toggleSort, sortRows } from './sort.svelte'
@@ -304,7 +304,7 @@
             <tbody>
               {#each execs as e (e.id)}
                 <tr class="tab">
-                  <td style="padding-left:0;color:var(--ink75);white-space:nowrap">{e.date} <span class="dim">{e.time}</span></td>
+                  <td style="padding-left:0;color:var(--ink75);white-space:nowrap">{localWhen(e.when, e.date).day} <span class="dim">{localWhen(e.when, e.date).time}</span></td>
                   <td style="padding-inline:6px;font-size:11.5px;letter-spacing:.03em;color:var(--ink60)">{e.sub || e.side}</td>
                   <td style="text-align:right;padding-inline:6px">{qty(e.qty)}</td>
                   <td class="dim" style="text-align:center;padding:7px 18px;font-variant-numeric:normal">{e.currency}</td>

@@ -200,7 +200,7 @@ pub fn is_stale(conn: &Connection, today: &str, symbols: &[Listing]) -> bool {
 /// The Bank of Canada has published
 /// today's rate (16:30 Eastern on a weekday) and the table does not have it.
 pub fn fx_day_published_but_missing(conn: &Connection, now_unix: f64) -> bool {
-    let (day, minute, _) = match crate::clockzone::local_at("America/Toronto", now_unix as i64) { Some(x) => x, None => return false };
+    let (day, minute, _) = match bagholder_model::clock::local_at("America/Toronto", now_unix as i64) { Some(x) => x, None => return false };
     let (y, m, d) = match bagholder_model::dates::parse_iso(&day) { Some(x) => x, None => return false };
     let weekday = (bagholder_model::dates::to_days(y, m, d) + 3).rem_euclid(7);
     if weekday > 4 || minute < BOC_PUBLISH_MINUTE_ET {

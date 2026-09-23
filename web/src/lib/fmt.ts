@@ -12,6 +12,24 @@
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+// Times arrive as UTC instants and are shown in the viewer's own zone (SPEC:
+// "Intraday bars and execution times are shown in the viewer's local time").
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** The viewer's calendar day, `YYYY-MM-DD`. */
+export function localDay(d: Date = new Date()): string {
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+}
+
+/** An instant as the viewer's day and `HH:MM`; a bare date (no time was
+ *  recorded) keeps its day and has no time. */
+export function localWhen(when: string, date: string): { day: string; time: string } {
+  const t = when.includes('T') ? Date.parse(when) : NaN
+  if (!isFinite(t)) return { day: date, time: '' }
+  const d = new Date(t)
+  return { day: localDay(d), time: pad2(d.getHours()) + ':' + pad2(d.getMinutes()) }
+}
+
 export function esc(s: unknown): string {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }) as Record<string, string>)[c])
 }

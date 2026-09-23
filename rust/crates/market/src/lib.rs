@@ -9,7 +9,6 @@ pub mod search;
 pub mod sedar;
 pub mod shorts;
 pub mod browser;
-pub mod clockzone;
 pub mod disclosures;
 pub mod edgar;
 pub mod enrich;

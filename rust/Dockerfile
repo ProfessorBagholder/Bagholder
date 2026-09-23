@@ -23,7 +23,7 @@ FROM debian:bookworm-slim
 # Chromium for the Wealthsimple sign-in, on a virtual display (Xvfb): the app's page shows
 # its window and passes your clicks and keys to it, so nothing is needed on the host but
 # Docker. Passkeys need a real browser; sign in with the password and 2FA.
-RUN apt-get update && apt-get install -y --no-install-recommends chromium xvfb fonts-liberation ca-certificates libssl3 poppler-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium xvfb fonts-liberation ca-certificates libssl3 poppler-utils tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint

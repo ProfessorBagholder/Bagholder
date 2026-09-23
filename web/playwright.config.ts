@@ -18,6 +18,8 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${PORT}`,
     viewport: { width: 1440, height: 900 },
     colorScheme: 'dark',
+    // the viewer's zone, pinned: a machine's own zone never changes an expected time
+    timezoneId: 'America/Toronto',
   },
   webServer: {
     command: 'node e2e/serve.mjs',

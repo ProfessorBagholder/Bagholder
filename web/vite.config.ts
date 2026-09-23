@@ -26,5 +26,7 @@ export default defineConfig(({ mode }) => ({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.test.ts'], // e2e/ is Playwright's, run by `npm run e2e`
+    // the viewer's zone, pinned: a machine's own zone never changes an expected time
+    env: { TZ: 'America/Toronto' },
   },
 }))

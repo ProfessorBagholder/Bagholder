@@ -629,20 +629,14 @@ pub fn minute_stamp(text: &str) -> Option<(i64, String, i64, i64)> {
     let mm: i64 = parts.get(1).map(|x| x.parse().ok()).unwrap_or(Some(0))?;
     let ss: i64 = parts.get(2).map(|x| x.split('.').next().unwrap_or("0").parse().ok()).unwrap_or(Some(0))?;
     let wall = bagholder_model::dates::to_days(y, m, dd) * 86400 + hh * 3600 + mm * 60 + ss;
-    // a time with no offset is the machine's own local time to `timestamp()`,
-    // and has no offset of its own
-    let epoch = if naive { wall - local_offset_at(wall) } else { wall - offset };
-    Some((epoch, bagholder_model::dates::fmt(y, m, dd), hh * 60 + mm, if naive { 0 } else { offset }))
+    // a time with no offset is the exchange's own wall clock (TMX: Toronto),
+    // never the machine's, which can be anywhere
+    let offset = if naive { bagholder_model::clock::offset_for_wall(TMX_ZONE, wall)? } else { offset };
+    Some((wall - offset, bagholder_model::dates::fmt(y, m, dd), hh * 60 + mm, offset))
 }
 
-/// The machine's local UTC offset for a wall-clock time, as `mktime` settles
-/// it.
-fn local_offset_at(wall: i64) -> i64 {
-    static LOCAL: std::sync::OnceLock<Option<tz::TimeZone>> = std::sync::OnceLock::new();
-    let zone = match LOCAL.get_or_init(|| tz::TimeZone::local().ok()) { Some(z) => z, None => return 0 };
-    let first = zone.find_local_time_type(wall).map(|t| t.ut_offset() as i64).unwrap_or(0);
-    zone.find_local_time_type(wall - first).map(|t| t.ut_offset() as i64).unwrap_or(first)
-}
+/// TMX's exchange zone: a chart time it sends without an offset is read here.
+const TMX_ZONE: &str = "America/Toronto";
 
 fn opt_num(v: Option<&Value>) -> Option<f64> {
     match v {

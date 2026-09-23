@@ -78,6 +78,22 @@ jobs:
         run: cargo test --workspace -- --include-ignored
         working-directory: rust
 
+  # Windows has no system time zone database, so the model reads the copy built into
+  # jiff there: the model's tests (the zones and every shared case) run where that holds.
+  rust-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: The model's suite
+        env:
+          CI: "true"
+        run: cargo test -p bagholder-model
+        working-directory: rust
+
   web:
     runs-on: ubuntu-latest
     defaults:

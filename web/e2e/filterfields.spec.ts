@@ -45,9 +45,13 @@ test('a custom date range sets the chip and clears the preset, and picking a yea
   await ready(page)
   await page.getByRole('button', { name: 'Filters' }).click()
   await page.locator('.pop-row', { hasText: /^Date/ }).click()
-  await page.locator('.pill', { hasText: '1M' }).click()
-
+  // the preset's own request is awaited, or on a slow run it lands after the wait
+  // below has begun and is read as the date's
   let reqPromise = eventsRequest(page)
+  await page.locator('.pill', { hasText: '1M' }).click()
+  expect((await requestFilters(await reqPromise)).preset).toBe('1m')
+
+  reqPromise = eventsRequest(page)
   await page.getByLabel('From').fill('2026-01-01')
   let filters = await requestFilters(await reqPromise)
   expect(filters.from).toBe('2026-01-01')

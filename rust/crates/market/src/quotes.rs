@@ -170,7 +170,7 @@ pub fn parse_yahoo_chart(text: &str) -> Vec<SourceBar> {
     for (i, t) in ts.iter().enumerate() {
         let t = match t.as_i64() { Some(t) => t, None => continue };
         let close = match col("close", i) { Some(c) if c > 0.0 => c, _ => continue };
-        let (day, minute, off) = match crate::clockzone::local_at(&zone, t) {
+        let (day, minute, off) = match bagholder_model::clock::local_at(&zone, t) {
             Some((d, mi, o)) => (d, mi, o),
             None => {
                 let local = t + fixed;

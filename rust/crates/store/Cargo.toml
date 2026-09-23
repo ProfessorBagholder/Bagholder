@@ -23,6 +23,8 @@ regex = "1"
 indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
+# tests read the time zone rules built into jiff, never the machine's
+bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 tempfile = "3"
 
 [[bin]]

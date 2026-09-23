@@ -159,3 +159,12 @@ fn test_every_bar_is_what_it_was() {
     }
     assert_eq!(have.as_object().unwrap().len(), want.as_object().unwrap().len());
 }
+
+#[test]
+fn test_a_tmx_time_without_an_offset_is_torontos_wall_clock() {
+    // 09:30 in Toronto is 13:30 UTC in summer and 14:30 in winter, wherever the app runs
+    let (epoch, day, minute, offset) = history::minute_stamp("2026-09-02T09:30:00").unwrap();
+    assert_eq!((epoch, day.as_str(), minute, offset), (1788355800, "2026-09-02", 570, -4 * 3600));
+    let (epoch, _, _, offset) = history::minute_stamp("2026-01-15T09:30:00").unwrap();
+    assert_eq!((epoch, offset), (1768487400, -5 * 3600));
+}

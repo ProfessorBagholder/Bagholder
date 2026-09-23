@@ -34,6 +34,8 @@ name = "bagholder"
 path = "src/main.rs"
 
 [dev-dependencies]
+# tests read the time zone rules built into jiff, never the machine's
+bagholder-model = { path = "../model", features = ["pinned-tzdb"] }
 # the stand-in Wealthsimple server, for the sync's own tests
 bagholder-ws = { path = "../ws", features = ["standin"] }
 # a database of its own for the model cache tests, as the store's tests have
