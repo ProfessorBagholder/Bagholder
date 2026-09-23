@@ -218,6 +218,16 @@ pub struct Book {
     deposit_trip: Option<TripKey>,
 }
 
+/// What `close` left unmet.
+#[derive(Clone, Debug)]
+struct Closed {
+    /// The quantity no open lot met.
+    left: Dec,
+    /// The part of the closing value and fee that is the unmet quantity's.
+    value_left: Fig<Money>,
+    fee_left: Money,
+}
+
 /// The whole match.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Matched {
@@ -285,25 +295,18 @@ pub fn multiplier(info: Option<&InstrumentInfo>, instrument: InstrumentId) -> Fi
 /// The value of a fill of `qty` units: its cash less its fee, since the cash is
 /// what moved; the stated price × quantity × multiplier only where no cash is
 /// stated (a fill the app booked itself). `acquiring` says which way the cash
-/// goes. Where both are stated and disagree, `price_disagrees` says so.
+/// goes. Where both are stated and disagree, `price_disagrees` says so. A fill
+/// that states neither has no value on the record.
 pub fn fill_value(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency, mult: &Fig<Dec>) -> Fig<Money> {
     let Some(cash) = t.cash else {
         return match t.price {
             Some(price) if price.currency != currency => Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
             Some(price) => Ok(Money::new(price.amount.checked_mul(qty)?.checked_mul(mult.clone()?)?, currency)),
-            None => Ok(Money::zero(currency)),
+            None => Err(Gaps::of(Gap::ValueUnstated(t.id.clone()))),
         };
     };
-    let fee = t.fee.map(|f| f.amount).unwrap_or(Dec::ZERO);
-    let cash = if cash.currency == currency {
-        cash.amount
-    } else {
-        // the rate the source states it applied: cash per unit of the instrument's currency
-        match t.fx_rate {
-            Some(r) if !r.is_zero() => cash.amount.div_rounded(r, SHARE_PLACES, Rounding::HalfEven)?,
-            _ => return Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
-        }
-    };
+    let fee = fee_in(t, currency)?.amount;
+    let cash = in_currency(t, cash, currency)?;
     let v = if acquiring { cash.neg().checked_sub(fee)? } else { cash.checked_add(fee)? };
     if v.is_negative() {
         return Err(Gaps::of(Gap::Arithmetic(format!("{} moves its cash against its direction", t.id))));
@@ -311,25 +314,59 @@ pub fn fill_value(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency
     Ok(Money::new(v, currency))
 }
 
-/// Whether a fill states both a price and cash that do not agree: price ×
-/// quantity × multiplier against the cash less the fee. Unknown (no multiplier)
-/// is not a disagreement.
-pub fn price_disagrees(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency, mult: &Fig<Dec>) -> bool {
-    let (Some(price), Some(_)) = (t.price, t.cash) else { return false };
-    let (Ok(m), Ok(by_cash)) = (mult, fill_value(t, qty, acquiring, currency, mult)) else { return false };
-    if price.currency != currency {
-        return false;
+/// An amount of a fill in the instrument's currency: as it is, or at the rate
+/// the source states it applied (the amount's currency per unit of the
+/// instrument's); without a stated rate, the currency is unstated.
+fn in_currency(t: &Transaction, amount: Money, currency: Currency) -> Result<Dec, Gaps> {
+    if amount.currency == currency {
+        return Ok(amount.amount);
     }
-    match price.amount.checked_mul(qty).and_then(|v| v.checked_mul(*m)) {
-        Ok(by_price) => by_price != by_cash.amount,
-        Err(_) => true,
+    let converts = t.cash.is_some_and(|c| c.currency == amount.currency);
+    match t.fx_rate {
+        Some(r) if converts && !r.is_zero() => Ok(amount.amount.div_rounded(r, SHARE_PLACES, Rounding::HalfEven)?),
+        _ => Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
     }
 }
 
-fn fee_of(t: &Transaction, currency: Currency) -> Money {
+/// A fill's fee in the instrument's currency (none stated is none charged).
+fn fee_in(t: &Transaction, currency: Currency) -> Result<Money, Gaps> {
     match t.fee {
-        Some(f) if f.currency == currency => f,
-        _ => Money::zero(currency),
+        None => Ok(Money::zero(currency)),
+        Some(f) => Ok(Money::new(in_currency(t, f, currency)?, currency)),
+    }
+}
+
+/// A fill's fee in the instrument's currency, and what its value becomes with
+/// it: as it is where the fee is stated in that currency (or converts at the
+/// stated rate), unstated where it is not, the fee then standing at zero.
+fn charged(t: &Transaction, currency: Currency) -> (Money, impl Fn(Fig<Money>) -> Fig<Money>) {
+    let fee = fee_in(t, currency);
+    let stands = fee.clone().unwrap_or(Money::zero(currency));
+    (stands, move |value: Fig<Money>| match (&fee, value) {
+        (Ok(_), v) => v,
+        (Err(g), Ok(_)) => Err(g.clone()),
+        (Err(g), Err(mut v)) => {
+            v.merge(g);
+            Err(v)
+        }
+    })
+}
+
+/// Whether a fill states both a price and cash that do not agree: price ×
+/// quantity × multiplier against the cash less the fee, at the cash's own
+/// places, since the broker rounds the cash to its minor unit. Cash converted
+/// from another currency is not compared: the stated rate is itself rounded.
+/// Unknown (no multiplier) is not a disagreement.
+pub fn price_disagrees(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency, mult: &Fig<Dec>) -> bool {
+    let (Some(price), Some(cash)) = (t.price, t.cash) else { return false };
+    if price.currency != currency || cash.currency != currency || t.fee.is_some_and(|f| f.currency != currency) {
+        return false;
+    }
+    let (Ok(m), Ok(by_cash)) = (mult, fill_value(t, qty, acquiring, currency, mult)) else { return false };
+    let places = currency.minor_units().max(cash.amount.places()).max(t.fee.map(|f| f.amount.places()).unwrap_or(0));
+    match price.amount.checked_mul(qty).and_then(|v| v.checked_mul(*m)) {
+        Ok(by_price) => by_price.round(places, Rounding::HalfEven) != by_cash.amount,
+        Err(_) => true,
     }
 }
 
@@ -553,13 +590,12 @@ impl<'a> Matcher<'a> {
 
     /// Close up to `qty` of `direction` from the front of a holding, at the
     /// closing value `value` and fee `fee` for the whole `qty`; returns what was
-    /// left unclosed and the round trips it closed into.
+    /// left unclosed with the part of the value and fee that is left to it.
     #[allow(clippy::too_many_arguments)]
-    fn close(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, closer: &Closer, day: Date, at: Option<Timestamp>, extra: &BTreeSet<Flag>) -> Result<(Dec, Vec<TripKey>), Gaps> {
+    fn close(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec, value: Fig<Money>, fee: Money, closer: &Closer, day: Date, at: Option<Timestamp>, extra: &BTreeSet<Flag>) -> Result<Closed, Gaps> {
         let mut left = qty;
         let mut value_left = value;
         let mut fee_left = fee;
-        let mut trips = Vec::new();
         loop {
             let book = self.book(account, instrument);
             let taint = book.taint.clone();
@@ -613,12 +649,9 @@ impl<'a> Matcher<'a> {
             if emptied {
                 tr.open_lots -= 1;
             }
-            if !trips.contains(&trip_key) {
-                trips.push(trip_key);
-            }
         }
         self.settle(account, instrument);
-        Ok((left, trips))
+        Ok(Closed { left, value_left, fee_left })
     }
 
     /// Take `qty` of longs off the front of a holding with their cost and no
@@ -808,13 +841,15 @@ impl<'a> Matcher<'a> {
         }
         let acquiring = acquires(t).unwrap_or(q.is_positive());
         let currency = self.currency(instrument);
-        let fee = fee_of(t, currency);
+        // a fee not stated in the instrument's currency leaves the fill's value
+        // unstated; a delivery's fee is the underlying's, handled there
+        let (fee, charge) = charged(t, currency);
         let closer = Closer::Transaction(t.id.clone());
         let none = BTreeSet::new();
         match mv {
             Move::Trade(effect) => {
                 let mult = multiplier(self.info(instrument), instrument);
-                let value = fill_value(t, qty, acquiring, currency, &mult);
+                let value = charge(fill_value(t, qty, acquiring, currency, &mult));
                 if price_disagrees(t, qty, acquiring, currency, &mult) {
                     self.out.disagreements.push(t.id.clone());
                 }
@@ -822,13 +857,13 @@ impl<'a> Matcher<'a> {
             }
             Move::Expire => {
                 let d = if acquiring { Direction::Short } else { Direction::Long };
-                match self.close(account, instrument, d, qty, Ok(Money::zero(currency)), fee, &closer, t.trade_date, t.occurred_at, &none) {
-                    Ok((left, _)) if left.is_positive() => self.beyond(t, account, instrument, left),
+                match self.close(account, instrument, d, qty, charge(Ok(Money::zero(currency))), fee, &closer, t.trade_date, t.occurred_at, &none) {
+                    Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                     Ok(_) => {}
                     Err(g) => self.taint(account, instrument, &g),
                 }
             }
-            Move::Deliver { exercise } => self.apply_delivery(t, instrument, qty, acquiring, exercise, fee),
+            Move::Deliver { exercise } => self.apply_delivery(t, instrument, qty, acquiring, exercise),
             Move::Transfer => self.apply_transfer(t, instrument, qty, acquiring),
             Move::Reward => {
                 if acquiring {
@@ -837,9 +872,9 @@ impl<'a> Matcher<'a> {
                 }
             }
             Move::Resolve => {
-                let value = fill_value(t, qty, false, currency, &Ok(Dec::ONE));
+                let value = charge(fill_value(t, qty, false, currency, &Ok(Dec::ONE)));
                 match self.close(account, instrument, Direction::Long, qty, value, fee, &closer, t.trade_date, t.occurred_at, &none) {
-                    Ok((left, _)) if left.is_positive() => self.beyond(t, account, instrument, left),
+                    Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                     Ok(_) => {}
                     Err(g) => self.taint(account, instrument, &g),
                 }
@@ -869,13 +904,13 @@ impl<'a> Matcher<'a> {
         let closer = Closer::Transaction(t.id.clone());
         let none = BTreeSet::new();
         let may_close = effect != Some(Effect::Open);
-        let (left, closed_trips) = if may_close {
-            match self.close(account, instrument, closes, qty, value.clone(), fee, &closer, t.trade_date, t.occurred_at, &none) {
+        let Closed { left, value_left, fee_left } = if may_close {
+            match self.close(account, instrument, closes, qty, value, fee, &closer, t.trade_date, t.occurred_at, &none) {
                 Ok(r) => r,
                 Err(g) => return self.taint(account, instrument, &g),
             }
         } else {
-            (qty, vec![])
+            Closed { left: qty, value_left: value, fee_left: fee }
         };
         if effect == Some(Effect::Open) && self.book(account, instrument).lots.iter().any(|l| l.direction == closes) {
             // the record says it opens, and it meets an opposite position
@@ -895,15 +930,12 @@ impl<'a> Matcher<'a> {
         if !may_open {
             return self.beyond(t, account, instrument, left);
         }
-        let v = if left == qty { value } else { fig_share(&value, left, qty) };
-        let f = if left == qty { fee } else { share(fee, left, qty).unwrap_or(fee) };
         let joins = if option { self.rolled_from(t, instrument, opens, record_legs) } else { None };
         let mut flags = BTreeSet::new();
         if joins.is_some() {
             flags.insert(Flag::Rolled);
         }
-        let _ = closed_trips;
-        self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, opens, left, v, f, flags, joins);
+        self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, opens, left, value_left, fee_left, flags, joins);
     }
 
     /// The round trip a roll's opening leg continues: the one closed by another
@@ -989,7 +1021,7 @@ impl<'a> Matcher<'a> {
 
     /// An assignment or exercise: the contract closes at zero, keeping its
     /// premium, and the underlying moves by contracts × multiplier at the strike.
-    fn apply_delivery(&mut self, t: &Transaction, instrument: InstrumentId, qty: Dec, acquiring: bool, exercise: bool, fee: Money) {
+    fn apply_delivery(&mut self, t: &Transaction, instrument: InstrumentId, qty: Dec, acquiring: bool, exercise: bool) {
         let account = t.account;
         let currency = self.currency(instrument);
         let flags = BTreeSet::from([Flag::Assignment]);
@@ -998,7 +1030,7 @@ impl<'a> Matcher<'a> {
         let closing = if exercise { Direction::Long } else { Direction::Short };
         let _ = acquiring;
         match self.close(account, instrument, closing, qty, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &flags) {
-            Ok((left, _)) if left.is_positive() => self.beyond(t, account, instrument, left),
+            Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
             Ok(_) => {}
             Err(g) => self.taint(account, instrument, &g),
         }
@@ -1022,18 +1054,17 @@ impl<'a> Matcher<'a> {
             Some(_) => fill_value(t, shares, receives, under_currency, &Ok(Dec::ONE)),
             None => terms.strike.checked_mul(shares).map(|v| Money::new(v, under_currency)).map_err(Gaps::from),
         };
-        let fee = if under_currency == currency { fee } else { Money::zero(under_currency) };
+        let (fee, charge) = charged(t, under_currency);
+        let value = charge(value);
         let (closes, opens) = if receives { (Direction::Short, Direction::Long) } else { (Direction::Long, Direction::Short) };
-        let (left, _) = match self.close(account, under, closes, shares, value.clone(), fee, &closer, t.trade_date, t.occurred_at, &flags) {
+        let Closed { left, value_left, fee_left } = match self.close(account, under, closes, shares, value, fee, &closer, t.trade_date, t.occurred_at, &flags) {
             Ok(r) => r,
             Err(g) => return self.taint(account, under, &g),
         };
         if left.is_positive() {
             // delivering shares not held opens a short: the contract obliges it
-            let v = fig_share(&value, left, shares);
-            let f = share(fee, left, shares).unwrap_or(fee);
             let own = TripKey { opening: t.id.clone(), instrument: under };
-            self.open_lot(account, under, &t.id, t.trade_date, t.occurred_at, opens, left, v, f, flags, Some(own));
+            self.open_lot(account, under, &t.id, t.trade_date, t.occurred_at, opens, left, value_left, fee_left, flags, Some(own));
         }
     }
 
@@ -1216,7 +1247,7 @@ impl<'a> Matcher<'a> {
                 }
                 let value = cash.times(out)?;
                 let closer = Closer::Transaction(anchor.clone());
-                let (left, _) = self.close(account, from, Direction::Long, out, Ok(value), Money::zero(currency), &closer, day, at, &BTreeSet::new())?;
+                let left = self.close(account, from, Direction::Long, out, Ok(value), Money::zero(currency), &closer, day, at, &BTreeSet::new())?.left;
                 if left.is_positive() {
                     self.out.beyond.push(Beyond { transaction: anchor.clone(), account, instrument: from, qty: left });
                 }

@@ -161,7 +161,7 @@ pub fn build(case: &Value) -> Built {
             quantity: s(&t, "qty").map(dec),
             price: money(s(&t, "price"), Some(&default_ccy)),
             cash: money(s(&t, "cash"), Some(s(&t, "cash_currency").unwrap_or(&default_ccy))),
-            fee: money(s(&t, "fee"), Some(s(&t, "cash_currency").unwrap_or(&default_ccy))),
+            fee: money(s(&t, "fee"), Some(s(&t, "fee_currency").or(s(&t, "cash_currency")).unwrap_or(&default_ccy))),
             fx_rate: s(&t, "fx_rate").map(dec),
         };
         let info = records.entry(record).or_insert_with(|| RecordInfo { source_key: record_label.clone(), problems: vec![] });

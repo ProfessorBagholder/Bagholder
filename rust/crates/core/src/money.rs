@@ -27,6 +27,17 @@ impl Currency {
         Ok(Currency([b[0], b[1], b[2]]))
     }
 
+    /// Places of the currency's minor unit, per ISO 4217 (list one): cash in it
+    /// is stated to these places.
+    pub fn minor_units(self) -> u32 {
+        match &self.0 {
+            b"BIF" | b"CLP" | b"DJF" | b"GNF" | b"ISK" | b"JPY" | b"KMF" | b"KRW" | b"PYG" | b"RWF" | b"UGX" | b"UYI" | b"VND" | b"VUV" | b"XAF" | b"XOF" | b"XPF" => 0,
+            b"BHD" | b"IQD" | b"JOD" | b"KWD" | b"LYD" | b"OMR" | b"TND" => 3,
+            b"CLF" | b"UYW" => 4,
+            _ => 2,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         // three ASCII capitals, checked on the way in
         std::str::from_utf8(&self.0).unwrap_or("???")

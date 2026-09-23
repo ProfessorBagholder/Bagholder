@@ -454,6 +454,10 @@ fn run(path: &Path) -> Vec<String> {
             let got: BTreeSet<String> = f.matched.beyond.iter().map(|x| tx.iter().find(|(_, id)| **id == x.transaction).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
             c.words("beyond held", v, got);
         }
+        if let Some(v) = expect.get("disagreements") {
+            let got: BTreeSet<String> = f.matched.disagreements.iter().map(|x| tx.iter().find(|(_, id)| *id == x).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
+            c.words("price and cash disagree", v, got);
+        }
         failures.extend(c.failures);
     }
     failures

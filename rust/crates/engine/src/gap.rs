@@ -41,6 +41,8 @@ pub enum Gap {
     /// A fill whose cash is in another currency than the instrument's, with no
     /// rate stated for the conversion.
     CurrencyUnstated(TransactionId),
+    /// A fill that states neither its cash nor its price.
+    ValueUnstated(TransactionId),
     /// A holding with no price: no quote from its own kind's source and no fill.
     PriceUnknown(InstrumentId),
     /// A holding with no close on a day the equity series needs one.
@@ -76,6 +78,7 @@ impl Gap {
             Gap::BeyondHeld(_) => "beyond-held",
             Gap::EffectConflict(_) => "effect-conflict",
             Gap::CurrencyUnstated(_) => "currency-unstated",
+            Gap::ValueUnstated(_) => "value-unstated",
             Gap::PriceUnknown(_) => "price-unknown",
             Gap::CloseUnknown { .. } => "close-unknown",
             Gap::FrequencyUnknown(_) => "frequency-unknown",
@@ -101,6 +104,7 @@ impl fmt::Display for Gap {
             Gap::BeyondHeld(t) => write!(f, "{t} takes out more than the account held"),
             Gap::EffectConflict(t) => write!(f, "{t} says it opens a position while the account holds the opposite one"),
             Gap::CurrencyUnstated(t) => write!(f, "{t} is paid in another currency than its instrument's, at no stated rate"),
+            Gap::ValueUnstated(t) => write!(f, "{t} states neither its cash nor its price"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),
             Gap::CloseUnknown { instrument, day } => write!(f, "{instrument} has no close for {day}"),
             Gap::FrequencyUnknown(i) => write!(f, "the payout frequency of {i} is not known yet"),
