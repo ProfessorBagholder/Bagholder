@@ -1,9 +1,11 @@
 //! Short selling, which regulator answers for a
 //! listing, what each report says, and the figure the app derives from them.
 
-use bagholder_market::shorts;
-use serde_json::{json, Map, Value};
+use bagholder_market::shorts::{self, CaPositionRow, CaVolumeRow, Position, UsVolumeRow};
+use bagholder_store::feeds::{ShortMarket, VolumeSpan};
+use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 const US_FILE: &str = "Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market\r\n\
@@ -49,34 +51,30 @@ fn approx(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-7, "{} != {}", a, b);
 }
 
-fn obj(v: Value) -> Map<String, Value> {
-    match v { Value::Object(m) => m, _ => Map::new() }
-}
-
 // --- RoutingTest ---------------------------------------------------------------
 
 #[test]
 fn test_each_market_goes_to_the_regulator_that_publishes_for_it() {
-    assert_eq!(shorts::market_of("GME", "NYSE", "USD"), "us");
-    assert_eq!(shorts::market_of("AAPL", "NASDAQ", "USD"), "us");
-    assert_eq!(shorts::market_of("QNC", "TSX-V", "CAD"), "ca");
-    assert_eq!(shorts::market_of("TGIF", "CSE", "CAD"), "ca");
-    assert_eq!(shorts::market_of("HBIX", "Cboe Canada", "CAD"), "ca");
+    assert_eq!(shorts::market_of("GME", "NYSE", "USD"), Some(ShortMarket::Us));
+    assert_eq!(shorts::market_of("AAPL", "NASDAQ", "USD"), Some(ShortMarket::Us));
+    assert_eq!(shorts::market_of("QNC", "TSX-V", "CAD"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("TGIF", "CSE", "CAD"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("HBIX", "Cboe Canada", "CAD"), Some(ShortMarket::Ca));
 }
 
 #[test]
 fn test_a_venue_the_book_does_not_name_follows_the_currency_as_the_quotes_do() {
-    assert_eq!(shorts::market_of("SHOP", "", "CAD"), "ca");
-    assert_eq!(shorts::market_of("F", "", "USD"), "us");
+    assert_eq!(shorts::market_of("SHOP", "", "CAD"), Some(ShortMarket::Ca));
+    assert_eq!(shorts::market_of("F", "", "USD"), Some(ShortMarket::Us));
 }
 
 #[test]
 fn test_nothing_is_claimed_for_an_instrument_no_one_reports() {
-    assert_eq!(shorts::market_of("BTC", "Crypto", "USD"), "");
-    assert_eq!(shorts::market_of("SPX", "Index", "USD"), "");
-    assert_eq!(shorts::market_of("ES", "CME", "USD"), "");
-    assert_eq!(shorts::market_of("AAPL  260117C00150000", "NASDAQ", "USD"), "");
-    assert_eq!(shorts::market_of("", "NYSE", "USD"), "");
+    assert_eq!(shorts::market_of("BTC", "Crypto", "USD"), None);
+    assert_eq!(shorts::market_of("SPX", "Index", "USD"), None);
+    assert_eq!(shorts::market_of("ES", "CME", "USD"), None);
+    assert_eq!(shorts::market_of("AAPL  260117C00150000", "NASDAQ", "USD"), None);
+    assert_eq!(shorts::market_of("", "NYSE", "USD"), None);
 }
 
 // --- ReportDateTest ------------------------------------------------------------
@@ -115,7 +113,7 @@ fn test_the_daily_file_is_only_looked_for_on_weekdays() {
 #[test]
 fn test_the_daily_us_file_gives_the_short_part_of_each_symbols_volume() {
     let rows = shorts::parse_us_volume(US_FILE);
-    assert_eq!(rows["GME"], json!({"shortVolume": 2250985.897562, "totalVolume": 3542062.253804}));
+    assert_eq!(rows["GME"], UsVolumeRow { short_volume: 2250985.897562, total_volume: 3542062.253804 });
     assert!(!rows.contains_key("NOVOL"));
     assert!(!rows.contains_key("SHORT"));
     assert!(!rows.contains_key("Symbol"));
@@ -124,8 +122,8 @@ fn test_the_daily_us_file_gives_the_short_part_of_each_symbols_volume() {
 #[test]
 fn test_the_canadian_position_report_gives_shares_short_and_the_change() {
     let rows = shorts::parse_ca_positions(&ca_grid());
-    assert_eq!(rows["QNC"], json!({"venue": "TSXV", "shares": 2667164.0, "change": 64077.0, "name": "QUANTUM EMOTION CORP."}));
-    assert_eq!(rows["TGIF"]["venue"], "CSE");
+    assert_eq!(rows["QNC"], CaPositionRow { venue: "TSXV".into(), shares: 2667164.0, change: Some(64077.0), name: "QUANTUM EMOTION CORP.".into() });
+    assert_eq!(rows["TGIF"].venue, "CSE");
     assert!(!rows.contains_key("NIL"));
     assert!(!rows.contains_key("OOPS"));
     assert!(!rows.contains_key("Security Symbol"));
@@ -134,10 +132,10 @@ fn test_the_canadian_position_report_gives_shares_short_and_the_change() {
 #[test]
 fn test_the_canadian_volume_report_gives_the_short_share_of_trading() {
     let rows = shorts::parse_ca_volume(CA_CSV).unwrap();
-    assert_eq!(rows["QNC"]["shortVolume"], json!(1197633.0));
-    assert_eq!(rows["QNC"]["volumePct"], json!(21.319));
-    approx(rows["QNC"]["totalVolume"].as_f64().unwrap(), 1197633.0 / 21.319 * 100.0);
-    assert!(rows["TGIF"]["totalVolume"].is_null());
+    assert_eq!(rows["QNC"].short_volume, 1197633.0);
+    assert_eq!(rows["QNC"].volume_pct, Some(21.319));
+    approx(rows["QNC"].total_volume.unwrap(), 1197633.0 / 21.319 * 100.0);
+    assert!(rows["TGIF"].total_volume.is_none());
 }
 
 #[test]
@@ -158,19 +156,15 @@ fn test_the_newest_settlement_finra_has_is_the_one_shown() {
         "not a row"
     ]);
     let out = shorts::parse_us_position(&answered);
-    let picked: Map<String, Value> = ["asOf", "shares", "previous", "change", "previousOf", "averageVolume"]
-        .iter()
-        .map(|k| (k.to_string(), out[*k].clone()))
-        .collect();
     assert_eq!(
-        Value::Object(picked),
-        json!({"asOf": "2026-08-31", "shares": 56990026.0, "previous": 54036583.0, "change": 2953443.0, "previousOf": "2026-08-14", "averageVolume": 5864237.0})
+        (out.as_of.as_str(), out.shares, out.previous, out.change, out.previous_of.as_str(), out.average_volume),
+        ("2026-08-31", Some(56990026.0), Some(54036583.0), Some(2953443.0), "2026-08-14", Some(5864237.0))
     );
 }
 
 #[test]
 fn test_a_symbol_finra_does_not_carry_answers_nothing_rather_than_guessing() {
-    assert_eq!(shorts::parse_us_position(&json!([])), json!({}));
+    assert_eq!(shorts::parse_us_position(&json!([])), Position::default());
 }
 
 #[test]
@@ -181,12 +175,12 @@ fn test_a_whole_market_file_is_read_once_and_used_for_every_listing() {
         calls.set(calls.get() + 1);
         Ok(US_FILE.to_string())
     };
-    let first = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, get));
-    let second = shorts::us_volume_with("A", || shorts::us_volume_file_with(TODAY, get));
+    let first = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, get)).unwrap();
+    let second = shorts::us_volume_with("A", || shorts::us_volume_file_with(TODAY, get)).unwrap();
     assert_eq!(calls.get(), 1);
-    assert_eq!(first["volumeOf"], "2026-09-15");
-    approx(first["volumePct"].as_f64().unwrap(), 2250985.897562 / 3542062.253804 * 100.0);
-    assert_eq!(second["volumeSpan"], "day");
+    assert_eq!(first.volume_of, "2026-09-15");
+    approx(first.volume_pct.unwrap(), 2250985.897562 / 3542062.253804 * 100.0);
+    assert_eq!(second.volume_span, VolumeSpan::Day);
 }
 
 #[test]
@@ -194,16 +188,15 @@ fn test_a_file_that_will_not_answer_keeps_what_was_already_read() {
     let _g = serial();
     shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Ok(US_FILE.to_string())));
     shorts::age_file("us_volume", shorts::FILE_HOURS * 3600 + 1);
-    let kept = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("down".to_string())));
-    assert_eq!(kept["shortVolume"], json!(2250985.897562));
+    let kept = shorts::us_volume_with("GME", || shorts::us_volume_file_with(TODAY, |_| Err("down".to_string()))).unwrap();
+    assert_eq!(kept.short_volume, Some(2250985.897562));
 }
 
 /// `for_listing` for a Canadian listing on fixed files.
-fn ca_listing(c: &rusqlite::Connection, sym: &str, exchange: &str, trend: bool) -> Value {
-    let mut rec = obj(shorts::ca_position_with(sym, exchange, TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))));
-    let vol = obj(shorts::ca_volume_with(sym, exchange, || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None));
-    rec.extend(vol);
-    shorts::finish(c, rec, sym, exchange, "CAD", TODAY, trend, "", "ca", |_| vec![], |_| None)
+fn ca_listing(c: &rusqlite::Connection, sym: &str, exchange: &str, trend: bool) -> bagholder_store::feeds::Shorts {
+    let position = shorts::ca_position_with(sym, exchange, TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
+    let volume = shorts::ca_volume_with(sym, exchange, || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None);
+    shorts::finish(c, position, volume, sym, exchange, trend, ShortMarket::Ca, |_| vec![], |_| None)
 }
 
 #[test]
@@ -211,13 +204,12 @@ fn test_a_canadian_listing_reads_both_of_its_reports() {
     let _g = serial();
     let c = conn();
     let rec = ca_listing(&c, "QNC", "TSX-V", false);
-    assert_eq!(rec["source"], "CIRO");
-    assert_eq!(rec["shares"], json!(2667164.0));
-    assert_eq!(rec["previous"], json!(2603087.0));
-    assert_eq!(rec["asOf"], "2026-09-15");
-    assert_eq!(rec["volumeOf"], "2026-09-01/2026-09-15");
-    assert_eq!(rec["volumeSpan"], "period");
-    assert_eq!(rec["previousOf"], "2026-08-31");
+    assert_eq!(rec.shares, Some(2667164.0));
+    assert_eq!(rec.previous, Some(2603087.0));
+    assert_eq!(rec.as_of, "2026-09-15");
+    assert_eq!(rec.volume_of, "2026-09-01/2026-09-15");
+    assert_eq!(rec.volume_span, Some(VolumeSpan::Period));
+    assert_eq!(rec.previous_of, "2026-08-31");
 }
 
 #[test]
@@ -225,20 +217,20 @@ fn test_a_listing_filed_under_another_venue_is_not_read_as_this_one() {
     let _g = serial();
     let c = conn();
     let rec = ca_listing(&c, "QNC", "CSE", false);
-    assert!(rec.get("shares").map(|v| v.is_null()).unwrap_or(true));
-    assert_eq!(rec["market"], "ca");
+    assert!(rec.shares.is_none());
+    assert_eq!(rec.market, ShortMarket::Ca);
 }
 
 #[test]
 fn test_nothing_is_read_for_an_instrument_no_one_reports() {
     let c = conn();
-    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", "USD", TODAY, false, ""), json!({}));
+    assert_eq!(shorts::for_listing(&c, "BTC", "Crypto", "USD", TODAY, false, ""), None);
 }
 
 #[test]
 fn test_days_to_cover_uses_the_volume_of_the_listings_own_market() {
     let c = conn();
-    let us = json!({"market": "us", "shares": 56990026.0, "averageVolume": 5864237.0});
+    let us = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(56990026.0), average_volume: Some(5864237.0), ..Default::default() };
     assert_eq!(shorts::average_volume(&c, &us), Some(5864237.0));
     assert_eq!(shorts::days_to_cover(&c, &us), Some(9.7));
 }
@@ -249,7 +241,7 @@ fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
     for day in ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"] {
         bagholder_store::tables::upsert_benchmark_prices(&c, Some(&json!({day: 100.0})), "TSX").unwrap();
     }
-    let ca = json!({"market": "ca", "shares": 2667164.0, "totalVolume": 5000000.0, "volumeOf": "2026-08-16/2026-08-31"});
+    let ca = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(2667164.0), total_volume: Some(5000000.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
     assert_eq!(days, 5);
     approx(shorts::average_volume(&c, &ca).unwrap(), 5000000.0 / days as f64);
@@ -260,9 +252,12 @@ fn test_the_canadian_average_counts_only_the_days_the_market_traded() {
 #[test]
 fn test_no_position_or_no_volume_leaves_days_to_cover_unsaid() {
     let c = conn();
-    assert_eq!(shorts::days_to_cover(&c, &json!({"market": "us", "shares": null, "averageVolume": 10.0})), None);
-    assert_eq!(shorts::days_to_cover(&c, &json!({"market": "us", "shares": 10.0, "averageVolume": null})), None);
-    assert_eq!(shorts::average_volume(&c, &json!({"market": "ca", "totalVolume": null, "volumeOf": "2026-08-16/2026-08-31"})), None);
+    let a = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: None, average_volume: Some(10.0), ..Default::default() };
+    assert_eq!(shorts::days_to_cover(&c, &a), None);
+    let b = bagholder_store::feeds::Shorts { market: ShortMarket::Us, shares: Some(10.0), average_volume: None, ..Default::default() };
+    assert_eq!(shorts::days_to_cover(&c, &b), None);
+    let d = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, total_volume: None, volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
+    assert_eq!(shorts::average_volume(&c, &d), None);
 }
 
 // --- SeriesTest ----------------------------------------------------------------
@@ -275,14 +270,14 @@ fn test_every_settlement_finra_answered_with_is_kept_oldest_first() {
         {"settlementDate": "2026-08-14", "currentShortPositionQuantity": 2},
         {"settlementDate": "2026-06-30", "currentShortPositionQuantity": null}
     ]);
-    let series = shorts::parse_us_position(&answered)["series"].as_array().unwrap().clone();
-    let dates: Vec<&str> = series.iter().map(|p| p["date"].as_str().unwrap()).collect();
-    let shares: Vec<f64> = series.iter().map(|p| p["shares"].as_f64().unwrap()).collect();
+    let series = shorts::parse_us_position(&answered).series.unwrap();
+    let dates: Vec<&str> = series.iter().map(|p| p.date.as_str()).collect();
+    let shares: Vec<f64> = series.iter().map(|p| p.shares).collect();
     assert_eq!(dates, vec!["2026-07-31", "2026-08-14", "2026-08-31"]);
     assert_eq!(shares, vec![1.0, 2.0, 3.0]);
 }
 
-fn rows_on(grid: Result<Vec<Vec<Value>>, String>) -> Map<String, Value> {
+fn rows_on(grid: Result<Vec<Vec<Value>>, String>) -> HashMap<String, CaPositionRow> {
     grid.map(|g| shorts::parse_ca_positions(&g)).unwrap_or_default()
 }
 
@@ -298,7 +293,7 @@ fn test_the_canadian_run_reads_one_file_per_reporting_date() {
         Ok(vec![vec![json!(""), json!("QNC"), json!("TSXV"), json!(shares), json!(0.0)]])
     };
     let series = shorts::ca_series_with("QNC", "TSX-V", "2026-08-31", TODAY, shorts::SERIES, |d| rows_on(grids(d)));
-    let got: Vec<(String, f64)> = series.iter().map(|p| (p["date"].as_str().unwrap().to_string(), p["shares"].as_f64().unwrap())).collect();
+    let got: Vec<(String, f64)> = series.iter().map(|p| (p.date.clone(), p.shares)).collect();
     assert_eq!(got, vec![("2026-07-31".to_string(), 100.0), ("2026-08-15".to_string(), 200.0), ("2026-08-31".to_string(), 300.0)]);
 }
 
@@ -320,9 +315,9 @@ fn test_the_canadian_run_is_only_read_when_it_is_asked_for() {
     let _g = serial();
     let c = conn();
     let asked = Cell::new(false);
-    let rec = obj(shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))));
-    let quiet = shorts::finish(&c, rec, "QNC", "TSX-V", "CAD", TODAY, false, "", "ca", |_| { asked.set(true); vec![] }, |_| None);
-    assert!(quiet.get("series").is_none());
+    let position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
+    let quiet = shorts::finish(&c, position, None, "QNC", "TSX-V", false, ShortMarket::Ca, |_| { asked.set(true); vec![] }, |_| None);
+    assert!(quiet.series.is_none());
     assert!(!asked.get());
 }
 
@@ -402,12 +397,10 @@ fn test_without_the_browser_client_the_float_is_simply_unknown() {
 #[test]
 fn test_the_position_is_measured_against_the_float() {
     let c = conn();
-    let mut rec = Map::new();
-    rec.insert("shares".into(), json!(100.0));
-    rec.insert("asOf".into(), json!("2026-08-31"));
-    let out = shorts::finish(&c, rec, "GME", "NYSE", "USD", TODAY, false, "", "us", |_| vec![], |_| Some(400.0));
-    assert_eq!(out["float"], json!(400.0));
-    assert_eq!(out["ofFloat"], json!(25.0));
+    let position = Position { shares: Some(100.0), as_of: "2026-08-31".into(), ..Position::default() };
+    let out = shorts::finish(&c, position, None, "GME", "NYSE", false, ShortMarket::Us, |_| vec![], |_| Some(400.0));
+    assert_eq!(out.float, Some(400.0));
+    assert_eq!(out.of_float, Some(25.0));
 }
 
 // --- FundFloatTest -------------------------------------------------------------
@@ -448,14 +441,14 @@ fn test_a_float_that_is_published_is_still_what_a_fund_is_measured_against() {
 
 // --- SearchedListingTest -------------------------------------------------------
 
-fn searched(exchange: &str, name: &str) -> (Value, Vec<String>) {
+fn searched(exchange: &str, name: &str) -> (bagholder_store::feeds::Shorts, Vec<String>) {
     let _g = serial();
     let c = conn();
-    let mut rows = Map::new();
-    rows.insert("SHOP".into(), json!({"venue": "TSX", "shares": 7573829.0, "change": 41206.0, "name": "SHOPIFY INC. CL 'A' SV"}));
-    let rec = obj(shorts::ca_position_from("2026-08-31", &rows, "SHOP", exchange, TODAY));
+    let mut rows = HashMap::new();
+    rows.insert("SHOP".to_string(), CaPositionRow { venue: "TSX".into(), shares: 7573829.0, change: Some(41206.0), name: "SHOPIFY INC. CL 'A' SV".into() });
+    let position = shorts::ca_position_from("2026-08-31", &rows, "SHOP", exchange, TODAY);
     let seen = RefCell::new(vec![]);
-    let out = shorts::finish(&c, rec, "SHOP", exchange, "CAD", TODAY, false, name, "ca", |_| vec![], |issuer| {
+    let out = shorts::finish(&c, position, None, "SHOP", exchange, false, ShortMarket::Ca, |_| vec![], |issuer| {
         // for_listing hands the book's own name over the report's
         let nm = if name.trim().is_empty() { issuer } else { name.trim() };
         seen.borrow_mut().push(nm.to_string());
@@ -467,14 +460,14 @@ fn searched(exchange: &str, name: &str) -> (Value, Vec<String>) {
 #[test]
 fn test_the_report_names_the_venue_and_the_issuer_where_the_book_knows_neither() {
     let (rec, seen) = searched("", "");
-    assert_eq!((rec["exchange"].as_str().unwrap(), rec["name"].as_str().unwrap()), ("TSX", "SHOPIFY INC. CL 'A' SV"));
+    assert_eq!((rec.exchange.as_str(), rec.name.as_str()), ("TSX", "SHOPIFY INC. CL 'A' SV"));
     assert_eq!(seen, vec!["SHOPIFY INC. CL 'A' SV"]);
 }
 
 #[test]
 fn test_the_book_own_name_for_a_listing_it_carries_is_the_one_the_float_is_read_under() {
     let (rec, seen) = searched("TSX", "Shopify Inc.");
-    assert_eq!(rec["exchange"], "TSX");
+    assert_eq!(rec.exchange, "TSX");
     assert_eq!(seen, vec!["Shopify Inc."]);
 }
 
@@ -601,52 +594,53 @@ fn test_a_canadian_listing_with_no_currency_keeps_its_own_suffixes() {
 #[test]
 fn test_a_record_read_on_the_spot_names_its_listing() {
     let c = conn();
-    let mut rec = Map::new();
-    rec.insert("shares".into(), json!(1.0));
-    rec.insert("asOf".into(), json!("2026-08-31"));
-    let out = shorts::finish(&c, rec, "RKLB", "NASDAQ", "USD", TODAY, false, "", "us", |_| vec![], |_| None);
-    assert_eq!(out["exchange"], "NASDAQ");
+    let position = Position { shares: Some(1.0), as_of: "2026-08-31".into(), ..Position::default() };
+    let out = shorts::finish(&c, position, None, "RKLB", "NASDAQ", false, ShortMarket::Us, |_| vec![], |_| None);
+    assert_eq!(out.exchange, "NASDAQ");
 }
 
 // --- ReportOmitsListingTest ----------------------------------------------------
 
-fn warm(rows: Value) {
-    shorts::warm_file("ca_volume", "2026-08-16/2026-08-31", obj(rows));
+fn warm(rows: HashMap<String, CaVolumeRow>) {
+    shorts::warm_ca_volume("ca_volume", "2026-08-16/2026-08-31", rows);
 }
 
 #[test]
 fn test_a_listing_the_report_omits_reads_as_none_of_its_trading() {
     let _g = serial();
-    warm(json!({}));
-    let out = shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| Some(1519546.0));
-    assert_eq!(out["shortVolume"], json!(0.0));
-    assert_eq!(out["volumePct"], json!(0.0));
-    assert_eq!(out["totalVolume"], json!(1519546.0));
+    warm(HashMap::new());
+    let out = shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| Some(1519546.0)).unwrap();
+    assert_eq!(out.short_volume, Some(0.0));
+    assert_eq!(out.volume_pct, Some(0.0));
+    assert_eq!(out.total_volume, Some(1519546.0));
 }
 
 #[test]
 fn test_a_listing_the_report_omits_and_the_exchange_has_no_volume_for_says_nothing() {
     let _g = serial();
-    warm(json!({}));
-    assert_eq!(shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| None), json!({}));
+    warm(HashMap::new());
+    assert_eq!(shorts::ca_volume_with("YES", "TSX-V", || panic!("read again"), |_| None), None);
 }
 
 #[test]
 fn test_a_listing_the_report_carries_is_read_from_the_report() {
     let _g = serial();
-    warm(json!({"QNC": {"venue": "TSXV", "shortVolume": 1197633.0, "volumePct": 21.319, "totalVolume": 5617679.0}}));
-    let out = shorts::ca_volume_with("QNC", "TSX-V", || panic!("read again"), |_| panic!("asked the exchange anyway"));
-    assert_eq!(out["volumePct"], json!(21.319));
+    let mut rows = HashMap::new();
+    rows.insert("QNC".to_string(), CaVolumeRow { venue: "TSXV".into(), short_volume: 1197633.0, volume_pct: Some(21.319), total_volume: Some(5617679.0) });
+    warm(rows);
+    let out = shorts::ca_volume_with("QNC", "TSX-V", || panic!("read again"), |_| panic!("asked the exchange anyway")).unwrap();
+    assert_eq!(out.volume_pct, Some(21.319));
 }
 
 #[test]
 fn test_days_to_cover_follows_from_what_the_exchange_says_was_traded() {
     let c = conn();
-    let prices: Map<String, Value> = (17..28).map(|d| (format!("2026-08-{:02}", d), json!(100.0))).collect();
+    let prices: serde_json::Map<String, Value> = (17..28).map(|d| (format!("2026-08-{:02}", d), json!(100.0))).collect();
     bagholder_store::tables::upsert_benchmark_prices(&c, Some(&Value::Object(prices)), "TSX").unwrap();
-    let rec = json!({"market": "ca", "shares": 17873.0, "totalVolume": 1519546.0, "volumeOf": "2026-08-16/2026-08-31"});
+    let rec = bagholder_store::feeds::Shorts { market: ShortMarket::Ca, shares: Some(17873.0), total_volume: Some(1519546.0), volume_of: "2026-08-16/2026-08-31".into(), ..Default::default() };
     let days = bagholder_store::tables::benchmark_days(&c, "TSX", "2026-08-16", "2026-08-31").unwrap();
     assert!(days > 0);
     approx(shorts::average_volume(&c, &rec).unwrap(), 1519546.0 / days as f64);
     assert!(shorts::days_to_cover(&c, &rec).is_some());
 }
+

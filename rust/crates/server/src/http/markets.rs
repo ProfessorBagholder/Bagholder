@@ -185,11 +185,15 @@ struct Shorts {
 
 async fn shorts(State(state): State<AppState>, Params(q): Params<Shorts>) -> Api {
     let l = q.listing;
-    answer(move || feeds::shorts_payload(&state.app, &l.symbol, some(&l.exchange), some(&l.currency), q.trend)).await
+    answer(move || match feeds::shorts_payload(&state.app, &l.symbol, some(&l.exchange), some(&l.currency), q.trend) {
+        Ok(d) => serde_json::to_value(d).unwrap_or(Value::Null),
+        Err(e) => json!({"ok": false, "error": e}),
+    })
+    .await
 }
 
 async fn shorts_feed(State(state): State<AppState>) -> Api {
-    answer(move || feeds::shorts_feed(&state.app)).await
+    answer(move || serde_json::to_value(feeds::shorts_feed(&state.app)).unwrap_or(Value::Null)).await
 }
 
 async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api {

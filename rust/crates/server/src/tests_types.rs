@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use bagholder_store::bars::{ChartBars, DayBar, TimeBar};
-use bagholder_store::feeds::{FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, StoredGauge};
+use bagholder_store::feeds::{
+    FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, ShortMarket, ShortPoint, Shorts, StoredGauge, StoredShorts, VolumeSpan,
+};
 use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
 
-use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, SourceStatus};
+use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::orders::{OrderCard, OrdersDoc};
 
 fn declarations() -> String {
@@ -108,7 +110,10 @@ fn markets_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc];
+    let decls: Vec<String> = decls![
+        GaugeReading, GaugePart, GaugePoint, Gauge, StoredGauge, FearDoc,
+        ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
+    ];
     let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\n");
     for d in decls {
         out.push_str("export ");

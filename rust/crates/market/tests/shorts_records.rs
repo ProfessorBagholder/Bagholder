@@ -6,8 +6,10 @@
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-market --test shorts_records`,
 //! and read the diff.
 
-use bagholder_market::shorts;
+use bagholder_market::shorts::{self, CaPositionRow, Position};
+use bagholder_store::feeds::ShortMarket;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 
 fn norm(v: Value) -> Value {
     match v {
@@ -20,10 +22,6 @@ fn norm(v: Value) -> Value {
 
 fn cell<T: serde::Serialize + ?Sized>(x: &T) -> Value {
     norm(serde_json::to_value(x).unwrap())
-}
-
-fn obj(v: Value) -> Map<String, Value> {
-    match v { Value::Object(m) => m, _ => Map::new() }
 }
 
 const TODAY: &str = "2026-09-15";
@@ -65,7 +63,7 @@ fn conn() -> rusqlite::Connection {
     c
 }
 
-fn rows_on(grid: Result<Vec<Vec<Value>>, String>) -> Map<String, Value> {
+fn rows_on(grid: Result<Vec<Vec<Value>>, String>) -> HashMap<String, CaPositionRow> {
     grid.map(|g| shorts::parse_ca_positions(&g)).unwrap_or_default()
 }
 
@@ -143,18 +141,12 @@ fn answers() -> Value {
 
     // --- finish: a US record and a Canadian one, with and without trend ---
     let c = conn();
-    let mut us_with_issuer = Map::new();
-    us_with_issuer.insert("shares".into(), json!(56990026.0));
-    us_with_issuer.insert("asOf".into(), json!("2026-08-31"));
-    us_with_issuer.insert("averageVolume".into(), json!(5864237.0));
-    us_with_issuer.insert("issuer".into(), json!("GameStop Corp."));
-    let out_us_full = shorts::finish(&c, us_with_issuer, "GME", "NYSE", "USD", TODAY, false, "", "us", |_| vec![], |issuer| { assert_eq!(issuer, "GameStop Corp."); Some(400000000.0) });
+    let us_with_issuer = Position { shares: Some(56990026.0), as_of: "2026-08-31".into(), average_volume: Some(5864237.0), issuer: "GameStop Corp.".into(), ..Position::default() };
+    let out_us_full = shorts::finish(&c, us_with_issuer, None, "GME", "NYSE", false, ShortMarket::Us, |_| vec![], |issuer| { assert_eq!(issuer, "GameStop Corp."); Some(400000000.0) });
     out.insert("finish_us_with_issuer_and_float".into(), cell(&out_us_full));
 
-    let mut us_bare = Map::new();
-    us_bare.insert("shares".into(), json!(50.0));
-    us_bare.insert("asOf".into(), json!("2026-08-31"));
-    let out_us_bare = shorts::finish(&c, us_bare, "RKLB", "NASDAQ", "USD", TODAY, true, "", "us", |_| panic!("a US record never asks for a series"), |_| None);
+    let us_bare = Position { shares: Some(50.0), as_of: "2026-08-31".into(), ..Position::default() };
+    let out_us_bare = shorts::finish(&c, us_bare, None, "RKLB", "NASDAQ", true, ShortMarket::Us, |_| panic!("a US record never asks for a series"), |_| None);
     out.insert("finish_us_no_issuer_no_float".into(), cell(&out_us_bare));
 
     // a Canadian record built the way `for_listing` builds one, with the
@@ -163,32 +155,32 @@ fn answers() -> Value {
     for day in ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"] {
         bagholder_store::tables::upsert_benchmark_prices(&c, Some(&json!({day: 100.0})), "TSX").unwrap();
     }
-    let mut ca_rec = obj(shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid()))));
-    let ca_vol = obj(shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None));
-    ca_rec.extend(ca_vol);
-    let ca_rec_for_trend_false = ca_rec.clone();
-    let out_ca_trend = shorts::finish(&c, ca_rec, "QNC", "TSX-V", "CAD", TODAY, true, "", "ca", |asof| shorts::ca_series_with("QNC", "TSX-V", asof, TODAY, shorts::SERIES, |d| rows_on(grids(d))), |issuer| { assert_eq!(issuer, "QUANTUM EMOTION CORP."); Some(212448707.0) });
+    let ca_position = shorts::ca_position_with("QNC", "TSX-V", TODAY, || shorts::ca_position_file_with(TODAY, |_| Ok(ca_grid())));
+    let ca_volume = shorts::ca_volume_with("QNC", "TSX-V", || shorts::ca_volume_file_with(TODAY, |_| Ok(CA_CSV.to_string())), |_| None);
+    let ca_position_for_trend_false = ca_position.clone();
+    let ca_volume_for_trend_false = ca_volume.clone();
+    let out_ca_trend = shorts::finish(&c, ca_position, ca_volume, "QNC", "TSX-V", true, ShortMarket::Ca, |asof| shorts::ca_series_with("QNC", "TSX-V", asof, TODAY, shorts::SERIES, |d| rows_on(grids(d))), |issuer| { assert_eq!(issuer, "QUANTUM EMOTION CORP."); Some(212448707.0) });
     out.insert("finish_ca_trend".into(), cell(&out_ca_trend));
-    let out_ca_no_trend = shorts::finish(&c, ca_rec_for_trend_false, "QNC", "TSX-V", "CAD", TODAY, false, "", "ca", |_| panic!("trend is off: the series is never asked for"), |_| Some(212448707.0));
+    let out_ca_no_trend = shorts::finish(&c, ca_position_for_trend_false, ca_volume_for_trend_false, "QNC", "TSX-V", false, ShortMarket::Ca, |_| panic!("trend is off: the series is never asked for"), |_| Some(212448707.0));
     out.insert("finish_ca_no_trend".into(), cell(&out_ca_no_trend));
 
     // --- store round trip ---------------------------------------------------
     let store_conn = conn();
-    bagholder_store::feeds::save_shorts(&store_conn, "GME", "NYSE", &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &out_us_full, "2026-09-15T12:00:00Z", 1).unwrap();
     let read_back = bagholder_store::feeds::shorts_for(&store_conn, "GME", "NYSE").unwrap().unwrap();
     out.insert("store_shorts_for_after_save".into(), cell(&read_back));
 
-    bagholder_store::feeds::save_shorts(&store_conn, "QNC", "TSX-V", &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
+    bagholder_store::feeds::save_shorts(&store_conn, &out_ca_trend, "2026-09-15T12:00:00Z", 1).unwrap();
     // a second save whose record carries no "series" keeps the series
     // already stored, rather than clearing it
-    let mut ca_rec_no_series = obj(out_ca_trend.clone());
-    ca_rec_no_series.remove("series");
-    bagholder_store::feeds::save_shorts(&store_conn, "QNC", "TSX-V", &Value::Object(ca_rec_no_series), "2026-09-15T12:30:00Z", 2).unwrap();
+    let mut ca_rec_no_series = out_ca_trend.clone();
+    ca_rec_no_series.series = None;
+    bagholder_store::feeds::save_shorts(&store_conn, &ca_rec_no_series, "2026-09-15T12:30:00Z", 2).unwrap();
     let qnc_after_reserve = bagholder_store::feeds::shorts_for(&store_conn, "QNC", "TSX-V").unwrap().unwrap();
     out.insert("store_series_kept_when_a_later_save_omits_it".into(), cell(&qnc_after_reserve));
 
     let mut all = bagholder_store::feeds::all_shorts(&store_conn).unwrap();
-    all.sort_by(|a, b| a["symbol"].as_str().unwrap_or("").cmp(b["symbol"].as_str().unwrap_or("")));
+    all.sort_by(|a, b| a.shorts.symbol.cmp(&b.shorts.symbol));
     out.insert("store_all_shorts".into(), cell(&all));
 
     Value::Object(out)

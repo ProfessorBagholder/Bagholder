@@ -27,7 +27,7 @@
   })
 
   const rec = $derived(shortsStore[shortsKey(trade)])
-  const s = $derived(rec && rec.ok && rec.covered ? rec.shorts || {} : null)
+  const s = $derived(rec && rec.ok && rec.covered ? rec.shorts : null)
 
   interface Ring {
     key: string

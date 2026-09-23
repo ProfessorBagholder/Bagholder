@@ -19,6 +19,10 @@ export type {
   Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
 } from './generated/filings'
 
+export type {
+  ShortMarket, VolumeSpan, ShortPoint, Shorts, StoredShorts, ShortsPayload, ShortsFeedRow, ShortsFeed,
+} from './generated/markets'
+
 export type EquityPoint = wire.Point
 export type Benchmark = wire.BenchmarkRef
 export type Listing = wire.ListingInfo
@@ -74,45 +78,6 @@ export interface Status {
 
 /** The model as the stream delivers it: the view, with the header's status beside it. */
 export type Model = wire.View & { status: Status }
-
-// /api/shorts payload: { ok, covered, shorts }
-export interface Shorts {
-  asOf?: string
-  shares?: number | null
-  previous?: number | null
-  previousOf?: string
-  change?: number | null
-  float?: number | null
-  ofFloat?: number | null
-  averageVolume?: number | null
-  daysToCover?: number | null
-  volumeOf?: string
-  shortVolume?: number | null
-  totalVolume?: number | null
-  volumePct?: number | null
-  series?: { date: string; shares: number }[]
-}
-export interface ShortsResp {
-  ok: boolean
-  covered?: boolean
-  shorts?: Shorts
-}
-
-
-// A ranked short-interest row from /api/shorts/feed (and a single /api/shorts hit).
-export interface ShortsFeedRow {
-  symbol: string
-  exchange?: string
-  name?: string
-  held?: boolean
-  watched?: boolean
-  positionId?: string | null
-  shares: number | null
-  ofFloat: number | null
-  daysToCover: number | null
-  volumePct: number | null
-  asOf: string
-}
 
 // A match from /api/symbols/search (watchlist add row, news/shorts lookup).
 export interface SymbolMatch {

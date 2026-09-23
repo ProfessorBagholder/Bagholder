@@ -597,54 +597,174 @@ pub fn replace_filings(conn: &Connection, symbol: &str, source: Regulator, items
 // short selling
 // --------------------------------------------------------------------------
 
-/// `SHORT_FIELDS` and `_SHORT_COLUMNS`, paired.
-pub const SHORT_FIELDS: [(&str, &str); 16] = [
-    ("market", "market"), ("asOf", "as_of"), ("shares", "shares"), ("previous", "previous"),
-    ("previousOf", "previous_of"), ("change", "change"), ("float", "float_shares"), ("ofFloat", "of_float"),
-    ("averageVolume", "average_volume"), ("daysToCover", "days_to_cover"), ("volumeOf", "volume_of"),
-    ("volumeSpan", "volume_span"), ("shortVolume", "short_volume"), ("totalVolume", "total_volume"),
-    ("volumePct", "volume_pct"), ("name", "name"),
-];
+/// "us" or "ca": the regulator's own market for a listing's short selling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ShortMarket {
+    #[default]
+    Us,
+    Ca,
+}
 
-/// `_short_row`.
-pub fn short_row(r: &Row) -> Result<Value> {
-    let mut out = Map::new();
-    out.insert("symbol".into(), json!(text(r, "symbol")?));
-    out.insert("exchange".into(), json!(text(r, "exchange")?));
-    out.insert("fetchedAt".into(), json!(text(r, "fetched_at")?));
-    out.insert("readVersion".into(), json!(r.get::<_, Option<i64>>("read_version")?.unwrap_or(0)));
-    for (name, column) in SHORT_FIELDS {
-        let v = match r.get_ref(r.as_ref().column_index(column)?)? {
-            rusqlite::types::ValueRef::Null => Value::Null,
-            rusqlite::types::ValueRef::Integer(n) => json!(n),
-            rusqlite::types::ValueRef::Real(f) => json!(f),
-            rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t).to_string()),
-            rusqlite::types::ValueRef::Blob(_) => Value::Null,
-        };
-        out.insert(name.into(), v);
+impl ShortMarket {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ShortMarket::Us => "us",
+            ShortMarket::Ca => "ca",
+        }
     }
+}
+
+/// Whether a short volume report covers one trading day (the US) or a
+/// half-month period (Canada).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum VolumeSpan {
+    Day,
+    Period,
+}
+
+impl VolumeSpan {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VolumeSpan::Day => "day",
+            VolumeSpan::Period => "period",
+        }
+    }
+}
+
+/// One reporting date's short position, as the run behind a listing's current
+/// figure.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct ShortPoint {
+    pub date: String,
+    pub shares: f64,
+}
+
+/// One listing's short selling as its regulator publishes it: the position
+/// still sold short and the short part of its recent trading. Neither
+/// measure is estimated -- every figure here is the regulator's own, or
+/// `daysToCover`, the one number the app derives from them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Shorts {
+    pub symbol: String,
+    pub exchange: String,
+    pub market: ShortMarket,
+    pub name: String,
+    pub as_of: String,
+    pub shares: Option<f64>,
+    pub previous: Option<f64>,
+    pub previous_of: String,
+    pub change: Option<f64>,
+    pub float: Option<f64>,
+    pub of_float: Option<f64>,
+    pub average_volume: Option<f64>,
+    pub days_to_cover: Option<f64>,
+    pub volume_of: String,
+    pub volume_span: Option<VolumeSpan>,
+    pub short_volume: Option<f64>,
+    pub total_volume: Option<f64>,
+    pub volume_pct: Option<f64>,
+    /// The reports behind the position, oldest first; `None` where they were
+    /// not read.
+    pub series: Option<Vec<ShortPoint>>,
+}
+
+impl Default for Shorts {
+    fn default() -> Self {
+        Shorts {
+            symbol: String::new(),
+            exchange: String::new(),
+            market: ShortMarket::default(),
+            name: String::new(),
+            as_of: String::new(),
+            shares: None,
+            previous: None,
+            previous_of: String::new(),
+            change: None,
+            float: None,
+            of_float: None,
+            average_volume: None,
+            days_to_cover: None,
+            volume_of: String::new(),
+            volume_span: None,
+            short_volume: None,
+            total_volume: None,
+            volume_pct: None,
+            series: None,
+        }
+    }
+}
+
+/// A listing's short selling as stored: when it was read, and by which
+/// version of the reading.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredShorts {
+    #[serde(flatten)]
+    pub shorts: Shorts,
+    pub fetched_at: String,
+    pub read_version: i64,
+}
+
+/// `short_row`: `None` where the stored row's market is neither `us` nor
+/// `ca` -- an older row from before the market was typed.
+fn short_row(r: &Row) -> Result<Option<StoredShorts>> {
+    let market = match r.get::<_, Option<String>>("market")?.as_deref() {
+        Some("us") => ShortMarket::Us,
+        Some("ca") => ShortMarket::Ca,
+        _ => return Ok(None),
+    };
+    let volume_span = match r.get::<_, Option<String>>("volume_span")?.as_deref() {
+        Some("day") => Some(VolumeSpan::Day),
+        Some("period") => Some(VolumeSpan::Period),
+        _ => None,
+    };
     let series: Option<String> = r.get("series")?;
-    out.insert(
-        "series".into(),
-        match series {
-            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_else(|_| json!([])),
-            _ => json!([]),
+    let series: Vec<ShortPoint> = match series {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
+        _ => vec![],
+    };
+    Ok(Some(StoredShorts {
+        shorts: Shorts {
+            symbol: text(r, "symbol")?,
+            exchange: text(r, "exchange")?,
+            market,
+            name: text(r, "name")?,
+            as_of: text(r, "as_of")?,
+            shares: r.get("shares")?,
+            previous: r.get("previous")?,
+            previous_of: text(r, "previous_of")?,
+            change: r.get("change")?,
+            float: r.get("float_shares")?,
+            of_float: r.get("of_float")?,
+            average_volume: r.get("average_volume")?,
+            days_to_cover: r.get("days_to_cover")?,
+            volume_of: text(r, "volume_of")?,
+            volume_span,
+            short_volume: r.get("short_volume")?,
+            total_volume: r.get("total_volume")?,
+            volume_pct: r.get("volume_pct")?,
+            // a stored run always reads back, empty where none was kept
+            series: Some(series),
         },
-    );
-    Ok(Value::Object(out))
+        fetched_at: text(r, "fetched_at")?,
+        read_version: r.get::<_, Option<i64>>("read_version")?.unwrap_or(0),
+    }))
 }
 
 /// `save_shorts`: one listing's short selling.
 ///
 /// A run of reports already stored is not dropped by a later read that did not
 /// ask for one.
-pub fn save_shorts(conn: &Connection, symbol: &str, exchange: &str, rec: &Value, now: &str, version: i64) -> Result<()> {
+pub fn save_shorts(conn: &Connection, rec: &Shorts, now: &str, version: i64) -> Result<()> {
     crate::atomically(conn, || {
-        let sym = up(symbol);
-        let ex = up(exchange);
-        let series = match rec.get("series") {
-            Some(s) if !s.is_null() => s.clone(),
-            _ => {
+        let sym = up(&rec.symbol);
+        let ex = up(&rec.exchange);
+        let series: Vec<ShortPoint> = match &rec.series {
+            Some(s) => s.clone(),
+            None => {
                 let held: Option<String> = conn
                     .query_row(
                         "SELECT series FROM shorts WHERE symbol = ? AND exchange = ?",
@@ -653,35 +773,50 @@ pub fn save_shorts(conn: &Connection, symbol: &str, exchange: &str, rec: &Value,
                     )
                     .unwrap_or(None);
                 match held {
-                    Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_else(|_| json!([])),
-                    _ => json!([]),
+                    Some(h) if !h.is_empty() => serde_json::from_str(&h).unwrap_or_default(),
+                    _ => vec![],
                 }
             }
         };
-        let cols: Vec<&str> = SHORT_FIELDS.iter().map(|(_, c)| *c).collect();
-        let marks = vec!["?"; cols.len() + 5].join(", ");
-        let sql = format!(
-            "INSERT OR REPLACE INTO shorts (symbol, exchange, {}, series, read_version, fetched_at) VALUES ({})",
-            cols.join(", "),
-            marks
-        );
-        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(sym.clone()), Box::new(ex.clone())];
-        for (field, _) in SHORT_FIELDS {
-            args.push(crate::activities::to_sql(rec.get(field).unwrap_or(&Value::Null)));
-        }
-        args.push(Box::new(crate::tables::json_text(&series)));
-        args.push(Box::new(version));
-        args.push(Box::new(now.to_string()));
-        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-        conn.execute(&sql, refs.as_slice())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO shorts (symbol, exchange, market, as_of, shares, previous, previous_of, change, \
+             float_shares, of_float, average_volume, days_to_cover, volume_of, volume_span, short_volume, \
+             total_volume, volume_pct, name, series, read_version, fetched_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                sym,
+                ex,
+                rec.market.as_str(),
+                rec.as_of,
+                rec.shares,
+                rec.previous,
+                rec.previous_of,
+                rec.change,
+                rec.float,
+                rec.of_float,
+                rec.average_volume,
+                rec.days_to_cover,
+                rec.volume_of,
+                rec.volume_span.as_ref().map(|v| v.as_str()),
+                rec.short_volume,
+                rec.total_volume,
+                rec.volume_pct,
+                rec.name,
+                serde_json::to_string(&series).unwrap_or_default(),
+                version,
+                now,
+            ],
+        )?;
         Ok(())
     })
 }
 
-pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<Value>> {
+/// One listing's stored short selling; `None` where none is stored, or where
+/// the row stored is from before the market was typed.
+pub fn shorts_for(conn: &Connection, symbol: &str, exchange: &str) -> Result<Option<StoredShorts>> {
     let mut stmt = conn.prepare("SELECT * FROM shorts WHERE symbol = ? AND exchange = ?")?;
     let mut rows = stmt.query(rusqlite::params![up(symbol), up(exchange)])?;
-    match rows.next()? { Some(r) => Ok(Some(short_row(r)?)), None => Ok(None) }
+    match rows.next()? { Some(r) => short_row(r), None => Ok(None) }
 }
 
 // --------------------------------------------------------------------------
@@ -1000,13 +1135,15 @@ pub fn dividend_symbols(conn: &Connection) -> Result<Vec<Value>> {
 }
 
 /// `all_shorts`: every listing's stored short selling, for the ranked
-/// list.
-pub fn all_shorts(conn: &Connection) -> Result<Vec<Value>> {
+/// list. A row from before the market was typed is left out.
+pub fn all_shorts(conn: &Connection) -> Result<Vec<StoredShorts>> {
     let mut stmt = conn.prepare("SELECT * FROM shorts")?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        out.push(short_row(r)?);
+        if let Some(row) = short_row(r)? {
+            out.push(row);
+        }
     }
     Ok(out)
 }

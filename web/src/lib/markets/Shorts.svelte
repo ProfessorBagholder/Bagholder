@@ -60,7 +60,7 @@
       if ((feed.rows || []).some((r) => String(r.symbol).toUpperCase() === key)) return
       found[key] = { loading: true }
       request<{ ok: boolean; covered?: boolean; shorts?: ShortsFeedRow }>('GET', '/api/shorts?symbol=' + encodeURIComponent(key)).then((d) => {
-        found[key] = d && d.ok && d.covered ? { row: { name: '', ...(d.shorts as ShortsFeedRow) } } : { missing: true }
+        found[key] = d && d.ok && d.covered ? { row: d.shorts as ShortsFeedRow } : { missing: true }
       })
     }, 450)
   }

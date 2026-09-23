@@ -18,7 +18,7 @@ use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge};
+use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge, StoredShorts};
 use bagholder_store::market as sf_market;
 use bagholder_store::tables::{get_meta, set_meta};
 
@@ -1764,36 +1764,47 @@ pub const SHORTS_STALE_HOURS: f64 = 6.0;
 pub const SHORTS_VERSION: i64 = 5;
 pub const SHORTS_SWEEP_EVERY_SEC: u64 = 1800;
 
-fn shorts_stale(rec: &Value) -> bool {
-    if (num(rec.get("readVersion"), Some(0.0)).unwrap_or(0.0) as i64) < SHORTS_VERSION {
+fn shorts_stale(rec: &StoredShorts) -> bool {
+    if rec.read_version < SHORTS_VERSION {
         return true;
     }
-    match parse_instant(&f(rec, "fetchedAt")) {
+    match parse_instant(&rec.fetched_at) {
         Some(then) => now_unix() - then > SHORTS_STALE_HOURS * 3600.0,
         None => true,
     }
 }
 
 /// One listing's short selling from its regulator,
-/// kept. {} for a market where no one publishes it.
-pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Value {
-    let c = match conn(app) { Some(c) => c, None => return json!({}) };
-    let rec = shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name);
-    if truthy(Some(&rec)) {
-        let ex = { let e = f(&rec, "exchange"); if e.is_empty() { exchange.to_string() } else { e } };
-        let _ = sf::save_shorts(&c, symbol, &ex, &rec, &now_iso(), SHORTS_VERSION);
+/// kept. `None` for a market where no one publishes it.
+pub fn read_shorts(app: &Arc<App>, symbol: &str, exchange: &str, currency: &str, trend: bool, name: &str) -> Option<StoredShorts> {
+    let c = conn(app)?;
+    let mut rec = shorts::for_listing(&c, symbol, exchange, currency, &today(), trend, name)?;
+    if rec.exchange.is_empty() {
+        rec.exchange = exchange.to_string();
     }
-    rec
+    let stored = StoredShorts { shorts: rec, fetched_at: now_iso(), read_version: SHORTS_VERSION };
+    let _ = sf::save_shorts(&c, &stored.shorts, &stored.fetched_at, SHORTS_VERSION);
+    Some(stored)
+}
+
+/// What `shorts_payload` sends a page asking for one listing's short selling.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortsPayload {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub covered: bool,
+    pub shorts: Option<StoredShorts>,
 }
 
 /// One listing's short selling, from the store at
 /// once where it was read before.
-pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Value {
+pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, currency: Option<&str>, trend: bool) -> Result<ShortsPayload, String> {
     let sym = symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return json!({"ok": false, "error": "symbol required"});
+        return Err("symbol required".to_string());
     }
-    let c = match conn(app) { Some(c) => c, None => return json!({"ok": false, "error": "store unavailable"}) };
+    let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
     let meta = instrument_meta(&c, &sym);
     let listed_as = if meta.0 == sym { String::new() } else { meta.0.clone() };
     let mut ex = exchange.unwrap_or("").trim().to_string();
@@ -1817,11 +1828,11 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
             }
         }
     }
-    if shorts::market_of(&sym, &ex, &ccy).is_empty() {
-        return json!({"ok": true, "covered": false});
+    if shorts::market_of(&sym, &ex, &ccy).is_none() {
+        return Ok(ShortsPayload { ok: true, covered: false, shorts: None });
     }
     if let Some(held) = sf::shorts_for(&c, &sym, &ex).ok().flatten() {
-        if !trend || truthy(held.get("series")) {
+        if !trend || held.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
             if shorts_stale(&held) {
                 let (s2, e2, c2, n2) = (sym.clone(), ex.clone(), ccy.clone(), listed_as.clone());
                 let a = app.clone();
@@ -1829,21 +1840,44 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
                     read_shorts(&a, &s2, &e2, &c2, true, &n2);
                 });
             }
-            return json!({"ok": true, "covered": true, "shorts": held});
+            return Ok(ShortsPayload { ok: true, covered: true, shorts: Some(held) });
         }
     }
-    let rec = read_shorts(app, &sym, &ex, &ccy, trend, &listed_as);
-    if !truthy(Some(&rec)) {
-        return json!({"ok": true, "covered": false});
+    match read_shorts(app, &sym, &ex, &ccy, trend, &listed_as) {
+        Some(rec) => Ok(ShortsPayload { ok: true, covered: true, shorts: Some(rec) }),
+        None => Ok(ShortsPayload { ok: true, covered: false, shorts: None }),
     }
-    json!({"ok": true, "covered": true, "shorts": rec})
+}
+
+/// One listing's short selling as a feed across listings carries it: the
+/// listing it belongs to, and the holding it opens.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortsFeedRow {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub shorts: StoredShorts,
+    pub position_id: Option<String>,
+    pub held: bool,
+    pub watched: bool,
+}
+
+/// Every held or watched listing's stored short selling, each marked held or
+/// watched.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortsFeed {
+    #[ts(type = "true")]
+    pub ok: bool,
+    pub rows: Vec<ShortsFeedRow>,
+    pub reading: bool,
 }
 
 /// Every held or watched listing's stored short
 /// selling, each marked held or watched.
-pub fn shorts_feed(app: &Arc<App>) -> Value {
+pub fn shorts_feed(app: &Arc<App>) -> ShortsFeed {
     let reading = app.feeds.shorts_left.load(Ordering::SeqCst) > 0;
-    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return json!({"ok": true, "rows": [], "reading": reading}) };
+    let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return ShortsFeed { ok: true, rows: vec![], reading } };
     // what the feed says of a listing: its name, its venue, and the holding it opens
     struct Known {
         name: String,
@@ -1860,19 +1894,16 @@ pub fn shorts_feed(app: &Arc<App>) -> Value {
     }
     let mut rows = Vec::new();
     for mut r in sf::all_shorts(&c).unwrap_or_default() {
-        let key = (f(&r, "symbol"), f(&r, "exchange"));
+        let key = (r.shorts.symbol.clone(), r.shorts.exchange.clone());
         let source = match held.get(&key).or_else(|| watched.get(&key)) { Some(x) => x, None => continue };
-        if r.get("shares").map(|v| v.is_null()).unwrap_or(true) {
+        if r.shorts.shares.is_none() {
             continue;
         }
-        r["name"] = json!(if source.name.is_empty() { f(&r, "name") } else { source.name.clone() });
-        r["exchange"] = json!(if source.exchange.is_empty() { key.1.clone() } else { source.exchange.clone() });
-        r["positionId"] = json!(source.position_id);
-        r["held"] = json!(held.contains_key(&key));
-        r["watched"] = json!(watched.contains_key(&key));
-        rows.push(r);
+        r.shorts.name = if source.name.is_empty() { r.shorts.name.clone() } else { source.name.clone() };
+        r.shorts.exchange = if source.exchange.is_empty() { key.1.clone() } else { source.exchange.clone() };
+        rows.push(ShortsFeedRow { position_id: source.position_id.clone(), held: held.contains_key(&key), watched: watched.contains_key(&key), shorts: r });
     }
-    json!({"ok": true, "rows": rows, "reading": app.feeds.shorts_left.load(Ordering::SeqCst) > 0})
+    ShortsFeed { ok: true, rows, reading: app.feeds.shorts_left.load(Ordering::SeqCst) > 0 }
 }
 
 /// What the page for one listing needs, held or
@@ -2002,7 +2033,7 @@ pub fn shorts_listings(app: &Arc<App>, scope: &str) -> Vec<(String, String, Stri
     for (symbol, ex, ccy, name) in rows {
         let sym = tmx_symbol(symbol);
         let key = (sym.to_uppercase(), ex.to_uppercase());
-        if sym.is_empty() || seen.contains(&key) || shorts::market_of(&sym, ex, ccy).is_empty() {
+        if sym.is_empty() || seen.contains(&key) || shorts::market_of(&sym, ex, ccy).is_none() {
             continue;
         }
         seen.insert(key);
@@ -2018,7 +2049,7 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
     let mut due = Vec::new();
     for (sym, ex, ccy, name) in shorts_listings(app, "all") {
         let held = sf::shorts_for(&c, &sym, &ex).ok().flatten();
-        let fresh = held.as_ref().map(|h| truthy(Some(h)) && truthy(h.get("series")) && !shorts_stale(h)).unwrap_or(false);
+        let fresh = held.as_ref().map(|h| h.shorts.series.as_ref().map(|s| !s.is_empty()).unwrap_or(false) && !shorts_stale(h)).unwrap_or(false);
         if !fresh {
             due.push((sym, ex, ccy, name));
         }
@@ -2035,7 +2066,7 @@ pub fn sweep_shorts(app: &Arc<App>) -> usize {
     }
     let _reset = Reset(app);
     for (sym, ex, ccy, name) in due {
-        if truthy(Some(&read_shorts(app, &sym, &ex, &ccy, true, &name))) {
+        if read_shorts(app, &sym, &ex, &ccy, true, &name).is_some() {
             done += 1;
         }
         app.feeds.shorts_left.fetch_sub(1, Ordering::SeqCst);

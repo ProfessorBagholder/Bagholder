@@ -12,3 +12,34 @@ export type Gauge = { index: string, source: string, score: number, rating: stri
 export type StoredGauge = { fetchedAt: string, readVersion: number, index: string, source: string, score: number, rating: string, asOf: string, previous: Array<GaugeReading>, parts: Array<GaugePart>, series: Array<GaugePoint>, };
 
 export type FearDoc = { ok: true, gauge: StoredGauge | null, };
+
+export type ShortMarket = "us" | "ca";
+
+export type VolumeSpan = "day" | "period";
+
+export type ShortPoint = { date: string, shares: number, };
+
+export type Shorts = { symbol: string, exchange: string, market: ShortMarket, name: string, asOf: string, shares: number | null, previous: number | null, previousOf: string, change: number | null, float: number | null, ofFloat: number | null, averageVolume: number | null, daysToCover: number | null, volumeOf: string, volumeSpan: VolumeSpan | null, shortVolume: number | null, totalVolume: number | null, volumePct: number | null, 
+/**
+ * The reports behind the position, oldest first; `None` where they were
+ * not read.
+ */
+series: Array<ShortPoint> | null, };
+
+export type StoredShorts = { fetchedAt: string, readVersion: number, symbol: string, exchange: string, market: ShortMarket, name: string, asOf: string, shares: number | null, previous: number | null, previousOf: string, change: number | null, float: number | null, ofFloat: number | null, averageVolume: number | null, daysToCover: number | null, volumeOf: string, volumeSpan: VolumeSpan | null, shortVolume: number | null, totalVolume: number | null, volumePct: number | null, 
+/**
+ * The reports behind the position, oldest first; `None` where they were
+ * not read.
+ */
+series: Array<ShortPoint> | null, };
+
+export type ShortsPayload = { ok: true, covered: boolean, shorts: StoredShorts | null, };
+
+export type ShortsFeedRow = { positionId: string | null, held: boolean, watched: boolean, fetchedAt: string, readVersion: number, symbol: string, exchange: string, market: ShortMarket, name: string, asOf: string, shares: number | null, previous: number | null, previousOf: string, change: number | null, float: number | null, ofFloat: number | null, averageVolume: number | null, daysToCover: number | null, volumeOf: string, volumeSpan: VolumeSpan | null, shortVolume: number | null, totalVolume: number | null, volumePct: number | null, 
+/**
+ * The reports behind the position, oldest first; `None` where they were
+ * not read.
+ */
+series: Array<ShortPoint> | null, };
+
+export type ShortsFeed = { ok: true, rows: Array<ShortsFeedRow>, reading: boolean, };

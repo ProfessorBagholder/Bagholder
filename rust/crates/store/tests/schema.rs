@@ -4,7 +4,6 @@ mod common;
 use bagholder_store::bars::{DayBar, Ohlcv, TimeBar};
 use bagholder_store::{feeds, market, schema};
 use common::*;
-use serde_json::json;
 
 fn day(date: &str, open: Option<f64>, high: Option<f64>, low: Option<f64>, close: f64, volume: Option<f64>) -> DayBar {
     DayBar { date: date.to_string(), px: Ohlcv { open, high, low, close, volume } }
@@ -61,10 +60,10 @@ fn test_a_table_from_the_version_before_gains_the_column_and_keeps_its_rows() {
           shares REAL, previous REAL, previous_of TEXT, change REAL, float_shares REAL, of_float REAL,
           average_volume REAL, days_to_cover REAL, volume_of TEXT, volume_span TEXT, short_volume REAL,
           total_volume REAL, volume_pct REAL, series TEXT, fetched_at TEXT, PRIMARY KEY (symbol, exchange));
-         INSERT INTO shorts (symbol, exchange, shares, fetched_at) VALUES ('QNC','TSX-V',2667164,'2026-09-15T20:00:00Z');",
+         INSERT INTO shorts (symbol, exchange, market, shares, fetched_at) VALUES ('QNC','TSX-V','ca',2667164,'2026-09-15T20:00:00Z');",
     ).unwrap();
     d.ensure();
     let row = feeds::shorts_for(&d.conn, "QNC", "TSX-V").unwrap().unwrap();
-    assert_eq!(f(&row["shares"]), 2667164.0);
-    assert_eq!(row["readVersion"], json!(0)); // unmarked, so it is read again once
+    assert_eq!(row.shorts.shares, Some(2667164.0));
+    assert_eq!(row.read_version, 0); // unmarked, so it is read again once
 }

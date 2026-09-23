@@ -1,13 +1,13 @@
 // Short interest per listing, read from /api/shorts and cached. Ported from
 // ledger.html (_shorts / ensureShorts / shortsKey / shortDay / shortSpan). The
 // store is reactive $state so the ShortInterest card renders when a fetch lands.
-import type { Trade, ShortsResp } from '../model'
+import type { Trade, ShortsPayload } from '../model'
 import { listingTicker } from './chart'
 import { lookup, query, type Answer } from '../api'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-export interface ShortsRec extends ShortsResp {
+export interface ShortsRec extends ShortsPayload {
   at: number
 }
 
@@ -23,10 +23,10 @@ export function shortsKey(t: Trade): string {
 }
 
 // a reading is good for half an hour; the run of past reports for as long as the page is open
-const readings = lookup<ShortsResp>({ keepMs: SHORTS_KEEP_MS })
-const trends = lookup<ShortsResp>()
+const readings = lookup<ShortsPayload>({ keepMs: SHORTS_KEEP_MS })
+const trends = lookup<ShortsPayload>()
 // the answer each shown reading was made from, to tell a new reading from the one shown
-const shownFrom = new Map<string, Answer<ShortsResp>>()
+const shownFrom = new Map<string, Answer<ShortsPayload>>()
 
 export async function ensureShorts(t: Trade): Promise<void> {
   const sym = discSymbol(t)

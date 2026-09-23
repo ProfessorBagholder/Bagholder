@@ -44,7 +44,7 @@ fn quote_shown(app: Arc<App>, key: String) {
 pub fn read(app: &Arc<App>, key: &str, _params: &Value) -> Option<Value> {
     match key {
         "orders" => Some(crate::orders::orders_payload(app, false)),
-        "shorts" => Some(crate::feeds::shorts_feed(app)),
+        "shorts" => Some(serde_json::to_value(crate::feeds::shorts_feed(app)).unwrap_or(Value::Null)),
         // the bell: the newest notifications and how many are unread. A new one reaches
         // the page as a row inserted; marking them read, as `readAt` set on those rows
         "notifications" => {
