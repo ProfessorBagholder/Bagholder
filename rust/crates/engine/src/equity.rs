@@ -300,9 +300,10 @@ pub enum Difference {
 pub struct BrokerCheck {
     pub account: AccountId,
     pub differences: Vec<Difference>,
-    /// The broker's statement is newer than the newest activity the book holds
-    /// for the account: a difference may be a fill not posted yet, so it is
-    /// pending until a later pull confirms or clears it.
+    /// The broker's statement is newer than the last full read of the
+    /// account's activity (or no read is known): a difference may be a fill
+    /// the record does not hold yet, so it is pending until a read of the
+    /// activity made after the statement confirms or clears it.
     pub pending: bool,
     /// Bagholder's own value now less the broker's stated net value now, in
     /// CAD; none when the broker states no net value.
@@ -314,13 +315,11 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched, equity: &BTreeMap<Accou
     let mut out = Vec::new();
     for (account, b) in &inputs.market.brokers {
         let mut own_cash: BTreeMap<Currency, Dec> = BTreeMap::new();
-        let mut newest = None;
         for t in inputs.ledger.transactions.iter().filter(|t| t.account == *account) {
             if let Some(c) = t.cash {
                 let e = own_cash.entry(c.currency).or_insert(Dec::ZERO);
                 *e = e.checked_add(c.amount).unwrap_or(*e);
             }
-            newest = newest.max(t.occurred_at);
         }
         let mut differences = Vec::new();
         let currencies: BTreeSet<Currency> = own_cash.keys().chain(b.cash.keys()).copied().collect();
@@ -337,9 +336,10 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched, equity: &BTreeMap<Accou
                 differences.push(Difference::Units { instrument: i, own: o, broker: br });
             }
         }
-        let pending = match (b.as_of, newest) {
-            (Some(at), Some(n)) => at > n,
-            _ => false,
+        let pending = match (b.as_of, b.activity_read_at) {
+            (Some(stated), Some(read)) => stated > read,
+            (Some(_), None) => true,
+            (None, _) => false,
         };
         let own_now = equity.get(account).and_then(|e| e.own.get(&today)).cloned();
         let value_difference = b.net_value_now.map(|n| match own_now {

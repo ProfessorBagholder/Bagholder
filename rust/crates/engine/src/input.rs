@@ -182,6 +182,9 @@ pub struct BrokerAccount {
     pub net_value_now: Option<Dec>,
     /// When the broker stated its balances and holdings now.
     pub as_of: Option<Timestamp>,
+    /// When the account's activity was last read in full: every fill the
+    /// broker had posted by then is on the record.
+    pub activity_read_at: Option<Timestamp>,
     /// Cash per currency now.
     pub cash: BTreeMap<Currency, Dec>,
     /// Units held per instrument now.

@@ -54,25 +54,34 @@
     "expect": {"kpi": {"preset": "ytd", "realized": "30.00", "count": 1}}
   },
   {
-    "name": "the broker check is exact, and pending against a statement newer than the book's activity",
+    "name": "the broker check is exact, and pending against a statement newer than the last read of the activity",
     "spec": "docs/plans/stage-2-engine.md, the broker check",
     "working": [
-      "A: 1,000 deposited, 10 X bought for 500 → cash 500 CAD and 10 X; the broker states the same: no difference",
-      "B: the same record, the broker states 12 X, as of after the book's last activity: one difference, pending"
+      "each account: 1,000 deposited, 10 X bought for 500 on 01-06 → cash 500 CAD and 10 X",
+      "A: the broker states the same at 01-07 15:00, the activity read at 16:00: no difference",
+      "B: the broker states 12 X at 01-07 15:00 and the activity was last read at 01-06 16:00: a fill may not be read yet, one difference, pending",
+      "C: the broker states 12 X at 01-07 15:00 and the activity was read at 16:00, after it: the difference stands, not pending, though the last fill is a day older than the statement",
+      "D: the broker states 12 X and no read of the activity is known: pending"
     ],
     "today": "2026-01-08",
-    "accounts": [{"id": "A"}, {"id": "B"}],
+    "accounts": [{"id": "A"}, {"id": "B"}, {"id": "C"}, {"id": "D"}],
     "instruments": [{"id": "X"}],
     "transactions": [
       {"id": "a1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
       {"id": "a2", "account": "A", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"},
       {"id": "b1", "account": "B", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
-      {"id": "b2", "account": "B", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"}
+      {"id": "b2", "account": "B", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"},
+      {"id": "c1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "c2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"},
+      {"id": "d1", "account": "D", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "d2", "account": "D", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-500"}
     ],
     "brokers": {
-      "A": {"cash": {"CAD": "500"}, "held": {"X": "10"}, "as_of": "2026-01-06T15:00:00Z"},
-      "B": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z"}
+      "A": {"cash": {"CAD": "500"}, "held": {"X": "10"}, "as_of": "2026-01-07T15:00:00Z", "activity_read_at": "2026-01-07T16:00:00Z"},
+      "B": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z", "activity_read_at": "2026-01-06T16:00:00Z"},
+      "C": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z", "activity_read_at": "2026-01-07T16:00:00Z"},
+      "D": {"cash": {"CAD": "500"}, "held": {"X": "12"}, "as_of": "2026-01-07T15:00:00Z"}
     },
-    "expect": {"checks": [{"account": "A", "differences": 0, "pending": false}, {"account": "B", "differences": 1, "pending": true}]}
+    "expect": {"checks": [{"account": "A", "differences": 0, "pending": false}, {"account": "B", "differences": 1, "pending": true}, {"account": "C", "differences": 1, "pending": false}, {"account": "D", "differences": 1, "pending": true}]}
   }
 ]

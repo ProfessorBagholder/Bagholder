@@ -287,6 +287,7 @@ pub fn build(case: &Value) -> Built {
         }
         acct.net_value_now = s(&b, "now").map(dec);
         acct.as_of = s(&b, "as_of").map(at);
+        acct.activity_read_at = s(&b, "activity_read_at").map(at);
         acct.buying_power = s(&b, "buying_power").map(|v| Ok(dec(v)));
         market.brokers.insert(id, acct);
     }
