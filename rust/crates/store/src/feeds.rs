@@ -10,7 +10,7 @@ use rusqlite::{Connection, Result, Row};
 use std::collections::HashSet;
 use serde_json::{json, Map, Value};
 
-use bagholder_model::value::{field_s, get, num};
+use bagholder_model::value::FSum;
 
 /// `NOTIFICATIONS_KEPT`.
 pub const NOTIFICATIONS_KEPT: i64 = 200;
@@ -25,25 +25,125 @@ fn up(s: &str) -> String { s.trim().to_uppercase() }
 // exposure
 // --------------------------------------------------------------------------
 
+/// Names and their weights, in the order the source gave them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Weights(pub Vec<(String, f64)>);
+
+impl Weights {
+    /// Adds to an existing name's weight, else appends.
+    pub fn add(&mut self, name: &str, w: f64) {
+        match self.0.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 += w,
+            None => self.0.push((name.to_string(), w)),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, (String, f64)> {
+        self.0.iter()
+    }
+
+    pub fn first_name(&self) -> Option<&str> {
+        self.0.first().map(|(n, _)| n.as_str())
+    }
+
+    pub fn total(&self) -> f64 {
+        self.0.iter().map(|(_, w)| *w).fsum()
+    }
+
+    /// Each weight divided by `by`.
+    pub fn scaled(self, by: f64) -> Weights {
+        Weights(self.0.into_iter().map(|(n, w)| (n, w / by)).collect())
+    }
+}
+
+impl serde::Serialize for Weights {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(self.0.len()))?;
+        for (n, w) in &self.0 {
+            m.serialize_entry(n, w)?;
+        }
+        m.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Weights {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Weights, D::Error> {
+        let v = Value::deserialize(d)?;
+        Ok(match v {
+            Value::Object(m) => Weights(m.into_iter().map(|(k, v)| (k, bagholder_model::value::num(Some(&v), 0.0))).collect()),
+            _ => Weights::default(),
+        })
+    }
+}
+
+/// One security's or listing's exposure: sector and country weights as
+/// fractions, the share of the holding they cover, and where they came from.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureRecord {
+    pub sectors: Weights,
+    pub countries: Weights,
+    pub coverage: f64,
+    pub source: String,
+    pub as_of: String,
+    pub industry: String,
+    pub error: String,
+}
+
+/// An exposure record as stored: when it was read.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredExposure {
+    #[serde(flatten)]
+    pub record: ExposureRecord,
+    pub fetched_at: String,
+}
+
+/// One row of the `exposures` table into a `StoredExposure`, for
+/// `exposure_record` and `snapshot::exposures_part`.
+pub fn stored_exposure(r: &Row) -> Result<StoredExposure> {
+    let weights = |raw: Option<String>| -> Weights {
+        match raw {
+            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Weights::default(),
+        }
+    };
+    Ok(StoredExposure {
+        record: ExposureRecord {
+            sectors: weights(r.get("sectors")?),
+            countries: weights(r.get("countries")?),
+            coverage: r.get::<_, Option<f64>>("coverage")?.unwrap_or(0.0),
+            source: text(r, "source")?,
+            as_of: text(r, "as_of")?,
+            industry: text(r, "industry")?,
+            error: text(r, "error")?,
+        },
+        fetched_at: text(r, "fetched_at")?,
+    })
+}
+
 /// `replace_exposure`: one record -- the sectors and countries as
 /// `{name: fraction}`, the share of the holding they cover, and where it came
 /// from.
-pub fn replace_exposure(conn: &Connection, key: &str, rec: &Value, now: &str) -> Result<()> {
-    let sectors = rec.get("sectors").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
-    let countries = rec.get("countries").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
+pub fn replace_exposure(conn: &Connection, key: &str, rec: &ExposureRecord, now: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO exposures (key, sectors, countries, coverage, source, as_of, industry, error, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET sectors = excluded.sectors, countries = excluded.countries, coverage = excluded.coverage, source = excluded.source, \
          as_of = excluded.as_of, industry = excluded.industry, error = excluded.error, fetched_at = excluded.fetched_at",
         rusqlite::params![
             key,
-            crate::tables::json_text(&sectors),
-            crate::tables::json_text(&countries),
-            num(get(rec, "coverage"), 0.0),
-            field_s(rec, "source"),
-            field_s(rec, "asOf"),
-            field_s(rec, "industry"),
-            field_s(rec, "error"),
+            serde_json::to_string(&rec.sectors).unwrap_or_default(),
+            serde_json::to_string(&rec.countries).unwrap_or_default(),
+            rec.coverage,
+            rec.source,
+            rec.as_of,
+            rec.industry,
+            rec.error,
             now,
         ],
     )?;
@@ -1272,7 +1372,8 @@ pub fn clear_notifications(conn: &Connection) -> Result<usize> {
 }
 
 /// `exposure_record`: one record by its key, or nothing.
-pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<Value>> {
-    let all = crate::admin::exposures_map(conn)?;
-    Ok(all.get(key).cloned())
+pub fn exposure_record(conn: &Connection, key: &str) -> Result<Option<StoredExposure>> {
+    let mut stmt = conn.prepare("SELECT * FROM exposures WHERE key = ?")?;
+    let mut rows = stmt.query(rusqlite::params![key])?;
+    match rows.next()? { Some(r) => Ok(Some(stored_exposure(r)?)), None => Ok(None) }
 }

@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
 use bagholder_model::exposure::{Exposure, Exposures};
+use crate::feeds::Weights;
 use bagholder_model::fx::Fx;
 use bagholder_model::input::{AccountRow, BalanceRow, Distribution, Journal, MarginRow, NewsRow, Quote, Quotes, TileRef, TradeGroup, UniverseRow, WatchRow};
 use bagholder_model::nav::NavRow;
@@ -101,9 +102,11 @@ pub fn nav(conn: &Connection) -> Result<(Vec<NavRow>, HashMap<String, Vec<NavRow
 
 /// Each security's weights, from the JSON text they are kept as; unreadable is none.
 pub fn exposures(conn: &Connection) -> Result<Exposures> {
-    let weights = |raw: String| -> Value { serde_json::from_str(&raw).unwrap_or(Value::Null) };
+    let weights = |raw: String| -> Weights { serde_json::from_str(&raw).unwrap_or_default() };
     let rows = all(conn, "SELECT * FROM exposures", |r| {
-        Ok((text(r, "key")?, Exposure::from_weights(&weights(text(r, "sectors")?), &weights(text(r, "countries")?))))
+        let sectors = weights(text(r, "sectors")?);
+        let countries = weights(text(r, "countries")?);
+        Ok((text(r, "key")?, Exposure { sectors: sectors.0, countries: countries.0 }))
     })?;
     Ok(rows.into_iter().collect())
 }

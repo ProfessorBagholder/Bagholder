@@ -1,16 +1,19 @@
 //! Sector and country exposure, pinned end to end: each issuer's page parser,
 //! a share's classification, the look-through (sources stood in for through
 //! `exposure::hooks`, as `exposure.rs` exercises without network), and what
-//! the store keeps and reads back through `feeds`, `admin`, `rows` and
-//! `snapshot`. The answers are held in `golden/exposure_records.json`, so a
-//! change of representation must leave every figure as it was.
+//! the store keeps and reads back through `feeds`, `rows` and `snapshot`. The
+//! answers are held in `golden/exposure_records.json`, so a change of
+//! representation must leave every figure as it was.
 //! After an intended change: `BAGHOLDER_BLESS=1 cargo test -p bagholder-market --test exposure_records`,
 //! and read the diff.
 
-use bagholder_market::exposure::{self, hooks, Ctx};
+use bagholder_market::exposure::{self, hooks, Breakdown, Ctx, Holding, Listed, ShareClass, TmxSector};
 use bagholder_market::htmltables::html_tables;
+use bagholder_model::securities::Security;
+use bagholder_store::feeds::{ExposureRecord, Weights};
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 
 fn norm(v: Value) -> Value {
     match v {
@@ -78,33 +81,27 @@ fn ctx(conn: &Connection) -> Ctx<'_> {
     Ctx { conn, pool, today: "2026-09-16".into() }
 }
 
-fn classified() -> Map<String, Value> {
-    json!({"RY": {"sector": "Financials", "industry": "Banking", "country": "Canada", "source": "TMX Money"},
-           "SHOP": {"sector": "Information Technology", "industry": "Software", "country": "Canada", "source": "TMX Money"},
-           "PLTR": {"sector": "Information Technology", "industry": "Software", "country": "United States", "source": "TMX Money"}})
-        .as_object().cloned().unwrap()
+fn classified() -> HashMap<String, ShareClass> {
+    HashMap::from([
+        ("RY".to_string(), ShareClass { sector: "Financials".into(), industry: "Banking".into(), country: "Canada".into(), source: "TMX Money".into() }),
+        ("SHOP".to_string(), ShareClass { sector: "Information Technology".into(), industry: "Software".into(), country: "Canada".into(), source: "TMX Money".into() }),
+        ("PLTR".to_string(), ShareClass { sector: "Information Technology".into(), industry: "Software".into(), country: "United States".into(), source: "TMX Money".into() }),
+    ])
 }
 
-fn set_classify(table: Map<String, Value>) {
+fn set_classify(table: HashMap<String, ShareClass>) {
     hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(move |sym, ex, _| {
         table.get(&sym.to_uppercase()).cloned()
-            .unwrap_or_else(|| json!({"sector": "", "industry": "", "country": exposure::venue_country(ex), "source": ""}))
+            .unwrap_or_else(|| ShareClass { sector: String::new(), industry: String::new(), country: exposure::venue_country(ex), source: String::new() })
     })));
 }
 
-fn lookthrough(c: &Ctx, rows: &[Value]) -> Value {
+fn lookthrough(c: &Ctx, rows: &[Holding]) -> ExposureRecord {
     exposure::lookthrough(c, rows, 0, &mut Vec::new())
 }
 
-/// The two weight maps of an exposure row as recorded by `bagholder_model`'s
-/// `Exposure`, which has no `Serialize` of its own: {name: weight} pairs,
-/// sorted by name so the golden file does not depend on map order.
-fn weights_cell(e: &bagholder_model::exposure::Exposure) -> Value {
-    let mut sectors: Vec<(String, f64)> = e.sectors.clone();
-    let mut countries: Vec<(String, f64)> = e.countries.clone();
-    sectors.sort_by(|a, b| a.0.cmp(&b.0));
-    countries.sort_by(|a, b| a.0.cmp(&b.0));
-    json!({"sectors": sectors, "countries": countries})
+fn holding(ticker: &str, name: &str, weight: f64, sector: &str, country: &str, exchange: &str, currency: &str, fund: bool) -> Holding {
+    Holding { ticker: ticker.into(), name: name.into(), weight, sector: sector.into(), country: country.into(), exchange: exchange.into(), currency: currency.into(), fund }
 }
 
 fn answers() -> Value {
@@ -153,8 +150,8 @@ fn answers() -> Value {
     {
         let conn = db();
         hooks::TMX_RECORD.with(|h| *h.borrow_mut() = Some(Box::new(|k| match k {
-            "PLTR" => Some(json!({"name": "Palantir CDR (CAD Hedged)", "sector": "Technology", "industry": "Software", "exchangeName": "Toronto Stock Exchange"})),
-            "PLTR:US" => Some(json!({"name": "Palantir Technologies Inc.", "sector": "Technology", "industry": "Software", "exchangeName": "Nasdaq Global Select"})),
+            "PLTR" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir CDR (CAD Hedged)".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Toronto Stock Exchange".into() }),
+            "PLTR:US" => Some(TmxSector { symbol: "PLTR".into(), name: "Palantir Technologies Inc.".into(), sector: "Technology".into(), industry: "Software".into(), exchange_name: "Nasdaq Global Select".into() }),
             _ => None,
         })));
         out.insert("classify_share_cdr_retry".into(), cell(&exposure::classify_share(&ctx(&conn), "PLTR", "", "")));
@@ -183,9 +180,9 @@ fn answers() -> Value {
         let conn = db();
         set_classify(classified());
         let rows = vec![
-            json!({"ticker": "RY", "name": "", "weight": 60, "sector": "", "country": "", "exchange": "TSX", "currency": "CAD", "fund": false}),
-            json!({"ticker": "ZZZ", "name": "", "weight": 20, "sector": "", "country": "", "exchange": "", "currency": "", "fund": false}),
-            json!({"ticker": "SHOP", "name": "", "weight": 20, "sector": "Information Technology", "country": "Canada", "exchange": "", "currency": "", "fund": false}),
+            holding("RY", "", 60.0, "", "", "TSX", "CAD", false),
+            holding("ZZZ", "", 20.0, "", "", "", "", false),
+            holding("SHOP", "", 20.0, "Information Technology", "Canada", "", "", false),
         ];
         out.insert("lookthrough_spread_by_weight".into(), cell(&lookthrough(&ctx(&conn), &rows)));
     }
@@ -193,18 +190,18 @@ fn answers() -> Value {
         let conn = db();
         hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| panic!("a stated holding is never classified"))));
         hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _, _| panic!("a stated holding is never looked through"))));
-        let rows = vec![json!({"ticker": "IBIT", "name": "iShares Bitcoin Trust ETF", "weight": 130.3, "sector": "Digital assets", "country": "United States", "exchange": "", "currency": "", "fund": true})];
+        let rows = vec![holding("IBIT", "iShares Bitcoin Trust ETF", 130.3, "Digital assets", "United States", "", "", true)];
         out.insert("lookthrough_stated_holding".into(), cell(&lookthrough(&ctx(&conn), &rows)));
     }
     {
         let conn = db();
         set_classify(classified());
         hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(|_, symbol, _, _| match symbol {
-            "OUTER" => Some(json!({"sectors": {}, "countries": {}, "holdings": [
-                {"ticker": "INNER", "name": "Inner Index ETF", "weight": 50, "sector": "", "country": "", "exchange": "TSX", "currency": "CAD", "fund": true},
-                {"ticker": "PLTR", "name": "", "weight": 50, "sector": "", "country": "", "exchange": "NYSE", "currency": "USD", "fund": false}], "source": "t", "asOf": ""})),
-            "INNER" => Some(json!({"sectors": {}, "countries": {}, "holdings": [
-                {"ticker": "RY", "name": "", "weight": 100, "sector": "", "country": "", "exchange": "TSX", "currency": "CAD", "fund": false}], "source": "t", "asOf": ""})),
+            "OUTER" => Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![
+                holding("INNER", "Inner Index ETF", 50.0, "", "", "TSX", "CAD", true),
+                holding("PLTR", "", 50.0, "", "", "NYSE", "USD", false)], source: "t".into(), as_of: String::new() }),
+            "INNER" => Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![
+                holding("RY", "", 100.0, "", "", "TSX", "CAD", false)], source: "t".into(), as_of: String::new() }),
             _ => None,
         })));
         let c = ctx(&conn);
@@ -219,16 +216,19 @@ fn answers() -> Value {
     {
         let conn = db();
         set_classify(classified());
-        hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(Some(json!({"sectors": {"Financials": 100.0}, "countries": {},
-            "holdings": [{"ticker": "RY", "name": "", "weight": 100, "sector": "", "country": "", "exchange": "TSX", "currency": "CAD", "fund": false}],
-            "source": "Yahoo Finance", "asOf": ""}))))));
+        hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(Some(Breakdown {
+            sectors: Weights(vec![("Financials".to_string(), 100.0)]), countries: Weights::default(),
+            holdings: vec![holding("RY", "", 100.0, "", "", "TSX", "CAD", false)],
+            source: "Yahoo Finance".into(), as_of: String::new(),
+        })))));
         let rec = exposure::fund_exposure(&ctx(&conn), "ZZZ", "Someone Else Global Equity ETF", "TSX", 0, &mut Vec::new()).unwrap();
         out.insert("fund_exposure_yahoo_fallback".into(), cell(&rec));
     }
     {
         let conn = db();
         hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Err("down".into()))));
-        let rec = exposure::refresh_security(&ctx(&conn), &json!({"id": "sec-s-1", "symbol": "ZZZ", "name": "Nobody Fund ETF", "primaryExchange": "TSX", "currency": "CAD"}));
+        let sec = Security { id: "sec-s-1".into(), symbol: "ZZZ".into(), name: "Nobody Fund ETF".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
+        let rec = exposure::refresh_security(&ctx(&conn), &sec);
         out.insert("refresh_security_fund_no_source".into(), cell(&rec));
         out.insert("refresh_security_fund_no_source_stored".into(), drop_fetched_at(cell(&bagholder_store::feeds::exposure_record(&conn, "sec-s-1").unwrap().unwrap())));
     }
@@ -238,7 +238,8 @@ fn answers() -> Value {
         let conn = db();
         set_classify(classified());
         let c = ctx(&conn);
-        let rec = exposure::refresh_security(&c, &json!({"id": "sec-s-ry", "symbol": "RY", "name": "Royal Bank of Canada", "primaryExchange": "TSX", "currency": "CAD"}));
+        let sec = Security { id: "sec-s-ry".into(), symbol: "RY".into(), name: "Royal Bank of Canada".into(), primary_exchange: "TSX".into(), currency: "CAD".into(), ..Default::default() };
+        let rec = exposure::refresh_security(&c, &sec);
         out.insert("refresh_security_share".into(), cell(&rec));
         out.insert("stale_ids".into(), cell(&exposure::stale(&c, &["sec-s-ry".to_string(), "sec-s-none".to_string()])));
     }
@@ -249,36 +250,45 @@ fn answers() -> Value {
         hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(move |family, symbol, _, _| {
             assert_eq!(family, "harvest");
             if symbol == "APLE" {
-                Some(json!({"sectors": {}, "countries": {}, "holdings": [{"ticker": "AAPL", "name": "AAPL", "weight": 100.0, "sector": "", "country": "", "exchange": "", "currency": "USD", "fund": false}], "source": "t", "asOf": ""}))
+                Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: vec![holding("AAPL", "AAPL", 100.0, "", "", "", "USD", false)], source: "t".into(), as_of: String::new() })
             } else { None }
         })));
-        hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(|_| Some(json!({"symbol": "APLE", "exchange": "TSX", "currency": "CAD"})))));
+        hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(|_| Some(Listed { symbol: "APLE".into(), exchange: "TSX".into(), currency: "CAD".into() }))));
         let mut table = classified();
-        table.insert("AAPL".into(), json!({"sector": "Information Technology", "industry": "Hardware", "country": "United States", "source": "TMX Money"}));
+        table.insert("AAPL".into(), ShareClass { sector: "Information Technology".into(), industry: "Hardware".into(), country: "United States".into(), source: "TMX Money".into() });
         hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(move |sym, _, _| {
-            table.get(&sym.to_uppercase()).cloned().unwrap_or_else(|| json!({"sector": "", "industry": "", "country": "", "source": ""}))
+            table.get(&sym.to_uppercase()).cloned().unwrap_or_else(|| ShareClass { sector: String::new(), industry: String::new(), country: String::new(), source: String::new() })
         })));
-        let rows = vec![json!({"ticker": "", "name": "Harvest Apple Enhanced High Income Shares ETF", "weight": 7.0, "sector": "", "country": "", "exchange": "", "currency": "", "fund": true})];
+        let rows = vec![holding("", "Harvest Apple Enhanced High Income Shares ETF", 7.0, "", "", "", "", true)];
         out.insert("lookthrough_resolved_by_name".into(), cell(&lookthrough(&ctx(&conn), &rows)));
     }
 
-    // --- the store round trip: replace_exposure / exposure_record / admin /
-    // rows / snapshot, all reading back the same rows -----------------------
+    // --- the store round trip: replace_exposure / exposure_record / rows /
+    // snapshot, all reading back the same rows -----------------------
     {
         let conn = db();
-        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &json!({"sectors": {"Financials": 1.0}, "countries": {"Canada": 1.0}, "coverage": 1.0, "source": "TMX Money", "asOf": "", "industry": "Banking"}), "2026-09-16T12:00:00Z").unwrap();
-        bagholder_store::feeds::replace_exposure(&conn, "fund:XEQT", &json!({"sectors": {"Financials": 0.3, "Information Technology": 0.7}, "countries": {"Canada": 0.6, "United States": 0.4}, "coverage": 0.9, "source": "Yahoo Finance", "asOf": "2026-09-01"}), "2026-09-16T12:00:00Z").unwrap();
+        let ry_rec = ExposureRecord {
+            sectors: Weights(vec![("Financials".to_string(), 1.0)]), countries: Weights(vec![("Canada".to_string(), 1.0)]),
+            coverage: 1.0, source: "TMX Money".into(), as_of: String::new(), industry: "Banking".into(), error: String::new(),
+        };
+        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &ry_rec, "2026-09-16T12:00:00Z").unwrap();
+        let xeqt_rec = ExposureRecord {
+            sectors: Weights(vec![("Financials".to_string(), 0.3), ("Information Technology".to_string(), 0.7)]),
+            countries: Weights(vec![("Canada".to_string(), 0.6), ("United States".to_string(), 0.4)]),
+            coverage: 0.9, source: "Yahoo Finance".into(), as_of: "2026-09-01".into(), industry: String::new(), error: String::new(),
+        };
+        bagholder_store::feeds::replace_exposure(&conn, "fund:XEQT", &xeqt_rec, "2026-09-16T12:00:00Z").unwrap();
         // a later write to the same key replaces it rather than merging
-        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &json!({"sectors": {"Financials": 1.0}, "countries": {"Canada": 1.0}, "coverage": 1.0, "source": "TMX Money", "asOf": "", "industry": "Banking"}), "2026-09-17T09:00:00Z").unwrap();
+        bagholder_store::feeds::replace_exposure(&conn, "share:RY:", &ry_rec, "2026-09-17T09:00:00Z").unwrap();
 
         out.insert("store_exposure_record_ry".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "share:RY:").unwrap().unwrap()));
         out.insert("store_exposure_record_missing".into(), cell(&bagholder_store::feeds::exposure_record(&conn, "nope").unwrap()));
 
-        let admin_map = bagholder_store::admin::exposures_map(&conn).unwrap();
-        let mut admin_keys: Vec<&String> = admin_map.keys().collect();
-        admin_keys.sort();
-        out.insert("store_admin_exposures_map_keys".into(), cell(&admin_keys));
-        out.insert("store_admin_exposures_map_xeqt".into(), cell(&admin_map["fund:XEQT"]));
+        let snap_map = bagholder_store::snapshot::exposures_part(&conn).unwrap();
+        let mut snap_keys: Vec<&String> = snap_map.keys().collect();
+        snap_keys.sort();
+        out.insert("store_admin_exposures_map_keys".into(), cell(&snap_keys));
+        out.insert("store_admin_exposures_map_xeqt".into(), cell(&snap_map["fund:XEQT"]));
 
         let rows_map = bagholder_store::rows::exposures(&conn).unwrap();
         let mut rows_out = Map::new();
@@ -297,9 +307,20 @@ fn answers() -> Value {
     Value::Object(out)
 }
 
+/// The two weight maps of an exposure row as recorded by `bagholder_model`'s
+/// `Exposure`, which has no `Serialize` of its own: {name: weight} pairs,
+/// sorted by name so the golden file does not depend on map order.
+fn weights_cell(e: &bagholder_model::exposure::Exposure) -> Value {
+    let mut sectors: Vec<(String, f64)> = e.sectors.clone();
+    let mut countries: Vec<(String, f64)> = e.countries.clone();
+    sectors.sort_by(|a, b| a.0.cmp(&b.0));
+    countries.sort_by(|a, b| a.0.cmp(&b.0));
+    json!({"sectors": sectors, "countries": countries})
+}
+
 /// Pinned answers for `exposure.rs`'s page parsers, `classify_share`,
 /// `share_exposure`, `lookthrough`, `fund_exposure`, `refresh_security`,
-/// `stale`, and the store round trip through `feeds`, `admin`, `rows` and
+/// `stale`, and the store round trip through `feeds`, `rows` and
 /// `snapshot`. To bless a change:
 /// `BAGHOLDER_BLESS=1 cargo test -p bagholder-market --test exposure_records`.
 #[test]

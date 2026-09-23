@@ -121,13 +121,6 @@ pub fn needs_security_id_backfill(conn: &Connection) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// `exposures_map`: every record keyed by what it is for -- a security
-/// id, or a share or fund key.
-pub fn exposures_map(conn: &Connection) -> Result<Map<String, Value>> {
-    let snapshot = crate::snapshot::snapshot(conn, false)?;
-    Ok(snapshot.get("exposures").and_then(|v| v.as_object()).cloned().unwrap_or_default())
-}
-
 /// `save_journal`.
 pub fn save_journal(conn: &Connection, entries: Option<&Value>) -> Result<Map<String, Value>> {
     let clean = crate::snapshot::clean_journal(entries.filter(|v| v.is_object()));

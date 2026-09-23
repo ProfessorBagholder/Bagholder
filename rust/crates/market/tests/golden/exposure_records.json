@@ -197,7 +197,8 @@
     "coverage": 1.0,
     "source": "TMX Money",
     "asOf": "",
-    "industry": "Banking"
+    "industry": "Banking",
+    "error": ""
   },
   "share_exposure_cache_key_hit": true,
   "lookthrough_spread_by_weight": {
@@ -208,7 +209,11 @@
     "countries": {
       "Canada": 0.8
     },
-    "coverage": 0.8
+    "coverage": 0.8,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "lookthrough_stated_holding": {
     "sectors": {
@@ -217,7 +222,11 @@
     "countries": {
       "United States": 1.0
     },
-    "coverage": 1.0
+    "coverage": 1.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "fund_exposure_fund_of_funds": {
     "sectors": {
@@ -230,7 +239,9 @@
     },
     "coverage": 1.0,
     "source": "t",
-    "asOf": ""
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "fund_exposure_inner_fund_kept": {
     "sectors": {
@@ -254,14 +265,18 @@
     },
     "coverage": 1.0,
     "source": "Yahoo Finance",
-    "asOf": ""
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "refresh_security_fund_no_source": {
     "sectors": {},
     "countries": {},
     "coverage": 0.0,
     "source": "",
-    "asOf": ""
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "refresh_security_fund_no_source_stored": {
     "sectors": {},
@@ -282,7 +297,8 @@
     "coverage": 1.0,
     "source": "TMX Money",
     "asOf": "",
-    "industry": "Banking"
+    "industry": "Banking",
+    "error": ""
   },
   "stale_ids": [
     "sec-s-none"
@@ -294,7 +310,11 @@
     "countries": {
       "United States": 1.0
     },
-    "coverage": 1.0
+    "coverage": 1.0,
+    "source": "",
+    "asOf": "",
+    "industry": "",
+    "error": ""
   },
   "store_exposure_record_ry": {
     "sectors": {

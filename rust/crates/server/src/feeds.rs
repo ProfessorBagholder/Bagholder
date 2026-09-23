@@ -17,12 +17,14 @@ use bagholder_market::{edgar, enrich, exposure, fear, history, localmodel, news,
 use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
+use bagholder_model::securities::Security;
 use bagholder_store::bars::ChartBars;
 use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge, StoredShorts};
 use bagholder_store::market as sf_market;
+use bagholder_store::rows;
 use bagholder_store::tables::{get_meta, set_meta};
 
-use crate::app::{f, log, now_iso, now_unix, num, parse_instant, spawn, truthy, App, ENRICH_VERSION};
+use crate::app::{f, log, now_iso, now_unix, parse_instant, spawn, truthy, App, ENRICH_VERSION};
 use crate::notify;
 
 /// The market-data loops' own state: what they are reading now, and for whom.
@@ -80,7 +82,7 @@ pub const EXPOSURE_FIRST_SEC: u64 = 20;
 pub const EXPOSURE_WORKERS: usize = 4;
 
 enum ExposureJob {
-    Sec(Value),
+    Sec(Security),
     Under(String, String),
     Watch(String, String, String),
 }
@@ -90,19 +92,16 @@ enum ExposureJob {
 pub fn refresh_exposures(app: &Arc<App>) -> Value {
     let c = match conn(app) { Some(c) => c, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
     let b = match base(app) { Some(b) => b, None => return json!({"ok": true, "held": 0, "refreshed": 0}) };
-    let snap = bagholder_store::snapshot::snapshot(&c, false).unwrap_or(json!({}));
-    let mut secs: HashMap<String, Value> = HashMap::new();
-    for sec in snap.get("securities").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-        let id = f(&sec, "id");
-        if !id.is_empty() {
-            secs.insert(id, sec);
+    let mut secs: HashMap<String, Security> = HashMap::new();
+    for sec in rows::securities(&c).unwrap_or_default() {
+        if !sec.id.is_empty() {
+            secs.insert(sec.id.clone(), sec);
         }
     }
     let mut held: HashSet<String> = b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares).map(|p| p.security_id.clone()).collect();
-    for bal in snap.get("balances").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-        let sid = f(&bal, "securityId");
-        if num(bal.get("quantity"), Some(0.0)).unwrap_or(0.0) > 0.0 && sid.starts_with("sec-s-") {
-            held.insert(sid);
+    for bal in rows::balances(&c).unwrap_or_default() {
+        if bal.quantity > 0.0 && bal.security_id.starts_with("sec-s-") {
+            held.insert(bal.security_id);
         }
     }
     let mut held: Vec<String> = held.into_iter().filter(|sid| !sid.is_empty() && !sid.starts_with("sec-c-")).collect();
@@ -110,7 +109,7 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
     let (today_s, _, _) = bagholder_market::clock_now();
     let ctx = exposure::Ctx { conn: &c, pool: app.store(), today: today_s.clone() };
     let mut todo: Vec<String> = exposure::stale(&ctx, &held).into_iter().filter(|sid| secs.contains_key(sid)).collect();
-    todo.sort_by_key(|sid| if exposure::is_fund(&f(&secs[sid], "name")) { 1 } else { 0 });
+    todo.sort_by_key(|sid| if exposure::is_fund(&secs[sid].name) { 1 } else { 0 });
     let mut unders: Vec<(String, String)> = b
         .positions
         .iter()
@@ -159,16 +158,13 @@ pub fn refresh_exposures(app: &Arc<App>) -> Value {
                 let line = match job {
                     ExposureJob::Sec(sec) => {
                         let rec = exposure::refresh_security(&ctx, &sec);
-                        let cov = num(rec.get("coverage"), Some(0.0)).unwrap_or(0.0);
-                        let source = f(&rec, "source");
-                        let err = f(&rec, "error");
                         format!(
                             "bagholder exposure: {} {}: {} ({}% covered){}",
-                            f(&sec, "symbol"),
-                            if exposure::is_fund(&f(&sec, "name")) { "fund" } else { "share" },
-                            if source.is_empty() { "no source".to_string() } else { source },
-                            (cov * 100.0).round_ties_even() as i64,
-                            if err.is_empty() { String::new() } else { format!(": {}", err) }
+                            sec.symbol,
+                            if exposure::is_fund(&sec.name) { "fund" } else { "share" },
+                            if rec.source.is_empty() { "no source".to_string() } else { rec.source.clone() },
+                            (rec.coverage * 100.0).round_ties_even() as i64,
+                            if rec.error.is_empty() { String::new() } else { format!(": {}", rec.error) }
                         )
                     }
                     ExposureJob::Watch(sym, ex, ccy) => {

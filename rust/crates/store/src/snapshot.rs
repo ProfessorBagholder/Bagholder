@@ -39,27 +39,6 @@ fn security_from_row(r: &Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// `_exposure_from_row`: the two weight maps are stored as JSON text, and
-/// anything unreadable is simply no exposure rather than an error.
-fn exposure_from_row(r: &Row) -> rusqlite::Result<Value> {
-    let js = |v: Option<String>| -> Value {
-        match v {
-            Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or_else(|_| json!({})),
-            _ => json!({}),
-        }
-    };
-    Ok(json!({
-        "sectors": js(r.get::<_, Option<String>>("sectors")?),
-        "countries": js(r.get::<_, Option<String>>("countries")?),
-        "coverage": r.get::<_, Option<f64>>("coverage")?.unwrap_or(0.0),
-        "source": text(r, "source")?,
-        "asOf": text(r, "as_of")?,
-        "industry": text(r, "industry")?,
-        "error": text(r, "error")?,
-        "fetchedAt": text(r, "fetched_at")?,
-    }))
-}
-
 /// `_watch_from_row`.
 fn watch_from_row(r: &Row) -> rusqlite::Result<Value> {
     Ok(json!({
@@ -262,7 +241,7 @@ pub fn exposures_part(conn: &Connection) -> Result<Map<String, Value>> {
     let mut stmt = conn.prepare("SELECT * FROM exposures")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        exposures.insert(text(r, "key")?, exposure_from_row(r)?);
+        exposures.insert(text(r, "key")?, serde_json::to_value(crate::feeds::stored_exposure(r)?).unwrap_or(Value::Null));
     }
     Ok(exposures)
 }

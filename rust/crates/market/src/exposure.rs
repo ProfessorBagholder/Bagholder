@@ -12,14 +12,18 @@
 
 use regex::Regex;
 use rusqlite::Connection;
-use serde_json::{json, Map, Value};
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::http::FetchError;
 pub use bagholder_model::exposure::{is_fund, issuer_of, norm_sector};
+use bagholder_model::lenient;
 use bagholder_model::textrules::trim_space;
+use bagholder_model::value::FSum;
+use bagholder_store::feeds::{ExposureRecord, Weights};
 
 pub const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 /// Between two requests to the same issuer.
@@ -39,19 +43,95 @@ pub struct Ctx<'a> {
     pub today: String,
 }
 
+/// A share's classification: `classify_share`'s answer.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareClass {
+    pub sector: String,
+    pub industry: String,
+    pub country: String,
+    pub source: String,
+}
+
+/// One issuer's holdings row -- a share, a fund, or a holding named without a
+/// ticker.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Holding {
+    pub ticker: String,
+    pub name: String,
+    pub weight: f64,
+    pub sector: String,
+    pub country: String,
+    pub exchange: String,
+    pub currency: String,
+    pub fund: bool,
+}
+
+/// An issuer's answer for one fund: the sectors and countries it states
+/// itself, or the holdings to look through.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Breakdown {
+    pub sectors: Weights,
+    pub countries: Weights,
+    pub holdings: Vec<Holding>,
+    pub source: String,
+    pub as_of: String,
+}
+
+/// A listing resolved from a name, or looked up directly: symbol, exchange,
+/// currency.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Listed {
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub exchange: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub currency: String,
+}
+
+/// TMX Money's `getQuoteBySymbol` answer, as far as a sector lookup reads it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TmxSector {
+    #[serde(deserialize_with = "lenient::text")]
+    pub symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub name: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub sector: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub industry: String,
+    #[serde(deserialize_with = "lenient::text")]
+    pub exchange_name: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct TmxSectorAnswer {
+    data: TmxSectorData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct TmxSectorData {
+    get_quote_by_symbol: Option<TmxSector>,
+}
 
 /// Stand-ins for the network sources, per thread, so the look-through can be
 /// exercised on inline data.
 pub mod hooks {
-    use serde_json::Value;
+    use super::{Breakdown, Listed, ShareClass, TmxSector};
     use std::cell::RefCell;
-    pub type Classify = Box<dyn Fn(&str, &str, &str) -> Value>;
-    pub type Resolve = Box<dyn Fn(&str) -> Option<Value>>;
+    pub type Classify = Box<dyn Fn(&str, &str, &str) -> ShareClass>;
+    pub type Resolve = Box<dyn Fn(&str) -> Option<Listed>>;
     /// (family, symbol, name, exchange) -> breakdown
-    pub type Adapter = Box<dyn Fn(&str, &str, &str, &str) -> Option<Value>>;
+    pub type Adapter = Box<dyn Fn(&str, &str, &str, &str) -> Option<Breakdown>>;
     /// (symbol, name, exchange) -> breakdown, or Err for a source that failed
-    pub type Fallback = Box<dyn Fn(&str, &str, &str) -> Result<Option<Value>, String>>;
-    pub type TmxRecord = Box<dyn Fn(&str) -> Option<Value>>;
+    pub type Fallback = Box<dyn Fn(&str, &str, &str) -> Result<Option<Breakdown>, String>>;
+    pub type TmxRecord = Box<dyn Fn(&str) -> Option<TmxSector>>;
     thread_local! {
         pub static CLASSIFY: RefCell<Option<Classify>> = RefCell::new(None);
         pub static RESOLVE: RefCell<Option<Resolve>> = RefCell::new(None);
@@ -66,10 +146,6 @@ pub mod hooks {
         FALLBACK.with(|h| *h.borrow_mut() = None);
         TMX_RECORD.with(|h| *h.borrow_mut() = None);
     }
-}
-
-fn s(v: Option<&Value>) -> String {
-    bagholder_model::value::s(v.filter(|x| !x.is_null()))
 }
 
 /// Thousands and percent signs dropped, parentheses negative.
@@ -88,6 +164,12 @@ pub fn num(v: Option<&Value>, default: f64) -> f64 {
 
 fn num_str(t: &str, default: f64) -> f64 {
     num(Some(&json!(t)), default)
+}
+
+/// The same rule as `num`, as a deserializer for a JSON field that may carry a
+/// percent sign, a thousands comma, or a parenthesized negative.
+fn pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(num(Some(&Value::deserialize(d)?), 0.0))
 }
 
 fn pace(host: &str) {
@@ -180,7 +262,7 @@ pub fn venue_country(exchange: &str) -> String {
 pub const TMX_SECTOR_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name sector industry exchangeName } }";
 pub const NASDAQ_SUMMARY_URL: &str = "https://api.nasdaq.com/api/quote/{}/summary?assetclass=stocks";
 
-fn tmx_record(key: &str) -> Option<Value> {
+fn tmx_record(key: &str) -> Option<TmxSector> {
     if let Some(r) = hooks::TMX_RECORD.with(|h| h.borrow().as_ref().map(|f| f(key))) {
         return r;
     }
@@ -194,34 +276,47 @@ fn tmx_record(key: &str) -> Option<Value> {
         &crate::http::TMX_HEADERS,
     )
     .ok()?;
-    let q = d.get("data").and_then(|x| x.get("getQuoteBySymbol")).cloned().unwrap_or(Value::Null);
-    let has = |k: &str| !s(q.get(k)).is_empty() && q.get(k).map(truthy).unwrap_or(false);
-    if has("sector") || has("industry") || has("name") { Some(q) } else { None }
+    let answer = TmxSectorAnswer::deserialize(&d).unwrap_or_default();
+    let q = answer.data.get_quote_by_symbol?;
+    if !q.sector.is_empty() || !q.industry.is_empty() || !q.name.is_empty() { Some(q) } else { None }
 }
 
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(t) => !t.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(m) => !m.is_empty(),
-    }
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct NasdaqSummaryAnswer {
+    data: NasdaqSummaryDataWrap,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct NasdaqSummaryDataWrap {
+    summary_data: NasdaqSummaryFields,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "PascalCase")]
+struct NasdaqSummaryFields {
+    sector: NasdaqSummaryValue,
+    industry: NasdaqSummaryValue,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct NasdaqSummaryValue {
+    #[serde(deserialize_with = "lenient::text")]
+    value: String,
 }
 
 fn nasdaq_summary(symbol: &str) -> (String, String) {
     let raw = match get(&NASDAQ_SUMMARY_URL.replace("{}", symbol), &[("Accept", "application/json, text/plain, */*")]) { Ok(t) => t, Err(_) => return (String::new(), String::new()) };
-    let d: Value = match serde_json::from_str(&raw) { Ok(v) => v, Err(_) => return (String::new(), String::new()) };
-    let sd = d.get("data").and_then(|x| x.get("summaryData")).cloned().unwrap_or(Value::Null);
-    let val = |k: &str| s(sd.get(k).and_then(|x| x.get("value")));
-    (val("Sector"), val("Industry"))
+    let d: NasdaqSummaryAnswer = match serde_json::from_str(&raw) { Ok(v) => v, Err(_) => return (String::new(), String::new()) };
+    (d.data.summary_data.sector.value, d.data.summary_data.industry.value)
 }
 
 /// {sector, industry, country, source} for one
 /// listing, from TMX's record, Nasdaq's for a US listing TMX has no sector for;
 /// the country is the venue's.
-pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Value {
+pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> ShareClass {
     if let Some(v) = hooks::CLASSIFY.with(|h| h.borrow().as_ref().map(|f| f(symbol, exchange, currency))) {
         return v;
     }
@@ -236,10 +331,10 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
         key = Some(format!("{}{}", sym, if currency.to_uppercase() == "USD" { ":US" } else { "" }));
     }
     if let Some(k) = key.filter(|k| !k.is_empty()) {
-        let (mut rec, _) = crate::tmx::tmx_lookup(ctx.conn, &k, &ctx.today, |form| tmx_record(form));
+        let (mut rec, _) = crate::tmx::tmx_lookup(ctx.conn, &k, &ctx.today, tmx_record);
         static CDR: OnceLock<Regex> = OnceLock::new();
         if let Some(r) = rec.as_ref() {
-            if country.is_empty() && CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&s(r.get("name"))) && !k.ends_with(":US") {
+            if country.is_empty() && CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&r.name) && !k.ends_with(":US") {
                 // a bare ticker answered with the Canadian depositary receipt of a
                 // US company; the company itself is the US listing
                 if let Some(us) = tmx_record(&format!("{}:US", crate::tmx::tmx_bare(&k))) {
@@ -248,9 +343,9 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
             }
         }
         if let Some(r) = rec {
-            sector = norm_sector(&s(r.get("sector")));
-            industry = trim_space(&s(r.get("industry"))).to_string();
-            out_country = if country.is_empty() { venue_country(&s(r.get("exchangeName"))) } else { country.clone() };
+            sector = norm_sector(&r.sector);
+            industry = trim_space(&r.industry).to_string();
+            out_country = if country.is_empty() { venue_country(&r.exchange_name) } else { country.clone() };
             source = "TMX Money".into();
         }
     }
@@ -269,12 +364,10 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
             }
         }
     }
-    json!({"sector": sector, "industry": industry, "country": out_country, "source": source})
+    ShareClass { sector, industry, country: out_country, source }
 }
 
 // --- the issuers -------------------------------------------------------------------
-
-type Breakdown = Value;
 
 fn header_index(header: &[String], names: &[&str]) -> i64 {
     let low: Vec<String> = header.iter().map(|h| h.to_lowercase()).collect();
@@ -295,33 +388,127 @@ const VANGUARD_HEADERS: [(&str, &str); 5] = [
 const VANGUARD_PORT_IDS: [&str; 41] = ["1811", "1817", "1936", "9561", "9554", "9559", "9560", "9569", "9570", "9558", "9555", "9550", "9549", "9742", "9556", "9548", "9828", "9835", "9795", "9563", "9562",
     "9566", "9564", "9551", "9567", "9870", "9841", "9552", "9553", "9565", "9568", "9691", "9577", "9578", "9579", "9692", "9557", "9864", "9865", "9867", "9896"];
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardFundsAnswer {
+    data: VanguardFundsData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardFundsData {
+    funds: Vec<VanguardFund>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardFund {
+    #[serde(deserialize_with = "lenient::text")]
+    port_id: String,
+    profile: VanguardProfile,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardProfile {
+    listings: Vec<VanguardListing>,
+    #[serde(deserialize_with = "lenient::text")]
+    port_id: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardListing {
+    identifiers: Vec<VanguardIdentifier>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardIdentifier {
+    #[serde(deserialize_with = "lenient::text")]
+    alt_id_value: String,
+}
+
 fn vanguard_port_id(symbol: &str) -> Result<String, FetchError> {
-    static MAP: OnceLock<Mutex<Map<String, Value>>> = OnceLock::new();
-    let map = MAP.get_or_init(|| Mutex::new(Map::new()));
+    static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
     if map.lock().unwrap().is_empty() {
         let q = json!({"operationName": "FundFinderFunds", "variables": {"portIds": VANGUARD_PORT_IDS.to_vec()},
                        "query": "query FundFinderFunds($portIds: [String!]!) { funds(portIds: $portIds) { portId profile { fundFullName listings { identifiers(altIds: [\"Ticker - Canada\", \"Ticker\"]) { altId altIdValue } } } } }"});
         let d = post(VANGUARD_GQL, &q, &VANGUARD_HEADERS)?;
+        let answer = VanguardFundsAnswer::deserialize(&d).unwrap_or_default();
         let mut m = map.lock().unwrap();
-        for f in d.get("data").and_then(|x| x.get("funds")).and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-            let p = f.get("profile").cloned().unwrap_or(json!({}));
-            for l in p.get("listings").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-                for i in l.get("identifiers").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-                    let v = s(i.get("altIdValue"));
+        for f in answer.data.funds {
+            for l in &f.profile.listings {
+                for i in &l.identifiers {
+                    let v = &i.alt_id_value;
                     if !v.is_empty() {
-                        let pid = { let a = s(f.get("portId")); if a.is_empty() { s(p.get("portId")) } else { a } };
-                        m.entry(v.to_uppercase()).or_insert(json!(pid));
+                        let pid = if !f.port_id.is_empty() { f.port_id.clone() } else { f.profile.port_id.clone() };
+                        m.entry(v.to_uppercase()).or_insert(pid);
                     }
                 }
             }
         }
     }
-    Ok(map.lock().unwrap().get(&bagholder_model::venues::tmx_symbol(symbol)).and_then(|v| v.as_str()).unwrap_or("").to_string())
+    Ok(map.lock().unwrap().get(&bagholder_model::venues::tmx_symbol(symbol)).cloned().unwrap_or_default())
 }
 
-fn add(m: &mut Map<String, Value>, n: &str, w: f64) {
-    let cur = m.get(n).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    m.insert(n.to_string(), json!(cur + w));
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardSectorAnswer {
+    data: VanguardSectorData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardSectorData {
+    funds: Vec<VanguardSectorFund>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardSectorFund {
+    sector_diversification: Vec<VanguardSectorRow>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardSectorRow {
+    #[serde(deserialize_with = "lenient::text")]
+    sector_name: String,
+    #[serde(deserialize_with = "lenient::number")]
+    fund_percent: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    date: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardMarketAnswer {
+    data: VanguardMarketData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VanguardMarketData {
+    funds: Vec<VanguardMarketFund>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardMarketFund {
+    market_allocation: Vec<VanguardMarketRow>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct VanguardMarketRow {
+    #[serde(deserialize_with = "lenient::text")]
+    country_name: String,
+    #[serde(deserialize_with = "lenient::number")]
+    fund_mkt_percent: f64,
+    #[serde(deserialize_with = "lenient::text")]
+    date: String,
 }
 
 fn vanguard_ca(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
@@ -333,35 +520,40 @@ fn vanguard_ca(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
         "query": "query getSectorDiversification($portIds: [String!]!) { funds(portIds: $portIds) { sectorDiversification { sectorName fundPercent date } } }"}), &VANGUARD_HEADERS)?;
     let mkt = post(VANGUARD_GQL, &json!({"operationName": "MarketAllocationGqlQuery", "variables": {"portIds": [pid]},
         "query": "query MarketAllocationGqlQuery($portIds: [String!]!) { funds(portIds: $portIds) { marketAllocation { countryName fundMktPercent date } } }"}), &VANGUARD_HEADERS)?;
-    let first = |d: &Value, k: &str| -> Vec<Value> {
-        d.get("data").and_then(|x| x.get("funds")).and_then(|x| x.as_array()).and_then(|a| a.first()).and_then(|f| f.get(k)).and_then(|x| x.as_array()).cloned().unwrap_or_default()
-    };
-    let srows = first(&sec, "sectorDiversification");
-    let crows = first(&mkt, "marketAllocation");
-    let mut sectors = Map::new();
-    let mut countries = Map::new();
+    let srows = VanguardSectorAnswer::deserialize(&sec).unwrap_or_default().data.funds.into_iter().next().map(|f| f.sector_diversification).unwrap_or_default();
+    let crows = VanguardMarketAnswer::deserialize(&mkt).unwrap_or_default().data.funds.into_iter().next().map(|f| f.market_allocation).unwrap_or_default();
+    let mut sectors = Weights::default();
+    let mut countries = Weights::default();
     for r in &srows {
-        let (n, w) = (norm_sector(&s(r.get("sectorName"))), num(r.get("fundPercent"), 0.0));
+        let (n, w) = (norm_sector(&r.sector_name), r.fund_percent);
         if !n.is_empty() && w > 0.0 {
-            add(&mut sectors, &n, w);
+            sectors.add(&n, w);
         }
     }
     for r in &crows {
-        let (n, w) = (norm_country(&s(r.get("countryName"))), num(r.get("fundMktPercent"), 0.0));
+        let (n, w) = (norm_country(&r.country_name), r.fund_mkt_percent);
         if !n.is_empty() && w > 0.0 {
-            add(&mut countries, &n, w);
+            countries.add(&n, w);
         }
     }
     if sectors.is_empty() && countries.is_empty() {
         return Ok(None);
     }
-    let rows = if !srows.is_empty() { &srows } else { &crows };
-    let as_of = rows.first().map(|r| s(r.get("date"))).unwrap_or_default();
-    Ok(Some(json!({"sectors": sectors, "countries": countries, "holdings": [], "source": "Vanguard Canada", "asOf": as_of})))
+    let as_of = if !srows.is_empty() { srows[0].date.clone() } else { crows.first().map(|r| r.date.clone()).unwrap_or_default() };
+    Ok(Some(Breakdown { sectors, countries, holdings: vec![], source: "Vanguard Canada".into(), as_of }))
 }
 
 pub const ISHARES_SCREENER: &str = "https://www.blackrock.com/ca/investors/en/product-screener/product-screener-v3.1.jsn?dcrPath=/templatedata/config/product-screener-v3/data/en/ca-one/product-screener-backend-config&siteEntryPassthrough=true";
 pub const ISHARES_HOLDINGS: &str = "https://www.blackrock.com{}/1464253357814.ajax?fileType=csv&fileName=holdings&dataType=fund";
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct IsharesScreenerRow {
+    #[serde(deserialize_with = "lenient::text")]
+    local_exchange_ticker: String,
+    #[serde(deserialize_with = "lenient::text")]
+    product_page_url: String,
+}
 
 fn ishares_page(symbol: &str) -> Result<String, FetchError> {
     static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -370,12 +562,12 @@ fn ishares_page(symbol: &str) -> Result<String, FetchError> {
         let raw = get(ISHARES_SCREENER, &[("Accept", "application/json, text/plain, */*")])?;
         let d: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| FetchError::Transport(e.to_string()))?;
         let mut m = map.lock().unwrap();
-        if let Value::Object(o) = d {
+        if let Value::Object(o) = &d {
             for rec in o.values() {
-                let t = s(rec.get("localExchangeTicker"));
-                let u = s(rec.get("productPageUrl"));
-                if rec.is_object() && truthy(rec.get("localExchangeTicker").unwrap_or(&Value::Null)) && truthy(rec.get("productPageUrl").unwrap_or(&Value::Null)) {
-                    m.insert(t.to_uppercase(), u);
+                if let Ok(row) = IsharesScreenerRow::deserialize(rec) {
+                    if !row.local_exchange_ticker.is_empty() && !row.product_page_url.is_empty() {
+                        m.insert(row.local_exchange_ticker.to_uppercase(), row.product_page_url);
+                    }
                 }
             }
         }
@@ -385,7 +577,7 @@ fn ishares_page(symbol: &str) -> Result<String, FetchError> {
 
 /// The holdings CSV, a few preamble lines then a
 /// header row starting with Ticker. (holdings, as of).
-pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
+pub fn parse_ishares_csv(text: &str) -> (Vec<Holding>, String) {
     let body = text.trim_start_matches('\u{feff}');
     let lines = bagholder_model::textrules::splitlines(body);
     let mut as_of = String::new();
@@ -436,16 +628,16 @@ pub fn parse_ishares_csv(text: &str) -> (Vec<Value>, String) {
         }
         let nm = if iname >= 0 { trim_space(&index_of(r, iname)).to_string() } else { String::new() };
         let _ = cell;
-        out.push(json!({
-            "ticker": trim_space(&index_of(r, it)),
-            "name": nm,
-            "weight": w,
-            "sector": if isec >= 0 { norm_sector(&index_of(r, isec)) } else { String::new() },
-            "country": if iloc >= 0 { norm_country(&index_of(r, iloc)) } else { String::new() },
-            "exchange": if iex >= 0 { trim_space(&index_of(r, iex)).to_string() } else { String::new() },
-            "currency": if iccy >= 0 { trim_space(&index_of(r, iccy)).to_string() } else { String::new() },
-            "fund": nm.to_uppercase().contains("ISHARES") || is_fund(&nm),
-        }));
+        out.push(Holding {
+            ticker: trim_space(&index_of(r, it)).to_string(),
+            name: nm.clone(),
+            weight: w,
+            sector: if isec >= 0 { norm_sector(&index_of(r, isec)) } else { String::new() },
+            country: if iloc >= 0 { norm_country(&index_of(r, iloc)) } else { String::new() },
+            exchange: if iex >= 0 { trim_space(&index_of(r, iex)).to_string() } else { String::new() },
+            currency: if iccy >= 0 { trim_space(&index_of(r, iccy)).to_string() } else { String::new() },
+            fund: nm.to_uppercase().contains("ISHARES") || is_fund(&nm),
+        });
     }
     (out, as_of)
 }
@@ -468,25 +660,25 @@ fn ishares_ca(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
         return Ok(None);
     }
     for h in holdings.iter_mut() {
-        if h["fund"].as_bool().unwrap_or(false) {
+        if h.fund {
             // a fund's row says Other or the top holding's sector; the fund is
             // looked through instead
-            h["sector"] = json!("");
+            h.sector = String::new();
         }
     }
-    Ok(Some(json!({"sectors": {}, "countries": {}, "holdings": holdings, "source": "iShares Canada", "asOf": as_of})))
+    Ok(Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings, source: "iShares Canada".into(), as_of }))
 }
 
 pub const HARVEST_PAGE: &str = "https://harvestportfolios.com/etf/{}/";
 
 /// Holdings from a Harvest page's tables,
 /// whichever shape the fund's page uses.
-pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String) {
+pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Holding>, String) {
     static CASH: OnceLock<Regex> = OnceLock::new();
     static HOLDINGS: OnceLock<Regex> = OnceLock::new();
     let cash = CASH.get_or_init(|| Regex::new(r"(?i)written options|cash and other|cash & other").unwrap());
     let holdings_head = HOLDINGS.get_or_init(|| Regex::new(r"(?i)^holdings?\b").unwrap());
-    let mut holdings: Vec<Value> = Vec::new();
+    let mut holdings: Vec<Holding> = Vec::new();
     let mut reference = String::new();
     for t in tables {
         if t.is_empty() {
@@ -517,7 +709,7 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String)
                 if country.is_empty() {
                     country = bloomberg(&code);
                 }
-                holdings.push(json!({"ticker": sym, "name": nm, "weight": w, "sector": sector, "country": country, "exchange": "", "currency": "", "fund": is_fund(&nm)}));
+                holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector, country, exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
             }
             continue;
         }
@@ -530,7 +722,7 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Value>, String)
                 if w <= 0.0 || nm.is_empty() || cash.is_match(&nm) {
                     continue;
                 }
-                holdings.push(json!({"ticker": "", "name": nm, "weight": w, "sector": "", "country": "", "exchange": "", "currency": "", "fund": is_fund(&nm)}));
+                holdings.push(Holding { ticker: String::new(), name: nm.clone(), weight: w, sector: String::new(), country: String::new(), exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
             }
         }
     }
@@ -542,15 +734,15 @@ fn harvest(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
     let (mut holdings, reference) = parse_harvest_tables(&crate::htmltables::html_tables(&html));
     static TICKER: OnceLock<Regex> = OnceLock::new();
     let ticker = TICKER.get_or_init(|| Regex::new(r"^[A-Z0-9][A-Z0-9.:-]{0,9}$").unwrap());
-    if !reference.is_empty() && ticker.is_match(&reference) && !holdings.iter().any(|h| !s(h.get("ticker")).is_empty()) {
+    if !reference.is_empty() && ticker.is_match(&reference) && !holdings.iter().any(|h| !h.ticker.is_empty()) {
         // a single-stock fund names its reference asset as a ticker: that is
         // the whole exposure
-        holdings = vec![json!({"ticker": reference, "name": reference, "weight": 100.0, "sector": "", "country": "", "exchange": "", "currency": "", "fund": false})];
+        holdings = vec![Holding { ticker: reference.clone(), name: reference.clone(), weight: 100.0, sector: String::new(), country: String::new(), exchange: String::new(), currency: String::new(), fund: false }];
     }
     if holdings.is_empty() {
         return Ok(None);
     }
-    Ok(Some(json!({"sectors": {}, "countries": {}, "holdings": holdings, "source": "Harvest ETFs", "asOf": ""})))
+    Ok(Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings, source: "Harvest ETFs".into(), as_of: String::new() }))
 }
 
 pub const NINEPOINT_LIST: &str = "https://www.ninepoint.com/landing-pages/ninepoint-highshares-etfs/";
@@ -575,8 +767,8 @@ pub fn parse_ninepoint_page(html: &str) -> (String, String, String) {
 }
 
 fn ninepoint(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
-    static PAGES: OnceLock<Mutex<Map<String, Value>>> = OnceLock::new();
-    let pages = PAGES.get_or_init(|| Mutex::new(Map::new()));
+    static PAGES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let pages = PAGES.get_or_init(|| Mutex::new(HashMap::new()));
     let sym = bagholder_model::venues::tmx_symbol(symbol);
     if !pages.lock().unwrap().contains_key(&sym) {
         let html = get(NINEPOINT_LIST, &[])?;
@@ -592,56 +784,103 @@ fn ninepoint(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
             if pages.lock().unwrap().contains_key(&sym) {
                 break;
             }
-            if pages.lock().unwrap().values().any(|v| v.as_str() == Some(slug.as_str())) {
+            if pages.lock().unwrap().values().any(|v| v.as_str() == slug.as_str()) {
                 continue;
             }
             let page = match get(&format!("{}{}", NINEPOINT_BASE, slug), &[]) { Ok(p) => p, Err(_) => continue };
             let (t, _, _) = parse_ninepoint_page(&page);
             if !t.is_empty() {
-                pages.lock().unwrap().insert(t, json!(slug));
+                pages.lock().unwrap().insert(t, slug);
             }
         }
     }
-    let slug = match pages.lock().unwrap().get(&sym).and_then(|v| v.as_str()) { Some(s) => s.to_string(), None => return Ok(None) };
+    let slug = match pages.lock().unwrap().get(&sym).cloned() { Some(s) => s, None => return Ok(None) };
     let (_, under, ex) = parse_ninepoint_page(&get(&format!("{}{}", NINEPOINT_BASE, slug), &[])?);
     if under.is_empty() {
         return Ok(None);
     }
-    Ok(Some(json!({"sectors": {}, "countries": {}, "holdings": [{"ticker": under, "name": under, "weight": 100.0, "sector": "", "country": "", "exchange": ex, "currency": "", "fund": false}],
-        "source": "Ninepoint", "asOf": ""})))
+    Ok(Some(Breakdown {
+        sectors: Weights::default(),
+        countries: Weights::default(),
+        holdings: vec![Holding { ticker: under.clone(), name: under.clone(), weight: 100.0, sector: String::new(), country: String::new(), exchange: ex, currency: String::new(), fund: false }],
+        source: "Ninepoint".into(),
+        as_of: String::new(),
+    }))
 }
 
 pub const EVOLVE_PAGE: &str = "https://evolveetfs.com/product/{}/";
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct EvolveBreakdown {
+    data: EvolveBreakdownData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct EvolveBreakdownData {
+    sector: Vec<EvolveSectorRow>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct EvolveSectorRow {
+    #[serde(deserialize_with = "lenient::text")]
+    name: String,
+    #[serde(deserialize_with = "pct")]
+    weight: f64,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct EvolveHoldings {
+    data: Vec<EvolveHoldingRow>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct EvolveHoldingRow {
+    #[serde(deserialize_with = "lenient::text")]
+    ticker: String,
+    #[serde(rename = "weight_percent", deserialize_with = "pct")]
+    weight_percent: f64,
+    #[serde(rename = "security_name", deserialize_with = "lenient::text")]
+    security_name: String,
+    #[serde(rename = "gics_sector", deserialize_with = "lenient::text")]
+    gics_sector: String,
+    #[serde(deserialize_with = "lenient::text")]
+    country: String,
+}
+
 /// (sectors, holdings) from the page's embedded
 /// `portfolioBreakdownData` and `holdingsData`.
-pub fn parse_evolve_page(html: &str) -> (Map<String, Value>, Vec<Value>) {
+pub fn parse_evolve_page(html: &str) -> (Weights, Vec<Holding>) {
     static BREAKDOWN: OnceLock<Regex> = OnceLock::new();
     static HOLDINGS: OnceLock<Regex> = OnceLock::new();
-    let mut sectors = Map::new();
+    let mut sectors = Weights::default();
     let mut holdings = Vec::new();
     if let Some(m) = BREAKDOWN.get_or_init(|| Regex::new(r"(?s)var portfolioBreakdownData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
-        if let Ok(v) = serde_json::from_str::<Value>(&m[1]) {
-            for r in v.get("data").and_then(|d| d.get("sector")).and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-                let (n, w) = (norm_sector(&s(r.get("name"))), num(r.get("weight"), 0.0));
+        if let Ok(v) = serde_json::from_str::<EvolveBreakdown>(&m[1]) {
+            for r in v.data.sector {
+                let (n, w) = (norm_sector(&r.name), r.weight);
                 if !n.is_empty() && w > 0.0 {
-                    add(&mut sectors, &n, w);
+                    sectors.add(&n, w);
                 }
             }
         }
     }
     if let Some(m) = HOLDINGS.get_or_init(|| Regex::new(r"(?s)var holdingsData\s*=\s*(\{.*?\});\s*\n").unwrap()).captures(html) {
-        let rows = serde_json::from_str::<Value>(&m[1]).ok().and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned()).unwrap_or_default();
+        let rows = serde_json::from_str::<EvolveHoldings>(&m[1]).map(|v| v.data).unwrap_or_default();
         for r in rows {
-            let tk = trim_space(&s(r.get("ticker"))).to_string();
+            let tk = trim_space(&r.ticker).to_string();
             let parts: Vec<&str> = tk.split(bagholder_model::unichars::is_space).filter(|x| !x.is_empty()).collect();
             let (sym, code) = if parts.len() >= 2 { (parts[0].to_string(), parts[1].to_string()) } else { (tk.clone(), String::new()) };
-            let w = num(r.get("weight_percent"), 0.0);
-            let nm = trim_space(&s(r.get("security_name"))).to_string();
+            let w = r.weight_percent;
+            let nm = trim_space(&r.security_name).to_string();
             if w <= 0.0 || sym.is_empty() {
                 continue;
             }
-            let mut ctry = norm_country(&s(r.get("country")));
+            let mut ctry = norm_country(&r.country);
             if !ctry.is_empty() && ctry.chars().count() <= 5 && ctry.to_uppercase() == ctry {
                 // a fund-of-funds page writes the sub-fund's ticker here, not a country
                 ctry = String::new();
@@ -649,7 +888,7 @@ pub fn parse_evolve_page(html: &str) -> (Map<String, Value>, Vec<Value>) {
             if ctry.is_empty() {
                 ctry = bloomberg(&code);
             }
-            holdings.push(json!({"ticker": sym, "name": nm, "weight": w, "sector": norm_sector(&s(r.get("gics_sector"))), "country": ctry, "exchange": "", "currency": "", "fund": is_fund(&nm)}));
+            holdings.push(Holding { ticker: sym, name: nm.clone(), weight: w, sector: norm_sector(&r.gics_sector), country: ctry, exchange: String::new(), currency: String::new(), fund: is_fund(&nm) });
         }
     }
     (sectors, holdings)
@@ -660,7 +899,7 @@ fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
     if sectors.is_empty() && holdings.is_empty() {
         return Ok(None);
     }
-    Ok(Some(json!({"sectors": sectors, "countries": {}, "holdings": holdings, "source": "Evolve ETFs", "asOf": ""})))
+    Ok(Some(Breakdown { sectors, countries: Weights::default(), holdings, source: "Evolve ETFs".into(), as_of: String::new() }))
 }
 
 pub const YAHOO_CRUMB: &str = "https://query2.finance.yahoo.com/v1/test/getcrumb";
@@ -697,41 +936,91 @@ fn round4(x: f64) -> f64 {
     format!("{:.4}", x).parse().unwrap_or(x)
 }
 
+/// {"raw": x} or a bare number, as Yahoo's `topHoldings` module writes a
+/// weight or a percent.
+#[derive(Clone, Copy, Default)]
+struct YahooRaw(f64);
+
+impl<'de> Deserialize<'de> for YahooRaw {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        let f = match &v { Value::Object(m) => num(m.get("raw"), 0.0), other => num(Some(other), 0.0) };
+        Ok(YahooRaw(f))
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooSummary {
+    quote_summary: YahooQuoteSummary,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct YahooQuoteSummary {
+    result: Vec<YahooResult>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooResult {
+    top_holdings: YahooTopHoldings,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooTopHoldings {
+    holdings: Vec<YahooHolding>,
+    sector_weightings: Vec<HashMap<String, YahooRaw>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct YahooHolding {
+    #[serde(deserialize_with = "lenient::text")]
+    symbol: String,
+    #[serde(deserialize_with = "lenient::text")]
+    holding_name: String,
+    holding_percent: YahooRaw,
+}
+
 /// (sectors, holdings) from Yahoo's
 /// topHoldings module.
-pub fn parse_yahoo_summary(data: &Value) -> (Map<String, Value>, Vec<Value>) {
-    let res = data.get("quoteSummary").and_then(|q| q.get("result")).and_then(|r| r.as_array()).and_then(|a| a.first()).cloned().unwrap_or(json!({}));
-    let th = res.get("topHoldings").cloned().unwrap_or(json!({}));
-    let mut sectors = Map::new();
-    for entry in th.get("sectorWeightings").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-        if let Value::Object(e) = entry {
-            for (k, v) in e {
-                let w = match &v { Value::Object(m) => num(m.get("raw"), 0.0), other => num(Some(other), 0.0) };
-                let n = norm_sector(&k.replace('_', " "));
-                if !n.is_empty() && w > 0.0 {
-                    let cur = sectors.get(&n).and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    sectors.insert(n, json!(round4(cur + w * 100.0)));
+pub fn parse_yahoo_summary(data: &Value) -> (Weights, Vec<Holding>) {
+    let answer = YahooSummary::deserialize(data).unwrap_or_default();
+    let th = answer.quote_summary.result.into_iter().next().map(|r| r.top_holdings).unwrap_or_default();
+    let mut sectors: Vec<(String, f64)> = Vec::new();
+    for entry in th.sector_weightings {
+        for (k, v) in entry {
+            let w = v.0;
+            let n = norm_sector(&k.replace('_', " "));
+            if !n.is_empty() && w > 0.0 {
+                match sectors.iter_mut().find(|(nm, _)| nm == &n) {
+                    Some(e) => e.1 = round4(e.1 + w * 100.0),
+                    None => sectors.push((n, round4(w * 100.0))),
                 }
             }
         }
     }
     let mut holdings = Vec::new();
-    for h in th.get("holdings").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-        let sym = trim_space(&s(h.get("symbol"))).to_string();
-        let w = match h.get("holdingPercent") { Some(Value::Object(m)) => num(m.get("raw"), 0.0), other => num(other, 0.0) };
-        if !sym.is_empty() && w > 0.0 {
+    for h in th.holdings {
+        let sym = trim_space(&h.symbol).to_string();
+        let raw = h.holding_percent.0;
+        if !sym.is_empty() && raw > 0.0 {
             let mut ex = "";
             for (suf, venue) in [(".TO", "TSX"), (".V", "TSX-V"), (".CN", "CSE"), (".NE", "CBOE CANADA")] {
                 if sym.to_uppercase().ends_with(suf) {
                     ex = venue;
                 }
             }
-            let name = s(h.get("holdingName"));
-            holdings.push(json!({"ticker": sym, "name": name, "weight": round4(w * 100.0), "sector": "", "country": "", "exchange": ex,
-                                 "currency": if ex.is_empty() { "" } else { "CAD" }, "fund": is_fund(&name)}));
+            let name = h.holding_name.clone();
+            holdings.push(Holding {
+                ticker: sym, name: name.clone(), weight: round4(raw * 100.0), sector: String::new(), country: String::new(), exchange: ex.to_string(),
+                currency: if ex.is_empty() { String::new() } else { "CAD".to_string() }, fund: is_fund(&name),
+            });
         }
     }
-    (sectors, holdings)
+    (Weights(sectors), holdings)
 }
 
 fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchError> {
@@ -742,14 +1031,14 @@ fn yahoo_fund(symbol: &str, exchange: &str) -> Result<Option<Breakdown>, FetchEr
     if sectors.is_empty() && holdings.is_empty() {
         return Ok(None);
     }
-    Ok(Some(json!({"sectors": sectors, "countries": {}, "holdings": holdings, "source": "Yahoo Finance", "asOf": ""})))
+    Ok(Some(Breakdown { sectors, countries: Weights::default(), holdings, source: "Yahoo Finance".into(), as_of: String::new() }))
 }
 
 // --- the look-through ------------------------------------------------------------
 
 /// A holding named without a ticker, the directories'
 /// first match on the name.
-pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
+pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Listed> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
         return v;
     }
@@ -766,12 +1055,12 @@ pub fn resolve_name(ctx: &Ctx, name: &str) -> Option<Value> {
         return None;
     }
     let r = crate::search::symbol_search(&ctx.pool, &clean.chars().take(40).collect::<String>());
-    r.get("matches").and_then(|m| m.as_array()).and_then(|a| a.first()).cloned()
+    r.get("matches").and_then(|m| m.as_array()).and_then(|a| a.first()).and_then(|m| Listed::deserialize(m).ok())
 }
 
-fn cache_get(ctx: &Ctx, key: &str) -> Option<Value> {
+fn cache_get(ctx: &Ctx, key: &str) -> Option<ExposureRecord> {
     let rec = bagholder_store::feeds::exposure_record(ctx.conn, key).ok()??;
-    let fetched = s(rec.get("fetchedAt"));
+    let fetched = rec.fetched_at.clone();
     let (d, _) = fetched.split_once('T')?;
     if fetched.len() != 20 || !fetched.ends_with('Z') {
         return None;
@@ -787,85 +1076,79 @@ fn cache_get(ctx: &Ctx, key: &str) -> Option<Value> {
     };
     let (_, now, _) = crate::clock_now();
     let age_days = ((now as i64) - then).div_euclid(86400);
-    if age_days < FRESH_DAYS { Some(rec) } else { None }
+    if age_days < FRESH_DAYS { Some(rec.record) } else { None }
 }
 
-fn store_exposure(ctx: &Ctx, key: &str, rec: &Value) {
+fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) {
     let _ = bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp());
 }
 
 /// A classified share as an exposure record, cached
 /// by ticker and venue form.
-pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> Value {
+pub fn share_exposure(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -> ExposureRecord {
     let key = format!("{}{}:{}", SHARE_KEY, bagholder_model::venues::tmx_symbol(symbol), bagholder_model::venues::tmx_form(exchange, currency).unwrap_or(""));
     if let Some(hit) = cache_get(ctx, &key) {
         return hit;
     }
     let c = classify_share(ctx, symbol, exchange, currency);
-    let (sec, ctry) = (s(c.get("sector")), s(c.get("country")));
-    let mut sectors = Map::new();
-    if !sec.is_empty() {
-        sectors.insert(sec.clone(), json!(1.0));
+    let mut sectors = Weights::default();
+    if !c.sector.is_empty() {
+        sectors.add(&c.sector, 1.0);
     }
-    let mut countries = Map::new();
-    if !ctry.is_empty() {
-        countries.insert(ctry.clone(), json!(1.0));
+    let mut countries = Weights::default();
+    if !c.country.is_empty() {
+        countries.add(&c.country, 1.0);
     }
-    let rec = json!({"sectors": sectors, "countries": countries, "coverage": if !sec.is_empty() || !ctry.is_empty() { 1.0 } else { 0.0 },
-                     "source": c["source"], "asOf": "", "industry": c["industry"]});
+    let coverage = if !c.sector.is_empty() || !c.country.is_empty() { 1.0 } else { 0.0 };
+    let rec = ExposureRecord { sectors, countries, coverage, source: c.source, as_of: String::new(), industry: c.industry, error: String::new() };
     store_exposure(ctx, &key, &rec);
     rec
-}
-
-fn first_key(v: Option<&Value>) -> String {
-    v.and_then(|x| x.as_object()).and_then(|m| m.keys().next().cloned()).unwrap_or_default()
 }
 
 /// Holdings into {sectors, countries, coverage} --
 /// weights over the positive rows, each row classified as given, by its
 /// ticker, by its name, or by looking a fund through.
-pub fn lookthrough(ctx: &Ctx, holdings: &[Value], depth: usize, seen: &mut Vec<String>) -> Value {
-    let rows: Vec<&Value> = holdings.iter().filter(|h| num(h.get("weight"), 0.0) > 0.0).collect();
-    let total: f64 = rows.iter().map(|h| num(h.get("weight"), 0.0)).sum();
+pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec<String>) -> ExposureRecord {
+    let rows: Vec<&Holding> = holdings.iter().filter(|h| h.weight > 0.0).collect();
+    let total: f64 = rows.iter().map(|h| h.weight).sum();
     if total <= 0.0 {
-        return json!({"sectors": {}, "countries": {}, "coverage": 0.0});
+        return ExposureRecord::default();
     }
-    let mut sectors = Map::new();
-    let mut countries = Map::new();
+    let mut sectors = Weights::default();
+    let mut countries = Weights::default();
     let mut covered = 0.0;
     for h in rows {
-        let w = num(h.get("weight"), 0.0) / total;
-        let (mut sec, mut ctry) = (s(h.get("sector")), s(h.get("country")));
-        let (mut tk, mut ex, mut ccy) = (s(h.get("ticker")), s(h.get("exchange")), s(h.get("currency")));
+        let w = h.weight / total;
+        let (mut sec, mut ctry) = (h.sector.clone(), h.country.clone());
+        let (mut tk, mut ex, mut ccy) = (h.ticker.clone(), h.exchange.clone(), h.currency.clone());
         if !sec.is_empty() && !ctry.is_empty() {
             // the issuer states both: nothing to look up
-            add(&mut sectors, &sec, w);
-            add(&mut countries, &ctry, w);
+            sectors.add(&sec, w);
+            countries.add(&ctry, w);
             covered += w;
             continue;
         }
-        let name = s(h.get("name"));
+        let name = h.name.clone();
         if tk.is_empty() && !name.is_empty() {
             if let Some(m) = resolve_name(ctx, &name) {
-                tk = s(m.get("symbol"));
-                ex = s(m.get("exchange"));
-                ccy = s(m.get("currency"));
+                tk = m.symbol;
+                ex = m.exchange;
+                ccy = m.currency;
             }
         }
-        let mut sub: Option<Value> = None;
-        if h.get("fund").map(truthy).unwrap_or(false) && depth < MAX_DEPTH && (!tk.is_empty() || !name.is_empty()) {
+        let mut sub: Option<ExposureRecord> = None;
+        if h.fund && depth < MAX_DEPTH && (!tk.is_empty() || !name.is_empty()) {
             sub = fund_exposure(ctx, &tk, &name, &ex, depth + 1, seen);
         }
         if let Some(sb) = sub.as_ref() {
-            let has = |k: &str| sb.get(k).map(truthy).unwrap_or(false);
-            if has("sectors") || has("countries") {
-                for (n, f) in sb.get("sectors").and_then(|x| x.as_object()).cloned().unwrap_or_default() {
-                    add(&mut sectors, &n, w * f.as_f64().unwrap_or(0.0));
+            if !sb.sectors.is_empty() || !sb.countries.is_empty() {
+                for (n, f) in sb.sectors.iter() {
+                    sectors.add(n, w * f);
                 }
-                for (n, f) in sb.get("countries").and_then(|x| x.as_object()).cloned().unwrap_or_default() {
-                    add(&mut countries, &n, w * f.as_f64().unwrap_or(0.0));
+                for (n, f) in sb.countries.iter() {
+                    countries.add(n, w * f);
                 }
-                covered += w * sb.get("coverage").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                covered += w * sb.coverage;
                 continue;
             }
         }
@@ -875,29 +1158,29 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Value], depth: usize, seen: &mut Vec<S
             }
             let c = share_exposure(ctx, &tk, &ex, &ccy);
             if sec.is_empty() {
-                sec = first_key(c.get("sectors"));
+                sec = c.sectors.first_name().unwrap_or("").to_string();
             }
             if ctry.is_empty() {
-                ctry = first_key(c.get("countries"));
+                ctry = c.countries.first_name().unwrap_or("").to_string();
             }
         }
         if !sec.is_empty() {
-            add(&mut sectors, &sec, w);
+            sectors.add(&sec, w);
         }
         if !ctry.is_empty() {
-            add(&mut countries, &ctry, w);
+            countries.add(&ctry, w);
         }
         if !sec.is_empty() || !ctry.is_empty() {
             covered += w;
         }
     }
-    json!({"sectors": sectors, "countries": countries, "coverage": covered.min(1.0)})
+    ExposureRecord { sectors, countries, coverage: covered.min(1.0), source: String::new(), as_of: String::new(), industry: String::new(), error: String::new() }
 }
 
 /// A fund's {sectors, countries, coverage, source,
 /// asOf}, through its issuer's adapter, cached by ticker; None when no source
 /// covers its family or the source answered nothing.
-pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Option<Value> {
+pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth: usize, seen: &mut Vec<String>) -> Option<ExposureRecord> {
     let key = format!("{}{}", FUND_KEY, bagholder_model::venues::tmx_symbol(if symbol.is_empty() { name } else { symbol }));
     if seen.contains(&key) {
         return None;
@@ -915,7 +1198,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         "evolve" => Some(evolve),
         _ => None,
     };
-    let mut data: Option<Value> = None;
+    let mut data: Option<Breakdown> = None;
     let hooked = hooks::ADAPTER.with(|h| h.borrow().as_ref().map(|f| f(family, symbol, name, exchange)));
     if let Some(d) = hooked {
         data = d;
@@ -937,34 +1220,31 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
         }
     }
     let data = data?;
-    let scale = |k: &str| -> Map<String, Value> {
-        data.get(k).and_then(|x| x.as_object()).map(|m| m.iter().map(|(n, w)| (n.clone(), json!(w.as_f64().unwrap_or(0.0) / 100.0))).collect()).unwrap_or_default()
-    };
-    let mut sectors = scale("sectors");
-    let mut countries = scale("countries");
+    let scale = |w: Weights| -> Weights { Weights(w.0.into_iter().map(|(n, x)| (n, x / 100.0)).collect()) };
+    let mut sectors = scale(data.sectors);
+    let mut countries = scale(data.countries);
     let mut coverage: f64 = if !sectors.is_empty() || !countries.is_empty() { 1.0 } else { 0.0 };
-    let holdings = data.get("holdings").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let holdings = data.holdings;
     if !holdings.is_empty() && (sectors.is_empty() || countries.is_empty()) {
         let agg = lookthrough(ctx, &holdings, depth, seen);
         if sectors.is_empty() {
-            sectors = agg["sectors"].as_object().cloned().unwrap_or_default();
+            sectors = agg.sectors;
         }
         if countries.is_empty() {
-            countries = agg["countries"].as_object().cloned().unwrap_or_default();
+            countries = agg.countries;
         }
-        let agg_cov = agg["coverage"].as_f64().unwrap_or(0.0);
-        coverage = if !sectors.is_empty() && !countries.is_empty() { coverage.max(agg_cov) } else { agg_cov };
+        coverage = if !sectors.is_empty() && !countries.is_empty() { coverage.max(agg.coverage) } else { agg.coverage };
     }
-    let tot = |m: &Map<String, Value>| bagholder_model::value::FSum::fsum(m.values().map(|v| v.as_f64().unwrap_or(0.0)));
-    let (tot_s, tot_c) = (tot(&sectors), tot(&countries));
+    let tot_s = sectors.iter().map(|(_, w)| *w).fsum();
+    let tot_c = countries.iter().map(|(_, w)| *w).fsum();
     if tot_s > 1.0001 {
-        sectors = sectors.into_iter().map(|(n, w)| (n, json!(w.as_f64().unwrap_or(0.0) / tot_s))).collect();
+        sectors = sectors.scaled(tot_s);
     }
     if tot_c > 1.0001 {
-        countries = countries.into_iter().map(|(n, w)| (n, json!(w.as_f64().unwrap_or(0.0) / tot_c))).collect();
+        countries = countries.scaled(tot_c);
     }
-    let source = { let v = s(data.get("source")); if v.is_empty() { family.to_string() } else { v } };
-    let rec = json!({"sectors": sectors, "countries": countries, "coverage": coverage, "source": source, "asOf": s(data.get("asOf"))});
+    let source = if data.source.is_empty() { family.to_string() } else { data.source };
+    let rec = ExposureRecord { sectors, countries, coverage, source, as_of: data.as_of, industry: String::new(), error: String::new() };
     store_exposure(ctx, &key, &rec);
     Some(rec)
 }
@@ -972,18 +1252,15 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
 /// The exposure record for one of the book's
 /// securities, stored under its id -- a fund looked through, a share
 /// classified.
-pub fn refresh_security(ctx: &Ctx, sec: &Value) -> Value {
-    let sid = s(sec.get("id"));
-    let (symbol, name, exchange, currency) = (s(sec.get("symbol")), s(sec.get("name")), s(sec.get("primaryExchange")), s(sec.get("currency")));
-    let rec = if is_fund(&name) {
+pub fn refresh_security(ctx: &Ctx, sec: &bagholder_model::securities::Security) -> ExposureRecord {
+    let rec = if is_fund(&sec.name) {
         // a fund no source covers is unclassified: its venue says nothing about what it holds
         let mut seen = Vec::new();
-        fund_exposure(ctx, &symbol, &name, &exchange, 0, &mut seen)
-            .unwrap_or_else(|| json!({"sectors": {}, "countries": {}, "coverage": 0.0, "source": "", "asOf": ""}))
+        fund_exposure(ctx, &sec.symbol, &sec.name, &sec.primary_exchange, 0, &mut seen).unwrap_or_default()
     } else {
-        share_exposure(ctx, &symbol, &exchange, &currency)
+        share_exposure(ctx, &sec.symbol, &sec.primary_exchange, &sec.currency)
     };
-    store_exposure(ctx, &sid, &rec);
+    store_exposure(ctx, &sec.id, &rec);
     rec
 }
 
