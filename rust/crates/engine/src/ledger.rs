@@ -940,6 +940,16 @@ impl<'a> Matcher<'a> {
 
     /// The round trip a roll's opening leg continues: the one closed by another
     /// leg of the same record, on a contract of the same underlying, the same way.
+    /// Whether a fill would close part of a position the account holds.
+    fn meets_opposite(&self, t: &Transaction) -> bool {
+        let (Some(instrument), Some(q)) = (t.instrument, t.quantity) else { return false };
+        if !matches!(read_move(t), Move::Trade(None | Some(Effect::Close))) || q.is_zero() {
+            return false;
+        }
+        let closes = if acquires(t).unwrap_or(q.is_positive()) { Direction::Short } else { Direction::Long };
+        self.out.books.get(&(t.account, instrument)).is_some_and(|b| b.lots.iter().any(|l| l.direction == closes))
+    }
+
     fn rolled_from(&self, t: &Transaction, instrument: InstrumentId, direction: Direction, legs: &[&Transaction]) -> Option<TripKey> {
         let under = self.underlying(instrument)?;
         for leg in legs {
@@ -1357,10 +1367,35 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
             }
         }
     }
+    // a record whose legs share a day is applied as one order where its first
+    // leg falls, each next leg the first that meets an opposite position, so a
+    // roll that states no effects closes the old contract before it opens the
+    // new one, whichever way its legs sort
+    let mut in_order: BTreeMap<_, Vec<&Transaction>> = BTreeMap::new();
     for t in &txs {
-        m.expire_before(t.trade_date);
+        in_order.entry(t.id.record).or_default().push(t);
+    }
+    let mut done: BTreeSet<&TransactionId> = BTreeSet::new();
+    for t in &txs {
+        if done.contains(&t.id) {
+            continue;
+        }
         let legs = by_record.get(&t.id.record).map(|v| v.as_slice()).unwrap_or(&[]);
-        m.apply(t, legs);
+        let one_day = legs.len() > 1 && legs.iter().all(|l| l.trade_date == t.trade_date);
+        if !one_day {
+            m.expire_before(t.trade_date);
+            m.apply(t, legs);
+            m.record_units(t.trade_date);
+            continue;
+        }
+        let mut left = in_order[&t.id.record].clone();
+        m.expire_before(t.trade_date);
+        while !left.is_empty() {
+            let i = left.iter().position(|l| m.meets_opposite(l)).unwrap_or(0);
+            let leg = left.remove(i);
+            done.insert(&leg.id);
+            m.apply(leg, legs);
+        }
         m.record_units(t.trade_date);
     }
     m.expire_before(inputs.clock.today);

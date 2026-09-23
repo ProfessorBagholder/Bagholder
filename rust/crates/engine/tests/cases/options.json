@@ -78,6 +78,36 @@
     }
   },
   {
+    "name": "a roll whose record states no effects closes the old contract before it opens the new one, whichever way its legs sort",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: rolls are one record's legs; options are a net position",
+    "working": [
+      "buy 1 C1 for −200: long 1 C1",
+      "one order, no effects stated: buy 1 C2 for −250 and sell 1 C1 for +300; the buy sorts first, but the sale is the leg that meets a position, so it goes first and closes C1",
+      "the C2 long then continues the C1 round trip as a roll",
+      "sell 1 C2 for +400: P&L = (300 − 200) + (400 − 250) = 250 = the fills' cash; one trade named after C2, marked rolled"
+    ],
+    "today": "2026-08-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "C2", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-09-18", "strike": "12", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "C1", "qty": "1", "cash": "-200"},
+      {"id": "t2", "record": "roll", "leg": "a", "account": "A", "day": "2026-05-01", "at": "2026-05-01T14:00:00Z", "kind": "buy", "instrument": "C2", "qty": "1", "cash": "-250"},
+      {"id": "t3", "record": "roll", "leg": "b", "account": "A", "day": "2026-05-01", "at": "2026-05-01T14:00:00Z", "kind": "sell", "instrument": "C1", "qty": "-1", "cash": "300"},
+      {"id": "t4", "account": "A", "day": "2026-07-01", "at": "2026-07-01T15:00:00Z", "kind": "sell", "instrument": "C2", "qty": "-1", "cash": "400"}
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 0,
+      "trades": [{"opened_by": "t1", "named_after": "C2", "pnl": "250.00", "flags": ["rolled"], "cash_invariant": true}]
+    }
+  },
+  {
     "name": "a multi-leg order whose legs are not stated: every contract on its underlying waits",
     "spec": "docs/plans/stage-2-engine.md: a multi-leg order without its legs moves nothing, and every contract on that underlying in that account, held then or opened later, waits",
     "working": [
