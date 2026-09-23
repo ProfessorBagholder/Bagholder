@@ -1,6 +1,6 @@
 # Bagholder: the design
 
-This is the design of Bagholder, worked out from what the app is for and where it is going. Every part of the code is judged against it; "the old app did it this way" is never a reason for anything here. `SPEC.md` stays the authority on what each screen shows and how each figure is defined; this document is the authority on how the app is built to deliver that. Where the two disagree, one of them is changed on purpose, and the change says why (§18 lists the changes this design makes to `SPEC.md`).
+This is the design of Bagholder, worked out from what the app is for and where it is going. Every part of the code is judged against it; "the old app did it this way" is never a reason for anything here. `SPEC.md` stays the authority on what each screen shows and how each figure is defined; this document is the authority on how the app is built to deliver that. Where the two disagree, one of them is changed on purpose, and the change says why (§19 lists the changes this design makes to `SPEC.md`).
 
 The previous version of this document was a stage-by-stage plan for porting the Python app to Rust and Svelte. It measured progress by how closely the new build reproduced the old one, and so it carried the old design across with it (that plan is in git at commit 955f7a3). This version replaces it. It was reviewed, before any code was judged against it, by a reviewer who had written none of it; the review's findings are folded in.
 
@@ -25,7 +25,7 @@ These are directions the design serves now, not ones bolted on later:
 - **More brokerages**, built soon. A person may hold accounts at several at once.
 - **Self-hosted, always.** The local, self-hosted app is the product and stays one even if a hosted version appears.
 - **Possibly hosted, for many people.** Nothing is built for it ahead of need, but nothing at the centre may assume there is only one person.
-- **AI agents** working for the person (§13), scripts, the command line.
+- **AI agents** working for the person (§14), scripts, the command line.
 - **More data and events**: company fundamentals; corporate events booked from the official record (`docs/plans/corporate-events.md`); more regulators and news sources.
 
 ## 3. What that demands
@@ -109,7 +109,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 - **The person's home zone** is a setting, an input to the engine. "Today", a year's boundary and a month's are the person's, never the server's (a container runs in UTC).
 - **The day a broker files a row under** is part of that broker's mapping (Wealthsimple's is Alberta's).
 - **Each venue has its session hours and holidays**, used for which quotes can have moved, the bracket engine's session rules and a resting order's renewal.
-- **FX is the Bank of Canada's published rate.** The Bank publishes a rate for every business day at 16:30 Eastern, and the app keeps every one of them from the start of the person's history: a trade on a business day uses that day's rate, one on a weekend or holiday the previous business day's (the Canadian convention, the one the Canada Revenue Agency applies). A trade made today before 16:30 uses today's rate once it is published, and until then its CAD figure is marked as waiting for it: that is the only time a rate does not exist yet. Failing to reach the Bank is a failure of that source like any other (§15): shown, retried, never covered by a number of the app's own.
+- **FX is the Bank of Canada's published rate.** The Bank publishes a rate for every business day at 16:30 Eastern, and the app keeps every one of them from the start of the person's history: a trade on a business day uses that day's rate, one on a weekend or holiday the previous business day's (the Canadian convention, the one the Canada Revenue Agency applies). A trade made today before 16:30 uses today's rate once it is published, and until then its CAD figure is marked as waiting for it: that is the only time a rate does not exist yet. Failing to reach the Bank is a failure of that source like any other (§16): shown, retried, never covered by a number of the app's own.
 - Display is in the viewer's zone. Zone rules come from the system's database with a built-in copy where there is none, and tests pin the rules (`docs/plans/time-zone-rules.md`).
 
 ## 8. The engine
@@ -129,7 +129,7 @@ Every outside source is an adapter behind one contract:
 - **What it offers**: which kinds of data for which instruments or markets, with what reach and freshness.
 - **How it is asked**: its identifiers, resolved through §5's references; its pace, enforced by one limiter per host; its credentials if any.
 - **What it answers, checked.** An adapter checks what it reads: the fields it needs are present and of the right type and range; what it does not read is ignored. On top of shape, it checks meaning: the currency matches the listing's, a timestamp is as fresh as the source claims (a quote fifteen minutes old is not a live price), a price is within bounds of the last one. A reply that fails is a failure of that source, never data. A change in the reply's overall shape (a field that disappeared or appeared) is reported separately so it is noticed before it matters. Real recorded replies are kept as the adapter's test fixtures, with a wrong-shaped and a wrong-meaning reply beside them.
-- **Its health.** Every request's outcome is recorded per source, and a source that fails, refuses or changes shape is visible where it matters (§15) while the rest carries on.
+- **Its health.** Every request's outcome is recorded per source, and a source that fails, refuses or changes shape is visible where it matters (§16) while the rest carries on.
 - **Choice between sources is data**: an ordered chain per kind of instrument, the winner remembered. No ticker is special-cased in code.
 
 **Finding out what no single source says.** Where a figure needs a fact and the usual source does not carry it, the app goes looking in every source that can state it, rather than assuming or giving up. Payout frequency is the model case. A frequency the issuer *states* comes first: the fund's own page, its distribution announcements ("announces monthly distribution"), and its filed documents. A frequency *inferred* from the declared record's ex-dates, or from the payments received, comes after that. A new holding is looked up the moment it appears, so the person never sees a guess. A fund no source answers for yet is a problem the app keeps working on and shows as one; it is never a steady state and never replaced by a default. Which issuer sources state it is established from their real pages before it is built.
@@ -170,12 +170,23 @@ The part that moves money is built the way order systems are built.
 **Access.**
 - The server answers only its own machine unless the person turns on remote access. Every request is checked for its Host and Origin, and every write carries a token that proves it came from the app's own page, so another website open in the same browser cannot reach it.
 - Remote access (from another device) goes through a secure tunnel or reverse proxy the person already trusts; the app does not manage certificates itself. A device is paired, receives its own token, and can be revoked.
-- Tokens carry access classes: what their holder may read and do. The page's own session has them all; a paired device and an AI agent (§13) have only what the person granted.
+- Tokens carry access classes: what their holder may read and do. The page's own session has them all; a paired device and an AI agent (§14) have only what the person granted.
 - **Broker credentials** live in the operating system's keychain where there is one, otherwise in a file only the person's account can read, outside the book, so a backup or a moved book never carries them.
 
 **Notifications** are events from the book, execution and sources, each identified by what it is (a fill, a filing's content, a release's words), so one event is told once, through the operating system's channel or the browser's.
 
-## 13. AI agents
+## 13. What the page loads and keeps
+
+The page loads what the screen shows, when the screen first needs it, and keeps it. After that it is told only what changed and changes only the elements showing it. Opening the app again shows what it last showed at once and asks only for what changed since.
+
+- **Loaded by what is on screen.** The page subscribes to the data of what it shows: the header, the current tab's cards under the current filters, an open instrument. A tab never visited loads nothing. A tab already visited stays loaded while the app is open, so going back to it is instant and asks for nothing. Long lists (trades, news, distribution history, orders) load the rows in view and more as the person scrolls, so a book of ten thousand trades does not send ten thousand rows to show thirty.
+- **Changes, not reloads.** After a subscription's first answer, only its changes arrive (§12). A filter change is a new subscription: rows that stay stay, rows that leave or arrive are removed or inserted, figures that change are written, and nothing else is touched. Opening an instrument does not reload the lists behind it; switching tabs does not rebuild the header; a chart's new bars are added to the chart already drawn.
+- **Kept between opens.** The page keeps, in the browser's own database, the last state of each subscription with its version number, and everything it loaded on demand (an instrument's bars, filings, short interest, document summaries) with its version. On opening it draws from that at once, then asks the server for what changed since those versions; with nothing changed, nothing is sent. An on-demand read carries the version it holds, and the server answers "unchanged" when it is. What cannot change, a closed day's bars or a filed document, is never asked for again. The page's own code and assets are kept by the browser until a release changes them.
+- **The server does no work because a page opened.** It runs as a service (§17), so its computed figures and stores are already current; a page opening is answered from them. Sources are read by the rules of §15, never because the page was opened.
+- **What the browser keeps is the person's**, stored under the book's id and the interface version, cleared when a device is signed out or revoked, and never holding a credential.
+- **Held by tests.** (1) Opening the app a second time with nothing changed: the screen is drawn from what was kept before any reply arrives, and the server sends nothing beyond acknowledging the versions. (2) A request budget per interaction: opening each tab, opening an instrument, changing a filter, a price tick, a minute idle; the number and size of requests are recorded, and a test fails when one grows. (3) For every kind of change, and for switching tabs and changing filters, a test watches the page and fails if an element that did not change is touched. (4) No request asks for data nothing on screen shows.
+
+## 14. AI agents
 
 The person's AI assistants (Claude, or any other that speaks the Model Context Protocol) can use Bagholder as a tool: ask about the book, the figures, the market around a holding, its filings; keep the journal and the watchlist; and, only where the person allows it, prepare or place orders. It is one feature of the whole app, not an attachment to any one part of it.
 
@@ -185,13 +196,13 @@ The person's AI assistants (Claude, or any other that speaks the Model Context P
 - **How an agent trades is the person's choice, per agent.** An agent granted *trade* either proposes orders, which arrive in the app as drafts the person reviews and sends from the ticket, or trades on its own, fully autonomously, if the person turns that on. The person may set limits for it (instruments, size, orders per day) or none; the app does not impose any. Execution treats an agent's orders exactly as the person's own: the same state machines, the same broker confirmation, the same record of who asked.
 - **Everything an agent does is recorded**: each call, what it read or changed, and, on every order, that an agent asked for it and which one. The person can read an agent's history in the app.
 - **What comes from outside is marked as such.** News headlines, filing text and anything else a source wrote reaches the agent labelled as outside content, so text planted in a headline cannot pass for an instruction; and an agent's own instructions come only from the person who set it up.
-- **An agent's request is demand like any other** (§14): it can ask for fresh data, within the same pacing every source keeps.
+- **An agent's request is demand like any other** (§15): it can ask for fresh data, within the same pacing every source keeps.
 
-## 14. Work follows demand
+## 15. Work follows demand
 
 Sources are read because something needs them: a screen showing what they feed, a notification someone turned on, an agent's request (which reads fresh data when what is stored is stale, within a bounded wait), or a known moment (a token's expiry, the Bank of Canada's daily rate, a pull time). **Execution is always demand**: while an order is open or a bracket is live, the broker is read on the cadence the order needs, whether or not anyone is looking. Every periodic read that remains is listed with its reason, and a test counts them.
 
-## 15. Failures are seen
+## 16. Failures are seen
 
 Every failure has an owner and a place it shows:
 
@@ -203,30 +214,30 @@ Every failure has an owner and a place it shows:
 
 Nothing is logged only to a terminal, and nothing is caught and discarded.
 
-## 16. Running it
+## 17. Running it
 
 - **One program, run as a service.** A single binary serves the page and runs the engine and background work. It installs itself as the operating system's service (launchd, systemd, a Windows service), so it starts at boot and after a crash; while it runs, brackets are guarded.
 - **Updates are safe.** Releases are signed and the binary checks the signature with a key built into it. An update waits until no order or bracket action is in progress, snapshots the book, swaps the binary, and returns to the previous version and snapshot if the new one does not come up. The container never updates itself; it says a new image is available.
 - **One data folder** holds the book, the market cache, backups and settings.
 - **Resource use is bounded**: work follows demand, each host is paced, every cache has a limit.
 
-## 17. How the design is held
+## 18. How the design is held
 
 - **Tests come from `SPEC.md` and from real source replies**, never from what an older build did.
-- **The boundaries are enforced by the build**: the engine is a crate that cannot depend on the network, the store or the clock; only adapters depend on a source's reply types; only execution depends on a broker's order interface; money types have no floating-point conversion outside statistics; a periodic wait not listed in §14 fails a test.
+- **The boundaries are enforced by the build**: the engine is a crate that cannot depend on the network, the store or the clock; only adapters depend on a source's reply types; only execution depends on a broker's order interface; money types have no floating-point conversion outside statistics; a periodic wait not listed in §15 fails a test.
 - **Every change is placed in this design before it is built**; a change this design does not cover changes this design first.
 - **The design and each stage of work are reviewed by someone who did not build the code**, against §1 to §3.
 
-## 18. Changes to `SPEC.md`
+## 19. Changes to `SPEC.md`
 
 These passages of `SPEC.md` describe an old implementation or contradict this design, and change with it. The ones marked **for the owner** change what the person sees or what the app does with their money or notes, so they are decided by the owner; the rest follow from this design.
 
 - Payout frequency (§1, §2 Distribution rate): never assumed. The spec's "12 is assumed" goes; the app finds the frequency out (§9, "Finding out what no single source says").
 - **For the owner — Clear data** (§4, the menu): it deletes the journal, which nothing can fetch again. This design has Clear data remove only what can be fetched or derived again, makes deleting the journal a separate action, and takes a backup first.
 - **For the owner — a watched stop's order** (§Brackets): it fires as a market sell, which can fill far away on a thin listing; a limit order a set distance through the bid fills almost always and never at any price. Which one a trader wants is the owner's call.
-- **For the owner — an unavailable source** (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card.
+- **For the owner — an unavailable source** (§4 Disclosures, "Source off"): the spec shows nothing; §16 names it on the card.
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
 - Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
 - Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/corporate-events.md`).
-- Freshness (§2), the store (§6), one data folder per build (§1), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §14 and §16, and moved out of the spec.
+- Freshness (§2), the store (§6), one data folder per build (§1), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §15 and §17, and moved out of the spec.
 - The page dividing by twelve (the spec's introduction): the engine gives per-month figures.
