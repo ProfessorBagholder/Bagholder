@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, OptionalExtension};
 
+use bagholder_core::journal::Opening;
 use bagholder_core::record::{Problem, RecordState, SourceRecord};
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
@@ -80,10 +81,22 @@ pub(crate) fn direction(t: &Transaction) -> i8 {
 }
 
 /// What makes a transaction the same opening as another: its account, its
-/// instrument, the way it moves the position, and, for an option, whether it
-/// opens or closes (a buy to open and a buy to close both move it in).
-pub(crate) fn opening_key(t: &Transaction) -> (AccountId, Option<InstrumentId>, i8, Option<Effect>) {
-    (t.account, t.instrument, direction(t), t.effect)
+/// instrument, the way it moves the position (and its kind: an assignment's
+/// delivery is not a purchase).
+pub(crate) fn opening_key(t: &Transaction) -> (AccountId, Option<InstrumentId>, i8, Kind) {
+    (t.account, t.instrument, direction(t), t.kind)
+}
+
+/// Whether `b` is the same opening as `a`: the same key, and, for an option,
+/// not the other effect where both state one (a buy to open and a buy to close
+/// both move it in). An effect one of them does not state does not tell them
+/// apart.
+pub(crate) fn same_opening(a: &Transaction, b: &Transaction) -> bool {
+    opening_key(a) == opening_key(b)
+        && match (a.effect, b.effect) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
 }
 
 /// Whether two transactions say the same thing (their mapping version aside).
@@ -215,6 +228,7 @@ impl Book {
         for t in &rows {
             self.insert_transaction(t)?;
         }
+        problems.extend(self.write_adjustments(record, &mapped.adjustments)?);
         self.add_problems(record, &problems)?;
         self.conn().execute("UPDATE source_records SET derived_version = ? WHERE id = ?", params![version, record.to_string()])?;
 
@@ -234,9 +248,9 @@ impl Book {
         }
         // a trade stays anchored only on an opening that is still the same opening
         for (trade, anchor) in self.trades_anchored_on(record)? {
-            let reason = match (before.get(&anchor.leg), after.get(&anchor.leg)) {
-                (_, None) => Some(format!("the record it opened on no longer has its {} transaction", anchor.leg)),
-                (Some(old), Some(new)) if opening_key(old) != opening_key(new) => {
+            let reason = match (before.get(&anchor.transaction.leg), after.get(&anchor.transaction.leg)) {
+                (_, None) => Some(format!("the record it opened on no longer has its {} transaction", anchor.transaction.leg)),
+                (Some(old), Some(new)) if !same_opening(old, new) => {
                     Some("the record it opened on now says another account, instrument or direction".to_string())
                 }
                 _ => None,
@@ -400,7 +414,7 @@ impl Book {
         for table in ["transactions", "record_problems", "instrument_sightings"] {
             self.conn().execute(&format!("DELETE FROM {table} WHERE record_id = ?"), [record.to_string()])?;
         }
-        Ok(())
+        self.clear_adjustments(record)
     }
 
     pub(crate) fn set_state(&self, record: RecordId, state: RecordState, at: jiff::Timestamp) -> Result<()> {
@@ -545,15 +559,18 @@ impl Book {
     }
 
     /// The trades anchored on a record's transactions, with their anchors.
-    pub(crate) fn trades_anchored_on(&self, record: RecordId) -> Result<Vec<(TradeId, TransactionId)>> {
-        let mut stmt = self.conn().prepare_cached("SELECT id, anchor_leg FROM trades WHERE anchor_record = ? ORDER BY created_at, rowid")?;
-        let rows = stmt.query_map([record.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    pub(crate) fn trades_anchored_on(&self, record: RecordId) -> Result<Vec<(TradeId, Opening)>> {
+        let mut stmt = self.conn().prepare_cached("SELECT id, anchor_leg, anchor_instrument FROM trades WHERE anchor_record = ? ORDER BY created_at, rowid")?;
+        let rows = stmt.query_map([record.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, leg) = row?;
+            let (id, leg, instrument) = row?;
             out.push((
                 text::parsed("trades", "id", &id, TradeId::parse)?,
-                TransactionId::new(record, text::parsed("trades", "anchor_leg", &leg, Leg::parse)?),
+                Opening {
+                    transaction: TransactionId::new(record, text::parsed("trades", "anchor_leg", &leg, Leg::parse)?),
+                    instrument: text::parsed("trades", "anchor_instrument", &instrument, InstrumentId::parse)?,
+                },
             ));
         }
         Ok(out)

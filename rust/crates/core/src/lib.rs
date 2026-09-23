@@ -5,6 +5,7 @@
 #[macro_use]
 pub mod text_enum;
 pub mod account;
+pub mod adjustment;
 pub mod dec;
 pub mod ids;
 pub mod instrument;
@@ -18,3 +19,7 @@ pub use dec::{Dec, DecError, Rounding};
 pub use ids::{AccountId, ConnectionId, GroupId, IdError, InstrumentId, IssuerId, Leg, LinkId, RecordId, TradeId, TransactionId};
 pub use money::{Currency, Money, MoneyError};
 pub use names::{Broker, MappingVersion, SourceName};
+
+/// Dates and instants, for the crates that depend on this one alone (the engine):
+/// one version of the calendar everywhere.
+pub use jiff;

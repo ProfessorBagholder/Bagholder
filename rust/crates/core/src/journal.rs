@@ -7,7 +7,7 @@
 //! is gone is orphaned, with the reason, and its journal is kept for the person
 //! to re-attach: a note is never dropped.
 
-use crate::ids::{GroupId, TradeId, TransactionId};
+use crate::ids::{GroupId, InstrumentId, TradeId, TransactionId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trade {
@@ -29,10 +29,19 @@ impl Trade {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Anchor {
-    /// Anchored on its opening transaction.
-    Opening(TransactionId),
+    /// Anchored on its opening.
+    Opening(Opening),
     /// Its opening transaction is gone; why, in words the person can read.
     Orphaned(String),
+}
+
+/// What opened a trade: a transaction and the instrument it opened. One
+/// transaction can open two (an assignment closes the contract's round trip and
+/// opens the underlying's), so the transaction alone is not enough.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Opening {
+    pub transaction: TransactionId,
+    pub instrument: InstrumentId,
 }
 
 text_enum! {

@@ -1,6 +1,9 @@
-//! The import mapping, `bagholder-import` version 1: an earlier database's
+//! The import mapping, `bagholder-import` version 2: an earlier database's
 //! activity row as a transaction (`docs/plans/stage-1-foundation.md`, the table
-//! of row shapes).
+//! of row shapes). Version 2 (`docs/plans/stage-2-engine.md`, "The import,
+//! version 2") no longer reads an option fill's "to open" or "to close", which
+//! the earlier app wrote itself, and books a multi-leg order's one row as its
+//! cash alone, with its legs not stated.
 //!
 //! What each row states depends on where the earlier app got it:
 //! - **synced** from Wealthsimple (`wealthsimple`): an instant, filed on
@@ -131,10 +134,11 @@ fn rule(ty: &str, sub: &str, cash: Option<Dec>, direction: &str) -> Option<Rule>
     match (ty, sub) {
         ("Trade", "BUY") => r(Kind::Buy, None, Some(I::Security), Qty::In, Cash::Paid),
         ("Trade", "SELL") => r(Kind::Sell, None, Some(I::Security), Qty::Out, Cash::Received),
-        ("OPTIONS_BUY", "BUYTOOPEN") => r(Kind::Buy, Some(Effect::Open), Some(I::OptionContract), Qty::In, Cash::Paid),
-        ("OPTIONS_BUY", "BUYTOCLOSE") => r(Kind::Buy, Some(Effect::Close), Some(I::OptionContract), Qty::In, Cash::Paid),
-        ("OPTIONS_SELL", "SELLTOOPEN") => r(Kind::Sell, Some(Effect::Open), Some(I::OptionContract), Qty::Out, Cash::Received),
-        ("OPTIONS_SELL", "SELLTOCLOSE") => r(Kind::Sell, Some(Effect::Close), Some(I::OptionContract), Qty::Out, Cash::Received),
+        // Whether an option fill opened or closed is not stated: the earlier app
+        // relabelled every option buy and sale "to open" after each pull, and
+        // every multi-leg order by its cash's sign (`store/src/relabel.rs`)
+        ("OPTIONS_BUY", "BUYTOOPEN" | "BUYTOCLOSE") => r(Kind::Buy, None, Some(I::OptionContract), Qty::In, Cash::Paid),
+        ("OPTIONS_SELL", "SELLTOOPEN" | "SELLTOCLOSE") => r(Kind::Sell, None, Some(I::OptionContract), Qty::Out, Cash::Received),
         ("EXPIR", "BUY") => r(Kind::OptionExpiry, None, Some(I::OptionContract), Qty::In, Cash::None),
         ("EXPIR", "SELL") => r(Kind::OptionExpiry, None, Some(I::OptionContract), Qty::Out, Cash::None),
         ("ASSIGN", _) => r(Kind::OptionAssignment, None, Some(I::OptionContract), Qty::AsSigned, Cash::AsSigned),
@@ -185,7 +189,7 @@ impl Mapping for ImportMapping {
     }
 
     fn version(&self) -> u32 {
-        1
+        2
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -195,7 +199,7 @@ impl Mapping for ImportMapping {
         };
         match map_row(ctx, &p) {
             Ok(m) => m,
-            Err(problem) => Mapped { legs: vec![], problems: vec![problem] },
+            Err(problem) => Mapped { legs: vec![], problems: vec![problem], ..Mapped::default() },
         }
     }
 }
@@ -259,7 +263,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
             fee: None,
             fx_rate: None,
         };
-        return Ok(Mapped { legs: vec![leg], problems });
+        return Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() });
     };
 
     // a sign the earlier app set against the kind: booked as the kind says, and shown
@@ -329,6 +333,16 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
         }
     };
     let quantity = if instrument.is_some() { quantity } else { None };
+    // One row of a multi-leg order: the earlier app kept one row for the whole
+    // order and none of its legs, so what it moved is not stated. Its cash moved.
+    let multi_leg = opt(&row.raw_type).is_some_and(|raw| raw.to_uppercase().contains("MULTILEG"));
+    let quantity = if multi_leg {
+        problems.retain(|p| p.code != "quantity-not-stated");
+        problems.push(Problem::new("leg-unstated", "one row for a multi-leg order: the earlier app kept none of its legs, so the contracts and quantities it moved are not stated"));
+        None
+    } else {
+        quantity
+    };
     let price = if quantity.is_some() { price } else { None };
 
     let leg = Draft {
@@ -346,7 +360,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
         fee,
         fx_rate: None,
     };
-    Ok(Mapped { legs: vec![leg], problems })
+    Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() })
 }
 
 /// The instrument a row names: by Wealthsimple's security id where it has one,

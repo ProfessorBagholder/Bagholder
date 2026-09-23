@@ -38,13 +38,37 @@ pub trait Mapping {
 pub struct Mapped {
     pub legs: Vec<Draft>,
     pub problems: Vec<Problem>,
+    /// What the record says a corporate event did, or what the person states
+    /// about a transaction (`bagholder_core::adjustment`).
+    pub adjustments: Vec<AdjustmentDraft>,
 }
 
 impl Mapped {
     /// A record the mapping could not read at all.
     pub fn unreadable(why: impl Into<String>) -> Mapped {
-        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)] }
+        Mapped { legs: vec![], problems: vec![Problem::new("unreadable", why)], adjustments: vec![] }
     }
+}
+
+/// An adjustment as a mapping describes it: the transaction it explains, and
+/// its legs naming instruments by their references (never by Bagholder's ids);
+/// the book finds the instruments, and a reference that names none is a problem.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdjustmentDraft {
+    pub leg: Leg,
+    pub applies_to: bagholder_core::TransactionId,
+    pub legs: Vec<AdjustmentLegDraft>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AdjustmentLegDraft {
+    pub from: Option<Vec<Reference>>,
+    pub to: Option<Vec<Reference>>,
+    pub units_per_unit: Option<Dec>,
+    pub cost_share: Option<Dec>,
+    pub cash_per_unit: Option<Money>,
+    pub cost: Option<Money>,
+    pub acquired: Option<jiff::civil::Date>,
 }
 
 /// One transaction, as a mapping describes it.

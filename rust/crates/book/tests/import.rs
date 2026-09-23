@@ -232,9 +232,9 @@ fn every_row_shape_books_as_the_table_says() {
     let cases: Vec<(&str, Kind, Option<Effect>, Option<&str>, Option<&str>, Option<InstrumentKind>)> = vec![
         ("trade-buy", Kind::Buy, None, Some("10"), Some("-100 CAD"), Some(InstrumentKind::Security)),
         ("trade-sell", Kind::Sell, None, Some("-10"), Some("105.5 CAD"), Some(InstrumentKind::Security)),
-        ("opt-bto", Kind::Buy, Some(Effect::Open), Some("2"), Some("-300 USD"), Some(InstrumentKind::OptionContract)),
-        ("opt-multileg", Kind::Buy, Some(Effect::Close), None, Some("-50 USD"), Some(InstrumentKind::OptionContract)),
-        ("opt-sto", Kind::Sell, Some(Effect::Open), Some("-2"), Some("120 USD"), Some(InstrumentKind::OptionContract)),
+        ("opt-bto", Kind::Buy, None, Some("2"), Some("-300 USD"), Some(InstrumentKind::OptionContract)),
+        ("opt-multileg", Kind::Buy, None, None, Some("-50 USD"), Some(InstrumentKind::OptionContract)),
+        ("opt-sto", Kind::Sell, None, Some("-2"), Some("120 USD"), Some(InstrumentKind::OptionContract)),
         ("expir-short", Kind::OptionExpiry, None, Some("2"), None, Some(InstrumentKind::OptionContract)),
         ("expir-long", Kind::OptionExpiry, None, Some("-1"), None, Some(InstrumentKind::OptionContract)),
         ("assign", Kind::OptionAssignment, None, Some("1"), None, Some(InstrumentKind::OptionContract)),
@@ -282,7 +282,7 @@ fn every_row_shape_books_as_the_table_says() {
         // a synced row states no price
         assert_eq!(t.price, None, "{row}");
     }
-    assert_eq!(problems(&i, "opt-multileg"), vec!["quantity-not-stated"]);
+    assert_eq!(problems(&i, "opt-multileg"), vec!["leg-unstated"]);
     assert_eq!(problems(&i, "intent"), vec!["unclassified"]);
     assert_eq!(problems(&i, "unknown"), vec!["unclassified"]);
     assert!(problems(&i, "trade-buy").is_empty());
@@ -349,7 +349,7 @@ fn notes_and_groups_are_placed_or_kept_with_the_reason() {
     assert_eq!(entries.len(), 7, "no note is lost: {entries:?}");
     let trade = |row: &str| {
         let t = tx(&i, row).unwrap();
-        i.book.trade_on(&t.id).unwrap().unwrap()
+        i.book.trade_on(&bagholder_core::journal::Opening { transaction: t.id.clone(), instrument: t.instrument.unwrap() }).unwrap().unwrap()
     };
     assert_eq!(i.book.journal(JournalSubject::Trade(trade("trade-buy"))).unwrap().unwrap().thesis, "on the buy");
     let orphaned: Vec<(String, String)> = i.book.orphaned_journal().unwrap().into_iter().map(|(t, e)| (t.legacy_key.unwrap(), e.thesis)).collect();
@@ -442,7 +442,7 @@ fn what_the_earlier_rows_do_not_state_is_shown_not_guessed() {
     // an account type not in the vocabulary is reported, not only kept
     assert!(i.report.account_problems.iter().any(|p| p.contains("future") && p.contains("SELF_DIRECTED_SOMETHING_LATER")), "{:?}", i.report.account_problems);
     // a note on a row that moves no position is kept, orphaned, with why
-    assert!(i.report.journal_orphaned.iter().any(|(k, why)| k == "rt:opt-multileg" && why.contains("quantity")), "{:?}", i.report.journal_orphaned);
+    assert!(i.report.journal_orphaned.iter().any(|(k, why)| k == "rt:opt-multileg" && why.contains("legs")), "{:?}", i.report.journal_orphaned);
 }
 
 #[test]

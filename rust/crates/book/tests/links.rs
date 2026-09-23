@@ -26,14 +26,14 @@ fn a_superseding_record_takes_the_trade_and_its_note() {
     let provisional = Spelled { source: "fills", version: 1 };
     let broker = Spelled::v(1);
     let fill = f.store(&provisional, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("breakout"), t0()).unwrap();
 
     // the broker's own row arrives and replaces the provisional fill, in one call
     let text = legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150.01", "2026-01-02T15:00:01Z")]).to_string();
     let row = f.book.store_superseding(&broker, &f.incoming("ws-1", &text), &[fill.record], "the broker's row for order-1", t0()).unwrap();
 
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(row.record)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(row.record)));
     assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "breakout");
     assert_eq!(f.book.record(fill.record).unwrap().state, RecordState::Superseded);
     assert!(f.book.transactions_of(fill.record).unwrap().is_empty());
@@ -51,12 +51,12 @@ fn with_several_candidates_the_earliest_takes_the_trade() {
     let provisional = Spelled { source: "fills", version: 1 };
     let broker = Spelled::v(1);
     let fill = f.store(&provisional, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
     // the order filled in two parts, each its own broker row; the later one arrives first
     let late = f.store(&broker, "ws-2", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "40", "-60", "2026-01-02T15:00:09Z")]));
     let early = f.store(&broker, "ws-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "60", "-90", "2026-01-02T15:00:02Z")]));
     f.book.supersede(&[fill.record], &[late.record, early.record], "two rows for order-1", t0()).unwrap();
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(early.record)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(early.record)));
     let held = positions(&f.book.transactions().unwrap()).unwrap();
     assert_eq!(held.values().copied().collect::<Vec<_>>(), vec![d("100")]);
 }
@@ -69,10 +69,10 @@ fn a_chain_ends_on_its_last_record() {
     let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
     let c = f.store(&m, "c", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(a.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
     f.book.supersede(&[a.record], &[b.record], "b replaces a", t0()).unwrap();
     f.book.supersede(&[b.record], &[c.record], "c replaces b", t0()).unwrap();
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(c.record)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(c.record)));
     assert_eq!(positions(&f.book.transactions().unwrap()).unwrap().values().copied().collect::<Vec<_>>(), vec![d("1")]);
     // a superseded record cannot be linked again
     assert!(f.book.supersede(&[a.record], &[c.record], "again", t0()).is_err());
@@ -84,7 +84,7 @@ fn a_trade_with_no_counterpart_is_orphaned_and_its_note_kept() {
     f.account(&["a1"]);
     let m = Spelled::v(1);
     let a = f.store(&m, "a", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(a.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &note("keep me"), t0()).unwrap();
     // replaced by a record for another instrument
     let b = f.store(&m, "b", &legs(vec![buy("a1", share("CA0000000002", "XYZ"), "1", "-1", "2026-01-02T15:00:00Z")]));
@@ -122,11 +122,11 @@ fn what_the_person_entered_gives_way_to_a_sourced_record() {
     let mine = f.book.store(&person, &Incoming { connection: None, source_key: "cost-basis-1", payload: &text, refs: vec![] }, t0()).unwrap();
     assert_eq!(f.book.record(mine.record).unwrap().source, SourceName::person());
     assert_eq!(f.book.record(mine.record).unwrap().connection, None);
-    let trade = f.book.open_trade(&opening(mine.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(mine.record), None, t0()).unwrap();
     // later, the broker's statement states it
     let stated = json!({"legs": [{"leg": "trade", "account": "a1", "kind": "transfer-in", "instrument": share("CA0000000001", "QNC"), "quantity": "50", "price": "2.12", "date": "2025-03-01"}]}).to_string();
     let sourced = f.book.store_superseding(&Spelled::v(1), &f.incoming("statement-1", &stated), &[mine.record], "the statement states the cost", t0()).unwrap();
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(sourced.record)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(sourced.record)));
     let held = f.book.transactions().unwrap();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].price, Some(cad("2.12")));
@@ -159,11 +159,11 @@ fn an_opening_moves_only_to_an_opening_of_the_same_kind() {
     let m = Spelled::v(1);
     // a buy to open, replaced by records holding a buy to close first and a buy to open after
     let opened = f.store(&m, "open", &legs(vec![option_leg("a1", "buy", "open", "1", "-100", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(opened.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(opened.record), None, t0()).unwrap();
     let closing = f.store(&m, "close", &legs(vec![option_leg("a1", "buy", "close", "1", "-90", "2026-01-02T14:00:00Z")]));
     let reopening = f.store(&m, "reopen", &legs(vec![option_leg("a1", "buy", "open", "1", "-100", "2026-01-02T15:00:01Z")]));
     f.book.supersede(&[opened.record], &[closing.record, reopening.record], "split", t0()).unwrap();
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(reopening.record)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(reopening.record)));
     // and a revision that turns the opening into a closing orphans the trade
     f.store(&m, "reopen", &legs(vec![option_leg("a1", "buy", "close", "1", "-100", "2026-01-02T15:00:01Z")]));
     assert!(matches!(f.book.trade(trade).unwrap().anchor, Anchor::Orphaned(_)));
@@ -193,12 +193,12 @@ fn candidates_at_the_same_instant_are_taken_in_record_order() {
     f.account(&["a1"]);
     let m = Spelled::v(1);
     let fill = f.store(&Spelled { source: "fills", version: 1 }, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "2", "-2", "2026-01-02T15:00:00Z")]));
-    let trade = f.book.open_trade(&opening(fill.record), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(fill.record), None, t0()).unwrap();
     let x = f.store(&m, "x", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:05Z")]));
     let y = f.store(&m, "y", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "1", "-1", "2026-01-02T15:00:05Z")]));
     f.book.supersede(&[fill.record], &[x.record, y.record], "two rows", t0()).unwrap();
     let first = if x.record < y.record { x.record } else { y.record };
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening(first)));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(first)));
 }
 
 #[test]

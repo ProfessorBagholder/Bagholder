@@ -7,6 +7,7 @@
 //! The book never reads the clock: every write is given the time it happened.
 
 pub mod canon;
+pub mod facts;
 pub mod identity;
 pub mod import;
 pub mod links;

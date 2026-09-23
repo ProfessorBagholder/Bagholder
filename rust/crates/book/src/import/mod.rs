@@ -20,7 +20,7 @@ pub mod old;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType, Registration};
-use bagholder_core::journal::{JournalEntry, JournalSubject};
+use bagholder_core::journal::{JournalEntry, JournalSubject, Opening};
 use bagholder_core::{Broker, ConnectionId, GroupId, Leg, TradeId, TransactionId};
 
 use crate::records::{Incoming, Outcome};
@@ -332,7 +332,8 @@ impl Book {
             return Ok((self.orphan_trade(key, &why, at)?, Some(why)));
         };
         let opening = TransactionId::new(record, row_leg());
-        let moves = self.transaction(&opening)?.map(|t| t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero()));
+        let found = self.transaction(&opening)?;
+        let moves = found.as_ref().map(|t| t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero()));
         if moves != Some(true) {
             if let Some(t) = self.trade_by_legacy_key(key)? {
                 return Ok((t, self.trade(t)?.orphaned_reason()));
@@ -345,7 +346,8 @@ impl Book {
             return Ok((self.orphan_trade(key, &why, at)?, Some(why)));
         }
         // a key orphaned by an earlier import stays that trade, and is reported as orphaned
-        let t = self.open_trade(&opening, Some(key), at)?;
+        let instrument = found.and_then(|t| t.instrument).expect("a transaction that moves a position names its instrument");
+        let t = self.open_trade(&Opening { transaction: opening, instrument }, Some(key), at)?;
         Ok((t, self.trade(t)?.orphaned_reason()))
     }
 

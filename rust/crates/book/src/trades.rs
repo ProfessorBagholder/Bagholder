@@ -7,17 +7,20 @@
 
 use rusqlite::{params, OptionalExtension};
 
-use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject, Trade};
-use bagholder_core::{GroupId, Leg, RecordId, TradeId, TransactionId};
+use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject, Opening, Trade};
+use bagholder_core::transaction::Kind;
+use bagholder_core::{GroupId, InstrumentId, Leg, RecordId, TradeId, TransactionId};
 
 use crate::text::{self, at as at_text};
 use crate::{new_uuid, Book, BookError, Result};
 
 impl Book {
     /// The trade opened by `opening`, made the first time it is asked for. The
-    /// opening must be a transaction in the book. `legacy_key` is the key an
+    /// opening must be a transaction in the book that moves a position of the
+    /// instrument named: its own instrument, or, for an assignment or an
+    /// exercise, the underlying its contract delivers. `legacy_key` is the key an
     /// earlier version of the app knew the trade by, where it was imported.
-    pub fn open_trade(&self, opening: &TransactionId, legacy_key: Option<&str>, at: jiff::Timestamp) -> Result<TradeId> {
+    pub fn open_trade(&self, opening: &Opening, legacy_key: Option<&str>, at: jiff::Timestamp) -> Result<TradeId> {
         self.atomically(|| {
             if let Some(key) = legacy_key {
                 if let Some(t) = self.trade_by_legacy_key(key)? {
@@ -30,18 +33,26 @@ impl Book {
                 }
                 return Ok(t);
             }
-            match self.transaction(opening)? {
-                None => return Err(BookError::Refused(format!("no transaction {opening} to open a trade on"))),
+            let tx = &opening.transaction;
+            match self.transaction(tx)? {
+                None => return Err(BookError::Refused(format!("no transaction {tx} to open a trade on"))),
                 // a trade opens on a position moving: a dividend or a deposit opens nothing
                 Some(t) if t.instrument.is_none() || t.quantity.is_none_or(|q| q.is_zero()) => {
-                    return Err(BookError::Refused(format!("transaction {opening} moves no position, so it opens no trade")));
+                    return Err(BookError::Refused(format!("transaction {tx} moves no position, so it opens no trade")));
+                }
+                Some(t) if t.instrument != Some(opening.instrument) => {
+                    let delivers = matches!(t.kind, Kind::OptionAssignment | Kind::OptionExercise)
+                        && t.instrument.map(|i| self.option_terms(i)).transpose()?.flatten().is_some_and(|terms| terms.underlying == opening.instrument);
+                    if !delivers {
+                        return Err(BookError::Refused(format!("transaction {tx} moves no position of instrument {}", opening.instrument)));
+                    }
                 }
                 Some(_) => {}
             }
             let id = TradeId::from_uuid(new_uuid(at));
             self.conn().execute(
-                "INSERT INTO trades(id, anchor_record, anchor_leg, legacy_key, created_at) VALUES (?, ?, ?, ?, ?)",
-                params![id.to_string(), opening.record.to_string(), opening.leg.as_str(), legacy_key, at_text(at)],
+                "INSERT INTO trades(id, anchor_record, anchor_leg, anchor_instrument, legacy_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                params![id.to_string(), tx.record.to_string(), tx.leg.as_str(), opening.instrument.to_string(), legacy_key, at_text(at)],
             )?;
             Ok(id)
         })
@@ -66,12 +77,24 @@ impl Book {
 
     pub(crate) fn orphan(&self, trade: TradeId, reason: &str) -> Result<()> {
         self.conn().execute(
-            "UPDATE trades SET anchor_record = NULL, anchor_leg = NULL, orphaned_reason = ? WHERE id = ?",
+            "UPDATE trades SET anchor_record = NULL, anchor_leg = NULL, anchor_instrument = NULL, orphaned_reason = ? WHERE id = ?",
             params![reason, trade.to_string()],
         )?;
         Ok(())
     }
 
+    /// Orphan a trade whose round trip a correction joined into another's: the
+    /// engine names it (`bagholder_engine::identity::Identity::joined`), and its
+    /// journal is kept for the person to re-attach.
+    pub fn orphan_joined(&self, trade: TradeId, keeps: TradeId) -> Result<()> {
+        self.atomically(|| {
+            drop(self.trade(trade)?);
+            self.orphan(trade, &format!("its round trip joined trade {keeps}"))
+        })
+    }
+
+    /// The anchor moved to the counterpart transaction; the instrument it opened
+    /// is the same.
     pub(crate) fn move_anchor(&self, trade: TradeId, to: &TransactionId) -> Result<()> {
         self.conn().execute(
             "UPDATE trades SET anchor_record = ?, anchor_leg = ?, orphaned_reason = NULL WHERE id = ?",
@@ -81,12 +104,12 @@ impl Book {
     }
 
     /// The trade anchored on `opening`, if any.
-    pub fn trade_on(&self, opening: &TransactionId) -> Result<Option<TradeId>> {
+    pub fn trade_on(&self, opening: &Opening) -> Result<Option<TradeId>> {
         let found: Option<String> = self
             .conn()
             .query_row(
-                "SELECT id FROM trades WHERE anchor_record = ? AND anchor_leg = ?",
-                params![opening.record.to_string(), opening.leg.as_str()],
+                "SELECT id FROM trades WHERE anchor_record = ? AND anchor_leg = ? AND anchor_instrument = ?",
+                params![opening.transaction.record.to_string(), opening.transaction.leg.as_str(), opening.instrument.to_string()],
                 |r| r.get(0),
             )
             .optional()?;
@@ -107,20 +130,20 @@ impl Book {
     }
 
     fn trades_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Trade>> {
-        let sql = format!("SELECT id, anchor_record, anchor_leg, orphaned_reason, legacy_key FROM trades {filter} ORDER BY created_at, rowid");
+        let sql = format!("SELECT id, anchor_record, anchor_leg, anchor_instrument, orphaned_reason, legacy_key FROM trades {filter} ORDER BY created_at, rowid");
         let mut stmt = self.conn().prepare_cached(&sql)?;
-        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>);
-        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)) })?;
+        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, record, leg, orphaned, legacy_key) = row?;
-            let anchor = match (record, leg, orphaned) {
-                (Some(r), Some(l), None) => Anchor::Opening(TransactionId::new(
-                    text::parsed("trades", "anchor_record", &r, RecordId::parse)?,
-                    text::parsed("trades", "anchor_leg", &l, Leg::parse)?,
-                )),
-                (None, None, Some(why)) => Anchor::Orphaned(why),
-                (r, l, o) => return Err(text::corrupt("trades", "anchor_record", &format!("{r:?} {l:?} {o:?}"), "neither anchored nor orphaned")),
+            let (id, record, leg, instrument, orphaned, legacy_key) = row?;
+            let anchor = match (record, leg, instrument, orphaned) {
+                (Some(r), Some(l), Some(i), None) => Anchor::Opening(Opening {
+                    transaction: TransactionId::new(text::parsed("trades", "anchor_record", &r, RecordId::parse)?, text::parsed("trades", "anchor_leg", &l, Leg::parse)?),
+                    instrument: text::parsed("trades", "anchor_instrument", &i, InstrumentId::parse)?,
+                }),
+                (None, None, None, Some(why)) => Anchor::Orphaned(why),
+                (r, l, i, o) => return Err(text::corrupt("trades", "anchor_record", &format!("{r:?} {l:?} {i:?} {o:?}"), "neither anchored on an instrument nor orphaned")),
             };
             out.push(Trade { id: text::parsed("trades", "id", &id, TradeId::parse)?, anchor, legacy_key });
         }

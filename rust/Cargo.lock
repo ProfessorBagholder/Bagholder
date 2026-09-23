@@ -206,6 +206,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-engine"
+version = "1.45.0"
+dependencies = [
+ "bagholder-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bagholder-market"
 version = "1.45.0"
 dependencies = [

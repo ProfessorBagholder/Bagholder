@@ -43,6 +43,17 @@ impl Fixture {
     }
 
     /// An account known by the broker ids `refs`.
+    /// The opening a transaction is: it and the instrument it moves.
+    pub fn opening_of(&self, t: bagholder_core::TransactionId) -> bagholder_core::journal::Opening {
+        let instrument = self.book.transaction(&t).unwrap().and_then(|x| x.instrument).expect("a transaction that moves an instrument");
+        bagholder_core::journal::Opening { transaction: t, instrument }
+    }
+
+    /// The opening a record's `trade` leg is.
+    pub fn opens(&self, r: bagholder_core::RecordId) -> bagholder_core::journal::Opening {
+        self.opening_of(bagholder_core::TransactionId::new(r, bagholder_core::Leg::named("trade")))
+    }
+
     pub fn account(&self, refs: &[&str]) -> AccountId {
         let refs: Vec<AccountRef> = refs.iter().map(|r| AccountRef::new(Broker::named("wealthsimple"), *r)).collect();
         let t = AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
@@ -135,7 +146,7 @@ impl Mapping for Spelled {
             })
             .collect();
         let problems = v.get("problems").and_then(Value::as_array).map(|ps| ps.iter().map(|p| Problem::new(p.as_str().unwrap(), "stated by the test")).collect()).unwrap_or_default();
-        Mapped { legs, problems }
+        Mapped { legs, problems, ..Mapped::default() }
     }
 }
 

@@ -1,0 +1,17 @@
+[package]
+name = "bagholder-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Every figure `SPEC.md` defines, computed from the book, the facts and the
+# market data the caller hands in (`docs/architecture.md` §8). A pure function of
+# its inputs: no database, no network, no clock. It depends on the vocabulary
+# alone (`bagholder-core`, which re-exports `jiff` for dates), and
+# `crates/core/tests/boundaries.rs` holds it to that.
+[dependencies]
+bagholder-core = { path = "../core" }
+
+[dev-dependencies]
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }

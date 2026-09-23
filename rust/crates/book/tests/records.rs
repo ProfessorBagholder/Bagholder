@@ -90,7 +90,7 @@ fn a_record_missing_from_a_pull_is_left_alone_and_only_a_reported_removal_remove
     assert_eq!(f.book.record(r1.record).unwrap().state, RecordState::Live);
     assert_eq!(f.book.transactions_of(r1.record).unwrap().len(), 1);
     // the source says it is gone
-    let trade = f.book.open_trade(&TransactionId::new(r1.record, Leg::named("trade")), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(r1.record), None, t0()).unwrap();
     let changes = f.book.mark_removed(r1.record, at("2026-09-24T00:00:00Z")).unwrap();
     assert_eq!(changes.removed, vec![TransactionId::new(r1.record, Leg::named("trade"))]);
     assert_eq!(f.book.record(r1.record).unwrap().state, RecordState::Removed);
@@ -145,7 +145,7 @@ fn a_new_mapping_version_derives_again_and_says_exactly_what_moved() {
             Spelled::v(2).map(ctx, &v["v2"].to_string())
         }
     }
-    let trade = f.book.open_trade(&TransactionId::new(a.record, Leg::named("trade")), None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opens(a.record), None, t0()).unwrap();
     let mut changes = f.book.rederive(&V2, t0()).unwrap();
     changes.added.sort();
     let leg = |r: bagholder_core::RecordId, l: &'static str| TransactionId::new(r, Leg::named(l));
@@ -156,7 +156,7 @@ fn a_new_mapping_version_derives_again_and_says_exactly_what_moved() {
     assert_eq!(changes.removed, vec![leg(e.record, "trade")]);
     // the record whose content did not move keeps its id and its trade
     assert!(!changes.added.contains(&leg(a.record, "trade")) && !changes.changed.contains(&leg(a.record, "trade")));
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(leg(a.record, "trade")));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(a.record)));
     assert_eq!(f.book.transaction(&leg(a.record, "trade")).unwrap().unwrap().mapping.version, 2);
     assert!(f.book.problems_of(c.record).unwrap().is_empty(), "the record that failed is read by the new version");
     // the same version again changes nothing
@@ -179,7 +179,7 @@ fn a_leg_added_before_another_leaves_the_others_id_and_its_trade() {
     });
     let r = f.store(&v1, "r1", &payload);
     let opening = TransactionId::new(r.record, Leg::named("trade"));
-    let trade = f.book.open_trade(&opening, None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opening_of(opening.clone()), None, t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &JournalEntry { thesis: "kept".into(), grade: None, tags: vec![] }, t0()).unwrap();
     struct V2;
     impl bagholder_book::mapping::Mapping for V2 {
@@ -197,7 +197,7 @@ fn a_leg_added_before_another_leaves_the_others_id_and_its_trade() {
     let changes = f.book.rederive(&V2, t0()).unwrap();
     assert_eq!(changes.added, vec![TransactionId::new(r.record, Leg::named("withholding"))]);
     assert!(changes.changed.is_empty());
-    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(opening));
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opening_of(opening)));
     assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "kept");
 }
 
@@ -208,7 +208,7 @@ fn a_trade_whose_opening_now_says_something_else_is_orphaned_with_its_note() {
     let m = Spelled::v(1);
     let r = f.store(&m, "r1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let opening = TransactionId::new(r.record, Leg::named("trade"));
-    let trade = f.book.open_trade(&opening, None, t0()).unwrap();
+    let trade = f.book.open_trade(&f.opening_of(opening.clone()), None, t0()).unwrap();
     f.book.set_journal(JournalSubject::Trade(trade), &JournalEntry { thesis: "why I bought".into(), grade: Some(bagholder_core::journal::Grade::B), tags: vec!["core".into()] }, t0()).unwrap();
     // the source revises the row: it was a sale
     f.store(&m, "r1", &legs(vec![sell("a1", share("CA0000000001", "QNC"), "-10", "100", "2026-01-02T15:00:00Z")]));

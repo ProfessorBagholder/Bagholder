@@ -14,7 +14,9 @@ use bagholder_core::record::RecordState;
 use bagholder_core::transaction::Transaction;
 use bagholder_core::{LinkId, RecordId, TransactionId};
 
-use crate::records::opening_key;
+use bagholder_core::journal::Opening;
+
+use crate::records::same_opening;
 use crate::text::{self, at as at_text};
 use crate::{new_uuid, Book, BookError, Result};
 
@@ -51,14 +53,13 @@ impl Book {
             for r in from {
                 let theirs = self.transactions_of(*r)?;
                 for (trade, anchor) in self.trades_anchored_on(*r)? {
-                    let Some(opening) = theirs.iter().find(|t| t.id == anchor) else {
+                    let Some(opening) = theirs.iter().find(|t| t.id == anchor.transaction) else {
                         self.orphan(trade, "the record it opened on had no such transaction")?;
                         continue;
                     };
-                    let key = opening_key(opening);
                     let mut moved = false;
-                    for t in targets.iter().filter(|t| opening_key(t) == key) {
-                        if self.trade_on(&t.id)?.is_none() {
+                    for t in targets.iter().filter(|t| same_opening(opening, t)) {
+                        if self.trade_on(&Opening { transaction: t.id.clone(), instrument: anchor.instrument })?.is_none() {
                             self.move_anchor(trade, &t.id)?;
                             moved = true;
                             break;
@@ -66,6 +67,17 @@ impl Book {
                     }
                     if !moved {
                         self.orphan(trade, "the record it opened on was replaced by records with no opening like it")?;
+                    }
+                }
+                // an adjustment explaining one of its transactions follows it the same way
+                for (adjustment, applies) in self.adjustments_applying_to(*r)? {
+                    let target = theirs.iter().find(|t| t.id == applies).and_then(|old| targets.iter().find(|t| same_opening(old, t)));
+                    match target {
+                        Some(t) => self.move_adjustment(&adjustment, &t.id)?,
+                        None => self.add_problems(adjustment.record, &[bagholder_core::record::Problem::new(
+                            "adjustment-target-gone",
+                            format!("the transaction it explains, {applies}, was replaced by records with no transaction like it"),
+                        )])?,
                     }
                 }
                 removed.extend(theirs.into_iter().map(|t| t.id));
