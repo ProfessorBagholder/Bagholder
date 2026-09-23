@@ -35,7 +35,7 @@ These are wrong today, whatever the design.
 | Instrument, issuer and account identity (§5) | Rebuild: Bagholder ids and reference tables in place of Wealthsimple ids and bare symbols | large |
 | Source records, transactions, reconciliation (§6) | Rebuild: append-only records with revisions; derived, versioned transactions; links in place of rewriting | large |
 | Money and quantities (§6) | Rebuild: decimals with currency, no constant rate, every currency converted | large |
-| Two stores, migrations, backups (§6, §15) | Change: split the file; numbered migrations, snapshots, tests on real old databases; automatic backups | medium |
+| Two stores, migrations, backups (§6, §16) | Change: split the file; numbered migrations, snapshots, tests on real old databases; automatic backups | medium |
 | Database plumbing | Keep | — |
 | Engine purity and entry point (§8) | Change: today's date and zone rules as inputs; ticker tables out of the engine; typed entry point | small–medium |
 | Engine's figure rules (FIFO, trades, cashflow, stats, filters) | Keep the rules; change their types and inputs to Bagholder's own transactions | medium |
@@ -48,20 +48,20 @@ These are wrong today, whatever the design.
 | Order and bracket state machines, event log, safety limits (§11) | Rebuild, keeping the bracket steps and tests; a fake broker that misbehaves | large |
 | Ticket validation, order routes | Keep; move Wealthsimple's rules into its capabilities | small |
 | Typed routes, page request path, element-level page updates | Keep | — |
-| Access (§12) | Rebuild: Host/Origin and write tokens; paired, scoped, revocable device tokens; credentials in the keychain | medium |
-| Failures shown (§14) | Change: per-source health on the header and cards; every discarded error dealt with; the page says when the app cannot start | medium |
-| Updater and running as a service (§15) | Change: health by answer not by uptime, book snapshot and restore, signed releases, service install | medium |
-| Periodic work (§13) | Change: the list of remaining timers and the test that counts them | small |
+| Access (§12) and AI agents (§13) | Rebuild: Host/Origin and write tokens; paired, scoped, revocable tokens; credentials in the keychain; one MCP server generated from the interface, replacing the filings-only one | medium |
+| Failures shown (§15) | Change: per-source health on the header and cards; every discarded error dealt with; the page says when the app cannot start | medium |
+| Updater and running as a service (§16) | Change: health by answer not by uptime, book snapshot and restore, signed releases, service install | medium |
+| Periodic work (§14) | Change: the list of remaining timers and the test that counts them | small |
 
-Taken together this is several weeks of work. The foundation (identity, the record, money) is most of it, and everything else is built on it.
+The foundation (identity, the record, money) is most of the work, and everything else is built on it.
 
 ## Order of work
 
 Each stage starts with its design reviewed by someone who did not build it, and its tests written from `SPEC.md` and real source replies.
 
 1. **The foundation**: identity, the book (records, transactions, links, facts used, adjustments), decimal money, the two stores, migrations and automatic backups.
-2. **The engine on the foundation**: stable trade ids, unknowns instead of guesses, contract terms, corporate events as records, Bagholder's own equity series, cases written from the spec, change reporting.
+2. **The engine on the foundation**: stable trade ids, facts found rather than guessed (rates, payout frequency), contract terms, corporate events as records, Bagholder's own equity series, cases written from the spec, change reporting.
 3. **Sources and brokers**: the adapter contract with checking and health; the broker interface with Wealthsimple as its first adapter.
 4. **Execution**: state machines, event logs, one gate for every exit, safety limits, tests against a misbehaving fake broker.
-5. **Interface and running**: access layer, typed numbered stream, failures shown, safe updater, service install, timer list.
+5. **Interface and running**: access layer, AI agents through one generated MCP server, typed numbered stream, failures shown, safe updater, service install, timer list.
 6. **The page's own structure** (shared components, one overlay manager, accessibility), then cutover: the Svelte page and this build become the app, and the Python app is retired.
