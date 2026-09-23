@@ -58,9 +58,9 @@ The foundation (identity, the record, money) is most of the work, and everything
 
 Each stage starts with its design reviewed by someone who did not build it, and its tests written from `SPEC.md` and real source replies.
 
-1. **The foundation**: identity, the book (records, transactions, links, facts used, adjustments), decimal money, the two stores and migrations.
-2. **The engine on the foundation**: stable trade ids, facts found rather than guessed (rates, payout frequency), contract terms, corporate events as records, Bagholder's own equity series, cases written from the spec, change reporting.
-3. **Sources and brokers**: the adapter contract with checking and health; the broker interface with Wealthsimple as its first adapter.
+1. **The foundation** (done: `docs/plans/stage-1-foundation.md`): identity, the book (records and their revisions, transactions, links, trades and the journal, the person's own entries as records), decimal money, numbered migrations with snapshots, and the import of an existing database. Built beside the running app; nothing reads the book until stage 2.
+2. **The engine on the foundation**: stable trade ids, the facts a figure used (FX rates applied, declared distributions, event values) kept in the book, facts found rather than guessed (rates, payout frequency), contract terms, corporate events as records, Bagholder's own equity series, cases written from the spec, change reporting; the app switches to the book.
+3. **Sources and brokers**: the adapter contract with checking and health; the market cache, the second store, with the adapters whose data it holds; the broker interface with Wealthsimple as its first adapter, whose raw rows replace the imported ones and whose account links join accounts the import kept apart.
 4. **Execution**: state machines, event logs, one gate for every exit, safety limits, tests against a misbehaving fake broker.
 5. **Interface and running**: the data flow to the screen (§13), access layer, AI agents through one generated MCP server, failures shown, safe updater, service install.
 6. **The page's own structure** (shared components, one overlay manager, accessibility), then cutover: the Svelte page and this build become the app, and the Python app is retired.

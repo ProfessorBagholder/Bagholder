@@ -10,6 +10,7 @@ mod docs;
 mod events;
 mod feeds;
 mod http;
+mod legacy_import;
 mod login;
 mod model_cache;
 mod notify;
@@ -227,6 +228,11 @@ fn main() {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("bagholder {}", app::APP_VERSION);
         return;
+    }
+    // the book this build will move onto (docs/plans/stage-1-foundation.md), made
+    // from a database kept today; nothing the app runs calls it yet
+    if args.first().map(String::as_str) == Some("import-book") {
+        std::process::exit(legacy_import::cli(&args[1..]));
     }
     let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
     if child || update::updates_off() {

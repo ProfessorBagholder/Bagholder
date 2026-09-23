@@ -1,0 +1,34 @@
+[package]
+name = "bagholder-book"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The book (`docs/architecture.md` §6): what the person's money did, what they
+# wrote, and every fact a figure was computed from; nothing in it can be fetched
+# again. It holds no network and never reads the clock (every write is given its
+# time); `bagholder-core/tests/boundaries.rs` holds these dependencies to this list.
+[dependencies]
+bagholder-core = { path = "../core" }
+# opening the file, transactions, numbered migrations and snapshots
+bagholder-sqlite = { path = "../sqlite" }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+# records' payloads are JSON; the book keeps them in a canonical form of its own
+# (`canon.rs`) so a number never passes through a float
+serde_json = "1"
+# the ids the book assigns: UUID v7, from the time a thing is stored (given, never
+# read from the clock) and random bits
+uuid = { version = "1", default-features = false, features = ["std", "v7"] }
+# The day a broker files a row under is a day in the broker's zone (Wealthsimple's
+# is Alberta's). Zone rules follow the convention of `docs/plans/time-zone-rules.md`:
+# the system's IANA database, a built-in copy where there is none, and the
+# built-in copy alone in tests (`pinned-tzdb`).
+jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
+
+[features]
+pinned-tzdb = []
+
+[dev-dependencies]
+bagholder-book = { path = ".", features = ["pinned-tzdb"] }
+tempfile = "3"

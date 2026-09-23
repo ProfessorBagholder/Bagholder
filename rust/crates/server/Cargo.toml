@@ -12,6 +12,11 @@ bagholder-diff-derive = { path = "../diff-derive" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
 bagholder-ws = { path = "../ws" }
+# the book the app moves onto in stage 2 (docs/plans/stage-1-foundation.md); for now
+# only `bagholder import-book` writes it, from the database kept today
+bagholder-book = { path = "../book" }
+bagholder-core = { path = "../core" }
+jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"
 serde = { version = "1", features = ["derive"] }

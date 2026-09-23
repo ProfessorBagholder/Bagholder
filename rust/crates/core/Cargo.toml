@@ -1,0 +1,27 @@
+[package]
+name = "bagholder-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The vocabulary every part of Bagholder speaks: ids, exact decimals and money,
+# instruments, accounts, source records, transactions, trades and the journal.
+# It holds no database, no network and no clock, and the engine (stage 2) will
+# depend on it alone. `tests/boundaries.rs` holds these dependencies to this list.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# Exact decimals under `Dec`: a 96-bit integer with a decimal scale, exact to 28
+# significant digits without a heap allocation, the usual choice for money in
+# Rust. It covers a coin's quantity to 18 places and any price or amount a broker
+# states; `bigdecimal` (unbounded, heap-allocated) is not needed at this precision.
+# No serde or float features: `Dec` serializes itself as text and has no float
+# constructor.
+rust_decimal = { version = "1", default-features = false, features = ["std"] }
+# dates and instants (UTC instants, civil dates, the zones a broker files under)
+jiff = "0.2.37"
+# the ids Bagholder assigns (UUID v7); parsing and printing only here, the book
+# makes them
+uuid = { version = "1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde_json = "1"
