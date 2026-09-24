@@ -23,7 +23,7 @@ use bagholder_net::{Ask, Net, Reply};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{Mismatch, Node, Shape};
+use crate::reply::{Mismatch, Node, RecordedShape};
 
 pub const SPOT_SOURCE: &str = "coinbase";
 pub const SPOT_HOST: &str = "api.coinbase.com";
@@ -41,11 +41,11 @@ pub fn exchange_source() -> SourceName {
     SourceName::named(EXCHANGE_SOURCE)
 }
 
-pub fn spot_shape() -> Shape {
+pub fn spot_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/coinbase-spot.paths"))
 }
 
-pub fn ticker_shape() -> Shape {
+pub fn ticker_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/coinbase-exchange-ticker.paths"))
 }
 

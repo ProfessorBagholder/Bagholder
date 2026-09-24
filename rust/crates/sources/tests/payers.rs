@@ -179,3 +179,25 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
     run::read(&ctx, &needs).unwrap();
     assert_eq!(recorded.asked.lock().unwrap().len(), asked);
 }
+
+#[test]
+fn a_payers_failed_read_is_recorded_as_it_failed_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/hhis/", 500, "harvest", "page-hhis.html"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    run::read(&ctx, &[payer(1, "HHIS", "XTSE", Currency::CAD, "Harvest Portfolios Group Inc. - Harvest Diversified High Income Shares ETF")]).unwrap();
+    assert!(book.declared().unwrap().is_empty());
+    let outcomes = cache.outcomes(&SourceName::named("harvest")).unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].outcome, OutcomeKind::Unreachable);
+    assert!(outcomes[0].detail.contains("status 500"), "{}", outcomes[0].detail);
+    // Harvest answers 403 to a request without a User-Agent
+    let headers = recorded.headers.lock().unwrap();
+    assert!(headers[0].iter().any(|(k, v)| k == "User-Agent" && v.starts_with("Bagholder/")), "{headers:?}");
+}

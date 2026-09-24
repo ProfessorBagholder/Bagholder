@@ -22,7 +22,7 @@ use bagholder_net::{Ask, Net, Pace};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{Keyed, Mismatch, Node, Shape};
+use crate::reply::{Keyed, Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "yahoo";
 pub const HOST: &str = "query1.finance.yahoo.com";
@@ -38,7 +38,7 @@ pub fn source() -> SourceName {
     SourceName::named(SOURCE)
 }
 
-pub fn shape() -> Shape {
+pub fn shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/yahoo-chart.paths"))
 }
 

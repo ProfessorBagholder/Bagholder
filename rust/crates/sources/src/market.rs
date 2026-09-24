@@ -91,9 +91,13 @@ pub fn due_close(need: &CloseNeed, market: Market, state: &CloseState, now: Time
     Some((start, latest))
 }
 
-/// The Yahoo form of a listing: the book's routing reference, else its venue's.
-pub fn yahoo_form(l: &crate::contract::Listing) -> Option<String> {
-    l.route(&RefScheme::Yahoo).map(str::to_string).or_else(|| l.venue_mic.as_deref().and_then(|mic| venue::yahoo_form(&l.symbol, mic)))
+/// The Yahoo forms of a listing to ask, in order: the book's routing reference
+/// alone where it holds one, else its venue's forms.
+pub fn yahoo_forms(l: &crate::contract::Listing) -> Vec<String> {
+    match l.route(&RefScheme::Yahoo) {
+        Some(r) => vec![r.to_string()],
+        None => l.venue_mic.as_deref().map(|mic| venue::yahoo_forms(&l.symbol, mic)).unwrap_or_default(),
+    }
 }
 
 /// A coin's Exchange pairs, its own market first.
@@ -137,7 +141,7 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
                 }
                 for pair in pairs {
                     let noted = coinbase::ask_candles(ctx.net, &pair, from, to, ctx.now);
-                    ctx.record(&coinbase::exchange_source(), coinbase::EXCHANGE_HOST, DataKind::DailyClose, Some(id), &noted)?;
+                    ctx.record_detail(&coinbase::exchange_source(), coinbase::EXCHANGE_HOST, DataKind::DailyClose, Some(id), &noted, &pair)?;
                     match noted.outcome {
                         Outcome::Answered(days) => {
                             let quote = pair.rsplit('-').next().and_then(|c| Currency::parse(c).ok()).unwrap_or(need.listing.currency);
@@ -151,20 +155,31 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
                 }
             }
             _ => {
-                let Some(form) = yahoo_form(&need.listing) else {
+                let mut forms = yahoo_forms(&need.listing);
+                if forms.is_empty() {
                     let noted: Noted<()> = Noted { outcome: Outcome::NotCarried(format!("{} names no venue Yahoo carries", need.listing.symbol)), shape_change: None };
                     ctx.record(&yahoo::source(), yahoo::HOST, DataKind::DailyClose, Some(id), &noted)?;
                     continue;
-                };
-                let noted = yahoo::ask_span(ctx.net, &form, from, to, ctx.now);
-                let answered = match &noted.outcome {
-                    Outcome::Answered(c) => Some((c.closes.clone(), c.currency)),
-                    _ => None,
-                };
-                ctx.record(&yahoo::source(), yahoo::HOST, DataKind::DailyClose, Some(id), &noted)?;
-                if let Some((closes, currency)) = answered {
-                    store(ctx, id, &closes, currency, &yahoo::source(), yahoo::HOST)?;
-                    ctx.cache.won(id, DataKind::DailyClose, &yahoo::source(), &form, ctx.now)?;
+                }
+                // the winner first, then the rest in order
+                if let Some((_, won)) = ctx.cache.winner(id, DataKind::DailyClose)? {
+                    forms.sort_by_key(|f| *f != won);
+                }
+                for form in forms {
+                    let noted = yahoo::ask_span(ctx.net, &form, from, to, ctx.now);
+                    let answered = match &noted.outcome {
+                        Outcome::Answered(c) => Some((c.closes.clone(), c.currency)),
+                        _ => None,
+                    };
+                    let not_carried = matches!(noted.outcome, Outcome::NotCarried(_));
+                    ctx.record_detail(&yahoo::source(), yahoo::HOST, DataKind::DailyClose, Some(id), &noted, &form)?;
+                    if let Some((closes, currency)) = answered {
+                        store(ctx, id, &closes, currency, &yahoo::source(), yahoo::HOST)?;
+                        ctx.cache.won(id, DataKind::DailyClose, &yahoo::source(), &form, ctx.now)?;
+                    }
+                    if !not_carried {
+                        break;
+                    }
                 }
             }
         }

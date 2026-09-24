@@ -3,12 +3,12 @@ chart
 chart.error
 chart.result
 chart.result[]
-chart.result[].events
-chart.result[].events.dividends
+chart.result[].events ?
+chart.result[].events.dividends ?
 chart.result[].events.dividends.*
 chart.result[].events.dividends.*.amount
 chart.result[].events.dividends.*.date
-chart.result[].events.splits
+chart.result[].events.splits ?
 chart.result[].events.splits.*
 chart.result[].events.splits.*.date
 chart.result[].events.splits.*.denominator

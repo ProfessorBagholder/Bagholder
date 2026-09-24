@@ -2,7 +2,7 @@
 //! reader"): exact, strict, and saying when a reply's shape moved.
 
 use bagholder_core::Dec;
-use bagholder_sources::reply::{parse, shape, shape_change, union, Node};
+use bagholder_sources::reply::{parse, recorded, shape, shape_change, Node, Presence};
 
 fn dec(s: &str) -> Dec {
     Dec::parse(s).unwrap()
@@ -76,7 +76,7 @@ fn a_field_not_read_is_ignored() {
 fn a_path_gone_and_a_path_new_are_each_a_shape_change() {
     let a = parse(r#"{"observations": [{"d": "2026-09-22", "FXUSDCAD": {"v": "1.38"}}], "seriesDetail": {"FXUSDCAD": {"label": "USD/CAD"}}}"#).unwrap();
     let b = parse(r#"{"observations": [], "seriesDetail": {"FXUSDCAD": {"label": "USD/CAD"}}}"#).unwrap();
-    let recorded = union([shape(&a), shape(&b)]);
+    let recorded = recorded([shape(&a), shape(&b)]);
     // indices folded: two replies with different numbers of rows have one shape
     let more = parse(r#"{"observations": [{"d": "2026-09-22", "FXUSDCAD": {"v": "1.38"}}, {"d": "2026-09-23", "FXUSDCAD": {"v": "1.39"}}], "seriesDetail": {"FXUSDCAD": {"label": "USD/CAD"}}}"#).unwrap();
     assert_eq!(shape_change(&recorded, &shape(&more)), None);
@@ -96,6 +96,26 @@ fn a_path_gone_and_a_path_new_are_each_a_shape_change() {
     // a whole top-level field gone
     let top = parse(r#"{"observations": []}"#).unwrap();
     assert_eq!(shape_change(&recorded, &shape(&top)).unwrap().gone, vec!["seriesDetail"]);
+}
+
+#[test]
+fn a_part_only_some_recorded_replies_carry_is_not_gone_when_absent() {
+    // Yahoo's chart carries `events` only when the span holds a dividend or split
+    let with = parse(r#"{"result": [{"meta": {"currency": "USD"}, "events": {"dividends": {"1": {"amount": 0.1}}}}]}"#).unwrap();
+    let without = parse(r#"{"result": [{"meta": {"currency": "USD"}}]}"#).unwrap();
+    let r = recorded([shape(&with), shape(&without)]);
+    assert_eq!(r["result[].events"], Presence::Sometimes);
+    assert_eq!(r["result[].events.dividends"], Presence::Always);
+    assert_eq!(r["result[].meta.currency"], Presence::Always);
+    assert_eq!(shape_change(&r, &shape(&without)), None);
+    // a path every reply carried is still gone when it is absent
+    let no_meta = parse(r#"{"result": [{"events": {"dividends": {}}}]}"#).unwrap();
+    let c = shape_change(&r, &shape(&no_meta)).unwrap();
+    assert_eq!(c.gone, vec!["result[].events.dividends.1", "result[].meta"]);
+    // the committed form keeps the difference
+    let text = bagholder_sources::ask::shape_text(&r);
+    assert!(text.contains("result[].events ?\n") && text.contains("result[].meta\n"), "{text}");
+    assert_eq!(bagholder_sources::ask::recorded_shape(&text), r);
 }
 
 #[test]

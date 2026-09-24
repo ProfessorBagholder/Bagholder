@@ -10,7 +10,7 @@ use bagholder_net::{Ask, Net};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{Mismatch, Node, Shape};
+use crate::reply::{Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "cboe-canada";
 pub const HOST: &str = "www-api.cboe.com";
@@ -20,7 +20,7 @@ pub fn source() -> SourceName {
     SourceName::named(SOURCE)
 }
 
-pub fn shape() -> Shape {
+pub fn shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/cboe-canada.paths"))
 }
 

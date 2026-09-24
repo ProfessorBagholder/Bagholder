@@ -29,6 +29,9 @@ use crate::venue;
 
 pub const SOURCE: &str = "harvest";
 pub const HOST: &str = "harvestportfolios.com";
+/// Without a User-Agent every page answers 403; with one, `/etf/<ticker>/`
+/// redirects to the fund's own page (observed 2026-09-24).
+const HEADERS: [(&str, &str); 1] = [("User-Agent", ask::USER_AGENT)];
 const INCOME_SHARES: [&str; 6] = ["Record Date", "Ex-dividend Date", "Pay Date", "Amount", "Total Amount S.I.", "Type"];
 const CORE: [&str; 5] = ["Ex-dividend Date", "Record Date", "Payment Date", "Class A", "Distribution Frequency"];
 
@@ -139,7 +142,7 @@ impl Payer for Harvest {
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let ticker = venue::root(&need.listing.symbol).to_ascii_lowercase();
         let url = format!("https://{HOST}/etf/{ticker}/");
-        let page = match ask::send(net, &Ask::get(&url, &[]), &[404]) {
+        let page = match ask::send(net, &Ask::get(&url, &HEADERS), &[404]) {
             Outcome::Answered(r) => r,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };

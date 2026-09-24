@@ -12,7 +12,7 @@ data.getQuoteBySymbol.prevClose
 data.getQuoteBySymbol.price
 data.getQuoteBySymbol.priceChange
 data.getQuoteBySymbol.symbol
-errors
+errors ?
 errors[]
 errors[].code
 errors[].locations

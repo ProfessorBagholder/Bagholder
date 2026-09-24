@@ -33,12 +33,13 @@ pub fn answers(source: &str, prefix: &str) -> Vec<String> {
     out
 }
 
-/// The shape committed in `shapes/<file>` is the union of the answers' shapes
-/// (`BAGHOLDER_BLESS=1` writes it).
+/// The shape committed in `shapes/<file>` is the recorded answers' shape: the
+/// union of their paths, each marked with whether every answer that could carry
+/// it does (`BAGHOLDER_BLESS=1` writes it).
 pub fn shape_is_the_answers_union(file: &str, source: &str, prefix: &str, keyed: &[reply::Keyed]) {
     let names = answers(source, prefix);
     assert!(!names.is_empty(), "no recorded answers for {source}/{prefix}");
-    let union = reply::union(names.iter().map(|n| reply::shape_keyed(&json(source, n), keyed)));
+    let union = reply::recorded(names.iter().map(|n| reply::shape_keyed(&json(source, n), keyed)));
     let text = ask::shape_text(&union);
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shapes").join(file);
     if std::env::var("BAGHOLDER_BLESS").is_ok() {
@@ -54,11 +55,13 @@ pub struct Recorded {
     /// status and the reply.
     pub answers: Vec<(String, String, u16, Vec<u8>)>,
     pub asked: std::sync::Mutex<Vec<String>>,
+    /// Each request's headers, in the order asked.
+    pub headers: std::sync::Mutex<Vec<Vec<(String, String)>>>,
 }
 
 impl Recorded {
     pub fn new() -> Recorded {
-        Recorded { answers: Vec::new(), asked: std::sync::Mutex::new(Vec::new()) }
+        Recorded { answers: Vec::new(), asked: std::sync::Mutex::new(Vec::new()), headers: std::sync::Mutex::new(Vec::new()) }
     }
 
     /// Answer `url` with the recorded reply `source/name`, captured with `status`.
@@ -81,6 +84,7 @@ pub struct Shared(pub std::sync::Arc<Recorded>);
 impl bagholder_net::Transport for Shared {
     fn answer(&self, ask: &bagholder_net::Ask) -> Result<bagholder_net::Answer, bagholder_net::NetError> {
         self.0.asked.lock().unwrap().push(ask.url.to_string());
+        self.0.headers.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
         let sent = ask.body.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
         match self.0.answers.iter().find(|(u, needle, _, _)| u == ask.url && sent.contains(needle.as_str())) {
             Some((_, _, status, body)) => Ok((*status, ask.url.to_string(), vec![], body.clone())),

@@ -17,7 +17,7 @@ use bagholder_net::{Ask, Net};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{Mismatch, Node, Shape};
+use crate::reply::{Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "statistics-canada";
 pub const HOST: &str = "www150.statcan.gc.ca";
@@ -27,7 +27,7 @@ pub fn source() -> SourceName {
     SourceName::named(SOURCE)
 }
 
-pub fn shape() -> Shape {
+pub fn shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/statistics-canada.paths"))
 }
 

@@ -14,6 +14,11 @@ pub const SOURCE: &str = "fred";
 pub const HOST: &str = "fred.stlouisfed.org";
 const URL: &str = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500";
 const HEADER: &str = "observation_date,SP500";
+/// FRED never answers a request whose User-Agent is missing, a bare name it does
+/// not know (`Bagholder/2.0`) or a browser's; it answers a known tool's
+/// (`curl/8`) and a name with a contact URL, [`ask::USER_AGENT`] (observed
+/// 2026-09-24 with curl over HTTP/1.1: the others hang until the timeout).
+pub const HEADERS: [(&str, &str); 1] = [("User-Agent", ask::USER_AGENT)];
 
 pub fn source() -> SourceName {
     SourceName::named(SOURCE)
@@ -64,7 +69,7 @@ pub fn parse(text: &str) -> Outcome<Vec<(Date, Dec)>> {
 }
 
 pub fn ask(net: &Net) -> Noted<Vec<(Date, Dec)>> {
-    let reply = match ask::send(net, &Ask::get(URL, &[]), &[]) {
+    let reply = match ask::send(net, &Ask::get(URL, &HEADERS), &[]) {
         Outcome::Answered(r) => r,
         other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
     };

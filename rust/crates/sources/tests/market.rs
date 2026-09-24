@@ -54,6 +54,12 @@ fn closes_are_stored_as_traded_with_the_replys_own_splits_undone() {
     // the dividend after the split is as declared
     assert_eq!(nvda.dividends, vec![(date(2024, 6, 11), dec("0.01"))]);
     assert!(nvda.closes.windows(2).all(|w| w[0].0 < w[1].0));
+    // a split with no dividend in the span: its events carry splits alone
+    let smci = chart("SMCI-2024-09-23-2024-10-04.json", "SMCI", "2026-09-24T04:00:00Z");
+    assert_eq!(smci.splits, vec![yahoo::Split { day: date(2024, 10, 1), numerator: dec("10"), denominator: dec("1") }]);
+    assert!(smci.dividends.is_empty());
+    assert_eq!(close(&smci, date(2024, 9, 23)), Some(dec("465.9400177001953")));
+    assert_eq!(close(&smci, date(2024, 10, 1)), Some(dec("40.54999923706055")));
 }
 
 #[test]
@@ -135,6 +141,16 @@ fn an_index_series_is_each_sessions_level_oldest_first() {
     assert!(old.is_empty(), "the series begins 2001-12-11");
     assert!(matches!(tmx::parse_series(&common::json(TMX, "wrong-meaning-series-TSX-oldest-first.json"), "^TSX", span), Outcome::Meaning(_)));
     assert!(matches!(tmx::parse_series(&common::json(TMX, "series-TSX-2026-09-01-2026-09-23.json"), "^TSX", (date(2026, 9, 10), date(2026, 9, 23))), Outcome::Meaning(w) if w.contains("outside")));
+}
+
+#[test]
+fn fred_is_asked_with_a_user_agent_naming_a_contact() {
+    let recorded = std::sync::Arc::new(common::Recorded::new().with("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500", 200, FRED, "SP500.csv"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    assert!(matches!(fred::ask(&net).outcome, Outcome::Answered(_)));
+    let headers = recorded.headers.lock().unwrap();
+    let ua = headers[0].iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.as_str());
+    assert!(ua.is_some_and(|v| v.starts_with("Bagholder/") && v.contains("(+https://")), "{ua:?}");
 }
 
 #[test]

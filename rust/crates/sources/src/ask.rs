@@ -12,7 +12,7 @@ use bagholder_core::json::Value;
 use bagholder_net::{retry_after, Ask, Net, Reply};
 
 use crate::outcome::Outcome;
-use crate::reply::{self, Keyed, Mismatch, Shape, ShapeChange};
+use crate::reply::{self, Keyed, Mismatch, Presence, RecordedShape, ShapeChange};
 
 /// What a request came to before its body is read.
 pub fn send(net: &Net, ask: &Ask, not_carried: &[u16]) -> Outcome<Reply> {
@@ -22,6 +22,11 @@ pub fn send(net: &Net, ask: &Ask, not_carried: &[u16]) -> Outcome<Reply> {
     };
     status(reply, not_carried)
 }
+
+/// How the app names itself to a source that needs a User-Agent: its name and
+/// version with a contact URL, as a well-behaved client does. FRED and Harvest
+/// each refuse a request without one.
+pub const USER_AGENT: &str = concat!("Bagholder/", env!("CARGO_PKG_VERSION"), " (+https://github.com/ProfessorBagholder/Bagholder)");
 
 /// The outcome a reply's status says, the reply itself when it is an answer.
 pub fn status(reply: Reply, not_carried: &[u16]) -> Outcome<Reply> {
@@ -46,20 +51,35 @@ pub fn json(body: &[u8]) -> Result<Value, Mismatch> {
 
 /// The shape change of a JSON reply against the shape its recorded replies
 /// carry, if any, the objects `keyed` names read as data-keyed.
-pub fn noticed(value: &Value, recorded: &Shape, keyed: &[Keyed]) -> Option<ShapeChange> {
+pub fn noticed(value: &Value, recorded: &RecordedShape, keyed: &[Keyed]) -> Option<ShapeChange> {
     reply::shape_change(recorded, &reply::shape_keyed(value, keyed))
 }
 
-/// The recorded replies' shape from its committed form: one path per line.
-pub fn recorded_shape(paths: &str) -> Shape {
-    paths.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(|p| (if p == "." { String::new() } else { p.to_string() }, Default::default())).collect()
+/// The recorded replies' shape from its committed form: one path per line, the
+/// root written `.`, a path only some replies carry ending ` ?`.
+pub fn recorded_shape(paths: &str) -> RecordedShape {
+    paths
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            let (p, presence) = match l.strip_suffix(" ?") {
+                Some(p) => (p, Presence::Sometimes),
+                None => (l, Presence::Always),
+            };
+            (if p == "." { String::new() } else { p.to_string() }, presence)
+        })
+        .collect()
 }
 
-/// A shape's committed form: one path per line, the root written `.`.
-pub fn shape_text(shape: &Shape) -> String {
+/// A recorded shape's committed form.
+pub fn shape_text(shape: &RecordedShape) -> String {
     let mut out = String::new();
-    for p in shape.keys() {
+    for (p, presence) in shape {
         out.push_str(if p.is_empty() { "." } else { p });
+        if *presence == Presence::Sometimes {
+            out.push_str(" ?");
+        }
         out.push('\n');
     }
     out

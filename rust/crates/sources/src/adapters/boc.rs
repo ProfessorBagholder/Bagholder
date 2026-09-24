@@ -23,7 +23,7 @@ use bagholder_net::{Ask, Net};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{Keyed, Mismatch, Node, Shape};
+use crate::reply::{Keyed, Mismatch, Node, RecordedShape};
 
 pub const DAILY: &str = "bank-of-canada";
 pub const NOON_SOURCE: &str = "bank-of-canada-noon";
@@ -42,7 +42,7 @@ pub fn noon_source() -> SourceName {
 }
 
 /// What Valet's replies carry, from the recorded ones (`tests/replies`).
-pub fn group_shape() -> Shape {
+pub fn group_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/bank-of-canada-group.paths"))
 }
 
@@ -51,7 +51,7 @@ pub const GROUP_KEYED: &[Keyed] = &[Keyed { parent: "groupDetails.groupSeries", 
 /// An observations reply is keyed by its series' code, in its detail and in each row.
 pub const OBSERVATIONS_KEYED: &[Keyed] = &[Keyed { parent: "seriesDetail", fields: &[] }, Keyed { parent: "observations[]", fields: &["d"] }];
 
-pub fn observations_shape() -> Shape {
+pub fn observations_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/bank-of-canada-observations.paths"))
 }
 

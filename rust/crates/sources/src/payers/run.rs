@@ -57,12 +57,13 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             continue;
         };
         let mut noted = adapter.read(ctx.net, need, ctx.now);
-        if let Outcome::Answered(record) = std::mem::replace(&mut noted.outcome, Outcome::NotCarried(String::new())) {
-            noted.outcome = match checked(record, ctx.now) {
+        noted.outcome = match noted.outcome {
+            Outcome::Answered(record) => match checked(record, ctx.now) {
                 Ok(r) => Outcome::Answered(r),
                 Err(why) => Outcome::Meaning(why),
-            };
-        }
+            },
+            other => other,
+        };
         ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
         if let Outcome::Answered(record) = noted.outcome {
             ctx.book.store_declared(id, &stored_rows(&record), &adapter.source(), ctx.now)?;

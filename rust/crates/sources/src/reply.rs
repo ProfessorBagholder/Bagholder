@@ -280,22 +280,40 @@ pub fn shape_keyed(v: &Value, keyed: &[Keyed]) -> Shape {
     out
 }
 
-/// The union of several replies' shapes: what the recorded replies carry.
-pub fn union(shapes: impl IntoIterator<Item = Shape>) -> Shape {
-    let mut out = Shape::new();
-    for s in shapes {
-        for (p, kinds) in s {
-            out.entry(p).or_default().extend(kinds);
-        }
-    }
-    out
+/// Whether the recorded replies carry a path every time they could.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Presence {
+    /// Every recorded reply that could carry it (its parent there as an object,
+    /// or as a list with items) does.
+    Always,
+    /// Some recorded reply that could carry it does not (Yahoo's `events`, there
+    /// only when the span holds a dividend or a split).
+    Sometimes,
+}
+
+/// What the recorded replies carry: each path, and whether it is always there.
+pub type RecordedShape = BTreeMap<String, Presence>;
+
+/// The recorded replies' shape: the union of their paths, each marked with
+/// whether every reply that could carry it does.
+pub fn recorded(shapes: impl IntoIterator<Item = Shape>) -> RecordedShape {
+    let shapes: Vec<Shape> = shapes.into_iter().collect();
+    let paths: BTreeSet<&String> = shapes.iter().flat_map(|s| s.keys()).collect();
+    paths
+        .into_iter()
+        .map(|p| {
+            let always = shapes.iter().all(|s| s.contains_key(p) || !could_carry(s, p));
+            (p.clone(), if always { Presence::Always } else { Presence::Sometimes })
+        })
+        .collect()
 }
 
 /// How a reply's shape differs from the recorded ones.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShapeChange {
-    /// Paths the recorded replies carry and this one does not, where it could
-    /// have: the path's parent is here as an object, or as a list with items.
+    /// Paths every recorded reply carries where it could and this one does not,
+    /// where it could have: the path's parent is here as an object, or as a list
+    /// with items.
     pub gone: Vec<String>,
     /// Paths this reply carries that no recorded reply does.
     pub new: Vec<String>,
@@ -328,20 +346,22 @@ fn parent(path: &str) -> Option<(&str, bool)> {
     path.rfind('.').map(|i| (&path[..i], false)).or(if path.is_empty() { None } else { Some(("", false)) })
 }
 
-pub fn shape_change(recorded: &Shape, reply: &Shape) -> Option<ShapeChange> {
+/// Whether a reply could carry `path`: its parent is there as an object, or as
+/// a list with items.
+fn could_carry(reply: &Shape, path: &str) -> bool {
+    let Some((up, item)) = parent(path) else { return false };
+    match reply.get(up) {
+        Some(kinds) if item => kinds.contains("a list") && reply.keys().any(|k| k.starts_with(&format!("{up}[]"))),
+        Some(kinds) => kinds.contains("an object"),
+        None => false,
+    }
+}
+
+pub fn shape_change(recorded: &RecordedShape, reply: &Shape) -> Option<ShapeChange> {
     let mut change = ShapeChange::default();
-    for p in recorded.keys() {
-        if reply.contains_key(p) {
-            continue;
-        }
-        let Some((up, item)) = parent(p) else { continue };
-        let could = match reply.get(up) {
-            // a list's items are gone only if the list has items and they lack it
-            Some(kinds) if item => kinds.contains("a list") && reply.keys().any(|k| k.starts_with(&format!("{up}[]"))),
-            Some(kinds) => kinds.contains("an object"),
-            None => false,
-        };
-        if could {
+    for (p, presence) in recorded {
+        // a path only some recorded replies carry is not gone when this one lacks it
+        if *presence == Presence::Always && !reply.contains_key(p) && could_carry(reply, p) {
             change.gone.push(p.clone());
         }
     }

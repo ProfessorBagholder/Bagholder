@@ -90,7 +90,7 @@ impl Payer for WisdomTree {
 
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
-        let Some(form) = l.venue_mic.as_deref().and_then(|mic| venue::yahoo_form(&l.symbol, mic)) else {
+        let Some(form) = l.venue_mic.as_deref().and_then(|mic| venue::yahoo_forms(&l.symbol, mic).into_iter().next()) else {
             return Noted { outcome: Outcome::NotCarried(format!("{} names no venue Yahoo carries", l.symbol)), shape_change: None };
         };
         // every dividend event the chart holds, from before any fund's first trade

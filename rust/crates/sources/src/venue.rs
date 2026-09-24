@@ -15,8 +15,8 @@ use crate::contract::Market;
 /// does not name is covered by no source here, and says so.
 pub fn market_of(mic: Option<&str>) -> Option<Market> {
     match mic? {
-        // the TSX, the TSX Venture, the CSE, and Alpha (TSX Alpha Exchange, an
-        // ATS whose listings are the TSX's)
+        // the TSX, the TSX Venture, the CSE, and Alpha (TSX Alpha Exchange, a
+        // venue trading both the TSX's and the TSX Venture's issues)
         "XTSE" | "XTSX" | "XCNQ" | "XATS" => Some(Market::Canada),
         "NEOE" => Some(Market::CboeCanada),
         // Nasdaq, the NYSE, NYSE Arca, NYSE American, Cboe's US equities (BZX)
@@ -76,26 +76,31 @@ pub fn tmx_form(symbol: &str, mic: &str) -> Option<String> {
     tmx_suffix(mic).map(|s| format!("{r}{s}"))
 }
 
-/// Yahoo's suffix for a venue.
-pub fn yahoo_suffix(mic: &str) -> Option<&'static str> {
+/// Yahoo's suffixes for a venue, the likelier first. Alpha (TSX Alpha
+/// Exchange) lists nothing: it trades both the TSX's and the TSX Venture's
+/// issues, so a trade there names either (01 Communique, filled on Alpha, is
+/// `ONE.V`); TMX gives its issues one set of symbols across both, so at most one
+/// of the two answers.
+pub fn yahoo_suffixes(mic: &str) -> &'static [&'static str] {
     match mic {
-        "XTSE" | "XATS" => Some(".TO"),
-        "XTSX" => Some(".V"),
-        "XCNQ" => Some(".CN"),
-        "NEOE" => Some(".NE"),
-        "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" => Some(""),
-        _ => None,
+        "XTSE" => &[".TO"],
+        "XATS" => &[".TO", ".V"],
+        "XTSX" => &[".V"],
+        "XCNQ" => &[".CN"],
+        "NEOE" => &[".NE"],
+        "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" => &[""],
+        _ => &[],
     }
 }
 
-/// The Yahoo form of a listing: its root with a class written with a dash, and
-/// its venue's suffix.
-pub fn yahoo_form(symbol: &str, mic: &str) -> Option<String> {
+/// The Yahoo forms of a listing, the likelier first: its root with a class
+/// written with a dash, and each of its venue's suffixes.
+pub fn yahoo_forms(symbol: &str, mic: &str) -> Vec<String> {
     let r = root(symbol).replace('.', "-");
     if r.is_empty() || r.contains(' ') {
-        return None;
+        return vec![];
     }
-    yahoo_suffix(mic).map(|s| format!("{r}{s}"))
+    yahoo_suffixes(mic).iter().map(|s| format!("{r}{s}")).collect()
 }
 
 #[cfg(test)]
@@ -116,12 +121,15 @@ mod tests {
         assert_eq!(tmx_form("BBD.A", "XTSE").as_deref(), Some("BBD.A"));
         assert_eq!(tmx_form("ABC", "XCNQ").as_deref(), Some("ABC:CNX"));
         assert_eq!(tmx_form("WQTM", "BATS").as_deref(), Some("WQTM:US"));
-        assert_eq!(yahoo_form("BBD.A", "XTSE").as_deref(), Some("BBD-A.TO"));
-        assert_eq!(yahoo_form("QNC.TO", "XTSX").as_deref(), Some("QNC.V"));
-        assert_eq!(yahoo_form("BRK.B", "XNYS").as_deref(), Some("BRK-B"));
-        assert_eq!(yahoo_form("MAXQ", "NEOE").as_deref(), Some("MAXQ.NE"));
+        assert_eq!(yahoo_forms("BBD.A", "XTSE"), ["BBD-A.TO"]);
+        assert_eq!(yahoo_forms("QNC.TO", "XTSX"), ["QNC.V"]);
+        assert_eq!(yahoo_forms("BRK.B", "XNYS"), ["BRK-B"]);
+        assert_eq!(yahoo_forms("MAXQ", "NEOE"), ["MAXQ.NE"]);
+        // a fill on Alpha names a TSX or a TSX Venture issue
+        assert_eq!(yahoo_forms("ONE", "XATS"), ["ONE.TO", "ONE.V"]);
         assert_eq!(tmx_form("X", "XLON"), None);
-        assert_eq!(yahoo_form("TWO WORDS", "XTSE"), None);
+        assert!(yahoo_forms("TWO WORDS", "XTSE").is_empty());
+        assert!(yahoo_forms("X", "XLON").is_empty());
     }
 
     #[test]

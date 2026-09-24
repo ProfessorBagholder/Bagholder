@@ -29,7 +29,7 @@ use bagholder_net::{Ask, Net};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{day_from, Mismatch, Node, Shape};
+use crate::reply::{day_from, Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "tmx";
 pub const HOST: &str = "app-money.tmx.com";
@@ -46,15 +46,15 @@ pub fn source() -> SourceName {
     SourceName::named(SOURCE)
 }
 
-pub fn quote_shape() -> Shape {
+pub fn quote_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/tmx-quote.paths"))
 }
 
-pub fn dividends_shape() -> Shape {
+pub fn dividends_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/tmx-dividends.paths"))
 }
 
-pub fn series_shape() -> Shape {
+pub fn series_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/tmx-series.paths"))
 }
 

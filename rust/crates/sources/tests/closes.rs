@@ -131,3 +131,27 @@ fn a_run_stores_closes_and_levels_and_asks_again_only_when_due() {
     market::read_benchmarks(&ctx, date(2016, 1, 4)).unwrap();
     assert_eq!(recorded.asked.lock().unwrap().len(), asked);
 }
+
+#[test]
+fn a_fill_on_alpha_is_asked_as_a_tsx_issue_then_a_venture_one_and_the_answer_remembered() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    // 01 Communique, filled on Alpha, is a TSX Venture issue
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with(&format!("{YAHOO}ONE.TO?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit"), 404, "yahoo", "ONE.TO-status-404.json")
+            .with(&format!("{YAHOO}ONE.V?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit"), 200, "yahoo", "ONE.V-2025-06-10-2025-07-11.json"),
+    );
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let one = need(listing(1, InstrumentKind::Security, Currency::CAD, "ONE", Some("XATS")), date(2025, 6, 10), date(2025, 7, 11));
+    market::read_closes(&ctx, &[one]).unwrap();
+    assert_eq!(*recorded.asked.lock().unwrap(), vec![format!("{YAHOO}ONE.TO?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit"), format!("{YAHOO}ONE.V?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit")]);
+    let closes = cache.closes().unwrap();
+    assert!(closes[&id(1)].keys().next().is_some_and(|d| *d >= date(2025, 6, 10)));
+    assert!(closes[&id(1)].values().all(|m| m.currency == Currency::CAD));
+    assert_eq!(cache.winner(id(1), DataKind::DailyClose).unwrap().map(|w| w.1), Some("ONE.V".to_string()));
+}
