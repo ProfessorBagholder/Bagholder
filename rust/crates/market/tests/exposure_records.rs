@@ -336,4 +336,6 @@ fn test_exposure_is_derived_and_stored_as_it_was() {
         assert_eq!(&have[k], v, "{} is not what it was", k);
     }
     assert_eq!(have.as_object().unwrap().len(), want.as_object().unwrap().len());
+    // every source is stood in: nothing was asked of the network
+    assert_eq!(bagholder_net::client::outbound_requests(), 0, "the test sent requests off the machine (BAGHOLDER_LOG_REQUESTS=1 names them)");
 }

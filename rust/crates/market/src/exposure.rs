@@ -331,7 +331,10 @@ pub fn classify_share(ctx: &Ctx, symbol: &str, exchange: &str, currency: &str) -
         key = Some(format!("{}{}", sym, if currency.to_uppercase() == "USD" { ":US" } else { "" }));
     }
     if let Some(k) = key.filter(|k| !k.is_empty()) {
-        let (mut rec, _) = crate::tmx::tmx_lookup(ctx.conn, &k, &ctx.today, tmx_record);
+        // a stand-in for TMX's record answers the whole lookup: the lookup's
+        // fallback, resolving another of TMX's forms, asks TMX itself
+        let stood_in = hooks::TMX_RECORD.with(|h| h.borrow().is_some());
+        let (mut rec, _) = if stood_in { (tmx_record(&k), k.clone()) } else { crate::tmx::tmx_lookup(ctx.conn, &k, &ctx.today, tmx_record) };
         static CDR: OnceLock<Regex> = OnceLock::new();
         if let Some(r) = rec.as_ref() {
             if country.is_empty() && CDR.get_or_init(|| Regex::new(r"\bCDR\b").unwrap()).is_match(&r.name) && !k.ends_with(":US") {
