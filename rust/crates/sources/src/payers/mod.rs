@@ -21,6 +21,7 @@
 //! nothing is written.
 
 pub mod bmo;
+pub mod companies;
 pub mod evolve;
 pub mod exchange;
 pub mod fidelity;
@@ -78,6 +79,12 @@ pub trait Payer: Send + Sync {
     /// The markets whose listings this company's publication covers (one brand
     /// can be two companies: Vanguard Canada and Vanguard in the US).
     fn markets(&self) -> &'static [Market];
+    /// Whether this reader serves a payer: by the brand its name carries and the
+    /// market it trades in, unless the reader knows its payers one by one.
+    fn serves(&self, need: &PayerNeed) -> bool {
+        let Some(name) = need.name.as_deref().map(str::to_lowercase) else { return false };
+        need.listing.market().is_some_and(|m| self.markets().contains(&m)) && self.brands().iter().any(|b| name.contains(b))
+    }
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record>;
 }
 
@@ -88,6 +95,7 @@ pub const US: &[Market] = &[Market::UnitedStates];
 /// Every payer adapter, in the order a fund's name is tried against them.
 pub fn all() -> Vec<Box<dyn Payer>> {
     vec![
+        Box::new(companies::Companies),
         Box::new(ninepoint::Ninepoint),
         Box::new(evolve::Evolve),
         Box::new(harvest::Harvest),
@@ -108,12 +116,10 @@ pub fn all() -> Vec<Box<dyn Payer>> {
     ]
 }
 
-/// The adapter for a payer, by the brand its name carries and the market it
-/// trades in.
+/// The adapter for a payer: a company it names by its listing, else a fund
+/// company by the brand its name carries and the market it trades in.
 pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
-    let name = need.name.as_deref()?.to_lowercase();
-    let market = need.listing.market()?;
-    all().into_iter().find(|p| p.markets().contains(&market) && p.brands().iter().any(|b| name.contains(b)))
+    all().into_iter().find(|p| p.serves(need))
 }
 
 /// A record checked, repeats folded: a meaning failure names what is wrong.

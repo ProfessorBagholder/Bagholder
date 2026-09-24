@@ -48,9 +48,14 @@ pub fn listed(html: &str) -> Result<Vec<Listed>, Mismatch> {
         let Some(close) = rest.find("</a>") else { continue };
         let body = &rest[end..close];
         // the title is the link's heading; the time and the lead are beside it
-        let title = match (body.find("<h3"), body.find("</h3>")) {
-            (Some(a), Some(b)) if a < b => text(&body[a..b]),
-            _ => text(body),
+        let heading = match (body.find("<h3"), body.find("</h3>")) {
+            (Some(a), Some(b)) if a < b => &body[a..b],
+            _ => body,
+        };
+        // the heading leads with the release's time in a <small>; the title follows
+        let title = match (heading.find("<small"), heading.find("</small>")) {
+            (Some(a), Some(b)) if a < b => text(&format!("{}{}", &heading[..a], &heading[b + "</small>".len()..])),
+            _ => text(heading),
         };
         if !out.iter().any(|l| l.path == path) {
             out.push(Listed { title, path });
