@@ -18,8 +18,7 @@ fn dec(s: &str) -> Dec {
 }
 
 fn all() -> Vec<(Value, Mapped)> {
-    let mut rec = Recorded::read(&fixtures()).with_positions(&fixtures());
-    map_all(&mut rec)
+    map_all(&mut replay(&fixtures()))
 }
 
 fn text<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
@@ -111,7 +110,7 @@ fn an_order_that_filled_nothing_moves_nothing() {
 
 #[test]
 fn a_row_whose_legs_do_not_net_to_it_is_kept_with_a_problem() {
-    let mut rec = Recorded::read(&fixtures()).with_positions(&fixtures());
+    let rec = replay(&fixtures());
     let row = rec.rows.iter().find(|r| text(r, "type") == Some("OPTIONS_MULTILEG") && text(r, "unifiedStatus") == Some("COMPLETED")).unwrap().clone();
     // the order with one leg's cash changed by hand
     let edited = json::parse(&std::fs::read_to_string(fixtures().join("wrong-meaning-multileg-legs-not-the-row.json")).unwrap()).unwrap();
@@ -124,7 +123,7 @@ fn a_row_whose_legs_do_not_net_to_it_is_kept_with_a_problem() {
         }
     }
     std::fs::write(dir.path().join("multileg-edited.json"), edited.canonical()).unwrap();
-    rec = Recorded::read(dir.path()).with_positions(dir.path());
+    let mut rec = replay(dir.path());
     let m = map_row(&mut rec, &row);
     assert!(m.legs.is_empty());
     assert_eq!(m.problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), vec!["legs-disagree"]);
@@ -134,7 +133,7 @@ fn a_row_whose_legs_do_not_net_to_it_is_kept_with_a_problem() {
 fn a_reply_of_another_shape_is_unreadable_and_named() {
     let v = json::parse(&std::fs::read_to_string(fixtures().join("wrong-shape-activity-amount-as-number.json")).unwrap()).unwrap();
     let row = Node::root(&v).obj("data").unwrap().obj("activityFeedItems").unwrap().list("edges").unwrap()[0].obj("node").unwrap().value().clone();
-    let mut rec = Recorded::read(&fixtures());
+    let mut rec = replay(&fixtures());
     let m = map_row(&mut rec, &row);
     assert!(m.legs.is_empty());
     assert_eq!(m.problems[0].code, "unreadable");

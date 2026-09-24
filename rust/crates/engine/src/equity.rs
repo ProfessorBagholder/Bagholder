@@ -119,7 +119,7 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched) -> Vec<BrokerCheck> {
         }
         let instruments: BTreeSet<InstrumentId> = matched.units.keys().filter(|(a, _)| a == account).map(|(_, i)| *i).chain(b.held.keys().copied()).collect();
         for i in instruments {
-            let (o, br) = (matched.units_on(*account, i, today), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
+            let (o, br) = (matched.units_on(*account, i, b.held_as_of.unwrap_or(today)), b.held.get(&i).copied().unwrap_or(Dec::ZERO));
             if o != Ok(br) {
                 differences.push(Difference::Units { instrument: i, own: o, broker: br });
             }

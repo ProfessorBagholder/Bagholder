@@ -8,9 +8,13 @@ use bagholder_core::json::{self, Value};
 use bagholder_wealthsimple::anonymise::{leaks, Anonymiser};
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    // `--as-sent`: the replies split into files as they are, for a pull on a
+    // copy of the owner's own book; such a folder stays on the owner's machine
+    let as_sent = args.iter().any(|a| a == "--as-sent");
+    args.retain(|a| a != "--as-sent");
     let [_, input, out] = args.as_slice() else {
-        eprintln!("usage: ws-anonymise <capture.json> <out-dir>");
+        eprintln!("usage: ws-anonymise [--as-sent] <capture.json> <out-dir>");
         std::process::exit(2);
     };
     let text = std::fs::read_to_string(input).unwrap_or_else(|e| panic!("{input}: {e}"));
@@ -22,9 +26,9 @@ fn main() {
         let Value::Object(map) = item else { panic!("{input}: an item is not an object") };
         let Some(Value::String(op)) = map.get("operationName") else { panic!("{input}: an item names no operation") };
         let reply = map.get("reply").unwrap_or_else(|| panic!("{input}: {op} has no reply"));
-        let clean = a.value(reply);
+        let clean = if as_sent { reply.clone() } else { a.value(reply) };
         let left = leaks(&clean);
-        assert!(left.is_empty(), "{op}: identifying values left at {left:?}");
+        assert!(as_sent || left.is_empty(), "{op}: identifying values left at {left:?}");
         let i = n.entry(op.clone()).or_default();
         *i += 1;
         // a positions reply names neither its account nor its day: the file does,
@@ -35,7 +39,7 @@ fn main() {
                     Some(Value::Array(ids)) if ids.len() == 1 => {
                         let mut one = std::collections::BTreeMap::new();
                         one.insert("accountId".to_string(), ids[0].clone());
-                        match a.value(&Value::Object(one)) {
+                        match if as_sent { Value::Object(one) } else { a.value(&Value::Object(one)) } {
                             Value::Object(m) => match m.get("accountId") {
                                 Some(Value::String(s)) => s.clone(),
                                 _ => panic!("{op}: an account id that is not text"),

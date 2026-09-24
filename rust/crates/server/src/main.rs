@@ -9,6 +9,7 @@ mod app;
 mod compare;
 mod docs;
 mod engine_inputs;
+mod pull_broker;
 mod read_sources;
 mod events;
 mod feeds;
@@ -244,6 +245,10 @@ fn main() {
     // the readers of market data and facts, run once (docs/plans/stage-3a-sources.md)
     if args.first().map(String::as_str) == Some("read-sources") {
         std::process::exit(read_sources::cli_read(&args[1..]));
+    }
+    // Wealthsimple pulled into the book (docs/plans/stage-3b-wealthsimple.md)
+    if args.first().map(String::as_str) == Some("pull-broker") {
+        std::process::exit(pull_broker::cli(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));

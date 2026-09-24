@@ -3,4 +3,6 @@
 pub mod anonymise;
 pub mod assemble;
 pub mod mapping;
+pub mod read;
 pub mod record;
+pub mod replay;

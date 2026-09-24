@@ -175,6 +175,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-broker"
+version = "1.45.0"
+dependencies = [
+ "bagholder-book",
+ "bagholder-core",
+ "jiff",
+]
+
+[[package]]
 name = "bagholder-browser"
 version = "1.45.0"
 dependencies = [
@@ -262,6 +271,7 @@ version = "1.45.0"
 dependencies = [
  "axum",
  "bagholder-book",
+ "bagholder-broker",
  "bagholder-core",
  "bagholder-diff-derive",
  "bagholder-engine",
@@ -270,6 +280,7 @@ dependencies = [
  "bagholder-net",
  "bagholder-sources",
  "bagholder-store",
+ "bagholder-wealthsimple",
  "bagholder-ws",
  "futures-util",
  "jiff",
@@ -327,6 +338,7 @@ name = "bagholder-wealthsimple"
 version = "1.45.0"
 dependencies = [
  "bagholder-book",
+ "bagholder-broker",
  "bagholder-core",
  "bagholder-sources",
  "jiff",

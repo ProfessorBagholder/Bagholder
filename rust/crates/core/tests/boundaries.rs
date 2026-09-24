@@ -50,7 +50,7 @@ impl Rules {
     }
 }
 
-const CRATES: [Rules; 7] = [
+const CRATES: [Rules; 8] = [
     Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"], clock: ClockRule::Given },
     Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[], clock: ClockRule::Given },
     Rules {
@@ -68,6 +68,15 @@ const CRATES: [Rules; 7] = [
         name: "bagholder-sources",
         dir: "sources",
         allowed: &["bagholder-core", "bagholder-sqlite", "bagholder-net", "bagholder-book", "rusqlite", "jiff"],
+        floats_in: &[],
+        clock: ClockRule::Given,
+    },
+    // the broker interface and the pull (docs/plans/stage-3b-wealthsimple.md):
+    // no broker's reply types, no float, no clock
+    Rules {
+        name: "bagholder-broker",
+        dir: "broker",
+        allowed: &["bagholder-core", "bagholder-book", "jiff"],
         floats_in: &[],
         clock: ClockRule::Given,
     },
@@ -240,6 +249,11 @@ fn the_checker_catches_each_kind_of_violation() {
     assert_eq!(violations(ws, on_ws, &[]), vec!["bagholder-wealthsimple depends on bagholder-ws"]);
     let float = vec![("src/mapping.rs".to_string(), "let q: f64 = 1.0;".to_string())];
     assert_eq!(violations(ws, "[dependencies]\n", &float), vec!["src/mapping.rs:1: uses a float"]);
+
+    // the broker interface: no adapter behind it
+    let b = CRATES.iter().find(|c| c.name == "bagholder-broker").expect("listed");
+    let on_ws = "[dependencies]\nbagholder-wealthsimple = { path = \"../wealthsimple\" }\n";
+    assert_eq!(violations(b, on_ws, &[]), vec!["bagholder-broker depends on bagholder-wealthsimple"]);
 
     // the network: the clock it is handed, the machine's in one file
     let net = CRATES.iter().find(|c| c.name == "bagholder-net").expect("listed");

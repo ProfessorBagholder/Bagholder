@@ -40,8 +40,8 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
         instruments,
         transactions: book.transactions().map_err(err)?,
         records,
-        // the linked transfers' writer is stage 3's broker adapter
-        transfer_links: vec![],
+        // the two sides of each move of holdings, as the broker's rows state them
+        transfer_links: book.transfer_links().map_err(err)?,
         trades: book.trades().map_err(err)?,
         groups: book.groups().map_err(err)?,
         journal: book.journal_entries().map_err(err)?.into_iter().collect(),
@@ -87,4 +87,38 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
 /// The source name a stand-in fact read from the old store carries.
 pub fn old_store_source() -> SourceName {
     SourceName::named("bagholder-old-store")
+}
+
+/// What each broker states about each account (`docs/plans/stage-3b-wealthsimple.md`,
+/// "The book's new tables"), read from the book: each day's value and net
+/// deposits (in CAD), the newest cash and when it was stated, the newest units
+/// and the day they are as of, and when the account's activity was last read in
+/// full. An account the broker has stated nothing about has none.
+pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>, String> {
+    let mut out = BTreeMap::new();
+    for a in book.accounts().map_err(err)? {
+        let s = book.stated(a.id).map_err(err)?;
+        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() {
+            continue;
+        }
+        let mut b = bagholder_engine::input::BrokerAccount::default();
+        for (day, (value, deposits)) in &s.days {
+            if value.currency != Currency::CAD || deposits.currency != Currency::CAD {
+                return Err(format!("account {} states its value on {day} in {}, not CAD", a.id, value.currency));
+            }
+            b.net_value.insert(*day, value.amount);
+            b.net_deposits.insert(*day, deposits.amount);
+        }
+        if let Some((at, cash)) = s.cash {
+            b.as_of = Some(at);
+            b.cash = cash;
+        }
+        if let Some((day, units)) = s.units {
+            b.held_as_of = Some(day);
+            b.held = units;
+        }
+        b.activity_read_at = s.activity_read_at;
+        out.insert(a.id, b);
+    }
+    Ok(out)
 }

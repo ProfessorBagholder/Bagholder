@@ -15,8 +15,7 @@ use common::*;
 fn every_row_of_the_capture_maps() {
     let dir = std::env::var("BAGHOLDER_WS_CAPTURE").expect("BAGHOLDER_WS_CAPTURE names the capture's directory");
     let dir = std::path::Path::new(&dir);
-    let mut rec = Recorded::read(dir).with_positions(dir);
-    let mapped = map_all(&mut rec);
+    let mapped = map_all(&mut replay(dir));
     let rows: Vec<_> = mapped.iter().map(|(r, _)| r.clone()).collect();
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut problems: BTreeMap<String, (usize, String)> = BTreeMap::new();

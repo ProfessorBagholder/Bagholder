@@ -17,6 +17,9 @@ bagholder-ws = { path = "../ws" }
 # now only `bagholder import-book` writes it, from the database kept today, and
 # `bagholder compare-figures` reads it
 bagholder-book = { path = "../book" }
+# the broker interface and Wealthsimple's adapter, for `pull-broker`
+bagholder-broker = { path = "../broker" }
+bagholder-wealthsimple = { path = "../wealthsimple" }
 bagholder-core = { path = "../core" }
 # the engine the app moves onto at the switch; for now `compare-figures` runs it
 # beside the old model (docs/plans/stage-2-engine.md)

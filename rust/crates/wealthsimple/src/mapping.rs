@@ -623,10 +623,13 @@ fn conversion(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(
 /// source, and an institutional transfer's intent moves nothing itself (the
 /// money arrives as its own row). Over the days the group spans, each account's
 /// positions change, net of the book's own transactions, is:
-/// - nothing at all: the group moved nothing the book does not already hold;
-/// - no holdings leaving one account for another: each row moved its own
-///   stated amount in cash (what else the accounts' cash did, a sale's proceeds
-///   or a conversion's side not stated, is the broker check's to show);
+/// - no holdings leaving one account for another: the row moved cash, its own
+///   stated amount (an institutional transfer's intent included: no other row
+///   brings its money in), or where it states none, the cash that fell in one
+///   account of a lone pair and rose by as much in the other. What else the
+///   accounts' cash did (a sale's proceeds, a conversion's side not stated) is
+///   the broker check's to show. That the positions show nothing moved is not
+///   read as the row moving nothing: a transfer can settle after its row's day;
 /// - holdings whose fall in one account is their rise in another (from another
 ///   institution, their rise): the holdings, where the group is one move, since
 ///   which row moved which is not stated otherwise.
@@ -699,16 +702,31 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
             }
         }
     }
-    let cash_changed = change.iter().any(|(_, c)| c.keys().any(|id| id.starts_with("sec-c-")));
-    if matched.is_empty() && !cash_changed {
-        // the book's own rows already hold everything the positions show: the
-        // group itself moved nothing
-        return Ok(());
-    }
     if matched.is_empty() {
-        // no holdings left one account for another: the row's stated amount is
-        // cash; whatever else the accounts' cash did is the broker check's to show
-        return cash_leg(out);
+        // no holdings left one account for another: the move was cash. Its
+        // amount is the row's where it states one; else the cash that fell in
+        // one account of a lone pair and rose by as much in the other
+        if row.amount.is_some() {
+            return cash_leg(out);
+        }
+        let other = row.node.opt_text("opposingAccountId")?;
+        let mirrored: Vec<(String, Dec)> = match (other, change.get(row.account)) {
+            (Some(o), Some(mine)) if group.len() == 2 => mine
+                .iter()
+                .filter(|(id, q)| id.starts_with("sec-c-") && change.get(o).is_some_and(|t| t.get(*id).is_some_and(|x| x.checked_add(**q).ok() == Some(Dec::ZERO))))
+                .map(|(id, q)| (id.clone(), *q))
+                .collect(),
+            _ => vec![],
+        };
+        if let [(id, q)] = mirrored.as_slice() {
+            let cur = Currency::parse(&id["sec-c-".len()..].to_uppercase()).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+            let mut d = base.draft(row_leg(), kind);
+            d.cash = Some(Money::new(*q, cur));
+            out.legs.push(d);
+            return Ok(());
+        }
+        unstated(out, format!("a {kind} that states no amount, and whose cash the positions do not show moving between the two accounts"));
+        return Ok(());
     }
     if group.len() > 2 {
         unstated(out, format!("{} moves of holdings on neighbouring days: which moved which is not stated", group.len()));

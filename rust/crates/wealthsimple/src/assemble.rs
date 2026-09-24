@@ -194,3 +194,38 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
     }
     Ok(r)
 }
+
+/// Whether a row moves holdings read against positions, in a group with others.
+fn moves_holdings(r: &Node) -> bool {
+    matches!(r.text("type").unwrap_or(""), "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "INSTITUTIONAL_TRANSFER_INTENT")
+        && r.opt_text("transferType").ok().flatten().is_none_or(|t| !t.contains("in_cash"))
+        && r.text("unifiedStatus").ok() == Some("COMPLETED")
+}
+
+/// A move of holdings' group: every such move connected to it by a shared
+/// account and days no more than one apart, followed until none is added
+/// (`crate::mapping`, "transfer"). `day` is the day a row is filed under.
+pub fn group(row: &Value, rows: &[Value], day: impl Fn(&Value) -> Option<jiff::civil::Date>) -> Vec<Value> {
+    let accounts = |r: &Node| -> Vec<String> { [r.text("accountId").ok(), r.opt_text("opposingAccountId").ok().flatten()].into_iter().flatten().map(str::to_string).collect() };
+    let id = |r: &Value| Node::root(r).text("canonicalId").ok().map(str::to_string);
+    let candidates: Vec<&Value> = rows.iter().filter(|r| moves_holdings(&Node::root(r))).collect();
+    let mut group: Vec<Value> = vec![row.clone()];
+    loop {
+        let before = group.len();
+        for c in &candidates {
+            if group.iter().any(|g| id(g) == id(c)) {
+                continue;
+            }
+            let Some(cd) = day(c) else { continue };
+            let ca = accounts(&Node::root(c));
+            let joined = group.iter().any(|g| day(g).is_some_and(|gd| (gd - cd).get_days().abs() <= 1) && accounts(&Node::root(g)).iter().any(|a| ca.contains(a)));
+            if joined {
+                group.push((*c).clone());
+            }
+        }
+        if group.len() == before {
+            break;
+        }
+    }
+    group
+}

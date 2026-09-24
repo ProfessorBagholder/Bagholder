@@ -204,7 +204,9 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
         }
         FactsFrom::Book { cache } => {
             let (cache, _) = bagholder_sources::cache::MarketCache::open(cache, crate::app::APP_VERSION, at).map_err(err)?;
-            crate::read_sources::market_from_cache(&cache, &book)?
+            let mut m = crate::read_sources::market_from_cache(&cache, &book)?;
+            m.brokers = engine_inputs::brokers(&book)?;
+            m
         }
     };
     let bank = bagholder_core::jiff::tz::TimeZone::get("America/Toronto").map_err(err)?;
@@ -428,6 +430,21 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     writeln!(out, "\nNot applied by the new engine: {:?}; sold or closed beyond what was held: {}; price and cash disagreeing: {}.", waits, m.beyond.len(), m.disagreements.len()).ok();
     for b in m.beyond.iter().take(12) {
         writeln!(out, "      beyond held: {} {} qty {}", old_row(&b.transaction), figures_symbol(&engine, b.instrument), b.qty.to_text()).ok();
+    }
+    // the broker check: each account's cash and units against the broker's statement
+    if !figures.checks.is_empty() {
+        let names: BTreeMap<_, _> = book.accounts().map_err(err)?.into_iter().map(|a| (a.id, a.nickname.unwrap_or_default())).collect();
+        let clean = figures.checks.iter().filter(|c| c.differences.is_empty()).count();
+        writeln!(out, "\nBroker check: {} accounts, {} agree exactly.", figures.checks.len(), clean).ok();
+        for c in figures.checks.iter().filter(|c| !c.differences.is_empty()) {
+            writeln!(out, "  {} ({}){}", names.get(&c.account).cloned().unwrap_or_default(), c.account, if c.pending { ", activity since the statement not read" } else { "" }).ok();
+            for d in &c.differences {
+                match d {
+                    bagholder_engine::equity::Difference::Cash { currency, own, broker } => writeln!(out, "      cash {currency}: book {} broker {}", own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).ok(),
+                    bagholder_engine::equity::Difference::Units { instrument, own, broker } => writeln!(out, "      units {}: book {} broker {}", figures_symbol(&engine, *instrument), own.as_ref().map(|x| x.to_text()).unwrap_or_else(|g| format!("{g:?}")), broker.to_text()).ok(),
+                };
+            }
+        }
     }
     let _ = std::fs::remove_dir_all(&scratch);
     let _: Option<RecordId> = None;

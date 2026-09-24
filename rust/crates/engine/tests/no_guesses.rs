@@ -25,7 +25,7 @@ fn sources() -> Vec<(String, String)> {
     // `server`) go at the switch
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut out = Vec::new();
-    for c in ["core", "book", "engine", "sources", "wealthsimple"] {
+    for c in ["core", "book", "engine", "sources", "wealthsimple", "broker"] {
         let before = out.len();
         walk(&crates.join(c).join("src"), &mut out);
         assert!(out.len() > before, "no sources read for {c}");
