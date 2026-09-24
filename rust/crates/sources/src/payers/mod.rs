@@ -22,8 +22,12 @@
 
 pub mod evolve;
 pub mod exchange;
+pub mod globalx;
+pub mod hamilton;
 pub mod harvest;
+pub mod newswire;
 pub mod ninepoint;
+pub mod purpose;
 pub mod run;
 pub mod vanguard_ca;
 
@@ -81,6 +85,9 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(evolve::Evolve),
         Box::new(harvest::Harvest),
         Box::new(vanguard_ca::VanguardCanada),
+        Box::new(hamilton::Hamilton),
+        Box::new(purpose::Purpose),
+        Box::new(globalx::GlobalX),
         Box::new(exchange::Mackenzie),
         Box::new(exchange::WisdomTree),
     ]
