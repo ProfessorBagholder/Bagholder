@@ -7,13 +7,12 @@ Owner decisions of 2026-09-24. Record them in `docs/decisions.md`, then adjust 3
 - **Each account's daily value and net deposits** come from Wealthsimple's historical financials, which the pull already reads (`FetchAccountHistoricalFinancials`). That is what `SPEC.md` defines today ("NAV from sync").
 - **The total** is the sum of the accounts. Returns are chain-linked daily returns net of deposits and withdrawals, as `SPEC.md` §2 says.
 - **Keep the value per account in the engine**, so a future account with no broker statement can get a computed value later. Don't build that now.
-- **Stop:** recorded option closes, the after-close option read, Cboe as a source, and reading past closes of every holding for the equity series. Keep only the past closes a chart shows, and the underlying's close on an option's expiry day, which the expiry rule needs.
+- **Stop:** recorded option closes, the after-close option read, and reading past closes of every holding for the equity series. Keep only the past closes a chart shows, and the underlying's close on an option's expiry day, which the expiry rule needs.
 - **The spec change** "equity is Bagholder's own" comes off the switchover list.
 
-## 2. Option prices on screen: a free source, fetched only when needed
+## 2. Option prices on screen: Cboe, as today, fetched only when needed
 
-- **Not Wealthsimple, not Cboe.** Cboe's delayed-quotes terms forbid automated extraction.
-- **Candidates:** Yahoo's option chain (the service already used for US quotes and bars) and Nasdaq's. Confirm each with one read, and read its terms, before writing a reader. With no permitted free source, the position's price waits, named.
+- **Keep Cboe's delayed chains** as the source for held US option contracts (`SPEC.md` §2, the market data table). It works, the chain carries its own timestamp, and the reader refuses a stale chain rather than showing it. Not Wealthsimple.
 - **Fetched only when needed.** A price is stored with its own time. It is fetched again only when a screen shows it, its market is open, and the stored one is older than the source can improve on. After the close, the stored final price stands until the next session. A page opening or reloading never causes a fetch by itself.
 
 ## 3. Benchmarks: the same kind of return as the owner's
