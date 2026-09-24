@@ -25,9 +25,12 @@
     }
   },
   {
-    "name": "a record that says it opens against an opposite position is a conflict, shown",
-    "spec": "docs/plans/stage-2-engine.md: where the record states the effect it is checked; an open that meets an opposite position is a gap",
-    "working": ["buy 1 to open, then sell 1 'to open' while long 1: the second is not what the record says it is; the contract's holdings wait"],
+    "name": "a record that says it opens against the opposite position is held back; the holding waits on it",
+    "spec": "docs/plans/stage-2-engine.md, Options: a stated effect the position before it contradicts is held back, and the holding waits on it",
+    "working": [
+      "buy 1 C1 to open for −50, then sell 1 C1 'to open' while long 1: the record contradicts the book, so it is not applied",
+      "the long stays, one position, waiting on the conflict; no short is opened beside it"
+    ],
     "today": "2026-06-01",
     "accounts": [{"id": "A"}],
     "instruments": [
@@ -36,15 +39,16 @@
     ],
     "rates": {"USD": {"2026-01-02": "1.35"}},
     "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
     "transactions": [
       {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "1", "cash": "-50"},
       {"id": "t2", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"}
     ],
     "expect": {
-      "positions": [
-        {"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict", "price-unknown"]},
-        {"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["effect-conflict", "price-unknown"]}
-      ]
+      "position_count": 1,
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "unapplied": {"t2": ["effect-conflict"]},
+      "beyond": []
     }
   },
   {
@@ -198,10 +202,10 @@
     }
   },
   {
-    "name": "a short call assigned delivers the shares at the strike; the premium is kept",
+    "name": "a covered call assigned delivers the shares held at the strike; the premium is kept",
     "spec": "SPEC.md §2 Trade, Options: assignment closes the option at zero, keeping the premium, and delivers the shares at the strike",
     "working": [
-      "100 U bought for 900; 1 C1 (strike 10, 100 shares) sold for 150",
+      "100 U bought for 900; 1 C1 (strike 10, 100 shares) sold for 150: the call is covered by the shares",
       "assigned: the contract closes at zero → option P&L 150; 1 × 100 shares delivered for the cash the record states, +1,000 → share P&L 1,000 − 900 = 100",
       "the shares' round trip is the one U opened; the assignment opens nothing new"
     ],
@@ -225,11 +229,11 @@
     }
   },
   {
-    "name": "a short put assigned receives the shares at the strike, a round trip of its own",
+    "name": "a short put, sold to open, assigned: the shares received at the strike are a round trip of their own, later sold",
     "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md: the delivery is its own round trip",
     "working": [
-      "1 P1 (strike 8) sold for 60; assigned with cash −800: option P&L 60",
-      "100 U received at 800: a position of 100, book 800, opened by the assignment"
+      "1 P1 (strike 8) sold to open for 60; assigned with cash −800: option P&L 60",
+      "100 U received at 800, a round trip opened by the assignment; sold for 900: P&L 100"
     ],
     "today": "2026-07-01",
     "accounts": [{"id": "A"}],
@@ -240,12 +244,14 @@
     "rates": {"USD": {"2026-01-02": "1.35"}},
     "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
     "transactions": [
-      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "P1", "qty": "-1", "cash": "60"},
-      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "P1", "qty": "1", "cash": "-800"}
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "P1", "qty": "-1", "cash": "60"},
+      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "P1", "qty": "1", "cash": "-800"},
+      {"id": "t3", "account": "A", "day": "2026-06-22", "at": "2026-06-22T15:00:00Z", "kind": "sell", "instrument": "U", "qty": "-100", "cash": "900"}
     ],
     "expect": {
-      "trades": [{"opened_by": "t1", "pnl": "60.00"}],
-      "positions": [{"account": "A", "instrument": "U", "qty": "100", "book": "800.00", "opened_by": "t2"}]
+      "trade_count": 2,
+      "position_count": 0,
+      "trades": [{"opened_by": "t1", "instrument": "P1", "pnl": "60.00", "flags": ["assignment"]}, {"opened_by": "t2", "instrument": "U", "pnl": "100.00", "cash_invariant": true}]
     }
   },
   {
@@ -337,5 +343,386 @@
       {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"}
     ],
     "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "direction": "short", "pnl": "10.00", "cash_invariant": true}]}
+  },
+  {
+    "name": "a record that says it closes against only the opposite position is held back",
+    "spec": "docs/plans/stage-2-engine.md, Options: a stated effect the position before it contradicts is held back, and the holding waits on it",
+    "working": ["long 1 C1 (−50); a buy 'to close' 1 closes a short, and the account holds only the long: not applied, the long waits"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "C1", "qty": "1", "cash": "-40"}
+    ],
+    "expect": {
+      "position_count": 1,
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "unapplied": {"t2": ["effect-conflict"]},
+      "beyond": []
+    }
+  },
+  {
+    "name": "a record that says it closes, with nothing held, is beyond what is held",
+    "spec": "docs/plans/stage-2-engine.md, Options: a close with nothing to close is beyond what is held",
+    "working": ["a buy 'to close' 1 C1 with no position: nothing closes, and the record is beyond what the account held"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "C1", "qty": "1", "cash": "-40"}
+    ],
+    "expect": {
+      "position_count": 0,
+      "beyond": ["t1"],
+      "unapplied": {}
+    }
+  },
+  {
+    "name": "an assignment against a long is held back; neither the contract nor the shares move",
+    "spec": "docs/plans/stage-2-engine.md, Options: a stated effect the position before it contradicts is held back, and the holding waits on it",
+    "working": [
+      "100 U (−900) and a long 1 C1 (−50); an assignment row brings a short's contracts back in, and none is short",
+      "not applied: the contract and the shares wait on it, both held as they were"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-900"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t3", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "C1", "qty": "1", "cash": "1000"}
+    ],
+    "expect": {
+      "position_count": 2,
+      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["effect-conflict"]}, {"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "unapplied": {"t3": ["effect-conflict"]}
+    }
+  },
+  {
+    "name": "an exercise against a short is held back",
+    "spec": "docs/plans/stage-2-engine.md, Options: a stated effect the position before it contradicts is held back, and the holding waits on it",
+    "working": ["a short 1 C1 (+60); an exercise row sends a long's contracts out, and none is long: not applied, the contract and U wait"],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "C1", "qty": "-1", "cash": "60"},
+      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-exercise", "instrument": "C1", "qty": "-1", "cash": "-1000"}
+    ],
+    "expect": {
+      "position_count": 1,
+      "positions": [{"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["effect-conflict"]}],
+      "unapplied": {"t2": ["effect-conflict"]}
+    }
+  },
+  {
+    "name": "an expiry row whose sign closes the other side than the one held is held back",
+    "spec": "docs/plans/stage-2-engine.md, Options: a stated effect the position before it contradicts is held back, and the holding waits on it",
+    "working": ["a long 1 C1 (−50); the expiry row brings 1 contract in, which closes a short: not applied, the long waits"],
+    "today": "2026-06-18",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-06-17", "at": "2026-06-17T21:30:00Z", "kind": "option-expiry", "instrument": "C1", "qty": "1", "cash": "0"}
+    ],
+    "expect": {
+      "position_count": 1,
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "unapplied": {"t2": ["effect-conflict"]}
+    }
+  },
+  {
+    "name": "at one instant a close that meets the long goes before an open of a short",
+    "spec": "docs/plans/stage-2-engine.md, The order of transactions: at one instant a stated close meeting a position goes before a stated open of the same contract",
+    "working": [
+      "long 1 C1 (−50); at one instant, sell 1 to open (+60) and sell 1 to close (+70), the open listed first",
+      "the close goes first and closes the long: P&L 70 − 50 = 20; then the open opens a short of 1, for +60"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"},
+      {"id": "t3", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "sell", "effect": "close", "instrument": "C1", "qty": "-1", "cash": "70"}
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 1,
+      "trades": [{"opened_by": "t1", "direction": "long", "pnl": "20.00", "cash_invariant": true}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "opened_by": "t2"}],
+      "unapplied": {},
+      "beyond": []
+    }
+  },
+  {
+    "name": "at one instant a close that meets the short goes before an open of a long",
+    "spec": "docs/plans/stage-2-engine.md, The order of transactions: at one instant a stated close meeting a position goes before a stated open of the same contract",
+    "working": [
+      "short 1 C1 (+60); at one instant, buy 1 to open (−55) and buy 1 to close (−40), the open listed first",
+      "the close goes first and covers the short: P&L 60 − 40 = 20; then the open opens a long of 1, for −55"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"},
+      {"id": "t2", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "1", "cash": "-55"},
+      {"id": "t3", "account": "A", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "C1", "qty": "1", "cash": "-40"}
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 1,
+      "trades": [{"opened_by": "t1", "direction": "short", "pnl": "20.00", "cash_invariant": true}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "opened_by": "t2"}],
+      "unapplied": {},
+      "beyond": []
+    }
+  },
+  {
+    "name": "undated on one day, a close that meets the long goes before an open of a short",
+    "spec": "docs/plans/stage-2-engine.md, The order of transactions: records stating only their day, taking units out, are at one instant after the day's timed ones",
+    "working": ["long 1 C1 (−50); on one day, undated, sell 1 to open (+60) and sell 1 to close (+70): the close goes first, P&L 20, then a short of 1"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-03-03", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"},
+      {"id": "t3", "account": "A", "day": "2026-03-03", "kind": "sell", "effect": "close", "instrument": "C1", "qty": "-1", "cash": "70"}
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 1,
+      "trades": [{"opened_by": "t1", "pnl": "20.00"}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "opened_by": "t2"}],
+      "unapplied": {},
+      "beyond": []
+    }
+  },
+  {
+    "name": "options with stated effects, closed in parts: a long and a short",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options",
+    "working": [
+      "C1: bought 2 to open for −100, sold 1 to close for +70, then 1 for +80: one round trip, P&L 50",
+      "P1: sold 2 to open for +120, bought 1 to close for −40, then 1 for −20: one round trip, P&L 60"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "C1", "qty": "2", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-03-10", "at": "2026-03-10T15:00:00Z", "kind": "sell", "effect": "close", "instrument": "C1", "qty": "-1", "cash": "70"},
+      {"id": "t3", "account": "A", "day": "2026-03-20", "at": "2026-03-20T15:00:00Z", "kind": "sell", "effect": "close", "instrument": "C1", "qty": "-1", "cash": "80"},
+      {"id": "t4", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:01:00Z", "kind": "sell", "effect": "open", "instrument": "P1", "qty": "-2", "cash": "120"},
+      {"id": "t5", "account": "A", "day": "2026-03-10", "at": "2026-03-10T15:01:00Z", "kind": "buy", "effect": "close", "instrument": "P1", "qty": "1", "cash": "-40"},
+      {"id": "t6", "account": "A", "day": "2026-03-20", "at": "2026-03-20T15:01:00Z", "kind": "buy", "effect": "close", "instrument": "P1", "qty": "1", "cash": "-20"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "position_count": 0,
+      "beyond": [],
+      "trades": [{"opened_by": "t1", "direction": "long", "pnl": "50.00", "cash_invariant": true}, {"opened_by": "t4", "direction": "short", "pnl": "60.00", "cash_invariant": true}]
+    }
+  },
+  {
+    "name": "a long put exercised with the shares held: the shares go at the strike",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options; an exercise closes the contract at zero and delivers the shares at the strike",
+    "working": [
+      "100 U bought for −900; 1 P1 (strike 10) bought for −50; exercised: the contract closes at zero, P&L −50",
+      "100 U delivered for the +1,000 the record states: the shares' round trip closes, P&L 100"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-900"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "P1", "qty": "1", "cash": "-50"},
+      {"id": "t3", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-exercise", "instrument": "P1", "qty": "-1", "cash": "1000"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "position_count": 0,
+      "unapplied": {},
+      "trades": [{"opened_by": "t2", "instrument": "P1", "pnl": "-50.00", "flags": ["assignment"]}, {"opened_by": "t1", "instrument": "U", "pnl": "100.00"}]
+    }
+  },
+  {
+    "name": "a long put exercised without the shares: the delivery opens a short of its own",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options; delivering shares not held opens a short, keyed by the delivery",
+    "working": [
+      "1 P1 (strike 10) bought for −50; exercised with no U held: the contract closes at zero, P&L −50",
+      "100 U delivered for +1,000 that the account does not hold: a short of 100, a round trip opened by the exercise"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "open", "instrument": "P1", "qty": "1", "cash": "-50"},
+      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-exercise", "instrument": "P1", "qty": "-1", "cash": "1000"}
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 1,
+      "trades": [{"opened_by": "t1", "instrument": "P1", "pnl": "-50.00"}],
+      "positions": [{"account": "A", "instrument": "U", "direction": "short", "qty": "100", "opened_by": "t2"}]
+    }
+  },
+  {
+    "name": "a naked call assigned with no shares held: the shares delivered short, valued at the cash stated, else at the strike",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options; the delivery is valued at the stated cash, and at strike × shares only without it",
+    "working": [
+      "A: 1 C1 sold for +150, assigned with cash +990 stated: option P&L 150; a short of 100 U valued at 990",
+      "B: the same, the assignment stating no cash: the short of 100 U valued at 10 × 100 = 1,000"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "150"},
+      {"id": "t2", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "C1", "qty": "1", "cash": "990"},
+      {"id": "t3", "account": "B", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "150"},
+      {"id": "t4", "account": "B", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "C1", "qty": "1"}
+    ],
+    "expect": {
+      "position_count": 2,
+      "positions": [{"account": "A", "instrument": "U", "direction": "short", "qty": "100", "book": "990.00", "opened_by": "t2"}, {"account": "B", "instrument": "U", "direction": "short", "qty": "100", "book": "1000.00", "opened_by": "t4"}]
+    }
+  },
+  {
+    "name": "a covered call of 2 contracts assigned with 150 of the 200 shares held",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options; shares held are closed in their own round trip, and only the remainder opens a round trip keyed by the delivery",
+    "working": [
+      "150 U bought for −1,350; 2 C1 sold for +300; assigned, 200 shares delivered for +2,000: option P&L 300",
+      "the 150 held close in their own round trip at 150 ÷ 200 of 2,000 = 1,500: P&L 150",
+      "the other 50 are delivered short: a round trip opened by the assignment, valued at 500"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "150", "cash": "-1350"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-2", "cash": "300"},
+      {"id": "t3", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "C1", "qty": "2", "cash": "2000"}
+    ],
+    "expect": {
+      "trade_count": 2,
+      "position_count": 1,
+      "trades": [{"opened_by": "t2", "instrument": "C1", "pnl": "300.00", "flags": ["assignment"]}, {"opened_by": "t1", "instrument": "U", "pnl": "150.00"}],
+      "positions": [{"account": "A", "instrument": "U", "direction": "short", "qty": "50", "book": "500.00", "opened_by": "t3"}]
+    }
+  },
+  {
+    "name": "an assignment that states no quantity: the contract and the shares both wait",
+    "spec": "SPEC.md §2 Trade, Options; docs/plans/stage-2-engine.md, Options; a delivery that states no quantity holds both the contract and its underlying",
+    "working": [
+      "100 U bought for −900; 1 C1 sold for +150; an assignment row with no quantity: how many contracts and shares moved is not stated",
+      "it is not applied; the contract and U wait on it"
+    ],
+    "today": "2026-07-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"},
+      {"id": "P1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "put", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "quotes": {"U": {"price": "12"}, "C1": {"price": "2", "source": "option"}, "P1": {"price": "1", "source": "option"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-900"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "150"},
+      {"id": "t3", "account": "A", "day": "2026-06-19", "at": "2026-06-19T21:30:00Z", "kind": "option-assignment", "instrument": "C1", "cash": "1000"}
+    ],
+    "expect": {
+      "position_count": 2,
+      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["quantity-unstated"]}, {"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["quantity-unstated"]}],
+      "unapplied": {"t3": ["quantity-unstated"]}
+    }
   }
 ]

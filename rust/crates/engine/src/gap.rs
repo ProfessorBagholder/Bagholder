@@ -35,6 +35,10 @@ pub enum Gap {
     NoExpiryRecord(InstrumentId),
     /// A corporate event whose kind and values are not known yet.
     EventUnknown(TransactionId),
+    /// A corporate event on a short holding that is not a split or a
+    /// continuation stated by its ratio: what the short owes after it is not
+    /// worked out, so the holding waits.
+    EventOnShort(TransactionId),
     /// Two adjustments that explain one transaction differently, neither
     /// superseding the other.
     AdjustmentConflict(TransactionId),
@@ -86,6 +90,7 @@ impl Gap {
             Gap::LegUnstated(_) => "leg-unstated",
             Gap::NoExpiryRecord(_) => "no-expiry-record",
             Gap::EventUnknown(_) => "event-unknown",
+            Gap::EventOnShort(_) => "event-on-short",
             Gap::AdjustmentConflict(_) => "adjustment-conflict",
             Gap::BasisUnknown(_) => "basis-unknown",
             Gap::BeyondHeld(_) => "beyond-held",
@@ -115,10 +120,11 @@ impl fmt::Display for Gap {
             Gap::LegUnstated(t) => write!(f, "{t} is a multi-leg order whose legs are not on the record"),
             Gap::NoExpiryRecord(i) => write!(f, "{i} is past its expiry with nothing on the record"),
             Gap::EventUnknown(t) => write!(f, "the corporate event {t} has no known values yet"),
+            Gap::EventOnShort(t) => write!(f, "the corporate event {t} on a short holding is not a split or a continuation by its ratio"),
             Gap::AdjustmentConflict(t) => write!(f, "two sources explain {t} differently"),
             Gap::BasisUnknown(t) => write!(f, "what the asset deposited by {t} cost is not on the record"),
             Gap::BeyondHeld(t) => write!(f, "{t} takes out more than the account held"),
-            Gap::EffectConflict(t) => write!(f, "{t} says it opens a position while the account holds the opposite one"),
+            Gap::EffectConflict(t) => write!(f, "{t} states an effect the position before it contradicts"),
             Gap::CurrencyUnstated(t) => write!(f, "{t} is paid in another currency than its instrument's, at no stated rate"),
             Gap::ValueUnstated(t) => write!(f, "{t} states neither its cash nor its price"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),

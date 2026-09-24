@@ -436,15 +436,14 @@ fn acquires(t: &Transaction) -> Option<bool> {
 /// - at one instant, records by what they do: one that states it opens a
 ///   position, then one that brings units in, then one that takes units out,
 ///   then one that states it closes (a position cannot close before it opens);
+///   except that a stated close meeting a position goes before a stated open of
+///   the same contract at that instant (`match_lots`), which would otherwise meet
+///   the position the close takes off;
 /// - then the record's source key, never when it was stored;
 /// - within a record, its closing legs before its opening ones (a roll closes
 ///   the old contract, then opens the new), then the legs' content and name.
 fn order_key(t: &Transaction, record_rank: u8, source_key: &str) -> (Date, u8, Option<Timestamp>, u8, String, u8, String) {
-    let bucket = match (t.occurred_at, acquires(t)) {
-        (None, Some(true)) => 0,
-        (Some(_), _) => 1,
-        (None, _) => 2,
-    };
+    let (_, bucket, _) = instant(t);
     let leg_rank = match t.effect {
         Some(Effect::Close) => 0,
         None => 1,
@@ -459,6 +458,17 @@ fn order_key(t: &Transaction, record_rank: u8, source_key: &str) -> (Date, u8, O
         t.id.leg.as_str()
     );
     (t.trade_date, bucket, t.occurred_at, record_rank, source_key.to_string(), leg_rank, content)
+}
+
+/// The instant a transaction is applied at: its day, whether it states only its
+/// day (bringing units in, or not), and its time.
+fn instant(t: &Transaction) -> (Date, u8, Option<Timestamp>) {
+    let bucket = match (t.occurred_at, acquires(t)) {
+        (None, Some(true)) => 0,
+        (Some(_), _) => 1,
+        (None, _) => 2,
+    };
+    (t.trade_date, bucket, t.occurred_at)
 }
 
 /// A record's place among records at one instant (`order_key`).
@@ -686,13 +696,18 @@ impl<'a> Matcher<'a> {
     /// P&L; returns the lots taken (for a linked transfer) and what could not be
     /// taken.
     fn take(&mut self, account: AccountId, instrument: InstrumentId, qty: Dec) -> Result<(Vec<Lot>, Dec), Gaps> {
+        self.take_side(account, instrument, Direction::Long, qty)
+    }
+
+    /// Take `qty` of `direction`'s lots off the front of a holding, as `take`.
+    fn take_side(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec) -> Result<(Vec<Lot>, Dec), Gaps> {
         let mut left = qty;
         let mut taken = Vec::new();
         let mut emptied = Vec::new();
         let book = self.book(account, instrument);
         while left.is_positive() {
             let Some(front) = book.lots.front_mut() else { break };
-            if front.direction != Direction::Long {
+            if front.direction != direction {
                 break;
             }
             let n = if front.qty <= left { front.qty } else { left };
@@ -745,6 +760,22 @@ impl<'a> Matcher<'a> {
 
     fn unapplied(&mut self, t: &Transaction, gaps: Gaps) {
         self.out.unapplied.push((t.id.clone(), gaps));
+    }
+
+    /// Whether the account holds lots of `direction` in the instrument.
+    fn holds(&self, account: AccountId, instrument: InstrumentId, direction: Direction) -> bool {
+        self.out.books.get(&(account, instrument)).is_some_and(|b| b.lots.iter().any(|l| l.direction == direction))
+    }
+
+    /// A transaction whose stated effect the position before it contradicts is
+    /// not applied: the holding, and whatever else it would have moved, waits
+    /// on it, as for a record that states no quantity.
+    fn contradicts(&mut self, t: &Transaction, holdings: &[(AccountId, InstrumentId)]) {
+        let gaps = Gaps::of(Gap::EffectConflict(t.id.clone()));
+        for (account, instrument) in holdings {
+            self.taint(*account, *instrument, &gaps);
+        }
+        self.unapplied(t, gaps);
     }
 
     /// A transaction took out more than was held: what it did close is waiting on
@@ -880,6 +911,10 @@ impl<'a> Matcher<'a> {
             }
             let gaps = Gaps::of(Gap::QuantityUnstated(t.id.clone()));
             self.taint(account, instrument, &gaps);
+            // a delivery moves the underlying too, by what it does not state
+            if let (Move::Deliver { .. }, Some(under)) = (mv, self.underlying(instrument)) {
+                self.taint(account, under, &gaps);
+            }
             if let Some((_, dest, dest_instr)) = self.link_of(t, instrument) {
                 // what arrives from it waits as well
                 self.taint(dest, dest_instr, &gaps);
@@ -911,6 +946,10 @@ impl<'a> Matcher<'a> {
             }
             Move::Expire => {
                 let d = if acquiring { Direction::Short } else { Direction::Long };
+                // a row whose sign closes the other side than the one held
+                if !self.holds(account, instrument, d) && self.holds(account, instrument, d.opposite()) {
+                    return self.contradicts(t, &[(account, instrument)]);
+                }
                 match self.close(account, instrument, d, qty, charge(Ok(Money::zero(currency))), fee, &closer, t.trade_date, t.occurred_at, &none) {
                     Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                     Ok(_) => {}
@@ -964,6 +1003,17 @@ impl<'a> Matcher<'a> {
         let opens = if acquiring { Direction::Long } else { Direction::Short };
         let closer = Closer::Transaction(t.id.clone());
         let none = BTreeSet::new();
+        // a stated effect the position contradicts: an open meeting the opposite
+        // position, a close meeting only the opposite one (a close meeting
+        // nothing is beyond what is held)
+        let contradicted = match effect {
+            Some(Effect::Open) => self.holds(account, instrument, closes),
+            Some(Effect::Close) => !self.holds(account, instrument, closes) && self.holds(account, instrument, opens),
+            None => false,
+        };
+        if contradicted {
+            return self.contradicts(t, &[(account, instrument)]);
+        }
         let may_close = effect != Some(Effect::Open);
         let Closed { left, value_left, fee_left } = if may_close {
             match self.close(account, instrument, closes, qty, value, fee, &closer, t.trade_date, t.occurred_at, &none) {
@@ -973,11 +1023,6 @@ impl<'a> Matcher<'a> {
         } else {
             Closed { left: qty, value_left: value, fee_left: fee }
         };
-        if effect == Some(Effect::Open) && self.book(account, instrument).lots.iter().any(|l| l.direction == closes) {
-            // the record says it opens, and it meets an opposite position
-            let gaps = Gaps::of(Gap::EffectConflict(t.id.clone()));
-            self.taint(account, instrument, &gaps);
-        }
         if !left.is_positive() {
             return;
         }
@@ -1146,6 +1191,16 @@ impl<'a> Matcher<'a> {
         // an assignment brings a short's contracts back in; an exercise sends a long's out
         let closing = if exercise { Direction::Long } else { Direction::Short };
         let _ = acquiring;
+        // only a short is assigned and only a long exercised: against the other
+        // side, or nothing, the record contradicts the book, and neither the
+        // contract nor its underlying moves
+        if !self.holds(account, instrument, closing) {
+            let mut holdings = vec![(account, instrument)];
+            if let Some(under) = self.underlying(instrument) {
+                holdings.push((account, under));
+            }
+            return self.contradicts(t, &holdings);
+        }
         match self.close(account, instrument, closing, qty, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &flags) {
             Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
             Ok(_) => {}
@@ -1262,6 +1317,10 @@ impl<'a> Matcher<'a> {
             // a stated cost belongs to a deposit, applied where the deposit is
             return Ok(());
         };
+        let short: Dec = dec_sum(self.book(account, from).lots.iter().filter(|l| l.direction == Direction::Short).map(|l| l.qty))?;
+        if short.is_positive() {
+            return self.event_on_short(account, anchor, leg, from, short);
+        }
         let held: Dec = dec_sum(self.book(account, from).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| l.qty))?;
         match (leg.to, leg.cash_per_unit) {
             // a split or consolidation, a stock dividend, a return of capital
@@ -1431,6 +1490,35 @@ impl<'a> Matcher<'a> {
 
     /// A holding's lots rescaled from `held` units to `new_total`, each in
     /// proportion, the last taking what is left; the cost stays.
+    /// An event on a short holding: a split or consolidation scales the short
+    /// by its ratio, and a continuation as another instrument moves it whole by
+    /// its ratio, as they do a long. Anything else (a stock dividend, cash, a
+    /// spin-off), or an event stating no ratio, leaves what the short owes
+    /// unworked, and the holding waits.
+    fn event_on_short(&mut self, account: AccountId, anchor: &TransactionId, leg: &AdjustmentLeg, from: InstrumentId, held: Dec) -> Result<(), Gaps> {
+        let waits = || Gaps::of(Gap::EventOnShort(anchor.clone()));
+        let (Some(to), Some(ratio), None, None) = (leg.to, leg.units_per_unit, leg.cash_per_unit, leg.cost) else { return Err(waits()) };
+        if leg.cost_share.is_some_and(|c| c != Dec::ONE) {
+            return Err(waits());
+        }
+        let total = held.checked_mul(ratio)?;
+        let (lots, _) = self.take_side(account, from, Direction::Short, held)?;
+        let flag = if to == from { Flag::Split } else { Flag::Continued };
+        let moved: Vec<Lot> = scale_side(lots, Direction::Short, held, total)?
+            .into_iter()
+            .map(|mut l| {
+                l.flags.insert(flag);
+                l
+            })
+            .collect();
+        if to != from {
+            let taint = self.book(account, from).taint.clone();
+            self.book(account, to).taint.merge(&taint);
+        }
+        self.place(account, to, moved);
+        Ok(())
+    }
+
     fn rescale(&mut self, account: AccountId, instrument: InstrumentId, held: Dec, new_total: Dec) -> Result<(), Gaps> {
         if held.is_zero() {
             return Ok(());
@@ -1449,15 +1537,20 @@ impl<'a> Matcher<'a> {
     }
 }
 
-/// Lots holding `held` units in all rescaled to `total`, each in proportion, the
-/// last long lot taking what is left.
+/// Long lots holding `held` units in all rescaled to `total`, each in
+/// proportion, the last long lot taking what is left.
 fn scale_lots(lots: Vec<Lot>, held: Dec, total: Dec) -> Result<Vec<Lot>, Gaps> {
+    scale_side(lots, Direction::Long, held, total)
+}
+
+/// `direction`'s lots holding `held` units in all rescaled to `total`, as `scale_lots`.
+fn scale_side(lots: Vec<Lot>, direction: Direction, held: Dec, total: Dec) -> Result<Vec<Lot>, Gaps> {
     let mut left = total;
     let mut held_left = held;
     let n = lots.len();
     let mut out = Vec::with_capacity(n);
     for (i, mut l) in lots.into_iter().enumerate() {
-        if l.direction == Direction::Long {
+        if l.direction == direction {
             let q = if i + 1 == n || held_left == l.qty { left } else { share_dec(left, l.qty, held_left)? };
             left = left.checked_sub(q)?;
             held_left = held_left.checked_sub(l.qty)?;
@@ -1523,9 +1616,28 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         in_order.entry(t.id.record).or_default().push(t);
     }
     let mut done: BTreeSet<&TransactionId> = BTreeSet::new();
-    for t in &txs {
+    for (at, t) in txs.iter().enumerate() {
         if done.contains(&t.id) {
             continue;
+        }
+        // at one instant a stated close that meets a position goes before a
+        // stated open of the same contract, which would meet that position; an
+        // open goes first only where the close needs it (a short opened and
+        // covered at one instant)
+        if t.effect == Some(Effect::Open) {
+            let closes: Vec<&Transaction> = txs[at + 1..]
+                .iter()
+                .take_while(|c| instant(c) == instant(t))
+                .filter(|c| !done.contains(&c.id) && c.effect == Some(Effect::Close) && c.account == t.account && c.instrument == t.instrument && by_record.get(&c.id.record).is_some_and(|l| l.len() == 1))
+                .copied()
+                .collect();
+            for c in closes {
+                if m.meets_opposite(c) {
+                    done.insert(&c.id);
+                    m.expire_before(c.trade_date);
+                    m.apply(c, by_record.get(&c.id.record).map(|v| v.as_slice()).unwrap_or(&[]));
+                }
+            }
         }
         let legs = by_record.get(&t.id.record).map(|v| v.as_slice()).unwrap_or(&[]);
         let one_day = legs.len() > 1 && legs.iter().all(|l| l.trade_date == t.trade_date);

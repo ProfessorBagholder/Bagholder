@@ -11,7 +11,7 @@
 
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::Value;
@@ -232,6 +232,14 @@ fn run(path: &Path) -> Vec<String> {
             }
             if let Some(v) = want.get("flags") {
                 c.words(&w("flags"), v, p.flags.iter().map(|x| x.to_string()).collect());
+            }
+            if let Some(v) = want.get("trips") {
+                // the round trips open in it, by the transaction that opened each, in order
+                let got: Vec<String> = p.trips.iter().map(|k| tx.iter().find(|(_, id)| **id == k.opening).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
+                let want_trips: Vec<String> = v.as_array().expect("trips: a list").iter().map(|x| x.as_str().expect("a label").to_string()).collect();
+                if got != want_trips {
+                    c.fail(format!("{}: expected {want_trips:?}, got {got:?}", w("trips")));
+                }
             }
         }
         for want in arr(&expect, "cash") {
@@ -460,6 +468,14 @@ fn run(path: &Path) -> Vec<String> {
             let got: BTreeSet<String> = f.matched.beyond.iter().map(|x| tx.iter().find(|(_, id)| **id == x.transaction).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
             c.words("beyond held", v, got);
         }
+        if let Some(v) = expect.get("unapplied") {
+            // each transaction not applied, with the gaps it waits on: `{"t2": ["effect-conflict"]}`
+            let got: BTreeMap<String, Vec<&str>> = f.matched.unapplied.iter().map(|(id, g)| (tx.iter().find(|(_, i)| **i == *id).map(|(l, _)| l.clone()).unwrap_or_default(), g.words())).collect();
+            let want: BTreeMap<String, Vec<&str>> = v.as_object().expect("unapplied: an object").iter().map(|(k, w)| (k.clone(), w.as_array().expect("words").iter().map(|x| x.as_str().expect("a word")).collect())).collect();
+            if got != want {
+                c.fail(format!("not applied: expected {want:?}, got {got:?}"));
+            }
+        }
         if let Some(v) = expect.get("unit_disagreements") {
             let got: BTreeSet<String> = f.matched.unit_disagreements.iter().map(|x| tx.iter().find(|(_, id)| **id == x.transaction).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
             c.words("event units against the ratio", v, got);
@@ -493,6 +509,14 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
     let keys: BTreeSet<_> = f.positions.iter().map(|p| (&p.key, p.account, p.instrument)).collect();
     if keys.len() != f.positions.len() {
         c.fail("invariant: two positions share a key".into());
+    }
+    // no holding is long and short at once
+    let mut sides: BTreeMap<(bagholder_core::AccountId, InstrumentId), BTreeSet<String>> = BTreeMap::new();
+    for p in f.positions.iter() {
+        sides.entry((p.account, p.instrument)).or_default().insert(format!("{:?}", p.direction));
+    }
+    if let Some(((a, i), _)) = sides.iter().find(|(_, d)| d.len() > 1) {
+        c.fail(format!("invariant: {a} holds {i} both long and short"));
     }
     let open: BTreeSet<&TripKey> = f.positions.iter().map(|p| &p.key).collect();
     let named: BTreeSet<InstrumentId> = b.inputs.facts.adjustments.iter().flat_map(|(_, a)| a.legs.iter().flat_map(|l| [l.from, l.to])).flatten().collect();

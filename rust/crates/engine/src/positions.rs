@@ -36,9 +36,14 @@ pub struct Mark {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PositionFig {
-    /// The round trip of its first lot.
+    /// The round trip of its first lot: its id, and the journal the holding
+    /// shows.
     pub key: TripKey,
     pub trade: Option<TradeId>,
+    /// Every round trip open in it, oldest lot first, `key` first. A holding
+    /// can carry several (a deposited coin beside bought ones, shares delivered
+    /// into a holding): each becomes its own trade as it closes.
+    pub trips: Vec<TripKey>,
     pub account: AccountId,
     pub instrument: InstrumentId,
     pub kind: InstrumentKind,
@@ -194,6 +199,12 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 Err(_) => 0,
             };
             let key = first.trip.clone();
+            let mut trips: Vec<TripKey> = Vec::new();
+            for l in &lots {
+                if !trips.contains(&l.trip) {
+                    trips.push(l.trip.clone());
+                }
+            }
             let trade = identity.trade_of.get(&key).copied();
             let journal = trade.and_then(|t| inputs.ledger.journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
             let mut fills = BTreeSet::new();
@@ -213,6 +224,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
             out.push(PositionFig {
                 key,
                 trade,
+                trips,
                 account: *account,
                 instrument: *instrument,
                 kind,

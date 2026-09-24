@@ -112,5 +112,50 @@
       {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "3000"}
     ],
     "expect": {"beyond": [], "position_count": 0, "trades": [{"opened_by": "t1", "pnl": {"gaps": ["event-unknown"]}}]}
+  },
+  {
+    "name": "a short through a split: the short is scaled by the ratio, its proceeds kept",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 X sold short (to open) for +1,000; a 2-for-1 split: a short of 200, entry 1,000 ÷ 200 = 5", "200 bought back for −800: P&L 1,000 − 800 = 200, marked split"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "X", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "X", "qty": "200", "cash": "-800"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "unapplied": {}, "trades": [{"opened_by": "t1", "direction": "short", "qty": "200", "entry": "5", "pnl": "200.00", "flags": ["split"]}]}
+  },
+  {
+    "name": "a short through a continuation under a new instrument: the short moves whole by the ratio",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 OLD sold short (to open) for +1,000; OLD continues as NEW, one for five: a short of 20 NEW, its round trip and proceeds kept", "20 NEW bought back for −800: P&L 200, one trade opened by the short sale, named after NEW"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "OLD"}, {"id": "NEW"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "OLD", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "OLD"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "NEW", "qty": "20", "cash": "-800"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "OLD", "to": "NEW", "units_per_unit": "0.2", "cost_share": "1"}]}],
+    "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "unapplied": {}, "trades": [{"opened_by": "t1", "direction": "short", "named_after": "NEW", "pnl": "200.00", "flags": ["continued"]}]}
+  },
+  {
+    "name": "a stock dividend on a short: what the short owes is not worked out, and the holding waits",
+    "spec": "docs/plans/stage-2-engine.md, corporate events: a split or a continuation by its ratio scales or moves a short as it does a long; any other event on a short leaves the holding waiting",
+    "working": ["100 X sold short (to open) for +1,000; a stock dividend of 0.05 new units per unit valued at 50: the short owes the lender those units, which the ledger does not work out", "the event is not applied; the short of 100 waits on it"],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "10"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "X", "qty": "-100", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"}
+    ],
+    "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.05", "cost": "50"}]}],
+    "expect": {"position_count": 1, "positions": [{"account": "A", "instrument": "X", "direction": "short", "qty": "100", "gaps": ["event-on-short"]}], "unapplied": {"t2": ["event-on-short"]}}
   }
 ]

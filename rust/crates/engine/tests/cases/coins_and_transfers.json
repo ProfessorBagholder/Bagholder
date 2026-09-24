@@ -187,5 +187,18 @@
       {"id": "t3", "account": "C", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-0.75", "cash": "1800"}
     ],
     "expect": {"position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "pnl": "-200.00"}]}
+  },
+  {
+    "name": "a holding with two round trips open, a bought coin and a deposited one, lists both",
+    "spec": "docs/plans/stage-2-engine.md, positions: a position links to every round trip open in it, the oldest first, and is keyed by the oldest",
+    "working": ["1 BTC bought for −50,000 (Jan 5), 1 BTC transferred in (Jan 6): one position of 2, its round trips the purchase's and the deposit's, keyed by the purchase"],
+    "today": "2026-03-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "BTC", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "1", "cash": "-50000"},
+      {"id": "t2", "account": "C", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "transfer-in", "instrument": "BTC", "qty": "1"}
+    ],
+    "expect": {"position_count": 1, "positions": [{"account": "C", "instrument": "BTC", "qty": "2", "opened_by": "t1", "trips": ["t1", "t2"]}]}
   }
 ]
