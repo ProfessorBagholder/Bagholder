@@ -32,6 +32,7 @@ pub mod newswire;
 pub mod ninepoint;
 pub mod purpose;
 pub mod run;
+pub mod us_pages;
 pub mod vanguard_ca;
 pub mod vanguard_us;
 
@@ -96,6 +97,8 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(ishares_ca::ISharesCanada),
         Box::new(fidelity::FidelityCanada),
         Box::new(vanguard_us::VanguardUs),
+        Box::new(us_pages::YieldMax),
+        Box::new(us_pages::Defiance),
         Box::new(exchange::Mackenzie),
         Box::new(exchange::WisdomTree),
     ]
