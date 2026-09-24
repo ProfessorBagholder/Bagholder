@@ -20,32 +20,28 @@ Out of this part, on purpose: news, filings, short interest, fund exposures, gau
 
 ### Research first, each question settled before its reader is built
 
-Each question below is answered from real replies before the reader that depends on it is written. The answer and its evidence are written into this plan's Verification. A question that cannot be answered stops that reader, and the plan changes first (*Right to refuse*). The fixtures that settle them are captured for public instruments chosen for the question (a fund with a year-end special, a listing with a recent split), never for the person's holdings.
+Each question below is answered from real replies before the reader that depends on it is written. The answer and its evidence are written into this plan's Verification. A question that cannot be answered stops that reader, and the plan changes first (*Right to refuse*). The fixtures that settle them are captured for public instruments chosen for the question (a listing with a recent split, a fund with a long record), never for the person's holdings.
 
 1. **Split adjustment of daily closes.**
    - Does each close source (TMX `getTimeSeriesData`, Yahoo's chart, Coinbase candles) give closes as traded, or adjusted for later splits?
    - Checked on a listing with a known split, before and after it.
    - An adjusted source is used only with its own split events to undo the adjustment (Yahoo's chart reports them with `events=split`), so closes are stored as traded, matching the book's units on each day.
    - A source whose adjustment cannot be undone from its own reply is not used for closes.
-2. **The kind of a distribution.**
-   - TMX states none: `type` is not a field, and was queried and refused on 2026-09-23.
-   - The candidates are the issuers' distribution announcements (which name a special or a reinvested distribution) and, for US listings, Nasdaq's dividend history.
-   - Until a source states it, the rule is fixed and tested (below).
-3. **A US listing's declared distributions and frequency.**
+2. **A US listing's declared distributions and frequency.**
    - Candidates: Nasdaq's dividend history (`api.nasdaq.com/api/quote/<sym>/dividends`, which did not answer from this machine on 2026-09-23 and is to be tried again) and Yahoo's chart with `events=div`.
    - Whichever answers is read under the same contract. If none states a frequency, US payers fall to the inference from ex-dates, as stage 2 already does.
-4. **The Bank's rates before 2007-05-01.**
+3. **The Bank's rates before 2007-05-01.**
    - Valet holds its daily series from 2017-01-03 and its legacy noon series from 2007-05-01 (both verified on 2026-09-23).
    - The Bank published noon rates for decades before that.
    - Candidate archives: the Bank's own historical files and Statistics Canada's tables carrying them. The one that answers is read as a third series with its own source name.
    - If none answers, a day before 2007-05-01 is a gap named for what it is, `rate-not-held` (no source holds the Bank's published rate for that day). It is never `rate-missing`, which names a failure of the Bank source.
-5. **Which session an option chain's `prev_day_close` belongs to**, and which of the chain's prices is a contract's close for a session.
+4. **Which session an option chain's `prev_day_close` belongs to**, and which of the chain's prices is a contract's close for a session.
    - Settled from chains captured before and after a session's close on the same day, and across a weekend.
    - The recorded close must be defined one way (the chain's closing price, or the closing midpoint) before its reader is built.
-6. **TMX's payout frequency vocabulary.**
+5. **TMX's payout frequency vocabulary.**
    - The words `dividendFrequency` uses, taken from a broad public sample of TMX listings (a screener's funds and payers), not the person's holdings.
    - Which listings answer null, since a non-payer states none.
-7. **Benchmark sources.**
+6. **Benchmark sources.**
    - Replies recorded for each: FRED's S&P 500 series (Stooq as fallback) and TMX's `^TSX` and `^TX60` daily series (SPEC §2).
 
 ### Two new crates, and where the existing code goes
@@ -137,7 +133,7 @@ It is keyed by the book's instrument ids. Nothing in it is a fact a figure was c
 
 A venue's session days are the days its own daily closes exist, as the sources report them. It needs no calendar of its own:
 - **A closed day** is one with a close stored, and is never read again.
-- **An option's recorded close** is dated to the underlying's session day that the chain's own time falls in or follows (research 5).
+- **An option's recorded close** is dated to the underlying's session day that the chain's own time falls in or follows (research 4).
 - **Venue hours and holidays** as a calendar (§7) are the bracket engine's need in stage 4, not a figure's.
 
 ### The fact readers (into the book, written once)
@@ -158,7 +154,7 @@ A venue's session days are the days its own daily closes exist, as the sources r
   - The daily series is the Bank's rate from its first day.
   - The noon series is read, and its rates stored, only up to the day before that.
   - So the two never both state a day, whichever read runs first.
-  - A day before the noon series begins follows research 4.
+  - A day before the noon series begins follows research 3.
 - **What is read.** For each currency, from the person's oldest day that needs it to today, then forward from the last span's end. A day's rate is written once, and a different later value is kept beside it and reported (stage 2).
 - **Holidays.**
   - The Bank's holiday schedule page (`/press/upcoming-events/bank-of-canada-holiday-schedule/`) lists this year's closures as date and name pairs.
@@ -176,22 +172,19 @@ A venue's session days are the days its own daily closes exist, as the sources r
   - Every page is read, until a page shorter than the batch or one repeating the page before (the old reader stops at 24 rows).
   - Meaning checks: the ex-date is on or before the pay date where both are stated; the currency is real; the amount is positive.
 - **One read is stored as a whole** (`store_declared`), so a distribution the fund withdrew is absent from the newest read. A read identical to the newest stored one records only its time.
-- **The kind, until a source states it.** TMX states no kind, so a row is stored with its kind unstated. This needs book migration 3's `declared_distributions` check and the book's and the engine's `DistributionKind::Unstated`. The engine counts an unstated row as a regular distribution only when it keeps the fund's cadence:
-  - its ex-date falls where the stated frequency, or the gaps of the rows before it, put the next distribution (within half a period);
-  - and its amount is within the range of the regular rows of the last year.
-  An unstated row off that cadence (a year-end special among monthly rows) is not counted and not dropped. It is a problem shown on the holding, `distribution-unknown` naming the row, until a source states its kind (research 2). This is how the design treats every fact the app is still finding out: shown as such, never folded into a figure.
+- **A distribution is a row of the fund's record**, as `SPEC.md` §2 defines the rate: the per-unit amount is the latest distribution gone ex, the frequency from the gaps between ex-dates where no frequency is stated. TMX states no category for a row and none is invented: the kinds stage 2 gave the engine (regular, special, non-cash) go, with book migration 3 dropping `declared_distributions.kind`.
 - **Stated frequency.**
   - `getQuoteBySymbol.dividendFrequency` states the payout frequency in words.
-  - A fixed table of TMX's words (research 6) maps each to payments per year, or to "states none" (null, and the words research 6 finds TMX uses for no schedule).
+  - A fixed table of TMX's words (research 5) maps each to payments per year, or to "states none" (null, and the words research 5 finds TMX uses for no schedule).
   - A word not in the table is a meaning failure naming the word. It is never a guess.
   - A later read that states none, or another frequency, is stored as that statement, so the newest statement stands and an old one is never left standing alone.
   - TMX is a data vendor, not the issuer (§9 puts the issuer's own statement first). A stated frequency that disagrees with the snapped gaps of the fund's own ex-dates is a problem shown on the holding, and the fund's own record stands. This changes the engine's order in `cashflow.rs:171`.
-- **Which instruments.** Every Canadian listing the book holds or has received a distribution from, and US listings through research 3.
+- **Which instruments.** Every Canadian listing the book holds or has received a distribution from, and US listings through research 2.
 
 **Option closes** (Cboe's delayed chains, `cdn.cboe.com`).
 
 - **When it is read.** After each session's close, the same day, for every held contract, including those expiring that day, which are gone from the next day's chain.
-- **What is written.** The contract's close as research 5 defines it, dated to its session, via `recorded_closes`.
+- **What is written.** The contract's close as research 4 defines it, dated to its session, via `recorded_closes`.
 - **Checks.** The chain's `timestamp` is UTC: the reply's `Last-Modified` (03:55:02 GMT) matched it (03:54:59) on 2026-09-23. A chain whose session cannot be told is a meaning failure, and it writes nothing.
 - **Exactness.** Cboe writes prices as binary float leftovers (`224.255004882812`). That is its statement, kept exactly as written.
 - **What cannot be had, stated now.**
@@ -232,14 +225,11 @@ A quote with no time is a meaning failure. How late each source is by design (Cb
 
 ### The engine's changes
 
-- **`DistributionKind::Unstated` and the cadence rule.** Cases:
-  - a monthly fund whose record states no kinds;
-  - a year-end special among unstated monthly rows, shown as `distribution-unknown` and left out of the per-unit amount;
-  - a stated special among unstated rows, passed over.
+- **Distribution kinds removed** (`DistributionKind` in the engine and the book): every row of the record counts, as `SPEC.md` §2 defines; the existing cases rewritten to that.
 - **The fund's own record over a vendor's frequency word.** Cases:
   - a stated frequency agreeing with the ex-dates;
   - a stated frequency disagreeing, where the ex-dates stand and a problem is shown.
-- **`rate-not-held`**, if research 4 finds no archive: a gap for a day no source holds the Bank's rate for, with a case.
+- **`rate-not-held`**, if research 3 finds no archive: a gap for a day no source holds the Bank's rate for, with a case.
 
 ### Periodic reads, each listed with its reason
 
@@ -266,7 +256,7 @@ Each is a pure due-function over the book, the cache and a clock handed in, test
 The template's Python, Go, shared-case and page lines do not apply: those builds are frozen, and the page does not change in this part.
 
 - [ ] **Build.** Rust, from `rust/`: the whole workspace's tests green and a warning-free build.
-- [ ] **Research.** Each of research 1–7 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
+- [ ] **Research.** Each of research 1–6 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
 - [ ] **Boundaries.** The boundary test holds `bagholder-net` and `bagholder-sources` to their columns, each checked by feeding the checker a violation:
   - no `f64` in `bagholder-sources`;
   - no clock read in `bagholder-sources`;
@@ -301,11 +291,10 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - every page of a long record read, stopping on a short page and on a repeated one;
   - the record and declaration dates kept, and their null read as stated none;
   - a read stored as a whole, with a later read lacking a row leaving it absent, and an identical read recording only its time;
-  - kinds stored unstated;
-  - every word in the frequency table (from research 6) maps as the table says;
+  - every word in the frequency table (from research 5) maps as the table says;
   - an unknown word is a meaning failure writing nothing;
   - a later read stating none replaces the earlier statement.
-- [ ] **The engine**, cases passing: the unstated kind (a monthly fund, a year-end special shown as `distribution-unknown` and left out, a stated special passed over); the fund's own record over a disagreeing stated frequency, shown as a problem; `rate-not-held` if research 4 needs it; every existing case still passing.
+- [ ] **The engine**, cases passing: distribution kinds removed, every row of a record counting as `SPEC.md` §2 defines; the fund's own record over a disagreeing stated frequency, shown as a problem; `rate-not-held` if research 3 needs it; every existing case still passing.
 - [ ] **Option closes**, each a test on recorded replies:
   - a chain read after the close writes each held contract's close once, dated to its session, including a contract expiring that day;
   - a chain whose session cannot be told writes nothing and records a meaning failure.
@@ -334,13 +323,12 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
 - The book's migration 3 and `schema/v3.sql`.
 - `book/facts.rs`'s writers, called outside tests for the first time.
 - `RefScheme` (two routing schemes) and its text form.
-- The book's and the engine's `DistributionKind`, every match over them, and `cashflow.rs`'s frequency order.
+- The book's and the engine's `DistributionKind`, removed with every use, and `cashflow.rs`'s frequency order.
 - `engine_inputs.rs` (the series' first and last days).
 - The release workflow and the Rust Dockerfile: new crates must not change what is built or attached.
 
 ## Right to refuse
 
-- **Taken, on the kind of a distribution.** Stage 2 gave the engine regular, special and non-cash kinds, and no source this part reads states them. Storing TMX's rows as regular would state a fact nobody stated; counting every unstated row would do the same at the figure. Unstated rows are stored unstated, counted only on the fund's cadence, and shown as waiting off it.
 - **Taken, on corporate events.** An event's values come from the official source (§6), not from Wealthsimple alone. Which source answers for which event is settled in 3b, beside the rows it explains.
 - **Reserved.** If research shows a field or a source this plan counts on is not there, the reader for it is not built on a guess: the plan changes first, and the change is written here.
 
