@@ -39,6 +39,8 @@
 2. The verdict comes back as the next numbered brief on `architecture-briefs`: **Go**, **Go with changes** (numbered, each one required), or **Stop**.
 3. Apply the required changes. If you disagree with one, say why under the plan's "Right to refuse" and let the owner decide. Don't deviate silently, and don't reopen the owner's decisions.
 
+**Decisions the reviewer can't see:** an owner decision that exists only in a local plan is invisible to the reviewer. Push the plan, or the decision, before a gate relies on it. Where a brief contradicts an owner decision it never saw, the owner's decision stands; say so and carry on.
+
 **Stage 3 now:** it is underway, and the switch itself is gated. Push the stage 3 plan as it stands, including how the switch will be done, before starting the switch.
 
 ## 2. Stage 3: what to get right
@@ -49,12 +51,7 @@
   - A source contract is justified: the market sources are many (quotes, bars, news, filings, short interest, exposure, gauges, rates, distributions).
   - A seam for execution is justified: stage 4 tests execution against a misbehaving fake broker.
   - Wealthsimple's specifics sit in one adapter module. The rest of the app calls it through the operations it uses today, and nothing more general.
-- **Payout frequency** (§9, "Finding out what no single source says"):
-  1. First build the declared-record reader, the inference from ex-dates and from payments, and `frequency-unknown` as a visible gap.
-  2. Then count, on a scratch copy of the owner's data, how many holdings are still unknown.
-  3. Build readers for issuer pages only for those holdings, and only after that count.
-
-  "Never assumed" is the owner's rule. How wide the machinery goes is not.
+- **Payout frequency:** the owner decided on 2026-09-23 that a fund's schedule comes from its fund company's own statement. Working it out from past distribution dates lags a change: when Ninepoint's funds went from monthly to twice a month, the dates would have shown monthly for about six weeks, and the income figure would have been half what it should be. That decision stands; build it as planned. An earlier version of this brief put the order the other way round because it was written without that decision.
 - **Move each market source off the old crates** (`market` and `ws` still import `bagholder_model` and `bagholder_store`) the way stages 1 and 2 worked:
   1. pin the source with goldens;
   2. move it, keeping verbatim the domain logic the design review marked "keep";
