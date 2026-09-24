@@ -1,57 +1,82 @@
-# Brief 04: a clean-room check of the engine's cases
+# Brief 04: options, trade marks, and what a blind check of the cases found
 
-**Checked:** `svelte-migration` at `61baead0`.
+**Checked:** `svelte-migration` at `039613de`.
 
-## What was run
+**How it was checked:**
+1. 15 cases were re-derived by agents who never saw the answers or the engine.
+2. The engine's code was traced in five areas (trade application, endings, trade marks, broker positions, case coverage), each trace checked by an independent skeptic.
+3. The reviewer re-read every finding below that changes a recommendation.
 
-Independent agents worked out the expected figures of 15 engine cases: the first three of `shares.json`, `options.json`, `events.json`, `rates.json` and `positions_and_income.json`.
-- They used only the written definitions (`SPEC.md`, the stage 2 plan's definitions, the stage 3a engine changes, `docs/architecture.md` §5 to §8).
-- They never saw the engine's code or the cases' `expect` and `working`.
-- A second agent compared each result with the case and judged every difference against the definitions.
+**This replaces earlier versions of this brief**, which were written before the engine's code was read. In particular, "show the broker's per-contract position" is withdrawn, and the options "design" turned out to be already built.
 
-**Result:** 11 cases agree exactly: all of shares, rates and positions and income, and the stock dividend. Four do not.
+## Already right: no change
 
-## Fix these
+**The four actions** (buy to open, sell to close, sell to open, buy to close), **the three endings**, and **every strategy** (long calls and puts; covered and naked calls; secured and naked puts) are implemented generically, as the stage 2 definitions say:
+- `apply_trade` (`engine/src/ledger.rs:953-994`) keeps one net position per contract when no effect is stated.
+- `apply_delivery` (`ledger.rs:1135-1180`) closes the shares held and opens the rest the other way. It values them at the stated cash, else strike × shares.
 
-**1. Options: the design, and the case that breaks it.** *(Revised: an earlier version allowed "the sale closes the long" as a fix. That guesses the label is wrong, so it is withdrawn.)*
+## 1. A stated effect that contradicts the position: fix before 3b
 
-**The design.** A broker keeps one net position per contract per account: long, short or flat.
-- **Four actions:** buy to open (flat or long, gets longer), sell to close (reduces a long), sell to open (flat or short, gets shorter), buy to close (reduces a short).
-- **Three endings:** expiry, assignment, exercise.
-- **Strategies are not separate code paths.** Long calls and puts, covered calls, cash-secured puts, naked calls and naked puts all use these same actions and endings. They differ only in what else the account holds, and that matters at assignment and exercise:
-  - a covered call delivers shares held;
-  - a naked call opens a short share position at the strike;
-  - a short put, secured or naked, buys the shares at the strike;
-  - an exercised long call buys at the strike, and an exercised long put sells shares held or opens a short.
+**Today:** a stated "open" against an opposite position doesn't close it. The engine opens the other direction beside it, in a round trip of its own, and taints the holding (`ledger.rs:961`, `:970-974`, `:982`, `:547-549`). The case `options.json:27-49` expects this. The result:
+- **Two positions:** a long and a short of one contract in one account.
+- **Later matching breaks.** `close` stops at the first lot of the other direction (`ledger.rs:630-633`), so a correctly labelled buy to close can't cover the short and goes beyond-held, and a buy with no effect adds to the long.
+- **The equity series and the broker check** use net units (`ledger.rs:800-814`) and never read the taint: they show 0 with no gap.
 
-**The conflict.** A stated effect that contradicts the position before it ("sell to open" while long, "buy to close" with no short) cannot happen with complete, correctly labelled broker records. It means an earlier row is missing or a row is mislabelled, and the record alone cannot say which. So:
-- **never** two positions in one contract and account (the case in `options.json`, "a record that says it opens against an opposite position is a conflict, shown", expects a long of 1 *and* a short of 1; that is the bug);
-- the contract's current position is the one the broker states for it, marked as the broker's, as the equity series already takes the broker's figure where its own can't be stated; with no broker statement, the position waits;
-- the round trips the conflicting transaction touches wait with `effect-conflict` until a missing or corrected row arrives; nothing is applied by guessing which label is wrong.
+**When it fires:** never on today's data. The import states no option effect (`book/src/import/mapping.rs:137-141`). It starts when 3b's Wealthsimple rows state their effects, so it must be fixed before 3b lands.
 
-Write this into the stage 2 definitions ("The ledger", Options), then fix the case and the engine.
+**The fix:**
+- **Hold back what contradicts the position.** A transaction whose stated effect contradicts the position before it is not applied. That covers an open meeting the opposite direction, a close meeting the opposite direction, and an ending that meets the wrong side (an assignment against a long or nothing, an exercise against a short, an expiry row whose sign opposes the position).
+- **Reuse the existing "waits" path**, the one `quantity-unstated` and `leg-unstated` use (`ledger.rs:835-881`): taint the holding and list the transaction in `unapplied`. The equity series then states the account's day from the broker, marked as the broker's (`equity.rs:126-130`, `:265-268`). No new mechanism is needed.
+- **Keep beyond-held** for a close that meets nothing, as definition :75 says.
+- **Strengthen the runner's invariant:** no book holds lots of both directions. `tests/cases.rs:493-496` checks only duplicate keys.
+- **Write the rule** into the stage 2 definitions (The ledger, Options) in a sentence.
 
-**Cases to add**, each through its full life, with effects stated as the broker states them:
-- buy to open then sell to close, in parts;
-- sell to open then buy to close, in parts;
-- a long put exercised, with the shares held and without;
-- a naked call assigned with no shares held: a short share position opened at the strike;
-- a covered call of 2 contracts assigned with only 150 of 200 shares held;
-- a cash-secured put assigned;
-- "buy to close" with no short: the conflict rule;
-- the conflict case above, rewritten to the rule.
+## 2. Same-instant ordering makes conflicts out of correct records: fix with §1
 
-Make the existing "a short call assigned delivers the shares at the strike" case state whether the shares were held.
+At one instant, a record stating "open" is applied before one stating "close" (`ledger.rs:465-474`; stage 2, "The order of transactions"). Example: long 1 held, then a sell to close 1 and a sell to open 1 at the same instant (or undated on the same day). The open goes first and meets the long. Today that raises a false conflict. Under §1's fix it would hold back the open and leave the book flat, which is wrong.
 
-**2. Trade marks no definition names:** `split` (`events.json`, the split marker case), `continued` (`events.json`, the consolidation case) and `rolled` (`options.json`, the roll case).
-- **Why it matters:** the definitions name two marks, `reward` and `basis-unknown`. `SPEC.md` §1 allows nothing beyond what it lists.
-- **The fix:** remove the three, or define each one where the definitions live and say where the page shows it. Don't leave them as outputs that only the code and its own cases know about.
+**The fix:** at one instant, a stated close that meets a position goes before a stated open in the other direction. An open still goes first only when a close at the same instant needs it (a short opened and covered at one instant). Add a case each way. §1 must not land without this.
 
-## Then run it over every case
+## 3. A corporate event that continues a holding leaves a short behind
 
-Brief 01 §3 asked for one case per file to be re-derived this way. The sample found a wrong expected figure in 1 case of 15, and invented output in 3 more. That's enough to run the check over every case in every file, not a sample:
-- one clean-room agent per file, blind to `expect`, `working` and `rust/`;
-- one judge per file;
-- the verdicts `case-wrong`, `cleanroom-wrong`, `definitions-ambiguous` and `format-only`.
+`apply_leg` counts the units held from long lots only (`ledger.rs:1259`), and `take` stops at the first lot that isn't long (`:695`). So when an event moves a holding to a new instrument, a short position stays under the old one, with no gap.
 
-Fix each `case-wrong`. Put each `definitions-ambiguous` into the definitions as a sentence; one that the owner must settle goes to the top of the plan. This is a fan-out job that fits brief 01 §3's rule, so run it as a workflow.
+**The fix:** an event moves or scales short lots as it does long ones, or the holding waits. Add a case with a short through a split and through a continuation.
+
+## 4. Several open round trips shown as one position
+
+`build_positions` makes one position per account, instrument and direction from every lot of that direction, and keys it by the first lot's round trip (`engine/src/positions.rs:122-124`, `:193`). `SPEC.md` §2 defines a position that way, but stage 2 says a position's id is its round trip's trade id. When several round trips are open in one direction, the position takes the first one's id and journal. That happens with a deposited coin beside bought ones, or with shares delivered into an existing holding.
+
+**The fix:** say in the definitions what such a position links to (all its open round trips, not the first alone), and add a case.
+
+## 5. The importer and the engine disagree on ending rows
+
+- **An expiry row with no quantity.** The engine and definition :77 treat it as a full close (`ledger.rs:873-875`). The import gives the same row a `quantity-not-stated` problem (`mapping.rs:293-295`), so the account's equity waits for nothing.
+- **An assignment or exercise row with no quantity** taints only the contract (`ledger.rs:876-881`). The delivered shares neither move nor wait.
+
+3b's Wealthsimple mapping replaces the import. Make it agree with the engine's definitions for these rows, and make a delivery with no quantity put the underlying on hold too. Add a case each.
+
+## 6. Cases to add
+
+Cases already there:
+- **The short put assigned:** `options.json:227-250`. Restate it with the sale stated as a sell to open, and the received shares later sold.
+- **The short call assigned** already holds the shares (`options.json:204`, `:217`). Rename it to say the call was covered.
+
+New cases:
+- **Options with stated effects, closed in parts**, one long and one short.
+- **A long put exercised, with the shares held and without.** Also amend stage 2 :74, which allows a short to be opened by an assignment only; the code opens one for an exercise too (`ledger.rs:1162`, `:1175-1179`).
+- **A naked call assigned with no shares held.** State the cash: the value is the stated cash, and strike × shares only without it.
+- **A covered call of 2 contracts assigned with only 150 of 200 shares held.** Don't assert `cash_invariant`: the runner sums every fill's cash (`tests/cases.rs:179-185`, `:505`).
+- **The conflict and ordering cases of §1 and §2, and the short through events of §3.**
+- **Stage 2 :78:** say that shares already held are closed inside their own round trip, and only the remainder opens a round trip keyed by the delivery.
+
+## 7. Trade marks
+
+- **Eight marks no definition names:** `rolled`, `split`, `continued`, `deposited`, `transferred`, `from-event`, `assignment` and `no-expiry-record` (`ledger.rs:72-84`). Only `reward` is defined.
+- **None reaches the page today.** The engine runs only in `compare-figures`, and the wire carries the old model's marks.
+- **`039613de` already rules that each is defined in `SPEC.md` at the switch or kept off the page** (`docs/architecture.md:244`), but it leaves out `deposited`. Add it.
+- **`basis-unknown`** is a gap in the engine, not a mark, but the page looks for it among the marks (`web/src/lib/Trades.svelte:77`). At the switch, the page reads the gap.
+
+## 8. Run the blind check over every case
+
+`039613de`'s check covered every case in two files and only the first case elsewhere (`tests/cases/README.md:17`), so it never reached the conflict case. Run it over every case in every file, one blind agent and one judge per file. That's a fan-out job for a workflow.
