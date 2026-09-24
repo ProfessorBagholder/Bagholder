@@ -555,3 +555,80 @@ fn every_case_gives_the_figures_the_spec_requires() {
     let failures: Vec<String> = files.iter().flat_map(|p| run(p)).collect();
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// The needs name every fact a figure uses: with no rate and no close given,
+/// every rate and every close any figure then waits on is one the engine's needs
+/// name, for every case. The figures are scanned through their debug form, which prints
+/// every gap they carry wherever it sits.
+#[test]
+fn the_needs_name_every_rate_and_close_a_figure_waits_on() {
+    use bagholder_core::Currency;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases");
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    files.sort();
+    let mut failures = Vec::new();
+    let mut seen = 0;
+    for path in files {
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for case in file.as_array().unwrap() {
+            let name = format!("{} / {}", path.file_name().unwrap().to_string_lossy(), s(case, "name").unwrap());
+            let b = build(case);
+            // no rate given, then neither a rate nor a close nor a quote
+            for without_market in [false, true] {
+                let mut bare = b.inputs.clone();
+                bare.facts.rates = Default::default();
+                if without_market {
+                    bare.market.closes = Default::default();
+                    bare.market.quotes = Default::default();
+                }
+                let e = Engine::build(bare);
+                // what a figure uses depends on what has been read (a contract past its
+                // expiry is held until its underlying's close shows it worthless), so the
+                // needs are those of the engine whose figures are scanned
+                let needs = e.needs();
+                let f = e.figures();
+                let text = format!("{:?} {:?} {:?} {:?} {:?}", f.trades, f.positions, f.cash, f.payers, f.equity);
+                for part in text.split("RateMissing { currency: ").skip(1) {
+                    let c: String = part.chars().take_while(|c| c.is_ascii_uppercase()).collect();
+                    let day: bagholder_core::jiff::civil::Date = part.split("day: ").nth(1).unwrap()[..10].parse().unwrap();
+                    let c = Currency::parse(&c).unwrap_or_else(|_| panic!("{name}: {part:.40}"));
+                    seen += 1;
+                    if !needs.rates.get(&c).is_some_and(|oldest| *oldest <= day) {
+                        failures.push(format!("{name}: a figure waits on the {c} rate for {day}, which the needs do not name"));
+                    }
+                }
+                for part in text.split("CloseUnknown { instrument: ").skip(1) {
+                    let id: String = part.trim_start_matches("InstrumentId(").chars().take_while(|c| c.is_ascii_hexdigit() || *c == '-').collect();
+                    let i = InstrumentId::parse(&id).unwrap_or_else(|_| panic!("{name}: {part:.60}"));
+                    let day: bagholder_core::jiff::civil::Date = part.split("day: ").nth(1).unwrap()[..10].parse().unwrap();
+                    seen += 1;
+                    if !needs.closes.get(&i).is_some_and(|(from, to)| *from <= day && day <= *to) {
+                        failures.push(format!("{name}: a figure waits on {i}'s close for {day}, which the needs do not name"));
+                    }
+                }
+                // every security held today whose rate a figure states or waits on
+                let today = b.inputs.clock.today;
+                for i in f.payers.keys() {
+                    let held = f.matched.units.keys().any(|(a, x)| x == i && !f.matched.units_on(*a, *i, today).is_zero());
+                    let security = b.inputs.ledger.instruments.get(i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Security);
+                    seen += 1;
+                    if held && security && !needs.payers.contains(i) {
+                        failures.push(format!("{name}: {i} is held and pays, and the needs do not name it a payer"));
+                    }
+                }
+                // a contract past its expiry with nothing on the record waits on its
+                // underlying's close that day
+                for part in text.split("NoExpiryRecord(InstrumentId(").skip(1) {
+                    let i = InstrumentId::parse(&part[..36]).unwrap_or_else(|_| panic!("{name}: {part:.60}"));
+                    let terms = b.inputs.ledger.instruments[&i].terms.as_ref().expect("a contract has terms");
+                    seen += 1;
+                    if !needs.closes.get(&terms.underlying).is_some_and(|(from, to)| *from <= terms.expiry && terms.expiry <= *to) {
+                        failures.push(format!("{name}: {i} waits on its underlying's close for {}, which the needs do not name", terms.expiry));
+                    }
+                }
+            }
+        }
+    }
+    assert!(seen > 0, "no case waited on a rate or a close: the scan reads nothing");
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}

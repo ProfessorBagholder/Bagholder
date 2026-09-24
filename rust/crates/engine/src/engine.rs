@@ -252,6 +252,11 @@ impl Engine {
         &self.identity
     }
 
+    /// The facts the figures use: what the readers read.
+    pub fn needs(&self) -> crate::needs::FactNeeds {
+        crate::needs::fact_needs(&self.inputs, &self.matched)
+    }
+
     pub fn figures(&self) -> Figures<'_> {
         Figures { trades: &self.trades, positions: &self.positions, cash: &self.cash, payers: &self.payers, equity: &self.equity, checks: &self.checks, matched: &self.matched }
     }

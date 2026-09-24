@@ -16,5 +16,6 @@ pub mod cashflow;
 pub mod equity;
 pub mod scope;
 pub mod engine;
+pub mod needs;
 
 pub use engine::{Change, Engine, Entity, Moved};
