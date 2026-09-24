@@ -1,5 +1,7 @@
 # Plan: corporate events and option contracts booked from the record, not guessed
 
+**Superseded.** Written against the old model (`fifo.rs`, cases generated from Python). Stage 2's engine (`docs/plans/stage-2-engine.md`) books corporate events as adjustments from the record, and the official source for each kind of event is stage 3b's research. Kept for its survey of the cases; not a plan of record.
+
 ## Scope
 
 Every event that changes a holding without a trade is booked today by one of two shortcuts, and both are wrong for some inputs:

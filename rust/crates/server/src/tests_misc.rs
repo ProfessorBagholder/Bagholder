@@ -475,7 +475,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// Every place the code waits on a clock, by file, with why it may. A wait that is
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
-/// docs/architecture.md, "Timers that remain", and then counted here.
+/// here, with the reason it stays: this list is the one place timers are argued for.
 const TIMED_WAITS: [(&str, usize, &str); 13] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
@@ -485,7 +485,7 @@ const TIMED_WAITS: [(&str, usize, &str); 13] = [
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
-    ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 6); a test"),
+    ("server/src/notify.rs", 2, "its stream's heartbeat (folded into /api/events in stage 5, the data flow); a test"),
     ("server/src/orders/brackets.rs", 2, "the bracket engine, parked until a bracket is armed: a stop's cadence; a cancel given its seconds to land"),
     ("server/src/orders/readback.rs", 1, "Wealthsimple offers no order push: read only while an order is live or shown"),
     ("server/src/session.rs", 2, "the portfolio while a page is open; the token and pull deadlines"),
@@ -519,5 +519,5 @@ fn test_no_wait_on_a_clock_that_is_not_accounted_for() {
     }
     found.sort();
     let want: Vec<(String, usize)> = TIMED_WAITS.iter().map(|(f, n, _)| (f.to_string(), *n)).collect();
-    assert_eq!(found, want, "a wait on a clock was added or removed: see docs/architecture.md, \"Timers that remain\"");
+    assert_eq!(found, want, "a wait on a clock was added or removed: argue for it in TIMED_WAITS, the list of timers that remain");
 }

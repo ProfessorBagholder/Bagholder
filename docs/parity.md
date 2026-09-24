@@ -1,6 +1,6 @@
 # Feature parity: `SPEC.md` against the Svelte page
 
-Every behaviour `SPEC.md` gives the web app, and whether `web/src` has it. Built 2026-09-20 by reading the code, not by running it, so an item marked done here is still owed its browser test (stage 8 of `docs/architecture.md`), and anything marked **unsure** is settled by driving it. An item is closed when it works on real data and a Playwright test holds it. `L:` is a line in `ledger.html`, the reference until cutover.
+Every behaviour `SPEC.md` gives the web app, and whether `web/src` has it. Built 2026-09-20 by reading the code, not by running it, so an item marked done here is still owed its browser test (the parity baselines taken before the switch, stage 3; `architecture-briefs` brief 01 §2.4), and anything marked **unsure** is settled by driving it. An item is closed when it works on real data and a Playwright test holds it. `L:` is a line in `ledger.html`, the reference until cutover.
 
 Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 
@@ -32,7 +32,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Back returns to the list at its scroll position; a newly opened page starts at the top (`L:4726`, `L:4739-4763`).
 - [x] A journal save that fails says so in the header (`L:909`).
 - [x] Disclosure rows waiting on the local model wake when it is ready (`summaryReady`, `L:866`). *(Design: the server's document reader wakes on `localmodel::on_change` and sends the rows; the page waits for nothing.)*
-- [x] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 6.)*
+- [x] No redraw under an open trade or a note being typed (`L:871-876`). *(Design: stage 5, the data flow.)*
 - [x] Chart cache reset when the server restarts (`startedAt`, `L:855-859`).
 - [x] The short-interest reading expiring after 30 minutes: asked again when the card is shown or the reader returns to the tab with an older one. The original re-asked from its 30-second redraw; no clock runs here, since the exchanges report twice a month.
 
@@ -42,14 +42,14 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] Enter adds the banded watchlist suggestion (`L:5146`).
 - [x] Esc in the News box clears the words, then the chip; Esc in the Shorts box clears its words (`L:5134-5137`).
 - [x] News reads `Reading…` while a pass is reading the scope, not only for a chip lookup (`newsPassReads`, `L:3618`).
-- [x] The Shorts feed refreshes on an open page. *(Design: by event, stage 6.)*
+- [x] The Shorts feed refreshes on an open page. *(Design: by event, stage 5.)*
 - [x] Esc closes the tile picker and the watchlist add row wherever focus is (`L:5133`).
 
 ### Order ticket and Orders panel
 - [x] The page behind an open panel does not scroll (`panel-open`, `L:4648`).
 - [x] ⌘K works over the Orders panel (`L:5104`).
 - [x] Enter saves an order editor; the editor takes focus when it opens (`L:4992-4995`, `L:5113`).
-- [ ] The cards' pixel grammar against the original, line by line: belongs to stage 8's pixel comparison, which runs both pages on the same orders.
+- [ ] The cards' pixel grammar against the original, line by line: belongs to the pixel comparison before the switch (stage 3, brief 01 §2.4), which runs both pages on the same data at 1200, 1340, 1440 and 1680 px.
 
 ### Notifications
 - [x] The browser channel: `new Notification`, `/api/notifications/seen`, the banner's click (`L:1137-1149`).
@@ -72,7 +72,7 @@ Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.
 - [x] The cut-text hover (`#cutTip`, `L:3379-3395`, `L:5259`).
 - [x] **Scrollbars appear while scrolling** (`scrolling` class, `L:5270-5277`); `scrollbars.ts`.
 - [x] A model reply with `ok:false` is handled; the error state offers a retry (`L:787`, action `reload`).
-- [x] A quote tick fetches only live figures (`L:803-818`). *(Design: carried by the event, stage 6.)*
+- [x] A quote tick fetches only live figures (`L:803-818`). *(Design: carried by the event, stage 5.)*
 
 ## Found done, now each driven by a browser test
 Header brand, version, sync line and notices; Orders button and bell with badges; menu items and the confirm dialog; filter fields, presets, ranges, chips, ranked search with external lookup; ⌘K, Esc cascade, arrow keys between tabs; Dashboard tiles, equity curve, annualized card and benchmark switch, monthly bars, grades, by symbol, review queue; Trades list columns, sorts and reset; trade and holding detail, chart timeframes and markers, executions, journal, short interest, disclosures; Portfolio tiles, donuts and holdings; Markets tiles, fear and greed, heatmap card, watchlist, shorts, news; Cashflow tiles, chart, tables and donut; order ticket and brackets; Orders panel tabs, drafts and actions; notification history and stream; connect with the streamed sign-in, sync, refresh, disconnect; CSV import, watch folder, add trade, export, clear data; reload on a new server version.

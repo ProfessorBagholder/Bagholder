@@ -1,5 +1,7 @@
 # Plan: replace the hand-rolled web stack with Rust (axum) + Svelte, incrementally
 
+**Superseded** by `docs/architecture.md` (the design) and the order of work in `docs/design-review.md`. Kept as history; nothing here is checked against.
+
 A program-level done-contract for the frontend/backend rewrite. This is the authoritative plan the phased PRs are checked against; each phase copies `PLAN.template.md` for its own per-task contract. Mark it up — nothing here is built until a phase's PR lands green.
 
 ## Why

@@ -1,5 +1,12 @@
 # Plan: stage 3a, sources and the facts the figures use
 
+## For the owner to decide
+
+1. **Payout frequency: which way.** Brief 01 (§2.1) says: keep working the frequency out from a fund's ex-dates and payments, show `frequency-unknown` where that fails, count how many holdings are left, and read fund companies' own pages only for those. Your decision of 2026-09-23 was the opposite: a fund's schedule comes from its fund company's own page, because working it out from dates lags about six weeks after a change (Ninepoint's funds went monthly → twice-monthly) and shows half the income meanwhile. The two cannot both hold. This plan follows your decision until you say otherwise; nothing depending on it is built until then.
+2. **Mackenzie (QCN, QUU) and WisdomTree (WQTM).** Their sites refuse any program that is not a browser (a bot check). The app will not get past a bot check, and neither company publishes its distributions anywhere else found. Unless you know another first-party source, these three funds' distribution figures show as waiting on their payer.
+
+Gated in this plan (brief 01 §1), not built until the gate says Go: book migration 3 (distributions without kinds, the reinvested part, rate series with their days) and the change to how the distribution rate is defined (cash per unit, from the payer's record only). Built already, as work inside the plan: the strict reply reader and the network crate with one limiter.
+
 ## Scope
 
 Stage 3 of the order of work in `docs/design-review.md` is three parts, each with its own plan, review and verification, landed in order:
@@ -318,6 +325,7 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
 
 ## Right to refuse
 
+- **Payout frequency (brief 01 §2.1 against the owner's decision of 2026-09-23).** The brief was written against `bc3cb0d`, before the owner's decision that a fund's schedule is its fund company's own statement, which lives in this plan's unpushed revisions. The brief's order (inference first, issuer pages only for what inference leaves unknown) contradicts it: inference from dates is exactly what lags a schedule change by weeks. Put to the owner as decision 1 above; the parked engine change that removes inference waits for that answer and the gate.
 - **Taken, on corporate events.** An event's values come from the official source (§6), not from Wealthsimple alone. Which source answers for which event is settled in 3b, beside the rows it explains.
 - **Reserved.** If research shows a field or a source this plan counts on is not there, the reader for it is not built on a guess: the plan changes first, and the change is written here.
 
