@@ -67,13 +67,27 @@ impl Ctx<'_> {
 
     /// Record one request's outcome.
     pub fn record<A>(&self, source: &SourceName, host: &str, kind: DataKind, instrument: Option<InstrumentId>, noted: &Noted<A>) -> Result<()> {
+        self.record_row(source, host, kind, instrument, noted, noted.outcome.detail())
+    }
+
+    /// Record one request's outcome under what was asked (`^TSX`), for requests
+    /// of one source and kind that are for different things with no instrument.
+    pub fn record_detail<A>(&self, source: &SourceName, host: &str, kind: DataKind, instrument: Option<InstrumentId>, noted: &Noted<A>, asked: &str) -> Result<()> {
+        let detail = match noted.outcome.detail() {
+            d if d.is_empty() => asked.to_string(),
+            d => format!("{asked}: {d}"),
+        };
+        self.record_row(source, host, kind, instrument, noted, detail)
+    }
+
+    fn record_row<A>(&self, source: &SourceName, host: &str, kind: DataKind, instrument: Option<InstrumentId>, noted: &Noted<A>, detail: String) -> Result<()> {
         self.cache.record(&OutcomeRow {
             source: source.clone(),
             host: host.to_string(),
             kind,
             instrument,
             outcome: noted.outcome.kind(),
-            detail: noted.outcome.detail(),
+            detail,
             shape_change: noted.shape_change.as_ref().map(|c| c.to_string()),
             at: self.now,
         })?;

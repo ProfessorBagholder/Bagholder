@@ -370,6 +370,17 @@ impl MarketCache {
         Ok(out)
     }
 
+    /// When a source last answered a kind of request, for an instrument or for
+    /// none.
+    pub fn last_answered(&self, of: &SourceName, kind: DataKind, id: Option<InstrumentId>) -> Result<Option<Timestamp>> {
+        let at: Option<String> = self.conn.query_row(
+            "SELECT at FROM outcomes WHERE source = ?1 AND kind = ?2 AND instrument_id IS ?3 AND outcome = 'answered' ORDER BY id DESC LIMIT 1",
+            params![of.as_str(), kind.as_str(), id.map(|i| i.to_string())],
+            |r| r.get(0),
+        ).optional()?;
+        at.map(|a| instant("outcomes", "at", &a)).transpose()
+    }
+
     /// Every source with an outcome recorded.
     pub fn sources(&self) -> Result<BTreeSet<SourceName>> {
         let mut stmt = self.conn.prepare("SELECT DISTINCT source FROM outcomes")?;

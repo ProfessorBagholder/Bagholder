@@ -12,6 +12,8 @@ pub mod ask;
 pub mod cache;
 pub mod contract;
 pub mod health;
+pub mod market;
+pub mod needs;
 pub mod outcome;
 pub mod rates;
 pub mod read;
