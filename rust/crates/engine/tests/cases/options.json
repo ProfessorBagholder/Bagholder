@@ -319,5 +319,23 @@
       "trades": [{"opened_by": "t2", "pnl": "100.00"}],
       "positions": [{"account": "A", "instrument": "U", "qty": "100", "gaps": ["multiplier-unstated", "price-unknown"]}]
     }
+  },
+  {
+    "name": "a short opened and covered at one instant: the opening goes first, whichever order the book lists them in",
+    "spec": "docs/plans/stage-2-engine.md, the order within a day: at one instant, what opens goes before what closes",
+    "working": ["sell 1 C1 to open for +60 and buy 1 C1 to close for −50, both at 15:00, the close listed first: one short round trip, P&L 10, nothing left"],
+    "today": "2026-04-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [
+      {"id": "U", "currency": "USD"},
+      {"id": "C1", "kind": "option", "currency": "USD", "underlying": "U", "expiry": "2026-06-19", "strike": "10", "right": "call", "multiplier": "100"}
+    ],
+    "rates": {"USD": {"2026-01-02": "1.35"}},
+    "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+    "transactions": [
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "effect": "close", "instrument": "C1", "qty": "1", "cash": "-50"},
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "effect": "open", "instrument": "C1", "qty": "-1", "cash": "60"}
+    ],
+    "expect": {"trade_count": 1, "position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "direction": "short", "pnl": "10.00", "cash_invariant": true}]}
   }
 ]

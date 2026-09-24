@@ -462,9 +462,82 @@ fn run(path: &Path) -> Vec<String> {
             let got: BTreeSet<String> = f.matched.disagreements.iter().map(|x| tx.iter().find(|(_, id)| *id == x).map(|(l, _)| l.clone()).unwrap_or_default()).collect();
             c.words("price and cash disagree", v, got);
         }
+        invariants(&mut c, &b, &f);
+        // the same book listed in another order gives the same figures
+        let mut reversed = e.inputs().clone();
+        reversed.ledger.transactions.reverse();
+        let moved = e.differences(&Engine::build(reversed));
+        if !moved.is_empty() {
+            c.fail(format!("invariant: the book in reverse order moves {moved:?}"));
+        }
         failures.extend(c.failures);
     }
     failures
+}
+
+/// What holds on every book, checked on every case: no two positions share a
+/// key; a closed round trip whose fills net to no units, all in its currency,
+/// has its fills' cash as its P&L (the parts of every fill add up to it); a
+/// holding moved by nothing but its own trades and transfers holds what its
+/// transactions add up to.
+fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
+    use bagholder_core::transaction::Kind;
+    use bagholder_engine::ledger::Flag;
+    let txs = &b.inputs.ledger.transactions;
+    let keys: BTreeSet<_> = f.positions.iter().map(|p| (&p.key, p.account, p.instrument)).collect();
+    if keys.len() != f.positions.len() {
+        c.fail("invariant: two positions share a key".into());
+    }
+    let open: BTreeSet<&TripKey> = f.positions.iter().map(|p| &p.key).collect();
+    let named: BTreeSet<InstrumentId> = b.inputs.facts.adjustments.iter().flat_map(|(_, a)| a.legs.iter().flat_map(|l| [l.from, l.to])).flatten().collect();
+    for t in f.trades.iter() {
+        let TradeKey::Trip(k) = &t.key else { continue };
+        let Ok(pnl) = &t.pnl else { continue };
+        // an event that moved cost (a spin-off, a return of capital) leaves the
+        // fills' cash apart from the P&L
+        let moved = t.instruments.iter().any(|i| named.contains(i));
+        if moved || open.contains(k) || t.slices.iter().any(|s| s.flags.iter().any(|fl| !matches!(*fl, Flag::Rolled | Flag::Split))) {
+            continue;
+        }
+        let fills: Vec<_> = txs.iter().filter(|x| t.fills.contains(&x.id)).collect();
+        let plain = fills.iter().all(|x| matches!(x.kind, Kind::Buy | Kind::Sell) && x.cash.is_some_and(|m| m.currency == t.currency) && x.fee.is_none_or(|m| m.currency == t.currency));
+        let mut net: std::collections::BTreeMap<InstrumentId, Dec> = std::collections::BTreeMap::new();
+        for x in &fills {
+            if let (Some(i), Some(q)) = (x.instrument, x.quantity) {
+                let e = net.entry(i).or_insert(Dec::ZERO);
+                *e = e.checked_add(q).unwrap();
+            }
+        }
+        if !plain || net.values().any(|q| !q.is_zero()) {
+            continue;
+        }
+        let cash = fills.iter().try_fold(Dec::ZERO, |a, x| a.checked_add(x.cash.unwrap().amount)).unwrap();
+        if pnl.amount != cash {
+            c.fail(format!("invariant: the round trip opened by {} has P&L {} against its fills' cash {}", k.opening, pnl.amount.to_text(), cash.to_text()));
+        }
+    }
+    let today = b.inputs.clock.today;
+    let linked: BTreeSet<_> = b.inputs.ledger.transfer_links.iter().flat_map(|(o, i)| [o, i]).collect();
+    let delivered: BTreeSet<InstrumentId> = txs
+        .iter()
+        .filter(|x| matches!(x.kind, Kind::OptionAssignment | Kind::OptionExercise))
+        .filter_map(|x| x.instrument.and_then(|i| b.inputs.ledger.instruments.get(&i)).and_then(|info| info.terms.as_ref()).map(|t| t.underlying))
+        .collect();
+    let beyond: BTreeSet<_> = f.matched.beyond.iter().map(|x| (x.account, x.instrument)).collect();
+    for ((account, instrument), book) in &f.matched.books {
+        let info = &b.inputs.ledger.instruments[instrument];
+        let expired = info.terms.as_ref().is_some_and(|t| t.expiry < today);
+        let own: Vec<_> = txs.iter().filter(|x| x.account == *account && x.instrument == Some(*instrument)).collect();
+        let moved = !book.taint.is_empty() || named.contains(instrument) || delivered.contains(instrument) || expired || beyond.contains(&(*account, *instrument));
+        if moved || !own.iter().all(|x| matches!(x.kind, Kind::Buy | Kind::Sell | Kind::StakingReward | Kind::TransferIn | Kind::TransferOut) && x.quantity.is_some() && !linked.contains(&x.id)) {
+            continue;
+        }
+        let sum = own.iter().try_fold(Dec::ZERO, |a, x| a.checked_add(x.quantity.unwrap())).unwrap();
+        let held = f.matched.units_on(*account, *instrument, today);
+        if held != sum {
+            c.fail(format!("invariant: {account} holds {} {instrument} against its transactions' {}", held.to_text(), sum.to_text()));
+        }
+    }
 }
 
 #[test]

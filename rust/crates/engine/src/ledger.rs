@@ -536,6 +536,9 @@ impl<'a> Matcher<'a> {
     fn trip_for(&mut self, account: AccountId, instrument: InstrumentId, direction: Direction, deposited: bool, opening: &TransactionId, joins: Option<TripKey>) -> TripKey {
         let book = self.book(account, instrument);
         let current = if deposited { book.deposit_trip.clone() } else { book.trip.clone() };
+        // a round trip is one direction: an opening against the other (a
+        // conflict on the record) is a round trip of its own
+        let current = current.filter(|k| self.out.trips.get(k).is_none_or(|t| t.direction == direction));
         let this = TripKey { opening: opening.clone(), instrument };
         let key = joins.or(current).unwrap_or_else(|| this.clone());
         // a round trip given by the caller (a roll's continuation, or a round
