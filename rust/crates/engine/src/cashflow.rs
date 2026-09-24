@@ -161,10 +161,12 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow]) -> BTreeMap<InstrumentId, 
             (None, Some(_)) => (Err(Gaps::of(Gap::NoDistributionYet(i))), None),
             (_, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
-        // payments per year: the payer's own statement, never worked out
-        let (per_year, frequency_source) = match inputs.facts.frequencies.get(&i) {
-            Some(s) => (Ok(s.value), Some(FrequencySource::Stated(s.source.clone()))),
-            None => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
+        // payments per year: the payer's own statement, never worked out; a
+        // record read that states none waits on a schedule no source states
+        let (per_year, frequency_source) = match (inputs.facts.frequencies.get(&i), read) {
+            (Some(s), _) => (Ok(s.value), Some(FrequencySource::Stated(s.source.clone()))),
+            (None, Some(_)) => (Err(Gaps::of(Gap::ScheduleUnstated(i))), None),
+            (None, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
         // the next distribution still to be paid, whether or not it has gone ex
         let due = |d: &&&crate::input::Declared| d.pay_date.unwrap_or(d.ex_date);

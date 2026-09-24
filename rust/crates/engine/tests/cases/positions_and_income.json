@@ -149,6 +149,29 @@
     }
   },
   {
+    "name": "a payer read from the exchange-side record, whose schedule no source states: the rate stands, the schedule waits on a source that states it",
+    "spec": "docs/decisions.md 2026-09-24 (the exchange-side record where a fund company's publication cannot be read; the schedule only where a source states it); docs/plans/stage-3a-sources.md, Distributions and schedules",
+    "working": [
+      "derived by an agent that had not read the engine, from the definitions (2026-09-24)",
+      "W: its record read, its latest distribution gone ex 0.50 → per 0.50; no source states its schedule → per_year waits: schedule-unstated, not payer-not-read",
+      "Q: its record read, latest gone ex 1.04983, its schedule stated as 4 → both stand"
+    ],
+    "today": "2026-04-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "W", "currency": "USD"}, {"id": "Q"}],
+    "frequencies": {"Q": 4},
+    "declared": {
+      "W": [{"ex": "2026-03-10", "amount": "0.50"}],
+      "Q": [{"ex": "2026-03-23", "pay": "2026-03-30", "amount": "1.04983"}]
+    },
+    "expect": {
+      "payers": [
+        {"instrument": "Q", "per": "1.04983", "per_year": 4, "next_ex": "2026-03-23"},
+        {"instrument": "W", "per": "0.50", "per_year": {"gaps": ["schedule-unstated"]}}
+      ]
+    }
+  },
+  {
     "name": "the tiles sum the stated members and count those left out",
     "spec": "docs/plans/stage-2-engine.md, unknown and waiting: a tile is the sum of those stated, and says how many it left out",
     "working": ["a win of 100, a loss of 40, and a deposited coin's sale: realized 60 over 2, 1 left out; win rate 0.5; profit factor 100 ÷ 40 = 2.5"],
