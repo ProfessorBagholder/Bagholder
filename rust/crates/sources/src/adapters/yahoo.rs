@@ -95,14 +95,21 @@ fn as_traded(v: Dec, day: Date, splits: &[Split]) -> Result<Dec, String> {
 
 /// Read one chart reply for `symbol` at `now`.
 pub fn parse(v: &Value, symbol: &str, now: Timestamp) -> Outcome<Chart> {
-    match read(v, symbol, now) {
+    parse_after(v, symbol, now, &[])
+}
+
+/// Read one chart reply, undoing also `later`: the splits after the span it
+/// covers. Yahoo adjusts every close and dividend for every split up to now, but
+/// a reply lists only the splits inside its own span.
+pub fn parse_after(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Outcome<Chart> {
+    match read(v, symbol, now, later) {
         Ok(Ok(c)) => Outcome::Answered(c),
         Ok(Err(why)) => Outcome::Meaning(why),
         Err(m) => Outcome::Mismatch(m),
     }
 }
 
-fn read(v: &Value, symbol: &str, now: Timestamp) -> Result<Result<Chart, String>, Mismatch> {
+fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Result<Chart, String>, Mismatch> {
     let chart = Node::root(v).obj("chart")?;
     let results = chart.list("result")?;
     let [r] = results.as_slice() else {
@@ -157,6 +164,11 @@ fn read(v: &Value, symbol: &str, now: Timestamp) -> Result<Result<Chart, String>
                 let e = ds.obj(k)?;
                 dividends.push((day_of(instant(e.int("date")?, "events.dividends.date")?), e.dec("amount")?));
             }
+        }
+    }
+    for s in later {
+        if !splits.iter().any(|x: &Split| x.day == s.day) {
+            splits.push(*s);
         }
     }
     splits.sort_by_key(|s| s.day);
@@ -217,11 +229,25 @@ fn percent_encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-/// Ask for `symbol`'s chart from `from` through `to`, with its splits and dividends.
+/// Ask for `symbol`'s chart from `from` through `to`, with its splits and
+/// dividends. A span that ends before today is adjusted for the splits after it
+/// too, which its reply does not list: those are asked first, as the monthly
+/// chart from the day after the span to today, which lists them.
 pub fn ask_span(net: &Net, symbol: &str, from: Date, to: Date, now: Timestamp) -> Noted<Chart> {
-    let end = to.tomorrow().map(epoch).unwrap_or_else(|_| epoch(to));
-    let url = format!("{CHART}{}?period1={}&period2={end}&interval=1d&events=div%7Csplit", percent_encode(symbol), epoch(from));
-    ask_url(net, &url, symbol, now)
+    let end = to.tomorrow().unwrap_or(to);
+    let today = now.to_zoned(TimeZone::UTC).date();
+    let mut later = Vec::new();
+    if end < today {
+        let url = format!("{CHART}{}?period1={}&period2={}&interval=1mo&events=split", percent_encode(symbol), epoch(end), epoch(today.tomorrow().unwrap_or(today)));
+        let noted = ask_url(net, &url, symbol, now);
+        match noted.outcome {
+            Outcome::Answered(c) => later = c.splits,
+            // without the later splits the span's closes cannot be undone
+            other => return Noted { outcome: other, shape_change: noted.shape_change },
+        }
+    }
+    let url = format!("{CHART}{}?period1={}&period2={}&interval=1d&events=div%7Csplit", percent_encode(symbol), epoch(from), epoch(end));
+    ask_url_after(net, &url, symbol, now, &later)
 }
 
 /// Ask for `symbol`'s quote: the chart of its latest session.
@@ -231,6 +257,10 @@ pub fn ask_quote(net: &Net, symbol: &str, now: Timestamp) -> Noted<Chart> {
 }
 
 fn ask_url(net: &Net, url: &str, symbol: &str, now: Timestamp) -> Noted<Chart> {
+    ask_url_after(net, url, symbol, now, &[])
+}
+
+fn ask_url_after(net: &Net, url: &str, symbol: &str, now: Timestamp, later: &[Split]) -> Noted<Chart> {
     let reply = match ask::send(net, &Ask::get(url, &HEADERS), NOT_CARRIED) {
         Outcome::Answered(r) => r,
         other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
@@ -239,5 +269,5 @@ fn ask_url(net: &Net, url: &str, symbol: &str, now: Timestamp) -> Noted<Chart> {
         Ok(v) => v,
         Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
     };
-    Noted { outcome: parse(&v, symbol, now), shape_change: ask::noticed(&v, &shape(), KEYED) }
+    Noted { outcome: parse_after(&v, symbol, now, later), shape_change: ask::noticed(&v, &shape(), KEYED) }
 }

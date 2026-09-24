@@ -60,11 +60,10 @@ pub fn fund_of(v: &Value, ticker: &str) -> Result<Option<(String, Option<u32>)>,
             .map(|i| i.text("altIdValue").map(str::to_string))
             .collect::<Result<_, _>>()?;
         if tickers.iter().any(|t| t.eq_ignore_ascii_case(ticker)) {
-            let word = p.opt_text("fundDistributionFrequency")?;
-            let per = match word {
-                Some(w) => Some(per_year(w).ok_or_else(|| p.mismatch(format!("{w:?} is not a schedule this reader knows")))?),
-                None => None,
-            };
+            // Vanguard states a schedule for every fund it lists: a fund without
+            // one is a change of what it publishes
+            let w = p.text("fundDistributionFrequency")?;
+            let per = Some(per_year(w).ok_or_else(|| p.mismatch(format!("{w:?} is not a schedule this reader knows")))?);
             return Ok(Some((p.text("portId")?.to_string(), per)));
         }
     }

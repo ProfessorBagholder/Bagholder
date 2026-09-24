@@ -6,7 +6,7 @@ use std::time::Duration;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, Dec, InstrumentId, Money, SourceName};
-use bagholder_sources::cache::{MarketCache, OutcomeRow, StoredQuote, MIGRATIONS, SCHEMA};
+use bagholder_sources::cache::{MarketCache, OutcomeRow, ReadRow, StoredQuote, MIGRATIONS, SCHEMA};
 use bagholder_sources::contract::{Benchmark, DataKind};
 use bagholder_sources::health::{self, State};
 use bagholder_sources::outcome::OutcomeKind;
@@ -129,6 +129,19 @@ fn the_winner_is_remembered_per_instrument_and_kind() {
     c.won(id(1), DataKind::Quote, &SourceName::named("tmx"), "QCN:US", t("2026-09-24T01:00:00Z")).unwrap();
     assert_eq!(c.winner(id(1), DataKind::Quote).unwrap(), Some((SourceName::named("tmx"), "QCN:US".to_string())));
     assert_eq!(c.winner(id(1), DataKind::DailyClose).unwrap(), None);
+}
+
+#[test]
+fn a_read_is_kept_per_span_newest_first_and_reads_back_exactly() {
+    let (_d, c) = open();
+    let r = |first: u8, last: u8, outcome: OutcomeKind, at: &str| ReadRow { source: SourceName::named("yahoo"), first: bagholder_core::jiff::civil::date(2026, 9, first as i8), last: bagholder_core::jiff::civil::date(2026, 9, last as i8), outcome, at: t(at) };
+    c.store_read("x", DataKind::DailyClose, &r(1, 22, OutcomeKind::Unreachable, "2026-09-23T01:00:00Z")).unwrap();
+    c.store_read("x", DataKind::DailyClose, &r(23, 23, OutcomeKind::Answered, "2026-09-23T22:00:00Z")).unwrap();
+    // the same span again: the newest attempt replaces the older
+    c.store_read("x", DataKind::DailyClose, &r(1, 22, OutcomeKind::Answered, "2026-09-23T21:00:00Z")).unwrap();
+    assert_eq!(c.reads("x", DataKind::DailyClose).unwrap(), vec![r(23, 23, OutcomeKind::Answered, "2026-09-23T22:00:00Z"), r(1, 22, OutcomeKind::Answered, "2026-09-23T21:00:00Z")]);
+    assert!(c.reads("x", DataKind::Benchmark).unwrap().is_empty());
+    assert!(c.reads("y", DataKind::DailyClose).unwrap().is_empty());
 }
 
 fn outcome(source: &'static str, kind: OutcomeKind, at: Timestamp) -> OutcomeRow {

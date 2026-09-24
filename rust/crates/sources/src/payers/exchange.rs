@@ -50,13 +50,8 @@ impl Payer for Mackenzie {
         };
         let quote = tmx::ask_quote(net, &form);
         let per_year = match quote.outcome {
-            Outcome::Answered(q) => {
-                let suffix = &form[venue::root(&l.symbol).len()..];
-                if !venue::tmx_venue_matches(suffix, &q.exchange_name) {
-                    return Noted { outcome: Outcome::NotCarried(format!("TMX answers {form} on {}, not the venue the record names", q.exchange_name)), shape_change: quote.shape_change };
-                }
-                q.per_year
-            }
+            // the quote's reader refuses an answer for another venue than the form's
+            Outcome::Answered(q) => q.per_year,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: quote.shape_change },
         };
         let rows = tmx::ask_dividends(net, &form);

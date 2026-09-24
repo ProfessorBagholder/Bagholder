@@ -11,9 +11,9 @@ use bagholder_core::jiff::Timestamp;
 use bagholder_core::{InstrumentId, SourceName};
 use bagholder_net::Net;
 
-use crate::cache::{CacheError, MarketCache, OutcomeRow};
+use crate::cache::{CacheError, MarketCache, OutcomeRow, ReadRow};
 use crate::contract::DataKind;
-use crate::outcome::Noted;
+use crate::outcome::{Noted, OutcomeKind};
 
 /// A failure to keep what was read: the book or the cache refused a write.
 /// Unlike a source's failure, this stops the run.
@@ -60,6 +60,21 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// Whether the newest read of `subject`'s `kind` failed within its host's
+    /// rest: a failure is asked again on the source's own rest, never in a loop.
+    pub fn resting(&self, subject: &str, kind: DataKind, host: &str) -> Result<bool> {
+        let reads = self.cache.reads(subject, kind)?;
+        Ok(crate::market::resting(&reads, self.now, self.net.limiter().pace(host).rest))
+    }
+
+    /// Keep that `subject`'s `kind` was read today, and how it ended: what
+    /// [`Ctx::resting`] reads.
+    pub fn attempted(&self, subject: &str, kind: DataKind, source: &SourceName, outcome: OutcomeKind) -> Result<()> {
+        let today = self.today();
+        self.cache.store_read(subject, kind, &ReadRow { source: source.clone(), first: today, last: today, outcome, at: self.now })?;
+        Ok(())
+    }
+
     /// Today in the Bank's zone.
     pub fn today(&self) -> Date {
         self.now.to_zoned(self.bank.clone()).date()

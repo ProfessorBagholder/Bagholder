@@ -56,6 +56,11 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             // no adapter reads this payer: the figures wait on it, named
             continue;
         };
+        // a failed read waits out its source's rest
+        let subject = id.to_string();
+        if ctx.resting(&subject, DataKind::Distributions, adapter.host())? {
+            continue;
+        }
         let mut noted = adapter.read(ctx.net, need, ctx.now);
         noted.outcome = match noted.outcome {
             Outcome::Answered(record) => match checked(record, ctx.now) {
@@ -65,6 +70,7 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             other => other,
         };
         ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
+        ctx.attempted(&subject, DataKind::Distributions, &adapter.source(), noted.outcome.kind())?;
         if let Outcome::Answered(record) = noted.outcome {
             ctx.book.store_declared(id, &stored_rows(&record), &adapter.source(), ctx.now)?;
             if let Some(n) = record.per_year {

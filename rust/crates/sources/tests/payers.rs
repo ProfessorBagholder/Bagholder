@@ -198,6 +198,24 @@ fn a_payers_failed_read_is_recorded_as_it_failed_and_writes_nothing() {
     assert_eq!(outcomes[0].outcome, OutcomeKind::Unreachable);
     assert!(outcomes[0].detail.contains("status 500"), "{}", outcomes[0].detail);
     // Harvest answers 403 to a request without a User-Agent
-    let headers = recorded.headers.lock().unwrap();
-    assert!(headers[0].iter().any(|(k, v)| k == "User-Agent" && v.starts_with("Bagholder/")), "{headers:?}");
+    assert!(recorded.headers.lock().unwrap()[0].iter().any(|(k, v)| k == "User-Agent" && v.starts_with("Bagholder/")));
+    // the failure waits out its source's rest (a minute for a host with no pace
+    // of its own), then the payer is asked again
+    let need = [payer(1, "HHIS", "XTSE", Currency::CAD, "Harvest Portfolios Group Inc. - Harvest Diversified High Income Shares ETF")];
+    run::read(&Ctx { now: t("2026-09-24T04:00:30Z"), ..ctx }, &need).unwrap();
+    assert_eq!(recorded.asked.lock().unwrap().len(), 1);
+    run::read(&Ctx { now: t("2026-09-24T04:01:00Z"), ..ctx }, &need).unwrap();
+    assert_eq!(recorded.asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn a_cash_row_and_a_units_row_for_one_ex_date_are_one_distribution() {
+    let ex = date(2026, 9, 29);
+    let cash = Distribution { ex_date: ex, record_date: Some(ex), pay_date: Some(date(2026, 10, 7)), cash: dec("0.10"), reinvested: None, currency: Currency::CAD };
+    let units = Distribution { cash: Dec::ZERO, reinvested: Some(dec("0.25")), ..cash };
+    let r = payers::checked(Record { rows: vec![units, cash], per_year: Some(4) }, t("2026-10-01T00:00:00Z")).unwrap();
+    assert_eq!(r.rows, vec![Distribution { reinvested: Some(dec("0.25")), ..cash }]);
+    // two different cash amounts for one ex-date are still a conflict
+    let other = Distribution { cash: dec("0.11"), ..cash };
+    assert!(payers::checked(Record { rows: vec![cash, other], per_year: Some(4) }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
 }

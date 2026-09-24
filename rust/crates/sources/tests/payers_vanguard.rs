@@ -33,6 +33,9 @@ fn the_product_list_names_the_funds_and_the_service_states_ticker_and_schedule()
     assert_eq!(vanguard_ca::fund_of(&listings, "VEQT").unwrap(), Some(("9692".to_string(), Some(1))));
     assert_eq!(vanguard_ca::fund_of(&listings, "VFV").unwrap(), Some(("9563".to_string(), Some(4))));
     assert_eq!(vanguard_ca::fund_of(&listings, "ZZZQX").unwrap(), None);
+    // a fund listed with no schedule: a change of what Vanguard publishes
+    let m = vanguard_ca::fund_of(&common::json(VG, "wrong-shape-listings-VEQT-schedule-null.json"), "VEQT").unwrap_err();
+    assert!(m.path.ends_with("fundDistributionFrequency"), "{m:?}");
 }
 
 #[test]

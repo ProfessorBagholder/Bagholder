@@ -41,6 +41,8 @@ const DIVIDENDS: &str = "query getDividendsForSymbol($symbol: String!, $page: In
 const SERIES: &str = "query getTimeSeriesData($symbol: String!, $freq: String, $interval: Int, $start: String, $end: String) { getTimeSeriesData(symbol: $symbol, freq: $freq, interval: $interval, start: $start, end: $end) { dateTime close } }";
 /// Rows per page of distributions; a full page means another is asked.
 const BATCH: usize = 100;
+/// The most pages asked: a century of monthly distributions.
+const PAGES_MAX: usize = 12;
 
 pub fn source() -> SourceName {
     SourceName::named(SOURCE)
@@ -91,7 +93,9 @@ pub struct TmxDistribution {
 pub fn per_year(word: &str) -> Option<u32> {
     Some(match word {
         "Weekly" => 52,
-        "Semi-Monthly" | "Bi-Monthly" => 24,
+        // "Bi-Monthly" is left out: it says every two months as often as twice a
+        // month, and no reply has shown which TMX means
+        "Semi-Monthly" => 24,
         "Monthly" => 12,
         "Quarterly" => 4,
         "Semi-Annual" | "Semi-Annually" => 2,
@@ -140,6 +144,11 @@ pub fn parse_quote(v: &Value, form: &str) -> Outcome<TmxQuote> {
         return Outcome::NotCarried(format!("TMX does not know {form}"));
     }
     match read_quote(&root, form) {
+        // TMX answers a form with the listing it knows by that symbol, which can
+        // be on another venue than the form asks: that listing is not this one
+        Ok(Ok(q)) if !crate::venue::tmx_venue_matches(form.find(':').map_or("", |i| &form[i..]), &q.exchange_name) => {
+            Outcome::NotCarried(format!("TMX answers {form} on {}, not the venue asked", q.exchange_name))
+        }
         Ok(Ok(q)) => Outcome::Answered(q),
         Ok(Err(why)) => Outcome::Meaning(why),
         Err(m) => Outcome::Mismatch(m),
@@ -200,8 +209,7 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
         let ex_date = r.day("exDate")?;
         let record_date = r.opt_day("recordDate")?;
         let pay_date = r.opt_day("payableDate")?;
-        // declared or not, the date is not what a figure reads; it must still be a day
-        r.opt_day("declarationDate")?;
+        let declared = r.opt_day("declarationDate")?;
         let amount = r.dec("amount")?;
         if amount < Dec::ZERO {
             return Ok(Err(format!("{form} lists a distribution of {amount} going ex {ex_date}")));
@@ -213,9 +221,15 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
             Ok(c) => c,
             Err(e) => return Ok(Err(format!("{form}'s distribution currency: {e}"))),
         };
+        // research 2: a row with a pay date is cash; the undated rows are the
+        // year-ends paid in units. Every row TMX dates with its declaration also
+        // states its pay date (the zero-amount year-end notice apart), so a dated
+        // declaration of an amount with no pay date is not a form TMX has shown:
+        // whether it pays cash is not stated
         let (cash, in_units) = match pay_date {
             Some(_) => (amount, None),
             None if amount.is_zero() => (Dec::ZERO, None),
+            None if declared.is_some() => return Ok(Err(format!("{form} declares {amount} going ex {ex_date} with no pay date: whether it is paid in cash is not stated"))),
             None => (Dec::ZERO, Some(amount)),
         };
         out.push(TmxDistribution { ex_date, record_date, pay_date, cash, in_units, currency });
@@ -282,9 +296,17 @@ pub fn ask_dividends(net: &Net, form: &str) -> Noted<Vec<TmxDistribution>> {
         match parse_dividends(&v, form) {
             Outcome::Answered(rows) => {
                 let full = rows.len() == BATCH;
+                // a page that repeats the one before: TMX ignored the page asked,
+                // and the pages would never end
+                if page > 1 && rows.first() == all.get(all.len() - BATCH) {
+                    return Noted { outcome: Outcome::Meaning(format!("TMX answered page {page} of {form}'s distributions with page {}", page - 1)), shape_change };
+                }
                 all.extend(rows);
                 if !full {
                     break;
+                }
+                if page == PAGES_MAX {
+                    return Noted { outcome: Outcome::Meaning(format!("{form} lists more than {} distributions", PAGES_MAX * BATCH)), shape_change };
                 }
             }
             other => return Noted { outcome: other, shape_change },

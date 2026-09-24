@@ -126,6 +126,23 @@ pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
 pub fn checked(mut record: Record, now: Timestamp) -> Result<Record, String> {
     record.rows.sort();
     record.rows.dedup();
+    // a cash row and a row of the part paid in units for one ex-date, the same
+    // dates and currency (a fund in both of a release's tables) are the two parts
+    // of one distribution
+    let units_only = |d: &Distribution| d.cash.is_zero() && d.reinvested.is_some();
+    let cash_only = |d: &Distribution| !d.cash.is_zero() && d.reinvested.is_none();
+    let mut merged: Vec<Distribution> = Vec::with_capacity(record.rows.len());
+    for r in record.rows {
+        match merged.last_mut() {
+            Some(m) if (m.ex_date, m.record_date, m.pay_date, m.currency) == (r.ex_date, r.record_date, r.pay_date, r.currency) && ((cash_only(m) && units_only(&r)) || (units_only(m) && cash_only(&r))) => {
+                let (cash, units) = if cash_only(m) { (m.cash, r.reinvested) } else { (r.cash, m.reinvested) };
+                m.cash = cash;
+                m.reinvested = units;
+            }
+            _ => merged.push(r),
+        }
+    }
+    record.rows = merged;
     let far = now.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).date().checked_add(SignedDuration::from_hours(24 * 400)).unwrap_or(Date::MAX);
     for w in record.rows.windows(2) {
         if w[0].ex_date == w[1].ex_date {

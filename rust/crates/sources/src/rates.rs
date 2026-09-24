@@ -158,59 +158,78 @@ pub fn due_holidays(held: &Held, now: Timestamp, bank: &TimeZone) -> bool {
 
 /// What the book and the cache hold now.
 pub fn held(ctx: &Ctx) -> Result<Held> {
-    let last_answered = |source: SourceName, detail: Option<&str>| -> Result<Option<Timestamp>> {
-        Ok(ctx.cache.outcomes(&source)?.into_iter().find(|o| o.outcome == OutcomeKind::Answered && detail.is_none_or(|d| o.detail == d)).map(|o| o.at))
+    // when a subject's read (as `read` keeps them) was last answered
+    let last_answered = |source: SourceName, subject: &str| -> Result<Option<Timestamp>> {
+        Ok(ctx.cache.reads(&format!("{subject}:{source}"), DataKind::Rate)?.into_iter().find(|r| r.outcome == OutcomeKind::Answered).map(|r| r.at))
     };
     Ok(Held {
         series: ctx.book.rate_series()?,
         reads: ctx.book.rate_reads()?,
         holidays: ctx.book.bank_holidays()?,
-        list_read: last_answered(boc::daily_source(), Some(LIST_DETAIL))?,
-        holidays_read: last_answered(holidays::source(), None)?,
+        list_read: last_answered(boc::daily_source(), LIST_DETAIL)?,
+        holidays_read: last_answered(holidays::source(), HOLIDAYS)?,
     })
 }
 
 /// How an answered read of the group is told from a read of a series.
 const LIST_DETAIL: &str = "the group of daily series";
+/// The holiday page's subject in the reads kept.
+const HOLIDAYS: &str = "holidays";
 
 /// Run every read due for `needs`, storing what answers into the book. A
 /// source's failure is recorded and the run goes on; a refusal to store stops it.
 pub fn read(ctx: &Ctx, needs: &[Need]) -> Result<()> {
     let needs: Vec<Need> = needs.iter().copied().filter(|n| n.currency != Currency::CAD).collect();
+    // each read is one subject of one source; after a failure it waits out the
+    // source's rest, and is kept once done
+    let run = |subject: String, source: SourceName, host: &str, read: &dyn Fn() -> Result<OutcomeKind>| -> Result<()> {
+        let subject = format!("{subject}:{source}");
+        if ctx.resting(&subject, DataKind::Rate, host)? {
+            return Ok(());
+        }
+        let kind = read()?;
+        ctx.attempted(&subject, DataKind::Rate, &source, kind)
+    };
     let h = held(ctx)?;
-    let mut listed = BTreeSet::new();
+    let listed = std::cell::RefCell::new(BTreeSet::new());
     for due in due_daily(&needs, &h, ctx.now, ctx.bank) {
         match due {
-            Due::DailyList => {
+            Due::DailyList => run(LIST_DETAIL.into(), boc::daily_source(), boc::HOST, &|| {
                 let noted = boc::ask_daily_list(ctx.net);
                 record_list(ctx, &Noted { outcome: noted.outcome.clone().map(|_| ()), shape_change: noted.shape_change })?;
+                let kind = noted.outcome.kind();
                 if let Outcome::Answered(list) = noted.outcome {
-                    listed = list.iter().map(|s| s.currency).collect();
+                    *listed.borrow_mut() = list.iter().map(|s| s.currency).collect();
                 }
-            }
-            Due::DailyForward(c, from, to) => daily(ctx, c, Some((from, to)))?,
+                Ok(kind)
+            })?,
+            Due::DailyForward(c, from, to) => run(c.to_string(), boc::daily_source(), boc::HOST, &|| daily(ctx, c, Some((from, to))))?,
             _ => {}
         }
     }
-    for due in due_daily_whole(&needs, &h, &listed) {
+    for due in due_daily_whole(&needs, &h, &listed.borrow()) {
         if let Due::DailyWhole(c) = due {
-            daily(ctx, c, None)?;
+            run(c.to_string(), boc::daily_source(), boc::HOST, &|| daily(ctx, c, None))?;
         }
     }
     let h = held(ctx)?;
     for due in due_archives(&needs, &h) {
         match due {
-            Due::Noon(c) => noon(ctx, c)?,
-            Due::Archive(c) => archive(ctx, c)?,
+            Due::Noon(c) => run(c.to_string(), boc::noon_source(), boc::HOST, &|| noon(ctx, c))?,
+            Due::Archive(c) => run(c.to_string(), statcan::source(), statcan::HOST, &|| archive(ctx, c))?,
             _ => {}
         }
     }
     if due_holidays(&h, ctx.now, ctx.bank) {
-        let noted = holidays::ask(ctx.net);
-        ctx.record(&holidays::source(), holidays::HOST, DataKind::Holidays, None, &noted)?;
-        if let Outcome::Answered(days) = noted.outcome {
-            ctx.book.store_bank_holidays(&days, &holidays::source(), ctx.now)?;
-        }
+        run(HOLIDAYS.into(), holidays::source(), holidays::HOST, &|| {
+            let noted = holidays::ask(ctx.net, ctx.today());
+            ctx.record(&holidays::source(), holidays::HOST, DataKind::Holidays, None, &noted)?;
+            let kind = noted.outcome.kind();
+            if let Outcome::Answered(days) = noted.outcome {
+                ctx.book.store_bank_holidays(&days, &holidays::source(), ctx.now)?;
+            }
+            Ok(kind)
+        })?;
     }
     Ok(())
 }
@@ -230,7 +249,7 @@ fn record_list(ctx: &Ctx, noted: &Noted<()>) -> Result<()> {
 }
 
 /// A daily series: whole (`span` none), or from the day after the last read.
-fn daily(ctx: &Ctx, c: Currency, span: Option<(Date, Date)>) -> Result<()> {
+fn daily(ctx: &Ctx, c: Currency, span: Option<(Date, Date)>) -> Result<OutcomeKind> {
     let code = boc::daily_code(c);
     let mut noted = boc::ask_observations(ctx.net, &code, span);
     // the description says what the series is, and whether it has ended
@@ -245,23 +264,16 @@ fn daily(ctx: &Ctx, c: Currency, span: Option<(Date, Date)>) -> Result<()> {
         _ => None,
     };
     ctx.record(&boc::daily_source(), boc::HOST, DataKind::Rate, None, &noted)?;
-    let (Outcome::Answered(o), Some(ended)) = (noted.outcome, ended) else { return Ok(()) };
-    let today = ctx.today();
-    let (Some(first), Some(last)) = (o.rates.first().map(|r| r.0), o.rates.last().map(|r| r.0)) else {
-        // a read forward that found nothing new: the days it covered are still known
-        if let Some((from, to)) = span {
-            ctx.book.store_rates(c, &[], (from, to), &boc::daily_source(), ctx.now)?;
-        }
-        return Ok(());
-    };
-    // what the read covered: the span asked, or from the series' first day to
-    // today; a series that has ended covers no day after its last
-    let covered = match (span, ended) {
-        (Some((from, _)), true) => (from, last),
-        (Some((from, to)), false) => (from, to),
-        (None, true) => (first, last),
-        (None, false) => (first, today.max(last)),
-    };
+    let kind = noted.outcome.kind();
+    let (Outcome::Answered(o), Some(ended)) = (noted.outcome, ended) else { return Ok(kind) };
+    // a read forward that found nothing new settles nothing: the Bank's service
+    // can lag its 16:30, so a day it has not posted yet is not a day it did not
+    // publish, and stays due
+    let (Some(first), Some(last)) = (o.rates.first().map(|r| r.0), o.rates.last().map(|r| r.0)) else { return Ok(kind) };
+    // what the read covered: from the span's first day (or the series') to the
+    // last day it observed. A weekday inside is one the Bank did not publish; a
+    // day after it is not known yet, whatever the span asked
+    let covered = (span.map_or(first, |(from, _)| from), last);
     ctx.book.store_rates(c, &o.rates, covered, &boc::daily_source(), ctx.now)?;
     let first_day = match span {
         // a forward read keeps the series' first day as the whole read found it
@@ -269,11 +281,11 @@ fn daily(ctx: &Ctx, c: Currency, span: Option<(Date, Date)>) -> Result<()> {
         None => first,
     };
     ctx.book.store_rate_series(&[RateSeries { currency: c, source: boc::daily_source(), first_day, last_day: last, ended }], ctx.now)?;
-    Ok(())
+    Ok(kind)
 }
 
 /// A currency's noon archive, each of its series whole.
-fn noon(ctx: &Ctx, c: Currency) -> Result<()> {
+fn noon(ctx: &Ctx, c: Currency) -> Result<OutcomeKind> {
     let series = boc::noon_series(c);
     for s in &series {
         let span = (s.first, s.last);
@@ -284,23 +296,25 @@ fn noon(ctx: &Ctx, c: Currency) -> Result<()> {
             }
         }
         ctx.record(&boc::noon_source(), boc::HOST, DataKind::Rate, None, &noted)?;
-        let Outcome::Answered(o) = noted.outcome else { return Ok(()) };
+        let kind = noted.outcome.kind();
+        let Outcome::Answered(o) = noted.outcome else { return Ok(kind) };
         ctx.book.store_rates(c, &o.rates, span, &boc::noon_source(), ctx.now)?;
     }
     if let (Some(first), Some(last)) = (series.first(), series.last()) {
         ctx.book.store_rate_series(&[RateSeries { currency: c, source: boc::noon_source(), first_day: first.first, last_day: last.last, ended: true }], ctx.now)?;
     }
-    Ok(())
+    Ok(OutcomeKind::Answered)
 }
 
 /// A currency's Statistics Canada archive, whole, to the day before the noon series.
-fn archive(ctx: &Ctx, c: Currency) -> Result<()> {
-    let Some(a) = statcan::series_of(c) else { return Ok(()) };
+fn archive(ctx: &Ctx, c: Currency) -> Result<OutcomeKind> {
+    let Some(a) = statcan::series_of(c) else { return Ok(OutcomeKind::NotCarried) };
     let span = (a.first, statcan::ERA_END);
     let noted = statcan::ask(ctx.net, &a, span);
     ctx.record(&statcan::source(), statcan::HOST, DataKind::Rate, None, &noted)?;
-    let Outcome::Answered(rates) = noted.outcome else { return Ok(()) };
+    let kind = noted.outcome.kind();
+    let Outcome::Answered(rates) = noted.outcome else { return Ok(kind) };
     ctx.book.store_rates(c, &rates, span, &statcan::source(), ctx.now)?;
     ctx.book.store_rate_series(&[RateSeries { currency: c, source: statcan::source(), first_day: a.first, last_day: statcan::ERA_END, ended: true }], ctx.now)?;
-    Ok(())
+    Ok(kind)
 }

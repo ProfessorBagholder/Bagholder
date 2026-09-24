@@ -15,7 +15,7 @@
 //! Amounts are in Canadian dollars unless the sentence writes `US$`. A special
 //! dividend declared beside the regular one (Alvopetro's) is not read.
 
-use bagholder_core::jiff::civil::{date, Date, Weekday};
+use bagholder_core::jiff::civil::{date, Date};
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, Dec, SourceName};
 use bagholder_net::{Ask, Net};
@@ -235,25 +235,26 @@ fn after<'a>(body: &'a str, markers: &[&str]) -> Option<&'a str> {
     markers.iter().filter_map(|m| body.find(m).map(|i| &body[i + m.len()..])).next()
 }
 
-/// The ex-date the exchange's rule gives a record date.
-pub fn ex_date(record: Date) -> Date {
-    if record >= date(2024, 5, 27) {
-        return record;
-    }
-    let mut d = record.yesterday().expect("a real day");
-    while matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) {
-        d = d.yesterday().expect("a real day");
-    }
-    d
+/// The first record date on which the ex-date is the record date: settlement in
+/// one business day (T+1) from 2024-05-27.
+pub const T_PLUS_ONE: Date = date(2024, 5, 27);
+
+/// The ex-date the exchange's rule gives a record date: the record date itself
+/// since T+1. Before it the ex-date was one business day before the record date
+/// (two before 2017-09-05), counted on the exchange's own calendar of sessions,
+/// which this reader does not hold: none is stated rather than one guessed.
+pub fn ex_date(record: Date) -> Option<Date> {
+    (record >= T_PLUS_ONE).then_some(record)
 }
 
-/// The common share dividend a declaring release states.
-pub fn declared(c: &Company, r: &Release) -> Result<Distribution, Mismatch> {
+/// The common share dividend a declaring release states; none for a record date
+/// before T+1, whose ex-date is not stated here (see [`ex_date`]).
+pub fn declared(c: &Company, r: &Release) -> Result<Option<Distribution>, Mismatch> {
     let m = |what: &str| Mismatch { path: format!("{} release of {}", c.ticker, r.at), why: format!("its sentence gives no {what}") };
     let (cash, currency) = after(&r.body, c.amount_after).and_then(amount).ok_or_else(|| m("amount"))?;
     let pay = after(&r.body, c.pay_after).and_then(long_date).ok_or_else(|| m("pay date"))?;
     let record = after(&r.body, c.record_after).and_then(long_date).ok_or_else(|| m("record date"))?;
-    Ok(Distribution { ex_date: ex_date(record), record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency })
+    Ok(ex_date(record).map(|ex_date| Distribution { ex_date, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency }))
 }
 
 /// The schedule a release states, where the company states it there.
@@ -269,6 +270,15 @@ pub fn schedule_on_page(c: &Company, html: &str) -> Option<u32> {
     match c.schedule {
         Schedule::OnPage { phrase, per_year, .. } => unescape(html).contains(phrase).then_some(per_year),
         Schedule::InRelease(_) => None,
+    }
+}
+
+/// The mismatch when a company's own statement of its schedule is not found
+/// where it makes it.
+pub fn schedule_missing(c: &Company) -> Mismatch {
+    match c.schedule {
+        Schedule::InRelease(phrases) => Mismatch { path: format!("{} releases", c.ticker), why: format!("none states its schedule ({})", phrases.iter().map(|(p, _)| format!("{p:?}")).collect::<Vec<_>>().join(", ")) },
+        Schedule::OnPage { url, phrase, .. } => Mismatch { path: url.to_string(), why: format!("the page no longer states {phrase:?}") },
     }
 }
 
@@ -333,7 +343,9 @@ impl Payer for Companies {
                 Err(m) => return mismatch(m),
             };
             match declared(c, &release) {
-                Ok(d) => rows.push(d),
+                Ok(Some(d)) => rows.push(d),
+                // a declaration from before T+1: its ex-date is not known here
+                Ok(None) => {}
                 Err(m) => return mismatch(m),
             }
             if per_year.is_none() {
@@ -349,6 +361,9 @@ impl Payer for Companies {
                 Err(o) => return fail(o),
             };
         }
-        Noted { outcome: Outcome::Answered(Record { rows, per_year }), shape_change: None }
+        // each company here states its schedule, in its releases or on its page:
+        // a statement gone is a change of its wording, not a schedule unstated
+        let Some(per_year) = per_year else { return mismatch(schedule_missing(c)) };
+        Noted { outcome: Outcome::Answered(Record { rows, per_year: Some(per_year) }), shape_change: None }
     }
 }

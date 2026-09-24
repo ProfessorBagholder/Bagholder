@@ -34,6 +34,17 @@ fn not_carried(ctx: &Ctx, source: &SourceName, host: &str, id: InstrumentId, why
     ctx.record(source, host, DataKind::Quote, Some(id), &noted)
 }
 
+/// An answer in another currency than the listing's is for another listing: a
+/// meaning failure, never kept.
+pub(crate) fn same_currency<A>(outcome: &mut Outcome<A>, currency: impl Fn(&A) -> Currency, l: &Listing) {
+    if let Outcome::Answered(a) = &*outcome {
+        let c = currency(a);
+        if c != l.currency {
+            *outcome = Outcome::Meaning(format!("the answer for {} is in {c}, the listing's currency is {}", l.symbol, l.currency));
+        }
+    }
+}
+
 /// Read each listing's quote once.
 pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
     for l in listings {
@@ -45,7 +56,8 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                     not_carried(ctx, &tmx::source(), tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol))?;
                     continue;
                 };
-                let noted = tmx::ask_quote(ctx.net, &form);
+                let mut noted = tmx::ask_quote(ctx.net, &form);
+                same_currency(&mut noted.outcome, |q| q.currency, l);
                 ctx.record_detail(&tmx::source(), tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?;
                 if let Outcome::Answered(q) = noted.outcome {
                     keep(ctx, id, tmx::source(), Money::new(q.price, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
@@ -74,7 +86,8 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                     forms.sort_by_key(|f| *f != won);
                 }
                 for form in forms {
-                    let noted = yahoo::ask_quote(ctx.net, &form, ctx.now);
+                    let mut noted = yahoo::ask_quote(ctx.net, &form, ctx.now);
+                    same_currency(&mut noted.outcome, |c| c.currency, l);
                     ctx.record_detail(&yahoo::source(), yahoo::HOST, DataKind::Quote, Some(id), &noted, &form)?;
                     match noted.outcome {
                         Outcome::Answered(c) => {

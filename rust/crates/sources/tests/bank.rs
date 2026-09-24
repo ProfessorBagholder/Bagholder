@@ -172,4 +172,9 @@ fn the_holiday_page_lists_each_closure_to_come() {
     );
     assert!(holidays::parse(&common::read(HOLIDAYS, "wrong-shape-no-date.html")).is_err());
     assert!(holidays::parse(&common::read(HOLIDAYS, "wrong-shape-no-closures.html")).is_err());
+    // the page lists the closures still to come: read on a day after all of them,
+    // it is last year's page, not current
+    assert_eq!(holidays::current(&got, date(2026, 9, 24)), Ok(()));
+    assert_eq!(holidays::current(&got, date(2026, 12, 28)), Ok(()));
+    assert!(holidays::current(&got, date(2026, 12, 29)).unwrap_err().contains("not current"));
 }

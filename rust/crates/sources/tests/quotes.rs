@@ -42,15 +42,15 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-24T04:40:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
-    for (n, kind, c) in [(1, "security", "CAD"), (2, "security", "CAD"), (3, "security", "USD"), (4, "crypto", "CAD"), (5, "crypto", "USD"), (6, "security", "CAD")] {
+    for (n, kind, c) in [(1, "security", "CAD"), (2, "security", "CAD"), (3, "security", "USD"), (4, "crypto", "CAD"), (5, "crypto", "USD"), (6, "security", "CAD"), (7, "security", "CAD")] {
         common::instrument_in_book(&dir.path().join("book.db"), id(n), kind, c);
     }
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let recorded = Arc::new(
         common::Recorded::new()
             .with_body(TMX, "\"symbol\":\"ENB\"", 200, "tmx", "quote-ENB.json")
-            // TMX answers ENB:CNX with the TSX listing: not the one asked
-            .with_body(TMX, "\"symbol\":\"ENB:CNX\"", 200, "tmx", "quote-ENB-CNX-another-venue.json")
+            // TMX's answer for the TSX listing, served to the CSE form: another listing
+            .with_body(TMX, "\"symbol\":\"ENB:CNX\"", 200, "tmx", "quote-ENB.json")
             .with("https://www-api.cboe.com/ca/equities/securities-1/HBIX/quote/", 200, "cboe-canada", "quote-HBIX.json")
             .with("https://query1.finance.yahoo.com/v8/finance/chart/SPY?range=1d&interval=1d", 200, "yahoo", "SPY-range-1d.json")
             .with("https://api.coinbase.com/v2/prices/BTC-CAD/spot", 200, "coinbase", "spot-BTC-CAD.json")
@@ -66,6 +66,8 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
         listing(4, InstrumentKind::Crypto, Currency::CAD, "BTC", None),
         listing(5, InstrumentKind::Crypto, Currency::USD, "BTC", None),
         listing(6, InstrumentKind::Security, Currency::CAD, "ENB", Some("XCNQ")),
+        // a listing the book holds in CAD, answered in USD: another listing
+        listing(7, InstrumentKind::Security, Currency::CAD, "SPY", Some("ARCX")),
     ];
     quotes::read_quotes(&ctx, &listings).unwrap();
     let got: BTreeMap<InstrumentId, _> = cache.quotes().unwrap().into_iter().map(|q| (q.instrument, q)).collect();
@@ -80,6 +82,9 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     assert!(!got.contains_key(&id(6)));
     let tmx_rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
     assert!(tmx_rows.iter().any(|o| o.instrument == Some(id(6)) && o.outcome == OutcomeKind::NotCarried && o.kind == DataKind::Quote));
+    assert!(!got.contains_key(&id(7)));
+    let yahoo_rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
+    assert!(yahoo_rows.iter().any(|o| o.instrument == Some(id(7)) && o.outcome == OutcomeKind::Meaning && o.detail.contains("USD")));
     // the form TMX answered for on the book's venue is written back as a route
     let routes = |n: u8| book.instrument_refs(id(n)).unwrap().into_iter().filter(|r| r.scheme == RefScheme::TmxForm).map(|r| r.value).collect::<Vec<_>>();
     assert_eq!(routes(1), vec!["ENB".to_string()]);

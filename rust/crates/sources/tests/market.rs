@@ -105,7 +105,10 @@ fn a_tmx_quote_states_its_venue_and_schedule() {
     assert_eq!(q.exchange_name, "Toronto Stock Exchange");
     assert!(bagholder_sources::venue::tmx_venue_matches("", &q.exchange_name));
     assert_eq!(quote("quote-ZZZQX-unknown.json", "ZZZQX").kind(), OutcomeKind::NotCarried);
-    assert_eq!(quote("quote-ENB-CNX-another-venue.json", "ENB:CNX").kind(), OutcomeKind::NotCarried);
+    assert_eq!(quote("quote-ENB-CNX-unknown.json", "ENB:CNX").kind(), OutcomeKind::NotCarried);
+    // TMX's answer for the TSX listing, read for a CSE form: another listing, not carried
+    assert!(matches!(quote("quote-ENB.json", "ENB:CNX"), Outcome::NotCarried(w) if w.contains("Toronto Stock Exchange")));
+    assert_eq!(quote("quote-ENB.json", "ENB").kind(), OutcomeKind::Answered);
     assert!(matches!(quote("wrong-shape-quote-ENB-price-null.json", "ENB"), Outcome::Mismatch(m) if m.path == "data.getQuoteBySymbol.price"));
     assert!(matches!(quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB"), Outcome::Mismatch(m) if m.why.contains("Fortnightly")));
     assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
@@ -128,6 +131,8 @@ fn tmx_distributions_are_cash_when_paid_on_a_date_and_in_units_otherwise() {
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "dividends-ZZZQX-unknown.json"), "ZZZQX"), Outcome::Answered(r) if r.is_empty()));
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-shape-dividends-QCN-amount-as-text.json"), "QCN"), Outcome::Mismatch(m) if m.path == "data.dividends.dividends[0].amount"));
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-meaning-dividends-QCN-paid-before-ex.json"), "QCN"), Outcome::Meaning(w) if w.contains("before")));
+    // a declared amount with no pay date: whether it is cash is not stated
+    assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-meaning-dividends-QCN-declared-without-pay-date.json"), "QCN"), Outcome::Meaning(w) if w.contains("no pay date")));
 }
 
 #[test]
@@ -215,4 +220,21 @@ fn a_cboe_canada_quote_is_its_last_price_at_its_trade_time() {
     assert_eq!((q.price, q.at, q.change), (dec("0.4400"), t("2026-09-23T20:00:00Z"), Some(dec("-0.0150"))));
     assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-shape-quote-MAXQ-last-null.json"), "MAXQ"), Outcome::Mismatch(m) if m.path == "data.last"));
     assert!(matches!(cboe_ca::parse(&common::json(CBOE, "wrong-meaning-quote-MAXQ-another-symbol.json"), "MAXQ"), Outcome::Meaning(w) if w.contains("HBIX")));
+}
+
+#[test]
+fn a_distributions_page_that_repeats_the_one_before_ends_the_read_as_a_failure() {
+    // a full page (edited: a hundred rows), answered for every page asked
+    let recorded = std::sync::Arc::new(common::Recorded::new().with_body("https://app-money.tmx.com/graphql", "getDividendsForSymbol", 200, TMX, "wrong-meaning-dividends-QCN-page-repeated.json"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    assert!(matches!(tmx::ask_dividends(&net, "QCN").outcome, Outcome::Meaning(w) if w.contains("page 2")));
+    assert_eq!(recorded.asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn an_ambiguous_schedule_word_is_not_read() {
+    assert_eq!(tmx::per_year("Quarterly"), Some(4));
+    assert_eq!(tmx::per_year("Semi-Monthly"), Some(24));
+    // every two months, or twice a month: not read until a reply settles it
+    assert_eq!(tmx::per_year("Bi-Monthly"), None);
 }

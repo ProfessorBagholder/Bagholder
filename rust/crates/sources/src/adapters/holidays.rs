@@ -64,13 +64,28 @@ pub fn parse(html: &str) -> Result<Vec<(Date, String)>, Mismatch> {
     Ok(out)
 }
 
-pub fn ask(net: &Net) -> Noted<Vec<(Date, String)>> {
+/// Whether the closures read are a current schedule on `today`: the page lists
+/// the closures still to come, so a page none of whose closures is on or after
+/// the day it is read is not current (last year's), and is a meaning failure.
+pub fn current(closures: &[(Date, String)], today: Date) -> Result<(), String> {
+    if closures.iter().any(|(d, _)| *d >= today) {
+        return Ok(());
+    }
+    let last = closures.iter().map(|c| c.0).max().map_or(String::new(), |d| d.to_string());
+    Err(format!("the holiday page lists no closure on or after {today} (its last is {last}): it is not current"))
+}
+
+/// Read the page on `today`, the Bank's day.
+pub fn ask(net: &Net, today: Date) -> Noted<Vec<(Date, String)>> {
     let reply = match ask::send(net, &Ask::get(PAGE, &[]), &[]) {
         Outcome::Answered(r) => r,
         other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
     };
     let outcome = match ask::text(&reply.body).and_then(parse) {
-        Ok(h) => Outcome::Answered(h),
+        Ok(h) => match current(&h, today) {
+            Ok(()) => Outcome::Answered(h),
+            Err(why) => Outcome::Meaning(why),
+        },
         Err(m) => Outcome::Mismatch(m),
     };
     Noted { outcome, shape_change: None }

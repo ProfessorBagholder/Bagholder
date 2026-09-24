@@ -46,7 +46,7 @@ fn each_companys_sentence_gives_its_amount_record_and_pay_dates() {
     for (ticker, slug, expected, schedule) in cases {
         let c = company(ticker);
         let r = release(slug);
-        assert_eq!(companies::declared(c, &r).unwrap(), expected, "{ticker}");
+        assert_eq!(companies::declared(c, &r).unwrap(), Some(expected), "{ticker}");
         assert_eq!(companies::schedule_in(c, &r), schedule, "{ticker}");
         // the organization's page: the newest release it takes as a declaration
         // is this one, and none it takes is an announcement of something else
@@ -64,10 +64,12 @@ fn each_companys_sentence_gives_its_amount_record_and_pay_dates() {
 
 #[test]
 fn the_ex_date_is_the_record_date_since_settlement_in_one_day() {
-    assert_eq!(companies::ex_date(date(2026, 9, 15)), date(2026, 9, 15));
-    // before 2024-05-27: the business day before the record date
-    assert_eq!(companies::ex_date(date(2024, 5, 24)), date(2024, 5, 23));
-    assert_eq!(companies::ex_date(date(2024, 4, 1)), date(2024, 3, 29));
+    assert_eq!(companies::ex_date(date(2026, 9, 15)), Some(date(2026, 9, 15)));
+    assert_eq!(companies::ex_date(date(2024, 5, 27)), Some(date(2024, 5, 27)));
+    // before 2024-05-27 the ex-date was counted on the exchange's calendar of
+    // sessions (2023-10-10's was 2023-10-06, Thanksgiving between): not guessed
+    assert_eq!(companies::ex_date(date(2024, 5, 24)), None);
+    assert_eq!(companies::ex_date(date(2023, 10, 10)), None);
 }
 
 #[test]
@@ -93,4 +95,18 @@ fn a_company_is_its_listing_not_its_name() {
 fn a_declaring_release_without_its_record_date_is_a_mismatch_naming_it() {
     let r = newswire::release(&common::read("newswire", "wrong-shape-release-bce-no-record-date.html")).unwrap();
     assert!(companies::declared(company("BCE"), &r).unwrap_err().why.contains("record date"));
+}
+
+#[test]
+fn a_company_whose_statement_of_its_schedule_is_gone_is_a_mismatch_naming_it() {
+    let td = company("TD");
+    let mut r = release("td-bank-group");
+    assert_eq!(companies::schedule_in(td, &r), Some(4));
+    // reworded: the phrase it states its schedule with is gone
+    r.body = r.body.replace("declared for the quarter ending", "declared for the period ending");
+    assert_eq!(companies::schedule_in(td, &r), None);
+    assert!(companies::schedule_missing(td).why.contains("declared for the quarter ending"));
+    // Scotiabank states it on its own page
+    assert_eq!(companies::schedule_on_page(company("BNS"), "<p>nothing about it</p>"), None);
+    assert!(companies::schedule_missing(company("BNS")).why.contains("no longer states"));
 }

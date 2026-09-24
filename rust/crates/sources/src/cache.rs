@@ -19,7 +19,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 1] = [Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") }];
+pub static MIGRATIONS: [Migration; 2] = [
+    Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
+    Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
+];
 
 pub static SCHEMA: Schema = Schema {
     name: "cache",
@@ -119,6 +122,16 @@ pub struct Disagreement {
     pub stands: Dec,
     pub later: Dec,
     pub source: SourceName,
+}
+
+/// One read of a subject: the days it settled, how it ended, and when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadRow {
+    pub source: SourceName,
+    pub first: Date,
+    pub last: Date,
+    pub outcome: OutcomeKind,
+    pub at: Timestamp,
 }
 
 /// One request's outcome, as the cache keeps it.
@@ -370,15 +383,35 @@ impl MarketCache {
         Ok(out)
     }
 
-    /// When a source last answered a kind of request, for an instrument or for
-    /// none.
-    pub fn last_answered(&self, of: &SourceName, kind: DataKind, id: Option<InstrumentId>) -> Result<Option<Timestamp>> {
-        let at: Option<String> = self.conn.query_row(
-            "SELECT at FROM outcomes WHERE source = ?1 AND kind = ?2 AND instrument_id IS ?3 AND outcome = 'answered' ORDER BY id DESC LIMIT 1",
-            params![of.as_str(), kind.as_str(), id.map(|i| i.to_string())],
-            |r| r.get(0),
-        ).optional()?;
-        at.map(|a| instant("outcomes", "at", &a)).transpose()
+    // -- reads -----------------------------------------------------------------
+
+    /// Keep a read of `subject`'s `kind`: the newest per span and source.
+    pub fn store_read(&self, subject: &str, kind: DataKind, r: &ReadRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO reads (subject, kind, source, first, last, outcome, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (subject, kind, source, first, last) DO UPDATE SET outcome = ?6, at = ?7",
+            params![subject, kind.as_str(), r.source.as_str(), r.first.to_string(), r.last.to_string(), r.outcome.as_str(), r.at.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The reads of `subject`'s `kind`, newest first.
+    pub fn reads(&self, subject: &str, kind: DataKind) -> Result<Vec<ReadRow>> {
+        const T: &str = "reads";
+        let mut stmt = self.conn.prepare("SELECT source, first, last, outcome, at FROM reads WHERE subject = ?1 AND kind = ?2 ORDER BY at DESC, rowid DESC")?;
+        let rows = stmt.query_map(params![subject, kind.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (s, f, l, o, at) = row?;
+            out.push(ReadRow {
+                source: source(T, "source", &s)?,
+                first: day(T, "first", &f)?,
+                last: day(T, "last", &l)?,
+                outcome: OutcomeKind::parse(&o).ok_or_else(|| corrupt(T, "outcome", &o, "not an outcome"))?,
+                at: instant(T, "at", &at)?,
+            });
+        }
+        Ok(out)
     }
 
     /// Every source with an outcome recorded.

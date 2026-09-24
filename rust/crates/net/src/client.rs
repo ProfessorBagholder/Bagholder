@@ -168,7 +168,7 @@ fn open(u: &Url, timeout: Duration) -> Result<Conn, Error> {
         return Ok(Conn::Plain(tcp_to(&u.host, u.port, timeout)?));
     }
     let env = |k: &str| std::env::var(k).ok().or_else(|| std::env::var(k.to_ascii_lowercase()).ok()).filter(|v| !v.trim().is_empty());
-    let tcp = match proxy::for_host(env("HTTPS_PROXY").as_deref(), env("NO_PROXY").as_deref(), &u.host) {
+    let tcp = match proxy::for_host(env("HTTPS_PROXY").as_deref(), env("NO_PROXY").as_deref(), &u.host).map_err(Error::Transport)? {
         Some(p) => {
             let mut tcp = tcp_to(&p.host, p.port, timeout)?;
             proxy::tunnel(&mut tcp, &p, &u.host, u.port)?;
@@ -198,8 +198,19 @@ mod proxy {
         pub auth: Option<String>,
     }
 
-    fn parse(url: &str) -> Option<Proxy> {
-        let rest = url.split_once("://").map_or(url, |(scheme, rest)| if scheme.eq_ignore_ascii_case("http") { rest } else { "" });
+    /// The proxy a URL names; an error for one this client cannot speak to (any
+    /// scheme but http), never a silent direct connection.
+    fn parse(url: &str) -> Result<Proxy, String> {
+        let unusable = || format!("HTTPS_PROXY names {url:?}, a proxy this client cannot use (it speaks to http:// proxies)");
+        let rest = match url.split_once("://") {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => rest,
+            Some(_) => return Err(unusable()),
+            None => url,
+        };
+        parse_authority(rest).ok_or_else(unusable)
+    }
+
+    fn parse_authority(rest: &str) -> Option<Proxy> {
         let authority = rest.split('/').next()?;
         let (auth, hostport) = match authority.rsplit_once('@') {
             Some((a, h)) => (Some(a.to_string()), h),
@@ -243,11 +254,11 @@ mod proxy {
         })
     }
 
-    pub fn for_host(https_proxy: Option<&str>, no_proxy: Option<&str>, host: &str) -> Option<Proxy> {
-        if no_proxy.is_some_and(|n| exempt(n, host)) {
-            return None;
+    pub fn for_host(https_proxy: Option<&str>, no_proxy: Option<&str>, host: &str) -> Result<Option<Proxy>, String> {
+        match https_proxy {
+            Some(p) if !no_proxy.is_some_and(|n| exempt(n, host)) => parse(p.trim()).map(Some),
+            _ => Ok(None),
         }
-        parse(https_proxy?.trim())
     }
 
     /// Ask the proxy for a tunnel to `host:port`; anything but a 2xx is the
@@ -286,25 +297,29 @@ mod proxy {
 
         #[test]
         fn a_proxy_is_read_as_curl_reads_it() {
-            let p = for_host(Some("http://user:pa55@localhost:60265"), Some("localhost,127.0.0.1"), "www.bankofcanada.ca").unwrap();
+            let p = for_host(Some("http://user:pa55@localhost:60265"), Some("localhost,127.0.0.1"), "www.bankofcanada.ca").unwrap().unwrap();
             assert_eq!(p, Proxy { host: "localhost".into(), port: 60265, auth: Some("user:pa55".into()) });
-            assert_eq!(for_host(Some("proxy.example:3128"), None, "a.b").unwrap().port, 3128);
-            assert_eq!(for_host(Some("http://proxy.example"), None, "a.b").unwrap().port, 80);
-            assert!(for_host(None, None, "a.b").is_none());
-            // a proxy that is not http is not one this client can speak to
-            assert!(for_host(Some("socks5://proxy.example:1080"), None, "a.b").is_none());
+            assert_eq!(for_host(Some("proxy.example:3128"), None, "a.b").unwrap().unwrap().port, 3128);
+            assert_eq!(for_host(Some("http://proxy.example"), None, "a.b").unwrap().unwrap().port, 80);
+            assert_eq!(for_host(None, None, "a.b"), Ok(None));
+            // a proxy that is not http is one this client cannot speak to: a
+            // failure naming it, never a request sent around it
+            assert!(for_host(Some("socks5://proxy.example:1080"), None, "a.b").unwrap_err().contains("cannot use"));
+            assert!(for_host(Some("https://proxy.example:443"), None, "a.b").unwrap_err().contains("cannot use"));
+            // unless the host is one NO_PROXY exempts
+            assert_eq!(for_host(Some("socks5://proxy.example:1080"), Some("a.b"), "a.b"), Ok(None));
         }
 
         #[test]
         fn no_proxy_exempts_hosts_domains_and_ranges() {
             let n = "localhost, .internal.example, example.org, 10.0.0.0/8, ::1/128";
             for host in ["localhost", "a.internal.example", "internal.example", "www.example.org", "10.1.2.3", "[::1]"] {
-                assert!(for_host(Some("http://p:1"), Some(n), host).is_none(), "{host}");
+                assert_eq!(for_host(Some("http://p:1"), Some(n), host), Ok(None), "{host}");
             }
             for host in ["notexample.org", "11.0.0.1", "www.bankofcanada.ca"] {
-                assert!(for_host(Some("http://p:1"), Some(n), host).is_some(), "{host}");
+                assert!(for_host(Some("http://p:1"), Some(n), host).unwrap().is_some(), "{host}");
             }
-            assert!(for_host(Some("http://p:1"), Some("*"), "anything").is_none());
+            assert_eq!(for_host(Some("http://p:1"), Some("*"), "anything"), Ok(None));
         }
     }
 }
