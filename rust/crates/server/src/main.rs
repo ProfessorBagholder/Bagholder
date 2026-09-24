@@ -9,6 +9,7 @@ mod app;
 mod compare;
 mod docs;
 mod engine_inputs;
+mod read_sources;
 mod events;
 mod feeds;
 mod http;
@@ -239,6 +240,13 @@ fn main() {
     // the new engine beside the old model on the same data (docs/plans/stage-2-engine.md)
     if args.first().map(String::as_str) == Some("compare-figures") {
         std::process::exit(compare::cli(&args[1..]));
+    }
+    // the readers of market data and facts, run once (docs/plans/stage-3a-sources.md)
+    if args.first().map(String::as_str) == Some("read-sources") {
+        std::process::exit(read_sources::cli_read(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("source-health") {
+        std::process::exit(read_sources::cli_health(&args[1..]));
     }
     let child = std::env::var("BAGHOLDER_CHILD").map(|v| v == "1").unwrap_or(false);
     if child || update::updates_off() {

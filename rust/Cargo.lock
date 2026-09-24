@@ -267,6 +267,7 @@ dependencies = [
  "bagholder-market",
  "bagholder-model",
  "bagholder-net",
+ "bagholder-sources",
  "bagholder-store",
  "bagholder-ws",
  "futures-util",

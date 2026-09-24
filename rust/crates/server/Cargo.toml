@@ -21,6 +21,9 @@ bagholder-core = { path = "../core" }
 # the engine the app moves onto at the switch; for now `compare-figures` runs it
 # beside the old model (docs/plans/stage-2-engine.md)
 bagholder-engine = { path = "../engine" }
+# the readers of market data and facts: `read-sources` and `source-health`
+# (docs/plans/stage-3a-sources.md)
+bagholder-sources = { path = "../sources" }
 jiff = "0.2.37"
 regex = "1"
 openssl = "0.10"

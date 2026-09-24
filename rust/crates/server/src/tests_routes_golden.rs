@@ -150,10 +150,18 @@ fn seed_refreshable_session(app: &Arc<App>) {
 fn scrub_timestamps(v: &mut Value) {
     match v {
         Value::Object(m) => {
-            for key in ["startedAt", "fetchedAt"] {
+            for key in ["startedAt", "fetchedAt", "today"] {
                 if let Some(x) = m.get_mut(key) {
                     if x.is_string() {
                         *x = json!(format!("<{}>", key));
+                    }
+                }
+            }
+            // the versions end with the day they were computed on
+            for key in ["coreVersion", "dataVersion"] {
+                if let Some(Value::String(s)) = m.get_mut(key) {
+                    if let Some((head, _)) = s.rsplit_once('|') {
+                        *s = format!("{head}|<today>");
                     }
                 }
             }

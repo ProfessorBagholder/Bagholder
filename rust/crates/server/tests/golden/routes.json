@@ -42,15 +42,15 @@
         "unread": 0
       },
       "newsReading": [],
-      "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23",
-      "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|2026-09-23"
+      "dataVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|quotes:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>",
+      "coreVersion": "accounts:0|activities:0|balances:0|benchmark:0|distributions:0|exposures:0|fx:0|groups:0|journal:0|margin:0|nav:0|news:0|securities:0|synced:0|tiles:0|universes:0|watchlist:0|<today>"
     }
   },
   "model_live_empty": {
     "status": 200,
     "body": {
       "ok": true,
-      "today": "2026-09-23",
+      "today": "<today>",
       "currency": "CAD",
       "market": {
         "fxLast": "",

@@ -1,4 +1,4 @@
-//! `bagholder compare-figures <old database> <book folder> [today]`: the old model
+//! `bagholder compare-figures <old database> <book folder> [today] [--facts-from-book]`: the old model
 //! and the new engine on the same data, every figure that differs listed with
 //! what the new engine says of it (`docs/plans/stage-2-engine.md`, "The
 //! comparison on the person's data").
@@ -7,7 +7,9 @@
 //! again with the import's current mapping. The market data (the USD rate, the
 //! funds' declared distributions, the quotes and the benchmarks) is read from the
 //! old store as a stand-in for the facts stage 3's readers will write, and is
-//! named as such in the report. Both databases are read from copies; the book
+//! named as such in the report; with `--facts-from-book` they are what the
+//! readers wrote instead (`read-sources`: the book's facts and the market
+//! cache, `docs/plans/stage-3a-sources.md`). Both databases are read from copies; the book
 //! folder given is written (its trades are opened), so it must be a copy too.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,7 +168,14 @@ fn close_enough(old: f64, new: &Result<Money, bagholder_engine::gap::Gaps>) -> b
     }
 }
 
-pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::civil::Date) -> Result<String, String> {
+/// Where the market data and the read facts come from: the old store's stand-ins,
+/// or what the readers wrote to the book and the market cache.
+pub enum FactsFrom<'a> {
+    OldStore,
+    Book { cache: &'a Path },
+}
+
+pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::civil::Date, from: FactsFrom) -> Result<String, String> {
     let at = bagholder_core::jiff::Timestamp::now();
     let scratch = std::env::temp_dir().join(format!("bh-compare-{}", at.as_millisecond()));
     std::fs::create_dir_all(&scratch).map_err(err)?;
@@ -181,10 +190,20 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let changes = book.rederive(&ImportMapping, at).map_err(err)?;
     let mut ledger = engine_inputs::ledger(&book)?;
     let mut facts = engine_inputs::facts(&book)?;
-    let (market, rates, declared, frequencies) = old_market(&old, &book, &ledger)?;
-    facts.rates = rates;
-    facts.declared = declared;
-    facts.frequencies = frequencies;
+    let from_book = matches!(from, FactsFrom::Book { .. });
+    let market = match from {
+        FactsFrom::OldStore => {
+            let (market, rates, declared, frequencies) = old_market(&old, &book, &ledger)?;
+            facts.rates = rates;
+            facts.declared = declared;
+            facts.frequencies = frequencies;
+            market
+        }
+        FactsFrom::Book { cache } => {
+            let (cache, _) = bagholder_sources::cache::MarketCache::open(cache, crate::app::APP_VERSION, at).map_err(err)?;
+            crate::read_sources::market_from_cache(&cache, &book)?
+        }
+    };
     let bank = bagholder_core::jiff::tz::TimeZone::get("America/Toronto").map_err(err)?;
     let home = bagholder_core::jiff::tz::TimeZone::system();
     // the end of the day in the Bank's zone: every rate of the day is out
@@ -209,7 +228,10 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let old_row = |t: &TransactionId| -> String { keys.get(&t.record).cloned().unwrap_or_default() };
     let figures = engine.figures();
     let mut out = String::new();
-    writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes, benchmarks.").ok();
+    match from_book {
+        false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes, benchmarks.").ok(),
+        true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and benchmarks from the market cache, as the readers wrote them.").ok(),
+    };
     writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).ok();
     let mut changed_kinds: BTreeMap<String, usize> = BTreeMap::new();
     for id in &changes.changed {
@@ -409,7 +431,25 @@ fn figures_symbol(engine: &Engine, i: InstrumentId) -> String {
 
 /// `bagholder compare-figures <old database> <book folder> [YYYY-MM-DD]`.
 pub fn cli(args: &[String]) -> i32 {
-    let (old, book, today) = match args {
+    let usage = "usage: bagholder compare-figures <old database> <book folder> [YYYY-MM-DD] [--facts-from-book [--cache <market.db>]]";
+    let mut positional = Vec::new();
+    let mut from_book = false;
+    let mut cache = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--facts-from-book" => from_book = true,
+            "--cache" => match it.next() {
+                Some(c) => cache = Some(std::path::PathBuf::from(c)),
+                None => {
+                    eprintln!("{usage}");
+                    return 2;
+                }
+            },
+            _ => positional.push(a.clone()),
+        }
+    }
+    let (old, book, today) = match positional.as_slice() {
         [old, book] => (old, book, bagholder_core::jiff::Zoned::now().date()),
         [old, book, day] => match day.parse() {
             Ok(d) => (old, book, d),
@@ -419,11 +459,17 @@ pub fn cli(args: &[String]) -> i32 {
             }
         },
         _ => {
-            eprintln!("usage: bagholder compare-figures <old database> <book folder> [YYYY-MM-DD]");
+            eprintln!("{usage}");
             return 2;
         }
     };
-    match compare(Path::new(old), Path::new(book), today) {
+    if cache.is_some() && !from_book {
+        eprintln!("{usage}");
+        return 2;
+    }
+    let cache = cache.unwrap_or_else(|| Path::new(book).join("market.db"));
+    let from = if from_book { FactsFrom::Book { cache: &cache } } else { FactsFrom::OldStore };
+    match compare(Path::new(old), Path::new(book), today, from) {
         Ok(report) => {
             println!("{report}");
             0
