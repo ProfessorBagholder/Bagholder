@@ -369,19 +369,71 @@ fn charged(t: &Transaction, currency: Currency) -> (Money, impl Fn(Fig<Money>) -
 /// Whether a fill states both a price and cash that do not agree: price ×
 /// quantity × multiplier against the cash less the fee, at the cash's own
 /// places, since the broker rounds the cash to its minor unit. Cash converted
-/// from another currency is not compared: the stated rate is itself rounded.
-/// Unknown (no multiplier) is not a disagreement.
+/// at a stated rate disagrees only where no cash, fee and rate that round to the
+/// stated ones give the price: the rate is itself rounded, so a difference it
+/// explains is not one. Unknown (no multiplier, no value) is not a disagreement.
 pub fn price_disagrees(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency, mult: &Fig<Dec>) -> bool {
     let (Some(price), Some(cash)) = (t.price, t.cash) else { return false };
-    if price.currency != currency || cash.currency != currency || t.fee.is_some_and(|f| f.currency != currency) {
+    if price.currency != currency {
         return false;
     }
-    let (Ok(m), Ok(by_cash)) = (mult, fill_value(t, qty, acquiring, currency, mult)) else { return false };
-    let places = currency.minor_units().max(cash.amount.places()).max(t.fee.map(|f| f.amount.places()).unwrap_or(0));
-    match price.amount.checked_mul(qty).and_then(|v| v.checked_mul(*m)) {
-        Ok(by_price) => by_price.round(places, Rounding::HalfEven) != by_cash.amount,
-        Err(_) => true,
+    let Ok(m) = mult else { return false };
+    let Ok(by_price) = price.amount.checked_mul(qty).and_then(|v| v.checked_mul(*m)) else { return true };
+    if cash.currency != currency {
+        return converted_disagrees(t, qty, acquiring, currency, mult, by_price);
     }
+    if t.fee.is_some_and(|f| f.currency != currency) {
+        return false;
+    }
+    let Ok(by_cash) = fill_value(t, qty, acquiring, currency, mult) else { return false };
+    let places = currency.minor_units().max(cash.amount.places()).max(t.fee.map(|f| f.amount.places()).unwrap_or(0));
+    by_price.round(places, Rounding::HalfEven) != by_cash.amount
+}
+
+/// Half a unit in the last place `d` is written to (at least the currency's
+/// minor unit for an amount).
+/// A value at every place a `Dec` holds has no rounding below it to speak of.
+fn half_unit(d: Dec, places: u32) -> Dec {
+    Dec::new(5, places.max(d.places()) + 1).unwrap_or(Dec::ZERO)
+}
+
+/// A converted fill's value over every cash, fee and rate that round to the
+/// stated ones: the price disagrees when it lies outside all of them.
+fn converted_disagrees(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency, mult: &Fig<Dec>, by_price: Dec) -> bool {
+    let (Some(cash), Some(rate)) = (t.cash, t.fx_rate) else { return false };
+    let spread = |d: Dec, places: u32| -> Option<[Dec; 2]> {
+        let h = half_unit(d, places);
+        Some([d.checked_sub(h).ok()?, d.checked_add(h).ok()?])
+    };
+    let Some(rates) = spread(rate, 0) else { return false };
+    if !rates[0].is_positive() {
+        return false;
+    }
+    let Some(cashes) = spread(cash.amount, cash.currency.minor_units()) else { return false };
+    let fees: Vec<Option<Money>> = match t.fee {
+        None => vec![None],
+        Some(f) => match spread(f.amount, f.currency.minor_units()) {
+            Some(fs) => fs.iter().map(|a| Some(Money::new(*a, f.currency))).collect(),
+            None => return false,
+        },
+    };
+    let mut values = Vec::new();
+    for r in rates {
+        for c in cashes {
+            for fee in &fees {
+                let mut v = t.clone();
+                v.fx_rate = Some(r);
+                v.cash = Some(Money::new(c, cash.currency));
+                v.fee = *fee;
+                match fill_value(&v, qty, acquiring, currency, mult) {
+                    Ok(value) => values.push(value.amount),
+                    Err(_) => return false,
+                }
+            }
+        }
+    }
+    let (Some(lo), Some(hi)) = (values.iter().min(), values.iter().max()) else { return false };
+    by_price < *lo || by_price > *hi
 }
 
 /// What one transaction does to a holding.

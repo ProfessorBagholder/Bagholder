@@ -66,11 +66,19 @@ impl Check<'_> {
         }
     }
 
-    /// A ratio that is a figure: its gaps are a failure of any expectation.
+    /// A ratio that is a figure: a number, none (`null`), or the gaps it waits
+    /// on (`{"gaps": [...]}`).
     fn ratio_fig(&mut self, what: &str, expect: &Value, got: &Fig<Option<f64>>) {
-        match got {
-            Ok(g) => self.ratio(what, expect, *g),
-            Err(g) => self.fail(format!("{what}: expected {expect}, got gaps {:?}", g.words())),
+        match (expect, got) {
+            (Value::Object(o), Err(g)) => {
+                let want: BTreeSet<String> = o.get("gaps").and_then(Value::as_array).map(|a| a.iter().map(|x| x.as_str().unwrap().to_string()).collect()).unwrap_or_default();
+                let have: BTreeSet<String> = g.words().into_iter().map(str::to_string).collect();
+                if have != want {
+                    self.fail(format!("{what}: expected gaps {want:?}, got {have:?}"));
+                }
+            }
+            (_, Ok(g)) => self.ratio(what, expect, *g),
+            (_, Err(g)) => self.fail(format!("{what}: expected {expect}, got gaps {:?}", g.words())),
         }
     }
 
@@ -379,10 +387,10 @@ fn run(path: &Path) -> Vec<String> {
                 c.money("income trailing year", v, &h.trailing_year.total);
             }
             if let Some(v) = want.get("yield_on_cost") {
-                c.ratio("yield on cost", v, h.yield_on_cost.as_ref().ok().copied());
+                c.ratio_fig("yield on cost", v, &h.yield_on_cost.clone().map(Some));
             }
             if let Some(v) = want.get("current_yield") {
-                c.ratio("current yield", v, h.current_yield.as_ref().ok().copied());
+                c.ratio_fig("current yield", v, &h.current_yield.clone().map(Some));
             }
         }
         for want in arr(&expect, "checks") {

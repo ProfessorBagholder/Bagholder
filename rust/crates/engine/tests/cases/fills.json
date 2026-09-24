@@ -63,13 +63,13 @@
     }
   },
   {
-    "name": "price and cash are compared at the cash's cents: a difference each way is listed, rounding and converted cash are not",
+    "name": "price and cash are compared at the cash's cents: a difference each way is listed, one the cash's or the stated rate's rounding explains is not",
     "spec": "docs/plans/stage-2-engine.md, the ledger: where a record states both and they disagree, the cash stands and the record is a problem",
     "working": [
       "t1: 3 X at 33.333 is 99.999, 100.00 at the cash's cents, and the cash is 100.00: they agree",
       "t2: 1 X at 10 against cash 10.50: the cash is more than the price says",
       "t3: 2 X at 31 is 62 against cash 60: the price says more than the cash",
-      "t4: 2 X at 29 against 75 CAD at 1.25 CAD per USD: the cash was converted at a rounded rate, so it is not compared",
+      "t4: 2 X at 29 is 58.00 USD against 75 CAD at 1.25 CAD per USD, 60.00 USD: every cash and rate that round to 75 and 1.25 give 59.76 to 60.25, so the price disagrees",
       "the cash stands: P&L (60 + 60) − (100 + 10.50) = 9.50"
     ],
     "today": "2026-03-02",
@@ -85,7 +85,8 @@
     ],
     "expect": {
       "position_count": 0,
-      "disagreements": ["t2", "t3"],
+      "disagreements": ["t2", "t3",
+    "t4"],
       "trades": [{"opened_by": "t1", "pnl": "9.50"}]
     }
   },
