@@ -89,7 +89,10 @@ fn close_on(inputs: &Inputs, instrument: InstrumentId, day: Date) -> Fig<Dec> {
         }
     }
     let from = day.checked_sub(CLOSE_REACH_DAYS.days()).unwrap_or(day);
-    inputs.market.closes.get(&instrument).and_then(|c| c.range(from..=day).next_back()).map(|(_, v)| *v).ok_or_else(|| Gaps::of(Gap::CloseUnknown { instrument, day }))
+    let (on, close) = inputs.market.closes.get(&instrument).and_then(|c| c.range(from..=day).next_back()).ok_or_else(|| Gaps::of(Gap::CloseUnknown { instrument, day }))?;
+    let currency = inputs.ledger.instruments.get(&instrument).map_or(close.currency, |i| i.instrument.currency);
+    // a close in another currency is converted at its own day's rate
+    crate::fx::convert(&inputs.facts.rates, &inputs.clock, *close, currency, *on)
 }
 
 /// CAD per unit on a day: the day's rate, or the live rate today.

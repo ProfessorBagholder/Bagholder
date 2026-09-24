@@ -97,6 +97,21 @@ pub fn rate(rates: &Rates, clock: &Clock, currency: Currency, day: Date) -> Fig<
     }
 }
 
+/// An amount in `to` on `day`: itself when it is in `to`; in CAD, the exact
+/// product with the day's rate; in another currency, through CAD, the quotient
+/// taken to eighteen places.
+pub fn convert(rates: &Rates, clock: &Clock, amount: Money, to: Currency, day: Date) -> Fig<Dec> {
+    if amount.currency == to {
+        return Ok(amount.amount);
+    }
+    let cad = to_cad(rates, clock, amount, day)?.amount;
+    if to == Currency::CAD {
+        return Ok(cad);
+    }
+    let r = rate(rates, clock, to, day)?;
+    Ok(cad.div_rounded(r, 18, bagholder_core::Rounding::HalfEven)?)
+}
+
 /// An amount in CAD for a transaction on `day`: the exact product.
 pub fn to_cad(rates: &Rates, clock: &Clock, amount: Money, day: Date) -> Fig<Money> {
     if amount.currency == Currency::CAD {

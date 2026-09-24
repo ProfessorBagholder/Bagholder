@@ -252,8 +252,11 @@ pub struct BrokerAccount {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Market {
     pub quotes: BTreeMap<InstrumentId, Quote>,
-    /// Daily closes per instrument, in its own currency.
-    pub closes: BTreeMap<InstrumentId, BTreeMap<Date, Dec>>,
+    /// Daily closes per instrument, each in the currency its source states it
+    /// in: the instrument's own, or, for a coin whose pair has no market of its
+    /// own, its USD market's, converted at the day's rate where it is used
+    /// (`SPEC.md` §2, Coinbase).
+    pub closes: BTreeMap<InstrumentId, BTreeMap<Date, Money>>,
     /// Index levels per benchmark key (`SP500`, `TSX`, `TX60`), per day.
     pub benchmarks: BTreeMap<String, BTreeMap<Date, Dec>>,
     pub brokers: BTreeMap<AccountId, BrokerAccount>,

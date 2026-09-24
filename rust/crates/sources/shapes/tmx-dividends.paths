@@ -1,0 +1,11 @@
+.
+data
+data.dividends
+data.dividends.dividends
+data.dividends.dividends[]
+data.dividends.dividends[].amount
+data.dividends.dividends[].currency
+data.dividends.dividends[].declarationDate
+data.dividends.dividends[].exDate
+data.dividends.dividends[].payableDate
+data.dividends.dividends[].recordDate

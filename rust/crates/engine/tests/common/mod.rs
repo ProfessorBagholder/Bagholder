@@ -264,8 +264,14 @@ pub fn build(case: &Value) -> Built {
     }
     for (i, days) in obj(case, "closes") {
         let id = ids.instrument(&i);
+        let currency = ledger.instruments[&id].instrument.currency;
         for (d, c) in days.as_object().unwrap() {
-            market.closes.entry(id).or_default().insert(day(d), dec(c.as_str().unwrap()));
+            // a close is the instrument's currency, or {"amount", "currency"} for another
+            let close = match c.as_str() {
+                Some(a) => Money::new(dec(a), currency),
+                None => Money::new(dec(s(c, "amount").unwrap()), ccy(s(c, "currency").unwrap())),
+            };
+            market.closes.entry(id).or_default().insert(day(d), close);
         }
     }
     for (k, days) in obj(case, "benchmarks") {

@@ -91,7 +91,9 @@ pub fn mark_of(inputs: &Inputs, instrument: InstrumentId, kind: InstrumentKind, 
     }
     let today = inputs.clock.today;
     if let Some((day, close)) = inputs.market.closes.get(&instrument).and_then(|c| c.range(..=today).next_back()) {
-        return Ok(Mark { price: *close, source: PriceSource::Close(*day), change: None, change_pct: None });
+        // a close in another currency is converted at its own day's rate
+        let price = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *close, currency, *day)?;
+        return Ok(Mark { price, source: PriceSource::Close(*day), change: None, change_pct: None });
     }
     Err(Gaps::of(Gap::PriceUnknown(instrument)))
 }

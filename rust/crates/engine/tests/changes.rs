@@ -133,7 +133,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let quote = Quote { price: Money::new(d("13"), Currency::CAD), change: Some(d("1")), change_pct: None, at: None, source: QuoteSource::Listing };
     // a close of the fund, which no contract is written on
     let mut closes = i.market.closes.get(&f).cloned().unwrap_or_default();
-    closes.insert(day("2026-04-18"), d("10.4"));
+    closes.insert(day("2026-04-18"), Money::new(d("10.4"), Currency::CAD));
     let _ = u;
     let broker = BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(d("3100")), as_of: Some("2026-04-20T16:00:00Z".parse().unwrap()), ..BrokerAccount::default() };
     let clock = bagholder_engine::input::Clock { today: day("2026-04-21"), now: "2026-04-21T22:00:00Z".parse().unwrap(), ..i.clock.clone() };

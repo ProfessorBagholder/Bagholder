@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{Group, JournalEntry, JournalSubject, Trade};
-use bagholder_core::{AccountId, Dec, InstrumentId, TransactionId};
+use bagholder_core::{AccountId, Dec, InstrumentId, Money, TransactionId};
 
 use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
@@ -34,7 +34,7 @@ pub enum Change {
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),
     Quote(InstrumentId, Option<Quote>),
-    Closes(InstrumentId, BTreeMap<Date, Dec>),
+    Closes(InstrumentId, BTreeMap<Date, Money>),
     Benchmark(String, BTreeMap<Date, Dec>),
     Broker(AccountId, Option<BrokerAccount>),
     /// The day turning, the instant moving (16:30 passing), the home zone.

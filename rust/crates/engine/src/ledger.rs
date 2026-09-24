@@ -818,6 +818,12 @@ impl<'a> Matcher<'a> {
     fn expired_worthless(&self, instrument: InstrumentId, expiry: Date) -> bool {
         let Some(terms) = self.info(instrument).and_then(|i| i.terms.as_ref()) else { return false };
         let Some(close) = self.inputs.market.closes.get(&terms.underlying).and_then(|c| c.get(&expiry)) else { return false };
+        // the strike is in the contract's currency; a close in another says nothing here
+        let Some(currency) = self.info(instrument).map(|i| i.instrument.currency) else { return false };
+        if close.currency != currency {
+            return false;
+        }
+        let close = &close.amount;
         // strictly out of the money: at the strike, whether it was exercised is
         // the broker's to say
         match terms.right {

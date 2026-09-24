@@ -89,12 +89,13 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
             frequencies.insert(i, Sourced { value: n, source: old_store_source() });
         }
     }
-    let mut closes: BTreeMap<InstrumentId, BTreeMap<bagholder_core::jiff::civil::Date, Dec>> = BTreeMap::new();
+    let mut closes: BTreeMap<InstrumentId, BTreeMap<bagholder_core::jiff::civil::Date, Money>> = BTreeMap::new();
     let mut stmt = old.prepare("SELECT symbol, date, close FROM price_history").map_err(err)?;
     for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?))).map_err(err)? {
         let (symbol, date, close) = row.map_err(err)?;
         let (Some(i), Ok(d), Some(c)) = (one(&symbol), date.get(..10).unwrap_or("").parse(), dec(close)) else { continue };
-        closes.entry(i).or_default().insert(d, c);
+        // the old store kept each close in its instrument's currency
+        closes.entry(i).or_default().insert(d, Money::new(c, ledger.instruments[&i].instrument.currency));
     }
     market.closes = closes;
     let mut stmt = old.prepare("SELECT symbol, date, close FROM benchmark_prices").map_err(err)?;

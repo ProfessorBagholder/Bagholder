@@ -187,5 +187,32 @@
     ]},
     "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
     "expect": {"income": [{"account": "A", "instrument": "F", "yield_on_cost": 0.15, "current_yield": 0.125}]}
+  },
+  {
+    "name": "a coin whose pair has no market of its own is priced by its USD market's close at that day's rate",
+    "spec": "SPEC.md §2 Coinbase: a coin's close is its pair's Coinbase Exchange close for the UTC day, the USD market converted at the day's Bank of Canada rate when the pair has none",
+    "working": [
+      "written by an agent that had not read the engine, from SPEC.md and the design (2026-09-24)",
+      "BTC: no quote; its last close is 2026-03-05's USD market close, 70000 USD, at that day's rate 1.40: 98000 CAD; market 0.5 × 98000 = 49000.00; book 50000; unrealized -1000.00",
+      "ETH: its last close is 2026-03-06's, 2000 USD; no read covered 2026-03-06 and its 16:30 has passed: rate-missing, and the fill price is never a market price"
+    ],
+    "today": "2026-03-09",
+    "now": "2026-03-09T15:00:00Z",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "BTC", "kind": "crypto", "currency": "CAD"}, {"id": "ETH", "kind": "crypto", "currency": "CAD"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "BTC", "qty": "0.5", "cash": "-50000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:05:00Z", "kind": "buy", "instrument": "ETH", "qty": "2", "cash": "-5000"}
+    ],
+    "closes": {"BTC": {"2026-03-05": {"amount": "70000", "currency": "USD"}}, "ETH": {"2026-03-06": {"amount": "2000", "currency": "USD"}}},
+    "rates": {"USD": {"2026-03-05": "1.40"}},
+    "covered": {"USD": [["2026-03-02", "2026-03-05", "2026-03-05T22:00:00Z"]]},
+    "series": {"USD": [["2017-01-03", "2026-03-05"]]},
+    "expect": {
+      "positions": [
+        {"account": "A", "instrument": "BTC", "market": "49000.00", "unrealized": "-1000.00"},
+        {"account": "A", "instrument": "ETH", "market": {"gaps": ["rate-missing"]}}
+      ]
+    }
   }
 ]
