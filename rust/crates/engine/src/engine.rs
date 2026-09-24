@@ -155,7 +155,7 @@ impl Fields for PayerRate {
 
 impl Fields for AccountEquity {
     fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("points", &self.points), f("returns", &self.returns)]
+        vec![f("points", &self.points), f("returns", &self.returns), f("gaps", &self.gaps)]
     }
 }
 

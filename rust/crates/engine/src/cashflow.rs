@@ -41,7 +41,7 @@ pub struct CashRow {
     /// Units the row states it paid on.
     pub qty: Option<Dec>,
     /// Per unit, where the row states its units.
-    pub per: Option<Money>,
+    pub per: Option<Fig<Money>>,
     /// In the currency it was paid.
     pub amount: Money,
     pub amount_cad: Fig<Money>,
@@ -64,7 +64,7 @@ pub fn build_cashflow(inputs: &Inputs, matched: &Matched) -> Vec<CashRow> {
         // a dividend of no cash is the broker's notice of one to come, not a payment
         let Some(cash) = t.cash.filter(|c| !c.amount.is_zero()) else { continue };
         let qty = t.quantity.filter(|q| !q.is_zero()).map(|q| q.abs());
-        let per = qty.and_then(|q| cash.amount.abs().div_rounded(q, crate::trades::PRICE_PLACES, Rounding::HalfEven).ok()).map(|v| Money::new(v, cash.currency));
+        let per: Option<Fig<Money>> = qty.map(|q| Ok(Money::new(cash.amount.abs().div_rounded(q, crate::trades::PRICE_PLACES, Rounding::HalfEven)?, cash.currency)));
         rows.push(CashRow {
             id: t.id.clone(),
             day: t.trade_date,

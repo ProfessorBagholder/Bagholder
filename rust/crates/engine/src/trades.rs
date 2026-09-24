@@ -158,7 +158,7 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
     let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
     let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
     let direction = slices[0].direction;
-    let qty: Fig<Dec> = slices.iter().try_fold(Dec::ZERO, |a, s| a.add_to_fit(s.qty)).map_err(Gaps::from);
+    let qty: Fig<Dec> = slices.iter().try_fold(Dec::ZERO, |a, s| a.checked_add(s.qty)).map_err(Gaps::from);
     let entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()));
     let exits = sum_money(currency, slices.iter().map(|s| s.exit.clone()));
     // units × multiplier over the slices, each on its own contract

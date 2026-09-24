@@ -46,11 +46,12 @@ impl FactNeeds {
 
 /// The days a holding's units are not zero, as spans of first and last day; the
 /// last span runs to today while it is held.
-fn held_spans(units: &BTreeMap<Date, bagholder_core::Dec>, today: Date) -> Vec<(Date, Date)> {
+fn held_spans(units: &BTreeMap<Date, crate::gap::Fig<bagholder_core::Dec>>, today: Date) -> Vec<(Date, Date)> {
     let mut out = Vec::new();
     let mut open: Option<Date> = None;
     for (day, q) in units {
-        match (open, q.is_zero()) {
+        // a count that could not be summed is of units held
+        match (open, q.as_ref().is_ok_and(|q| q.is_zero())) {
             (None, false) => open = Some(*day),
             // units recorded at the end of a day: the day it went to zero was held
             (Some(from), true) => {
@@ -88,7 +89,7 @@ pub fn fact_needs(inputs: &Inputs, matched: &Matched) -> FactNeeds {
     // cost and value in CAD), quoted while held today, a security's payer read,
     // and a contract held into its expiry decided by its underlying's close that day
     for ((account, i), units) in &matched.units {
-        let held_today = !matched.units_on(*account, *i, today).is_zero();
+        let held_today = !matched.units_on(*account, *i, today).is_ok_and(|q| q.is_zero());
         for (from, to) in held_spans(units, today) {
             if let Some(c) = currency(i) {
                 n.rate(c, from);

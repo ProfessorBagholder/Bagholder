@@ -255,14 +255,14 @@ pub struct Matched {
     /// Transactions that moved nothing, and what they wait on.
     pub unapplied: Vec<(TransactionId, Gaps)>,
     /// Each holding's units (longs less shorts) at the end of each day they
-    /// changed: what the equity series values.
-    pub units: BTreeMap<(AccountId, InstrumentId), BTreeMap<Date, Dec>>,
+    /// changed; a count whose lots cannot be summed exactly is that failure.
+    pub units: BTreeMap<(AccountId, InstrumentId), BTreeMap<Date, Fig<Dec>>>,
 }
 
 impl Matched {
     /// Units of a holding at the end of `day`.
-    pub fn units_on(&self, account: AccountId, instrument: InstrumentId, day: Date) -> Dec {
-        self.units.get(&(account, instrument)).and_then(|t| t.range(..=day).next_back()).map(|(_, q)| *q).unwrap_or(Dec::ZERO)
+    pub fn units_on(&self, account: AccountId, instrument: InstrumentId, day: Date) -> Fig<Dec> {
+        self.units.get(&(account, instrument)).and_then(|t| t.range(..=day).next_back()).map(|(_, q)| q.clone()).unwrap_or(Ok(Dec::ZERO))
     }
 }
 
@@ -830,14 +830,16 @@ impl<'a> Matcher<'a> {
     /// The units of every holding touched since the last record, at the end of `day`.
     fn record_units(&mut self, day: Date) {
         for key in std::mem::take(&mut self.dirty) {
-            let net = self.out.books.get(&key).map(|b| {
-                b.lots.iter().fold(Dec::ZERO, |a, l| match l.direction {
-                    Direction::Long => a.checked_add(l.qty).unwrap_or(a),
-                    Direction::Short => a.checked_sub(l.qty).unwrap_or(a),
-                })
+            let net: Fig<Dec> = self.out.books.get(&key).map_or(Ok(Dec::ZERO), |b| {
+                b.lots
+                    .iter()
+                    .try_fold(Dec::ZERO, |a, l| match l.direction {
+                        Direction::Long => a.checked_add(l.qty),
+                        Direction::Short => a.checked_sub(l.qty),
+                    })
+                    .map_err(Gaps::from)
             });
             let timeline = self.out.units.entry(key).or_default();
-            let net = net.unwrap_or(Dec::ZERO);
             if timeline.values().next_back() != Some(&net) {
                 timeline.insert(day, net);
             }

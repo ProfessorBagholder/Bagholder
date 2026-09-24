@@ -66,6 +66,14 @@ impl Check<'_> {
         }
     }
 
+    /// A ratio that is a figure: its gaps are a failure of any expectation.
+    fn ratio_fig(&mut self, what: &str, expect: &Value, got: &Fig<Option<f64>>) {
+        match got {
+            Ok(g) => self.ratio(what, expect, *g),
+            Err(g) => self.fail(format!("{what}: expected {expect}, got gaps {:?}", g.words())),
+        }
+    }
+
     fn ratio(&mut self, what: &str, expect: &Value, got: Option<f64>) {
         match (expect.as_f64(), got) {
             (Some(e), Some(g)) if (e - g).abs() < 1e-9 => {}
@@ -200,7 +208,7 @@ fn run(path: &Path) -> Vec<String> {
             };
             let w = |k: &str| format!("{label} {k}");
             if let Some(v) = want.get("qty") {
-                c.figure(&w("qty"), v, &Ok(p.qty));
+                c.figure(&w("qty"), v, &p.qty);
             }
             if let Some(v) = want.get("book") {
                 c.money(&w("book"), v, &p.book);
@@ -221,8 +229,8 @@ fn run(path: &Path) -> Vec<String> {
                 c.words(&w("gaps"), v, gaps_words(&p.gaps));
             }
             if let Some(v) = want.get("held_days") {
-                if p.held_days != v.as_i64().unwrap() {
-                    c.fail(format!("{}: expected {v}, got {}", w("held_days"), p.held_days));
+                if p.held_days != Ok(v.as_i64().unwrap()) {
+                    c.fail(format!("{}: expected {v}, got {:?}", w("held_days"), p.held_days));
                 }
             }
             if let Some(v) = s(&want, "opened_by") {
@@ -303,7 +311,7 @@ fn run(path: &Path) -> Vec<String> {
             };
             let sc = scoped(filters);
             if let Some(v) = k.get("realized") {
-                c.money("kpi realized", v, &Ok(sc.kpi.realized));
+                c.money("kpi realized", v, &sc.kpi.realized);
             }
             for (field, got) in [("count", sc.kpi.count), ("left_out", sc.kpi.left_out), ("wins", sc.kpi.wins), ("losses", sc.kpi.losses), ("breakeven", sc.kpi.breakeven)] {
                 if let Some(v) = k.get(field) {
@@ -316,10 +324,10 @@ fn run(path: &Path) -> Vec<String> {
                 c.ratio("kpi win_rate", v, sc.kpi.win_rate);
             }
             if let Some(v) = k.get("profit_factor") {
-                c.ratio("kpi profit_factor", v, sc.kpi.profit_factor);
+                c.ratio_fig("kpi profit_factor", v, &sc.kpi.profit_factor);
             }
             if let Some(v) = k.get("market_value") {
-                c.money("portfolio market value", v, &Ok(sc.portfolio.market_value.total));
+                c.money("portfolio market value", v, &sc.portfolio.market_value.total);
             }
             if let Some(v) = k.get("market_value_left_out") {
                 if v.as_u64() != Some(sc.portfolio.market_value.left_out as u64) {
@@ -327,7 +335,7 @@ fn run(path: &Path) -> Vec<String> {
                 }
             }
             if let Some(v) = k.get("dividends") {
-                c.money("cashflow all-time dividends", v, &Ok(sc.cashflow.total.total));
+                c.money("cashflow all-time dividends", v, &sc.cashflow.total.total);
             }
             for y in arr(k, "years") {
                 let year = y.get("year").and_then(Value::as_i64).unwrap() as i16;
@@ -365,10 +373,10 @@ fn run(path: &Path) -> Vec<String> {
                 continue;
             };
             if let Some(v) = want.get("all_time") {
-                c.money("income all time", v, &Ok(h.all_time.total));
+                c.money("income all time", v, &h.all_time.total);
             }
             if let Some(v) = want.get("trailing_year") {
-                c.money("income trailing year", v, &Ok(h.trailing_year.total));
+                c.money("income trailing year", v, &h.trailing_year.total);
             }
             if let Some(v) = want.get("yield_on_cost") {
                 c.ratio("yield on cost", v, h.yield_on_cost.as_ref().ok().copied());
@@ -560,8 +568,8 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
         }
         let sum = own.iter().try_fold(Dec::ZERO, |a, x| a.checked_add(x.quantity.unwrap())).unwrap();
         let held = f.matched.units_on(*account, *instrument, today);
-        if held != sum {
-            c.fail(format!("invariant: {account} holds {} {instrument} against its transactions' {}", held.to_text(), sum.to_text()));
+        if held != Ok(sum) {
+            c.fail(format!("invariant: {account} holds {held:?} {instrument} against its transactions' {}", sum.to_text()));
         }
     }
 }
@@ -620,7 +628,7 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                 // every security held today whose rate a figure states or waits on
                 let today = b.inputs.clock.today;
                 for i in f.payers.keys() {
-                    let held = f.matched.units.keys().any(|(a, x)| x == i && !f.matched.units_on(*a, *i, today).is_zero());
+                    let held = f.matched.units.keys().any(|(a, x)| x == i && !f.matched.units_on(*a, *i, today).is_ok_and(|q| q.is_zero()));
                     let security = b.inputs.ledger.instruments.get(i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Security);
                     seen += 1;
                     if held && security && !needs.payers.contains(i) {
@@ -638,7 +646,7 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                     }
                 }
                 // every instrument held today is quoted, and nothing else
-                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_zero()).map(|(_, x)| *x).collect();
+                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).collect();
                 seen += 1;
                 if needs.held != held {
                     failures.push(format!("{name}: held today {held:?}, the needs name {:?}", needs.held));

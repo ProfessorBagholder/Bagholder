@@ -49,11 +49,12 @@ pub struct PositionFig {
     pub kind: InstrumentKind,
     pub currency: Currency,
     pub direction: Direction,
-    pub qty: Dec,
+    /// Σ lot quantity, exact.
+    pub qty: Fig<Dec>,
     pub multiplier: Fig<Dec>,
     /// Σ lot value: what the open units cost (long) or brought in (short).
     pub book: Fig<Money>,
-    pub fees: Money,
+    pub fees: Fig<Money>,
     /// Book ÷ (qty × multiplier).
     pub avg: Fig<Dec>,
     pub mark: Fig<Mark>,
@@ -68,7 +69,7 @@ pub struct PositionFig {
     pub unrealized_cad: Fig<Money>,
     pub day_change_cad: Fig<Option<Money>>,
     /// Quantity-weighted days since each lot was opened.
-    pub held_days: i64,
+    pub held_days: Fig<i64>,
     pub opened_on: Date,
     pub lots: Vec<Lot>,
     pub fills: BTreeSet<TransactionId>,
@@ -133,8 +134,8 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
             let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
             let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
             let mult = multiplier(info, *instrument);
-            let qty = lots.iter().fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty).unwrap_or(a));
-            let fees = lots.iter().fold(Money::zero(currency), |a, l| a.add_to_fit(l.fee).unwrap_or(a));
+            let qty: Fig<Dec> = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).map_err(Gaps::from);
+            let fees: Fig<Money> = lots.iter().try_fold(Money::zero(currency), |a, l| a.add_to_fit(l.fee)).map_err(Gaps::from);
             let taint = book.taint.clone();
             let with_taint = |f: Fig<Money>| -> Fig<Money> {
                 if taint.is_empty() {
@@ -148,7 +149,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 }
             };
             let book_value = with_taint(lot_sum(currency, &lots));
-            let units: Fig<Dec> = mult.clone().and_then(|m| Ok(qty.checked_mul(m)?));
+            let units: Fig<Dec> = crate::gap::both(qty.clone(), mult.clone(), |q, m| Ok(q.checked_mul(m)?));
             let avg = match (&book_value, &units) {
                 (Ok(b), Ok(u)) if !u.is_zero() => b.amount.div_rounded(*u, PRICE_PLACES, Rounding::HalfEven).map_err(Gaps::from),
                 (Ok(_), Ok(_)) => Ok(Dec::ZERO),
@@ -193,11 +194,10 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 Err(g) => Err(g.clone()),
             };
             // quantity-weighted days held
-            let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?));
-            let held_days = match weighted.and_then(|w| w.div_rounded(qty, 0, Rounding::HalfEven)) {
-                Ok(d) => d.to_text().parse::<i64>().unwrap_or(0),
-                Err(_) => 0,
-            };
+            let held_days: Fig<i64> = qty.clone().and_then(|q| {
+                let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?))?;
+                Ok(weighted.div_rounded(q, 0, Rounding::HalfEven)?.to_int()?)
+            });
             let key = first.trip.clone();
             let mut trips: Vec<TripKey> = Vec::new();
             for l in &lots {
@@ -216,6 +216,9 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 flags.extend(l.flags.iter().map(|f| f.word()));
             }
             let mut gaps = taint.clone();
+            if let Err(g) = &qty {
+                gaps.merge(g);
+            }
             for f in [&book_value, &market] {
                 if let Err(g) = f {
                     gaps.merge(g);

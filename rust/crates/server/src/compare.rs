@@ -150,6 +150,13 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
     Ok((market, rates, declared, frequencies))
 }
 
+fn qty(q: &Result<bagholder_core::Dec, bagholder_engine::gap::Gaps>) -> String {
+    match q {
+        Ok(v) => v.to_text(),
+        Err(g) => format!("— ({})", g.words().join(", ")),
+    }
+}
+
 fn money(m: &Result<Money, bagholder_engine::gap::Gaps>) -> String {
     match m {
         Ok(v) => v.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(),
@@ -353,21 +360,21 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
             None => pos_causes.entry("old position with no new position on the same opening".into()).or_default().push(format!("{key} {} qty {} book {:.2}", o.symbol, o.qty, o.cost)),
             Some(n) => {
                 seen.insert(key.clone());
-                let qty_ok = (n.qty.to_f64() - o.qty).abs() < 1e-6;
+                let qty_ok = n.qty.as_ref().is_ok_and(|q| (q.to_f64() - o.qty).abs() < 1e-6);
                 let book_ok = close_enough(o.cost.abs(), &n.book);
                 if qty_ok && book_ok {
                     pos_same += 1;
                     continue;
                 }
                 let cause = if !n.gaps.is_empty() { format!("new position waits: {}", n.gaps.words().join(", ")) } else if !qty_ok { "a different quantity".into() } else { "a different book value".into() };
-                pos_causes.entry(cause).or_default().push(format!("{key} {} qty {} / {} book {:.2} / {}", o.symbol, o.qty, n.qty, o.cost, money(&n.book)));
+                pos_causes.entry(cause).or_default().push(format!("{key} {} qty {} / {} book {:.2} / {}", o.symbol, o.qty, qty(&n.qty), o.cost, money(&n.book)));
             }
         }
     }
     for (key, n) in &new_pos {
         if !seen.contains(key) {
             let symbol = figures_symbol(&engine, n.instrument);
-            pos_causes.entry("new position the old model did not have".into()).or_default().push(format!("{key} {symbol} qty {} book {} gaps {:?}", n.qty, money(&n.book), n.gaps.words()));
+            pos_causes.entry("new position the old model did not have".into()).or_default().push(format!("{key} {symbol} qty {} book {} gaps {:?}", qty(&n.qty), money(&n.book), n.gaps.words()));
         }
     }
     writeln!(out, "\nPositions: {} old, {} new, {} the same.", view.positions.len(), figures.positions.len(), pos_same).ok();
@@ -396,8 +403,8 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
 
     // the dashboard, unfiltered
     let scoped = engine.scope(&Filters { benchmark: "SP500".into(), ..Filters::default() });
-    writeln!(out, "\nDashboard: realized old {:.2} new {} ({} trades, {} left out); count old {} new {}.", view.kpi.realized, scoped.kpi.realized.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.kpi.count, scoped.kpi.left_out, view.kpi.count, scoped.kpi.count).ok();
-    writeln!(out, "Portfolio: market value old {:.2} new {} ({} left out); cost basis old {:.2} new {} ({} left out).", view.portfolio.market_value, scoped.portfolio.market_value.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.portfolio.market_value.left_out, view.portfolio.cost_basis, scoped.portfolio.cost_basis.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.portfolio.cost_basis.left_out).ok();
+    writeln!(out, "\nDashboard: realized old {:.2} new {} ({} trades, {} left out); count old {} new {}.", view.kpi.realized, money(&scoped.kpi.realized), scoped.kpi.count, scoped.kpi.left_out, view.kpi.count, scoped.kpi.count).ok();
+    writeln!(out, "Portfolio: market value old {:.2} new {} ({} left out); cost basis old {:.2} new {} ({} left out).", view.portfolio.market_value, money(&scoped.portfolio.market_value.total), scoped.portfolio.market_value.left_out, view.portfolio.cost_basis, money(&scoped.portfolio.cost_basis.total), scoped.portfolio.cost_basis.left_out).ok();
     // each position the market value leaves out, by what it waits on
     let mut waiting: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for p in figures.positions.iter() {
@@ -408,7 +415,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     for (why, symbols) in &waiting {
         writeln!(out, "  market value leaves out, waiting on {why} — {}: {}", symbols.len(), symbols.join(", ")).ok();
     }
-    writeln!(out, "Cashflow: all-time dividends old {:.2} new {} ({} left out).", view.cashflow.total, scoped.cashflow.total.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.cashflow.total.left_out).ok();
+    writeln!(out, "Cashflow: all-time dividends old {:.2} new {} ({} left out).", view.cashflow.total, money(&scoped.cashflow.total.total), scoped.cashflow.total.left_out).ok();
 
     // what the new engine could not apply
     let m = figures.matched;

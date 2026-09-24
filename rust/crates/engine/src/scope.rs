@@ -240,31 +240,32 @@ pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
         && (f.venues.is_empty() || venue_of(inputs, p.instrument).is_some_and(|v| f.venues.contains(&v)))
 }
 
-/// A sum of the stated members, and how many were left out.
+/// A sum of the stated members, and how many were left out. The sum is the
+/// failure when the stated members cannot be added.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Partial {
-    pub total: Money,
+    pub total: Fig<Money>,
     pub left_out: usize,
 }
 
 impl Partial {
-    fn of<'a>(items: impl IntoIterator<Item = &'a Fig<Money>>) -> Result<Partial, Gaps> {
-        let mut total = Money::zero(Currency::CAD);
+    fn of<'a>(items: impl IntoIterator<Item = &'a Fig<Money>>) -> Partial {
+        let mut stated = Vec::new();
         let mut left_out = 0;
         for i in items {
             match i {
-                Ok(m) => total = total.add_to_fit(*m)?,
+                Ok(m) => stated.push(*m),
                 Err(_) => left_out += 1,
             }
         }
-        Ok(Partial { total, left_out })
+        Partial { total: money_sum(stated), left_out }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Kpi {
     /// Over the trades whose CAD P&L is stated.
-    pub realized: Money,
+    pub realized: Fig<Money>,
     pub count: usize,
     /// Trades in scope whose CAD P&L is not stated (a deposited coin, a rate
     /// waiting, a contract size not stated…).
@@ -273,15 +274,15 @@ pub struct Kpi {
     pub losses: usize,
     pub breakeven: usize,
     pub win_rate: Option<Ratio>,
-    pub gross_win: Money,
-    pub gross_loss: Money,
+    pub gross_win: Fig<Money>,
+    pub gross_loss: Fig<Money>,
     /// None with no losses and some wins: infinite.
-    pub profit_factor: Option<Ratio>,
+    pub profit_factor: Fig<Option<Ratio>>,
     pub profit_factor_infinite: bool,
-    pub expectancy: Option<Money>,
-    pub avg_win: Option<Money>,
-    pub avg_loss: Option<Money>,
-    pub fees: Money,
+    pub expectancy: Fig<Option<Money>>,
+    pub avg_win: Fig<Option<Money>>,
+    pub avg_loss: Fig<Option<Money>>,
+    pub fees: Fig<Money>,
     pub avg_hold: Option<Ratio>,
 }
 
@@ -289,7 +290,7 @@ pub struct Kpi {
 pub struct MonthBar {
     pub year: i16,
     pub month: i8,
-    pub value: Money,
+    pub value: Fig<Money>,
     pub count: usize,
     pub trades: Vec<TradeKey>,
 }
@@ -297,7 +298,7 @@ pub struct MonthBar {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnderlyingRow {
     pub underlying: InstrumentId,
-    pub pnl: Money,
+    pub pnl: Fig<Money>,
     pub count: usize,
     pub legs: usize,
     pub win_rate: Option<Ratio>,
@@ -309,7 +310,7 @@ pub struct UnderlyingRow {
 pub struct GradeBucket {
     pub grade: Grade,
     pub count: usize,
-    pub pnl: Money,
+    pub pnl: Fig<Money>,
     pub trades: Vec<TradeKey>,
 }
 
@@ -324,7 +325,7 @@ pub enum Missing {
 pub struct Allocation {
     pub position: usize,
     pub value: Money,
-    pub share: Ratio,
+    pub share: Fig<Ratio>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -333,31 +334,31 @@ pub struct Portfolio {
     pub market_value: Partial,
     pub cost_basis: Partial,
     pub unrealized: Partial,
-    pub unrealized_pct: Option<Ratio>,
+    pub unrealized_pct: Fig<Option<Ratio>>,
     pub account_count: usize,
     /// Σ the broker's stated net value of the open accounts in scope.
-    pub net_value: Option<Money>,
+    pub net_value: Option<Fig<Money>>,
     pub net_value_accounts: usize,
     /// The negative cash balances the broker states, per currency, shown positive.
-    pub margin_used_by: BTreeMap<Currency, Dec>,
+    pub margin_used_by: BTreeMap<Currency, Fig<Dec>>,
     pub margin_used: Fig<Money>,
-    pub margin_used_pct: Option<Ratio>,
-    pub available_margin: Option<Money>,
+    pub margin_used_pct: Fig<Option<Ratio>>,
+    pub available_margin: Option<Fig<Money>>,
     /// Margin accounts whose buying power the broker could not state, and why.
     pub margin_unavailable: Vec<(AccountId, String)>,
     pub has_margin: bool,
     pub cash: Fig<Money>,
-    pub cash_pct: Option<Ratio>,
+    pub cash_pct: Fig<Option<Ratio>>,
     pub day_change: Option<Partial>,
-    pub day_change_pct: Option<Ratio>,
+    pub day_change_pct: Fig<Option<Ratio>>,
     pub allocation: Vec<Allocation>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CashTile {
-    Paid { label: PaidLabel, total: Partial, count: usize, per_paying_month: Option<Money> },
-    Margin { margin_used: Fig<Money>, interest_per_month: Option<Money>, interest_months: usize },
-    Yield { yield_on_cost: Option<Ratio>, projected_per_month: Money, earned: Money, book: Money, left_out: usize },
+    Paid { label: PaidLabel, total: Partial, count: usize, per_paying_month: Fig<Option<Money>> },
+    Margin { margin_used: Fig<Money>, interest_per_month: Fig<Option<Money>>, interest_months: usize },
+    Yield { yield_on_cost: Fig<Option<Ratio>>, projected_per_month: Fig<Money>, earned: Fig<Money>, book: Fig<Money>, left_out: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -411,6 +412,8 @@ pub struct Cashflow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EquityBlock {
     pub series: Vec<Day>,
+    /// What the accounts' series in scope wait on.
+    pub gaps: Gaps,
     pub years: Vec<YearReturn>,
     pub annualized: Annualized,
     pub drawdown: Drawdown,
@@ -430,12 +433,25 @@ pub struct Scoped {
     pub equity: EquityBlock,
 }
 
-fn money_sum(items: impl IntoIterator<Item = Money>) -> Money {
-    items.into_iter().fold(Money::zero(Currency::CAD), |a, b| a.add_to_fit(b).unwrap_or(a))
+/// Σ amounts in CAD: the failure when they cannot be added (a total too large
+/// to hold), never a total that leaves a term out.
+fn money_sum(items: impl IntoIterator<Item = Money>) -> Fig<Money> {
+    Ok(items.into_iter().try_fold(Money::zero(Currency::CAD), Money::add_to_fit)?)
 }
 
-fn avg_money(total: Money, n: usize) -> Option<Money> {
-    (n > 0).then(|| total.amount.div_rounded(Dec::from_int(n as i64), crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven).ok().map(|v| Money::new(v, total.currency))).flatten()
+/// The mean of `n` amounts totalling `total`; none of none.
+fn avg_money(total: &Fig<Money>, n: usize) -> Fig<Option<Money>> {
+    let total = total.clone()?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let v = total.amount.div_rounded(Dec::from_int(n as i64), crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?;
+    Ok(Some(Money::new(v, total.currency)))
+}
+
+/// `part ÷ whole` where both are stated; none where the whole is zero.
+fn ratio_of(part: &Fig<Money>, whole: &Fig<Money>) -> Fig<Option<Ratio>> {
+    crate::gap::both(part.clone(), whole.clone(), |p, w| Ok(money_ratio(p, w)))
 }
 
 fn kpi(trades: &[&TradeFig]) -> Kpi {
@@ -443,29 +459,32 @@ fn kpi(trades: &[&TradeFig]) -> Kpi {
     let wins: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_positive()).collect();
     let losses: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_negative()).collect();
     let gross_win = money_sum(wins.iter().copied());
-    let gross_loss = money_sum(losses.iter().copied()).neg();
+    let gross_loss = money_sum(losses.iter().copied()).map(Money::neg);
     let realized = money_sum(stated.iter().map(|(_, p)| *p));
     let n = stated.len();
     let fees = money_sum(stated.iter().filter_map(|(t, _)| t.fees_cad.as_ref().ok().copied()));
+    let profit_factor = crate::gap::both(gross_win.clone(), gross_loss.clone(), |w, l| {
+        Ok(if !l.amount.is_zero() {
+            money_ratio(w, l)
+        } else if w.amount.is_positive() {
+            None
+        } else {
+            Some(0.0)
+        })
+    });
     Kpi {
-        realized,
         count: n,
         left_out: trades.len() - n,
         wins: wins.len(),
         losses: losses.len(),
         breakeven: n - wins.len() - losses.len(),
         win_rate: count_ratio(wins.len(), n),
-        profit_factor: if !gross_loss.amount.is_zero() {
-            money_ratio(gross_win, gross_loss)
-        } else if gross_win.amount.is_positive() {
-            None
-        } else {
-            Some(0.0)
-        },
-        profit_factor_infinite: gross_loss.amount.is_zero() && gross_win.amount.is_positive(),
-        expectancy: avg_money(realized, n),
-        avg_win: avg_money(gross_win, wins.len()),
-        avg_loss: avg_money(gross_loss.neg(), losses.len()),
+        profit_factor_infinite: matches!((&gross_win, &gross_loss), (Ok(w), Ok(l)) if l.amount.is_zero() && w.amount.is_positive()),
+        profit_factor,
+        expectancy: avg_money(&realized, n),
+        avg_win: avg_money(&gross_win, wins.len()),
+        avg_loss: avg_money(&gross_loss.clone().map(Money::neg), losses.len()),
+        realized,
         gross_win,
         gross_loss,
         fees,
@@ -490,32 +509,37 @@ pub fn scope(
     let stated: Vec<&&TradeFig> = in_scope.iter().filter(|t| t.pnl_cad.is_ok()).collect();
 
     // monthly P&L by close month
-    let mut months: BTreeMap<(i16, i8), MonthBar> = BTreeMap::new();
+    let mut months: BTreeMap<(i16, i8), (Vec<Money>, Vec<TradeKey>)> = BTreeMap::new();
     for t in &stated {
-        let p = *t.pnl_cad.as_ref().expect("stated");
-        let bar = months.entry((t.closed_on.year(), t.closed_on.month())).or_insert(MonthBar { year: t.closed_on.year(), month: t.closed_on.month(), value: Money::zero(Currency::CAD), count: 0, trades: vec![] });
-        bar.value = bar.value.add_to_fit(p).unwrap_or(bar.value);
-        bar.count += 1;
-        bar.trades.push(t.key.clone());
+        let bar = months.entry((t.closed_on.year(), t.closed_on.month())).or_default();
+        bar.0.push(*t.pnl_cad.as_ref().expect("stated"));
+        bar.1.push(t.key.clone());
     }
+    let monthly: Vec<MonthBar> = months.into_iter().map(|((year, month), (pnls, trades))| MonthBar { year, month, count: pnls.len(), value: money_sum(pnls), trades }).collect();
 
     // by underlying, largest gain first
-    let mut by: BTreeMap<InstrumentId, (Money, usize, usize, i64, usize, Vec<TradeKey>)> = BTreeMap::new();
+    let mut by: BTreeMap<InstrumentId, (Vec<Money>, usize, i64, usize, Vec<TradeKey>)> = BTreeMap::new();
     for t in &stated {
         let p = *t.pnl_cad.as_ref().expect("stated");
-        let e = by.entry(underlying_of(inputs, t.instrument)).or_insert((Money::zero(Currency::CAD), 0, 0, 0, 0, vec![]));
-        e.0 = e.0.add_to_fit(p).unwrap_or(e.0);
-        e.1 += 1;
-        e.2 += usize::from(p.amount.is_positive());
-        e.3 += t.hold_days;
-        e.4 += t.slices.len();
-        e.5.push(t.key.clone());
+        let e = by.entry(underlying_of(inputs, t.instrument)).or_default();
+        e.0.push(p);
+        e.1 += usize::from(p.amount.is_positive());
+        e.2 += t.hold_days;
+        e.3 += t.slices.len();
+        e.4.push(t.key.clone());
     }
     let mut by_underlying: Vec<UnderlyingRow> = by
         .into_iter()
-        .map(|(u, (pnl, n, wins, hold, legs, keys))| UnderlyingRow { underlying: u, pnl, count: n, legs, win_rate: count_ratio(wins, n), avg_hold: count_ratio(hold.max(0) as usize, n), trades: keys })
+        .map(|(u, (pnls, wins, hold, legs, keys))| {
+            let n = pnls.len();
+            UnderlyingRow { underlying: u, pnl: money_sum(pnls), count: n, legs, win_rate: count_ratio(wins, n), avg_hold: count_ratio(hold.max(0) as usize, n), trades: keys }
+        })
         .collect();
-    by_underlying.sort_by(|a, b| b.pnl.amount.cmp(&a.pnl.amount));
+    // largest gain first; one whose total cannot be stated last
+    by_underlying.sort_by(|a, b| match (&a.pnl, &b.pnl) {
+        (Ok(x), Ok(y)) => y.amount.cmp(&x.amount),
+        (a, b) => a.is_err().cmp(&b.is_err()),
+    });
 
     let grades = [Grade::A, Grade::B, Grade::C, Grade::F]
         .into_iter()
@@ -545,7 +569,7 @@ pub fn scope(
     Scoped {
         kpi: kpi(&in_scope),
         trades: in_scope.iter().map(|t| t.key.clone()).collect(),
-        monthly: months.into_values().collect(),
+        monthly,
         by_underlying,
         grades,
         ungraded,
@@ -572,14 +596,14 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let market: Vec<Fig<Money>> = idx.iter().map(|i| signed_market(&positions[*i])).collect();
     let cost: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].book_cad.clone().map(|m| m.abs())).collect();
     let unreal: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].unrealized_cad.clone()).collect();
-    let market_value = Partial::of(&market).unwrap_or(Partial { total: Money::zero(Currency::CAD), left_out: market.len() });
-    let cost_basis = Partial::of(&cost).unwrap_or(Partial { total: Money::zero(Currency::CAD), left_out: cost.len() });
-    let unrealized = Partial::of(&unreal).unwrap_or(Partial { total: Money::zero(Currency::CAD), left_out: unreal.len() });
+    let market_value = Partial::of(&market);
+    let cost_basis = Partial::of(&cost);
+    let unrealized = Partial::of(&unreal);
 
     let accounts = open_accounts_in_scope(f, inputs);
     let mut navs = Vec::new();
-    let mut used: BTreeMap<Currency, Dec> = BTreeMap::new();
-    let mut cash_by: BTreeMap<Currency, Dec> = BTreeMap::new();
+    let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
     for a in &accounts {
@@ -588,8 +612,10 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
             navs.push(Money::new(n, Currency::CAD));
         }
         for (c, v) in &b.cash {
-            let slot = if v.is_negative() { used.entry(*c).or_insert(Dec::ZERO) } else { cash_by.entry(*c).or_insert(Dec::ZERO) };
-            *slot = slot.add_to_fit(v.abs()).unwrap_or(*slot);
+            let slot = if v.is_negative() { used.entry(*c).or_insert(Ok(Dec::ZERO)) } else { cash_by.entry(*c).or_insert(Ok(Dec::ZERO)) };
+            if let Ok(total) = slot {
+                *slot = total.checked_add(v.abs()).map_err(Gaps::from);
+            }
         }
         if is_margin(a) {
             match &b.buying_power {
@@ -599,10 +625,10 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
             }
         }
     }
-    let to_cad_sum = |by: &BTreeMap<Currency, Dec>| -> Fig<Money> {
+    let to_cad_sum = |by: &BTreeMap<Currency, Fig<Dec>>| -> Fig<Money> {
         let mut total = Money::zero(Currency::CAD);
         for (c, v) in by {
-            total = total.add_to_fit(live_to_cad(rates, clock, Money::new(*v, *c))?)?;
+            total = total.add_to_fit(live_to_cad(rates, clock, Money::new(v.clone()?, *c))?)?;
         }
         Ok(total)
     };
@@ -611,27 +637,31 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let net_value = (!navs.is_empty()).then(|| money_sum(navs.iter().copied()));
     let quoted: Vec<(usize, Money)> = idx.iter().filter_map(|i| positions[*i].day_change_cad.as_ref().ok().and_then(|d| d.map(|m| (*i, m)))).collect();
     let day_change = (!quoted.is_empty()).then(|| Partial { total: money_sum(quoted.iter().map(|(_, m)| *m)), left_out: idx.len() - quoted.len() });
-    let day_change_pct = day_change.as_ref().and_then(|dc| {
-        let now = money_sum(quoted.iter().filter_map(|(i, _)| signed_market(&positions[*i]).ok()));
-        let before = now.checked_sub(dc.total).ok()?;
-        money_ratio(dc.total, before)
-    });
+    let day_change_pct: Fig<Option<Ratio>> = match &day_change {
+        None => Ok(None),
+        Some(dc) => {
+            let now = money_sum(quoted.iter().filter_map(|(i, _)| signed_market(&positions[*i]).ok()));
+            let before = crate::gap::both(now, dc.total.clone(), |n, d| Ok(n.checked_sub(d)?));
+            ratio_of(&dc.total, &before)
+        }
+    };
     let mut allocation: Vec<Allocation> = idx
         .iter()
-        .filter_map(|i| positions[*i].market_cad.as_ref().ok().filter(|m| m.amount.is_positive()).map(|m| Allocation { position: *i, value: *m, share: 0.0 }))
+        .filter_map(|i| positions[*i].market_cad.as_ref().ok().filter(|m| m.amount.is_positive()).map(|m| Allocation { position: *i, value: *m, share: Ok(0.0) }))
         .collect();
     allocation.sort_by(|a, b| b.value.amount.cmp(&a.value.amount));
     let allocated = money_sum(allocation.iter().map(|a| a.value));
     for a in allocation.iter_mut() {
-        a.share = money_ratio(a.value, allocated).unwrap_or(0.0);
+        // every value is positive, so their sum is never zero
+        a.share = allocated.clone().map(|t| money_ratio(a.value, t).unwrap_or(0.0));
     }
     let account_count = idx.iter().map(|i| positions[*i].account).collect::<BTreeSet<_>>().len();
     Portfolio {
-        unrealized_pct: money_ratio(unrealized.total, cost_basis.total),
-        margin_used_pct: margin_used.as_ref().ok().and_then(|m| money_ratio(*m, market_value.total)),
-        cash_pct: match (&cash, &net_value) {
-            (Ok(c), Some(n)) => money_ratio(*c, *n),
-            _ => None,
+        unrealized_pct: ratio_of(&unrealized.total, &cost_basis.total),
+        margin_used_pct: ratio_of(&margin_used, &market_value.total),
+        cash_pct: match &net_value {
+            Some(n) => ratio_of(&cash, n),
+            None => Ok(None),
         },
         positions: idx,
         market_value,
@@ -665,7 +695,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let other: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind != Payment::Dividend).collect();
     let partial = |ix: &mut dyn Iterator<Item = usize>| -> Partial {
         let figs: Vec<Fig<Money>> = ix.map(|i| rows[i].amount_cad.clone()).collect();
-        Partial::of(&figs).unwrap_or(Partial { total: Money::zero(Currency::CAD), left_out: figs.len() })
+        Partial::of(&figs)
     };
 
     // the chart: every month from the first payment to the current month (or the date filter's end)
@@ -685,7 +715,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
             let paid: Vec<usize> = dividends.iter().copied().filter(in_month).collect();
             let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge && in_month(i)).collect();
             let mut interest = partial(&mut charges.iter().copied());
-            interest.total = interest.total.neg();
+            interest.total = interest.total.map(Money::neg);
             months.push(CashMonth { year: y, month: m, count: paid.len(), distributions: partial(&mut paid.iter().copied()), interest });
             if m == 12 {
                 y += 1;
@@ -699,7 +729,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let paying_months = |keep: &dyn Fn(&CashMonth) -> bool| months.iter().filter(|m| keep(m) && m.count > 0).count();
     let paid_tile = |label: PaidLabel, ix: Vec<usize>, months_paid: usize| {
         let total = partial(&mut ix.iter().copied());
-        CashTile::Paid { per_paying_month: avg_money(total.total, months_paid), total, count: ix.len(), label }
+        CashTile::Paid { per_paying_month: avg_money(&total.total, months_paid), total, count: ix.len(), label }
     };
     let this_year = today.year();
     let mut tiles = Vec::new();
@@ -712,8 +742,8 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     if portfolio.has_margin {
         let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge).collect();
         let charged: BTreeSet<(i16, i8)> = charges.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect();
-        let total = partial(&mut charges.iter().copied()).total.neg();
-        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone(), interest_per_month: avg_money(total, charged.len()), interest_months: charged.len() });
+        let total = partial(&mut charges.iter().copied()).total.map(Money::neg);
+        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone(), interest_per_month: avg_money(&total, charged.len()), interest_months: charged.len() });
     } else {
         let since = today.checked_sub(365.days()).unwrap_or(Date::MIN);
         let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day > since && rows[*i].day <= today).collect();
@@ -732,7 +762,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
         .map(|(pi, p, rate)| {
             // what this holding paid: its instrument, into its own account
             let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && rows[*i].account == p.account && keep(&rows[*i])));
-            let annual: Fig<Money> = rate.annual_per_unit().and_then(|a| Ok(a.times(p.qty)?));
+            let annual: Fig<Money> = crate::gap::both(rate.annual_per_unit(), p.qty.clone(), |a, q| Ok(a.times(q)?));
             // a payout in another currency than the holding's is taken at the
             // latest rate, as any live figure is
             let per_unit_annual = rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, p.currency));
@@ -755,9 +785,9 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let rated: Vec<&IncomeHolding> = holdings.iter().filter(|h| h.projected_per_month_cad.is_ok()).collect();
     let book = money_sum(rated.iter().filter_map(|h| positions[h.position].book_cad.as_ref().ok().copied()));
     let per_month = money_sum(rated.iter().filter_map(|h| h.projected_per_month_cad.as_ref().ok().copied()));
-    let earned = money_sum(rated.iter().map(|h| h.trailing_year.total));
-    let annual_total = per_month.times(Dec::from_int(12)).unwrap_or(per_month);
-    tiles.push(CashTile::Yield { yield_on_cost: money_ratio(annual_total, book), projected_per_month: per_month, earned, book, left_out: holdings.len() - rated.len() });
+    let earned: Fig<Money> = rated.iter().try_fold(Money::zero(Currency::CAD), |a, h| Ok(a.add_to_fit(h.trailing_year.total.clone()?)?));
+    let annual_total: Fig<Money> = per_month.clone().and_then(|m| Ok(m.times(Dec::from_int(12))?));
+    tiles.push(CashTile::Yield { yield_on_cost: ratio_of(&annual_total, &book), projected_per_month: per_month, earned, book, left_out: holdings.len() - rated.len() });
 
     Cashflow {
         total: partial(&mut dividends.iter().copied()),
@@ -787,23 +817,50 @@ fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<M
 /// its return is the value-weighted return of the accounts that formed one.
 fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>, today: Date) -> EquityBlock {
     let accounts: Vec<&AccountEquity> = equity.values().filter(|e| f.accounts.is_empty() || f.accounts.contains(&e.account)).collect();
-    let mut values: BTreeMap<Date, (Dec, usize, Option<Dec>)> = BTreeMap::new();
+    // each day's accounts' values and flows, summed in the statistics' own arithmetic
+    let mut values: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = BTreeMap::new();
     for e in &accounts {
         for p in &e.points {
-            let v = values.entry(p.day).or_insert((Dec::ZERO, 0, Some(Dec::ZERO)));
-            v.0 = v.0.add_to_fit(p.value).unwrap_or(v.0);
-            v.1 += 1;
-            v.2 = match (v.2, p.flow) {
-                (Some(a), Some(b)) => a.add_to_fit(b).ok(),
-                _ => None,
-            };
+            values.entry(p.day).or_default().push((p.value, p.flow));
         }
     }
     let begun = |d: Date| accounts.iter().filter(|e| e.points.first().is_some_and(|p| p.day <= d)).count();
-    let complete: BTreeMap<Date, (Dec, Option<Dec>)> = values.into_iter().filter(|(d, (_, n, _))| *n == begun(*d)).map(|(d, (v, _, flow))| (d, (v, flow))).collect();
+    let complete: BTreeMap<Date, Vec<(Dec, Option<Dec>)>> = values.into_iter().filter(|(d, v)| v.len() == begun(*d)).collect();
     let per_account: Vec<&[(Date, Ratio, Dec)]> = accounts.iter().map(|e| e.returns.as_slice()).collect();
     let series = returns::combine(&complete, &per_account);
     let benchmark = benchmarks.get(&f.benchmark);
     let years = returns::yearly_returns(&series, today, benchmark);
-    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series }
+    let mut gaps = Gaps::none();
+    for e in &accounts {
+        gaps.merge(&e.gaps);
+    }
+    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series, gaps }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cad(s: &str) -> Money {
+        Money::new(Dec::parse(s).unwrap(), Currency::CAD)
+    }
+
+    const HUGE: &str = "70000000000000000000000000000";
+
+    #[test]
+    fn a_total_too_large_to_hold_is_a_gap_never_a_total_missing_a_term() {
+        assert_eq!(money_sum([cad("1.25"), cad("2.5")]), Ok(cad("3.75")));
+        let over = money_sum([cad(HUGE), cad(HUGE), cad("1")]);
+        assert!(over.as_ref().is_err_and(|g| g.has_word("arithmetic")), "{over:?}");
+
+        let p = Partial::of(&[Ok(cad(HUGE)), Err(Gaps::of(Gap::Arithmetic("a price".into()))), Ok(cad(HUGE))]);
+        assert_eq!(p.left_out, 1);
+        assert!(p.total.as_ref().is_err_and(|g| g.has_word("arithmetic")), "{p:?}");
+
+        // what is worked out from such a total carries its gap too
+        assert!(avg_money(&p.total, 2).is_err());
+        assert!(ratio_of(&Ok(cad("1")), &p.total).is_err());
+        assert_eq!(avg_money(&Ok(cad("3")), 0), Ok(None));
+        assert_eq!(ratio_of(&Ok(cad("1")), &Ok(cad("4"))), Ok(Some(0.25)));
+    }
 }

@@ -49,9 +49,10 @@ pub struct Drawdown {
     pub peak_at: Option<Date>,
 }
 
-/// The series in scope from the complete days' values and flows, and each
-/// account's daily returns weighted by the value each is over.
-pub fn combine(values: &BTreeMap<Date, (Dec, Option<Dec>)>, accounts: &[&[(Date, f64, Dec)]]) -> Vec<Day> {
+/// The series in scope from each complete day's accounts' values and flows
+/// (the day's flow known when every account's is), and each account's daily
+/// returns weighted by the value each is over.
+pub fn combine(values: &BTreeMap<Date, Vec<(Dec, Option<Dec>)>>, accounts: &[&[(Date, f64, Dec)]]) -> Vec<Day> {
     let mut rets: BTreeMap<Date, (f64, f64)> = BTreeMap::new();
     for a in accounts {
         for (d, r, w) in a.iter() {
@@ -63,7 +64,12 @@ pub fn combine(values: &BTreeMap<Date, (Dec, Option<Dec>)>, accounts: &[&[(Date,
     }
     values
         .iter()
-        .map(|(d, (v, flow))| Day { day: *d, value: v.to_f64(), ret: rets.get(d).and_then(|(s, w)| (*w > 0.0).then(|| s / w)), flow: flow.map(|x| x.to_f64()) })
+        .map(|(d, each)| Day {
+            day: *d,
+            value: each.iter().map(|(v, _)| v.to_f64()).sum(),
+            ret: rets.get(d).and_then(|(s, w)| (*w > 0.0).then(|| s / w)),
+            flow: each.iter().map(|(_, f)| f.map(|x| x.to_f64())).sum(),
+        })
         .collect()
 }
 

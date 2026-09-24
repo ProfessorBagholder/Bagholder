@@ -338,6 +338,16 @@ impl Dec {
         self.0.is_sign_negative() && !self.0.is_zero()
     }
 
+    /// The value as a whole number, or an error: one with places is inexact, one
+    /// beyond an `i64` does not fit.
+    pub fn to_int(self) -> Result<i64, DecError> {
+        use rust_decimal::prelude::ToPrimitive;
+        if self.places() > 0 {
+            return Err(DecError::Inexact);
+        }
+        self.0.to_i64().ok_or(DecError::Overflow)
+    }
+
     /// For statistics only (ratios, returns), which the design keeps in floating
     /// point. Nothing comes back the other way.
     pub fn to_f64(self) -> f64 {
@@ -486,6 +496,14 @@ mod tests {
             assert_eq!(v.to_text(), canonical, "{input}");
             assert_eq!(d(canonical), v, "{input}");
         }
+    }
+
+    #[test]
+    fn a_whole_number_is_an_integer_and_anything_else_an_error() {
+        assert_eq!(d("42").to_int(), Ok(42));
+        assert_eq!(d("-7.000").to_int(), Ok(-7));
+        assert_eq!(d("1.5").to_int(), Err(DecError::Inexact));
+        assert_eq!(d("9999999999999999999999999999").to_int(), Err(DecError::Overflow));
     }
 
     #[test]
