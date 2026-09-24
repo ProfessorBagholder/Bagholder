@@ -25,9 +25,11 @@ pub mod evolve;
 pub mod exchange;
 pub mod fidelity;
 pub mod globalx;
+pub mod goldman;
 pub mod hamilton;
 pub mod harvest;
 pub mod ishares_ca;
+pub mod ishares_us;
 pub mod newswire;
 pub mod ninepoint;
 pub mod purpose;
@@ -99,6 +101,8 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(vanguard_us::VanguardUs),
         Box::new(us_pages::YieldMax),
         Box::new(us_pages::Defiance),
+        Box::new(goldman::GoldmanSachs),
+        Box::new(ishares_us::ISharesUs),
         Box::new(exchange::Mackenzie),
         Box::new(exchange::WisdomTree),
     ]
