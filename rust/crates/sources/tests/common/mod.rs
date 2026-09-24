@@ -48,12 +48,22 @@ pub fn shape_is_the_answers_union(file: &str, source: &str, prefix: &str, keyed:
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "{} is not the union of the recorded answers", path.display());
 }
 
+/// The headers captured with a reply, from `<name>.headers` (curl's `-D`, the
+/// last response's block), none where there is no such file.
+pub fn headers(source: &str, name: &str) -> Vec<(String, String)> {
+    let Ok(text) = std::fs::read_to_string(dir(source).join(format!("{name}.headers"))) else { return vec![] };
+    let text = text.replace('\r', "");
+    let last = text.trim_end().rsplit("\n\n").next().unwrap_or("").to_string();
+    last.lines().filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))).filter(|(k, _)| !k.starts_with("HTTP/")).collect()
+}
+
 /// A network that answers each URL it is given with a recorded reply, and
 /// fails the test on any other request.
 pub struct Recorded {
     /// The URL, what the request's body must contain (empty: anything), the
-    /// status and the reply.
-    pub answers: Vec<(String, String, u16, Vec<u8>)>,
+    /// status, the reply and its headers (from `<name>.headers` beside it, where
+    /// the capture kept them).
+    pub answers: Vec<(String, String, u16, Vec<u8>, Vec<(String, String)>)>,
     pub asked: std::sync::Mutex<Vec<String>>,
     /// Each request's headers, in the order asked.
     pub headers: std::sync::Mutex<Vec<Vec<(String, String)>>>,
@@ -66,13 +76,13 @@ impl Recorded {
 
     /// Answer `url` with the recorded reply `source/name`, captured with `status`.
     pub fn with(mut self, url: &str, status: u16, source: &str, name: &str) -> Recorded {
-        self.answers.push((url.to_string(), String::new(), status, read(source, name).into_bytes()));
+        self.answers.push((url.to_string(), String::new(), status, read(source, name).into_bytes(), headers(source, name)));
         self
     }
 
     /// Answer a request to `url` whose body contains `needle`.
     pub fn with_body(mut self, url: &str, needle: &str, status: u16, source: &str, name: &str) -> Recorded {
-        self.answers.push((url.to_string(), needle.to_string(), status, read(source, name).into_bytes()));
+        self.answers.push((url.to_string(), needle.to_string(), status, read(source, name).into_bytes(), headers(source, name)));
         self
     }
 }
@@ -86,8 +96,8 @@ impl bagholder_net::Transport for Shared {
         self.0.asked.lock().unwrap().push(ask.url.to_string());
         self.0.headers.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
         let sent = ask.body.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-        match self.0.answers.iter().find(|(u, needle, _, _)| u == ask.url && sent.contains(needle.as_str())) {
-            Some((_, _, status, body)) => Ok((*status, ask.url.to_string(), vec![], body.clone())),
+        match self.0.answers.iter().find(|(u, needle, _, _, _)| u == ask.url && sent.contains(needle.as_str())) {
+            Some((_, _, status, body, headers)) => Ok((*status, ask.url.to_string(), headers.clone(), body.clone())),
             None => panic!("a request no recorded reply answers: {}", ask.url),
         }
     }

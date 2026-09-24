@@ -3,8 +3,9 @@
 //!
 //! - **The spot price** (`api.coinbase.com/v2/prices/<base>-<currency>/spot`) in
 //!   the coin's own currency. It states no time: it is stamped with the reply's
-//!   `Date`, less the age its `Cache-Control` allows it (`max-age`), that allowance
-//!   stored with it (`no-store`: none).
+//!   `Date`, less the age its origin allows it (`max-age` of the origin's
+//!   directive, `grpc-metadata-cache-control`, else of `Cache-Control`), that
+//!   allowance stored with it.
 //! - **The Exchange ticker** (`api.exchange.coinbase.com/products/<pair>/ticker`),
 //!   which carries its trade's time, for a pair the Exchange lists (USD pairs;
 //!   the CAD pairs answer 404).
@@ -157,6 +158,14 @@ fn sent(net: &Net, url: &str) -> Result<Reply, Outcome<()>> {
     }
 }
 
+/// How old the origin lets its answer be. The edge tells the client
+/// `cache-control: no-store`; the origin's own directive comes beside it as
+/// `grpc-metadata-cache-control` (`public, max-age=60`, observed 2026-09-24), and
+/// the edge may serve a copy that old.
+fn origin_cache(reply: &bagholder_net::Reply) -> Option<&str> {
+    reply.header("grpc-metadata-cache-control").or_else(|| reply.header("cache-control"))
+}
+
 /// Ask for `base`'s spot price in `currency`.
 pub fn ask_spot(net: &Net, base: &str, currency: Currency) -> Noted<Spot> {
     let url = format!("https://{SPOT_HOST}/v2/prices/{base}-{}/spot", currency.as_str());
@@ -168,7 +177,7 @@ pub fn ask_spot(net: &Net, base: &str, currency: Currency) -> Noted<Spot> {
         Ok(v) => v,
         Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
     };
-    Noted { outcome: parse_spot(&v, base, currency, reply.header("date"), reply.header("cache-control")), shape_change: ask::noticed(&v, &spot_shape(), &[]) }
+    Noted { outcome: parse_spot(&v, base, currency, reply.header("date"), origin_cache(&reply)), shape_change: ask::noticed(&v, &spot_shape(), &[]) }
 }
 
 /// Ask the Exchange for `pair`'s ticker.

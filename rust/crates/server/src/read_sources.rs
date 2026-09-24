@@ -6,8 +6,9 @@
 //! reader that is due for it once, and asks again: what one read settles can
 //! make another fact needed (an expired contract's underlying's close decides
 //! whether it is still held), so the passes go on until the needs stop changing.
-//! Each source's outcomes of the run are printed. `source-health` prints each
-//! source's state and its last outcome of each kind.
+//! Each listing held today is then quoted once, and each source's outcomes of
+//! the run are printed. `source-health` prints each source's state and its last
+//! outcome of each kind.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -27,7 +28,7 @@ use bagholder_sources::cache::MarketCache;
 use bagholder_sources::contract::Listing;
 use bagholder_sources::needs::{CloseNeed, Needs, PayerNeed};
 use bagholder_sources::read::Ctx;
-use bagholder_sources::{health, market, payers, rates};
+use bagholder_sources::{health, market, payers, quotes, rates};
 
 use crate::engine_inputs;
 
@@ -142,9 +143,14 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
             market::read_benchmarks(&ctx, from).map_err(err)?;
         }
         payers::run::read(&ctx, &needs.payers).map_err(err)?;
-        unread = payers::run::unread(&needs.payers).iter().map(|p| (p.listing.id, p.listing.symbol.clone())).collect();
+        unread.extend(payers::run::unread(&needs.payers).iter().map(|p| (p.listing.id, p.listing.symbol.clone())));
         last = Some(n);
         passes += 1;
+    }
+    // a quote for each listing held today, once
+    if let Some(n) = &last {
+        let held: Vec<Listing> = needs_of(&book, n)?.closes.into_iter().filter(|c| c.to >= clock.today).map(|c| c.listing).collect();
+        quotes::read_quotes(&ctx, &held).map_err(err)?;
     }
     let mut out = String::new();
     let _ = writeln!(out, "{passes} pass(es) of reads");

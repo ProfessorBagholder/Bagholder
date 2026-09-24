@@ -17,6 +17,7 @@ pub mod market;
 pub mod needs;
 pub mod outcome;
 pub mod payers;
+pub mod quotes;
 pub mod rates;
 pub mod read;
 pub mod reply;
