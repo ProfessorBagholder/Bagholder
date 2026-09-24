@@ -464,6 +464,12 @@ impl Book {
         Ok(n > 0)
     }
 
+    /// Report on an adjustment's own record that the transaction it explains is
+    /// gone: it then explains nothing, and says so.
+    pub(crate) fn adjustment_target_gone(&self, key: &AdjustmentKey, applies: &TransactionId, why: &str) -> Result<()> {
+        self.add_problems(key.record, &[bagholder_core::record::Problem::new("adjustment-target-gone", format!("the transaction it explains, {applies}, {why}"))])
+    }
+
     pub(crate) fn move_adjustment(&self, key: &AdjustmentKey, to: &TransactionId) -> Result<()> {
         self.conn().execute(
             "UPDATE adjustments SET applies_record = ?, applies_leg = ? WHERE record_id = ? AND leg = ?",

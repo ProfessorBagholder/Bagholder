@@ -212,3 +212,52 @@ fn a_spin_offs_second_child_and_an_events_marker_open_trades_the_adjustment_name
     let parent = f.book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Isin, "CA0000000001")).unwrap().unwrap();
     assert!(f.book.open_trade(&Opening { transaction: applies, instrument: parent }, None, t0()).is_err());
 }
+
+fn event_leg(leg: &str) -> serde_json::Value {
+    json!({"leg": leg, "account": "a1", "kind": "corporate-event", "instrument": share("CA0000000001", "QNC"), "at": "2026-03-02T11:00:00Z", "date": "2026-03-02"})
+}
+
+fn person_split(f: &Fixture, key: &str, applies: &TransactionId) -> bagholder_core::RecordId {
+    let person = Spelled { source: "person", version: 1 };
+    f.store(&person, key, &json!({"legs": [], "adjustments": [{"applies_to": applies.to_string(), "legs": [{"from": [["isin", "CA0000000001"]], "to": [["isin", "CA0000000001"]], "units_per_unit": "2"}]}]})).record
+}
+
+#[test]
+fn a_record_read_again_without_the_transaction_an_adjustment_explains_reports_it_on_the_adjustment() {
+    let f = Fixture::new();
+    let (_, applies) = event_and_its_adjustment(&f);
+    let mine = person_split(&f, "my-split", &applies);
+    assert!(f.book.problems_of(mine).unwrap().is_empty());
+    // the source's record now states its event under another leg
+    f.store(&Spelled::v(1), "split", &legs(vec![event_leg("other")]));
+    let problems = f.book.problems_of(mine).unwrap();
+    assert_eq!(problems.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(), ["adjustment-target-gone"]);
+}
+
+#[test]
+fn a_removed_record_reports_the_adjustments_that_explained_it() {
+    let f = Fixture::new();
+    let (event_record, applies) = event_and_its_adjustment(&f);
+    let mine = person_split(&f, "my-split", &applies);
+    f.book.mark_removed(event_record, t0()).unwrap();
+    assert_eq!(f.book.problems_of(mine).unwrap()[0].code, "adjustment-target-gone");
+}
+
+#[test]
+fn a_supersede_never_moves_two_adjustments_of_different_transactions_onto_one() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-1000", "2026-01-02T15:00:00Z")]));
+    let event = f.store(&Spelled::v(1), "split", &legs(vec![event_leg("a"), event_leg("b")]));
+    let first = person_split(&f, "first", &TransactionId::new(event.record, Leg::named("a")));
+    let second = person_split(&f, "second", &TransactionId::new(event.record, Leg::named("b")));
+    // the broker's one row replaces both
+    let broker = Spelled { source: "broker-raw", version: 1 };
+    let text = legs(vec![event_leg("trade")]).to_string();
+    let raw = f.book.store_superseding(&broker, &f.incoming("raw-event", &text), &[event.record], "the broker's row", t0()).unwrap();
+    let onto = TransactionId::new(raw.record, Leg::named("trade"));
+    let moved: Vec<_> = f.book.adjustments().unwrap().into_iter().filter(|a| a.applies_to == onto).collect();
+    assert_eq!(moved.len(), 1, "one adjustment explains the new row");
+    assert!(f.book.problems_of(first).unwrap().is_empty());
+    assert_eq!(f.book.problems_of(second).unwrap()[0].code, "adjustment-target-gone");
+}

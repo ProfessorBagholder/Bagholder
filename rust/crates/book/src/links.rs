@@ -8,6 +8,8 @@
 //! (A by B, then B by C) ends with every anchor on C. A trade with no
 //! counterpart is orphaned with the reason, its journal kept.
 
+use std::collections::BTreeMap;
+
 use rusqlite::params;
 
 use bagholder_core::record::RecordState;
@@ -50,6 +52,7 @@ impl Book {
             targets.sort_by(|a, b| {
                 (a.occurred_at.is_none(), a.occurred_at, a.id.record, &a.id.leg).cmp(&(b.occurred_at.is_none(), b.occurred_at, b.id.record, &b.id.leg))
             });
+            let mut explained: BTreeMap<TransactionId, TransactionId> = BTreeMap::new();
             for r in from {
                 let theirs = self.transactions_of(*r)?;
                 for (trade, anchor) in self.trades_anchored_on(*r)? {
@@ -69,15 +72,21 @@ impl Book {
                         self.orphan(trade, "the record it opened on was replaced by records with no opening like it")?;
                     }
                 }
-                // an adjustment explaining one of its transactions follows it the same way
+                // an adjustment explaining one of its transactions follows it the
+                // same way, never onto a transaction another one moved to explains
                 for (adjustment, applies) in self.adjustments_applying_to(*r)? {
-                    let target = theirs.iter().find(|t| t.id == applies).and_then(|old| targets.iter().find(|t| same_opening(old, t)));
+                    if from.contains(&adjustment.record) {
+                        // it goes with its own record
+                        continue;
+                    }
+                    let free = |t: &&Transaction| explained.get(&t.id).is_none_or(|o| *o == applies);
+                    let target = theirs.iter().find(|t| t.id == applies).and_then(|old| targets.iter().filter(free).find(|t| same_opening(old, t)));
                     match target {
-                        Some(t) => self.move_adjustment(&adjustment, &t.id)?,
-                        None => self.add_problems(adjustment.record, &[bagholder_core::record::Problem::new(
-                            "adjustment-target-gone",
-                            format!("the transaction it explains, {applies}, was replaced by records with no transaction like it"),
-                        )])?,
+                        Some(t) => {
+                            explained.insert(t.id.clone(), applies.clone());
+                            self.move_adjustment(&adjustment, &t.id)?;
+                        }
+                        None => self.adjustment_target_gone(&adjustment, &applies, "was replaced by records with no transaction like it")?,
                     }
                 }
                 removed.extend(theirs.into_iter().map(|t| t.id));

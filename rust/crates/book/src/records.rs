@@ -233,6 +233,12 @@ impl Book {
         self.conn().execute("UPDATE source_records SET derived_version = ? WHERE id = ?", params![version, record.to_string()])?;
 
         let after: BTreeMap<Leg, &Transaction> = rows.iter().map(|t| (t.id.leg.clone(), t)).collect();
+        // an adjustment another record holds on a transaction this one no longer has
+        for (adjustment, applies) in self.adjustments_applying_to(record)? {
+            if adjustment.record != record && !after.contains_key(&applies.leg) {
+                self.adjustment_target_gone(&adjustment, &applies, "is no longer on its record")?;
+            }
+        }
         let mut changes = Changes::default();
         for (leg, t) in &after {
             match before.get(leg) {
@@ -395,6 +401,11 @@ impl Book {
             let removed: Vec<TransactionId> = self.transactions_of(record)?.into_iter().map(|t| t.id).collect();
             for (trade, _) in self.trades_anchored_on(record)? {
                 self.orphan(trade, "the source removed the record it opened on")?;
+            }
+            for (adjustment, applies) in self.adjustments_applying_to(record)? {
+                if adjustment.record != record {
+                    self.adjustment_target_gone(&adjustment, &applies, "was removed by its source")?;
+                }
             }
             self.clear_derived(record)?;
             self.set_state(record, RecordState::Removed, at)?;
