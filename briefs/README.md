@@ -13,4 +13,4 @@ Read from any checkout without switching branches:
 | 02 | [Verdict on the stage 3a plan: Go with changes](02-stage-3a-verdict.md) | Current |
 | 03 | [The instruction files](03-instructions-audit.md) | Current |
 | 04 | [Options, trade marks, and a blind check of the cases](04-clean-room-case-check.md) | Current (rewritten after reading the engine) |
-| 05 | [Think first, then look only for what's missing](05-think-first.md) | Current |
+| 05 | [Every action is the best course for the objective](05-think-first.md) | Current |
