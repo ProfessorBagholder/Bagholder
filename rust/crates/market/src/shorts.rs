@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::http::{get_text, note_source, post_json, FetchError, TIMEOUT_SEC};
+use crate::http::{get_text, post_json, FetchError, TIMEOUT_SEC};
 use bagholder_model::dates;
 use bagholder_model::lenient;
 use bagholder_model::textrules::{csv_records, parse_float, splitlines};
@@ -405,7 +405,7 @@ pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow>
 }
 
 fn get_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    crate::client::request("GET", url, &headers(), None, Duration::from_secs(TIMEOUT_SEC)).map(|r| r.body)
+    bagholder_net::client::request("GET", url, &headers(), None, Duration::from_secs(TIMEOUT_SEC)).map(|r| r.body)
 }
 
 fn ca_position_file(today: &str) -> Option<(String, HashMap<String, CaPositionRow>)> {
@@ -418,14 +418,8 @@ pub fn ca_position_file_with<G: FnMut(&str) -> Result<Vec<Vec<Value>>, String>>(
         let url = CA_POSITION_URL.replace("{}", &compact(&d));
         let rows = grid_of(&url).map(|grid| parse_ca_positions(&grid));
         match rows {
-            Err(_) => {
-                note_source("ciro", false, Some(&FetchError::Transport(format!("no report for {}", d))));
-                continue;
-            }
-            Ok(rows) if !rows.is_empty() => {
-                note_source("ciro", true, None);
-                return Some((d, rows));
-            }
+            Err(_) => continue,
+            Ok(rows) if !rows.is_empty() => return Some((d, rows)),
             Ok(_) => {}
         }
     }
@@ -547,7 +541,7 @@ pub fn ca_series_with<R: FnMut(&str) -> HashMap<String, CaPositionRow>>(symbol: 
 // --- the float -----------------------------------------------------------------
 
 struct Yahoo {
-    session: crate::browser::Session,
+    session: bagholder_net::browser::Session,
     crumb: String,
 }
 
@@ -564,7 +558,7 @@ fn yahoo_open(slot: &mut Option<Yahoo>) -> bool {
     if slot.is_some() {
         return true;
     }
-    let mut session = match crate::browser::Session::new() { Some(s) => s, None => return false };
+    let mut session = match bagholder_net::browser::Session::new() { Some(s) => s, None => return false };
     let timeout = Duration::from_secs(TIMEOUT_SEC);
     if let Err(e) = session.get(&YAHOO_QUOTE_URL.replace("{}", "AAPL"), timeout) {
         eprintln!("bagholder shorts: yahoo would not open: {}", e);
@@ -699,7 +693,7 @@ pub fn float_shares(conn: &rusqlite::Connection, symbol: &str, exchange: &str, c
             }
         }
     };
-    float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_turn, crate::quotes::yahoo_back_off, |sym, ccy| {
+    float_shares_with(symbol, exchange, currency, name, opened, ask, crate::quotes::yahoo_may_ask, crate::quotes::yahoo_back_off, |sym, ccy| {
         fund_units(conn, sym, exchange, ccy, today)
     })
 }

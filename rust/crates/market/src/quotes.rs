@@ -51,80 +51,32 @@ pub const YAHOO_CHART_URL: &str = "https://query1.finance.yahoo.com/v8/finance/c
 const YAHOO_HEADERS: [(&str, &str); 2] = [("User-Agent", "Mozilla/5.0"), ("Accept", "application/json")];
 
 /// Yahoo rate-limits bursts: one request at a time, well spaced, and after a
-/// 429 nothing is asked of it for ten minutes.
-pub const YAHOO_MIN_INTERVAL: Duration = Duration::from_millis(2000);
-pub const YAHOO_BACKOFF: Duration = Duration::from_secs(600);
+/// 429 nothing is asked of it for ten minutes. That is its pace on the one
+/// limiter every host goes through.
+pub const YAHOO_HOST: &str = "query1.finance.yahoo.com";
+pub const YAHOO_PACE: bagholder_net::Pace = bagholder_net::Pace { gap: Duration::from_millis(2000), rest: Duration::from_secs(600) };
 
-struct YahooGate {
-    next_at: Option<Instant>,
-    backoff_until: Option<Instant>,
+fn yahoo_turn() -> Result<(), crate::http::FetchError> {
+    let limiter = bagholder_net::machine::global();
+    limiter.configure(YAHOO_HOST, YAHOO_PACE);
+    limiter
+        .turn(YAHOO_HOST, &bagholder_net::SystemClock)
+        .map_err(|r| crate::http::FetchError::Transport(format!("yahoo: refused a request; not asked again before {}", r.until)))
 }
-
-static YAHOO: Mutex<YahooGate> = Mutex::new(YahooGate { next_at: None, backoff_until: None });
 
 fn yahoo_get(url: &str) -> Option<String> {
-    {
-        let mut gate = YAHOO.lock().unwrap();
-        let now = Instant::now();
-        if let Some(until) = gate.backoff_until {
-            if now < until {
-                crate::http::note_source("yahoo", false, Some(&crate::http::FetchError::Transport("yahoo: backing off after 429".into())));
-                return None;
-            }
-        }
-        if let Some(next) = gate.next_at {
-            if next > now {
-                let wait = next - now;
-                drop(gate);
-                std::thread::sleep(wait);
-                gate = YAHOO.lock().unwrap();
-            }
-        }
-        gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    }
-    match get_text(url, &YAHOO_HEADERS) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            if e.code() == Some(429) {
-                YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
-            }
-            None
-        }
-    }
+    yahoo_get_result(url).ok()
 }
 
-/// A Yahoo request for the chart path: the body, or the failure -- a backoff in force reads as one, and a 404 keeps its
+/// A Yahoo request for the chart path: the body, or the failure -- a rest in force reads as one, and a 404 keeps its
 /// code so the symbol can be remembered as one Yahoo does not carry.
 pub fn yahoo_get_result(url: &str) -> Result<String, crate::http::FetchError> {
-    {
-        let mut gate = YAHOO.lock().unwrap();
-        let now = Instant::now();
-        if let Some(until) = gate.backoff_until {
-            if now < until {
-                let e = crate::http::FetchError::Transport("yahoo: backing off after 429".into());
-                crate::http::note_source("yahoo", false, Some(&e));
-                return Err(e);
-            }
+    yahoo_turn()?;
+    get_text(url, &YAHOO_HEADERS).inspect_err(|e| {
+        if e.code() == Some(429) {
+            bagholder_net::machine::refused_now(YAHOO_HOST, None);
         }
-        if let Some(next) = gate.next_at {
-            if next > now {
-                let wait = next - now;
-                drop(gate);
-                std::thread::sleep(wait);
-                gate = YAHOO.lock().unwrap();
-            }
-        }
-        gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    }
-    match get_text(url, &YAHOO_HEADERS) {
-        Ok(t) => Ok(t),
-        Err(e) => {
-            if e.code() == Some(429) {
-                YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
-            }
-            Err(e)
-        }
-    }
+    })
 }
 
 /// The same, answering only the HTTP code.
@@ -636,32 +588,15 @@ pub fn n(v: Option<&Value>) -> f64 {
     num(v, 0.0)
 }
 
-/// Yahoo's pace, for a caller that makes its own request: false while a
-/// backoff after a 429 stands; otherwise waits its turn and takes it.
-pub fn yahoo_turn() -> bool {
-    let mut gate = YAHOO.lock().unwrap();
-    let now = Instant::now();
-    if let Some(until) = gate.backoff_until {
-        if now < until {
-            return false;
-        }
-    }
-    if let Some(next) = gate.next_at {
-        if next > now {
-            let wait = next - now;
-            drop(gate);
-            std::thread::sleep(wait);
-            gate = YAHOO.lock().unwrap();
-        }
-    }
-    gate.next_at = Some(Instant::now() + YAHOO_MIN_INTERVAL);
-    true
+/// Yahoo's pace, for a caller that makes its own request: false while its rest
+/// after a 429 stands; otherwise waits its turn and takes it.
+pub fn yahoo_may_ask() -> bool {
+    yahoo_turn().is_ok()
 }
 
-/// Yahoo turned a request away with a 429: nothing is asked of it for the
-/// backoff.
+/// Yahoo turned a request away with a 429: nothing is asked of it for its rest.
 pub fn yahoo_back_off() {
-    YAHOO.lock().unwrap().backoff_until = Some(Instant::now() + YAHOO_BACKOFF);
+    bagholder_net::machine::refused_now(YAHOO_HOST, None);
 }
 
 pub const PEEK_SECONDS: u64 = 60;

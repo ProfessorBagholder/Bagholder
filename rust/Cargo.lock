@@ -219,8 +219,8 @@ name = "bagholder-market"
 version = "1.45.0"
 dependencies = [
  "bagholder-model",
+ "bagholder-net",
  "bagholder-store",
- "flate2",
  "openssl",
  "pdf-extract",
  "regex",
@@ -245,6 +245,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-net"
+version = "1.45.0"
+dependencies = [
+ "flate2",
+ "jiff",
+ "openssl",
+ "serde_json",
+]
+
+[[package]]
 name = "bagholder-server"
 version = "1.45.0"
 dependencies = [
@@ -255,6 +265,7 @@ dependencies = [
  "bagholder-engine",
  "bagholder-market",
  "bagholder-model",
+ "bagholder-net",
  "bagholder-store",
  "bagholder-ws",
  "futures-util",
@@ -309,6 +320,7 @@ version = "1.45.0"
 dependencies = [
  "bagholder-market",
  "bagholder-model",
+ "bagholder-net",
  "bagholder-store",
  "bagholder-ws",
  "rusqlite",

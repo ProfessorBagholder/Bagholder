@@ -39,7 +39,7 @@ pub fn available() -> bool {
 }
 
 fn pace() {
-    crate::pace::turn("sec.gov", PACE);
+    bagholder_net::machine::turn("sec.gov", PACE);
 }
 
 /// The standard reason phrase for an HTTP status, for failure messages.
@@ -58,18 +58,18 @@ fn reason(code: u16) -> &'static str {
     }
 }
 
-fn describe(e: &crate::client::Error) -> String {
+fn describe(e: &bagholder_net::client::Error) -> String {
     match e {
-        crate::client::Error::Status(c) => format!("HTTP Error {}: {}", c, reason(*c)),
-        crate::client::Error::Transport(m) => format!("<urlopen error {}>", m),
+        bagholder_net::client::Error::Status(c) => format!("HTTP Error {}: {}", c, reason(*c)),
+        bagholder_net::client::Error::Transport(m) => format!("<urlopen error {}>", m),
     }
 }
 
-fn get(url: &str, what: &str) -> Fetched<crate::client::Response> {
+fn get(url: &str, what: &str) -> Fetched<bagholder_net::client::Response> {
     pace();
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate"), ("Accept", "application/json")];
-    crate::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
+    bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
         .map_err(|e| SourceError::Unavailable(format!("{}: {}", what, describe(&e))))
 }
 
@@ -450,7 +450,7 @@ fn fetch_url(url: &str) -> Fetched<(Vec<u8>, String)> {
     pace();
     let ua = ua();
     let headers = [("User-Agent", ua.as_str()), ("Accept-Encoding", "gzip, deflate")];
-    let resp = crate::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
+    let resp = bagholder_net::client::request("GET", url, &headers, None, Duration::from_secs(TIMEOUT))
         .map_err(|e| SourceError::Unavailable(format!("EDGAR document fetch failed: {}", describe(&e))))?;
     // email.message's get_content_type: the type alone, lower-cased, text/plain
     // where there is none or it is malformed

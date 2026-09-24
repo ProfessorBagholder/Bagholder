@@ -2,7 +2,8 @@
 //! new crates"), held by the build's own files:
 //!
 //! - each crate depends only on what its column allows;
-//! - none reads the clock (every time is given to it);
+//! - none reads the machine's clock: every time is given to it, or, for the
+//!   network, asked of the clock it is handed, the machine's read in one file;
 //! - no float appears outside the two places allowed one: `Dec::to_f64`, the one
 //!   way a decimal leaves for statistics, and the import's reading of the earlier
 //!   database, which stored money as floats.
@@ -21,32 +22,63 @@ struct Rules {
     /// Source files, relative to the crate, that may use `f64`: a path ending in
     /// `/` allows every file under it.
     floats_in: &'static [&'static str],
+    clock: ClockRule,
+}
+
+/// How a crate may come by the time.
+#[derive(Clone, Copy)]
+enum ClockRule {
+    /// It is handed every time as a value, and asks no clock at all.
+    Given,
+    /// It is handed a clock and asks it (`clock.now()`); only the files named
+    /// read the machine's.
+    Handed { machine_in: &'static [&'static str] },
 }
 
 impl Rules {
     fn floats_allowed(&self, path: &str) -> bool {
         self.floats_in.iter().any(|p| if p.ends_with('/') { path.starts_with(p) } else { path == *p })
     }
+
+    /// What in a line of `path` reads the machine's clock.
+    fn clock_reads(&self, path: &str) -> &'static [&'static str] {
+        match self.clock {
+            ClockRule::Given => &["now(", "SystemTime", "Instant"],
+            ClockRule::Handed { machine_in } if machine_in.contains(&path) => &[],
+            ClockRule::Handed { .. } => &["::now(", "SystemTime", "Instant", "SystemClock."],
+        }
+    }
 }
 
-const CRATES: [Rules; 5] = [
-    Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"] },
-    Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[] },
+const CRATES: [Rules; 6] = [
+    Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"], clock: ClockRule::Given },
+    Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[], clock: ClockRule::Given },
     Rules {
         name: "bagholder-book",
         dir: "book",
         allowed: &["bagholder-core", "bagholder-sqlite", "rusqlite", "serde", "serde_json", "uuid", "jiff"],
         floats_in: &["src/import/old.rs"],
+        clock: ClockRule::Given,
     },
     // the engine (docs/plans/stage-2-engine.md): the vocabulary alone, which
     // re-exports the calendar; floats only for the statistics
-    Rules { name: "bagholder-engine", dir: "engine", allowed: &["bagholder-core"], floats_in: &["src/stat/"] },
+    Rules { name: "bagholder-engine", dir: "engine", allowed: &["bagholder-core"], floats_in: &["src/stat/"], clock: ClockRule::Given },
     // the sources (docs/plans/stage-3a-sources.md): no float anywhere, no clock
     Rules {
         name: "bagholder-sources",
         dir: "sources",
         allowed: &["bagholder-core", "bagholder-sqlite", "bagholder-net", "bagholder-book", "rusqlite", "jiff"],
         floats_in: &[],
+        clock: ClockRule::Given,
+    },
+    // the network: no float, and the time only from the clock it is handed, the
+    // machine's read in one file
+    Rules {
+        name: "bagholder-net",
+        dir: "net",
+        allowed: &["openssl", "flate2", "serde_json", "jiff"],
+        floats_in: &[],
+        clock: ClockRule::Handed { machine_in: &["src/machine.rs"] },
     },
 ];
 
@@ -95,7 +127,7 @@ fn violations(rules: &Rules, manifest: &str, sources: &[(String, String)]) -> Ve
     for (path, text) in sources {
         for (n, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
-            for clock in ["now(", "SystemTime", "Instant"] {
+            for clock in rules.clock_reads(path) {
                 if code.contains(clock) {
                     out.push(format!("{}:{}: reads the clock ({clock})", path, n + 1));
                 }
@@ -192,4 +224,36 @@ fn the_checker_catches_each_kind_of_violation() {
     assert_eq!(violations(sources, on_book, &price), vec!["src/adapters/cboe.rs:1: uses a float"]);
     let clock = vec![("src/due.rs".to_string(), "let t = jiff::Timestamp::now();".to_string())];
     assert_eq!(violations(sources, on_book, &clock).len(), 1);
+
+    // the network: the clock it is handed, the machine's in one file
+    let net = &CRATES[5];
+    let deps = "[dependencies]\nopenssl = \"0.10\"\njiff = \"0.2\"\n";
+    let handed = vec![("src/limiter.rs".to_string(), "let now = clock.now();".to_string())];
+    assert!(violations(net, deps, &handed).is_empty(), "asking the clock handed in is not reading the machine's");
+    for read in ["let t = Timestamp::now();", "let t = std::time::Instant::now();", "global().refused(h, SystemClock.now(), None)"] {
+        let v = vec![("src/net.rs".to_string(), read.to_string())];
+        assert!(!violations(net, deps, &v).is_empty(), "{read}");
+    }
+    let machine = vec![("src/machine.rs".to_string(), "fn now(&self) -> Timestamp { Timestamp::now() }".to_string())];
+    assert!(violations(net, deps, &machine).is_empty(), "the one file that reads the machine's clock");
+    let on_book = "[dependencies]\nbagholder-book = { path = \"../book\" }\n";
+    assert_eq!(violations(net, on_book, &[]), vec!["bagholder-net depends on bagholder-book"]);
+    let float = vec![("src/browser.rs".to_string(), "let t = timeout.as_secs_f64();".to_string())];
+    assert_eq!(violations(net, deps, &float), vec!["src/browser.rs:1: uses a float"]);
+}
+
+/// The code moved out of `bagholder-market` (`docs/plans/stage-3a-sources.md`,
+/// "One copy") is there no more: the client, the browser session, the pacing
+/// and the never-read health record each live in one place.
+#[test]
+fn the_moved_code_has_one_copy() {
+    let market = crates_dir().join("market");
+    for gone in ["src/client.rs", "src/browser.rs", "src/pace.rs"] {
+        assert!(!market.join(gone).exists(), "bagholder-market still holds {gone}");
+    }
+    for (path, text) in sources(&market) {
+        for old in ["fn note_source", "fn source_health", "struct YahooGate", "fn request_any"] {
+            assert!(!text.contains(old), "{path} still defines {old}");
+        }
+    }
 }

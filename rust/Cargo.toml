@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/engine", "crates/book", "crates/sqlite", "crates/model", "crates/store", "crates/market", "crates/ws", "crates/server", "crates/browser", "crates/diff-derive", "crates/sources"]
+members = ["crates/core", "crates/engine", "crates/book", "crates/sqlite", "crates/model", "crates/store", "crates/market", "crates/ws", "crates/server", "crates/browser", "crates/diff-derive", "crates/sources", "crates/net"]
 
 [workspace.package]
 version = "1.45.0"

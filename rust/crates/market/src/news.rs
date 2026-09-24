@@ -158,7 +158,7 @@ fn log(line: &str) {
 /// listings read side by side still ask each host one at a time, `seconds`
 /// apart.
 pub fn pace(host: &str, seconds: f64) {
-    crate::pace::turn(host, std::time::Duration::from_secs_f64(seconds.max(0.0)));
+    bagholder_net::machine::turn(host, std::time::Duration::from_secs_f64(seconds.max(0.0)));
 }
 
 fn paced(net: &Net, host: &str, seconds: f64) {

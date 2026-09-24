@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::browser::Session;
+use bagholder_net::browser::Session;
 use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
 use crate::news::unescape;
 use bagholder_model::textrules::{parse_int, trim_space};
@@ -69,7 +69,6 @@ fn fwd_chars(s: &str, at: usize, n: usize) -> usize {
 
 struct State {
     session: Option<Session>,
-    last: Option<Instant>,
     scope: ScopeCache,
 }
 
@@ -111,18 +110,12 @@ impl ScopeCache {
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { session: None, last: None, scope: ScopeCache::default() }))
+    S.get_or_init(|| Mutex::new(State { session: None, scope: ScopeCache::default() }))
 }
 
-fn pace(st: &mut State) {
-    if let Some(t) = st.last {
-        let next = t + PACE;
-        let now = Instant::now();
-        if next > now {
-            std::thread::sleep(next - now);
-        }
-    }
-    st.last = Some(Instant::now());
+/// SEDAR+'s turn on the one limiter every host goes through.
+fn pace(_st: &mut State) {
+    bagholder_net::machine::turn("www.sedarplus.ca", PACE);
 }
 
 fn session(st: &mut State) -> Fetched<&mut Session> {
@@ -655,7 +648,7 @@ pub fn newest(limit: usize) -> Fetched<Vec<SedarRow>> {
 }
 
 /// A real document, not the site's HTML error page.
-fn is_document(a: &crate::browser::Answer) -> bool {
+fn is_document(a: &bagholder_net::browser::Answer) -> bool {
     let ct = a.header("content-type").unwrap_or("").to_lowercase();
     if a.status != 200 || a.body.is_empty() {
         return false;

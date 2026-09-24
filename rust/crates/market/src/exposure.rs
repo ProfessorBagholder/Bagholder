@@ -173,7 +173,7 @@ fn pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
 }
 
 fn pace(host: &str) {
-    crate::pace::turn(host, PACE);
+    bagholder_net::machine::turn(host, PACE);
 }
 
 fn host_of(url: &str) -> String {
@@ -916,7 +916,7 @@ fn yahoo_session() -> Result<(String, String), FetchError> {
         }
     }
     pace("fc.yahoo.com");
-    let cookies: Vec<String> = match crate::client::request_any("GET", "https://fc.yahoo.com", &[("User-Agent", UA)], None, Duration::from_secs(crate::http::TIMEOUT_SEC)) {
+    let cookies: Vec<String> = match bagholder_net::client::request_any("GET", "https://fc.yahoo.com", &[("User-Agent", UA)], None, Duration::from_secs(crate::http::TIMEOUT_SEC)) {
         Ok(r) => r.headers.iter().filter(|(k, _)| k == "set-cookie").map(|(_, v)| v.split(';').next().unwrap_or("").to_string()).collect(),
         Err(_) => vec![],
     };
@@ -1206,7 +1206,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
     } else if let Some(f) = adapter {
         match f(symbol) {
             Ok(d) => data = d,
-            Err(e) => crate::http::note_source(family, false, Some(&e)),
+            Err(_) => {}
         }
     }
     if data.is_none() {
@@ -1216,7 +1216,7 @@ pub fn fund_exposure(ctx: &Ctx, symbol: &str, name: &str, exchange: &str, depth:
             Some(Err(_)) => {}
             None => match yahoo_fund(symbol, exchange) {
                 Ok(d) => data = d,
-                Err(e) => crate::http::note_source("yahoo", false, Some(&e)),
+                Err(_) => {}
             },
         }
     }

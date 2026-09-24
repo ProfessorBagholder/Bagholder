@@ -1,14 +1,12 @@
 //! The public market sources: what each one sends, how it is read, and the
 //! top-ups that keep the stored series current.
 
-pub mod client;
 pub mod http;
 pub mod parse;
 pub mod refresh;
 pub mod search;
 pub mod sedar;
 pub mod shorts;
-pub mod browser;
 pub mod disclosures;
 pub mod edgar;
 pub mod enrich;
@@ -21,7 +19,6 @@ pub mod pdftext;
 pub mod fear;
 pub mod entities;
 pub mod news;
-pub mod pace;
 pub mod history;
 pub mod quotes;
 pub mod tmx;

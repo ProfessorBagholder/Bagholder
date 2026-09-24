@@ -5,15 +5,13 @@ edition.workspace = true
 
 [dependencies]
 bagholder-model = { path = "../model" }
+bagholder-net = { path = "../net" }
 bagholder-store = { path = "../store" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-# The standard library has no HTTPS. The HTTP client is built on OpenSSL:
-# some of these hosts gate on the TLS handshake and answer only an OpenSSL
-# client, not rustls or the platform stack. flate2 inflates gzip bodies.
+# SHA digests (a cached model file, a document's key, a headline's key)
 openssl = "0.10"
-flate2 = "1"
 # the filing sources' page patterns
 regex = "1"
 # a headline's accents taken off, so `Québec` and `Quebec` are one word

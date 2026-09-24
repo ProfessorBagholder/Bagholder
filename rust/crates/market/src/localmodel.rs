@@ -136,7 +136,7 @@ fn llamafile_path() -> PathBuf {
 }
 
 fn get_ok(url: &str, timeout: Duration) -> bool {
-    crate::client::request("GET", url, &[("User-Agent", "Bagholder")], None, timeout).is_ok()
+    bagholder_net::client::request("GET", url, &[("User-Agent", "Bagholder")], None, timeout).is_ok()
 }
 
 /// A user-run endpoint, if one answers now.
@@ -324,7 +324,7 @@ pub fn download(path: &PathBuf) -> bool {
         return false;
     }
     let tmp = path.with_extension("part");
-    let got = crate::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
+    let got = bagholder_net::client::request("GET", &url, &[("User-Agent", "Bagholder")], None, DOWNLOAD_TIMEOUT)
         .map_err(|e| e.to_string())
         .and_then(|r| std::fs::write(&tmp, &r.body).map_err(|e| e.to_string()))
         .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
@@ -431,7 +431,7 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
     let url = format!("{}/v1/chat/completions", base);
     let got = match hooks::POST.with(|h| h.borrow().as_ref().map(|f| f(&url, &text))) {
         Some(r) => r,
-        None => crate::client::request("POST", &url, &[("Content-Type", "application/json")], Some(text.as_bytes()), chat_timeout())
+        None => bagholder_net::client::request("POST", &url, &[("Content-Type", "application/json")], Some(text.as_bytes()), chat_timeout())
             .map(|r| r.text())
             .map_err(|e| e.to_string()),
     };

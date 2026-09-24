@@ -111,7 +111,7 @@ impl Session {
         binary: bool,
     ) -> Result<Answer, String> {
         let hdrs: Vec<Value> = headers.iter().map(|(k, v)| json!([k, v])).collect();
-        let mut req = json!({"method": method, "url": url, "timeout": timeout.as_secs_f64(), "headers": hdrs, "binary": binary});
+        let mut req = json!({"method": method, "url": url, "timeout": timeout.as_secs(), "headers": hdrs, "binary": binary});
         if let Some(b) = body {
             req["body"] = json!(b);
         }

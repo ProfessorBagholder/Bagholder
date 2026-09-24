@@ -1,23 +1,21 @@
-//! Reading from the public sources, and remembering which of them answered.
+//! Reading from the public sources.
 //!
 //! One connection per host is kept open between requests. Every read used to
 //! open a new TLS connection, and for a request this small the handshake is
 //! the whole cost -- which is what pinned a small board at a full core while
 //! the archive caught up.
 
-use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use serde_json::Value;
 use std::time::Duration;
 
-pub use crate::client::Error as FetchError;
+pub use bagholder_net::client::Error as FetchError;
 
 pub const TIMEOUT_SEC: u64 = 30;
 
 pub const UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
-/// Each source's label, in the order the health list is reported in.
+/// Each source's label, as a failure names it.
 pub const SOURCE_LABELS: [(&str, &str); 9] = [
     ("tmx", "TMX Money"),
     ("yahoo", "Yahoo Finance"),
@@ -30,95 +28,22 @@ pub const SOURCE_LABELS: [(&str, &str); 9] = [
     ("ciro", "CIRO"),
 ];
 
-const HOST_NEEDLES: [(&str, &str); 9] = [
-    ("tmx", "tmx.com"),
-    ("yahoo", "yahoo.com"),
-    ("coinbase", "coinbase.com"),
-    ("cboe", "cboe.com"),
-    ("boc", "bankofcanada.ca"),
-    ("fred", "stlouisfed.org"),
-    ("stooq", "stooq.com"),
-    ("finra", "finra.org"),
-    ("ciro", "ciro.ca"),
-];
-
-
-pub fn source_of_url(url: &str) -> String {
-    let host = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
-    for (key, needle) in HOST_NEEDLES {
-        if host.contains(needle) {
-            return key.to_string();
-        }
-    }
-    if host.is_empty() { "other".to_string() } else { host }
-}
-
 /// A failure in words a user can act on.
 pub fn describe_failure(e: &FetchError) -> String {
     match e {
         FetchError::Status(429) => "refused the request (too many)".into(),
         FetchError::Status(c) => format!("answered with an error ({})", c),
-        FetchError::Transport(m) if m.contains("backing off") => {
-            "refused the request; asked again in ten minutes".into()
+        FetchError::Transport(m) if m.contains("not asked again before") => {
+            "refused the request; asked again when its rest is over".into()
         }
         _ => "could not be reached".into(),
     }
 }
 
-struct Health {
-    ok: bool,
-    at: String,
-    error: String,
-}
-
-fn health() -> &'static Mutex<BTreeMap<String, Health>> {
-    static H: OnceLock<Mutex<BTreeMap<String, Health>>> = OnceLock::new();
-    H.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-pub fn note_source(name: &str, ok: bool, error: Option<&FetchError>) {
-    let at = crate::now_stamp();
-    // a failure with nothing to say for itself reads as unreachable
-    let error = if ok { String::new() } else { error.map(describe_failure).unwrap_or_else(|| "could not be reached".into()) };
-    health().lock().unwrap().insert(name.to_string(), Health { ok, at, error });
-}
-
-/// Every source touched since start, in a fixed order.
-pub fn source_health() -> Vec<Value> {
-    let snap = health().lock().unwrap();
-    SOURCE_LABELS
-        .iter()
-        .filter_map(|(k, name)| {
-            snap.get(*k).map(|h| json!({"key": k, "name": name, "ok": h.ok, "at": h.at, "error": h.error}))
-        })
-        .collect()
-}
-
-
-/// A 404 is a symbol the source does not carry, not the
-/// source failing, so it is not recorded against its health.
 pub fn get_text(url: &str, headers: &[(&str, &str)]) -> Result<String, FetchError> {
     let default: Vec<(&str, &str)> = vec![("User-Agent", UA), ("Accept", "text/csv,application/json,*/*;q=0.8")];
     let hdrs = if headers.is_empty() { &default[..] } else { headers };
-    match crate::client::request("GET", url, hdrs, None, Duration::from_secs(TIMEOUT_SEC)) {
-        Ok(resp) => {
-            note_source(&source_of_url(url), true, None);
-            Ok(resp.text())
-        }
-        Err(err) => {
-            if err.code() != Some(404) {
-                note_source(&source_of_url(url), false, Some(&err));
-            }
-            Err(err)
-        }
-    }
+    bagholder_net::client::request("GET", url, hdrs, None, Duration::from_secs(TIMEOUT_SEC)).map(|r| r.text())
 }
 
 pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result<Value, FetchError> {
@@ -137,16 +62,8 @@ pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result
             None => hdrs.push((k, v)),
         }
     }
-    match crate::client::request("POST", url, &hdrs, Some(body.as_bytes()), Duration::from_secs(TIMEOUT_SEC)) {
-        Ok(resp) => {
-            note_source(&source_of_url(url), true, None);
-            serde_json::from_str(&resp.text()).map_err(|e| FetchError::Transport(e.to_string()))
-        }
-        Err(err) => {
-            note_source(&source_of_url(url), false, Some(&err));
-            Err(err)
-        }
-    }
+    let resp = bagholder_net::client::request("POST", url, &hdrs, Some(body.as_bytes()), Duration::from_secs(TIMEOUT_SEC))?;
+    serde_json::from_str(&resp.text()).map_err(|e| FetchError::Transport(e.to_string()))
 }
 
 /// The headers TMX's GraphQL endpoint expects.

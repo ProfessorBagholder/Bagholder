@@ -430,7 +430,7 @@ pub fn http_json_timeout(method: &str, url: &str, body: Option<&Value>, headers:
         hdrs.retain(|(k, _)| !k.eq_ignore_ascii_case("Content-Type"));
         hdrs.push(("Content-Type", "application/json"));
     }
-    match bagholder_market::client::request_any(method, url, &hdrs, payload.as_deref(), Duration::from_secs(timeout_sec)) {
+    match bagholder_net::client::request_any(method, url, &hdrs, payload.as_deref(), Duration::from_secs(timeout_sec)) {
         Ok(resp) => {
             let text = resp.text();
             if resp.status >= 400 {

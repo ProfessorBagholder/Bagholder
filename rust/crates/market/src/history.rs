@@ -744,7 +744,7 @@ pub fn fetch_tmx_minutes(key: &str, start: &str, end: &str, on_demand: bool) -> 
     }
     let one = |span: (String, String)| -> Vec<SourceBar> {
         if !on_demand {
-            crate::pace::turn("app-money.tmx.com", ARCHIVE_TMX_GAP);
+            bagholder_net::machine::turn("app-money.tmx.com", ARCHIVE_TMX_GAP);
         }
         let payload = json!({"operationName": "getCompanyChart", "variables": {"symbol": key, "from": span.0, "to": span.1}, "query": TMX_CHART_QUERY});
         match post_json(TMX_URL, &payload, &TMX_HEADERS) {

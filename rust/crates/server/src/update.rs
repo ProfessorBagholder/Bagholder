@@ -137,7 +137,7 @@ fn fetch_release() -> Option<GithubRelease> {
     #[allow(unreachable_code)]
     {
         let ua = format!("Bagholder/{}", APP_VERSION);
-        let got = bagholder_market::client::request(
+        let got = bagholder_net::client::request(
             "GET",
             &release_url(),
             &[("Accept", "application/vnd.github+json"), ("User-Agent", &ua)],
@@ -275,7 +275,7 @@ pub fn can_update(app: &Arc<App>, rec: Option<&UpdateRecord>) -> bool {
 
 fn download(url: &str, dest: &Path, max_bytes: usize) -> Result<(), String> {
     let ua = format!("Bagholder/{}", APP_VERSION);
-    let resp = bagholder_market::client::request("GET", url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], None, Duration::from_secs(120))
+    let resp = bagholder_net::client::request("GET", url, &[("User-Agent", &ua), ("Accept", "application/octet-stream")], None, Duration::from_secs(120))
         .map_err(|e| format!("{:?}", e))?;
     if resp.body.len() > max_bytes {
         return Err("release archive is larger than expected".into());

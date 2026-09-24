@@ -11,6 +11,7 @@ bagholder-model = { path = "../model" }
 bagholder-diff-derive = { path = "../diff-derive" }
 bagholder-store = { path = "../store" }
 bagholder-market = { path = "../market" }
+bagholder-net = { path = "../net" }
 bagholder-ws = { path = "../ws" }
 # the book the app moves onto at the switch (docs/design-review.md, stage 3); for
 # now only `bagholder import-book` writes it, from the database kept today, and

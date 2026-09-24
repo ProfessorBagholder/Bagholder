@@ -476,12 +476,10 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// docs/architecture.md, "Timers that remain", and then counted here.
-const TIMED_WAITS: [(&str, usize, &str); 15] = [
+const TIMED_WAITS: [(&str, usize, &str); 13] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
-    ("market/src/pace.rs", 1, "a host's request rate (the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
-    ("market/src/quotes.rs", 3, "Yahoo's request rate, waited for outside the lock"),
-    ("market/src/sedar.rs", 1, "SEDAR+'s request rate on its one session"),
+    ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("server/src/app.rs", 1, "`wait` itself"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather, midnight; three in its tests"),
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),

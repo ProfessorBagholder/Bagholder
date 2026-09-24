@@ -91,7 +91,7 @@ pub fn find_chrome() -> String {
 
 fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<String> {
     let url = format!("http://127.0.0.1:{}{}", port, path);
-    bagholder_market::client::request("GET", &url, &[], None, timeout).ok().map(|r| r.text())
+    bagholder_net::client::request("GET", &url, &[], None, timeout).ok().map(|r| r.text())
 }
 
 /// One of DevTools' `/json/list` targets: a window, a tab, or the browser
