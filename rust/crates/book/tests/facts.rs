@@ -90,15 +90,16 @@ fn the_first_rate_for_a_day_stands_and_a_later_different_one_is_kept_beside_it()
 #[test]
 fn the_banks_series_and_holidays_are_kept() {
     let f = Fixture::new();
-    let series = |c: Currency, first: &str, last: &str| RateSeries { currency: c, source: boc(), first_day: day(first), last_day: day(last) };
+    let series = |c: Currency, first: &str, last: &str| RateSeries { currency: c, source: boc(), first_day: day(first), last_day: day(last), ended: false };
     f.book.store_rate_series(&[series(Currency::USD, "2017-01-03", "2026-09-22"), series(Currency::parse("EUR").unwrap(), "2017-01-03", "2026-09-22")], t0()).unwrap();
     // a later statement of the same series moves its last day on
     f.book.store_rate_series(&[series(Currency::USD, "2017-01-03", "2026-09-23")], t0()).unwrap();
     // another source's series of the same currency stands beside it
-    let noon = RateSeries { currency: Currency::USD, source: SourceName::named("bank-of-canada-noon"), first_day: day("2007-05-01"), last_day: day("2017-04-28") };
+    let noon = RateSeries { currency: Currency::USD, source: SourceName::named("bank-of-canada-noon"), first_day: day("2007-05-01"), last_day: day("2017-04-28"), ended: true };
     f.book.store_rate_series(&[noon.clone()], t0()).unwrap();
     let held = f.book.rate_series().unwrap();
     assert_eq!(held.len(), 3);
+    assert!(held.contains(&noon), "an ended series reads back as ended");
     assert_eq!(held.iter().filter(|s| s.currency == Currency::USD).map(|s| (s.first_day, s.last_day)).collect::<Vec<_>>(), vec![(day("2007-05-01"), day("2017-04-28")), (day("2017-01-03"), day("2026-09-23"))]);
     assert!(f.book.store_rate_series(&[series(Currency::USD, "2026-01-02", "2026-01-01")], t0()).is_err(), "a series holding no day");
     f.book.store_bank_holidays(&[(day("2026-02-16"), "Family Day".into())], &boc(), t0()).unwrap();
@@ -290,7 +291,7 @@ fn migration_three_keeps_each_distribution_as_stated_without_a_kind() {
     .unwrap();
     drop(conn);
     let (book, done) = Book::open(&path, "test", t0()).unwrap();
-    assert_eq!((done.from, done.to), (2, 3));
+    assert_eq!((done.from, done.to), (2, MIGRATIONS.len() as u32));
     let fund = bagholder_core::InstrumentId::parse("01900000-0000-7000-8000-000000000003").unwrap();
     let items = &book.declared().unwrap()[&fund].items;
     assert_eq!((items[0].amount.amount, items[0].reinvested), (d("0"), Some(d("0.84031"))), "a non-cash row paid no cash: its amount is what was reinvested");

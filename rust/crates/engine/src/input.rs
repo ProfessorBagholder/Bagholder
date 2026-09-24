@@ -83,17 +83,35 @@ pub struct Sourced<T> {
 pub struct Rates {
     /// CAD per unit of the currency, per business day the Bank published.
     pub by_currency: BTreeMap<Currency, BTreeMap<Date, Dec>>,
-    /// Per currency, the days each series held of the Bank's rates spans (its
-    /// daily average, its noon rate, the archive of it), oldest first: a
-    /// currency with none is one the Bank publishes no rate for, and a day before
-    /// the oldest is one no source holds a rate for.
-    pub series: BTreeMap<Currency, Vec<(Date, Date)>>,
+    /// Per currency, each series held of the Bank's rates (its daily average,
+    /// its noon rate, the archive of it), oldest first: a currency with none is
+    /// one the Bank publishes no rate for, and a day in none of them is one no
+    /// source holds a published rate for.
+    pub series: BTreeMap<Currency, Vec<Series>>,
     /// The days the Bank's own schedule says it does not publish (its holidays).
     pub holidays: BTreeSet<Date>,
     /// Per currency, the spans of days completed reads of the Bank's series
     /// covered, and when each read was received: a weekday inside one without a
     /// rate was not published, if that day's 16:30 Eastern had passed by then.
     pub covered: BTreeMap<Currency, Vec<Read>>,
+}
+
+/// One series of the Bank's rates for a currency: the days it holds, and whether
+/// its source states it has ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Series {
+    pub first: Date,
+    /// The last day read of it; a series still published goes on past it.
+    pub last: Date,
+    pub ended: bool,
+}
+
+impl Series {
+    /// Whether the series holds `d`: on or after its first day, and, once it has
+    /// ended, on or before its last.
+    pub fn holds(&self, d: Date) -> bool {
+        self.first <= d && (!self.ended || d <= self.last)
+    }
 }
 
 /// One completed read of a series.

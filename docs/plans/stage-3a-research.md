@@ -17,6 +17,12 @@
 - StatCan answers JSON numbers (read from their text); it states a non-business day explicitly (value null, statusCode 1); it refuses bursts (empty body), so it is paced.
 - Decision: the Bank's daily average (Valet) from 2017-01-03; before that, the Bank's noon rate from Statistics Canada 10-10-0008 (one source, 1950 onward); Valet's legacy noon group is not needed. No pre-2007 gap.
 
+## 3, continued. Series that end, and one that begins late (2026-09-24, replies in $TMPDIR/research/boc)
+- `FX_RATES_DAILY` lists 27 series. Most begin 2017-01-03. The zloty's (`FXPLNCAD`) begins 2026-05-01; its noon series ended 2017-04-28, so no series holds 2017-04-29 to 2026-04-30. Three are described as a "historical series" and have stopped: the ruble and the Saudi riyal after 2026-04-30, the dong after 2019-12-31.
+- The noon archives' own days: most 2007-05-01 to 2017-04-28; the Romanian leu, Serbian dinar and UAE dirham from 2007-09-04; the old Ghanaian cedi to 2007-06-29 and the new from 2007-07-03; the Slovak koruna to 2008-12-31; the old Venezuelan bolivar to 2007-12-31 and the bolivar fuerte from 2008-01-02; the Argentine peso (local) to 2012-03-15 beside the plain one from 2010-01-04; the Myanmar kyat (fixed) to 2012-03-30, then the kyat from 2012-04-02.
+- Statistics Canada's twelve, by vector: USD 121716, NOK 121717, SEK 121718, CHF 121719, GBP 121720, DKK 121743 (each from 1950-10-02), JPY 121747 (from 1952-01-14), AUD 121729 (1979-01-02), HKD 121732 and NZD 121733 (1986-01-02), MXN 121739 (1993-01-04), EUR 121742 (1999-01-04's value first, 1999-01-01 stated null), all to 2017-04-28. Values carry up to eight decimals (`2.96799999`), kept as written.
+- Decision: each series is stored with whether its source states it ended; a day no series holds is `rate-not-held` (the plan, "Three eras per currency").
+
 ## 5. Benchmark sources (2026-09-24, replies in $TMPDIR/research/bench)
 - FRED `fredgraph.csv?id=SP500` answers `observation_date,SP500`, one row per weekday from 2016-09-26 to 2026-09-23 (2,608 rows): the trailing ten years only. Levels are written with two decimals (`2026-09-23,7706.03`). A US market holiday is a row with an empty value (`2016-11-24,`; 96 such rows), not a missing row and not `.`.
 - Stooq (`stooq.com/q/d/l/?s=^spx&i=d`) now answers every request with a JavaScript proof-of-work page ("This site requires JavaScript to verify your browser"), not data. Passing it would be defeating a bot check, so Stooq is dropped as a source.

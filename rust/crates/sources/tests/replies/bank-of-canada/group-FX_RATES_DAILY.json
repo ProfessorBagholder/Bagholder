@@ -1,0 +1,93 @@
+{
+    "terms": {
+        "url": "https://www.bankofcanada.ca/terms/"
+    },
+        "groupDetails" : {
+        "name": "FX_RATES_DAILY",
+        "label": "Daily exchange rates",
+        "description": "Daily average exchange rates for various foreign currencies currently or historically published by the Bank of Canada, representing the value of one unit of foreign currency expressed in Canadian dollars. These rates are typically published once each business day by 16:30 (ET). All Bank of Canada exchange rates are indicative rates only, obtained from averages of aggregated price quotes from financial institutions.",
+        "groupSeries": {
+                        "FXAUDCAD": {
+                "label": "AUD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXAUDCAD"
+            },                        "FXBRLCAD": {
+                "label": "BRL/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXBRLCAD"
+            },                        "FXCNYCAD": {
+                "label": "CNY/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXCNYCAD"
+            },                        "FXEURCAD": {
+                "label": "EUR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXEURCAD"
+            },                        "FXHKDCAD": {
+                "label": "HKD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXHKDCAD"
+            },                        "FXINRCAD": {
+                "label": "INR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXINRCAD"
+            },                        "FXIDRCAD": {
+                "label": "IDR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXIDRCAD"
+            },                        "FXJPYCAD": {
+                "label": "JPY/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXJPYCAD"
+            },                        "FXMYRCAD": {
+                "label": "MYR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXMYRCAD"
+            },                        "FXMXNCAD": {
+                "label": "MXN/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXMXNCAD"
+            },                        "FXNZDCAD": {
+                "label": "NZD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXNZDCAD"
+            },                        "FXNOKCAD": {
+                "label": "NOK/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXNOKCAD"
+            },                        "FXPENCAD": {
+                "label": "PEN/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXPENCAD"
+            },                        "FXPLNCAD": {
+                "label": "PLN/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXPLNCAD"
+            },                        "FXRUBCAD": {
+                "label": "RUB/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXRUBCAD"
+            },                        "FXSARCAD": {
+                "label": "SAR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXSARCAD"
+            },                        "FXSGDCAD": {
+                "label": "SGD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXSGDCAD"
+            },                        "FXZARCAD": {
+                "label": "ZAR/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXZARCAD"
+            },                        "FXKRWCAD": {
+                "label": "KRW/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXKRWCAD"
+            },                        "FXSEKCAD": {
+                "label": "SEK/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXSEKCAD"
+            },                        "FXCHFCAD": {
+                "label": "CHF/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXCHFCAD"
+            },                        "FXTWDCAD": {
+                "label": "TWD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXTWDCAD"
+            },                        "FXTHBCAD": {
+                "label": "THB/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXTHBCAD"
+            },                        "FXTRYCAD": {
+                "label": "TRY/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXTRYCAD"
+            },                        "FXGBPCAD": {
+                "label": "GBP/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXGBPCAD"
+            },                        "FXUSDCAD": {
+                "label": "USD/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXUSDCAD"
+            },                        "FXVNDCAD": {
+                "label": "VND/CAD",
+                "link": "https://www.bankofcanada.ca/valet/series/FXVNDCAD"
+            }                    }
+    }
+}

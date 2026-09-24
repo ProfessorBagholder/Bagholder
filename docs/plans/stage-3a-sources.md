@@ -161,7 +161,8 @@ A venue's session days are the days its own daily closes exist, as the sources r
   - The daily series (Valet) is the Bank's rate from its first day.
   - Before it, the Bank's noon series (Valet's legacy noon), read and stored only up to the day before the daily series begins.
   - Before that, Statistics Canada's 10-10-0008 noon spot rate, for the twelve currencies it holds, read and stored only up to the day before the noon series begins.
-  - So no two series ever state the same day, whichever read runs first. A day before a currency's oldest series is `rate-not-held`.
+  - So no two series ever state the same day, whichever read runs first.
+  - **A series can end, and one can begin long after another ended.** The noon archives ended on 2017-04-28; the Bank marks a daily series it stopped as a "historical series" (the ruble and the Saudi riyal after 2026-04-30, the dong after 2019-12-31); and a currency's daily series can begin years after its noon series ended (the zloty's on 2026-05-01, its noon series having ended on 2017-04-28). Each series is stored with whether its source states it ended (book migration 4, `fx_series.ended`). A day no series holds (before the oldest, between two, after the last one ended) is `rate-not-held`: no source holds a rate the Bank published for it. A day after a series still published is one not read yet.
 - **What is read.** For each currency, from the person's oldest day that needs it to today, then forward from the last span's end. A day's rate is written once, and a different later value is kept beside it and reported (stage 2).
 - **Holidays.**
   - The Bank's holiday schedule page (`/press/upcoming-events/bank-of-canada-holiday-schedule/`) lists this year's closures as date and name pairs.
@@ -275,7 +276,7 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - a reply whose series description differs from the table (IEXE0105's forward rate in place of IEXE0101) is a mismatch;
   - a span's rates and the span stored, clamped to the series' days (a read asked from 2010 records its daily span from 2017-01-03);
   - a weekday skipped inside a completed span is not a business day to the engine, and a weekday before a series begins is not;
-  - each era stops the day before the next begins (Statistics Canada, then noon, then daily), with no conflict whichever read runs first, and a day before a currency's oldest series is `rate-not-held`;
+  - each era stops the day before the next begins (Statistics Canada, then noon, then daily), with no conflict whichever read runs first, and a day no series holds (before the oldest, between two, after one ended) is `rate-not-held`;
   - a repeated day, another series than asked, a non-decimal value and a day outside the span are each a failure writing nothing;
   - the currencies read are every currency the engine converts;
   - the holiday page's pairs stored, a weekend-dated observed holiday kept as stated, and a page with no pairs or the wrong year a mismatch;

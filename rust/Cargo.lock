@@ -286,7 +286,12 @@ dependencies = [
 name = "bagholder-sources"
 version = "1.45.0"
 dependencies = [
+ "bagholder-book",
  "bagholder-core",
+ "bagholder-net",
+ "bagholder-sqlite",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]

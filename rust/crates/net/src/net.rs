@@ -104,16 +104,32 @@ pub fn retry_after(value: &str, now: Timestamp) -> Option<Duration> {
     Some(if at > now { Duration::try_from(now.duration_until(at)).unwrap_or(Duration::ZERO) } else { Duration::ZERO })
 }
 
+/// What a transport answers: the status, where the request ended up, the
+/// headers (names lower-cased) and the body.
+pub type Answer = (u16, String, Vec<(String, String)>, Vec<u8>);
+
+/// Something that answers requests in place of the network: recorded replies in
+/// tests. The limiter and the clock still apply to every request.
+pub trait Transport: Send + Sync {
+    fn answer(&self, ask: &Ask) -> Result<Answer, NetError>;
+}
+
 /// The network as the sources see it.
 pub struct Net {
     clock: Arc<dyn Clock>,
     limiter: Arc<Limiter>,
     browser: Mutex<Option<browser::Session>>,
+    replaced: Option<Box<dyn Transport>>,
 }
 
 impl Net {
     pub fn new(clock: Arc<dyn Clock>, limiter: Arc<Limiter>) -> Net {
-        Net { clock, limiter, browser: Mutex::new(None) }
+        Net { clock, limiter, browser: Mutex::new(None), replaced: None }
+    }
+
+    /// A network whose every request is answered by `transport`.
+    pub fn answered_by(clock: Arc<dyn Clock>, limiter: Arc<Limiter>, transport: Box<dyn Transport>) -> Net {
+        Net { clock, limiter, browser: Mutex::new(None), replaced: Some(transport) }
     }
 
     pub fn clock(&self) -> &dyn Clock {
@@ -129,12 +145,13 @@ impl Net {
     pub fn send(&self, ask: &Ask) -> Result<Reply, NetError> {
         let host = host_of(ask.url);
         self.limiter.turn(&host, &*self.clock).map_err(|Resting { until }| NetError::Resting { host: host.clone(), until })?;
-        let (status, url, headers, body) = match ask.via {
-            Via::Direct => {
+        let (status, url, headers, body) = match (&self.replaced, ask.via) {
+            (Some(t), _) => t.answer(ask)?,
+            (None, Via::Direct) => {
                 let r = client::request_any(ask.method, ask.url, ask.headers, ask.body, ask.timeout).map_err(|e| NetError::Unreachable(e.to_string()))?;
                 (r.status, ask.url.to_string(), r.headers, r.body)
             }
-            Via::Browser => {
+            (None, Via::Browser) => {
                 let mut slot = self.browser.lock().unwrap_or_else(|e| e.into_inner());
                 if slot.is_none() {
                     *slot = Some(browser::Session::new().ok_or_else(|| NetError::Unreachable("the browser helper is not installed".into()))?);

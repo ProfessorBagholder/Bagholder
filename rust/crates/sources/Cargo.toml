@@ -11,3 +11,13 @@ rust-version.workspace = true
 # `crates/core/tests/boundaries.rs` holds it to its column.
 [dependencies]
 bagholder-core = { path = "../core" }
+# the market cache's file: numbered migrations, snapshots, transactions
+bagholder-sqlite = { path = "../sqlite" }
+# every request goes through the one limiter, on the clock it is handed
+bagholder-net = { path = "../net" }
+# the facts the readers write, and the instruments they read for
+bagholder-book = { path = "../book" }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+
+[dev-dependencies]
+tempfile = "3"

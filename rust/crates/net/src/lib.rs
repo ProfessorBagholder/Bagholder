@@ -12,4 +12,4 @@ mod net;
 pub use clock::{Clock, ManualClock};
 pub use machine::SystemClock;
 pub use limiter::{Limiter, Pace, Resting};
-pub use net::{host_of, retry_after, Ask, Net, NetError, Reply, Via};
+pub use net::{host_of, retry_after, Answer, Ask, Net, NetError, Reply, Transport, Via};

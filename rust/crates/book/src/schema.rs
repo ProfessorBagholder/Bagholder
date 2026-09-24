@@ -4,10 +4,11 @@
 
 use bagholder_sqlite::migrate::{Migration, Schema};
 
-pub static MIGRATIONS: [Migration; 3] = [
+pub static MIGRATIONS: [Migration; 4] = [
     Migration { number: 1, name: "the book", sql: include_str!("../migrations/001-the-book.sql") },
     Migration { number: 2, name: "the facts", sql: include_str!("../migrations/002-the-facts.sql") },
     Migration { number: 3, name: "the facts as stated", sql: include_str!("../migrations/003-the-facts-as-stated.sql") },
+    Migration { number: 4, name: "series that ended", sql: include_str!("../migrations/004-series-that-ended.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {

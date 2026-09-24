@@ -18,7 +18,7 @@ use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject
 use bagholder_core::record::Problem;
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, Broker, ConnectionId, Currency, Dec, GroupId, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
-use bagholder_engine::input::{Adjustments, Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Series, Sourced};
 use bagholder_engine::{Change, Engine};
 
 /// Labels to ids: the same label is the same id throughout a case.
@@ -208,7 +208,9 @@ pub fn build(case: &Value) -> Built {
     for (c, spans) in obj(case, "series") {
         for span in spans.as_array().unwrap() {
             let span = span.as_array().unwrap();
-            rates.series.entry(ccy(&c)).or_default().push((day(span[0].as_str().unwrap()), day(span[1].as_str().unwrap())));
+            // a third element "ended" says the series is no longer published
+            let ended = span.get(2).and_then(Value::as_str) == Some("ended");
+            rates.series.entry(ccy(&c)).or_default().push(Series { first: day(span[0].as_str().unwrap()), last: day(span[1].as_str().unwrap()), ended });
         }
     }
     rates.holidays = arr(case, "holidays").iter().map(|d| day(d.as_str().unwrap())).collect();

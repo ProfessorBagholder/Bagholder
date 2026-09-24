@@ -6,10 +6,9 @@
 use std::collections::BTreeMap;
 
 use bagholder_book::Book;
-use bagholder_core::jiff::civil::Date;
 use bagholder_core::names::SourceName;
 use bagholder_core::Currency;
-use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Series, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -49,11 +48,11 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
     })
 }
 
-/// Per currency, the days each series of the Bank's rates the book holds spans.
-fn series(book: &Book) -> Result<BTreeMap<Currency, Vec<(Date, Date)>>, String> {
-    let mut out: BTreeMap<Currency, Vec<(Date, Date)>> = BTreeMap::new();
+/// Per currency, each series of the Bank's rates the book holds.
+fn series(book: &Book) -> Result<BTreeMap<Currency, Vec<Series>>, String> {
+    let mut out: BTreeMap<Currency, Vec<Series>> = BTreeMap::new();
     for s in book.rate_series().map_err(err)? {
-        out.entry(s.currency).or_default().push((s.first_day, s.last_day));
+        out.entry(s.currency).or_default().push(Series { first: s.first_day, last: s.last_day, ended: s.ended });
     }
     Ok(out)
 }

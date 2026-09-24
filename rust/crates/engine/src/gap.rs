@@ -19,8 +19,9 @@ pub enum Gap {
     RateMissing { currency: Currency, day: Date },
     /// A currency the Bank publishes no rate for.
     RateUnpublished(Currency),
-    /// A day before every series of the currency any source holds: no source
-    /// holds the rate the Bank published for it.
+    /// A day no series of the currency any source holds covers (before the
+    /// oldest, between two, or after the last one ended): no source holds a rate
+    /// the Bank published for it.
     RateNotHeld { currency: Currency, day: Date },
     /// An option contract whose shares per contract no source has stated yet.
     MultiplierUnstated(InstrumentId),

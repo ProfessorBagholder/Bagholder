@@ -127,7 +127,7 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
         }
         rates.covered.insert(Currency::USD, spans);
         if let (Some(first), Some(last)) = (s.keys().next().copied(), s.keys().next_back().copied()) {
-            rates.series.insert(Currency::USD, vec![(first, last)]);
+            rates.series.insert(Currency::USD, vec![bagholder_engine::input::Series { first, last, ended: false }]);
         }
     }
     let mut declared: BTreeMap<InstrumentId, Vec<Declared>> = BTreeMap::new();

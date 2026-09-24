@@ -47,6 +47,9 @@ pub struct RateSeries {
     pub source: SourceName,
     pub first_day: jiff::civil::Date,
     pub last_day: jiff::civil::Date,
+    /// The source states the series is no longer published (an archive, or a
+    /// daily series the Bank marks historical): no day after `last_day` is in it.
+    pub ended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,8 +191,8 @@ impl Book {
                     return Err(BookError::Refused(format!("a {} series from {} to {} holds no day", s.currency, s.first_day, s.last_day)));
                 }
                 self.conn().execute(
-                    "INSERT OR REPLACE INTO fx_series(currency, source, first_day, last_day, received_at) VALUES (?, ?, ?, ?, ?)",
-                    params![s.currency.as_str(), s.source.as_str(), day(s.first_day), day(s.last_day), at_text(at)],
+                    "INSERT OR REPLACE INTO fx_series(currency, source, first_day, last_day, ended, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    params![s.currency.as_str(), s.source.as_str(), day(s.first_day), day(s.last_day), s.ended as i64, at_text(at)],
                 )?;
             }
             Ok(())
@@ -198,16 +201,21 @@ impl Book {
 
     /// Every series of the Bank's rates held, oldest first within a currency.
     pub fn rate_series(&self) -> Result<Vec<RateSeries>> {
-        let mut stmt = self.conn().prepare_cached("SELECT currency, source, first_day, last_day FROM fx_series ORDER BY currency, first_day")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        let mut stmt = self.conn().prepare_cached("SELECT currency, source, first_day, last_day, ended FROM fx_series ORDER BY currency, first_day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            let (c, source, first, last) = row?;
+            let (c, source, first, last, ended) = row?;
             out.push(RateSeries {
                 currency: parse_currency("fx_series", "currency", &c)?,
                 source: text::parsed("fx_series", "source", &source, SourceName::parse)?,
                 first_day: parse_day("fx_series", "first_day", &first)?,
                 last_day: parse_day("fx_series", "last_day", &last)?,
+                ended: match ended {
+                    0 => false,
+                    1 => true,
+                    n => return Err(text::corrupt("fx_series", "ended", &n.to_string(), "not 0 or 1")),
+                },
             });
         }
         Ok(out)

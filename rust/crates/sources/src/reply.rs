@@ -240,25 +240,43 @@ pub fn day_from(text: &str) -> Result<Date, String> {
 pub type Shape = BTreeMap<String, BTreeSet<&'static str>>;
 
 pub fn shape(v: &Value) -> Shape {
-    fn walk(v: &Value, path: &str, out: &mut Shape) {
+    shape_keyed(v, &[])
+}
+
+/// An object whose keys are data, not fields (a series code, a date): every key
+/// under `parent` other than `fields` is written `*` in the shape, as a list's
+/// index is folded, so a reply for another series has the same shape.
+#[derive(Clone, Copy, Debug)]
+pub struct Keyed<'a> {
+    pub parent: &'a str,
+    pub fields: &'a [&'a str],
+}
+
+pub fn shape_keyed(v: &Value, keyed: &[Keyed]) -> Shape {
+    fn walk(v: &Value, path: &str, keyed: &[Keyed], out: &mut Shape) {
         out.entry(path.to_string()).or_default().insert(v.kind());
         match v {
             Value::Object(map) => {
+                let data = keyed.iter().find(|k| k.parent == path);
                 for (k, item) in map {
-                    let p = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
-                    walk(item, &p, out);
+                    let k = match data {
+                        Some(d) if !d.fields.contains(&k.as_str()) => "*",
+                        _ => k.as_str(),
+                    };
+                    let p = if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
+                    walk(item, &p, keyed, out);
                 }
             }
             Value::Array(items) => {
                 for item in items {
-                    walk(item, &format!("{path}[]"), out);
+                    walk(item, &format!("{path}[]"), keyed, out);
                 }
             }
             _ => {}
         }
     }
     let mut out = Shape::new();
-    walk(v, "", &mut out);
+    walk(v, "", keyed, &mut out);
     out
 }
 

@@ -12,8 +12,11 @@
 //!
 //! The Bank's rate is held in eras, each a series: its daily average from
 //! 2017-01-03, its noon rate before that, and Statistics Canada's archive of the
-//! noon rate before 2007 for the currencies it holds. A day before a currency's
-//! oldest series is one no source holds the published rate for.
+//! noon rate before 2007 for the currencies it holds. A day no series holds is
+//! one no source holds a published rate for: before a currency's oldest series,
+//! between two (the Bank published no zloty from its noon series' end in 2017 to
+//! its daily series' start in 2026), or after the last one ended (the Bank ended
+//! its daily ruble series in 2026).
 //!
 //! A live mark (a holding's value now) is not a transaction on a day: it uses the
 //! latest rate the Bank has published, and that rate is a failure once a later
@@ -53,8 +56,8 @@ fn waiting(clock: &Clock, currency: Currency, d: Date) -> Gaps {
 }
 
 fn check_published(rates: &Rates, currency: Currency, day: Date) -> Result<(), Gaps> {
-    match rates.series.get(&currency).and_then(|s| s.iter().map(|(first, _)| *first).min()) {
-        Some(oldest) if day < oldest => Err(Gaps::of(Gap::RateNotHeld { currency, day })),
+    match rates.series.get(&currency).filter(|s| !s.is_empty()) {
+        Some(s) if !s.iter().any(|series| series.holds(day)) => Err(Gaps::of(Gap::RateNotHeld { currency, day })),
         Some(_) => Ok(()),
         // until the lists of series have been read, a currency with no series is
         // a rate not read, not a currency the Bank does not publish
@@ -89,7 +92,7 @@ pub fn rate(rates: &Rates, clock: &Clock, currency: Currency, day: Date) -> Fig<
             Ok(y) => y,
             Err(_) => return Err(Gaps::of(Gap::RateMissing { currency, day })),
         };
-        // walked back past the oldest series: no source holds the governing day
+        // walked back out of every series: no source holds the governing day
         check_published(rates, currency, d)?;
     }
 }
