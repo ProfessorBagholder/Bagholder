@@ -2,9 +2,9 @@
 
 ## For the owner to decide
 
-1. **A daily run on your Mac for option closes.** A contract's closing price for a session can only be read that day: no source gives it later. Until the Rust build is the app you run every day, nothing of it runs daily. The choice: a scheduled job on your Mac runs `bagholder read-sources` once each weekday after the close, from when this part lands. It needs nothing from you once set up, touches only its own data folder, and places no orders. Without it, every session day until then loses the closes of the option contracts held that day for good; on those days the equity series takes Wealthsimple's stated account value where it has one, and waits where it has none.
+Nothing open.
 
-Settled: a fund's schedule and distributions come from its fund company's own publication; another source only where that publication cannot be read at all (owner, 2026-09-24). Brief 02: Go with changes, applied.
+Settled: a fund's schedule and distributions come from its fund company's own publication; another source only where that publication cannot be read at all (owner, 2026-09-24). Settled: an option contract's close is read by the app itself each session day after the close, like every due read; nothing is set up outside the app to capture days before it runs (owner, 2026-09-24, answering brief 02 #2). Brief 02: Go with changes, applied.
 
 Gated in this plan (brief 01 §1), not built until the gate says Go: book migration 3 (distributions without kinds, the reinvested part, rate series with their days) and the change to how the distribution rate is defined (cash per unit, from the payer's record only). A fund's schedule and distributions come from its fund company's own publication, never worked out from past dates (owner, 2026-09-23; brief 01 §2.1 as revised). Built already, as work inside the plan: the strict reply reader and the network crate with one limiter.
 
@@ -191,7 +191,7 @@ A venue's session days are the days its own daily closes exist, as the sources r
   - A contract's close for a day no reader ran.
   - Any day before the first run. No store holds a past session's close to import (checked 2026-09-24).
   No source gives these later. On those days the equity series takes the broker's stated figure (stage 2's rule) or waits, and says which.
-- **Captured every session** by a daily run (decision 1 at the top) until the Rust build runs every day.
+- **Captured every session** by the app's own due read (the periodic reads table), from the first day it runs.
 
 **Underlyings on expiry days.** The expiry rule (`engine/src/ledger.rs`) needs an option's underlying's close on the contract's expiry day. That close is read for every contract the book has held, whether or not the underlying was ever held.
 
