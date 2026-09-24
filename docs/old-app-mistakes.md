@@ -29,6 +29,7 @@ A test in the old crates that records one of these as it behaves today is named 
 
 ## Figures
 
+- **No open trade, and the sold part of a held position made a trade of its own**, so a partial sale was scored as a finished trade and the position's later sales as another. Guarded: the cases in `open_trades.json` (a partly sold position is one open trade; win rate and expectancy count only closed trades).
 - **A position marked at the person's own fill** when no price was read. Guarded: scan for `last_fill`, `LastFill`.
 - **A tolerance for coins sold beyond what was held.** Guarded: scan for `fn dust`, `0.01 *`.
 - **A residue under a dollar dropped.** Guarded: scan for `< 1.0)`.

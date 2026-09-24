@@ -16,7 +16,7 @@ It defines every figure and every screen by itself: what each figure means, how 
 
 ### Trade
 
-A trade is one round trip: a position in one account, symbol and currency going from flat, through open, back to flat. Lots are matched first-in first-out within that account, symbol and currency. Its id is `rt:` followed by the id of the activity that opened it. A trade always has a close date; there is no open trade.
+A trade is one round trip: a position in one account, symbol and currency from its first fill until it is flat again. Lots are matched first-in first-out within that account, symbol and currency. Its id is `rt:` followed by the id of the activity that opened it. While any of it is held the trade is **open**, a position with no sale yet and a partly sold one alike, its P&L what it has realized so far (0.00 before a first sale); once flat it is **closed**. Each sale's P&L is realized on the day of that sale, whether the trade is open or closed. A round trip that goes flat without a sale (a position sent wholly out by a transfer) is not a trade. A saved group is open while any of its members is open.
 
 - **Options.** Contracts are matched per contract. A multileg fill is a roll: the far leg is opened in the same trade and the whole chain, from the first short to the last buy-back or expiry, is one trade named after the last contract. Expiry closes a contract at zero. Assignment closes the option at zero, keeping the premium, and delivers the shares at the strike into the share book.
 - **Crypto.** Matched like shares. Staking rewards open a lot at zero cost and carry a `reward` flag. A transfer in is a deposit of an asset, not a buy made here: its original cost is unknown, so the lot carries a `basis-unknown` flag and its later sale is an unscoreable round trip — that trade stands on its own (never merged into a bought one) and is left out of the performance figures (realized, win rate, by-symbol, monthly) rather than scored on a made-up cost; it still appears in the trades list, flagged. A transfer out is not a sale: the coins come off the open lots first-in first-out at their cost, with no P&L, and the transfer is not a fill of the trade.
@@ -28,16 +28,16 @@ Per-trade fields, all in the trade's currency unless stated:
 | Field | Definition |
 |---|---|
 | Open | Earliest entry date among the trade's lots |
-| Close | Latest exit date |
+| Close | Latest exit date, once the trade is closed; an open trade's reads `Open` |
 | Symbol | The instrument; for a rolled chain, the last contract |
 | Exchange | Listing venue from the security record (TSX, TSX-V, CSE, Cboe Canada, NYSE, NASDAQ, NYSE American, NYSE Arca); `Crypto` for crypto |
-| Qty | Units matched (shares, contracts or coins) |
-| Entry | Quantity-weighted average entry price |
-| Exit | Quantity-weighted average exit price |
+| Qty | Units opened (shares, contracts or coins) |
+| Entry | Quantity-weighted average entry price over the units opened |
+| Exit | Quantity-weighted average exit price over the units closed so far; none before the first |
 | FX | Currency code, CAD or USD |
-| P&L | Sum over lots of (exit − entry) × qty × multiplier for longs, reversed for shorts, minus entry and exit commissions |
-| P&L % | P&L divided by the entry basis (entry × qty × multiplier) |
-| Hold | Calendar days from Open to Close |
+| P&L | Realized so far: sum over the closed units of (exit − entry) × qty × multiplier for longs, reversed for shorts, minus entry and exit commissions |
+| P&L % | P&L divided by the entry basis of the units closed (entry × qty × multiplier) |
+| Hold | Calendar days from Open to Close, or to today while open |
 | P&L (CAD) | The same P&L with each leg's notional converted on its own fill date; equals P&L for CAD trades |
 | Grade, thesis, tags | Journal entries keyed by the trade id |
 
@@ -180,14 +180,14 @@ All pages share the header (brand and version, sync status, orders, filter, menu
 
 ### Dashboard
 
-Six KPI tiles in one row, all in CAD over the trades in scope:
+Six KPI tiles in one row, all in CAD over the trades in scope. A trade is in scope for a date range when it was open at any time in it; a realized P&L counts in the range when its sale falls in it; a closed trade's statistics count when its close falls in it.
 
 | Tile | Value | Subtitle |
 |---|---|---|
-| Realized P&L | Sum of P&L (CAD) | Trade count |
-| Win rate | Winning trades ÷ all trades | Wins, losses and breakevens |
-| Profit factor | Gross wins ÷ gross losses; `∞` with no losses | Gross W and L |
-| Expectancy | Realized P&L ÷ trade count | Average win and average loss |
+| Realized P&L | Sum of the P&L (CAD) realized in scope, each sale on its own day, open trades' partial sales included | Closed-trade count |
+| Win rate | Winning closed trades ÷ closed trades | Wins, losses and breakevens |
+| Profit factor | Gross wins ÷ gross losses over closed trades; `∞` with no losses | Gross W and L |
+| Expectancy | Closed trades' P&L ÷ their count | Average win and average loss |
 | Max drawdown | Drawdown percentage | CAD fall and trough month |
 | Avg annualized | Annualized return | Number of years used |
 
@@ -195,14 +195,14 @@ Cards:
 
 - **Equity curve.** The equity series in scope with a `$` axis and six date labels; hover shows the value and day, and the chart past the day read dims (the line and its fill keep their colour up to the pointer and fade after it), as the phone's does. Every line chart the page draws itself hovers this way.
 - **Annualized returns.** Title `Annualized returns` with a switch at the right, `S&P 500`, `S&P/TSX` or `TSX 60`, choosing the index the years are compared against; the choice is remembered on this machine and is not a filter. Subtitle `Vs <index>`. Every year, newest first, each with the account's return and the index's return and two equal-height bars; the list scrolls inside the card, which takes its height from the equity curve beside it and never grows past it. Footer, fixed below the list: `Outperformed <index> in N of M years.`
-- **Monthly P&L.** One bar per calendar month of close date, CAD, six axis labels; hover shows the month and trade count; click opens the trade or filters to that month. The value axis labels the top, the midpoint, zero and the bottom; a label that would touch the one above it is not shown, so the bottom label goes when the losing months are small next to the winning ones.
-- **Grade vs P&L.** Four bars, A B C F, CAD sum per grade with the count under each.
-- **By symbol.** Symbol, P&L (CAD), Trades, Win rate, Avg hold, grouped by underlying, sorted by P&L; click opens or filters.
+- **Monthly P&L.** One bar per calendar month of the P&L realized in it (each sale in its own month, open trades' partial sales included), CAD, six axis labels; hover shows the month and the number of trades realizing in it; click opens the trade or filters to that month. The value axis labels the top, the midpoint, zero and the bottom; a label that would touch the one above it is not shown, so the bottom label goes when the losing months are small next to the winning ones.
+- **Grade vs P&L.** Four bars, A B C F, CAD sum of the closed trades per grade with the count under each.
+- **By symbol.** Symbol, P&L (CAD) realized (as Realized P&L), Trades, Win rate and Avg hold over closed trades, grouped by underlying, sorted by P&L; click opens or filters.
 - **Review queue.** Closed trades missing a grade or a thesis, newest first.
 
 ### Trades
 
-Table columns in this order: Open · Close · Symbol · Exchange · Qty · Entry · Exit · FX · P&L · P&L % · Hold · Grade · Tags. Every column sorts. Grade sorts A first on the first click, F first on the second, ungraded trades last either way. FX is centred; numbers are right-aligned. Column widths are fixed proportions of the table so they do not shift with content; the table scrolls sideways only when its card is narrower than 1150 px. Long symbols truncate with an ellipsis and show in full on hover. Newest close first by default.
+Table columns in this order: Open · Close · Symbol · Exchange · Qty · Entry · Exit · FX · P&L · P&L % · Hold · Grade · Tags. Every column sorts. Grade sorts A first on the first click, F first on the second, ungraded trades last either way. FX is centred; numbers are right-aligned. Column widths are fixed proportions of the table so they do not shift with content; the table scrolls sideways only when its card is narrower than 1150 px. Long symbols truncate with an ellipsis and show in full on hover. Open trades are listed with closed ones, their Close reading `Open`; opening one opens the holding page. Newest activity first by default (an open trade by its latest fill, a closed one by its close).
 
 Trade detail: symbol, then name, exchange and listing ticker as `Name · EXCHANGE: TICKER` (the underlying's ticker for an option, listing suffixes such as .TO dropped); P&L and P&L % in the trade's currency; the trade chart; facts Open, Close, Entry, Exit, Hold, Account; an executions table with When · Side · Qty · FX · Price · Amount where Side reads `BUY` or `SELL` for shares and crypto and, for options, what the fill did in this trade (`BUY TO OPEN`, `SELL TO CLOSE`, …); a fill that closed one trade and opened the next says `(close + open)`; the journal with thesis, grade and tags; and, below them, the short interest card and the disclosures. The browser Back button returns to the list at the same scroll position.
 

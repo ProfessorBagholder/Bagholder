@@ -117,6 +117,17 @@ impl Filters {
         }
     }
 
+    /// Whether any day from `from` to `to` is in the dates chosen.
+    pub fn overlaps(&self, today: Date, from: Date, to: Date) -> bool {
+        if let Some((lo, hi)) = self.bounds(today) {
+            return from <= hi && lo <= to;
+        }
+        match &self.dates {
+            Dates::Years(ys) if !ys.is_empty() => ys.iter().any(|y| from.year() <= *y && *y <= to.year()),
+            _ => true,
+        }
+    }
+
     pub fn in_dates(&self, today: Date, day: Date) -> bool {
         if let Some((lo, hi)) = self.bounds(today) {
             return lo <= day && day <= hi;
@@ -229,7 +240,14 @@ pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
     {
         return false;
     }
-    f.in_dates(today, t.closed_on)
+    // in scope when it was open at any time in the dates chosen
+    f.overlaps(today, t.opened_on, t.closed_on.unwrap_or(today))
+}
+
+/// A closed trade whose close falls in the dates chosen: what the closed-trade
+/// statistics count.
+fn closed_in(f: &Filters, today: Date, t: &TradeFig) -> bool {
+    t.closed_on.is_some_and(|d| f.in_dates(today, d))
 }
 
 pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
@@ -264,11 +282,15 @@ impl Partial {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Kpi {
-    /// Over the trades whose CAD P&L is stated.
+    /// Every sale's P&L in the dates chosen, open trades' included, whose CAD
+    /// P&L is stated.
     pub realized: Fig<Money>,
+    /// Sales in the dates chosen whose CAD P&L is not stated.
+    pub realized_left_out: usize,
+    /// Closed trades whose CAD P&L is stated.
     pub count: usize,
-    /// Trades in scope whose CAD P&L is not stated (a deposited coin, a rate
-    /// waiting, a contract size not stated…).
+    /// Closed trades in scope whose CAD P&L is not stated (a deposited coin, a
+    /// rate waiting, a contract size not stated…).
     pub left_out: usize,
     pub wins: usize,
     pub losses: usize,
@@ -454,13 +476,17 @@ fn ratio_of(part: &Fig<Money>, whole: &Fig<Money>) -> Fig<Option<Ratio>> {
     crate::gap::both(part.clone(), whole.clone(), |p, w| Ok(money_ratio(p, w)))
 }
 
-fn kpi(trades: &[&TradeFig]) -> Kpi {
+/// The closed-trade statistics over `closed`, and the realized P&L over `parts`.
+fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
+    let trades = closed;
     let stated: Vec<(&TradeFig, Money)> = trades.iter().filter_map(|t| t.pnl_cad.as_ref().ok().map(|p| (*t, *p))).collect();
     let wins: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_positive()).collect();
     let losses: Vec<Money> = stated.iter().map(|(_, p)| *p).filter(|p| p.amount.is_negative()).collect();
     let gross_win = money_sum(wins.iter().copied());
     let gross_loss = money_sum(losses.iter().copied()).map(Money::neg);
-    let realized = money_sum(stated.iter().map(|(_, p)| *p));
+    let closed_total = money_sum(stated.iter().map(|(_, p)| *p));
+    let realized = money_sum(parts.iter().filter_map(|p| p.as_ref().ok().copied()));
+    let realized_left_out = parts.iter().filter(|p| p.is_err()).count();
     let n = stated.len();
     let fees = money_sum(stated.iter().filter_map(|(t, _)| t.fees_cad.as_ref().ok().copied()));
     let profit_factor = crate::gap::both(gross_win.clone(), gross_loss.clone(), |w, l| {
@@ -481,10 +507,11 @@ fn kpi(trades: &[&TradeFig]) -> Kpi {
         win_rate: count_ratio(wins.len(), n),
         profit_factor_infinite: matches!((&gross_win, &gross_loss), (Ok(w), Ok(l)) if l.amount.is_zero() && w.amount.is_positive()),
         profit_factor,
-        expectancy: avg_money(&realized, n),
+        expectancy: avg_money(&closed_total, n),
         avg_win: avg_money(&gross_win, wins.len()),
         avg_loss: avg_money(&gross_loss.clone().map(Money::neg), losses.len()),
         realized,
+        realized_left_out,
         gross_win,
         gross_loss,
         fees,
@@ -506,34 +533,43 @@ pub fn scope(
 ) -> Scoped {
     let today = inputs.clock.today;
     let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
-    let stated: Vec<&&TradeFig> = in_scope.iter().filter(|t| t.pnl_cad.is_ok()).collect();
+    // closed trades whose close is in the dates: what the statistics count
+    let closed: Vec<&TradeFig> = in_scope.iter().copied().filter(|t| closed_in(f, today, t)).collect();
+    let stated: Vec<&&TradeFig> = closed.iter().filter(|t| t.pnl_cad.is_ok()).collect();
+    // each sale in the dates, of an open or a closed trade, on its own day
+    let parts: Vec<(&TradeFig, &crate::trades::Realized)> = in_scope.iter().flat_map(|t| t.realized.iter().filter(|r| f.in_dates(today, r.day)).map(move |r| (*t, r))).collect();
 
-    // monthly P&L by close month
+    // monthly P&L by the month each sale was realized
     let mut months: BTreeMap<(i16, i8), (Vec<Money>, Vec<TradeKey>)> = BTreeMap::new();
-    for t in &stated {
-        let bar = months.entry((t.closed_on.year(), t.closed_on.month())).or_default();
-        bar.0.push(*t.pnl_cad.as_ref().expect("stated"));
-        bar.1.push(t.key.clone());
+    for (t, r) in &parts {
+        let Ok(p) = &r.pnl_cad else { continue };
+        let bar = months.entry((r.day.year(), r.day.month())).or_default();
+        bar.0.push(*p);
+        if !bar.1.contains(&t.key) {
+            bar.1.push(t.key.clone());
+        }
     }
-    let monthly: Vec<MonthBar> = months.into_iter().map(|((year, month), (pnls, trades))| MonthBar { year, month, count: pnls.len(), value: money_sum(pnls), trades }).collect();
+    let monthly: Vec<MonthBar> = months.into_iter().map(|((year, month), (pnls, trades))| MonthBar { year, month, count: trades.len(), value: money_sum(pnls), trades }).collect();
 
-    // by underlying, largest gain first
-    let mut by: BTreeMap<InstrumentId, (Vec<Money>, usize, i64, usize, Vec<TradeKey>)> = BTreeMap::new();
+    // by underlying, largest gain first: the P&L realized, the closed trades' counts
+    let mut by: BTreeMap<InstrumentId, (Vec<Money>, usize, i64, usize, Vec<TradeKey>, usize)> = BTreeMap::new();
+    for (t, r) in &parts {
+        if let Ok(p) = &r.pnl_cad {
+            by.entry(underlying_of(inputs, t.instrument)).or_default().0.push(*p);
+        }
+    }
     for t in &stated {
         let p = *t.pnl_cad.as_ref().expect("stated");
         let e = by.entry(underlying_of(inputs, t.instrument)).or_default();
-        e.0.push(p);
         e.1 += usize::from(p.amount.is_positive());
         e.2 += t.hold_days;
         e.3 += t.slices.len();
         e.4.push(t.key.clone());
+        e.5 += 1;
     }
     let mut by_underlying: Vec<UnderlyingRow> = by
         .into_iter()
-        .map(|(u, (pnls, wins, hold, legs, keys))| {
-            let n = pnls.len();
-            UnderlyingRow { underlying: u, pnl: money_sum(pnls), count: n, legs, win_rate: count_ratio(wins, n), avg_hold: count_ratio(hold.max(0) as usize, n), trades: keys }
-        })
+        .map(|(u, (pnls, wins, hold, legs, keys, n))| UnderlyingRow { underlying: u, pnl: money_sum(pnls), count: n, legs, win_rate: count_ratio(wins, n), avg_hold: count_ratio(hold.max(0) as usize, n), trades: keys })
         .collect();
     // largest gain first; one whose total cannot be stated last
     by_underlying.sort_by(|a, b| match (&a.pnl, &b.pnl) {
@@ -548,8 +584,8 @@ pub fn scope(
             GradeBucket { grade: g, count: rows.len(), pnl: money_sum(rows.iter().map(|t| *t.pnl_cad.as_ref().expect("stated"))), trades: rows.iter().map(|t| t.key.clone()).collect() }
         })
         .collect();
-    let ungraded = in_scope.iter().filter(|t| t.journal.grade.is_none()).count();
-    let mut queue: Vec<(&TradeFig, Missing)> = in_scope
+    let ungraded = closed.iter().filter(|t| t.journal.grade.is_none()).count();
+    let mut queue: Vec<(&TradeFig, Missing)> = closed
         .iter()
         .filter_map(|t| {
             let m = match (t.journal.grade.is_none(), t.journal.thesis.trim().is_empty()) {
@@ -567,7 +603,7 @@ pub fn scope(
     let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
     let equity = equity_block(f, equity, benchmarks, today);
     Scoped {
-        kpi: kpi(&in_scope),
+        kpi: kpi(&closed, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
         trades: in_scope.iter().map(|t| t.key.clone()).collect(),
         monthly,
         by_underlying,

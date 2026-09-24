@@ -142,7 +142,11 @@ fn run(path: &Path) -> Vec<String> {
                 c.figure(&w("entry"), v, &t.entry);
             }
             if let Some(v) = want.get("exit") {
-                c.figure(&w("exit"), v, &t.exit);
+                match &t.exit {
+                    Some(x) => c.figure(&w("exit"), v, x),
+                    None if v.is_null() => {}
+                    None => c.fail(format!("{}: expected {v}, got none", w("exit"))),
+                }
             }
             if let Some(v) = want.get("pnl") {
                 c.money(&w("pnl"), v, &t.pnl);
@@ -161,9 +165,12 @@ fn run(path: &Path) -> Vec<String> {
                     c.fail(format!("{}: expected {v}, got {}", w("hold_days"), t.hold_days));
                 }
             }
+            // "closed": the close day, or "open" for a trade still held
             if let Some(v) = s(&want, "closed") {
-                if t.closed_on != day(v) {
-                    c.fail(format!("{}: expected {v}, got {}", w("closed"), t.closed_on));
+                let got = t.closed_on.map(|d| d.to_string()).unwrap_or_else(|| "open".into());
+                let want_day = if v == "open" { "open".to_string() } else { day(v).to_string() };
+                if got != want_day {
+                    c.fail(format!("{}: expected {v}, got {got}", w("closed")));
                 }
             }
             if let Some(v) = s(&want, "opened") {
@@ -312,6 +319,11 @@ fn run(path: &Path) -> Vec<String> {
                 Some("ytd") => Filters { dates: Dates::Preset(Preset::YearToDate), ..Filters::default() },
                 _ => Filters::default(),
             };
+            // "from" / "to": a date range, either end open
+            let filters = match (s(k, "from"), s(k, "to")) {
+                (None, None) => filters,
+                (from, to) => Filters { dates: Dates::Range { from: from.map(day), to: to.map(day) }, ..filters },
+            };
             let filters = Filters {
                 accounts: arr(k, "accounts").iter().map(|a| b.ids.account(a.as_str().unwrap())).collect(),
                 benchmark: s(k, "benchmark").unwrap_or("SP500").to_string(),
@@ -321,7 +333,46 @@ fn run(path: &Path) -> Vec<String> {
             if let Some(v) = k.get("realized") {
                 c.money("kpi realized", v, &sc.kpi.realized);
             }
-            for (field, got) in [("count", sc.kpi.count), ("left_out", sc.kpi.left_out), ("wins", sc.kpi.wins), ("losses", sc.kpi.losses), ("breakeven", sc.kpi.breakeven)] {
+            if let Some(v) = k.get("expectancy") {
+                match (&sc.kpi.expectancy, v.is_null()) {
+                    (Ok(None), true) => {}
+                    (Ok(Some(m)), false) => c.money("kpi expectancy", v, &Ok(*m)),
+                    (got, _) => c.fail(format!("kpi expectancy: expected {v}, got {got:?}")),
+                }
+            }
+            // the trades in scope, by the transaction that opened each
+            if let Some(v) = k.get("trades") {
+                let mut got: Vec<String> = sc.trades.iter().filter_map(|key| match key {
+                    TradeKey::Trip(t) => tx.iter().find(|(_, id)| **id == t.opening).map(|(l, _)| l.clone()),
+                    TradeKey::Group(_) => None,
+                }).collect();
+                got.sort();
+                let mut want_t: Vec<String> = v.as_array().expect("trades: a list").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+                want_t.sort();
+                if got != want_t {
+                    c.fail(format!("kpi trades in scope: expected {want_t:?}, got {got:?}"));
+                }
+            }
+            for m in arr(k, "monthly") {
+                let (y, mo) = (m.get("year").and_then(Value::as_i64).unwrap() as i16, m.get("month").and_then(Value::as_i64).unwrap() as i8);
+                match sc.monthly.iter().find(|b| b.year == y && b.month == mo) {
+                    None => c.fail(format!("no monthly bar {y}-{mo}")),
+                    Some(bar) => {
+                        c.money(&format!("monthly {y}-{mo}"), m.get("value").unwrap(), &bar.value);
+                        if let Some(n) = m.get("count").and_then(Value::as_u64) {
+                            if bar.count as u64 != n {
+                                c.fail(format!("monthly {y}-{mo} count: expected {n}, got {}", bar.count));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(n) = k.get("monthly_bars").and_then(Value::as_u64) {
+                if sc.monthly.len() as u64 != n {
+                    c.fail(format!("monthly bars: expected {n}, got {}", sc.monthly.len()));
+                }
+            }
+            for (field, got) in [("count", sc.kpi.count), ("left_out", sc.kpi.left_out), ("realized_left_out", sc.kpi.realized_left_out), ("wins", sc.kpi.wins), ("losses", sc.kpi.losses), ("breakeven", sc.kpi.breakeven)] {
                 if let Some(v) = k.get(field) {
                     if v.as_u64() != Some(got as u64) {
                         c.fail(format!("kpi {field}: expected {v}, got {got}"));

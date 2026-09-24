@@ -70,21 +70,113 @@
     "spec": "SPEC.md §2 Trade: a round trip goes from flat, through open, back to flat; docs/plans/stage-2-engine.md, the order of transactions",
     "working": [
       "15:00 buy 10 for 100; 18:00 sell 10 for 110: flat at 18:00, one round trip, P&L 10, hold 0",
-      "20:00 buy 5 for 55: a new round trip, open: a position of 5 with a book of 55"
+      "20:00 buy 5 for 55: a new round trip, open: a position of 5 with a book of 55",
+      "Open trades (SPEC.md §2 Trade, 2026-09-24), re-derived without the engine:",
+      "CAD book. t1 buy 10 X for 100 at 15:00, t2 sell 10 for 110 at 18:00: flat, a closed trade on 2026-02-02, P&L 10.00, entry 10, exit 11, pnl% 0.1, hold 0.",
+      "t3 buy 5 for 55 at 20:00, after flat: opens the next round trip, still held on 2026-02-10: an OPEN trade, entry 11, nothing realized, hold 2026-02-02..2026-02-10 = 8.",
+      "trade_count 2. KPI: realized 10.00, count 1, 1 win, expectancy 10.00. Monthly 2026-02 10.00, 1 trade."
     ],
     "today": "2026-02-10",
-    "accounts": [{"id": "A"}],
-    "instruments": [{"id": "X"}],
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
     "transactions": [
-      {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
-      {"id": "t2", "account": "A", "day": "2026-02-02", "at": "2026-02-02T18:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "110"},
-      {"id": "t3", "account": "A", "day": "2026-02-02", "at": "2026-02-02T20:00:00Z", "kind": "buy", "instrument": "X", "qty": "5", "cash": "-55"}
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T18:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-10",
+        "cash": "110"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T20:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "5",
+        "cash": "-55"
+      }
     ],
     "expect": {
-      "trade_count": 1,
+      "trade_count": 2,
       "position_count": 1,
-      "trades": [{"opened_by": "t1", "pnl": "10.00", "hold_days": 0}],
-      "positions": [{"account": "A", "instrument": "X", "qty": "5", "book": "55.00", "opened_by": "t3"}]
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "X",
+          "closed": "2026-02-02",
+          "opened": "2026-02-02",
+          "qty": "10",
+          "entry": "10",
+          "exit": "11",
+          "pnl": "10.00",
+          "pnl_cad": "10.00",
+          "pnl_pct": 0.1,
+          "hold_days": 0,
+          "direction": "long"
+        },
+        {
+          "opened_by": "t3",
+          "instrument": "X",
+          "closed": "open",
+          "opened": "2026-02-02",
+          "qty": "5",
+          "entry": "11",
+          "exit": null,
+          "pnl": "0.00",
+          "pnl_cad": "0.00",
+          "hold_days": 8,
+          "direction": "long"
+        }
+      ],
+      "positions": [
+        {
+          "account": "A",
+          "instrument": "X",
+          "qty": "5",
+          "book": "55.00",
+          "opened_by": "t3"
+        }
+      ],
+      "kpi": {
+        "realized": "10.00",
+        "count": 1,
+        "wins": 1,
+        "losses": 0,
+        "breakeven": 0,
+        "win_rate": 1.0,
+        "expectancy": "10.00",
+        "monthly": [
+          {
+            "year": 2026,
+            "month": 2,
+            "value": "10.00",
+            "count": 1
+          }
+        ]
+      }
     }
   },
   {
@@ -153,19 +245,84 @@
     "spec": "docs/architecture.md §5: nothing is ever matched on a bare symbol",
     "working": [
       "CH (one security) bought 100 for 100; CH (another security) sold 100 for 150: the sale closes nothing of the first",
-      "the first stays a position of 100; the sale is beyond what the second held"
+      "the first stays a position of 100; the sale is beyond what the second held",
+      "Open trades (SPEC.md §2 Trade, 2026-09-24), re-derived without the engine:",
+      "Lots are per account and instrument, never per symbol: CH1 and CH2 never share a lot.",
+      "t1: buy 100 CH1 for 100: a round trip held to today: an OPEN trade, entry 1, nothing realized, hold 2026-01-05..2026-02-01 = 27.",
+      "t2: sell 100 CH2 with nothing held in CH2: a sale beyond what is held, a gap on the transaction, never a short invented: no round trip, no trade.",
+      "trade_count 1. KPI: nothing realized, no closed trade: realized 0.00, count 0, expectancy null."
     ],
     "today": "2026-02-01",
-    "accounts": [{"id": "A"}],
-    "instruments": [{"id": "CH1", "symbol": "CH"}, {"id": "CH2", "symbol": "CH"}],
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "CH1",
+        "symbol": "CH"
+      },
+      {
+        "id": "CH2",
+        "symbol": "CH"
+      }
+    ],
     "transactions": [
-      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "CH1", "qty": "100", "cash": "-100"},
-      {"id": "t2", "account": "A", "day": "2026-01-06", "at": "2026-01-06T15:00:00Z", "kind": "sell", "instrument": "CH2", "qty": "-100", "cash": "150"}
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "CH1",
+        "qty": "100",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "sell",
+        "instrument": "CH2",
+        "qty": "-100",
+        "cash": "150"
+      }
     ],
     "expect": {
-      "trade_count": 0,
-      "positions": [{"account": "A", "instrument": "CH1", "qty": "100", "book": "100.00"}],
-      "beyond": ["t2"]
+      "trade_count": 1,
+      "positions": [
+        {
+          "account": "A",
+          "instrument": "CH1",
+          "qty": "100",
+          "book": "100.00"
+        }
+      ],
+      "beyond": [
+        "t2"
+      ],
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "CH1",
+          "closed": "open",
+          "opened": "2026-01-05",
+          "qty": "100",
+          "entry": "1",
+          "exit": null,
+          "pnl": "0.00",
+          "pnl_cad": "0.00",
+          "hold_days": 27,
+          "direction": "long"
+        }
+      ],
+      "kpi": {
+        "realized": "0.00",
+        "count": 0,
+        "expectancy": null
+      }
     }
   }
 ]

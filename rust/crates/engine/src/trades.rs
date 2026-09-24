@@ -1,6 +1,7 @@
-//! Trades (`SPEC.md` §2 Trade): the closed part of each round trip, or of each
-//! group the person saved, with its figures in the instrument's own currency and
-//! its P&L in CAD, each leg converted on its own day.
+//! Trades (`SPEC.md` §2 Trade): each round trip from its first fill until it is
+//! flat, open while any of it is held, or each group the person saved, with its
+//! figures in the instrument's own currency and its P&L in CAD, each sale
+//! realized on its own day and each leg converted on its own day.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,7 +15,7 @@ use crate::fx::to_cad;
 use crate::gap::{Fig, Gaps};
 use crate::identity::Identity;
 use crate::input::Inputs;
-use crate::ledger::{multiplier, Closer, Direction, Matched, Slice, TripKey};
+use crate::ledger::{multiplier, Closer, Direction, Lot, Matched, Slice, TripKey};
 use crate::stat::Ratio;
 
 /// Places an average price is kept to; it is rounded again where it is shown.
@@ -26,6 +27,20 @@ pub enum TradeKey {
     /// A round trip, by its key; its trade id once the book has given one.
     Trip(TripKey),
     Group(GroupId),
+}
+
+/// Whether any of a trade is still held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TradeStatus {
+    Open,
+    Closed,
+}
+
+/// One sale's P&L, realized on its day.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Realized {
+    pub day: Date,
+    pub pnl_cad: Fig<Money>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,19 +57,28 @@ pub struct TradeFig {
     pub kind: InstrumentKind,
     pub currency: Currency,
     pub direction: Direction,
-    /// Units matched.
+    pub status: TradeStatus,
+    /// Units opened.
     pub qty: Fig<Dec>,
     pub opened_on: Date,
-    pub closed_on: Date,
+    /// The last close, once the trade is closed.
+    pub closed_on: Option<Date>,
+    /// The day of its latest fill or close: what the list is ordered by.
+    pub last_on: Date,
     pub opened_at: Option<Timestamp>,
     pub closed_at: Option<Timestamp>,
-    /// Calendar days from the first opening to the last close.
+    /// Calendar days from the first opening to the last close, or to today
+    /// while open.
     pub hold_days: i64,
-    /// Per unit, quantity-weighted: the entry value ÷ (units × multiplier).
+    /// Per unit, quantity-weighted over the units opened: the entry value ÷
+    /// (units × multiplier).
     pub entry: Fig<Dec>,
-    pub exit: Fig<Dec>,
-    /// The entry value: what the P&L percentage is over.
+    /// The same over the units closed so far; none before the first.
+    pub exit: Option<Fig<Dec>>,
+    /// The entry value of the units closed: what the P&L percentage is over.
     pub basis: Fig<Money>,
+    /// Each sale's P&L in CAD on its own day; `pnl_cad` is their sum.
+    pub realized: Vec<Realized>,
     pub pnl: Fig<Money>,
     pub pnl_cad: Fig<Money>,
     pub fees: Fig<Money>,
@@ -72,6 +96,10 @@ pub struct TradeFig {
 }
 
 impl TradeFig {
+    pub fn is_closed(&self) -> bool {
+        self.status == TradeStatus::Closed
+    }
+
     /// The P&L's percentage of the entry basis.
     pub fn pnl_pct(&self) -> Option<Ratio> {
         match (&self.pnl, &self.basis) {
@@ -143,44 +171,60 @@ fn fees_cad(inputs: &Inputs, s: &Slice) -> Fig<Money> {
     Ok(a.add_to_fit(b)?)
 }
 
-/// The trade made of these slices.
+/// The trade made of these slices and these lots still open. None for a round
+/// trip that went flat without a sale (`SPEC.md` §2 Trade): it is not a trade.
 #[allow(clippy::too_many_arguments)]
-fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<TradeId>, trips: Vec<TripKey>, slices: Vec<Slice>, journal: JournalEntry, locked: bool) -> Option<TradeFig> {
+fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<TradeId>, trips: Vec<TripKey>, slices: Vec<Slice>, lots: Vec<(InstrumentId, &Lot)>, journal: JournalEntry, locked: bool) -> Option<TradeFig> {
     let mut slices = slices;
-    if slices.is_empty() {
+    if slices.is_empty() && lots.is_empty() {
         return None;
     }
     slices.sort_by(|a, b| (a.closed_on, a.closed_at, a.opened_on).cmp(&(b.closed_on, b.closed_at, b.opened_on)));
     let first_trip = matched.trips.get(&trips[0])?;
-    let last = slices.last()?;
-    let instrument = *first_trip.instruments.last().unwrap_or(&last.instrument);
+    let named = slices.last().map(|s| s.instrument).or_else(|| lots.last().map(|(i, _)| *i))?;
+    let instrument = *first_trip.instruments.last().unwrap_or(&named);
     let info = inputs.ledger.instruments.get(&instrument);
     let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
     let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
-    let direction = slices[0].direction;
-    let qty: Fig<Dec> = slices.iter().try_fold(Dec::ZERO, |a, s| a.checked_add(s.qty)).map_err(Gaps::from);
-    let entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()));
+    let direction = slices.first().map(|s| s.direction).or_else(|| lots.first().map(|(_, l)| l.direction))?;
+    let status = if lots.is_empty() { TradeStatus::Closed } else { TradeStatus::Open };
+    let mult = |i: InstrumentId| multiplier(inputs.ledger.instruments.get(&i), i);
+    // units opened: the units closed and the units still held
+    let qty: Fig<Dec> = slices.iter().map(|s| s.qty).chain(lots.iter().map(|(_, l)| l.qty)).try_fold(Dec::ZERO, |a, q| a.checked_add(q)).map_err(Gaps::from);
+    let closed_entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()));
+    let all_entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()).chain(lots.iter().map(|(_, l)| l.value.clone())));
     let exits = sum_money(currency, slices.iter().map(|s| s.exit.clone()));
-    // units × multiplier over the slices, each on its own contract
-    let weight: Fig<Dec> = slices.iter().try_fold(Dec::ZERO, |a, s| {
-        let m = multiplier(inputs.ledger.instruments.get(&s.instrument), s.instrument)?;
-        Ok::<Dec, Gaps>(a.add_to_fit(s.qty.checked_mul(m)?)?)
-    });
-    let avg = |total: &Fig<Money>| -> Fig<Dec> {
+    // units × multiplier, each on its own contract
+    let weigh = |parts: Vec<(Dec, InstrumentId)>| -> Fig<Dec> {
+        parts.into_iter().try_fold(Dec::ZERO, |a, (q, i)| Ok::<Dec, Gaps>(a.add_to_fit(q.checked_mul(mult(i)?)?)?))
+    };
+    let closed_weight = weigh(slices.iter().map(|s| (s.qty, s.instrument)).collect());
+    let all_weight = weigh(slices.iter().map(|s| (s.qty, s.instrument)).chain(lots.iter().map(|(i, l)| (l.qty, *i))).collect());
+    let avg = |total: &Fig<Money>, weight: &Fig<Dec>| -> Fig<Dec> {
         let (t, w) = (total.clone()?, weight.clone()?);
         if w.is_zero() {
             return Ok(Dec::ZERO);
         }
         Ok(t.amount.div_rounded(w, PRICE_PLACES, Rounding::HalfEven)?)
     };
-    let fees = sum_money(currency, slices.iter().map(|s| Ok(s.entry_fee.add_to_fit(s.exit_fee)?)));
+    let fees = sum_money(currency, slices.iter().map(|s| Ok(s.entry_fee.add_to_fit(s.exit_fee)?)).chain(lots.iter().map(|(_, l)| Ok(l.fee))));
     let pnl = sum_money(currency, slices.iter().map(Slice::pnl));
-    let pnl_cad = sum_money(Currency::CAD, slices.iter().map(|s| slice_pnl_cad(inputs, s)));
-    let fees_cad = sum_money(Currency::CAD, slices.iter().map(|s| fees_cad(inputs, s)));
-    let opened_on = slices.iter().map(|s| s.opened_on).min()?;
-    let closed_on = slices.iter().map(|s| s.closed_on).max()?;
-    let opened_at = slices.iter().filter_map(|s| s.opened_at).min();
-    let closed_at = slices.iter().filter_map(|s| s.closed_at).max();
+    let realized: Vec<Realized> = slices.iter().map(|s| Realized { day: s.closed_on, pnl_cad: slice_pnl_cad(inputs, s) }).collect();
+    let pnl_cad = sum_money(Currency::CAD, realized.iter().map(|r| r.pnl_cad.clone()));
+    let fees_cad = sum_money(Currency::CAD, slices.iter().map(|s| fees_cad(inputs, s)).chain(lots.iter().map(|(_, l)| to_cad(&inputs.facts.rates, &inputs.clock, l.fee, l.day))));
+    let opened_on = slices.iter().map(|s| s.opened_on).chain(lots.iter().map(|(_, l)| l.day)).min()?;
+    let last_close = slices.iter().map(|s| s.closed_on).max();
+    let closed_on = match status {
+        TradeStatus::Closed => last_close,
+        TradeStatus::Open => None,
+    };
+    let last_on = last_close.into_iter().chain(lots.iter().map(|(_, l)| l.day)).max()?;
+    let opened_at = slices.iter().filter_map(|s| s.opened_at).chain(lots.iter().filter_map(|(_, l)| l.at)).min();
+    let closed_at = match status {
+        TradeStatus::Closed => slices.iter().filter_map(|s| s.closed_at).max(),
+        TradeStatus::Open => None,
+    };
+    let hold_end = closed_on.unwrap_or(inputs.clock.today);
     let mut fills = BTreeSet::new();
     let mut opened = BTreeSet::new();
     let mut closed = BTreeSet::new();
@@ -204,7 +248,10 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
             closed.insert(id.clone());
         }
     }
-    let account = matched.trips.get(trips.last()?).map(|t| t.account).unwrap_or(last.account);
+    for (_, l) in &lots {
+        flags.extend(l.flags.iter().map(|f| f.word()));
+    }
+    let account = matched.trips.get(trips.last()?).map(|t| t.account).or_else(|| slices.last().map(|s| s.account))?;
     Some(TradeFig {
         key,
         trade,
@@ -215,15 +262,18 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
         kind,
         currency,
         direction,
+        status,
         qty,
         opened_on,
         closed_on,
+        last_on,
         opened_at,
         closed_at,
-        hold_days: (closed_on - opened_on).get_days() as i64,
-        entry: avg(&entries),
-        exit: avg(&exits),
-        basis: entries,
+        hold_days: (hold_end - opened_on).get_days() as i64,
+        entry: avg(&all_entries, &all_weight),
+        exit: if slices.is_empty() { None } else { Some(avg(&exits, &closed_weight)) },
+        basis: closed_entries,
+        realized,
         pnl,
         pnl_cad,
         fees,
@@ -238,10 +288,17 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
     })
 }
 
-/// Every trade: the saved groups first, then each remaining round trip with
-/// something closed, newest close first.
+/// Every trade: the saved groups first, then each remaining round trip, open or
+/// closed, newest activity first.
 pub fn build_trades(inputs: &Inputs, matched: &Matched, identity: &Identity) -> Vec<TradeFig> {
     let journal = &inputs.ledger.journal;
+    let mut open: BTreeMap<&TripKey, Vec<(InstrumentId, &Lot)>> = BTreeMap::new();
+    for ((_, instrument), book) in &matched.books {
+        for l in &book.lots {
+            open.entry(&l.trip).or_default().push((*instrument, l));
+        }
+    }
+    let lots_of = |trips: &[TripKey]| -> Vec<(InstrumentId, &Lot)> { trips.iter().flat_map(|k| open.get(k).cloned().unwrap_or_default()).collect() };
     let trip_of_trade: BTreeMap<TradeId, &TripKey> = identity.trade_of.iter().map(|(k, t)| (*t, k)).collect();
     let mut used: BTreeSet<TripKey> = BTreeSet::new();
     let mut out = Vec::new();
@@ -259,21 +316,22 @@ pub fn build_trades(inputs: &Inputs, matched: &Matched, identity: &Identity) -> 
         }
         let slices: Vec<Slice> = trips.iter().filter_map(|k| matched.trips.get(k)).flat_map(|t| t.slices.iter().cloned()).collect();
         let entry = journal.get(&JournalSubject::Group(g.id)).cloned().unwrap_or_default();
-        if let Some(t) = collapse(inputs, matched, TradeKey::Group(g.id), None, trips.clone(), slices, entry, true) {
+        if let Some(t) = collapse(inputs, matched, TradeKey::Group(g.id), None, trips.clone(), slices, lots_of(&trips), entry, true) {
             used.extend(trips);
             out.push(t);
         }
     }
     for (key, trip) in &matched.trips {
-        if used.contains(key) || trip.slices.is_empty() {
+        if used.contains(key) {
             continue;
         }
         let trade = identity.trade_of.get(key).copied();
         let entry = trade.and_then(|t| journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
-        if let Some(t) = collapse(inputs, matched, TradeKey::Trip(key.clone()), trade, vec![key.clone()], trip.slices.clone(), entry, false) {
+        let keys = vec![key.clone()];
+        if let Some(t) = collapse(inputs, matched, TradeKey::Trip(key.clone()), trade, keys.clone(), trip.slices.clone(), lots_of(&keys), entry, false) {
             out.push(t);
         }
     }
-    out.sort_by(|a, b| (b.closed_on, b.closed_at, &b.key).cmp(&(a.closed_on, a.closed_at, &a.key)));
+    out.sort_by(|a, b| (b.last_on, b.closed_at, &b.key).cmp(&(a.last_on, a.closed_at, &a.key)));
     out
 }

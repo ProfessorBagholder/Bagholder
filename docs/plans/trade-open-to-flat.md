@@ -43,17 +43,16 @@ Not consulted (`CLAUDE.md`, the owner's rule on the old app). What the person se
 - **A round trip that goes flat with no sale is not a trade** (brief 07): a position sent wholly out of the account by a transfer out takes lots and makes no slice, and a transfer out is not a sale (`SPEC.md` §2, Crypto), so it is neither a closed trade nor counted in Win rate or Expectancy. A case holds it.
 - **Each figure says what it covers** in `SPEC.md`: Realized P&L includes open trades' partial sales, its subtitle count and Expectancy count closed trades; a group is open while any member is open.
 
-**Wire and page** (`server/src/http/model.rs`, `web/src/lib/generated/wire.ts`, `web/src/lib/Trades.svelte` and the trade page): the trade row carries its status and optional close; the Trades list shows open trades (Close reads `Open`), newest activity first by default; opening an open trade opens the holding page, as a Holdings row does. No caption or helper text is added.
+**Wire and page** (`server/src/http/model.rs`, `web/src/lib/generated/wire.ts`, `web/src/lib/Trades.svelte` and the trade page): the trade row carries its status and optional close; the Trades list shows open trades (Close reads `Open`), newest activity first by default; opening an open trade opens the holding page, as a Holdings row does. No caption or helper text is added. **Built with the switch (3c):** the page is served from the old model until then (`server/src/http/model.rs` reads `bagholder_model`, not the engine), so a page change here could not show the engine's trades; the engine's `TradeFig` carries what the page needs (`status`, `closed_on`, `last_on`, `realized`), and 3c's wire and page read it.
 
 **`SPEC.md`** changes in the same commit: §2 Trade (the definition, the per-trade fields for an open trade), §Dashboard (each figure above), §Trades (the list and default order). `docs/old-app-mistakes.md` gains the entry.
 
 ## Acceptance criteria
 
-- [ ] `cargo test --workspace` green in `rust/`, warning-free, applet test alone; `npm run check`, `npm test`, `npm run e2e` green in `web/`, a browser test driving an open trade in the list and opening it; screenshot baselines changed only where `SPEC.md` changed.
-- [ ] Engine cases, expected figures written by an agent that has not read the engine: a partly sold position is one open trade with its realized part (the ETH case of `coins_and_transfers.json`); the same position sold to flat is one closed trade whose P&L is all its parts; Realized P&L counts a partial sale on its day while Win rate, Profit factor and Expectancy do not count the open trade; Monthly P&L puts each part in its own month; a roll chain still open is one open trade; a position transferred wholly out with no sale is no trade.
-- [ ] The blind check of brief 04 §8, run again on every case file this changes, agrees with the committed figures, or each disagreement is settled against `SPEC.md`.
-- [ ] Rendered on the Rust scratch server on a copy of the book (`SPEC.md` §7): open trades in the list, every figure traced to its field, no table overflowing at 1200 / 1340 / 1440 / 1680.
-- [ ] `SPEC.md`, `docs/architecture.md` and `docs/old-app-mistakes.md` say what the code does.
+- [x] `cargo test --workspace` green in `rust/`, warning-free, applet test alone. The page's criteria (a browser test driving an open trade, rendering on the scratch server) move to 3c with the wire.
+- [x] Engine cases, expected figures written by an agent that has not read the engine: a partly sold position is one open trade with its realized part (the ETH case of `coins_and_transfers.json`); the same position sold to flat is one closed trade whose P&L is all its parts; Realized P&L counts a partial sale on its day while Win rate, Profit factor and Expectancy do not count the open trade; Monthly P&L puts each part in its own month; a roll chain still open is one open trade; a position transferred wholly out with no sale is no trade.
+- [x] The blind check of brief 04 §8, run again on every case file this changes, agrees with the committed figures, or each disagreement is settled against `SPEC.md`.
+- [x] `SPEC.md`, `docs/architecture.md` and `docs/old-app-mistakes.md` say what the code does.
 
 ## Surfaces to check beyond the diff
 
@@ -65,8 +64,19 @@ Nothing refused.
 
 ## Anti-stub self-check
 
+- No definition nobody references: `TradeStatus`, `Realized`, `last_on` are read by `scope.rs`, the list order and the case runner; `Kpi.realized_left_out` by the runner. ✔
+- No field written and never read: `closed_on` (now optional) by the date filter, the runner and the Review queue. ✔
+- No branch only the switch knows: the page part moved to 3c whole, not stubbed. ✔
+- No real-target run skipped: the suite was run (below); the page is not rendered here because it is not changed here.
+
 ## Verification
 
+- `cargo test -q --workspace` in `rust/`: 996 passed, 0 failed. `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets`: clean. The applet test alone: 1 passed.
+- Engine cases: an agent that had not read the engine re-derived the 11 cases the change moved (`events.json` 1, `options.json` 7, `shares.json` 2, `coins_and_transfers.json` 1) and wrote the 8 cases of `open_trades.json` from `SPEC.md` (partly sold ETH open; sold to flat closed; realized counts an open trade's sale while win rate, profit factor and expectancy do not; one trade across two months; a date range; an open roll chain; a transfer out with no sale is no trade; a saved group open while a member is). The engine agreed with every figure but two readings `SPEC.md` left open, settled against it (`cases/README.md`): an open trade with no sale has realized 0.00; a spin-off's children are opened by the event the adjustment applies to. `cargo test -p bagholder-engine --test cases`: green.
+- Brief 04 §8's blind check on the files this changes: the eleven moved cases are that check, re-derived blind; the other cases of those files are unchanged.
+
 ## Handoff
+
+Done for the engine, `SPEC.md` and the cases. The Trades list's wire and page (open trades in the list, Close reading `Open`, opening one opens the holding page) are built in 3c with the switch.
 
 **Nothing left running.**
