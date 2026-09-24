@@ -14,3 +14,4 @@ Read from any checkout without switching branches:
 | 03 | [The instruction files](03-instructions-audit.md) | Current |
 | 04 | [Options, trade marks, and a blind check of the cases](04-clean-room-case-check.md) | Current (rewritten after reading the engine) |
 | 05 | [Every action is the best course for the objective](05-think-first.md) | Current |
+| 06 | [The owner's decisions that change stage 3a](06-owner-decisions-3a.md) | Current |
