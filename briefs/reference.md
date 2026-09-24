@@ -2,6 +2,19 @@
 
 The reviewer's standing reference. Every gate verdict is checked against it. Each line comes from a primary source, fetched on 2026-09-24. **UNVERIFIED** marks what could not be confirmed. This file is not an instruction to the building session.
 
+## Constraints every recommendation must pass first
+
+Each recommendation is checked against every line here before it reaches the owner or a brief. A recommendation that fails one is dropped or reworked.
+
+1. **Who it is for:** "a local-first trading journal for Wealthsimple users" (README, `CLAUDE.md`), self-hosted, one person, public repository.
+2. **What it may depend on:** a Wealthsimple account and sources that need no account or key. Anything that needs another account (Questrade, TradingView) is optional: it improves what already works, and nothing goes blank without it.
+3. **Wealthsimple's API is unofficial.** It is read only for what only Wealthsimple has (accounts, activity, positions, orders), and only as often as that needs.
+4. **A source's terms:** no source is read in a way its own terms forbid (Cboe's delayed quotes forbid automated extraction).
+5. **Scope:** the migration only; the Rust+Svelte build that replaces the old app. Nothing for the old app or the period before the switchover. Nothing the owner hasn't asked for, and nothing for futures not on the table (`docs/decisions.md`).
+6. **What the owner sees:** the UI and UX stay as they are unless `SPEC.md` changes on purpose. No captions, tooltips or helper text.
+7. **Figures:** exact, from stated facts, never a guess presented as a fact; per-instrument figures in the instrument's currency, aggregates in CAD.
+8. **Method:** each recommendation rests on the code as it is (read, not assumed) and on established practice (this file), and is the best course for its objective with the information already at hand.
+
 ## Facts the broker's data doesn't carry (cost basis, corporate actions)
 
 **Transfer-in cost at brokers**
