@@ -49,7 +49,7 @@ pub enum Gap {
     CurrencyUnstated(TransactionId),
     /// A fill that states neither its cash nor its price.
     ValueUnstated(TransactionId),
-    /// A holding with no price: no quote from its own kind's source and no fill.
+    /// A holding with no price: no quote from its own kind's source and no last close.
     PriceUnknown(InstrumentId),
     /// A holding with no close on a day the equity series needs one.
     CloseUnknown { instrument: InstrumentId, day: Date },

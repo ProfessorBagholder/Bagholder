@@ -239,5 +239,6 @@ These passages of `SPEC.md` describe an old implementation or contradict this de
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
 - Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
 - Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/stage-2-engine.md`, "Corporate events").
-- Freshness (§2), the store (§6), one data folder per build (§1), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §13 and §16, and moved out of the spec.
+- Freshness (§2), the store (§6), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §13 and §16, and moved out of the spec.
 - The page dividing by twelve (the spec's introduction): the engine gives per-month figures.
+- Trade flags (§2 Trade): `SPEC.md` names only `reward` and `basis-unknown`; the engine also records how a round trip came to be (`split`, `continued`, `from-event`, `transferred`, `rolled`, `assignment`, `no-expiry-record`). Each is defined in `SPEC.md` at the switch, or none reaches the page.
