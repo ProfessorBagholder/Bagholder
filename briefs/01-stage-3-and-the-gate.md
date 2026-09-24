@@ -19,7 +19,7 @@
 - **UI and UX:** the user-facing UI and UX match today's app. What is redesigned is the engineering underneath. Nothing the person sees or does changes unless `SPEC.md` changes on purpose.
 - **Priority:** make the app work properly as it is. Don't extend it beyond what the owner has asked for.
 - **Pace:** no rush. Correctness over speed.
-- **The three order bugs** in the running Python app (`docs/design-review.md`, "Money and data risks") wait for stage 4, by the owner's choice. Leave the frozen app as it is.
+- **The work is the migration.** Nothing is done, proposed or asked about for the app that runs today or for the period before the Rust+Svelte build replaces it, unless it bears directly on building the new version properly. The known order defects (`docs/design-review.md`, "Money and data risks") are fixed in the new build, in stage 4.
 - **Real figures** from the owner's data in committed docs are acceptable to the owner.
 - **On open**, the page shows the last figures it holds at once, and updates them only when newer data arrives (§2.5).
 - **What the owner reads:** not plans and docs line by line. A plan puts what the owner must decide at its top, in a few lines. The rest is for this session and the gate.
@@ -59,13 +59,9 @@
 
   No source lives in two places for longer than one change.
 
-### 2.2 The switch, and after it
+### 2.2 The switch
 
-The switch moves the Rust build onto the book. The owner keeps running the Python app until cutover (stage 6), so the switch is not the moment of risk for the owner; cutover is. Therefore:
-
-- **Keep `compare-figures` running** on scratch copies of the owner's data regularly from the switch until cutover, not once. Decide cutover on that record: no difference left unattributed over several weeks of real syncs.
-- **The owner's one stage 3 decision** is the table of figures that change at the switch: one row per cause, giving figure, before, after and why. Keep it short. It is the only stage 3 document the owner reads.
-- **Keep rollback in view.** Stage 6 must say what happens to anything written in the new build after cutover (journal, groups, watchlist, orders, live brackets) if the owner goes back, rehearse it on scratch copies, and put it to the owner as a decision. Don't make a stage 3 choice about the book's format that would rule out an answer there.
+- **The owner's one stage 3 decision** is the list of figures whose definition changes at the switch (the `SPEC.md` changes): one line per change, giving the figure, what changes and why. Keep it short. It is the only stage 3 document the owner reads.
 
 ### 2.3 The wire at the switch
 
@@ -166,7 +162,7 @@ The owner doesn't read the docs line by line, so they have to stay consistent wi
 
 Settled by the owner: on open, the page draws its kept figures at once and updates them only when newer data arrives (§2.5). No decision is left open.
 
-The switch's table of figures and the rollback reach the owner with their plans.
+The switch's list of changing figures reaches the owner with its plan.
 
 ## Verdict on what exists
 

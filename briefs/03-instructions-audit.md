@@ -4,7 +4,7 @@
 
 **Why this brief exists:** the owner's instructions don't reach the sessions reliably. The clearest case: the refactor keeps copying the Python app, because almost every concrete instruction a session reads still names the Python app as the reference, and only one sentence in `docs/architecture.md` says otherwise. Agents follow the most concrete instruction in front of them, so the files have to agree.
 
-Apply this as one change on `svelte-migration`, then the same `CLAUDE.md` on `master` as a docs-only PR the owner merges, so a session started on either branch reads the same rules. It is a docs change and needs no gate.
+Apply this as one change on `svelte-migration`. It is a docs change and needs no gate.
 
 ## 1. The rule every session reads first
 
@@ -17,7 +17,7 @@ Then remove every line that contradicts it (§2 to §5).
 ## 2. `CLAUDE.md`: one build, one set of rules
 
 - **Opening.** Replace the opening description of three desktop implementations with: Rust (`rust/`) and Svelte (`web/`) are the app being built; `SPEC.md` defines what it shows; `docs/architecture.md` defines how it is built; `docs/decisions.md` holds the owner's decisions.
-- **Frozen builds out of the loaded file.** Move everything about the frozen builds into `docs/frozen.md`, unchanged: the Python, Go and `ledger.html` descriptions, their test commands, their scratch-server recipe, the `PROTOCOL` trio, their release archives, and every rule for frozen platforms. Leave one line in `CLAUDE.md`: "`python/`, `go/` and `ledger.html` are frozen: a fix there only keeps a released copy safe, and how is in `docs/frozen.md`." Until cutover the release process still ships them, so the moved text keeps working; it just stops loading into every session.
+- **Old builds out of the loaded file.** Remove from `CLAUDE.md` everything about `python/`, `go/` and `ledger.html`: descriptions, test commands, scratch-server recipes, the `PROTOCOL` trio, release archives, and the rules for frozen platforms. What stays about the old app is §1's rule, and `docs/parity.md` for what the page looks like and does.
 - **Planning and the owner.** Replace "put its acceptance criteria in front of the user before writing code" with:
   - small work needs no plan;
   - heavy lifts (brief 01 §1) get a plan that goes through the gate;
@@ -34,7 +34,8 @@ A dated list, one line per decision with its reason, newest first, each naming w
 - 2026-09-24: the user-facing UI and UX stay at parity; the engineering underneath is redesigned.
 - 2026-09-24: make the app work properly as it is; nothing is built for expansion the owner hasn't asked for.
 - 2026-09-24: correctness over speed; no deadline.
-- 2026-09-24: the three order bugs in the running app wait for stage 4.
+- 2026-09-24: the work is the migration. Nothing is done, proposed or asked about for the app that runs today or for the period before the Rust+Svelte build replaces it, unless it bears directly on building the new version properly.
+- 2026-09-24: the known order defects are fixed in the new build, in stage 4.
 - 2026-09-24: real figures in committed docs are acceptable.
 - 2026-09-24: on open, the page shows its last figures at once and updates only when newer data arrives.
 - 2026-09-23: a fund's schedule and distributions come from its fund company's own publication, never worked out from past dates.
@@ -93,7 +94,3 @@ Anything the owner reads (a plan's top section, a question, a handoff):
 - no invented terms, and no section numbers without saying what they are.
 
 The owner has said they won't review material written for sessions, so what they must decide has to be readable without it.
-
-## 10. Stage 3a: the daily option-close job
-
-On the plan's open decision, the reviewer recommends yes. The job must bring the book up to date from the running app's database, read-only, before each read. Otherwise contracts opened after 3a lands are never read. Add that to the plan, with a test that a contract opened after the import is read on the next run.
