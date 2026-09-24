@@ -40,6 +40,8 @@ Not consulted (`CLAUDE.md`, the owner's rule on the old app). What the person se
 - Monthly P&L: each realized part in the month it was realized; the hover counts the trades realizing in that month.
 - By symbol P&L: realized parts, as Realized P&L; its Trades column counts closed trades.
 - `basis-unknown` round trips stay out of the performance figures as today.
+- **A round trip that goes flat with no sale is not a trade** (brief 07): a position sent wholly out of the account by a transfer out takes lots and makes no slice, and a transfer out is not a sale (`SPEC.md` §2, Crypto), so it is neither a closed trade nor counted in Win rate or Expectancy. A case holds it.
+- **Each figure says what it covers** in `SPEC.md`: Realized P&L includes open trades' partial sales, its subtitle count and Expectancy count closed trades; a group is open while any member is open.
 
 **Wire and page** (`server/src/http/model.rs`, `web/src/lib/generated/wire.ts`, `web/src/lib/Trades.svelte` and the trade page): the trade row carries its status and optional close; the Trades list shows open trades (Close reads `Open`), newest activity first by default; opening an open trade opens the holding page, as a Holdings row does. No caption or helper text is added.
 
@@ -48,7 +50,7 @@ Not consulted (`CLAUDE.md`, the owner's rule on the old app). What the person se
 ## Acceptance criteria
 
 - [ ] `cargo test --workspace` green in `rust/`, warning-free, applet test alone; `npm run check`, `npm test`, `npm run e2e` green in `web/`, a browser test driving an open trade in the list and opening it; screenshot baselines changed only where `SPEC.md` changed.
-- [ ] Engine cases, expected figures written by an agent that has not read the engine: a partly sold position is one open trade with its realized part (the ETH case of `coins_and_transfers.json`); the same position sold to flat is one closed trade whose P&L is all its parts; Realized P&L counts a partial sale on its day while Win rate, Profit factor and Expectancy do not count the open trade; Monthly P&L puts each part in its own month; a roll chain still open is one open trade.
+- [ ] Engine cases, expected figures written by an agent that has not read the engine: a partly sold position is one open trade with its realized part (the ETH case of `coins_and_transfers.json`); the same position sold to flat is one closed trade whose P&L is all its parts; Realized P&L counts a partial sale on its day while Win rate, Profit factor and Expectancy do not count the open trade; Monthly P&L puts each part in its own month; a roll chain still open is one open trade; a position transferred wholly out with no sale is no trade.
 - [ ] The blind check of brief 04 §8, run again on every case file this changes, agrees with the committed figures, or each disagreement is settled against `SPEC.md`.
 - [ ] Rendered on the Rust scratch server on a copy of the book (`SPEC.md` §7): open trades in the list, every figure traced to its field, no table overflowing at 1200 / 1340 / 1440 / 1680.
 - [ ] `SPEC.md`, `docs/architecture.md` and `docs/old-app-mistakes.md` say what the code does.

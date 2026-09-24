@@ -4,6 +4,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## 2026-09-24
 
+- **Calls to Wealthsimple's unofficial API are kept to what is necessary.** The first pull reads each account in full once; after that only what changed is read, and an account is re-read only over the span a broker-check difference points to. Held by a test counting a pull's requests (stage 3b). (Owner; brief 07.)
 - **No settings hook as a backstop (brief 05 §4 declined).** A script policing commands before they run is tedious and brittle; the rule in `CLAUDE.md` that every action is the best course for its objective is what holds. (Owner.)
 - **A trade runs from a position's first fill until it is flat; a partly sold position is an open trade in the Trades list; a partial sale's P&L counts on its day** in realized P&L and the monthly figures, while win rate and the other closed-trade statistics count a trade once it has closed. As Tradervue, TraderSync and TradeZella do (sources in `docs/plans/trade-open-to-flat.md`). Replaces `SPEC.md`'s "there is no open trade" and the engine's trade of the sold part. (Owner, after the blind case check.)
 - **Every definition is checked against how the leading journals and the industry do it, with sources**, before it is recommended or planned; every plan carries that section, and the reviewer checks it at the gate. (Owner.)
