@@ -8,15 +8,17 @@ Examples can't cover the next case. One test covers all of them.
 
 ## 1. The rule: at the top of `CLAUDE.md`, under the owner's rule on the old app
 
-> **Every action must be the best course of action for the objective.** Before you do anything (search, scan, run, measure, poll, build, wait), ask: is this actually the best way to achieve what I am trying to achieve? Not whether it would tell you something, not whether it is allowed, not whether it is cheap.
+> **Every action must be the best course of action for the objective.** Before you do anything (search, scan, run, measure, poll, build, wait), answer two questions:
+> 1. Is this actually the best way to achieve what I am trying to achieve? Not whether it would tell me something, not whether it is allowed, not whether it is cheap.
+> 2. Do I already have the information at hand, or information that would otherwise nullify the value of doing this? Check the code in front of you, the docs, the replies already recorded, and what the owner has said.
 >
-> Start from what you already know: the code in front of you, the docs, the replies already recorded, what the owner has said. Usually that settles it: act on it. When something is genuinely missing, the best course is the direct route to that one thing.
+> If what you have settles it, act on it. When something is genuinely missing, the best course is the direct route to that one thing.
 >
-> A broad or blind move (searching everything, trying things until one works, watching to see what happens) is almost never the best course; it means the problem is not understood yet, so stop and think. If you cannot say why an action is the best course for the objective, don't do it.
+> A broad or blind move (searching everything, trying things until one works, watching to see what happens) is almost never the best course; it means the problem is not understood yet, so stop and think. If you cannot answer both questions for an action, don't do it.
 
 ## 2. In every plan
 
-- **Each open question states three things:** the objective it serves, what is already known that bears on it (with where it comes from), and why the way chosen to settle it is the best course for that objective.
+- **Each open question states three things:** the objective it serves; what is already known that bears on it, or would make settling it unnecessary (with where it comes from); and why the way chosen to settle it is the best course for that objective.
 - **Add to the plan template's Handoff:** "Nothing left running." List every background process and scheduled wake-up this session started, and stop each one or give the reason it must stay.
 
 ## 3. At the gate
