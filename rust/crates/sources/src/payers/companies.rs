@@ -238,7 +238,7 @@ pub fn amount(s: &str) -> Option<(Dec, Currency)> {
 }
 
 /// The text right after the first of `markers` in `body`.
-fn after<'a>(body: &'a str, markers: &[&str]) -> Option<&'a str> {
+pub fn after<'a>(body: &'a str, markers: &[&str]) -> Option<&'a str> {
     markers.iter().filter_map(|m| body.find(m).map(|i| &body[i + m.len()..])).next()
 }
 

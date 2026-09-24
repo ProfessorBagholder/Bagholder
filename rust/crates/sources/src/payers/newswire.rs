@@ -5,6 +5,7 @@
 //! and its body (`<section class="release-body">`), whose tables each follow a
 //! heading.
 
+use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
 
 use crate::html::{html_tables, unescape};
@@ -18,6 +19,19 @@ pub struct Listed {
     pub title: String,
     /// The path on newswire.ca (`/news-releases/…html`).
     pub path: String,
+    /// The day the page gives it (`Sep 21, 2026, 18:00 ET`), in Eastern time.
+    pub day: Option<Date>,
+}
+
+/// `Sep 21, 2026, 18:00 ET` as its day.
+fn listed_day(s: &str) -> Option<Date> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let mut it = s.split_whitespace();
+    let word = it.next()?;
+    let month = MONTHS.iter().position(|m| *m == word)? as i8 + 1;
+    let day: i8 = it.next()?.strip_suffix(',')?.parse().ok()?;
+    let year: i16 = it.next()?.trim_end_matches(',').parse().ok()?;
+    Date::new(year, month, day).ok()
 }
 
 fn text(html: &str) -> String {
@@ -53,12 +67,12 @@ pub fn listed(html: &str) -> Result<Vec<Listed>, Mismatch> {
             _ => body,
         };
         // the heading leads with the release's time in a <small>; the title follows
-        let title = match (heading.find("<small"), heading.find("</small>")) {
-            (Some(a), Some(b)) if a < b => text(&format!("{}{}", &heading[..a], &heading[b + "</small>".len()..])),
-            _ => text(heading),
+        let (title, day) = match (heading.find("<small"), heading.find("</small>")) {
+            (Some(a), Some(b)) if a < b => (text(&format!("{}{}", &heading[..a], &heading[b + "</small>".len()..])), listed_day(&text(&heading[a..b]))),
+            _ => (text(heading), None),
         };
         if !out.iter().any(|l| l.path == path) {
-            out.push(Listed { title, path });
+            out.push(Listed { title, path, day });
         }
     }
     if out.is_empty() {

@@ -108,28 +108,69 @@ use bagholder_sources::payers::fidelity;
 const FD: &str = "fidelity-canada";
 const DIR: &str = "fidelity";
 const FUNDS: &str = "https://www.fidelity.ca/content/fidelity-data/pnp-cached-en.json";
-const HISTORY: &str = "https://fidcaapi.fidelity.ca/FidcaAPI/api/fund/distributions/history/EN/";
+const ORGANIZATION: &str = "https://www.newswire.ca/news/fidelity-investments-canada-ulc/";
 
 fn series(symbol: &str) -> PayerNeed {
     need(symbol, "XTSE", Currency::CAD, "Fidelity Investments Canada ULC - Fidelity Fund")
 }
 
-fn replies(funds: &str, symbol: &str, history: &str) -> common::Recorded {
-    common::Recorded::new().with(FUNDS, 200, DIR, funds).with(&format!("{HISTORY}{symbol}"), 200, DIR, history)
+/// The fund file, the organization's two pages that reach back 400 days, and
+/// every distribution release they list in that window (`releases.txt` maps each
+/// release's path to its capture); `swap` answers one release with another copy.
+fn replies(funds: &str, swap: Option<(&str, &str)>) -> common::Recorded {
+    let mut r = common::Recorded::new()
+        .with(FUNDS, 200, DIR, funds)
+        .with(ORGANIZATION, 200, DIR, "organization-page-1-trimmed.html")
+        .with(&format!("{ORGANIZATION}?page=2&pagesize=25"), 200, DIR, "organization-page-2-trimmed.html");
+    for line in common::read(DIR, "releases.txt").lines() {
+        let (path, name) = line.split_once(' ').unwrap();
+        let name = match swap {
+            Some((from, to)) if from == name => to,
+            _ => name,
+        };
+        r = r.with(&format!("https://www.newswire.ca{path}"), 200, DIR, name);
+    }
+    r
 }
 
 #[test]
-fn a_series_that_has_paid_nothing_is_stored_empty_with_its_schedule() {
-    let ran = run_payer(replies("funds-trimmed.json", "FBTC", "history-FBTC.json"), &series("FBTC"), FD);
+fn a_monthly_series_is_stored_from_every_release_of_the_window() {
+    let ran = run_payer(replies("funds-trimmed.json", None), &series("FCAB"), FD);
     assert_eq!(ran.outcome().0, OutcomeKind::Answered);
-    assert_eq!(ran.declared(), Some(("fidelity-canada".to_string(), vec![])));
+    let (source, items) = ran.declared().unwrap();
+    assert_eq!(source, "fidelity-canada");
+    // fourteen months' cash releases (August 2025 to September 2026, December's final)
+    assert_eq!(items.len(), 14, "{items:?}");
+    let on = |d: Date| items.iter().find(|r| r.ex_date == d).cloned().unwrap();
+    assert_eq!(on(date(2026, 9, 30)), stored(date(2026, 9, 30), Some(date(2026, 9, 30)), Some(date(2026, 10, 2)), "0.11549", Currency::CAD, None));
+    assert_eq!(on(date(2025, 12, 29)), stored(date(2025, 12, 29), Some(date(2025, 12, 29)), Some(date(2025, 12, 31)), "0.14081", Currency::CAD, None));
+    assert_eq!(ran.frequency(), Some((12, "fidelity-canada".to_string())));
+    // no page past the one that reaches back beyond the window is asked
+    assert!(!ran.asked.iter().any(|u| u.contains("page=3")));
+}
+
+#[test]
+fn an_annual_payer_is_stored_with_its_reinvested_capital_gain() {
+    let ran = run_payer(replies("funds-trimmed.json", None), &series("FBTC"), FD);
+    assert_eq!(ran.outcome().0, OutcomeKind::Answered);
+    let (_, items) = ran.declared().unwrap();
+    assert_eq!(items, vec![stored(date(2025, 12, 29), Some(date(2025, 12, 29)), Some(date(2025, 12, 31)), "0", Currency::CAD, Some("0.84031"))]);
     assert_eq!(ran.frequency(), Some((1, "fidelity-canada".to_string())));
 }
 
 #[test]
-fn a_history_with_no_ex_dates_is_a_mismatch_writing_nothing() {
-    let ran = run_payer(replies("funds-trimmed.json", "FCAB", "history-FCAB.json"), &series("FCAB"), FD);
-    assert_eq!(ran.outcome(), (OutcomeKind::Mismatch, "distributions: FCAB's distributions carry one date each and no ex-date".to_string()));
+fn a_release_paying_before_its_record_date_is_a_meaning_failure_writing_nothing() {
+    let ran = run_payer(replies("funds-trimmed.json", Some(("release-2026-09-21-cash-trimmed.html", "wrong-meaning-release-2026-09-21-paid-before-record.html"))), &series("FCAB"), FD);
+    assert_eq!(ran.outcome(), (OutcomeKind::Meaning, "the distribution going ex 2026-09-30 is paid 2026-09-01".to_string()));
+    assert!(ran.wrote_nothing());
+}
+
+#[test]
+fn a_release_in_another_currency_is_a_mismatch_writing_nothing() {
+    let ran = run_payer(replies("funds-trimmed.json", Some(("release-2026-09-21-cash-trimmed.html", "wrong-shape-release-2026-09-21-amount-in-us-dollars.html"))), &series("FCAB"), FD);
+    let (kind, detail) = ran.outcome();
+    assert_eq!(kind, OutcomeKind::Mismatch);
+    assert!(detail.contains("US$"), "{detail}");
     assert!(ran.wrote_nothing());
 }
 
