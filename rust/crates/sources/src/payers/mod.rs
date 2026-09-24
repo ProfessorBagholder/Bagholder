@@ -23,6 +23,7 @@
 pub mod bmo;
 pub mod evolve;
 pub mod exchange;
+pub mod fidelity;
 pub mod globalx;
 pub mod hamilton;
 pub mod harvest;
@@ -32,6 +33,7 @@ pub mod ninepoint;
 pub mod purpose;
 pub mod run;
 pub mod vanguard_ca;
+pub mod vanguard_us;
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
@@ -92,6 +94,8 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(globalx::GlobalX),
         Box::new(bmo::Bmo),
         Box::new(ishares_ca::ISharesCanada),
+        Box::new(fidelity::FidelityCanada),
+        Box::new(vanguard_us::VanguardUs),
         Box::new(exchange::Mackenzie),
         Box::new(exchange::WisdomTree),
     ]
