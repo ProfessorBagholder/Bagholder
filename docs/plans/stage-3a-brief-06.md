@@ -74,7 +74,7 @@ No definition nobody references (`ValueSource`, the own valuation, `Gap::CloseUn
 ## Handoff
 
 - The server calling these readers when due (the chain when a screen shows a contract, the trackers after each session settles) is 3c's.
-- Company ex-dates before 2024-05-27: the planned fix reads the TSX's sessions from XIC's stored closes.
+- Company ex-dates before 2024-05-28: dated on XIC's sessions (fixed 2026-09-24).
 - Brief 05 §4, the hook in the building session's own settings, is local and not in the repository.
 
 **Nothing left running.** The Cboe and TMX pollers of the earlier session were stopped on 2026-09-24 at 14:28 UTC; nothing has written to their folders since.

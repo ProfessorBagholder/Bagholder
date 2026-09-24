@@ -239,35 +239,64 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
 /// the span reaches back when the oldest day moves earlier. A dividend or split
 /// is stored with the span that holds its day.
 pub fn read_benchmarks(ctx: &Ctx, from: Date) -> Result<()> {
-    let today = ctx.today();
-    let source = yahoo::source();
     for b in Benchmark::ALL {
-        let (symbol, currency) = b.tracker();
-        let state = CloseState { days: ctx.cache.benchmark_days(b)?, reads: ctx.cache.reads(b.key(), DataKind::Benchmark)? };
-        let Some((first, last)) = due_span(b.market(), from, today, &state, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST)) else { continue };
-        let mut noted = yahoo::ask_span(ctx.net, symbol, first, last, ctx.now);
-        if let Outcome::Answered(c) = &noted.outcome {
-            if c.currency != currency {
-                noted.outcome = Outcome::Meaning(format!("{symbol} is answered in {}, it trades in {currency}", c.currency));
-            }
-        }
-        ctx.record_detail(&source, yahoo::HOST, DataKind::Benchmark, None, &noted, symbol)?;
-        let kind = noted.outcome.kind();
-        let mut held_last = None;
-        if let Outcome::Answered(c) = noted.outcome {
-            let inside = |d: &Date| *d >= first && *d <= last;
-            let closes: Vec<(Date, Dec)> = c.closes.into_iter().filter(|(d, _)| inside(d)).collect();
-            held_last = closes.last().map(|c| c.0);
-            let mut events: Vec<(Date, TrackerEvent)> = c.dividends.into_iter().filter(|(d, _)| inside(d)).map(|(d, a)| (d, TrackerEvent::Dividend(a))).collect();
-            events.extend(c.splits.into_iter().filter(|s| inside(&s.day)).map(|s| (s.day, TrackerEvent::Split { numerator: s.numerator, denominator: s.denominator })));
-            let mut later: Vec<String> = ctx.cache.store_benchmark_closes(b, &closes, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: close {} stands, {} came later", d.day, d.stands, d.later)).collect();
-            later.extend(ctx.cache.store_benchmark_events(b, &events, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: {} {} stands, {} came later", d.day, d.kind, d.stands, d.later)));
-            for why in later {
-                // a later value for a closed day: the first stands, and this is a meaning outcome
-                ctx.record(&source, yahoo::HOST, DataKind::Benchmark, None, &Noted::<()> { outcome: Outcome::Meaning(why), shape_change: None })?;
-            }
-        }
-        keep_read(ctx, b.key(), DataKind::Benchmark, &source, (first, last), kind, held_last)?;
+        read_benchmark(ctx, b, from, ctx.today())?;
     }
+    Ok(())
+}
+
+/// What the cache holds of a benchmark's tracker.
+pub fn benchmark_state(ctx: &Ctx, b: Benchmark) -> Result<CloseState> {
+    Ok(CloseState { days: ctx.cache.benchmark_days(b)?, reads: ctx.cache.reads(b.key(), DataKind::Benchmark)? })
+}
+
+/// Whether every settled session day of `from`..=`to` is stored or covered by
+/// a read made after it settled: the days held are then all the market's
+/// sessions of the span (a holiday is a day a read answered with nothing).
+pub fn covered(market: Market, from: Date, to: Date, state: &CloseState, now: Timestamp, bank: &TimeZone) -> bool {
+    let Some(latest) = latest_settled(market, to, now, bank) else { return false };
+    if latest < to && can_trade(market, to) {
+        return false;
+    }
+    let mut d = from;
+    while d <= latest {
+        if can_trade(market, d) && !state.days.contains(&d) && !settled_by_read(&state.reads, market, d, bank) {
+            return false;
+        }
+        let Ok(next) = d.tomorrow() else { return false };
+        d = next;
+    }
+    true
+}
+
+/// Read one benchmark's tracker for the days of `from`..=`to` not held yet.
+pub fn read_benchmark(ctx: &Ctx, b: Benchmark, from: Date, to: Date) -> Result<()> {
+    let source = yahoo::source();
+    let (symbol, currency) = b.tracker();
+    let state = benchmark_state(ctx, b)?;
+    let Some((first, last)) = due_span(b.market(), from, to, &state, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST)) else { return Ok(()) };
+    let mut noted = yahoo::ask_span(ctx.net, symbol, first, last, ctx.now);
+    if let Outcome::Answered(c) = &noted.outcome {
+        if c.currency != currency {
+            noted.outcome = Outcome::Meaning(format!("{symbol} is answered in {}, it trades in {currency}", c.currency));
+        }
+    }
+    ctx.record_detail(&source, yahoo::HOST, DataKind::Benchmark, None, &noted, symbol)?;
+    let kind = noted.outcome.kind();
+    let mut held_last = None;
+    if let Outcome::Answered(c) = noted.outcome {
+        let inside = |d: &Date| *d >= first && *d <= last;
+        let closes: Vec<(Date, Dec)> = c.closes.into_iter().filter(|(d, _)| inside(d)).collect();
+        held_last = closes.last().map(|c| c.0);
+        let mut events: Vec<(Date, TrackerEvent)> = c.dividends.into_iter().filter(|(d, _)| inside(d)).map(|(d, a)| (d, TrackerEvent::Dividend(a))).collect();
+        events.extend(c.splits.into_iter().filter(|s| inside(&s.day)).map(|s| (s.day, TrackerEvent::Split { numerator: s.numerator, denominator: s.denominator })));
+        let mut later: Vec<String> = ctx.cache.store_benchmark_closes(b, &closes, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: close {} stands, {} came later", d.day, d.stands, d.later)).collect();
+        later.extend(ctx.cache.store_benchmark_events(b, &events, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: {} {} stands, {} came later", d.day, d.kind, d.stands, d.later)));
+        for why in later {
+            // a later value for a closed day: the first stands, and this is a meaning outcome
+            ctx.record(&source, yahoo::HOST, DataKind::Benchmark, None, &Noted::<()> { outcome: Outcome::Meaning(why), shape_change: None })?;
+        }
+    }
+    keep_read(ctx, b.key(), DataKind::Benchmark, &source, (first, last), kind, held_last)?;
     Ok(())
 }

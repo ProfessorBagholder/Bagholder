@@ -95,7 +95,7 @@ pub fn parse_page(html: &str) -> Outcome<Record> {
         };
         rows.push(Distribution { ex_date: ex, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency });
     }
-    Outcome::Answered(Record { rows, per_year })
+    Outcome::Answered(Record { rows, per_year, by_record: vec![] })
 }
 
 pub struct Ninepoint;

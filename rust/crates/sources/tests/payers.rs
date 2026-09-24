@@ -83,16 +83,16 @@ fn row(ex: Date, cash: &str) -> Distribution {
 fn a_record_is_checked_before_anything_is_written() {
     let now = t("2026-09-24T04:00:00Z");
     // an identical repeat is one row
-    let r = payers::checked(Record { rows: vec![row(date(2026, 9, 15), "0.1"), row(date(2026, 9, 15), "0.1")], per_year: Some(12) }, now).unwrap();
+    let r = payers::checked(Record { rows: vec![row(date(2026, 9, 15), "0.1"), row(date(2026, 9, 15), "0.1")], per_year: Some(12), by_record: vec![] }, now).unwrap();
     assert_eq!(r.rows.len(), 1);
     // a record date ten years ahead (a typo in the publication) is past the fund's life
     let mut far = row(date(2036, 7, 30), "0.1");
     far.record_date = Some(date(2036, 7, 30));
-    assert!(payers::checked(Record { rows: vec![far], per_year: None }, now).unwrap_err().contains("past the fund's life"));
+    assert!(payers::checked(Record { rows: vec![far], per_year: None, by_record: vec![] }, now).unwrap_err().contains("past the fund's life"));
     // paid before it goes ex
     let mut early = row(date(2026, 9, 15), "0.1");
     early.pay_date = Some(date(2026, 9, 1));
-    assert!(payers::checked(Record { rows: vec![early], per_year: None }, now).is_err());
+    assert!(payers::checked(Record { rows: vec![early], per_year: None, by_record: vec![] }, now).is_err());
 }
 
 fn read(at: &str, items: &[Date]) -> DeclaredReadRow {
@@ -213,9 +213,9 @@ fn a_cash_row_and_a_units_row_for_one_ex_date_are_one_distribution() {
     let ex = date(2026, 9, 29);
     let cash = Distribution { ex_date: ex, record_date: Some(ex), pay_date: Some(date(2026, 10, 7)), cash: dec("0.10"), reinvested: None, currency: Currency::CAD };
     let units = Distribution { cash: Dec::ZERO, reinvested: Some(dec("0.25")), ..cash };
-    let r = payers::checked(Record { rows: vec![units, cash], per_year: Some(4) }, t("2026-10-01T00:00:00Z")).unwrap();
+    let r = payers::checked(Record { rows: vec![units, cash], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap();
     assert_eq!(r.rows, vec![Distribution { reinvested: Some(dec("0.25")), ..cash }]);
     // two different cash amounts for one ex-date are still a conflict
     let other = Distribution { cash: dec("0.11"), ..cash };
-    assert!(payers::checked(Record { rows: vec![cash, other], per_year: Some(4) }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
+    assert!(payers::checked(Record { rows: vec![cash, other], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
 }

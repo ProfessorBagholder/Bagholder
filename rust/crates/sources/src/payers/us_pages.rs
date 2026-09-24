@@ -144,7 +144,7 @@ impl Payer for YieldMax {
             Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
         };
         let outcome = match page_text(net, &format!("https://{YIELDMAX_HOST}/our-etfs/{ticker}/")) {
-            Ok(h) => yieldmax_page(&h).map(|rows| Record { rows, per_year }),
+            Ok(h) => yieldmax_page(&h).map(|rows| Record { rows, per_year, by_record: vec![] }),
             Err(o) => o.failed().expect("not answered"),
         };
         Noted { outcome, shape_change: None }
@@ -205,7 +205,7 @@ impl Payer for Defiance {
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let ticker = venue::root(&need.listing.symbol).to_ascii_lowercase();
         let outcome = match page_text(net, &format!("https://{DEFIANCE_HOST}/{ticker}/")) {
-            Ok(h) => defiance_page(&h).map(|rows| Record { rows, per_year: None }),
+            Ok(h) => defiance_page(&h).map(|rows| Record { rows, per_year: None, by_record: vec![] }),
             Err(o) => o.failed().expect("not answered"),
         };
         Noted { outcome, shape_change: None }

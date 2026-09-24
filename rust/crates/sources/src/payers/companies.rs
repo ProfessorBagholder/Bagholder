@@ -10,10 +10,15 @@
 //! it, never a skipped release.
 //!
 //! A company states its record date, and only TD its ex-date elsewhere, so the
-//! ex-date is the exchange's rule from the record date: the same day since
-//! 2024-05-27 (settlement in one day), the business day before until then.
+//! ex-date is the exchange's rule from the record date (TSX notices 2017-018 and
+//! of 2024-05 on T+1): the record date itself from record date 2024-05-28, one
+//! session before it from record date 2017-09-07, two before that. A
+//! declaration before T+1 is handed back by its record date and dated on the
+//! exchange's sessions, the days XIC (the Composite's tracker) has a close.
 //! Amounts are in Canadian dollars unless the sentence writes `US$`. A special
 //! dividend declared beside the regular one (Alvopetro's) is not read.
+
+use std::collections::BTreeSet;
 
 use bagholder_core::jiff::civil::{date, Date};
 use bagholder_core::jiff::Timestamp;
@@ -25,7 +30,7 @@ use crate::html::unescape;
 use crate::needs::PayerNeed;
 use crate::outcome::{Noted, Outcome};
 use crate::payers::newswire::{self, Release};
-use crate::payers::{Distribution, Payer, Record};
+use crate::payers::{ByRecord, Payer, Record};
 use crate::reply::Mismatch;
 use crate::venue;
 
@@ -94,7 +99,9 @@ pub const COMPANIES: &[Company] = &[
         mic: "XTSE",
         organization: "bce-inc.",
         title_starts: "BCE reports",
-        title_has: &["results"],
+        // its quarter's results declare; "BCE reports results of Series AI and AJ
+        // preferred share conversions" does not
+        title_has: &["quarter", "results"],
         title_ends: "",
         amount_after: &["declared a quarterly dividend of"],
         pay_after: &["payable on "],
@@ -235,26 +242,45 @@ fn after<'a>(body: &'a str, markers: &[&str]) -> Option<&'a str> {
     markers.iter().filter_map(|m| body.find(m).map(|i| &body[i + m.len()..])).next()
 }
 
-/// The first record date on which the ex-date is the record date: settlement in
-/// one business day (T+1) from 2024-05-27.
-pub const T_PLUS_ONE: Date = date(2024, 5, 27);
+/// The first record date whose ex-date is the record date: settlement in one
+/// business day began with trades of 2024-05-27, and TMX's notice gives record
+/// date 2024-05-27 the ex-date 2024-05-24 and record date 2024-05-28 itself.
+pub const T_PLUS_ONE: Date = date(2024, 5, 28);
 
-/// The ex-date the exchange's rule gives a record date: the record date itself
-/// since T+1. Before it the ex-date was one business day before the record date
-/// (two before 2017-09-05), counted on the exchange's own calendar of sessions,
-/// which this reader does not hold: none is stated rather than one guessed.
-pub fn ex_date(record: Date) -> Option<Date> {
-    (record >= T_PLUS_ONE).then_some(record)
+/// The first record date whose ex-date is one session before it: settlement in
+/// two business days began with trades of 2017-09-05, and TSX notice 2017-018
+/// puts record dates from 2017-09-07 on the one-day cycle.
+pub const T_PLUS_TWO: Date = date(2017, 9, 7);
+
+/// How many of the exchange's sessions before its record date a record date's
+/// ex-date is.
+pub fn sessions_before(record: Date) -> usize {
+    if record >= T_PLUS_ONE {
+        0
+    } else if record >= T_PLUS_TWO {
+        1
+    } else {
+        2
+    }
 }
 
-/// The common share dividend a declaring release states; none for a record date
-/// before T+1, whose ex-date is not stated here (see [`ex_date`]).
-pub fn declared(c: &Company, r: &Release) -> Result<Option<Distribution>, Mismatch> {
+/// The ex-date the exchange's rule gives a record date, counted on `sessions`,
+/// the exchange's session days; none when they hold too few before it (the
+/// caller holds them whole for the span first, `market::covered`).
+pub fn ex_date(record: Date, sessions: &BTreeSet<Date>) -> Option<Date> {
+    match sessions_before(record) {
+        0 => Some(record),
+        n => sessions.range(..record).nth_back(n - 1).copied(),
+    }
+}
+
+/// The common share dividend a declaring release states, by its record date.
+pub fn declared(c: &Company, r: &Release) -> Result<ByRecord, Mismatch> {
     let m = |what: &str| Mismatch { path: format!("{} release of {}", c.ticker, r.at), why: format!("its sentence gives no {what}") };
     let (cash, currency) = after(&r.body, c.amount_after).and_then(amount).ok_or_else(|| m("amount"))?;
     let pay = after(&r.body, c.pay_after).and_then(long_date).ok_or_else(|| m("pay date"))?;
     let record = after(&r.body, c.record_after).and_then(long_date).ok_or_else(|| m("record date"))?;
-    Ok(ex_date(record).map(|ex_date| Distribution { ex_date, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency }))
+    Ok(ByRecord { record_date: record, pay_date: Some(pay), cash, reinvested: None, currency })
 }
 
 /// The schedule a release states, where the company states it there.
@@ -332,6 +358,7 @@ impl Payer for Companies {
             Err(m) => return mismatch(m),
         };
         let mut rows = Vec::new();
+        let mut by_record = Vec::new();
         let mut per_year = None;
         for l in listed.iter().filter(|l| declares(c, &l.title)) {
             let html = match get(&format!("https://{}{}", newswire::HOST, l.path)) {
@@ -343,16 +370,16 @@ impl Payer for Companies {
                 Err(m) => return mismatch(m),
             };
             match declared(c, &release) {
-                Ok(Some(d)) => rows.push(d),
-                // a declaration from before T+1: its ex-date is not known here
-                Ok(None) => {}
+                Ok(d) if sessions_before(d.record_date) == 0 => rows.push(d.with_ex(d.record_date)),
+                // before T+1 the ex-date is counted on the exchange's sessions
+                Ok(d) => by_record.push(d),
                 Err(m) => return mismatch(m),
             }
             if per_year.is_none() {
                 per_year = schedule_in(c, &release);
             }
         }
-        if rows.is_empty() {
+        if rows.is_empty() && by_record.is_empty() {
             return Noted { outcome: Outcome::NotCarried(format!("no release of {} declares a dividend", c.ticker)), shape_change: None };
         }
         if let Schedule::OnPage { url, .. } = c.schedule {
@@ -364,6 +391,6 @@ impl Payer for Companies {
         // each company here states its schedule, in its releases or on its page:
         // a statement gone is a change of its wording, not a schedule unstated
         let Some(per_year) = per_year else { return mismatch(schedule_missing(c)) };
-        Noted { outcome: Outcome::Answered(Record { rows, per_year: Some(per_year) }), shape_change: None }
+        Noted { outcome: Outcome::Answered(Record { rows, per_year: Some(per_year), by_record }), shape_change: None }
     }
 }

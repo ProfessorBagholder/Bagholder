@@ -103,7 +103,7 @@ impl Payer for VanguardUs {
         };
         let outcome = match get(&format!("{id}/pricing/distributions?hasDistributionYield=true"), &[]) {
             Ok(v) => match parse_distributions(&v) {
-                Ok(rows) => Outcome::Answered(Record { rows, per_year }),
+                Ok(rows) => Outcome::Answered(Record { rows, per_year, by_record: vec![] }),
                 Err(m) => Outcome::Mismatch(m),
             },
             Err(o) => o.failed().expect("not answered"),

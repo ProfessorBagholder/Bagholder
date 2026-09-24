@@ -61,12 +61,33 @@ pub struct Distribution {
     pub currency: Currency,
 }
 
+/// A distribution its payer states by its record date alone, from a time when
+/// the ex-date was not the record date: its ex-date is the exchange's rule,
+/// counted on the exchange's sessions (`companies::ex_date`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ByRecord {
+    pub record_date: Date,
+    pub pay_date: Option<Date>,
+    pub cash: Dec,
+    pub reinvested: Option<Dec>,
+    pub currency: Currency,
+}
+
+impl ByRecord {
+    pub fn with_ex(self, ex_date: Date) -> Distribution {
+        Distribution { ex_date, record_date: Some(self.record_date), pay_date: self.pay_date, cash: self.cash, reinvested: self.reinvested, currency: self.currency }
+    }
+}
+
 /// What one read of a payer's publication states.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub rows: Vec<Distribution>,
     /// Payments a year, where the publication states the schedule.
     pub per_year: Option<u32>,
+    /// Distributions still to be dated on the exchange's sessions; none is
+    /// stored until each is.
+    pub by_record: Vec<ByRecord>,
 }
 
 /// One fund company's (or the exchange-side stand-in's) reader.
@@ -124,6 +145,9 @@ pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
 
 /// A record checked, repeats folded: a meaning failure names what is wrong.
 pub fn checked(mut record: Record, now: Timestamp) -> Result<Record, String> {
+    if let Some(b) = record.by_record.first() {
+        return Err(format!("the distribution of record {} has no ex-date yet", b.record_date));
+    }
     record.rows.sort();
     record.rows.dedup();
     // a cash row and a row of the part paid in units for one ex-date, the same

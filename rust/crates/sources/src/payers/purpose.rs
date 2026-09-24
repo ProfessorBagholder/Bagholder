@@ -72,7 +72,7 @@ pub fn parse(v: &Value, ticker: &str) -> Outcome<Record> {
             }
             rows.push(Distribution { ex_date: r.day("date_ex")?, record_date: r.opt_day("date_rec")?, pay_date: r.opt_day("date_pay")?, cash: r.dec("amount")?, reinvested: None, currency });
         }
-        Ok(Ok(Some(Record { rows, per_year })))
+        Ok(Ok(Some(Record { rows, per_year, by_record: vec![] })))
     };
     match read() {
         Ok(Ok(Some(r))) => Outcome::Answered(r),

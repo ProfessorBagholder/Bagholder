@@ -160,7 +160,7 @@ impl Payer for ISharesCanada {
             Err(o) => return fail(o),
         };
         let outcome = match json(&history.body) {
-            Ok(v) => parse_history(&v).map(|rows| Record { rows, per_year }),
+            Ok(v) => parse_history(&v).map(|rows| Record { rows, per_year, by_record: vec![] }),
             Err(m) => Outcome::Mismatch(m),
         };
         Noted { outcome, shape_change: None }

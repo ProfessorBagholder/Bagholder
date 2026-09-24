@@ -147,7 +147,7 @@ impl Payer for ISharesUs {
             None => return mismatch(Mismatch { path: "Distribution Frequency".into(), why: "the page states no schedule".into() }),
         };
         let outcome = match component(&page).and_then(|v| parse_component(&v)) {
-            Ok(rows) => Outcome::Answered(Record { rows, per_year }),
+            Ok(rows) => Outcome::Answered(Record { rows, per_year, by_record: vec![] }),
             Err(m) => Outcome::Mismatch(m),
         };
         Noted { outcome, shape_change: None }

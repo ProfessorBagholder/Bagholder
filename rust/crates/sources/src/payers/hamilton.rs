@@ -62,7 +62,7 @@ pub fn parse_page(html: &str, currency: Currency) -> Outcome<Record> {
         };
         rows.push(Distribution { ex_date: ex, record_date: None, pay_date: Some(pay), cash, reinvested: None, currency });
     }
-    Outcome::Answered(Record { rows, per_year })
+    Outcome::Answered(Record { rows, per_year, by_record: vec![] })
 }
 
 pub struct Hamilton;

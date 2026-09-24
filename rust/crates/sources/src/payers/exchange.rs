@@ -59,6 +59,7 @@ impl Payer for Mackenzie {
         let outcome = rows.outcome.map(|rows| Record {
             rows: rows.into_iter().map(|r| Distribution { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, cash: r.cash, reinvested: r.in_units, currency: r.currency }).collect(),
             per_year,
+            by_record: vec![],
         });
         Noted { outcome, shape_change }
     }
@@ -94,6 +95,7 @@ impl Payer for WisdomTree {
         let outcome = chart.outcome.map(|c| Record {
             rows: c.dividends.into_iter().map(|(ex, amount)| Distribution { ex_date: ex, record_date: None, pay_date: None, cash: amount, reinvested: None, currency: c.currency }).collect(),
             per_year: None,
+            by_record: vec![],
         });
         Noted { outcome, shape_change: chart.shape_change }
     }

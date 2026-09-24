@@ -5,10 +5,10 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::instrument::InstrumentKind;
-use bagholder_core::jiff::civil::{date, Date};
+use bagholder_core::jiff::civil::{date, Date, Weekday};
 use bagholder_core::{Currency, Dec, InstrumentId};
 use bagholder_sources::contract::Listing;
 use bagholder_sources::needs::PayerNeed;
@@ -46,7 +46,7 @@ fn each_companys_sentence_gives_its_amount_record_and_pay_dates() {
     for (ticker, slug, expected, schedule) in cases {
         let c = company(ticker);
         let r = release(slug);
-        assert_eq!(companies::declared(c, &r).unwrap(), Some(expected), "{ticker}");
+        assert_eq!(companies::declared(c, &r).map(|d| d.with_ex(d.record_date)).unwrap(), expected, "{ticker}");
         assert_eq!(companies::schedule_in(c, &r), schedule, "{ticker}");
         // the organization's page: the newest release it takes as a declaration
         // is this one, and none it takes is an announcement of something else
@@ -55,7 +55,7 @@ fn each_companys_sentence_gives_its_amount_record_and_pay_dates() {
         assert!(!taken.is_empty(), "{ticker}");
         for t in &taken {
             let t = t.to_lowercase();
-            assert!(!t.contains("to be announced") && !t.contains("to release") && !t.contains("officer") && !t.contains("voting"), "{ticker}: {t}");
+            assert!(!t.contains("to be announced") && !t.contains("to release") && !t.contains("officer") && !t.contains("voting") && !t.contains("preferred share conversions"), "{ticker}: {t}");
         }
     }
     // Scotiabank states its schedule on its own page
@@ -63,13 +63,35 @@ fn each_companys_sentence_gives_its_amount_record_and_pay_dates() {
 }
 
 #[test]
-fn the_ex_date_is_the_record_date_since_settlement_in_one_day() {
-    assert_eq!(companies::ex_date(date(2026, 9, 15)), Some(date(2026, 9, 15)));
-    assert_eq!(companies::ex_date(date(2024, 5, 27)), Some(date(2024, 5, 27)));
-    // before 2024-05-27 the ex-date was counted on the exchange's calendar of
-    // sessions (2023-10-10's was 2023-10-06, Thanksgiving between): not guessed
-    assert_eq!(companies::ex_date(date(2024, 5, 24)), None);
-    assert_eq!(companies::ex_date(date(2023, 10, 10)), None);
+fn the_ex_date_is_the_exchanges_rule_counted_on_its_sessions() {
+    // the TSX's sessions: weekdays less its holidays (2017-09-04 Labour Day,
+    // 2023-10-09 Thanksgiving, 2024-05-20 Victoria Day)
+    let holidays = [date(2017, 9, 4), date(2023, 10, 9), date(2024, 5, 20)];
+    let mut sessions = BTreeSet::new();
+    for (from, to) in [(date(2017, 8, 21), date(2017, 9, 15)), (date(2023, 9, 25), date(2023, 10, 20)), (date(2024, 5, 10), date(2024, 6, 7))] {
+        let mut d = from;
+        while d <= to {
+            if !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) && !holidays.contains(&d) {
+                sessions.insert(d);
+            }
+            d = d.tomorrow().unwrap();
+        }
+    }
+    let ex = |y, m, d| companies::ex_date(date(y, m, d), &sessions);
+    // T+1: the record date itself, from record date 2024-05-28 (TMX's notice)
+    assert_eq!(ex(2026, 9, 15), Some(date(2026, 9, 15)));
+    assert_eq!(ex(2024, 5, 28), Some(date(2024, 5, 28)));
+    // record 2024-05-27 went ex on 2024-05-24, 2024-05-24 on 2024-05-23 (the notice)
+    assert_eq!(ex(2024, 5, 27), Some(date(2024, 5, 24)));
+    assert_eq!(ex(2024, 5, 24), Some(date(2024, 5, 23)));
+    // one session before, over a holiday: 2023-10-10's was 2023-10-06
+    assert_eq!(ex(2023, 10, 10), Some(date(2023, 10, 6)));
+    // T+2 from record date 2017-09-07 (TSX notice 2017-018), two sessions before until then
+    assert_eq!(ex(2017, 9, 7), Some(date(2017, 9, 6)));
+    assert_eq!(ex(2017, 9, 6), Some(date(2017, 9, 1)));
+    assert_eq!(ex(2017, 9, 5), Some(date(2017, 8, 31)));
+    // no sessions held before it: none
+    assert_eq!(ex(2010, 3, 15), None);
 }
 
 #[test]

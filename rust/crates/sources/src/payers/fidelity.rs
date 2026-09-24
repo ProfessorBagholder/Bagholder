@@ -111,7 +111,7 @@ impl Payer for FidelityCanada {
             Ok(r) => r,
             Err(o) => return fail(o),
         };
-        let outcome = parse_history(&history.body, &ticker).map(|()| Record { rows: vec![], per_year });
+        let outcome = parse_history(&history.body, &ticker).map(|()| Record { rows: vec![], per_year, by_record: vec![] });
         Noted { outcome, shape_change: None }
     }
 }

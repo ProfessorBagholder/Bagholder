@@ -133,7 +133,7 @@ impl Payer for GoldmanSachs {
         let detail = format!(r#"{{"fundDetailRequest":{{"country":"us","language":"en","audience":"advisors","pvNumber":"{}","shareClassId":"{}"}}}}"#, class.pv_number, class.share_class);
         let outcome = match post(body("Fund", FUND, &detail)) {
             Ok(v) => match parse_detail(&v, &ticker, class.currency) {
-                Ok(rows) => Outcome::Answered(Record { rows, per_year: class.per_year }),
+                Ok(rows) => Outcome::Answered(Record { rows, per_year: class.per_year, by_record: vec![] }),
                 Err(m) => Outcome::Mismatch(m),
             },
             Err(o) => o.failed().expect("not answered"),

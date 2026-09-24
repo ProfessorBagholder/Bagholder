@@ -16,10 +16,11 @@ use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
 use bagholder_core::{InstrumentId, Money};
 
-use crate::contract::DataKind;
+use crate::contract::{Benchmark, DataKind};
+use crate::market;
 use crate::needs::PayerNeed;
 use crate::outcome::Outcome;
-use crate::payers::{adapter_for, checked, Record};
+use crate::payers::{adapter_for, checked, companies, Record};
 use crate::read::{Ctx, Result};
 
 /// Whether a payer is due, from what the book holds of it.
@@ -43,6 +44,28 @@ fn stored_rows(record: &Record) -> Vec<DeclaredRow> {
     record.rows.iter().map(|r| DeclaredRow { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, amount: Money::new(r.cash, r.currency), reinvested: r.reinvested }).collect()
 }
 
+/// Date a record's distributions stated by record date on the exchange's
+/// sessions, reading XIC's closes for the span first where they are not held:
+/// whether every one is dated.
+fn dated(ctx: &Ctx, record: &mut Record) -> Result<bool> {
+    let (Some(first), Some(last)) = (record.by_record.iter().map(|b| b.record_date).min(), record.by_record.iter().map(|b| b.record_date).max()) else { return Ok(true) };
+    // two sessions before a record date lie within a fortnight of it
+    let from = first.checked_sub(SignedDuration::from_hours(24 * 14)).unwrap_or(Date::MIN);
+    market::read_benchmark(ctx, Benchmark::Tsx, from, last)?;
+    let state = market::benchmark_state(ctx, Benchmark::Tsx)?;
+    if !market::covered(Benchmark::Tsx.market(), from, last, &state, ctx.now, ctx.bank) {
+        return Ok(false);
+    }
+    let mut rows = Vec::with_capacity(record.by_record.len());
+    for b in &record.by_record {
+        let Some(ex) = companies::ex_date(b.record_date, &state.days) else { return Ok(false) };
+        rows.push(b.with_ex(ex));
+    }
+    record.rows.extend(rows);
+    record.by_record.clear();
+    Ok(true)
+}
+
 /// Read every held payer that is due, storing what its publication states.
 pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
     let declared: BTreeMap<InstrumentId, DeclaredReadRow> = ctx.book.declared()?;
@@ -62,6 +85,15 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             continue;
         }
         let mut noted = adapter.read(ctx.net, need, ctx.now);
+        if let Outcome::Answered(record) = &mut noted.outcome {
+            if !dated(ctx, record)? {
+                // the exchange's sessions for its older declarations are not all
+                // held (their read failed or rests): the payer's answer is kept
+                // as a read of its source, nothing is stored, and it stays due
+                ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
+                continue;
+            }
+        }
         noted.outcome = match noted.outcome {
             Outcome::Answered(record) => match checked(record, ctx.now) {
                 Ok(r) => Outcome::Answered(r),
