@@ -15,14 +15,13 @@ These are wrong today, whatever the design.
 
 **Also in the Python app now in use (checked by hand, `python/bagholder.py` on master's code):**
 1. **An order that may be live is marked failed and never checked again.** Any error on sending, a timeout included, marks the order failed (`bagholder.py` `submit_order`, lines ~4456–4463; Rust `orders/ticket.rs:648-659`). A failed order is never read back, so an order Wealthsimple did take can rest there unseen. For a bracket's exit, a retry then places a second exit under a new id.
-2. **A partly filled order is booked more than once.** The fill is booked as the cumulative quantity filled rather than what is new since the last booking (Python `book_order_fill`, line ~4747; Rust `readback.rs:272-322`): 50 filled, then 100, books 150.
+2. **A filled order can be booked twice.** A fill is booked only once the order is fully filled (`readback.rs:399`), but two read-backs running at once can each book it: the booking and its "booked" mark are two writes, not one transaction, and no lock is shared (`readback.rs:317-318`). The next sync then links neither local row and adds Wealthsimple's own (`store/src/merge.rs:196-203`).
 3. **Order handling sees only the newest 200 orders** (`store.list_orders(limit=200)`; Rust `tools.rs:172`). Each move of a trailing stop adds an order, so this fills. Past it, a waiting bracket's entry is not found and the bracket is cancelled without a word, and the refresh can fail on every pass.
 
 **In the Rust build** (not in use yet):
 - A sale from the ticket does not wait for the stop's cancel to be confirmed (`ticket.rs:687-705`; a test asserts the violation, `tests_brackets.rs:504-521`).
 - A watched stop can fire while the target's cancel is unconfirmed (`brackets.rs:633-687`).
 - A bracket whose watched market sell is refused is stuck in `Firing` and never retried (`brackets.rs:567-575`).
-- A fill can be double-booked when read-backs run at once; booking and marking are not one transaction (`readback.rs:318-320, 452`).
 - With the container port published beyond loopback, anyone on the network can place orders (`http/mod.rs:267-295`).
 - An update's rollback can leave no working copy, and never restores the book (`update.rs:448-451, 593-652`).
 - Broker rows are rewritten at every start (`store/src/relabel.rs:45-136`). Bad rows are dropped or read as zero (`lenient.rs:20-23`, `base.rs:69-71`).

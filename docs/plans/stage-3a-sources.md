@@ -2,7 +2,9 @@
 
 ## For the owner to decide
 
-Nothing open. Settled: a fund's schedule and distributions come from its fund company's own publication; another source only where that publication cannot be read at all (owner, 2026-09-24).
+1. **A daily run on your Mac for option closes.** A contract's closing price for a session can only be read that day: no source gives it later. Until the Rust build is the app you run every day, nothing of it runs daily. The choice: a scheduled job on your Mac runs `bagholder read-sources` once each weekday after the close, from when this part lands. It needs nothing from you once set up, touches only its own data folder, and places no orders. Without it, every session day until then loses the closes of the option contracts held that day for good; on those days the equity series takes Wealthsimple's stated account value where it has one, and waits where it has none.
+
+Settled: a fund's schedule and distributions come from its fund company's own publication; another source only where that publication cannot be read at all (owner, 2026-09-24). Brief 02: Go with changes, applied.
 
 Gated in this plan (brief 01 §1), not built until the gate says Go: book migration 3 (distributions without kinds, the reinvested part, rate series with their days) and the change to how the distribution rate is defined (cash per unit, from the payer's record only). A fund's schedule and distributions come from its fund company's own publication, never worked out from past dates (owner, 2026-09-23; brief 01 §2.1 as revised). Built already, as work inside the plan: the strict reply reader and the network crate with one limiter.
 
@@ -175,9 +177,9 @@ A venue's session days are the days its own daily closes exist, as the sources r
 - **What a publication states, kept as stated.** A distribution's cash and reinvested parts where the payer states them (BMO, Vanguard, iShares Canada, Mackenzie, Global X's reinvested table, Fidelity's release); a row repeated identically is one row; two different rows for one ex-date, or a date outside the fund's life, are a meaning failure naming both, and the read writes nothing.
 - **Stored in the book, written once**: the distributions as one read of the payer's record (`store_declared`), so a distribution the payer withdrew is absent from the newest read (a read identical to the newest records only its time); the schedule as a stated frequency (`store_frequency`) under the payer's own source name. A later statement stands as the newest; an old one is never left standing alone.
 - **What the figures use.** The per-unit amount is the cash per unit of the latest distribution gone ex that pays cash, since the figures are income paid (`SPEC.md` §2, "Annual income"); a reinvested part pays nothing and is shown as the payer stated it. The frequency is the payer's own statement (§18's change: never assumed). The kinds stage 2 gave the engine (regular, special, non-cash) go: book migration 3 drops `declared_distributions.kind` and adds `reinvested`, the stated reinvested part per unit, beside `amount`, the cash part.
-- **Where the fund company's own publication cannot be read at all** (the owner's one exception, 2026-09-24): today Mackenzie (QCN, QUU) and WisdomTree (WQTM), whose sites answer only a browser, and getting past a bot check is not something the app does (research 2). For such a company, and only for it, the fund's record comes from the listing's exchange-side record: TMX's declared distributions for a Canadian listing, Yahoo's dividend events for a US one. The schedule is the one that record states, else worked out from its ex-dates, and every figure built on it names that source, so it never passes for the fund company's own statement. Which companies take this path is a fixed list in the adapters, research-backed and tested; it is not a fallback on failure. A fund company's page that fails to answer is a failure of that source, shown as one, and never silently replaced.
+- **Where the fund company's own publication cannot be read at all** (the owner's one exception, 2026-09-24): today Mackenzie (QCN, QUU) and WisdomTree (WQTM), whose sites answer only a browser, and getting past a bot check is not something the app does (research 2). For such a company, and only for it, the fund's distributions come from the listing's exchange-side record: TMX's declared distributions for a Canadian listing, Yahoo's dividend events for a US one, marked with that source; they are the fund's declarations as the exchange publishes them. The schedule is used only where a readable source states it (TMX's `dividendFrequency` where not null); it is never worked out from past dates. Where none states it, the fund's annual income is a gap naming why (its company's site cannot be read). Every figure built on the exchange-side record carries its source in the data; how the page shows it is `SPEC.md`'s to say at the switch (3c). Which companies take this path is a fixed list in the adapters, research-backed and tested; it is not a fallback on failure. A fund company's page that fails to answer is a failure of that source, shown as one, and never silently replaced.
 - **A payer no adapter reads** is shown as waiting on its payer, named. It is never filled from a default.
-- **Which payers.** Every instrument the book holds or has been paid a distribution by.
+- **Which payers.** The instruments whose rate a screen shows: held positions (`SPEC.md` §2, "Distribution rate for a holding", and the income figures built on it). A payer no longer held is not read. A release notification that carries a distribution's figures (`SPEC.md` §4) reads its payer when the release arrives; that is the data flow's (stage 5), not this part's.
 
 **Option closes** (Cboe's delayed chains, `cdn.cboe.com`).
 
@@ -186,9 +188,10 @@ A venue's session days are the days its own daily closes exist, as the sources r
 - **Checks.** The chain's `timestamp` is UTC: the reply's `Last-Modified` (03:55:02 GMT) matched it (03:54:59) on 2026-09-23. A chain whose session cannot be told is a meaning failure, and it writes nothing.
 - **Exactness.** Cboe writes prices as binary float leftovers (`224.255004882812`). That is its statement, kept exactly as written.
 - **What cannot be had, stated now.**
-  - A contract's close for a day the app was not running.
-  - Any day before 3a first ran.
+  - A contract's close for a day no reader ran.
+  - Any day before the first run. No store holds a past session's close to import (checked 2026-09-24).
   No source gives these later. On those days the equity series takes the broker's stated figure (stage 2's rule) or waits, and says which.
+- **Captured every session** by a daily run (decision 1 at the top) until the Rust build runs every day.
 
 **Underlyings on expiry days.** The expiry rule (`engine/src/ledger.rs`) needs an option's underlying's close on the contract's expiry day. That close is read for every contract the book has held, whether or not the underlying was ever held.
 
@@ -215,11 +218,6 @@ Stooq goes from `SPEC.md` §2: it now answers with a browser check instead of da
 - **Coinbase, a coin's own currency:** the spot price (`api.coinbase.com/v2/prices/<pair>/spot`) states no time, and its origin allows it to be 60 seconds old (`max-age=60`). Such a quote is stamped with the reply's `Date` less that allowance, the allowance stored with it.
 
 A quote with no time is a meaning failure. How late each source is by design (Cboe's chains are delayed fifteen minutes) is part of its `Offer`. A chain never asks a source for a market it is not live for (TMX is not asked to quote a US listing, as SPEC §2 already rules). The quote's time is stored and carried to `Market`, so how old a price is can always be shown.
-
-**A price far from the last close.**
-- A quote more than 50 % from the listing's latest stored close is not written on the first read. It is held, and it is written when the next read agrees with it within 1 %, or when a second source in the chain states it.
-- It is never refused for good: a split day or a halt resumes on the next read.
-- Each hold is recorded as a meaning outcome naming both prices.
 
 **Closes as traded.** Daily closes are stored as traded (research 1), for every instrument from the first day it was held and for every underlying on its contracts' expiry days. A closed day is never read again.
 
@@ -289,7 +287,7 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - a repeated identical row stored once; two different rows for one ex-date, or a date outside the fund's life, a meaning failure writing nothing;
   - a company release's amount, record date, pay date and schedule read from its own sentence, and its ex-date by the exchange's rule on each side of 2024-05-27;
   - a read stored as a whole, a later read lacking a row leaving it absent, an identical read recording only its time; a later schedule statement replacing the earlier;
-  - Mackenzie's and WisdomTree's funds shown as waiting on their payer, named.
+  - Mackenzie's and WisdomTree's funds: distributions from the exchange-side record, marked with its source; the schedule where a source states it, otherwise the fund's annual income a gap naming its unreadable company site; never a schedule worked out from dates.
 - [ ] **The engine**, cases passing: distribution kinds removed; the per-unit amount the cash per unit of the latest distribution gone ex that pays cash, a wholly reinvested one passed over and a year-end one with a cash part counting its cash; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` for a day before a currency's oldest series; every existing case still passing.
 - [ ] **Option closes**, each a test on recorded replies:
   - a chain read after the close writes each held contract's close once, dated to its session, including a contract expiring that day;
@@ -299,7 +297,6 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - `NotCarried` recorded and not counted as a failure;
   - a quote without a time refused;
   - a Coinbase spot quote stamped with its reply's date less its allowance;
-  - a quote 50 % off the last close held, and written when the next read agrees;
   - a closed day written once, and a later different value kept beside it and recorded while the first stands in `Market`;
   - closes stored as traded around a split (research 1);
   - an expiring contract's underlying's close read for its expiry day when the underlying was never held;
@@ -341,3 +338,5 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
 ## Handoff
 
 (Filled in when the part is built.)
+
+- For stage 4 (brief 02): the HTTP client moved into `bagholder-net` re-sends a request once on a fresh connection when the reply fails on a reused one (`net/src/client.rs`, the two-attempt loop in `send`). That includes Wealthsimple's order POSTs (`ws/src/session.rs`), so an order can be sent twice. It moved as it was; stage 4 limits the re-send to requests that are safe to repeat.
