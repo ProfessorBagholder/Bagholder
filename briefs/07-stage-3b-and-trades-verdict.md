@@ -26,6 +26,10 @@ Record in `docs/decisions.md`: calls to Wealthsimple's unofficial API are kept t
   - Legs, entitlements and positions read once per row and kept in its record.
 - **A missed or revised row is found by the broker check, not by re-reading.** When an account's cash or units differ from Wealthsimple's statement in a way the book cannot explain, that account is re-read over the span the difference points to, and only then.
 - **Acceptance criterion:** the requests of a pull with nothing new, and of a pull with one new trade, are counted on the real run and stated.
+- **Guarded by a test, not by review.** On recorded replies, a pull with nothing new sends exactly the fixed minimum: the accounts list and one activity page per open account. A pull with one new trade sends only what that trade needs. Any other count fails, so re-reading history turns CI red, as `test_no_wait_on_a_clock_that_is_not_accounted_for` does for timers.
+
+**Every decision that can be tested is guarded by a test.** Each line of `docs/decisions.md` names the test that fails if it is broken, or says "review only" where no test can hold it. Add the missing tests in this stage for the decisions 3b touches.
+
 
 **2. The mapping reads each row's status.**
 - A row not stated as executed (cancelled, expired, rejected, pending) moves nothing and raises no gap. A partly filled, then cancelled, order books its filled part.
