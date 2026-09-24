@@ -20,11 +20,13 @@
 //! distribution, or a date far past the fund's life are a meaning failure, and
 //! nothing is written.
 
+pub mod bmo;
 pub mod evolve;
 pub mod exchange;
 pub mod globalx;
 pub mod hamilton;
 pub mod harvest;
+pub mod ishares_ca;
 pub mod newswire;
 pub mod ninepoint;
 pub mod purpose;
@@ -88,6 +90,8 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(hamilton::Hamilton),
         Box::new(purpose::Purpose),
         Box::new(globalx::GlobalX),
+        Box::new(bmo::Bmo),
+        Box::new(ishares_ca::ISharesCanada),
         Box::new(exchange::Mackenzie),
         Box::new(exchange::WisdomTree),
     ]
