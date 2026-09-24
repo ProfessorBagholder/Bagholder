@@ -8,7 +8,7 @@
 //! and read the diff.
 
 use bagholder_market::exposure::{self, hooks, Breakdown, Ctx, Holding, Listed, ShareClass, TmxSector};
-use bagholder_market::htmltables::html_tables;
+use bagholder_sources::html::html_tables;
 use bagholder_model::securities::Security;
 use bagholder_store::feeds::{ExposureRecord, Weights};
 use rusqlite::Connection;

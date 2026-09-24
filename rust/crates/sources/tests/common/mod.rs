@@ -94,3 +94,10 @@ pub fn net(recorded: &std::sync::Arc<Recorded>, at: &str) -> bagholder_net::Net 
     let clock = std::sync::Arc::new(bagholder_net::ManualClock::at(at.parse().unwrap()));
     bagholder_net::Net::answered_by(clock, std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(recorded.clone())))
 }
+
+/// Put an instrument straight into the book's file, as a record would have: the
+/// facts a reader stores are for instruments the book holds.
+pub fn instrument_in_book(book: &std::path::Path, id: bagholder_core::InstrumentId, kind: &str, currency: &str) {
+    let conn = rusqlite::Connection::open(book).unwrap();
+    conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z')", rusqlite::params![id.to_string(), kind, currency]).unwrap();
+}

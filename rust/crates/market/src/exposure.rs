@@ -731,7 +731,7 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Holding>, Strin
 
 fn harvest(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
     let html = get(&HARVEST_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?;
-    let (mut holdings, reference) = parse_harvest_tables(&crate::htmltables::html_tables(&html));
+    let (mut holdings, reference) = parse_harvest_tables(&bagholder_sources::html::html_tables(&html));
     static TICKER: OnceLock<Regex> = OnceLock::new();
     let ticker = TICKER.get_or_init(|| Regex::new(r"^[A-Z0-9][A-Z0-9.:-]{0,9}$").unwrap());
     if !reference.is_empty() && ticker.is_match(&reference) && !holdings.iter().any(|h| !h.ticker.is_empty()) {

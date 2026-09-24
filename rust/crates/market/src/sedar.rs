@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use bagholder_net::browser::Session;
 use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
-use crate::news::unescape;
+use bagholder_sources::html::unescape;
 use bagholder_model::textrules::{parse_int, trim_space};
 use bagholder_store::feeds::{FiledDocument, Regulator};
 

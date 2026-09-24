@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 bagholder-model = { path = "../model" }
 bagholder-net = { path = "../net" }
+# the one HTML table reader and character-reference rules, moved there
+bagholder-sources = { path = "../sources" }
 bagholder-store = { path = "../store" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

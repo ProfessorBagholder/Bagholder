@@ -220,6 +220,7 @@ version = "1.45.0"
 dependencies = [
  "bagholder-model",
  "bagholder-net",
+ "bagholder-sources",
  "bagholder-store",
  "openssl",
  "pdf-extract",

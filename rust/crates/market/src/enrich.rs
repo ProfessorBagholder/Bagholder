@@ -13,7 +13,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::disclosures::Enrichment;
-use crate::news::unescape;
+use bagholder_sources::html::unescape;
 use bagholder_model::unichars::{is_alpha, is_digit, is_space, is_upper};
 use bagholder_model::textrules::trim_space;
 

@@ -4,8 +4,6 @@
 //! and declarations passed by, script and style bodies taken as raw text, and
 //! character references resolved in the text.
 
-use regex::Regex;
-use std::sync::OnceLock;
 
 fn is_letter(b: u8) -> bool {
     b.is_ascii_alphabetic()
@@ -39,6 +37,29 @@ fn tag_end(b: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+/// Runs of whitespace (as `\s` reads it) written as one space.
+fn collapse(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            if !space {
+                out.push(' ');
+            }
+            space = true;
+        } else {
+            out.push(c);
+            space = false;
+        }
+    }
+    out
+}
+
+/// A cell's text without the spaces around it, Unicode's included.
+fn trim_space(text: &str) -> &str {
+    text.trim_matches(|c: char| c.is_whitespace() || matches!(c as u32, 0x1c..=0x1f))
+}
+
 enum Event {
     Start(String),
     End(String),
@@ -53,7 +74,7 @@ fn events(html: &str) -> Vec<Event> {
     let mut raw_until: Option<String> = None;
     let flush = |out: &mut Vec<Event>, from: usize, to: usize| {
         if to > from {
-            out.push(Event::Data(crate::news::unescape(&html[from..to])));
+            out.push(Event::Data(super::unescape(&html[from..to])));
         }
     };
     while i < b.len() {
@@ -125,8 +146,6 @@ fn events(html: &str) -> Vec<Event> {
 }
 
 pub fn html_tables(html: &str) -> Vec<Vec<Vec<String>>> {
-    static WS: OnceLock<Regex> = OnceLock::new();
-    let ws = WS.get_or_init(|| Regex::new(r"\s+").unwrap());
     let mut tables: Vec<Vec<Vec<String>>> = Vec::new();
     let mut table: Option<Vec<Vec<String>>> = None;
     let mut row: Option<Vec<String>> = None;
@@ -147,8 +166,7 @@ pub fn html_tables(html: &str) -> Vec<Vec<Vec<String>>> {
             Event::End(t) => match t.as_str() {
                 "td" | "th" if cell.is_some() && row.is_some() => {
                     let text = cell.take().unwrap();
-                    let collapsed = ws.replace_all(&text, " ");
-                    row.as_mut().unwrap().push(bagholder_model::textrules::trim_space(&collapsed).to_string());
+                    row.as_mut().unwrap().push(trim_space(&collapse(&text)).to_string());
                 }
                 "tr" if row.is_some() && table.is_some() => {
                     let r = row.take().unwrap();

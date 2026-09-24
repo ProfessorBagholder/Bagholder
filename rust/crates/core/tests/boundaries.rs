@@ -244,15 +244,16 @@ fn the_checker_catches_each_kind_of_violation() {
 
 /// The code moved out of `bagholder-market` (`docs/plans/stage-3a-sources.md`,
 /// "One copy") is there no more: the client, the browser session, the pacing
-/// and the never-read health record each live in one place.
+/// the never-read health record, and the HTML table reader with its character
+/// references each live in one place.
 #[test]
 fn the_moved_code_has_one_copy() {
     let market = crates_dir().join("market");
-    for gone in ["src/client.rs", "src/browser.rs", "src/pace.rs"] {
+    for gone in ["src/client.rs", "src/browser.rs", "src/pace.rs", "src/htmltables.rs", "src/entities.rs"] {
         assert!(!market.join(gone).exists(), "bagholder-market still holds {gone}");
     }
     for (path, text) in sources(&market) {
-        for old in ["fn note_source", "fn source_health", "struct YahooGate", "fn request_any"] {
+        for old in ["fn note_source", "fn source_health", "struct YahooGate", "fn request_any", "fn html_tables", "fn unescape(", "fn charref"] {
             assert!(!text.contains(old), "{path} still defines {old}");
         }
     }

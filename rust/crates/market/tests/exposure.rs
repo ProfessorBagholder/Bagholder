@@ -117,15 +117,15 @@ fn test_evolve_page() {
 
 #[test]
 fn test_harvest_tables() {
-    let (rows, rf) = exposure::parse_harvest_tables(&bagholder_market::htmltables::html_tables(HARVEST_TABLE_HTML));
+    let (rows, rf) = exposure::parse_harvest_tables(&bagholder_sources::html::html_tables(HARVEST_TABLE_HTML));
     assert_eq!(rf, "");
     let got: Vec<(String, f64, String, String)> = rows.iter().map(|r| (r.ticker.clone(), r.weight, r.sector.clone(), r.country.clone())).collect();
     assert_eq!(got, vec![("IBIT".to_string(), 130.3, "Digital assets".to_string(), "United States".to_string())], "options and cash rows are out");
-    let (rows, rf) = exposure::parse_harvest_tables(&bagholder_market::htmltables::html_tables(HARVEST_NAMES_HTML));
+    let (rows, rf) = exposure::parse_harvest_tables(&bagholder_sources::html::html_tables(HARVEST_NAMES_HTML));
     assert_eq!(rf, "PLTR");
     let got: Vec<(String, f64, bool)> = rows.iter().map(|r| (r.name.clone(), r.weight, r.fund)).collect();
     assert_eq!(got, vec![("Palantir Technologies Inc.".to_string(), 128.2, false)]);
-    let (rows, _) = exposure::parse_harvest_tables(&bagholder_market::htmltables::html_tables(HARVEST_FOF_HTML));
+    let (rows, _) = exposure::parse_harvest_tables(&bagholder_sources::html::html_tables(HARVEST_FOF_HTML));
     let got: Vec<(String, f64, bool)> = rows.iter().map(|r| (r.name.clone(), r.weight, r.fund)).collect();
     assert_eq!(got, vec![
         ("Harvest Apple Enhanced High Income Shares ETF".to_string(), 7.0, true),
