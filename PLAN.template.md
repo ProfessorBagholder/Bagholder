@@ -14,6 +14,10 @@ One paragraph: the change, and the figures, screens or `SPEC.md` sections it tou
 
 What the old app does in this area, what is wrong with it (with its entry in `docs/old-app-mistakes.md`, adding one where it is new), and what this plan does instead. For anything carried over (a rule, a structure, a formula, a default, a fallback): why it is right, shown against `SPEC.md` and `docs/architecture.md`, never because it exists or has always worked that way. What the person sees and does on screen stays as it is unless `SPEC.md` changes. At the gate, anything carried over without this answer is a finding.
 
+## How the leading products do it
+
+Bagholder is a trading journal: every definition, figure and behaviour this plan sets is checked first against how the leading journals (TradeZella, Tradervue, TraderSync, Edgewonk), brokers and industry standards do it, from their own documentation, each fact with its link and the date it was read. `SPEC.md`, the engine and what the app did before are what is being checked here, never the evidence. Where this plan departs from the practice found, say why. A plan without this section, or with no source link in it, fails `rust/crates/core/tests/plans.rs`.
+
 ## Open questions
 
 Each question states three things: the objective it serves; what is already known that bears on it, or would make settling it unnecessary, and where that comes from (the code, the docs, replies already recorded, what the owner has said); and why the way chosen to settle it is the best course for that objective. "None" when there are none.
