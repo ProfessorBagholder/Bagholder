@@ -6,7 +6,7 @@ Stage 3 of the order of work in `docs/design-review.md` is three parts, each wit
 
 - **3a, sources and facts** (this plan): the source adapter contract of `docs/architecture.md` §9, with strict checking, recorded real replies and health; the market cache (§6's second store); and the adapters that supply what the engine reads:
   - the Bank of Canada's rates for every currency, with the spans read and its holidays;
-  - funds' declared distributions and stated payout frequencies;
+  - each payer's distributions and schedule, from the fund company's own page or the company's own announcement;
   - option contracts' closes (written once into the book);
   - quotes, daily closes and benchmark levels (kept in the market cache).
 - **3b, Wealthsimple as the first broker adapter**: its raw rows as source records superseding the imported ones, multi-leg orders' legs, contract sizes, account links, its statements, when each account's activity was last read, and corporate events. An event's values are taken from the official source where there is one (the issuer's filing, the exchange's notice, §6) and from Wealthsimple's rows where its own units state them. Which official source answers for which kind of event is 3b's first research, because the events stage 2 left waiting (a consolidation and two renames under new security ids) are tied to Wealthsimple's rows.
@@ -27,9 +27,10 @@ Each question below is answered from real replies before the reader that depends
    - Checked on a listing with a known split, before and after it.
    - An adjusted source is used only with its own split events to undo the adjustment (Yahoo's chart reports them with `events=split`), so closes are stored as traded, matching the book's units on each day.
    - A source whose adjustment cannot be undone from its own reply is not used for closes.
-2. **A US listing's declared distributions and frequency.**
-   - Candidates: Nasdaq's dividend history (`api.nasdaq.com/api/quote/<sym>/dividends`, which did not answer from this machine on 2026-09-23 and is to be tried again) and Yahoo's chart with `events=div`.
-   - Whichever answers is read under the same contract. If none states a frequency, US payers fall to the inference from ex-dates, as stage 2 already does.
+2. **Each payer's own statement of its distributions.**
+   - A fund's distribution schedule and its distributions (the dates and the amount per unit) are published by the fund company on the fund's own page, and that is the authority (§9). Which page and which part of it states them is found for each fund company the person's funds come from (thirteen today, listed in the private checklist kept outside the repository), from a public fund of that company that the person does not hold.
+   - A company that pays a dividend (a bank, a pipeline) declares each one itself, in the announcement it issues; which of its own publications states the amount, the dates and the schedule is found the same way.
+   - Each fund company's page and each announcement form is one adapter under the contract, with its recorded pages as fixtures.
 3. **The Bank's rates before 2007-05-01.**
    - Valet holds its daily series from 2017-01-03 and its legacy noon series from 2007-05-01 (both verified on 2026-09-23).
    - The Bank published noon rates for decades before that.
@@ -38,10 +39,7 @@ Each question below is answered from real replies before the reader that depends
 4. **Which session an option chain's `prev_day_close` belongs to**, and which of the chain's prices is a contract's close for a session.
    - Settled from chains captured before and after a session's close on the same day, and across a weekend.
    - The recorded close must be defined one way (the chain's closing price, or the closing midpoint) before its reader is built.
-5. **TMX's payout frequency vocabulary.**
-   - The words `dividendFrequency` uses, taken from a broad public sample of TMX listings (a screener's funds and payers), not the person's holdings.
-   - Which listings answer null, since a non-payer states none.
-6. **Benchmark sources.**
+5. **Benchmark sources.**
    - Replies recorded for each: FRED's S&P 500 series (Stooq as fallback) and TMX's `^TSX` and `^TX60` daily series (SPEC §2).
 
 ### Two new crates, and where the existing code goes
@@ -163,23 +161,14 @@ A venue's session days are the days its own daily closes exist, as the sources r
   - A page with no pairs, or with pairs for another year than it names, is a mismatch, not an empty schedule.
   - The fixtures include a year whose holiday falls on a weekend.
 
-**TMX Money: declared distributions and stated frequency** (`app-money.tmx.com/graphql`), verified on 2026-09-23.
+**Distributions and schedules, from the payer itself** (research 2).
 
-- **Declared distributions.** `getDividendsForSymbol` answers `exDate, recordDate, payableDate, declarationDate, amount, currency` per row.
-  - `recordDate` and `declarationDate` are read now; the old reader asked for neither.
-  - Optional dates are read with the optional accessors where research shows them null.
-  - `amount` is a JSON number, read exactly from its text.
-  - Every page is read, until a page shorter than the batch or one repeating the page before (the old reader stops at 24 rows).
-  - Meaning checks: the ex-date is on or before the pay date where both are stated; the currency is real; the amount is positive.
-- **One read is stored as a whole** (`store_declared`), so a distribution the fund withdrew is absent from the newest read. A read identical to the newest stored one records only its time.
-- **A distribution is a row of the fund's record**, as `SPEC.md` §2 defines the rate: the per-unit amount is the latest distribution gone ex, the frequency from the gaps between ex-dates where no frequency is stated. TMX states no category for a row and none is invented: the kinds stage 2 gave the engine (regular, special, non-cash) go, with book migration 3 dropping `declared_distributions.kind`.
-- **Stated frequency.**
-  - `getQuoteBySymbol.dividendFrequency` states the payout frequency in words.
-  - A fixed table of TMX's words (research 5) maps each to payments per year, or to "states none" (null, and the words research 5 finds TMX uses for no schedule).
-  - A word not in the table is a meaning failure naming the word. It is never a guess.
-  - A later read that states none, or another frequency, is stored as that statement, so the newest statement stands and an old one is never left standing alone.
-  - TMX is a data vendor, not the issuer (§9 puts the issuer's own statement first). A stated frequency that disagrees with the snapped gaps of the fund's own ex-dates is a problem shown on the holding, and the fund's own record stands. This changes the engine's order in `cashflow.rs:171`.
-- **Which instruments.** Every Canadian listing the book holds or has received a distribution from, and US listings through research 2.
+- **The fund company's page** states a fund's schedule (how often it pays) and its distributions: ex-date, record date, pay date, amount per unit, currency. Each company's adapter reads its own page strictly: every field it needs, typed and checked; a page that no longer carries them is a mismatch naming what is missing, never an empty schedule.
+- **A company's own announcement** states each dividend it declares, and its schedule where it states one.
+- **Stored in the book, written once**: the distributions as one read of the payer's record (`store_declared`), so a distribution the payer withdrew is absent from the newest read (a read identical to the newest records only its time); the schedule as a stated frequency (`store_frequency`) under the payer's own source name. A later statement stands as the newest; an old one is never left standing alone.
+- **What the figures use.** The per-unit amount is the latest distribution gone ex, and the frequency is the payer's own statement (`SPEC.md` §2, with §18's change: never assumed). The kinds stage 2 gave the engine (regular, special, non-cash) go, since no payer's record here states them, with book migration 3 dropping `declared_distributions.kind`.
+- **A payer no adapter reads yet** (a fund from a company not among today's thirteen) is shown as waiting on its payer's page, named, until its company's adapter is built. It is never filled from another source or a default.
+- **Which payers.** Every instrument the book holds or has been paid a distribution by.
 
 **Option closes** (Cboe's delayed chains, `cdn.cboe.com`).
 
@@ -226,9 +215,7 @@ A quote with no time is a meaning failure. How late each source is by design (Cb
 ### The engine's changes
 
 - **Distribution kinds removed** (`DistributionKind` in the engine and the book): every row of the record counts, as `SPEC.md` §2 defines; the existing cases rewritten to that.
-- **The fund's own record over a vendor's frequency word.** Cases:
-  - a stated frequency agreeing with the ex-dates;
-  - a stated frequency disagreeing, where the ex-dates stand and a problem is shown.
+- **The frequency is the payer's statement**, first in `cashflow.rs`; a payer with none waits, named. Cases: a stated schedule used; a payer with no statement shown as waiting.
 - **`rate-not-held`**, if research 3 finds no archive: a gap for a day no source holds the Bank's rate for, with a case.
 
 ### Periodic reads, each listed with its reason
@@ -237,8 +224,7 @@ A quote with no time is a meaning failure. How late each source is by design (Cb
 |---|---|---|
 | Bank of Canada observations | a business day after 16:30 Eastern whose rate is not stored; once when a currency first appears | the Bank publishes at 16:30 (§7) |
 | Bank holiday page | the first business day of each month | the page names this year's closures, and a closure must be known before its day passes |
-| Declared distributions | when a declared record's newest row has gone ex and its next is due by the fund's cadence; on a release announcing distributions (3c); when a payer first appears | a declared record changes only when a fund declares |
-| Stated frequency | with the declared read | the same statement |
+| A payer's page or announcement | when its next distribution is due by its own schedule and not yet read; on an announcement of distributions (3c); when a payer first appears | a payer's record changes only when it declares |
 | Option closes | each session day after the close, for held contracts | a session's close is gone the next day |
 | Daily closes | each session day after the close, for held instruments and expiring contracts' underlyings | the equity series needs each day's close |
 | Benchmarks | each session day after the close | the yearly returns need each day's level |
@@ -287,14 +273,8 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - the holiday page's pairs stored, a weekend-dated observed holiday kept as stated, and a page with no pairs or the wrong year a mismatch;
   - the due rule on a fake clock: a business day after 16:30 Eastern with no rate is due, before 16:30 it is not, a holiday is not;
   - book migration 3 applied to a version 2 book with its rows intact, and `schema/v3.sql` committed and compared.
-- [ ] **TMX**, each a test on recorded replies:
-  - every page of a long record read, stopping on a short page and on a repeated one;
-  - the record and declaration dates kept, and their null read as stated none;
-  - a read stored as a whole, with a later read lacking a row leaving it absent, and an identical read recording only its time;
-  - every word in the frequency table (from research 5) maps as the table says;
-  - an unknown word is a meaning failure writing nothing;
-  - a later read stating none replaces the earlier statement.
-- [ ] **The engine**, cases passing: distribution kinds removed, every row of a record counting as `SPEC.md` §2 defines; the fund's own record over a disagreeing stated frequency, shown as a problem; `rate-not-held` if research 3 needs it; every existing case still passing.
+- [ ] **Payers' pages**, for each fund company and announcement form, each a test on its recorded pages: the schedule and every distribution read and stored; a page missing a field it must carry is a mismatch naming the field and writes nothing; a read stored as a whole, a later read lacking a row leaving it absent, an identical read recording only its time; a later schedule statement replacing the earlier.
+- [ ] **The engine**, cases passing: distribution kinds removed, every row of a record counting as `SPEC.md` §2 defines; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` if research 3 needs it; every existing case still passing.
 - [ ] **Option closes**, each a test on recorded replies:
   - a chain read after the close writes each held contract's close once, dated to its session, including a contract expiring that day;
   - a chain whose session cannot be told writes nothing and records a meaning failure.
