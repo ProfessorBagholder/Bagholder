@@ -1,0 +1,61 @@
+[
+  {
+    "name": "a sourced adjustment supersedes the person's own for the same event, whichever the book holds first",
+    "spec": "bagholder_core::adjustment: a sourced adjustment supersedes the person's",
+    "working": [
+      "100 X bought for 1,000; a split marker; the issuer states 2 for 1, the person had entered 3 for 1",
+      "the issuer's stands: 200 units, cost 1,000; 200 sold for 1,200 → P&L 200, nothing left"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "1200"}
+    ],
+    "adjustments": [
+      {"applies_to": "t2", "source": "issuer", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]},
+      {"applies_to": "t2", "source": "person", "legs": [{"from": "X", "to": "X", "units_per_unit": "3"}]}
+    ],
+    "expect": {"position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "qty": "200", "pnl": "200.00", "flags": ["split"]}]}
+  },
+  {
+    "name": "two sources that state one event differently explain it not at all, and the holding waits on the conflict",
+    "spec": "bagholder_core::adjustment; docs/plans/stage-2-engine.md: nothing the record does not settle is worked out",
+    "working": [
+      "100 X bought for 1,000; a split marker; the issuer states 2 for 1, the exchange 3 for 1: neither supersedes the other",
+      "the marker moves nothing and the holding waits (adjustment-conflict); 200 sold for 1,200 is beyond the 100 held, so the round trip waits on both"
+    ],
+    "today": "2026-06-01",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"},
+      {"id": "t3", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-200", "cash": "1200"}
+    ],
+    "adjustments": [
+      {"applies_to": "t2", "source": "issuer", "legs": [{"from": "X", "to": "X", "units_per_unit": "2"}]},
+      {"applies_to": "t2", "source": "tmx", "legs": [{"from": "X", "to": "X", "units_per_unit": "3"}]}
+    ],
+    "expect": {"beyond": ["t3"], "trades": [{"opened_by": "t1", "pnl": {"gaps": ["adjustment-conflict", "beyond-held"]}}]}
+  },
+  {
+    "name": "two entries by the person that disagree on a deposit's cost leave it waiting on the conflict",
+    "spec": "bagholder_core::adjustment",
+    "working": ["1 ETH transferred in; the person has two entries for its cost, 2,000 and 2,500; sold for 3,000: the P&L waits (adjustment-conflict)"],
+    "today": "2026-04-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-03-01", "at": "2026-03-01T15:00:00Z", "kind": "transfer-in", "instrument": "ETH", "qty": "1"},
+      {"id": "t2", "account": "C", "day": "2026-03-15", "at": "2026-03-15T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-1", "cash": "3000"}
+    ],
+    "adjustments": [
+      {"applies_to": "t1", "source": "person", "legs": [{"to": "ETH", "cost": "2000", "acquired": "2025-06-01"}]},
+      {"applies_to": "t1", "source": "person", "legs": [{"to": "ETH", "cost": "2500", "acquired": "2025-06-01"}]}
+    ],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": {"gaps": ["adjustment-conflict"]}}]}
+  }
+]

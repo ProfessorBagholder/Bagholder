@@ -31,6 +31,9 @@ pub enum Gap {
     NoExpiryRecord(InstrumentId),
     /// A corporate event whose kind and values are not known yet.
     EventUnknown(TransactionId),
+    /// Two adjustments that explain one transaction differently, neither
+    /// superseding the other.
+    AdjustmentConflict(TransactionId),
     /// An asset deposited into the account: what it cost is not on the record.
     BasisUnknown(TransactionId),
     /// A sale or close of more than the account held.
@@ -74,6 +77,7 @@ impl Gap {
             Gap::LegUnstated(_) => "leg-unstated",
             Gap::NoExpiryRecord(_) => "no-expiry-record",
             Gap::EventUnknown(_) => "event-unknown",
+            Gap::AdjustmentConflict(_) => "adjustment-conflict",
             Gap::BasisUnknown(_) => "basis-unknown",
             Gap::BeyondHeld(_) => "beyond-held",
             Gap::EffectConflict(_) => "effect-conflict",
@@ -100,6 +104,7 @@ impl fmt::Display for Gap {
             Gap::LegUnstated(t) => write!(f, "{t} is a multi-leg order whose legs are not on the record"),
             Gap::NoExpiryRecord(i) => write!(f, "{i} is past its expiry with nothing on the record"),
             Gap::EventUnknown(t) => write!(f, "the corporate event {t} has no known values yet"),
+            Gap::AdjustmentConflict(t) => write!(f, "two sources explain {t} differently"),
             Gap::BasisUnknown(t) => write!(f, "what the asset deposited by {t} cost is not on the record"),
             Gap::BeyondHeld(t) => write!(f, "{t} takes out more than the account held"),
             Gap::EffectConflict(t) => write!(f, "{t} says it opens a position while the account holds the opposite one"),

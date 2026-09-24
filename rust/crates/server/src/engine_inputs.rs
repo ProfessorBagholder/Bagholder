@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use bagholder_book::facts::DistributionKind as BookKind;
 use bagholder_book::Book;
 use bagholder_core::names::SourceName;
-use bagholder_engine::input::{Read, AccountInfo, Declared, DeclaredRead, DistributionKind, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, DistributionKind, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -75,7 +75,7 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
         })
         .collect();
     let frequencies = book.frequencies().map_err(err)?.into_iter().map(|(i, f)| (i, Sourced { value: f.per_year, source: f.source })).collect();
-    let adjustments = book.adjustments().map_err(err)?.into_iter().map(|a| (a.applies_to.clone(), a)).collect();
+    let adjustments = Adjustments::choose(book.adjustments().map_err(err)?);
     Ok(Facts { rates, declared, frequencies, adjustments })
 }
 

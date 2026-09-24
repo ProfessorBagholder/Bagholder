@@ -12,7 +12,7 @@ use serde_json::Value;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{Group, JournalEntry, JournalSubject};
 use bagholder_core::{Currency, Dec, Money, SourceName};
-use bagholder_engine::input::{Adjustment, AdjustmentLeg, BrokerAccount, Declared, DeclaredRead, DistributionKind, Inputs, Quote, QuoteSource, Sourced};
+use bagholder_engine::input::{Adjustment, AdjustmentLeg, Adjustments, BrokerAccount, Declared, DeclaredRead, DistributionKind, Inputs, Quote, QuoteSource, Sourced};
 use bagholder_engine::{Change, Engine};
 use common::*;
 
@@ -122,10 +122,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let trades: Vec<_> = i.ledger.trades.iter().filter(|t| t.id != x_trade).cloned().collect();
     // the person states what the deposited coin cost
     let btc = b.ids.instrument("BTC");
-    let adjustments = BTreeMap::from([(
-        b.tx["k1"].clone(),
-        Adjustment { applies_to: b.tx["k1"].clone(), legs: vec![AdjustmentLeg { to: Some(btc), cost: Some(Money::new(d("25000"), Currency::CAD)), ..AdjustmentLeg::default() }], source: SourceName::named("person") },
-    )]);
+    let adjustments = Adjustments::choose([Adjustment { applies_to: b.tx["k1"].clone(), legs: vec![AdjustmentLeg { to: Some(btc), cost: Some(Money::new(d("25000"), Currency::CAD)), ..AdjustmentLeg::default() }], source: SourceName::named("person") }]);
     let mut rates = i.facts.rates.clone();
     rates.by_currency.get_mut(&Currency::USD).unwrap().insert(day("2026-04-20"), d("1.39"));
     let declared = DeclaredRead {

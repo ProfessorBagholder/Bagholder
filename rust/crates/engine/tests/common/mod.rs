@@ -18,7 +18,7 @@ use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject
 use bagholder_core::record::Problem;
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, Broker, ConnectionId, Currency, Dec, GroupId, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
-use bagholder_engine::input::{Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, DistributionKind, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Sourced};
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, DistributionKind, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Sourced};
 use bagholder_engine::{Change, Engine};
 
 /// Labels to ids: the same label is the same id throughout a case.
@@ -228,7 +228,7 @@ pub fn build(case: &Value) -> Built {
         declared.insert(ids.instrument(&i), DeclaredRead { read_at: Timestamp::UNIX_EPOCH, source: SourceName::named("tmx"), items });
     }
     let frequencies = obj(case, "frequencies").into_iter().map(|(i, n)| (ids.instrument(&i), Sourced { value: n.as_u64().unwrap() as u32, source: SourceName::named("tmx") })).collect();
-    let mut adjustments = BTreeMap::new();
+    let mut adjustments = Vec::new();
     for a in arr(case, "adjustments") {
         let applies_to = tx[s(&a, "applies_to").unwrap()].clone();
         let legs = arr(&a, "legs")
@@ -244,9 +244,9 @@ pub fn build(case: &Value) -> Built {
             })
             .collect();
         let source = SourceName::parse(s(&a, "source").unwrap_or("issuer")).unwrap();
-        adjustments.insert(applies_to.clone(), Adjustment { applies_to, legs, source });
+        adjustments.push(Adjustment { applies_to, legs, source });
     }
-    let facts = Facts { rates, declared, frequencies, adjustments };
+    let facts = Facts { rates, declared, frequencies, adjustments: Adjustments::choose(adjustments) };
 
     let mut market = Market::default();
     for (i, q) in obj(case, "quotes") {

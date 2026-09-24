@@ -12,7 +12,7 @@ use bagholder_core::{AccountId, Dec, InstrumentId, TransactionId};
 use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
 use crate::identity::{identify, Identity};
-use crate::input::{Adjustment, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
+use crate::input::{Adjustments, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
 use crate::ledger::{match_lots, Direction, Matched};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
@@ -29,7 +29,7 @@ pub enum Change {
     Trades(Vec<Trade>),
     Groups(Vec<Group>),
     Journal(BTreeMap<JournalSubject, JournalEntry>),
-    Adjustments(BTreeMap<TransactionId, Adjustment>),
+    Adjustments(Adjustments),
     Rates(Rates),
     Declared(InstrumentId, Option<DeclaredRead>),
     Frequency(InstrumentId, Option<Sourced<u32>>),

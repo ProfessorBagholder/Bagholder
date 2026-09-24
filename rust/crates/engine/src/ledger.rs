@@ -988,6 +988,7 @@ impl<'a> Matcher<'a> {
             let stated = self.inputs.facts.adjustments.get(&t.id).and_then(|a| a.legs.iter().find(|l| l.from.is_none() && l.to == Some(instrument) && l.cost.is_some()).cloned());
             let (value, day) = match stated {
                 Some(leg) => (Ok(leg.cost.expect("filtered")), leg.acquired.unwrap_or(t.trade_date)),
+                None if self.inputs.facts.adjustments.in_conflict(&t.id) => (Err(Gaps::of(Gap::AdjustmentConflict(t.id.clone()))), t.trade_date),
                 None => (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date),
             };
             let value = match value {
@@ -1121,7 +1122,7 @@ impl<'a> Matcher<'a> {
             // nothing says what this event was: the units the broker states move
             // at an unknown cost, and the holding waits on it
             let Some(instrument) = t.instrument else { return };
-            let unknown = Gaps::of(Gap::EventUnknown(t.id.clone()));
+            let unknown = if self.inputs.facts.adjustments.in_conflict(&t.id) { Gaps::of(Gap::AdjustmentConflict(t.id.clone())) } else { Gaps::of(Gap::EventUnknown(t.id.clone())) };
             self.taint(account, instrument, &unknown);
             if let Some(q) = t.quantity.filter(|q| !q.is_zero()) {
                 if q.is_positive() {
@@ -1388,7 +1389,7 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
     };
     // each adjustment's event: its own row and the event rows of that account and
     // day on the instruments its legs name
-    for (applies_to, adj) in &inputs.facts.adjustments {
+    for (applies_to, adj) in inputs.facts.adjustments.iter() {
         let Some(anchor) = ledger.transactions.iter().find(|t| &t.id == applies_to) else { continue };
         if anchor.kind != Kind::CorporateEvent {
             continue;

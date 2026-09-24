@@ -143,7 +143,51 @@ pub struct Facts {
     /// Payments per year as a source states it.
     pub frequencies: BTreeMap<InstrumentId, Sourced<u32>>,
     /// By the transaction each explains.
-    pub adjustments: BTreeMap<TransactionId, Adjustment>,
+    pub adjustments: Adjustments,
+}
+
+/// The adjustment that explains each transaction, chosen from every one the
+/// book holds: a sourced one supersedes the person's own; two that explain one
+/// transaction differently, with neither superseding the other, explain it not
+/// at all and are named as a conflict.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Adjustments {
+    chosen: BTreeMap<TransactionId, Adjustment>,
+    conflicts: BTreeSet<TransactionId>,
+}
+
+impl Adjustments {
+    pub fn choose(all: impl IntoIterator<Item = Adjustment>) -> Adjustments {
+        let mut by_tx: BTreeMap<TransactionId, Vec<Adjustment>> = BTreeMap::new();
+        for a in all {
+            by_tx.entry(a.applies_to.clone()).or_default().push(a);
+        }
+        let mut out = Adjustments::default();
+        for (tx, list) in by_tx {
+            let person = SourceName::person();
+            let sourced: Vec<&Adjustment> = list.iter().filter(|a| a.source != person).collect();
+            let standing: Vec<&Adjustment> = if sourced.is_empty() { list.iter().collect() } else { sourced };
+            if standing.iter().all(|a| a.legs == standing[0].legs) {
+                out.chosen.insert(tx, standing[0].clone());
+            } else {
+                out.conflicts.insert(tx);
+            }
+        }
+        out
+    }
+
+    pub fn get(&self, transaction: &TransactionId) -> Option<&Adjustment> {
+        self.chosen.get(transaction)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&TransactionId, &Adjustment)> {
+        self.chosen.iter()
+    }
+
+    /// Whether adjustments that disagree leave the transaction unexplained.
+    pub fn in_conflict(&self, transaction: &TransactionId) -> bool {
+        self.conflicts.contains(transaction)
+    }
 }
 
 /// Where a quote came from, as far as it decides what the quote may price
