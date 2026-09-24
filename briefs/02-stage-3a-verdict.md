@@ -21,11 +21,11 @@ Both follow the owner's decisions of 2026-09-23 and 2026-09-24.
 
 ## Required changes
 
-**1. Mackenzie and WisdomTree: the plan contradicts itself.**
-- "Distributions and schedules" follows the owner's exception of 2026-09-24: these three funds take the listing's exchange-side record (TMX, Yahoo).
-- The acceptance criteria still say "Mackenzie's and WisdomTree's funds shown as waiting on their payer, named", and `stage-3a-research.md` still says they wait "until the owner decides".
-
-Make the criterion test what the approach says, and update the research note.
+**1. Mackenzie and WisdomTree: stated facts only, never a worked-out schedule.**
+For the three funds whose company site the app cannot read (the owner's exception of 2026-09-24):
+- **Distributions:** take them from the listing's exchange-side record (TMX, Yahoo), marked with that source. They are the fund's declarations as the exchange publishes them.
+- **The schedule:** use it only where a source states it. Drop "else worked out from its ex-dates" (plan, "Distributions and schedules"). Working a schedule out from past dates is the inference the owner ruled out: it showed Ninepoint as monthly for six weeks after the change. Where no readable source states the schedule, the fund's annual income is a gap naming why (its company's site cannot be read), never a worked-out number.
+- **The acceptance criterion** that says these funds are "shown as waiting on their payer" becomes: distributions from the exchange-side record; the schedule where stated, otherwise the income figure shown as a named gap. Update `stage-3a-research.md`'s "until the owner decides" to match.
 
 **2. Option closes are lost every session until something reads them.**
 The plan says rightly that no source gives a contract's close later. But in 3a the readers run only when someone runs the command, the server calls them only from 3c, and the owner runs the Python app until cutover. Every session day from now until then is a close lost for good. Before building the option-close reader:
