@@ -134,30 +134,178 @@ fn pool() -> &'static Mutex<HashMap<String, Vec<Conn>>> {
     P.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn open(u: &Url, timeout: Duration) -> Result<Conn, Error> {
-    let addr = format!("{}:{}", u.host, u.port);
-    let sock = addr
-        .to_socket_addrs_first()
-        .ok_or_else(|| Error::Transport(format!("cannot resolve {}", u.host)))?;
-    let tcp = TcpStream::connect_timeout(&sock, timeout).map_err(transport)?;
+fn tcp_to(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Error> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<std::net::SocketAddr> = (host, port).to_socket_addrs().map(|a| a.collect()).unwrap_or_default();
+    if addrs.is_empty() {
+        return Err(Error::Transport(format!("cannot resolve {host}")));
+    }
+    // each address the name resolves to, in turn: a host listening on one family
+    // only (a local proxy on 127.0.0.1 while `localhost` is ::1 first) is reached
+    let mut last = None;
+    let mut tcp = None;
+    for a in &addrs {
+        match TcpStream::connect_timeout(a, timeout) {
+            Ok(t) => {
+                tcp = Some(t);
+                break;
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    let tcp = match tcp {
+        Some(t) => t,
+        None => return Err(transport(last.expect("an address was tried"))),
+    };
     tcp.set_read_timeout(Some(timeout)).map_err(transport)?;
     tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
     tcp.set_nodelay(true).ok();
+    Ok(tcp)
+}
+
+fn open(u: &Url, timeout: Duration) -> Result<Conn, Error> {
     if !u.tls {
-        return Ok(Conn::Plain(tcp));
+        return Ok(Conn::Plain(tcp_to(&u.host, u.port, timeout)?));
     }
+    let env = |k: &str| std::env::var(k).ok().or_else(|| std::env::var(k.to_ascii_lowercase()).ok()).filter(|v| !v.trim().is_empty());
+    let tcp = match proxy::for_host(env("HTTPS_PROXY").as_deref(), env("NO_PROXY").as_deref(), &u.host) {
+        Some(p) => {
+            let mut tcp = tcp_to(&p.host, p.port, timeout)?;
+            proxy::tunnel(&mut tcp, &p, &u.host, u.port)?;
+            tcp
+        }
+        None => tcp_to(&u.host, u.port, timeout)?,
+    };
     let s = connector().connect(&u.host, tcp).map_err(|e| Error::Transport(e.to_string()))?;
     Ok(Conn::Tls(Box::new(s)))
 }
 
-trait FirstAddr {
-    fn to_socket_addrs_first(&self) -> Option<std::net::SocketAddr>;
-}
+/// An HTTPS request through the proxy the environment names (`HTTPS_PROXY`,
+/// with `NO_PROXY`'s exceptions), the way curl and every other client reads
+/// them: a `CONNECT` tunnel to the host, and TLS with the host through it, so
+/// the handshake a host gates on is still this client's own.
+mod proxy {
+    use std::io::{Read, Write};
+    use std::net::{IpAddr, TcpStream};
 
-impl FirstAddr for String {
-    fn to_socket_addrs_first(&self) -> Option<std::net::SocketAddr> {
-        use std::net::ToSocketAddrs;
-        self.to_socket_addrs().ok()?.next()
+    use super::Error;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Proxy {
+        pub host: String,
+        pub port: u16,
+        /// `user:password` from the proxy's URL, sent as basic authorization.
+        pub auth: Option<String>,
+    }
+
+    fn parse(url: &str) -> Option<Proxy> {
+        let rest = url.split_once("://").map_or(url, |(scheme, rest)| if scheme.eq_ignore_ascii_case("http") { rest } else { "" });
+        let authority = rest.split('/').next()?;
+        let (auth, hostport) = match authority.rsplit_once('@') {
+            Some((a, h)) => (Some(a.to_string()), h),
+            None => (None, authority),
+        };
+        let (host, port) = match hostport.rsplit_once(':') {
+            Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (h, p.parse().ok()?),
+            _ => (hostport, 80),
+        };
+        if host.is_empty() {
+            return None;
+        }
+        Some(Proxy { host: host.trim_matches(['[', ']']).to_string(), port, auth })
+    }
+
+    /// Whether `NO_PROXY` exempts `host`: `*`, the host itself, a domain it is
+    /// under (`example.com` and `.example.com` both), or an address range.
+    fn exempt(no_proxy: &str, host: &str) -> bool {
+        let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+        let ip: Option<IpAddr> = host.parse().ok();
+        no_proxy.split(',').map(str::trim).filter(|e| !e.is_empty()).any(|e| {
+            let e = e.to_ascii_lowercase();
+            if e == "*" {
+                return true;
+            }
+            if let (Some(ip), Some((net, bits))) = (ip, e.split_once('/')) {
+                return match (ip, net.parse::<IpAddr>(), bits.parse::<u32>()) {
+                    (IpAddr::V4(a), Ok(IpAddr::V4(n)), Ok(b)) if b <= 32 => {
+                        let mask = if b == 0 { 0 } else { u32::MAX << (32 - b) };
+                        u32::from(a) & mask == u32::from(n) & mask
+                    }
+                    (IpAddr::V6(a), Ok(IpAddr::V6(n)), Ok(b)) if b <= 128 => {
+                        let mask = if b == 0 { 0 } else { u128::MAX << (128 - b) };
+                        u128::from(a) & mask == u128::from(n) & mask
+                    }
+                    _ => false,
+                };
+            }
+            let d = e.trim_start_matches('.');
+            host == d || host.ends_with(&format!(".{d}"))
+        })
+    }
+
+    pub fn for_host(https_proxy: Option<&str>, no_proxy: Option<&str>, host: &str) -> Option<Proxy> {
+        if no_proxy.is_some_and(|n| exempt(n, host)) {
+            return None;
+        }
+        parse(https_proxy?.trim())
+    }
+
+    /// Ask the proxy for a tunnel to `host:port`; anything but a 2xx is the
+    /// proxy's refusal, named with its status line.
+    pub fn tunnel(tcp: &mut TcpStream, p: &Proxy, host: &str, port: u16) -> Result<(), Error> {
+        let mut req = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n");
+        if let Some(a) = &p.auth {
+            req.push_str(&format!("Proxy-Authorization: Basic {}\r\n", openssl::base64::encode_block(a.as_bytes())));
+        }
+        req.push_str("\r\n");
+        tcp.write_all(req.as_bytes()).map_err(super::transport)?;
+        // the proxy's reply ends with its blank line; nothing of the tunnel follows
+        // until the handshake is sent, so it is read a byte at a time
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if tcp.read(&mut byte).map_err(super::transport)? == 0 {
+                return Err(Error::Transport(format!("the proxy {}:{} closed before answering", p.host, p.port)));
+            }
+            head.push(byte[0]);
+            if head.len() > 16 * 1024 {
+                return Err(Error::Transport("the proxy's answer has no end".into()));
+            }
+        }
+        let status = String::from_utf8_lossy(&head);
+        let line = status.lines().next().unwrap_or("");
+        match line.split_whitespace().nth(1) {
+            Some(code) if code.starts_with('2') => Ok(()),
+            _ => Err(Error::Transport(format!("the proxy {}:{} refused a tunnel to {host}: {line}", p.host, p.port))),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_proxy_is_read_as_curl_reads_it() {
+            let p = for_host(Some("http://user:pa55@localhost:60265"), Some("localhost,127.0.0.1"), "www.bankofcanada.ca").unwrap();
+            assert_eq!(p, Proxy { host: "localhost".into(), port: 60265, auth: Some("user:pa55".into()) });
+            assert_eq!(for_host(Some("proxy.example:3128"), None, "a.b").unwrap().port, 3128);
+            assert_eq!(for_host(Some("http://proxy.example"), None, "a.b").unwrap().port, 80);
+            assert!(for_host(None, None, "a.b").is_none());
+            // a proxy that is not http is not one this client can speak to
+            assert!(for_host(Some("socks5://proxy.example:1080"), None, "a.b").is_none());
+        }
+
+        #[test]
+        fn no_proxy_exempts_hosts_domains_and_ranges() {
+            let n = "localhost, .internal.example, example.org, 10.0.0.0/8, ::1/128";
+            for host in ["localhost", "a.internal.example", "internal.example", "www.example.org", "10.1.2.3", "[::1]"] {
+                assert!(for_host(Some("http://p:1"), Some(n), host).is_none(), "{host}");
+            }
+            for host in ["notexample.org", "11.0.0.1", "www.bankofcanada.ca"] {
+                assert!(for_host(Some("http://p:1"), Some(n), host).is_some(), "{host}");
+            }
+            assert!(for_host(Some("http://p:1"), Some("*"), "anything").is_none());
+        }
     }
 }
 
