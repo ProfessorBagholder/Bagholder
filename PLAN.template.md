@@ -16,7 +16,7 @@ What the old app does in this area, what is wrong with it (with its entry in `do
 
 ## How the leading products do it
 
-Bagholder is a trading journal: every definition, figure and behaviour this plan sets is checked first against how the leading journals (TradeZella, Tradervue, TraderSync, Edgewonk), brokers and industry standards do it, from their own documentation, each fact with its link and the date it was read. `SPEC.md`, the engine and what the app did before are what is being checked here, never the evidence. Where this plan departs from the practice found, say why. A plan without this section, or with no source link in it, fails `rust/crates/core/tests/plans.rs`.
+Bagholder is a trading journal: every definition, figure and behaviour this plan sets is checked first against how the leading journals (TradeZella, Tradervue, TraderSync, Edgewonk), brokers and industry standards do it, from their own documentation, each fact with its link and the date it was read. `SPEC.md`, the engine and what the app did before are what is being checked here, never the evidence. Where this plan departs from the practice found, say why.
 
 ## Open questions
 
