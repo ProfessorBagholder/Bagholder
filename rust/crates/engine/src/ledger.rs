@@ -830,6 +830,10 @@ impl<'a> Matcher<'a> {
             }
             let gaps = Gaps::of(Gap::QuantityUnstated(t.id.clone()));
             self.taint(account, instrument, &gaps);
+            if let Some((_, dest, dest_instr)) = self.link_of(t, instrument) {
+                // what arrives from it waits as well
+                self.taint(dest, dest_instr, &gaps);
+            }
             return self.unapplied(t, gaps);
         };
         let qty = q.abs();
@@ -994,16 +998,28 @@ impl<'a> Matcher<'a> {
             self.open_lot(account, instrument, &t.id, day, t.occurred_at, Direction::Long, qty, value, Money::zero(currency), flags, None);
             return;
         }
+        let link = self.link_of(t, instrument);
+        // what the holding waits on goes with what leaves it
+        let waiting = self.book(account, instrument).taint.clone();
         match self.take(account, instrument, qty) {
             Ok((lots, left)) => {
                 if left.is_positive() {
                     self.beyond(t, account, instrument, left);
                 }
-                let Some(to) = self.links_out.get(&t.id).cloned() else { return };
                 // the person's own accounts: the lots move with their cost and dates
-                let Some(recv) = self.inputs.ledger.transactions.iter().find(|x| x.id == to) else { return };
-                let (dest, dest_instr) = (recv.account, recv.instrument.unwrap_or(instrument));
+                let Some((to, dest, dest_instr)) = link else { return };
                 self.consumed.insert(to.clone());
+                if !waiting.is_empty() {
+                    self.taint(dest, dest_instr, &waiting);
+                }
+                if left.is_positive() {
+                    // units beyond what was held arrive all the same, their cost
+                    // not on the record
+                    let own = TripKey { opening: to.clone(), instrument: dest_instr };
+                    let flags = BTreeSet::from([Flag::Transferred]);
+                    let currency = self.currency(dest_instr);
+                    self.open_lot(dest, dest_instr, &to, t.trade_date, t.occurred_at, Direction::Long, left, Err(Gaps::of(Gap::BeyondHeld(t.id.clone()))), Money::zero(currency), flags, Some(own));
+                }
                 let whole = self.book(account, instrument).lots.is_empty();
                 if whole {
                     // the whole holding moved: it is the same round trip, held elsewhere
@@ -1025,8 +1041,26 @@ impl<'a> Matcher<'a> {
                     }
                 }
             }
-            Err(g) => self.taint(account, instrument, &g),
+            Err(g) => {
+                self.taint(account, instrument, &g);
+                if let Some((to, dest, dest_instr)) = link {
+                    // the units arrive, what they cost waiting on what failed here
+                    self.consumed.insert(to.clone());
+                    let own = TripKey { opening: to.clone(), instrument: dest_instr };
+                    let flags = BTreeSet::from([Flag::Transferred]);
+                    let currency = self.currency(dest_instr);
+                    self.open_lot(dest, dest_instr, &to, t.trade_date, t.occurred_at, Direction::Long, qty, Err(g.clone()), Money::zero(currency), flags, Some(own));
+                    self.taint(dest, dest_instr, &g);
+                }
+            }
         }
+    }
+
+    /// A transfer out's linked receiving side: its id, account and instrument.
+    fn link_of(&self, t: &Transaction, instrument: InstrumentId) -> Option<(TransactionId, AccountId, InstrumentId)> {
+        let to = self.links_out.get(&t.id)?;
+        let recv = self.inputs.ledger.transactions.iter().find(|x| &x.id == to)?;
+        Some((to.clone(), recv.account, recv.instrument.unwrap_or(instrument)))
     }
 
     /// An assignment or exercise: the contract closes at zero, keeping its

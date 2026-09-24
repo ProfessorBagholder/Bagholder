@@ -90,6 +90,50 @@
     "expect": {"trade_count": 1, "trades": [{"opened_by": "t1", "pnl": "50.00", "hold_days": 27, "flags": ["transferred"]}]}
   },
   {
+    "name": "what a holding waits on moves with it to another of the person's accounts",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: a holding that waits carries the wait on every figure matched in it",
+    "working": [
+      "A: a purchase of X that states no quantity (the holding waits: quantity-unstated); 10 X bought for 100; all 10 moved to B (linked)",
+      "B sells the 10 for 150: the round trip's P&L waits on the same unstated quantity, never 50"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t0", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "X", "cash": "-30"},
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-100"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10"},
+      {"id": "t4", "account": "B", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "150"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {"trades": [{"opened_by": "t1", "pnl": {"gaps": ["quantity-unstated"]}}]}
+  },
+  {
+    "name": "a linked transfer of more than was held still delivers every unit it moved, the extra at a cost not on the record",
+    "spec": "docs/plans/stage-2-engine.md, the ledger: a sale or move of more than held is beyond-held, never dropped",
+    "working": [
+      "A: 6 X bought for 60; 10 moved to B (linked): 4 beyond what A held",
+      "B receives all 10: the 6 lots continue the round trip, the 4 are a round trip of their own opened by the receiving transfer, cost waiting (beyond-held)",
+      "B sells 10 for 150: 6 at 90 against 60 → P&L 30; 4 at 60 against no stated cost → waits; the sale itself is within what B holds"
+    ],
+    "today": "2026-03-01",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "6", "cash": "-60"},
+      {"id": "t2", "account": "A", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-out", "instrument": "X", "qty": "-10"},
+      {"id": "t3", "account": "B", "day": "2026-01-10", "at": "2026-01-10T15:00:00Z", "kind": "transfer-in", "instrument": "X", "qty": "10"},
+      {"id": "t4", "account": "B", "day": "2026-02-01", "at": "2026-02-01T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-10", "cash": "150"}
+    ],
+    "transfer_links": [{"out": "t2", "in": "t3"}],
+    "expect": {
+      "position_count": 0,
+      "beyond": ["t2"],
+      "trades": [{"opened_by": "t1", "pnl": "30.00"}, {"opened_by": "t3", "pnl": {"gaps": ["beyond-held"]}}]
+    }
+  },
+  {
     "name": "part of a holding moved to another account is a round trip of its own there, keeping the day it was bought",
     "spec": "docs/plans/stage-2-engine.md, transfers and trade identity: a part moved is a new round trip, so no two positions share an id",
     "working": [
