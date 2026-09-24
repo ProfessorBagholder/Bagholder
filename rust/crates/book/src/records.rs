@@ -194,7 +194,7 @@ impl Book {
     fn derive(&self, record: RecordId, connection: Option<ConnectionId>, payload: &str, mapping: &dyn Mapping, at: jiff::Timestamp) -> Result<Changes> {
         let source = mapping.source();
         let version = mapping.version();
-        let ctx = MapContext { connection, zones: &self.zones };
+        let ctx = MapContext { connection, record: record.clone(), zones: &self.zones };
         let mapped = mapping.map(&ctx, payload);
         let mut problems = mapped.problems.clone();
 

@@ -27,7 +27,47 @@ fn main() {
         assert!(left.is_empty(), "{op}: identifying values left at {left:?}");
         let i = n.entry(op.clone()).or_default();
         *i += 1;
-        let path = format!("{out}/{op}-{i}.json");
+        // a positions reply names neither its account nor its day: the file does,
+        // from what was asked (the account's stand-in and the day)
+        let path = match (op.as_str(), map.get("variables")) {
+            ("FetchHoldingsExportPositionsAsOfDate", Some(Value::Object(vars))) => {
+                let account = match vars.get("accountIds") {
+                    Some(Value::Array(ids)) if ids.len() == 1 => {
+                        let mut one = std::collections::BTreeMap::new();
+                        one.insert("accountId".to_string(), ids[0].clone());
+                        match a.value(&Value::Object(one)) {
+                            Value::Object(m) => match m.get("accountId") {
+                                Some(Value::String(s)) => s.clone(),
+                                _ => panic!("{op}: an account id that is not text"),
+                            },
+                            _ => unreachable!("an object stays an object"),
+                        }
+                    }
+                    // several accounts in one reply: one file per account, each
+                    // the reply with that account alone
+                    _ => {
+                        let Some(Value::String(day)) = vars.get("asOf") else { panic!("{op}: positions asked with no day") };
+                        let Value::Object(root) = &clean else { panic!("{op}: a reply that is not an object") };
+                        let Some(Value::Object(data)) = root.get("data") else { panic!("{op}: no data") };
+                        let Some(Value::Array(accounts)) = data.get("accounts") else { panic!("{op}: no accounts") };
+                        for acc in accounts {
+                            let Value::Object(am) = acc else { continue };
+                            let Some(Value::String(id)) = am.get("id") else { continue };
+                            let mut d = std::collections::BTreeMap::new();
+                            d.insert("accounts".to_string(), Value::Array(vec![acc.clone()]));
+                            let mut r = std::collections::BTreeMap::new();
+                            r.insert("data".to_string(), Value::Object(d));
+                            let path = format!("{out}/positions@{id}@{day}.json");
+                            std::fs::write(&path, Value::Object(r).canonical()).unwrap_or_else(|e| panic!("{path}: {e}"));
+                        }
+                        continue;
+                    }
+                };
+                let Some(Value::String(day)) = vars.get("asOf") else { panic!("{op}: positions asked with no day") };
+                format!("{out}/positions@{account}@{day}.json")
+            }
+            _ => format!("{out}/{op}-{i}.json"),
+        };
         std::fs::write(&path, clean.canonical()).unwrap_or_else(|e| panic!("{path}: {e}"));
     }
     for (op, count) in n {

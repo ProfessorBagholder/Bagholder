@@ -33,3 +33,15 @@ fn a_leak_is_named_by_its_path() {
     let v = json::parse(r#"{"rows":[{"accountId":"tfsa-abc123"}]}"#).unwrap();
     assert_eq!(leaks(&v), vec!["rows[0].accountId".to_string()]);
 }
+
+#[test]
+fn everything_about_an_account_s_owner_is_replaced() {
+    let v = json::parse(r#"{"accountOwners":[{"name":"Jane Doe","legalName":"Jane Q Doe","email":"j@d.ca","ownershipType":"primary","identityId":"identity-1"}],"nickname":"My TFSA"}"#).unwrap();
+    let out = Anonymiser::default().value(&v);
+    assert!(leaks(&out).is_empty(), "{:?}", leaks(&out));
+    let text = out.canonical();
+    for word in ["Jane", "j@d.ca", "My TFSA", "\"identity-1"] {
+        assert!(!text.contains(word), "{word} left in {text}");
+    }
+    assert!(text.contains("primary"));
+}

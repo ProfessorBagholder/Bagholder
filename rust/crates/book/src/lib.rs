@@ -14,6 +14,7 @@ pub mod links;
 pub mod mapping;
 pub mod records;
 pub mod schema;
+pub mod statements;
 pub mod trades;
 pub mod zones;
 

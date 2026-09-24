@@ -21,6 +21,9 @@ use bagholder_core::{ConnectionId, Currency, Dec, Leg, Money, SourceName};
 pub struct MapContext<'a> {
     /// The connection the record came through, if any.
     pub connection: Option<ConnectionId>,
+    /// The record being mapped: what an adjustment on its own transactions
+    /// applies to (a corporate event's row states what the event did).
+    pub record: bagholder_core::RecordId,
     pub zones: &'a crate::zones::Zones,
 }
 

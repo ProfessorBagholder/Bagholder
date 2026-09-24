@@ -11,5 +11,11 @@ rust-version.workspace = true
 # to its column.
 [dependencies]
 bagholder-core = { path = "../core" }
+# the mapping the book derives Wealthsimple's records by
+bagholder-book = { path = "../book" }
+jiff = "0.2"
 # the strict reply reader and the recorded-replies shape, shared with the sources
 bagholder-sources = { path = "../sources" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -362,9 +362,15 @@ impl Book {
 /// What Wealthsimple's `unifiedAccountType` says an account is, in Bagholder's
 /// vocabulary; a type not listed here is kept in Wealthsimple's words.
 pub fn account_type(a: &OldAccount) -> AccountType {
+    wealthsimple_account_type(a.unified_account_type.as_deref().unwrap_or(""))
+}
+
+/// What Wealthsimple's `unifiedAccountType` words say an account is, in
+/// Bagholder's vocabulary; words not listed here are kept as they are.
+pub fn wealthsimple_account_type(words: &str) -> AccountType {
     use AccountKind::*;
     use Registration::*;
-    let words = a.unified_account_type.clone().unwrap_or_default();
+    let words = words.to_string();
     let known = |kind, registration, managed, joint| AccountType::Known { kind, registration, managed, joint };
     match words.as_str() {
         "SELF_DIRECTED_NON_REGISTERED" => known(Cash, Unregistered, false, false),

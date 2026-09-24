@@ -28,6 +28,10 @@ pub const IDENTIFIERS: &[&str] = &[
     "externalId",
     "orderId",
     "groupId",
+    "applicationFamilyId",
+    "userReferenceId",
+    "idempotencyKey",
+    "externalReferenceId",
     // a page cursor spells the ids of the row it stops at
     "endCursor",
     "cursor",
@@ -53,7 +57,17 @@ pub const PERSONAL: &[&str] = &[
     "title",
     "subtitle",
     "email",
+    "legalName",
+    "accountNickname",
+    "clientCanonicalId",
 ];
+
+/// Objects under these fields describe a person: every text in them is
+/// personal, but the few that only classify.
+pub const PEOPLE: &[&str] = &["accountOwners", "sentInvitations", "activeInvitation", "accountEntityRelationships"];
+
+/// Texts inside a person's object that only classify, and stay.
+const CLASSIFYING: &[&str] = &["ownershipType", "__typename", "status", "type", "role"];
 
 /// The prefix every stand-in starts with.
 pub const STAND_IN: &str = "anon-";
@@ -94,14 +108,17 @@ impl Anonymiser {
 
     /// The value with every identifying text replaced.
     pub fn value(&mut self, v: &Value) -> Value {
-        self.walk(v, None)
+        self.walk(v, None, false)
     }
 
-    fn walk(&mut self, v: &Value, key: Option<&str>) -> Value {
+    fn walk(&mut self, v: &Value, key: Option<&str>, person: bool) -> Value {
         match v {
-            Value::String(t) if key.is_some_and(|k| must_be_stand_in(k, t)) => Value::String(self.stand_in(key.unwrap_or_default(), t)),
-            Value::Array(items) => Value::Array(items.iter().map(|i| self.walk(i, key)).collect()),
-            Value::Object(map) => Value::Object(map.iter().map(|(k, item)| (k.clone(), self.walk(item, Some(k)))).collect()),
+            Value::String(t) if key.is_some_and(|k| must_be_stand_in(k, t) || (person && !CLASSIFYING.contains(&k))) => {
+                let k = key.unwrap_or_default();
+                Value::String(self.stand_in(if person && !IDENTIFIERS.contains(&k) { "email" } else { k }, t))
+            }
+            Value::Array(items) => Value::Array(items.iter().map(|i| self.walk(i, key, person)).collect()),
+            Value::Object(map) => Value::Object(map.iter().map(|(k, item)| (k.clone(), self.walk(item, Some(k), person || PEOPLE.contains(&k.as_str())))).collect()),
             other => other.clone(),
         }
     }
@@ -109,29 +126,29 @@ impl Anonymiser {
 
 /// Every place in a value where identifying text is not a stand-in: its path.
 pub fn leaks(v: &Value) -> Vec<String> {
-    fn walk(v: &Value, key: Option<&str>, path: &str, out: &mut Vec<String>) {
+    fn walk(v: &Value, key: Option<&str>, person: bool, path: &str, out: &mut Vec<String>) {
         match v {
             Value::String(t) => {
                 if let Some(k) = key {
-                    if must_be_stand_in(k, t) && !t.starts_with(STAND_IN) {
+                    if (must_be_stand_in(k, t) || (person && !CLASSIFYING.contains(&k))) && !t.starts_with(STAND_IN) {
                         out.push(path.to_string());
                     }
                 }
             }
             Value::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
-                    walk(item, key, &format!("{path}[{i}]"), out);
+                    walk(item, key, person, &format!("{path}[{i}]"), out);
                 }
             }
             Value::Object(map) => {
                 for (k, item) in map {
-                    walk(item, Some(k), &if path.is_empty() { k.clone() } else { format!("{path}.{k}") }, out);
+                    walk(item, Some(k), person || PEOPLE.contains(&k.as_str()), &if path.is_empty() { k.clone() } else { format!("{path}.{k}") }, out);
                 }
             }
             _ => {}
         }
     }
     let mut out = Vec::new();
-    walk(v, None, "", &mut out);
+    walk(v, None, false, "", &mut out);
     out
 }
