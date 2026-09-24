@@ -2,6 +2,14 @@
 
 > **The Python app is the original, and its mistakes are why this refactor exists.** Its code, data model and calculations contain many errors. Never copy them blindly, and never assume anything in them is correct or optimal because it exists or because it has always worked that way. Before carrying anything over (a rule, a structure, a formula, a default, a fallback), check it against `SPEC.md` and `docs/architecture.md`, and state in the plan why it is right. Some of it is; that has to be shown, not assumed. What the owner sees and does on screen is the exception: that stays as it is unless `SPEC.md` changes.
 
+> **Every action must be the best course of action for the objective.** Before you do anything (search, scan, run, measure, poll, build, wait), answer two questions:
+> 1. Is this actually the best way to achieve what I am trying to achieve? Not whether it would tell me something, not whether it is allowed, not whether it is cheap.
+> 2. Do I already have the information at hand, or information that would otherwise nullify the value of doing this? Check the code in front of you, the docs, the replies already recorded, and what the owner has said.
+>
+> If what you have settles it, act on it. When something is genuinely missing, the best course is the direct route to that one thing.
+>
+> A broad or blind move (searching everything, trying things until one works, watching to see what happens) is almost never the best course; it means the problem is not understood yet, so stop and think. If you cannot answer both questions for an action, don't do it.
+
 Bagholder is a local-first trading journal for Wealthsimple users. The app being built is the Rust server (`rust/`, a Cargo workspace, toolchain pinned in `rust/rust-toolchain.toml`) with the Svelte page (`web/`, Svelte 5 + TypeScript + Vite, served from `web/dist`). Four documents govern it:
 
 - `SPEC.md`: what the app shows and does, every figure and every screen.

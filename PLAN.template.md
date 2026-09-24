@@ -14,6 +14,10 @@ One paragraph: the change, and the figures, screens or `SPEC.md` sections it tou
 
 What the old app does in this area, what is wrong with it (with its entry in `docs/old-app-mistakes.md`, adding one where it is new), and what this plan does instead. For anything carried over (a rule, a structure, a formula, a default, a fallback): why it is right, shown against `SPEC.md` and `docs/architecture.md`, never because it exists or has always worked that way. What the person sees and does on screen stays as it is unless `SPEC.md` changes. At the gate, anything carried over without this answer is a finding.
 
+## Open questions
+
+Each question states three things: the objective it serves; what is already known that bears on it, or would make settling it unnecessary, and where that comes from (the code, the docs, replies already recorded, what the owner has said); and why the way chosen to settle it is the best course for that objective. "None" when there are none.
+
 ## Approach
 
 The existing types, crates, book tables and page components this builds on, named, so a second copy of something is never written. Whether `SPEC.md` must change, and why. What deliberately stays the same.
@@ -47,3 +51,5 @@ The exact commands run and what they showed. Paste the numbers, not "passes".
 ## Handoff
 
 Where this stopped (`file:line`), what is blocking, what not to redo, and the one command to resume.
+
+**Nothing left running.** Every background process and scheduled wake-up this session started, each stopped or with the reason it must stay.
