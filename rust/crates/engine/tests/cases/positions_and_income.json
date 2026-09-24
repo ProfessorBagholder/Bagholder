@@ -149,5 +149,28 @@
       {"id": "t6", "account": "C", "day": "2026-01-06", "at": "2026-01-06T17:00:00Z", "kind": "sell", "instrument": "BTC", "qty": "-1", "cash": "90000"}
     ],
     "expect": {"kpi": {"realized": "60.00", "count": 2, "left_out": 1, "wins": 1, "losses": 1, "win_rate": 0.5, "profit_factor": 2.5}}
+  },
+  {
+    "name": "a fund held in CAD that pays in USD: its yields take the payout at the latest rate",
+    "spec": "SPEC.md §2 Income: yield on cost and current yield; docs/plans/stage-2-engine.md, rates: a live figure uses the latest rate the Bank has published",
+    "working": [
+      "100 F bought for 1,000 CAD: avg 10; quote 12",
+      "0.10 USD a month, 12 a year: 1.20 USD per unit a year; the latest rate, 1.25 on 2026-03-09 → 1.50 CAD",
+      "yield on cost 1.50 ÷ 10 = 0.15; current yield 1.50 ÷ 12 = 0.125"
+    ],
+    "today": "2026-03-10",
+    "now": "2026-03-10T15:00:00Z",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F"}],
+    "rates": {"USD": {"2026-03-09": "1.25"}},
+    "covered": {"USD": [["2026-03-01", "2026-03-09"]]},
+    "quotes": {"F": {"price": "12"}},
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-01-15", "amount": "0.10", "currency": "USD"},
+      {"ex": "2026-02-13", "amount": "0.10", "currency": "USD"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
+    "expect": {"income": [{"account": "A", "instrument": "F", "yield_on_cost": 0.15, "current_yield": 0.125}]}
   }
 ]

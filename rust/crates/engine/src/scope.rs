@@ -14,8 +14,8 @@ use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money};
 
 use crate::cashflow::{CashRow, PayerRate, Payment};
 use crate::equity::AccountEquity;
-use crate::fx::live_to_cad;
-use crate::gap::{Fig, Gaps};
+use crate::fx::{live_rate, live_to_cad};
+use crate::gap::{Fig, Gap, Gaps};
 use crate::input::Inputs;
 use crate::ledger::Direction;
 use crate::positions::PositionFig;
@@ -225,7 +225,7 @@ pub fn trade_matches(f: &Filters, inputs: &Inputs, t: &TradeFig) -> bool {
     if !bound(f.price, t.entry.as_ref().ok().copied())
         || !bound(f.hold, Some(Dec::from_int(t.hold_days)))
         || !bound(f.pnl, t.pnl_cad.as_ref().ok().map(|m| m.amount))
-        || !bound(f.qty, Some(t.qty))
+        || !bound(f.qty, t.qty.as_ref().ok().copied())
     {
         return false;
     }
@@ -381,7 +381,7 @@ pub struct CashMonth {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IncomeHolding {
     pub position: usize,
-    pub rate: Option<PayerRate>,
+    pub rate: PayerRate,
     pub ytd: Partial,
     pub trailing_year: Partial,
     pub all_time: Partial,
@@ -726,18 +726,18 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
     let holdings: Vec<IncomeHolding> = positions
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.direction == Direction::Long && rates.contains_key(&p.instrument) && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
-        .map(|(pi, p)| {
-            let rate = rates.get(&p.instrument).cloned();
+        .filter(|(_, p)| p.direction == Direction::Long && in_accounts(&p.account) && in_instruments(Some(p.instrument)))
+        .filter_map(|(pi, p)| rates.get(&p.instrument).map(|r| (pi, p, r.clone())))
+        .map(|(pi, p, rate)| {
             // what this holding paid: its instrument, into its own account
             let paid = |keep: &dyn Fn(&CashRow) -> bool| partial(&mut for_yoc.iter().copied().filter(|i| rows[*i].instrument == Some(p.instrument) && rows[*i].account == p.account && keep(&rows[*i])));
-            let annual: Fig<Money> = match &rate {
-                Some(r) => r.annual_per_unit().and_then(|a| Ok(a.times(p.qty)?)),
-                None => Err(Gaps::none()),
-            };
-            let per_unit_annual = rate.as_ref().map(|r| r.annual_per_unit()).unwrap_or_else(|| Err(Gaps::none()));
-            let yoc = crate::gap::both(per_unit_annual.clone(), p.avg.clone(), |a, avg| money_ratio(a, Money::new(avg, p.currency)).ok_or_else(Gaps::none));
-            let cy = crate::gap::both(per_unit_annual, p.mark.clone(), |a, m| money_ratio(a, Money::new(m.price, p.currency)).ok_or_else(Gaps::none));
+            let annual: Fig<Money> = rate.annual_per_unit().and_then(|a| Ok(a.times(p.qty)?));
+            // a payout in another currency than the holding's is taken at the
+            // latest rate, as any live figure is
+            let per_unit_annual = rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, p.currency));
+            let over = |a: Money, of: Dec, what: &str| money_ratio(a, Money::new(of, p.currency)).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
+            let yoc = crate::gap::both(per_unit_annual.clone(), p.avg.clone(), |a, avg| over(a, avg, "cost"));
+            let cy = crate::gap::both(per_unit_annual, p.mark.clone(), |a, m| over(a, m.price, "price"));
             IncomeHolding {
                 position: pi,
                 ytd: paid(&|r| r.day.year() == this_year),
@@ -769,6 +769,16 @@ fn cashflow(f: &Filters, inputs: &Inputs, positions: &[PositionFig], rows: &[Cas
         other,
         unread_filters: f.unread_by_cashflow(),
     }
+}
+
+/// `amount` in `currency` at the latest rates the Bank has published.
+fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<Money> {
+    if amount.currency == currency {
+        return Ok(amount);
+    }
+    let cad = live_to_cad(&inputs.facts.rates, &inputs.clock, amount)?;
+    let (per_unit, _) = live_rate(&inputs.facts.rates, &inputs.clock, currency)?;
+    Ok(Money::new(cad.amount.div_rounded(per_unit, crate::trades::PRICE_PLACES, bagholder_core::Rounding::HalfEven)?, currency))
 }
 
 /// The equity series of the accounts in scope, and what it says. A day is in

@@ -170,5 +170,22 @@
     ],
     "adjustments": [{"applies_to": "t1", "source": "person", "legs": [{"to": "ETH", "cost": "2000", "acquired": "2025-06-01"}]}],
     "expect": {"trades": [{"opened_by": "t1", "pnl": "1000.00", "opened": "2025-06-01"}]}
+  },
+  {
+    "name": "a staking reward taken back: the units leave for nothing, their cost a loss",
+    "spec": "SPEC.md §2 Trade, Crypto: staking rewards; docs/plans/stage-2-engine.md: every unit that leaves is matched",
+    "working": [
+      "1 ETH bought for 2,000; a reward of −0.25 ETH (taken back): 0.25 leaves at 0 against a cost of 500 → −500",
+      "0.75 sold for 1,800 against 1,500 → 300; the round trip: −200"
+    ],
+    "today": "2026-04-01",
+    "accounts": [{"id": "C", "kind": "crypto"}],
+    "instruments": [{"id": "ETH", "kind": "crypto"}],
+    "transactions": [
+      {"id": "t1", "account": "C", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "buy", "instrument": "ETH", "qty": "1", "cash": "-2000"},
+      {"id": "t2", "account": "C", "day": "2026-02-05", "at": "2026-02-05T15:00:00Z", "kind": "staking-reward", "instrument": "ETH", "qty": "-0.25"},
+      {"id": "t3", "account": "C", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "sell", "instrument": "ETH", "qty": "-0.75", "cash": "1800"}
+    ],
+    "expect": {"position_count": 0, "beyond": [], "trades": [{"opened_by": "t1", "pnl": "-200.00"}]}
   }
 ]

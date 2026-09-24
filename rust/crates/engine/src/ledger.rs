@@ -482,6 +482,12 @@ struct Matcher<'a> {
     /// What every contract on an underlying in an account waits on: a multi-leg
     /// order whose legs are not stated.
     underlying_taint: BTreeMap<(AccountId, InstrumentId), Gaps>,
+    /// What a share waits on: a multi-leg order naming it whose legs are not
+    /// stated (its contracts wait through `underlying_taint`).
+    instrument_taint: BTreeMap<(AccountId, InstrumentId), Gaps>,
+    /// What every holding in an account waits on: a multi-leg order naming no
+    /// instrument, whose legs may be anything the account holds.
+    account_taint: BTreeMap<AccountId, Gaps>,
     /// Transactions already applied as part of another (an event's rows, a
     /// linked transfer's receiving side).
     consumed: BTreeSet<TransactionId>,
@@ -519,9 +525,11 @@ impl<'a> Matcher<'a> {
 
     fn book(&mut self, account: AccountId, instrument: InstrumentId) -> &mut Book {
         let under = self.underlying(instrument).and_then(|u| self.underlying_taint.get(&(account, u)).cloned());
+        let own = self.instrument_taint.get(&(account, instrument)).cloned();
+        let whole = self.account_taint.get(&account).cloned();
         self.dirty.insert((account, instrument));
         let book = self.out.books.entry((account, instrument)).or_default();
-        if let Some(g) = under {
+        for g in [under, own, whole].into_iter().flatten() {
             book.taint.merge(&g);
         }
         book
@@ -822,27 +830,43 @@ impl<'a> Matcher<'a> {
         if self.consumed.contains(&t.id) {
             return;
         }
-        let Some(instrument) = t.instrument else { return };
         let account = t.account;
         let mv = read_move(t);
+        let multi_leg = self.inputs.ledger.records.get(&t.id.record).is_some_and(|r| r.problems.iter().any(|p| p.code == "leg-unstated"));
+        if multi_leg && mv != Move::Event {
+            // a multi-leg order whose legs are not stated: anything it could
+            // have moved waits, from its day on
+            let gaps = Gaps::of(Gap::LegUnstated(t.id.clone()));
+            let affected: Vec<InstrumentId> = match t.instrument {
+                // any contract on the named contract's underlying, or on the
+                // named share (and the share itself)
+                Some(named) => {
+                    let under = self.underlying(named);
+                    let key = under.unwrap_or(named);
+                    self.underlying_taint.entry((account, key)).or_default().merge(&gaps);
+                    if under.is_none() {
+                        self.instrument_taint.entry((account, named)).or_default().merge(&gaps);
+                    }
+                    let mut v: Vec<InstrumentId> = self.out.books.keys().filter(|(a, i)| *a == account && (self.underlying(*i) == Some(key) || (under.is_none() && *i == named))).map(|(_, i)| *i).collect();
+                    v.push(named);
+                    v
+                }
+                // anything the account holds
+                None => {
+                    self.account_taint.entry(account).or_default().merge(&gaps);
+                    self.out.books.keys().filter(|(a, _)| *a == account).map(|(_, i)| *i).collect()
+                }
+            };
+            for i in affected {
+                self.taint(account, i, &gaps);
+            }
+            return self.unapplied(t, gaps);
+        }
+        let Some(instrument) = t.instrument else { return };
         match mv {
             Move::Nothing => return,
             Move::Event => return self.apply_event(t),
             _ => {}
-        }
-        let multi_leg = self.inputs.ledger.records.get(&t.id.record).is_some_and(|r| r.problems.iter().any(|p| p.code == "leg-unstated"));
-        if multi_leg && self.is_option(instrument) {
-            // any contract on this underlying in this account may be a leg of it
-            let gaps = Gaps::of(Gap::LegUnstated(t.id.clone()));
-            if let Some(under) = self.underlying(instrument) {
-                self.underlying_taint.entry((account, under)).or_default().merge(&gaps);
-                let affected: Vec<InstrumentId> = self.out.books.keys().filter(|(a, i)| *a == account && self.underlying(*i) == Some(under)).map(|(_, i)| *i).collect();
-                for i in affected {
-                    self.taint(account, i, &gaps);
-                }
-            }
-            self.taint(account, instrument, &gaps);
-            return self.unapplied(t, gaps);
         }
         let Some(q) = t.quantity else {
             if mv == Move::Expire {
@@ -893,6 +917,13 @@ impl<'a> Matcher<'a> {
                 if acquiring {
                     let flags = BTreeSet::from([Flag::Reward]);
                     self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, qty, Ok(Money::zero(currency)), Money::zero(currency), flags, None);
+                } else {
+                    // a reward taken back: the units leave for nothing
+                    match self.close(account, instrument, Direction::Long, qty, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &none) {
+                        Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
+                        Ok(_) => {}
+                        Err(g) => self.taint(account, instrument, &g),
+                    }
                 }
             }
             Move::Resolve => {
@@ -1447,6 +1478,8 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         out: Matched::default(),
         expiring: BTreeMap::new(),
         underlying_taint: BTreeMap::new(),
+        instrument_taint: BTreeMap::new(),
+        account_taint: BTreeMap::new(),
         consumed: BTreeSet::new(),
         links_out: ledger.transfer_links.iter().cloned().collect(),
         links_in: ledger.transfer_links.iter().map(|(_, i)| i.clone()).collect(),

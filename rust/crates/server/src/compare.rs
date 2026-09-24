@@ -112,11 +112,20 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
         }
     }
     if let Some(s) = rates.by_currency.get(&Currency::USD) {
-        // the old table was appended from every read of the Bank's series since
-        // its first day: one complete read of its span
-        if let (Some(a), Some(b)) = (s.keys().next().copied(), s.keys().next_back().copied()) {
-            rates.covered.insert(Currency::USD, vec![bagholder_engine::input::Read { first: a, last: b, at: bagholder_core::jiff::Timestamp::now() }]);
+        // the old table was appended from reads of the Bank's series; it keeps
+        // no record of them. A span is taken as read only where its stored days
+        // lie no further apart than the Bank's longest closure (Christmas, Boxing
+        // Day and a weekend: five days from one published day to the next), so a
+        // longer hole is a rate missing, never a run of holidays
+        let at = bagholder_core::jiff::Timestamp::now();
+        let mut spans: Vec<bagholder_engine::input::Read> = Vec::new();
+        for d in s.keys().copied() {
+            match spans.last_mut() {
+                Some(r) if (d - r.last).get_days() <= 5 => r.last = d,
+                _ => spans.push(bagholder_engine::input::Read { first: d, last: d, at }),
+            }
         }
+        rates.covered.insert(Currency::USD, spans);
         rates.published.insert(Currency::USD);
     }
     let mut declared: BTreeMap<InstrumentId, Vec<Declared>> = BTreeMap::new();
@@ -229,7 +238,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
                 seen_new.insert(key.clone());
                 let pnl_ok = close_enough(o.pnl, &n.pnl);
                 let cad_ok = close_enough(o.pnl_cad, &n.pnl_cad);
-                let qty_ok = (n.qty.to_f64() - o.qty).abs() < 1e-6;
+                let qty_ok = n.qty.as_ref().is_ok_and(|q| (q.to_f64() - o.qty).abs() < 1e-6);
                 if pnl_ok && cad_ok && qty_ok {
                     same += 1;
                     continue;
@@ -248,7 +257,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
                     key,
                     o.symbol,
                     o.qty,
-                    n.qty,
+                    n.qty.as_ref().map(|q| q.to_text()).unwrap_or_else(|g| format!("— ({})", g.words().join(", "))),
                     o.pnl,
                     money(&n.pnl),
                     o.pnl_cad,

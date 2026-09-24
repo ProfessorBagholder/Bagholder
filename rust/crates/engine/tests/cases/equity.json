@@ -102,5 +102,25 @@
       {"account": "A", "day": "2026-01-13", "value": null, "own_gaps": ["close-unknown"]},
       {"account": "A", "day": "2026-01-14", "value": "2100", "source": "own", "return": 0.1}
     ]}
+  },
+  {
+    "name": "today's value takes a quote, or a close within the week like any other day, never an older close",
+    "spec": "docs/plans/stage-2-engine.md, the equity series: holdings at a close within 7 days",
+    "working": [
+      "Jan 5: 100 X bought for 1,000 with 1,000 deposited, X closes at 10 → 1,000",
+      "no close since and no quote: Jan 12 is the last day the Jan 5 close reaches; today, Jan 20, the value waits (close-unknown)"
+    ],
+    "today": "2026-01-20",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "closes": {"X": {"2026-01-05": "10"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-05", "at": "2026-01-05T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"}
+    ],
+    "expect": {"equity": [
+      {"account": "A", "day": "2026-01-12", "value": "1000", "source": "own"},
+      {"account": "A", "day": "2026-01-20", "value": null, "own_gaps": ["close-unknown"]}
+    ]}
   }
 ]

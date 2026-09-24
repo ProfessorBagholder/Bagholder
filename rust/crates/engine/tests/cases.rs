@@ -120,7 +120,7 @@ fn run(path: &Path) -> Vec<String> {
             };
             let w = |k: &str| format!("trade {label} {k}");
             if let Some(v) = want.get("qty") {
-                c.figure(&w("qty"), v, &Ok(t.qty));
+                c.figure(&w("qty"), v, &t.qty);
             }
             if let Some(v) = want.get("entry") {
                 c.figure(&w("entry"), v, &t.entry);
@@ -135,7 +135,7 @@ fn run(path: &Path) -> Vec<String> {
                 c.money(&w("pnl_cad"), v, &t.pnl_cad);
             }
             if let Some(v) = want.get("fees") {
-                c.money(&w("fees"), v, &Ok(t.fees));
+                c.money(&w("fees"), v, &t.fees);
             }
             if let Some(v) = want.get("pnl_pct") {
                 c.ratio(&w("pnl_pct"), v, t.pnl_pct());
@@ -361,6 +361,12 @@ fn run(path: &Path) -> Vec<String> {
             }
             if let Some(v) = want.get("trailing_year") {
                 c.money("income trailing year", v, &Ok(h.trailing_year.total));
+            }
+            if let Some(v) = want.get("yield_on_cost") {
+                c.ratio("yield on cost", v, h.yield_on_cost.as_ref().ok().copied());
+            }
+            if let Some(v) = want.get("current_yield") {
+                c.ratio("current yield", v, h.current_yield.as_ref().ok().copied());
             }
         }
         for want in arr(&expect, "checks") {

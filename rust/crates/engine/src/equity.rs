@@ -24,7 +24,7 @@ use crate::fx::{live_rate, rate};
 use crate::gap::{Fig, Gap, Gaps};
 use crate::input::Inputs;
 use crate::ledger::{multiplier, Matched};
-use crate::positions::mark_of;
+use crate::positions::{mark_of, PriceSource};
 use crate::stat::Ratio;
 
 /// How far back a close may be and still be a holding's close on a day.
@@ -77,9 +77,15 @@ fn is_flow(kind: Kind) -> bool {
 /// The close of an instrument on a day: the latest within `CLOSE_REACH_DAYS`
 /// before it, and on today its live price.
 fn close_on(inputs: &Inputs, instrument: InstrumentId, day: Date) -> Fig<Dec> {
+    // today's quote where there is one; otherwise, as any day, a close within
+    // the week
     if day == inputs.clock.today {
         if let Some(info) = inputs.ledger.instruments.get(&instrument) {
-            return mark_of(inputs, instrument, info.instrument.kind, info.instrument.currency).map(|m| m.price);
+            if let Ok(m) = mark_of(inputs, instrument, info.instrument.kind, info.instrument.currency) {
+                if m.source == PriceSource::Quote {
+                    return Ok(m.price);
+                }
+            }
         }
     }
     let from = day.checked_sub(CLOSE_REACH_DAYS.days()).unwrap_or(day);

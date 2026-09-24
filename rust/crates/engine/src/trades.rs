@@ -43,7 +43,7 @@ pub struct TradeFig {
     pub currency: Currency,
     pub direction: Direction,
     /// Units matched.
-    pub qty: Dec,
+    pub qty: Fig<Dec>,
     pub opened_on: Date,
     pub closed_on: Date,
     pub opened_at: Option<Timestamp>,
@@ -57,7 +57,7 @@ pub struct TradeFig {
     pub basis: Fig<Money>,
     pub pnl: Fig<Money>,
     pub pnl_cad: Fig<Money>,
-    pub fees: Money,
+    pub fees: Fig<Money>,
     pub fees_cad: Fig<Money>,
     pub slices: Vec<Slice>,
     /// Every transaction that opened or closed part of it.
@@ -83,10 +83,13 @@ impl TradeFig {
     /// What the figures of this trade wait on.
     pub fn gaps(&self) -> Gaps {
         let mut g = Gaps::none();
-        for f in [&self.pnl, &self.pnl_cad] {
+        for f in [&self.pnl, &self.pnl_cad, &self.fees] {
             if let Err(e) = f {
                 g.merge(e);
             }
+        }
+        if let Err(e) = &self.qty {
+            g.merge(e);
         }
         g
     }
@@ -155,7 +158,7 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
     let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
     let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
     let direction = slices[0].direction;
-    let qty = slices.iter().try_fold(Dec::ZERO, |a, s| a.checked_add(s.qty)).ok()?;
+    let qty: Fig<Dec> = slices.iter().try_fold(Dec::ZERO, |a, s| a.checked_add(s.qty)).map_err(Gaps::from);
     let entries = sum_money(currency, slices.iter().map(|s| s.entry.clone()));
     let exits = sum_money(currency, slices.iter().map(|s| s.exit.clone()));
     // units × multiplier over the slices, each on its own contract
@@ -170,7 +173,7 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
         }
         Ok(t.amount.div_rounded(w, PRICE_PLACES, Rounding::HalfEven)?)
     };
-    let fees = slices.iter().try_fold(Money::zero(currency), |a, s| a.checked_add(s.entry_fee).and_then(|x| x.checked_add(s.exit_fee))).ok()?;
+    let fees = sum_money(currency, slices.iter().map(|s| Ok(s.entry_fee.checked_add(s.exit_fee)?)));
     let pnl = sum_money(currency, slices.iter().map(Slice::pnl));
     let pnl_cad = sum_money(Currency::CAD, slices.iter().map(|s| slice_pnl_cad(inputs, s)));
     let fees_cad = sum_money(Currency::CAD, slices.iter().map(|s| fees_cad(inputs, s)));
