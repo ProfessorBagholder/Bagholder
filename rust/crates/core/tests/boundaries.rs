@@ -29,7 +29,7 @@ impl Rules {
     }
 }
 
-const CRATES: [Rules; 4] = [
+const CRATES: [Rules; 5] = [
     Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"] },
     Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[] },
     Rules {
@@ -41,6 +41,13 @@ const CRATES: [Rules; 4] = [
     // the engine (docs/plans/stage-2-engine.md): the vocabulary alone, which
     // re-exports the calendar; floats only for the statistics
     Rules { name: "bagholder-engine", dir: "engine", allowed: &["bagholder-core"], floats_in: &["src/stat/"] },
+    // the sources (docs/plans/stage-3a-sources.md): no float anywhere, no clock
+    Rules {
+        name: "bagholder-sources",
+        dir: "sources",
+        allowed: &["bagholder-core", "bagholder-sqlite", "bagholder-net", "bagholder-book", "rusqlite", "jiff"],
+        floats_in: &[],
+    },
 ];
 
 /// The names a manifest depends on for the crate itself: every `[dependencies]`
@@ -174,4 +181,15 @@ fn the_checker_catches_each_kind_of_violation() {
     assert_eq!(violations(engine, on_core, &figure), vec!["src/trades.rs:1: uses a float"]);
     let clock = vec![("src/fx.rs".to_string(), "let now = Timestamp::now();".to_string())];
     assert_eq!(violations(engine, on_core, &clock).len(), 1);
+
+    // the sources: no float, no clock, and not the old market code
+    let sources = &CRATES[4];
+    let on_book = "[dependencies]\nbagholder-core = { path = \"../core\" }\nbagholder-book = { path = \"../book\" }\n";
+    assert!(violations(sources, on_book, &[]).is_empty());
+    let on_market = "[dependencies]\nbagholder-market = { path = \"../market\" }\n";
+    assert_eq!(violations(sources, on_market, &[]), vec!["bagholder-sources depends on bagholder-market"]);
+    let price = vec![("src/adapters/cboe.rs".to_string(), "let close: f64 = 1.0;".to_string())];
+    assert_eq!(violations(sources, on_book, &price), vec!["src/adapters/cboe.rs:1: uses a float"]);
+    let clock = vec![("src/due.rs".to_string(), "let t = jiff::Timestamp::now();".to_string())];
+    assert_eq!(violations(sources, on_book, &clock).len(), 1);
 }

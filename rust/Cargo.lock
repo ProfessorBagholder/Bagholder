@@ -272,6 +272,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-sources"
+version = "1.45.0"
+dependencies = [
+ "bagholder-core",
+]
+
+[[package]]
 name = "bagholder-sqlite"
 version = "1.45.0"
 dependencies = [

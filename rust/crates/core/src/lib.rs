@@ -8,6 +8,7 @@ pub mod account;
 pub mod adjustment;
 pub mod dec;
 pub mod ids;
+pub mod json;
 pub mod instrument;
 pub mod journal;
 pub mod money;
