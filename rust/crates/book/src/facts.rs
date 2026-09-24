@@ -248,6 +248,22 @@ impl Book {
     pub fn store_declared(&self, instrument: InstrumentId, items: &[DeclaredRow], source: &SourceName, at: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
             drop(self.instrument(instrument)?);
+            // a read identical to the newest, from the same source, records only its time
+            let newest: Option<(i64, String)> = self
+                .conn()
+                .query_row("SELECT id, source FROM declared_reads WHERE instrument_id = ? ORDER BY read_at DESC, id DESC LIMIT 1", [instrument.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?;
+            if let Some((id, stored_source)) = newest {
+                let key = |d: &DeclaredRow| (d.ex_date, d.record_date, d.pay_date, d.amount.amount.to_text(), d.amount.currency.as_str().to_string(), d.reinvested.map(Dec::to_text));
+                let mut stored: Vec<_> = self.declared_rows(id)?.iter().map(key).collect();
+                let mut now: Vec<_> = items.iter().map(key).collect();
+                stored.sort();
+                now.sort();
+                if stored_source == source.as_str() && stored == now {
+                    self.conn().execute("UPDATE declared_reads SET read_at = ? WHERE id = ?", params![at_text(at), id])?;
+                    return Ok(());
+                }
+            }
             self.conn().execute(
                 "INSERT INTO declared_reads(instrument_id, source, read_at) VALUES (?, ?, ?)",
                 params![instrument.to_string(), source.as_str(), at_text(at)],
@@ -263,6 +279,26 @@ impl Book {
         })
     }
 
+    /// The distributions one read of a declared record stored, by ex-date.
+    fn declared_rows(&self, read: i64) -> Result<Vec<DeclaredRow>> {
+        let mut items = Vec::new();
+        let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, reinvested, currency FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
+        let rows = s.query_map([read], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?))
+        })?;
+        for row in rows {
+            let (ex, rec, pay, amount, reinvested, currency) = row?;
+            items.push(DeclaredRow {
+                ex_date: parse_day("declared_distributions", "ex_date", &ex)?,
+                record_date: rec.map(|d| parse_day("declared_distributions", "record_date", &d)).transpose()?,
+                pay_date: pay.map(|d| parse_day("declared_distributions", "pay_date", &d)).transpose()?,
+                amount: Money::new(parse_dec("declared_distributions", "amount", &amount)?, parse_currency("declared_distributions", "currency", &currency)?),
+                reinvested: reinvested.map(|r| parse_dec("declared_distributions", "reinvested", &r)).transpose()?,
+            });
+        }
+        Ok(items)
+    }
+
     /// The newest read of each fund's declared record.
     pub fn declared(&self) -> Result<BTreeMap<InstrumentId, DeclaredReadRow>> {
         let mut stmt = self.conn().prepare_cached(
@@ -272,21 +308,7 @@ impl Book {
         let reads = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut out = BTreeMap::new();
         for (id, instrument, source, read_at) in reads {
-            let mut items = Vec::new();
-            let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, reinvested, currency FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
-            let rows = s.query_map([id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?))
-            })?;
-            for row in rows {
-                let (ex, rec, pay, amount, reinvested, currency) = row?;
-                items.push(DeclaredRow {
-                    ex_date: parse_day("declared_distributions", "ex_date", &ex)?,
-                    record_date: rec.map(|d| parse_day("declared_distributions", "record_date", &d)).transpose()?,
-                    pay_date: pay.map(|d| parse_day("declared_distributions", "pay_date", &d)).transpose()?,
-                    amount: Money::new(parse_dec("declared_distributions", "amount", &amount)?, parse_currency("declared_distributions", "currency", &currency)?),
-                    reinvested: reinvested.map(|r| parse_dec("declared_distributions", "reinvested", &r)).transpose()?,
-                });
-            }
+            let items = self.declared_rows(id)?;
             out.insert(
                 text::parsed("declared_reads", "instrument_id", &instrument, InstrumentId::parse)?,
                 DeclaredReadRow {

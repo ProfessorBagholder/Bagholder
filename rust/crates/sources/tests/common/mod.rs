@@ -1,6 +1,7 @@
 //! The recorded replies (`tests/replies/<source>/`): real answers captured from
 //! each source, and beside them copies edited by hand, named `wrong-shape-…` and
-//! `wrong-meaning-…` for what is wrong. A reply captured with a status other than
+//! `wrong-meaning-…` for what is wrong, or `edited-…` for a real answer moved to
+//! another moment (its session, its time). A reply captured with a status other than
 //! 200 is named `…-status-<code>…`.
 
 #![allow(dead_code)]

@@ -5,6 +5,7 @@
 
 pub mod boc;
 pub mod cboe_ca;
+pub mod cboe_options;
 pub mod coinbase;
 pub mod fred;
 pub mod holidays;

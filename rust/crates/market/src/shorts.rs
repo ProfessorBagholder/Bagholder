@@ -405,7 +405,7 @@ pub fn parse_ca_positions(grid: &[Vec<Value>]) -> HashMap<String, CaPositionRow>
 }
 
 fn get_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    bagholder_net::client::request("GET", url, &headers(), None, Duration::from_secs(TIMEOUT_SEC)).map(|r| r.body)
+    crate::http::get_bytes(url, &headers())
 }
 
 fn ca_position_file(today: &str) -> Option<(String, HashMap<String, CaPositionRow>)> {

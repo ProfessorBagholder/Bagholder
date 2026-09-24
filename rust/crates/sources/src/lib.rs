@@ -15,6 +15,7 @@ pub mod health;
 pub mod html;
 pub mod market;
 pub mod needs;
+pub mod options;
 pub mod outcome;
 pub mod payers;
 pub mod quotes;

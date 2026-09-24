@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the decimal the moved option midpoint rule is written in
+bagholder-core = { path = "../core" }
 bagholder-model = { path = "../model" }
 bagholder-net = { path = "../net" }
 # the one HTML table reader and character-reference rules, moved there

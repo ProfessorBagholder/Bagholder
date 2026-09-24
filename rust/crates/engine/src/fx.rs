@@ -112,13 +112,14 @@ pub fn convert(rates: &Rates, clock: &Clock, amount: Money, to: Currency, day: D
     Ok(cad.div_rounded(r, 18, bagholder_core::Rounding::HalfEven)?)
 }
 
-/// An amount in CAD for a transaction on `day`: the exact product.
+/// An amount in CAD for a transaction on `day`: the exact product, rounded once
+/// to fit only where it needs more digits than a decimal holds.
 pub fn to_cad(rates: &Rates, clock: &Clock, amount: Money, day: Date) -> Fig<Money> {
     if amount.currency == Currency::CAD {
         return Ok(amount);
     }
     let r = rate(rates, clock, amount.currency, day)?;
-    Ok(Money::new(amount.amount.checked_mul(r)?, Currency::CAD))
+    Ok(Money::new(amount.amount.mul_to_fit(r)?, Currency::CAD))
 }
 
 /// The rate a live mark uses, and the day it is the Bank's rate for: the latest
@@ -156,5 +157,5 @@ pub fn live_to_cad(rates: &Rates, clock: &Clock, amount: Money) -> Fig<Money> {
         return Ok(amount);
     }
     let (r, _) = live_rate(rates, clock, amount.currency)?;
-    Ok(Money::new(amount.amount.checked_mul(r)?, Currency::CAD))
+    Ok(Money::new(amount.amount.mul_to_fit(r)?, Currency::CAD))
 }

@@ -128,6 +128,33 @@ fn a_funds_record_is_read_whole_and_a_withdrawn_distribution_is_gone_from_the_ne
 }
 
 #[test]
+fn an_identical_read_of_a_funds_record_records_only_its_time() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "FUND"), "10", "-100", "2026-01-02T15:00:00Z")]));
+    let fund = f.opens(r.record).instrument;
+    let rows = vec![
+        DeclaredRow { ex_date: day("2026-02-13"), record_date: Some(day("2026-02-13")), pay_date: Some(day("2026-02-20")), amount: Money::new(d("0.10"), Currency::CAD), reinvested: None },
+        DeclaredRow { ex_date: day("2026-03-13"), record_date: Some(day("2026-03-13")), pay_date: Some(day("2026-03-20")), amount: Money::new(d("0.15"), Currency::CAD), reinvested: Some(d("0.12")) },
+    ];
+    let tmx = SourceName::named("tmx");
+    f.book.store_declared(fund, &rows, &tmx, at("2026-03-01T00:00:00Z")).unwrap();
+    f.book.store_declared(fund, &rows, &tmx, at("2026-03-02T00:00:00Z")).unwrap();
+    let read = &f.book.declared().unwrap()[&fund];
+    assert_eq!(read.read_at, at("2026-03-02T00:00:00Z"), "the newer read's time");
+    assert_eq!(read.items, rows, "the record as stated");
+    let conn = rusqlite::Connection::open(f.dir.path().join(bagholder_book::BOOK_FILE)).unwrap();
+    let stored: Vec<(String, i64)> = conn
+        .prepare("SELECT r.read_at, (SELECT COUNT(*) FROM declared_distributions x WHERE x.read_id = r.id) FROM declared_reads r WHERE r.instrument_id = ?1")
+        .unwrap()
+        .query_map([fund.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(stored, vec![("2026-03-02T00:00:00Z".to_string(), 2)], "one stored read, its time the newer one");
+}
+
+#[test]
 fn a_recorded_close_is_written_once() {
     let f = Fixture::new();
     f.account(&["a1"]);

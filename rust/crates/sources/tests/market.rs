@@ -42,6 +42,16 @@ fn close(c: &yahoo::Chart, d: Date) -> Option<Dec> {
 }
 
 #[test]
+fn a_span_with_no_session_is_an_answer_with_no_closes() {
+    // a weekend, and a session Yahoo holds no bar for (HBIX.NE on 2026-09-23): the
+    // chart carries no timestamp list and empty quote series
+    for (name, symbol) in [("SPY-2026-09-19-2026-09-20.json", "SPY"), ("HBIX.NE-2026-09-23-2026-09-23.json", "HBIX.NE")] {
+        let c = chart(name, symbol, "2026-09-24T15:30:00Z");
+        assert!(c.closes.is_empty() && c.splits.is_empty(), "{name}");
+    }
+}
+
+#[test]
 fn closes_are_stored_as_traded_with_the_replys_own_splits_undone() {
     let nvda = chart("NVDA-2024-05-28-2024-06-14.json", "NVDA", "2026-09-24T04:00:00Z");
     assert_eq!(nvda.currency, Currency::USD);

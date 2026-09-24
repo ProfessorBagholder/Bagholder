@@ -106,7 +106,9 @@ pub struct StoredQuote {
     pub price: Money,
     pub change: Option<Dec>,
     pub change_pct: Option<Dec>,
-    /// When the source says the price was current.
+    /// When the source says the price was current: a trade's time where the
+    /// source states one (Yahoo, Cboe Canada, a contract's last trade), else the
+    /// time the source served it (TMX) or made it (a chain, less its delay).
     pub quoted_at: Timestamp,
     /// How much older than `quoted_at` the price may be, where the source does
     /// not state its time exactly.

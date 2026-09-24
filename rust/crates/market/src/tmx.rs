@@ -21,17 +21,18 @@ pub const TMX_URL: &str = "https://app-money.tmx.com/graphql";
 
 pub const TMX_QUOTE_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName price priceChange percentChange prevClose currency dividendFrequency dividendYield dividendAmount exDividendDate } }";
 
-const FORMS_CAD: [&str; 3] = ["", ":CNX", ":AQL"];
-const FORMS_USD: [&str; 1] = [":US"];
-
-/// The venue a quote must name for that form to be
-/// the right one.
-const VENUE_OF_FORM: [(&str, &[&str]); 4] = [
-    ("", &["TORONTO STOCK EXCHANGE", "TSX VENTURE"]),
-    (":CNX", &["CANADIAN SECURITIES EXCHANGE"]),
-    (":AQL", &["CBOE", "NEO"]),
-    (":US", &["NYSE", "NASDAQ", "NEW YORK"]),
-];
+/// TMX's forms of every venue of a market, the likelier first
+/// (`bagholder_sources::venue::tmx_suffix` of each).
+fn market_forms(us: bool) -> Vec<&'static str> {
+    let venues: &[&str] = if us { &crate::quotes::US_VENUES } else { &crate::quotes::CANADIAN_VENUES };
+    let mut out: Vec<&'static str> = Vec::new();
+    for form in venues.iter().filter_map(|mic| bagholder_sources::venue::tmx_suffix(mic)) {
+        if !out.contains(&form) {
+            out.push(form);
+        }
+    }
+    out
+}
 
 pub const RESOLVE_RETRY_DAYS: i64 = 1;
 
@@ -143,7 +144,7 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
     }
     let bare = tmx_bare(key);
     let suffix = &key[bare.len()..];
-    let base: Vec<&str> = if suffix == ":US" { FORMS_USD.to_vec() } else { FORMS_CAD.to_vec() };
+    let base: Vec<&str> = market_forms(suffix == ":US");
     // the record's own form first, when TMX has one for it
     let forms: Vec<&str> = if base.contains(&suffix) {
         let mut f = vec![suffix];
@@ -171,10 +172,10 @@ pub fn tmx_resolve(conn: &rusqlite::Connection, key: &str, today: &str) -> Strin
         let venue = q
             .get("data")
             .and_then(|d| d.get("getQuoteBySymbol"))
-            .map(|g| field_s(g, "exchangeName").to_uppercase())
+            .map(|g| field_s(g, "exchangeName"))
             .unwrap_or_default();
-        let wanted = VENUE_OF_FORM.iter().find(|(f, _)| *f == form).map(|(_, v)| *v).unwrap_or(&[]);
-        if !venue.is_empty() && wanted.iter().any(|w| venue.contains(w)) {
+        // the venue the quote names must be the one the form asks for
+        if bagholder_sources::venue::tmx_venue_matches(form, &venue) {
             let _ = bagholder_store::tables::set_meta(conn, &meta_key, &format!("@{}", form));
             return cand;
         }

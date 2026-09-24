@@ -70,6 +70,9 @@ pub struct TmxQuote {
     pub change: Option<Dec>,
     pub change_pct: Option<Dec>,
     pub currency: Currency,
+    /// When TMX served the quote, its only time: in session and out it equals the
+    /// request's time within seconds. It says the price is current then, never
+    /// when the last trade was.
     pub datetime: Timestamp,
     /// How often the listing pays, where TMX states it.
     pub per_year: Option<u32>,

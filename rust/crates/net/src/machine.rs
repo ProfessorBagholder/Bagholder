@@ -3,8 +3,9 @@
 
 use crate::clock::Clock;
 use crate::limiter::{Limiter, Pace};
+use crate::net::Net;
 use jiff::Timestamp;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// The machine's clock.
@@ -22,8 +23,23 @@ impl Clock for SystemClock {
 
 /// The process's one limiter, which every request to the network goes through.
 pub fn global() -> &'static Limiter {
-    static L: OnceLock<Limiter> = OnceLock::new();
-    L.get_or_init(Limiter::new)
+    shared_ref()
+}
+
+fn shared_ref() -> &'static Arc<Limiter> {
+    static L: OnceLock<Arc<Limiter>> = OnceLock::new();
+    L.get_or_init(|| Arc::new(Limiter::new()))
+}
+
+/// The same limiter, for a [`Net`] built by a caller.
+pub fn shared() -> Arc<Limiter> {
+    shared_ref().clone()
+}
+
+/// The process's network: the one limiter, on the machine's clock.
+pub fn net() -> &'static Net {
+    static N: OnceLock<Net> = OnceLock::new();
+    N.get_or_init(|| Net::new(Arc::new(SystemClock), shared()))
 }
 
 /// For the readers not yet behind the source contract (stage 5): wait for this

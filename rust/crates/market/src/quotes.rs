@@ -56,10 +56,16 @@ const YAHOO_HEADERS: [(&str, &str); 2] = [("User-Agent", "Mozilla/5.0"), ("Accep
 pub const YAHOO_HOST: &str = "query1.finance.yahoo.com";
 pub const YAHOO_PACE: bagholder_net::Pace = bagholder_net::Pace { gap: Duration::from_millis(2000), rest: Duration::from_secs(600) };
 
+/// Yahoo's pace, set on the one limiter.
+fn yahoo_paced() {
+    bagholder_net::machine::global().configure(YAHOO_HOST, YAHOO_PACE);
+}
+
+/// A turn at Yahoo for a request not made through `crate::http` (the float's
+/// browser session), which takes its own.
 fn yahoo_turn() -> Result<(), crate::http::FetchError> {
-    let limiter = bagholder_net::machine::global();
-    limiter.configure(YAHOO_HOST, YAHOO_PACE);
-    limiter
+    yahoo_paced();
+    bagholder_net::machine::global()
         .turn(YAHOO_HOST, &bagholder_net::SystemClock)
         .map_err(|r| crate::http::FetchError::Transport(format!("yahoo: refused a request; not asked again before {}", r.until)))
 }
@@ -71,12 +77,9 @@ fn yahoo_get(url: &str) -> Option<String> {
 /// A Yahoo request for the chart path: the body, or the failure -- a rest in force reads as one, and a 404 keeps its
 /// code so the symbol can be remembered as one Yahoo does not carry.
 pub fn yahoo_get_result(url: &str) -> Result<String, crate::http::FetchError> {
-    yahoo_turn()?;
-    get_text(url, &YAHOO_HEADERS).inspect_err(|e| {
-        if e.code() == Some(429) {
-            bagholder_net::machine::refused_now(YAHOO_HOST, None);
-        }
-    })
+    // the request takes its turn, and a 429 rests the host, in `crate::http`
+    yahoo_paced();
+    get_text(url, &YAHOO_HEADERS)
 }
 
 /// The same, answering only the HTTP code.
@@ -212,50 +215,59 @@ pub fn fetch_yahoo_quote(code: &str) -> Option<SourceQuote> {
     parse_yahoo_quote(&yahoo_get(&url)?)
 }
 
-pub fn yahoo_root(symbol: &str) -> String {
-    bagholder_model::venues::tmx_symbol(symbol).replace('.', "-")
+/// The market identifier code of a venue as this reader's records name it
+/// (`TSX`, `TSX-V`, `NASDAQ`), for the venue rules moved to
+/// `bagholder_sources::venue`, which read venues by their code. A venue named
+/// here by no code is one those rules do not cover.
+pub fn venue_mic(exchange: &str) -> Option<&'static str> {
+    match exchange.trim().to_uppercase().as_str() {
+        "TSX" => Some("XTSE"),
+        "TSX-V" | "TSXV" => Some("XTSX"),
+        "CSE" => Some("XCNQ"),
+        "CBOE CANADA" | "NEO" => Some("NEOE"),
+        "NASDAQ" => Some("XNAS"),
+        "NYSE" => Some("XNYS"),
+        "NYSE ARCA" | "ARCA" => Some("ARCX"),
+        "NYSE AMERICAN" | "AMEX" => Some("XASE"),
+        "BATS" | "CBOE" => Some("BATS"),
+        _ => None,
+    }
 }
 
-const YAHOO_SUFFIX: [(&str, &str); 6] = [
-    ("TSX", ".TO"), ("TSX-V", ".V"), ("TSXV", ".V"), ("CSE", ".CN"), ("CBOE CANADA", ".NE"), ("NEO", ".NE"),
-];
-const YAHOO_FORMS_CAD: [&str; 4] = [".TO", ".V", ".CN", ".NE"];
-const YAHOO_FORMS_USD: [&str; 1] = [""];
+/// The venues of each market, the likelier first: the forms a lookup tries,
+/// after the listing's own venue's, when its venue is wrong or missing.
+pub const CANADIAN_VENUES: [&str; 4] = ["XTSE", "XTSX", "XCNQ", "NEOE"];
+pub const US_VENUES: [&str; 1] = ["XNAS"];
 
-/// The venue's own suffix first, then the other venues of its market, so a
+/// The venue's own forms first, then the other venues of its market, so a
 /// wrong or missing venue still finds it. The venue names the market before
 /// the currency does: a watched listing keeps no currency, and read by
 /// currency alone a Nasdaq listing was asked for as a Toronto one, which is
 /// another security (`PLTR.TO` is Palantir's Canadian depositary receipt, not
 /// the stock) or nothing at all; a TSX listing that trades in US dollars is
 /// still a Toronto one. Only a venue the app does not name leaves the currency
-/// to decide.
+/// to decide. Each venue's forms are `bagholder_sources::venue::yahoo_forms`.
 pub fn yahoo_forms(rec: &Listing) -> Vec<String> {
-    let root = yahoo_root(&rec.symbol);
-    let ccy = match bagholder_model::venues::tmx_form(&rec.exchange, "") {
-        Some(":US") => "USD".to_string(),
-        Some(_) => "CAD".to_string(),
-        None => { let c = rec.currency.clone(); if c.is_empty() { "CAD".to_string() } else { c.trim().to_uppercase() } }
+    let us = match bagholder_model::venues::tmx_form(&rec.exchange, "") {
+        Some(form) => form == ":US",
+        None => match rec.currency.trim().to_uppercase().as_str() {
+            "" | "CAD" => false,
+            "USD" => true,
+            _ => return vec![],
+        },
     };
-    if root.is_empty() || root.contains(' ') {
-        return vec![];
-    }
-    let base: Vec<&str> = match ccy.as_str() {
-        "CAD" => YAHOO_FORMS_CAD.to_vec(),
-        "USD" => YAHOO_FORMS_USD.to_vec(),
-        _ => return vec![],
-    };
-    let venue = rec.exchange.clone().trim().to_uppercase();
-    let first = YAHOO_SUFFIX.iter().find(|(k, _)| *k == venue).map(|(_, v)| *v);
-    let forms: Vec<&str> = match first {
-        Some(f) if base.contains(&f) => {
-            let mut out = vec![f];
-            out.extend(base.iter().filter(|x| **x != f));
-            out
+    let market: &[&str] = if us { &US_VENUES } else { &CANADIAN_VENUES };
+    // every venue `venue_mic` names is one `tmx_form` places in a market, so
+    // the listing's own venue is always of the market chosen
+    let mut out: Vec<String> = Vec::new();
+    for mic in venue_mic(&rec.exchange).into_iter().chain(market.iter().copied()) {
+        for form in bagholder_sources::venue::yahoo_forms(&rec.symbol, mic) {
+            if !out.contains(&form) {
+                out.push(form);
+            }
         }
-        _ => base,
-    };
-    forms.into_iter().map(|f| format!("{}{}", root, f)).collect()
+    }
+    out
 }
 
 /// The form a listing's quote is filed under, or

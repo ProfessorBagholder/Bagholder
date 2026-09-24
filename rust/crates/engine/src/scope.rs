@@ -253,7 +253,7 @@ impl Partial {
         let mut left_out = 0;
         for i in items {
             match i {
-                Ok(m) => total = total.checked_add(*m)?,
+                Ok(m) => total = total.add_to_fit(*m)?,
                 Err(_) => left_out += 1,
             }
         }
@@ -431,7 +431,7 @@ pub struct Scoped {
 }
 
 fn money_sum(items: impl IntoIterator<Item = Money>) -> Money {
-    items.into_iter().fold(Money::zero(Currency::CAD), |a, b| a.checked_add(b).unwrap_or(a))
+    items.into_iter().fold(Money::zero(Currency::CAD), |a, b| a.add_to_fit(b).unwrap_or(a))
 }
 
 fn avg_money(total: Money, n: usize) -> Option<Money> {
@@ -493,7 +493,7 @@ pub fn scope(
     for t in &stated {
         let p = *t.pnl_cad.as_ref().expect("stated");
         let bar = months.entry((t.closed_on.year(), t.closed_on.month())).or_insert(MonthBar { year: t.closed_on.year(), month: t.closed_on.month(), value: Money::zero(Currency::CAD), count: 0, trades: vec![] });
-        bar.value = bar.value.checked_add(p).unwrap_or(bar.value);
+        bar.value = bar.value.add_to_fit(p).unwrap_or(bar.value);
         bar.count += 1;
         bar.trades.push(t.key.clone());
     }
@@ -503,7 +503,7 @@ pub fn scope(
     for t in &stated {
         let p = *t.pnl_cad.as_ref().expect("stated");
         let e = by.entry(underlying_of(inputs, t.instrument)).or_insert((Money::zero(Currency::CAD), 0, 0, 0, 0, vec![]));
-        e.0 = e.0.checked_add(p).unwrap_or(e.0);
+        e.0 = e.0.add_to_fit(p).unwrap_or(e.0);
         e.1 += 1;
         e.2 += usize::from(p.amount.is_positive());
         e.3 += t.hold_days;
@@ -588,7 +588,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
         }
         for (c, v) in &b.cash {
             let slot = if v.is_negative() { used.entry(*c).or_insert(Dec::ZERO) } else { cash_by.entry(*c).or_insert(Dec::ZERO) };
-            *slot = slot.checked_add(v.abs()).unwrap_or(*slot);
+            *slot = slot.add_to_fit(v.abs()).unwrap_or(*slot);
         }
         if is_margin(a) {
             match &b.buying_power {
@@ -601,7 +601,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig]) -> Portfol
     let to_cad_sum = |by: &BTreeMap<Currency, Dec>| -> Fig<Money> {
         let mut total = Money::zero(Currency::CAD);
         for (c, v) in by {
-            total = total.checked_add(live_to_cad(rates, clock, Money::new(*v, *c))?)?;
+            total = total.add_to_fit(live_to_cad(rates, clock, Money::new(*v, *c))?)?;
         }
         Ok(total)
     };
@@ -790,10 +790,10 @@ fn equity_block(f: &Filters, inputs: &Inputs, equity: &BTreeMap<AccountId, Accou
     for e in &accounts {
         for p in &e.points {
             let v = values.entry(p.day).or_insert((Dec::ZERO, 0, Some(Dec::ZERO)));
-            v.0 = v.0.checked_add(p.value).unwrap_or(v.0);
+            v.0 = v.0.add_to_fit(p.value).unwrap_or(v.0);
             v.1 += 1;
             v.2 = match (v.2, p.flow) {
-                (Some(a), Some(b)) => a.checked_add(b).ok(),
+                (Some(a), Some(b)) => a.add_to_fit(b).ok(),
                 _ => None,
             };
         }

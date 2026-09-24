@@ -172,12 +172,9 @@ fn pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
     Ok(num(Some(&Value::deserialize(d)?), 0.0))
 }
 
+/// The host's pace on the one limiter; the request takes the turn (`crate::http`).
 fn pace(host: &str) {
-    bagholder_net::machine::turn(host, PACE);
-}
-
-fn host_of(url: &str) -> String {
-    url.split('/').nth(2).unwrap_or("").to_string()
+    crate::http::pace_host(host, PACE);
 }
 
 fn base_headers<'a>(extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
@@ -196,12 +193,12 @@ fn base_headers<'a>(extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 }
 
 fn get(url: &str, extra: &[(&str, &str)]) -> Result<String, FetchError> {
-    pace(&host_of(url));
+    pace(&bagholder_net::host_of(url));
     crate::http::get_text(url, &base_headers(extra))
 }
 
 fn post(url: &str, payload: &Value, extra: &[(&str, &str)]) -> Result<Value, FetchError> {
-    pace(&host_of(url));
+    pace(&bagholder_net::host_of(url));
     crate::http::post_json(url, payload, &base_headers(extra))
 }
 
@@ -904,7 +901,6 @@ fn evolve(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
 
 pub const YAHOO_CRUMB: &str = "https://query2.finance.yahoo.com/v1/test/getcrumb";
 pub const YAHOO_SUMMARY: &str = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=topHoldings&crumb={}";
-const YAHOO_SUFFIX: [(&str, &str); 6] = [("TSX", ".TO"), ("TSX-V", ".V"), ("TSXV", ".V"), ("CSE", ".CN"), ("CBOE CANADA", ".NE"), ("NEO", ".NE")];
 
 fn yahoo_session() -> Result<(String, String), FetchError> {
     static SESSION: OnceLock<Mutex<(String, String)>> = OnceLock::new();
@@ -916,7 +912,9 @@ fn yahoo_session() -> Result<(String, String), FetchError> {
         }
     }
     pace("fc.yahoo.com");
-    let cookies: Vec<String> = match bagholder_net::client::request_any("GET", "https://fc.yahoo.com", &[("User-Agent", UA)], None, Duration::from_secs(crate::http::TIMEOUT_SEC)) {
+    let ask = bagholder_net::Ask { timeout: Duration::from_secs(crate::http::TIMEOUT_SEC), ..bagholder_net::Ask::get("https://fc.yahoo.com", &[("User-Agent", UA)]) };
+    // an error page's cookies are read too, so any status is an answer here
+    let cookies: Vec<String> = match bagholder_net::machine::net().send(&ask) {
         Ok(r) => r.headers.iter().filter(|(k, _)| k == "set-cookie").map(|(_, v)| v.split(';').next().unwrap_or("").to_string()).collect(),
         Err(_) => vec![],
     };
@@ -926,9 +924,12 @@ fn yahoo_session() -> Result<(String, String), FetchError> {
     Ok((cookie, crumb))
 }
 
+/// Yahoo's form of a listing on the venue it names (`bagholder_sources::venue`);
+/// a venue the app does not name leaves the bare symbol.
 pub fn yahoo_symbol(symbol: &str, exchange: &str) -> String {
-    let ex = trim_space(exchange).to_uppercase();
-    format!("{}{}", bagholder_model::venues::tmx_symbol(symbol), YAHOO_SUFFIX.iter().find(|(k, _)| *k == ex).map(|(_, v)| *v).unwrap_or(""))
+    crate::quotes::venue_mic(trim_space(exchange))
+        .and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next())
+        .unwrap_or_else(|| bagholder_model::venues::tmx_symbol(symbol))
 }
 
 /// `round(x, 4)`.

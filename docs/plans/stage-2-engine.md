@@ -62,7 +62,7 @@ engine.identity() -> &Identity           the round trips that need a trade id, a
 - **Parts of a whole**: a lot closed in part, or a fill closing several lots, is shared by quantity to 12 decimal places, the last part taking what is left, so the parts always add up to the whole exactly. So a closed round trip whose fills all state their cash, and whose lots were never moved at cost (by a transfer or a corporate event) or delivered by an assignment without stated cash, has a P&L equal to the sum of its fills' cash, exactly; a test holds that on every case it covers.
 - **P&L** of a slice is exit value − entry value for a long (reversed for a short) less both fees, which is `SPEC.md`'s definition; since the values are gross of the fee, each fee is subtracted once.
 - **Prices** (entry, exit, average cost) are averages for the screens: total value ÷ (quantity × multiplier), rounded only where they are shown. They are never an input to anything.
-- **CAD** amounts are exact products of the amount and the rate, rounded only where they are shown.
+- **CAD** amounts are exact products of the amount and the rate, rounded only where they are shown. A decimal holds 28 significant digits: a value or a total whose exact result needs more (a dust coin's value beside a large holding, a quantity of many digits at a price of many places) is rounded once, half to even, to the most places that hold it, many places below the cent it is shown to. Nothing else is rounded, and a quantity or a lot's value in the ledger is never.
 
 ### The order of transactions
 

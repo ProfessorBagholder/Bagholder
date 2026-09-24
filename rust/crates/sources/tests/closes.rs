@@ -221,3 +221,179 @@ fn a_benchmark_reaches_back_when_the_oldest_day_moves_earlier() {
     assert_eq!(market::due_span(Market::Canada, date(2022, 1, 3), date(2026, 9, 24), &state, now, &eastern(), REST), None);
     assert_eq!(market::due_span(Market::Canada, date(2015, 6, 1), date(2026, 9, 24), &state, now, &eastern(), REST), Some((date(2015, 6, 1), date(2021, 12, 31))));
 }
+
+#[test]
+fn a_later_read_asks_the_remembered_winning_form_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    // an earlier read of 01 Communique (filled on Alpha) found it under ONE.V, after
+    // ONE.TO did not carry it, and remembered that form
+    cache.won(id(1), DataKind::DailyClose, &SourceName::named("yahoo"), "ONE.V", t("2026-09-20T21:00:00Z")).unwrap();
+    // only ONE.V answers here: a request for ONE.TO fails the test
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with(&format!("{YAHOO}ONE.V?period1=1752278400&period2=1790294400&interval=1mo&events=split"), 200, "yahoo", "ONE.V-splits-2025-07-12-2026-09-24.json")
+            .with(&format!("{YAHOO}ONE.V?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit"), 200, "yahoo", "ONE.V-2025-06-10-2025-07-11.json"),
+    );
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let one = need(listing(1, InstrumentKind::Security, Currency::CAD, "ONE", Some("XATS")), date(2025, 6, 10), date(2025, 7, 11));
+    market::read_closes(&ctx, &[one]).unwrap();
+    assert_eq!(
+        *recorded.asked.lock().unwrap(),
+        vec![format!("{YAHOO}ONE.V?period1=1752278400&period2=1790294400&interval=1mo&events=split"), format!("{YAHOO}ONE.V?period1=1749513600&period2=1752278400&interval=1d&events=div%7Csplit")],
+        "the remembered ONE.V is asked before ONE.TO, and answers"
+    );
+    assert!(!cache.closes().unwrap()[&id(1)].is_empty());
+    assert_eq!(cache.winner(id(1), DataKind::DailyClose).unwrap().map(|w| w.1), Some("ONE.V".to_string()));
+}
+
+#[test]
+fn a_later_different_close_for_a_closed_day_is_kept_beside_it_and_recorded_while_the_first_stands() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    // ENB's 2026-08-04 already written, with another value than Yahoo now sends
+    let yahoo = SourceName::named("yahoo");
+    cache.store_closes(id(1), &[(date(2026, 8, 4), dec("70.5"))], Currency::CAD, &yahoo, t("2026-08-04T21:00:00Z")).unwrap();
+    let recorded = Arc::new(common::Recorded::new().with(&format!("{YAHOO}ENB.TO?period1=1785715200&period2=1790208000&interval=1d&events=div%7Csplit"), 200, "yahoo", "ENB.TO-2026-08-03-2026-09-24.json"));
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let enb = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"));
+    market::read_closes(&ctx, &[need(enb, date(2026, 8, 3), date(2026, 9, 24))]).unwrap();
+    // the first stands in what the cache returns; the reply's other days are written
+    let closes = cache.closes().unwrap();
+    assert_eq!(closes[&id(1)][&date(2026, 8, 4)], Money::new(dec("70.5"), Currency::CAD));
+    assert_eq!(closes[&id(1)].keys().next_back(), Some(&date(2026, 9, 23)));
+    // the later value is kept beside it
+    let kept: Vec<(String, i64)> = cache
+        .connection()
+        .prepare("SELECT close, first FROM daily_closes WHERE instrument_id = ?1 AND day = '2026-08-04' ORDER BY first DESC")
+        .unwrap()
+        .query_map([id(1).to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(kept, vec![("70.5".to_string(), 1), ("75.08999633789062".to_string(), 0)]);
+    // and recorded as a meaning outcome of Yahoo's, for that instrument
+    let meaning: Vec<_> = cache.outcomes(&yahoo).unwrap().into_iter().filter(|o| o.outcome == OutcomeKind::Meaning).collect();
+    assert_eq!(meaning.len(), 1, "{meaning:?}");
+    assert_eq!((meaning[0].kind, meaning[0].instrument, meaning[0].host.as_str()), (DataKind::DailyClose, Some(id(1)), "query1.finance.yahoo.com"));
+    assert_eq!(meaning[0].detail, format!("{} 2026-08-04: {} stands, {} came later", id(1), dec("70.5"), dec("75.08999633789062")));
+}
+
+#[test]
+fn an_expiring_contracts_underlying_never_held_has_its_close_read_for_the_expiry_day_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    // NVDA never held; a contract on it expired 2024-05-17, so the need is that one day
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with(&format!("{YAHOO}NVDA?period1=1715990400&period2=1790294400&interval=1mo&events=split"), 200, "yahoo", "NVDA-splits-2024-05-18-2026-09-24.json")
+            .with(&format!("{YAHOO}NVDA?period1=1715904000&period2=1715990400&interval=1d&events=div%7Csplit"), 200, "yahoo", "NVDA-2024-05-17-2024-05-17.json"),
+    );
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let nvda = [need(listing(1, InstrumentKind::Security, Currency::USD, "NVDA", Some("XNAS")), date(2024, 5, 17), date(2024, 5, 17))];
+    market::read_closes(&ctx, &nvda).unwrap();
+    // that day's close alone, as traded, and a read of that day alone
+    assert_eq!(cache.closes().unwrap()[&id(1)], BTreeMap::from([(date(2024, 5, 17), Money::new(dec("924.7899627685547"), Currency::USD))]));
+    let reads = cache.reads(&id(1).to_string(), DataKind::DailyClose).unwrap();
+    assert_eq!(reads.iter().map(|r| (r.first, r.last, r.outcome)).collect::<Vec<_>>(), vec![(date(2024, 5, 17), date(2024, 5, 17), OutcomeKind::Answered)]);
+    assert_eq!(recorded.asked.lock().unwrap().len(), 2);
+    // read again later: that day is settled, nothing is asked
+    let later = Ctx { now: t("2026-09-25T04:00:00Z"), ..ctx };
+    market::read_closes(&later, &nvda).unwrap();
+    assert_eq!(recorded.asked.lock().unwrap().len(), 2);
+}
+
+fn dec(s: &str) -> Dec {
+    Dec::parse(s).unwrap()
+}
+
+const FRED: &str = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500";
+
+/// Read the benchmarks from 2026-09-01 at `now` on `recorded`, returning how many
+/// requests it made.
+fn benchmarks_at(book: &Book, cache: &MarketCache, recorded: &Arc<common::Recorded>, now: Timestamp) -> usize {
+    let before = recorded.asked.lock().unwrap().len();
+    let net = common::net(recorded, &now.to_string());
+    let zone = eastern();
+    let ctx = Ctx { book, cache, net: &net, now, bank: &zone };
+    market::read_benchmarks(&ctx, date(2026, 9, 1)).unwrap();
+    recorded.asked.lock().unwrap().len() - before
+}
+
+fn tmx_series(r: common::Recorded) -> common::Recorded {
+    // (the ^TSX reply stands in for ^TX60's here, as above)
+    r.with_body(TMX, "\"symbol\":\"^TSX\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json").with_body(TMX, "\"symbol\":\"^TX60\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json")
+}
+
+#[test]
+fn a_benchmarks_session_day_is_due_after_1630_eastern_until_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-23T20:30:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let zone = eastern();
+    let state = |b: Benchmark| {
+        // as `read_benchmarks` sees it: the S&P 500's FRED reads, each TMX index's reads
+        let reads = cache.reads(b.key(), DataKind::Benchmark).unwrap().into_iter().filter(|r| b != Benchmark::Sp500 || r.source.as_str() == "fred").collect();
+        CloseState { days: cache.benchmark_days(b).unwrap(), reads }
+    };
+    let due = |b: Benchmark, now: &str| market::due_span(if b == Benchmark::Sp500 { Market::UnitedStates } else { Market::Canada }, date(2026, 9, 1), date(2026, 9, 24), &state(b), t(now), &zone, REST);
+    // nothing stored: at 16:29 Eastern on Wednesday the 23rd the days to the 22nd are due, at 16:30 the 23rd too
+    for b in [Benchmark::Sp500, Benchmark::Tsx, Benchmark::Tx60] {
+        assert_eq!(due(b, "2026-09-23T20:29:59Z"), Some((date(2026, 9, 1), date(2026, 9, 22))), "{b:?}");
+        assert_eq!(due(b, "2026-09-23T20:30:00Z"), Some((date(2026, 9, 1), date(2026, 9, 23))), "{b:?}");
+    }
+    // read at 16:30: each index asked once, through the 23rd
+    let recorded = Arc::new(tmx_series(common::Recorded::new().with(FRED, 200, "fred", "SP500.csv")));
+    assert_eq!(benchmarks_at(&book, &cache, &recorded, at), 3);
+    let levels = cache.benchmarks().unwrap();
+    assert_eq!(levels[&Benchmark::Sp500][&date(2026, 9, 23)], dec("7706.03"));
+    assert_eq!(levels[&Benchmark::Tsx][&date(2026, 9, 23)], dec("35751.43"));
+    assert_eq!(levels[&Benchmark::Tx60][&date(2026, 9, 23)], dec("35751.43"));
+    assert_eq!(levels[&Benchmark::Tsx][&date(2026, 9, 1)], dec("35825.73"));
+    // once read, not due again: that evening, the next morning, nor at 16:29 on the 24th
+    for now in ["2026-09-23T23:00:00Z", "2026-09-24T14:00:00Z", "2026-09-24T20:29:59Z"] {
+        assert_eq!(benchmarks_at(&book, &cache, &recorded, t(now)), 0, "{now}");
+    }
+    // at 16:30 on the 24th, a session day not stored, the 24th alone is due for each index
+    for b in [Benchmark::Sp500, Benchmark::Tsx, Benchmark::Tx60] {
+        assert_eq!(due(b, "2026-09-24T20:29:59Z"), None, "{b:?}");
+        assert_eq!(due(b, "2026-09-24T20:30:00Z"), Some((date(2026, 9, 24), date(2026, 9, 24))), "{b:?}");
+    }
+}
+
+#[test]
+fn a_benchmarks_failed_read_is_not_asked_again_within_its_sources_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-23T20:30:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let failing = Arc::new(tmx_series(common::Recorded::new().with(FRED, 200, "fred", "wrong-meaning-SP500-negative.csv")));
+    let rest = common::net(&failing, "2026-09-23T20:30:00Z").limiter().pace(bagholder_sources::adapters::fred::HOST).rest;
+    // FRED's reply fails its meaning: nothing of the S&P 500 written, the failure recorded
+    assert_eq!(benchmarks_at(&book, &cache, &failing, at), 3);
+    assert!(!cache.benchmarks().unwrap().contains_key(&Benchmark::Sp500));
+    let fred = cache.outcomes(&SourceName::named("fred")).unwrap();
+    assert_eq!((fred[0].kind, fred[0].outcome), (DataKind::Benchmark, OutcomeKind::Meaning));
+    // within the rest nothing is asked; the TSX's indexes are read and not due
+    let within = at + bagholder_core::jiff::SignedDuration::try_from(rest).unwrap() - bagholder_core::jiff::SignedDuration::from_secs(1);
+    assert_eq!(benchmarks_at(&book, &cache, &failing, within), 0);
+    // once the rest is over FRED is asked again, and its answer written
+    let answering = Arc::new(common::Recorded::new().with(FRED, 200, "fred", "SP500.csv"));
+    let after = at + bagholder_core::jiff::SignedDuration::try_from(rest).unwrap();
+    assert_eq!(benchmarks_at(&book, &cache, &answering, after), 1);
+    assert_eq!(*answering.asked.lock().unwrap(), vec![FRED.to_string()]);
+    assert_eq!(cache.benchmarks().unwrap()[&Benchmark::Sp500][&date(2026, 9, 23)], dec("7706.03"));
+}

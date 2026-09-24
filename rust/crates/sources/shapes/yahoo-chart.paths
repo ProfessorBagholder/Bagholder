@@ -5,7 +5,7 @@ chart.result
 chart.result[]
 chart.result[].events ?
 chart.result[].events.dividends ?
-chart.result[].events.dividends.*
+chart.result[].events.dividends.* ?
 chart.result[].events.dividends.*.amount
 chart.result[].events.dividends.*.date
 chart.result[].events.splits ?
@@ -17,19 +17,19 @@ chart.result[].events.splits.*.splitRatio
 chart.result[].indicators
 chart.result[].indicators.adjclose
 chart.result[].indicators.adjclose[]
-chart.result[].indicators.adjclose[].adjclose
+chart.result[].indicators.adjclose[].adjclose ?
 chart.result[].indicators.adjclose[].adjclose[]
 chart.result[].indicators.quote
 chart.result[].indicators.quote[]
-chart.result[].indicators.quote[].close
+chart.result[].indicators.quote[].close ?
 chart.result[].indicators.quote[].close[]
-chart.result[].indicators.quote[].high
+chart.result[].indicators.quote[].high ?
 chart.result[].indicators.quote[].high[]
-chart.result[].indicators.quote[].low
+chart.result[].indicators.quote[].low ?
 chart.result[].indicators.quote[].low[]
-chart.result[].indicators.quote[].open
+chart.result[].indicators.quote[].open ?
 chart.result[].indicators.quote[].open[]
-chart.result[].indicators.quote[].volume
+chart.result[].indicators.quote[].volume ?
 chart.result[].indicators.quote[].volume[]
 chart.result[].meta
 chart.result[].meta.chartPreviousClose
@@ -77,5 +77,5 @@ chart.result[].meta.symbol
 chart.result[].meta.timezone
 chart.result[].meta.validRanges
 chart.result[].meta.validRanges[]
-chart.result[].timestamp
+chart.result[].timestamp ?
 chart.result[].timestamp[]

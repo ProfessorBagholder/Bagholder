@@ -4,14 +4,17 @@
 //!
 //! - **Canadian listings (TSX, TSX Venture, CSE, Alpha):** TMX's quote, for the
 //!   book's TMX form, else the one its venue gives. A form TMX answers for on the
-//!   venue it asks is written back to the book as a routing reference.
+//!   venue it asks is written back to the book as a routing reference. TMX states
+//!   no trade time: its quote's time is when it served the quote, which is what
+//!   is kept. It says the price is current then; it is never presented as the
+//!   time of a trade.
 //! - **Cboe Canada listings:** Cboe Canada's own quote.
 //! - **US listings:** Yahoo's chart, its forms in order, the winner first.
 //! - **Coins:** Coinbase in the holding's own currency: the Exchange's ticker,
 //!   which states its time, for a USD pair; otherwise the spot price, stamped with
 //!   its reply's date less the age its origin allows.
 //!
-//! Option contracts are quoted from their chains with the option closes.
+//! Option contracts are quoted from their chains with their closes (`options`).
 
 use bagholder_core::instrument::{RefScheme, Reference};
 use bagholder_core::{Currency, InstrumentId, Money, SourceName};

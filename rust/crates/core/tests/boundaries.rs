@@ -244,17 +244,41 @@ fn the_checker_catches_each_kind_of_violation() {
 
 /// The code moved out of `bagholder-market` (`docs/plans/stage-3a-sources.md`,
 /// "One copy") is there no more: the client, the browser session, the pacing
-/// the never-read health record, and the HTML table reader with its character
-/// references each live in one place.
+/// the never-read health record, the HTML table reader with its character
+/// references, TMX's venue forms, Yahoo's venue suffixes and the option
+/// midpoint rule each live in one place; and every request the old readers make
+/// through `http.rs` takes its turn on the one limiter, not the bare client.
 #[test]
 fn the_moved_code_has_one_copy() {
     let market = crates_dir().join("market");
     for gone in ["src/client.rs", "src/browser.rs", "src/pace.rs", "src/htmltables.rs", "src/entities.rs"] {
         assert!(!market.join(gone).exists(), "bagholder-market still holds {gone}");
     }
+    let old_definitions = [
+        "fn note_source",
+        "fn source_health",
+        "struct YahooGate",
+        "fn request_any",
+        "fn html_tables",
+        "fn unescape(",
+        "fn charref",
+        // TMX's venue forms and the venue each must name
+        "FORMS_CAD",
+        "FORMS_USD",
+        "VENUE_OF_FORM",
+        // Yahoo's venue suffixes
+        "YAHOO_SUFFIX",
+        "YAHOO_FORMS_CAD",
+        "YAHOO_FORMS_USD",
+        "fn yahoo_root",
+        // the option midpoint rule
+        "(bid + ask) / 2",
+    ];
     for (path, text) in sources(&market) {
-        for old in ["fn note_source", "fn source_health", "struct YahooGate", "fn request_any", "fn html_tables", "fn unescape(", "fn charref"] {
+        for old in old_definitions {
             assert!(!text.contains(old), "{path} still defines {old}");
         }
     }
+    let http = std::fs::read_to_string(market.join("src/http.rs")).expect("market's http.rs");
+    assert!(!http.contains("client::request"), "market's http.rs asks the bare client, past the one limiter");
 }

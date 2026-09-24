@@ -85,7 +85,7 @@ pub fn resting(reads: &[ReadRow], now: Timestamp, rest: Duration) -> bool {
 
 /// Whether a read made after `d` settled covered it: its source answered through
 /// it, or said it does not carry the subject.
-fn settled_by_read(reads: &[ReadRow], market: Market, d: Date, bank: &TimeZone) -> bool {
+pub(crate) fn settled_by_read(reads: &[ReadRow], market: Market, d: Date, bank: &TimeZone) -> bool {
     let Some(settled) = settled_at(market, d, bank) else { return false };
     reads.iter().any(|r| matches!(r.outcome, OutcomeKind::Answered | OutcomeKind::NotCarried) && r.first <= d && d <= r.last && r.at >= settled)
 }
@@ -170,7 +170,7 @@ fn store(ctx: &Ctx, id: InstrumentId, closes: &[(Date, Dec)], currency: Currency
 pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
     for need in needs {
         let Some(market) = need.listing.market() else { continue };
-        // option contracts: the option closes, from their chains
+        // option contracts: from their chains (`options`)
         if market == Market::UsOptions {
             continue;
         }

@@ -133,6 +133,15 @@ impl Money {
         Ok(Money { amount: self.amount.checked_add(other.amount)?, currency: self.currency })
     }
 
+    /// A term added to a total, as [`Dec::add_to_fit`]; an error when the
+    /// currencies differ or the sum is too large to hold.
+    pub fn add_to_fit(self, other: Money) -> Result<Money, MoneyError> {
+        if self.currency != other.currency {
+            return Err(MoneyError::Mismatch { left: self.currency, right: other.currency });
+        }
+        Ok(Money { amount: self.amount.add_to_fit(other.amount)?, currency: self.currency })
+    }
+
     pub fn checked_sub(self, other: Money) -> Result<Money, MoneyError> {
         self.checked_add(other.neg())
     }

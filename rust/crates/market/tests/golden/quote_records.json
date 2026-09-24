@@ -109,9 +109,9 @@
   "option_AAPL260918C00200000": {
     "source": "cboe_options",
     "stored": {
-      "price": 5.199999999999999,
-      "priceChange": 0.39999999999999947,
-      "percentChange": 8.333333333333325,
+      "price": 5.2,
+      "priceChange": 0.40000000000000036,
+      "percentChange": 8.333333333333348,
       "prevClose": 4.8,
       "dividendAmount": null,
       "dividendFrequency": "",

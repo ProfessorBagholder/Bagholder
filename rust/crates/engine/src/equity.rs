@@ -104,7 +104,7 @@ fn cad_rate(inputs: &Inputs, currency: Currency, day: Date) -> Fig<Dec> {
 }
 
 fn money_cad(inputs: &Inputs, m: Money, day: Date) -> Fig<Dec> {
-    Ok(m.amount.checked_mul(cad_rate(inputs, m.currency, day)?)?)
+    Ok(m.amount.mul_to_fit(cad_rate(inputs, m.currency, day)?)?)
 }
 
 /// The first day each account has a problem on its record: from then on its own
@@ -178,7 +178,7 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
         while day <= today {
             for m in cash_moves.get(&day).into_iter().flatten() {
                 let e = cash.entry(m.currency).or_insert(Dec::ZERO);
-                *e = e.checked_add(m.amount).unwrap_or(*e);
+                *e = e.add_to_fit(m.amount).unwrap_or(*e);
             }
             // a record with a problem leaves the value and the flows unstated from its day
             let problem_now = problem.filter(|(d, _)| *d <= day).map(|(_, g)| g.clone());
@@ -193,7 +193,7 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                         continue;
                     }
                     match money_cad(inputs, Money::new(*amount, *c), day) {
-                        Ok(v) => total = total.checked_add(v)?,
+                        Ok(v) => total = total.add_to_fit(v)?,
                         Err(g) => gaps.merge(&g),
                     }
                 }
@@ -207,10 +207,10 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                     let v = (|| -> Fig<Dec> {
                         let m = multiplier(info, *i)?;
                         let close = close_on(inputs, *i, day)?;
-                        money_cad(inputs, Money::new(units.checked_mul(close)?.checked_mul(m)?, currency), day)
+                        money_cad(inputs, Money::new(units.mul_to_fit(close)?.mul_to_fit(m)?, currency), day)
                     })();
                     match v {
-                        Ok(v) => total = total.checked_add(v)?,
+                        Ok(v) => total = total.add_to_fit(v)?,
                         Err(g) => gaps.merge(&g),
                     }
                 }
@@ -234,12 +234,12 @@ pub fn build_equity(inputs: &Inputs, matched: &Matched, only: Option<&BTreeSet<A
                             let currency = info.map(|x| x.instrument.currency).unwrap_or(Currency::CAD);
                             let m = multiplier(info, i)?;
                             let close = close_on(inputs, i, day)?;
-                            f = f.checked_add(money_cad(inputs, Money::new(q.checked_mul(close)?.checked_mul(m)?, currency), day)?)?;
+                            f = f.add_to_fit(money_cad(inputs, Money::new(q.mul_to_fit(close)?.mul_to_fit(m)?, currency), day)?)?;
                         }
                         Ok(f)
                     })();
                     match f {
-                        Ok(v) => flow = flow.checked_add(v)?,
+                        Ok(v) => flow = flow.add_to_fit(v)?,
                         Err(g) => gaps.merge(&g),
                     }
                 }
@@ -289,7 +289,7 @@ fn daily_returns(own: &BTreeMap<Date, Fig<Dec>>, flows: &BTreeMap<Date, Fig<Dec>
                 // the flows of every day after `a` up to and including `b`,
                 // days whose value waits included
                 let flow = flows.range(a.day..=b.day).skip(1).try_fold(Dec::ZERO, |acc, (_, f)| match f {
-                    Ok(f) => acc.checked_add(*f).ok(),
+                    Ok(f) => acc.add_to_fit(*f).ok(),
                     Err(_) => None,
                 });
                 flow.map(|f| (*va, *vb, f))
@@ -341,7 +341,7 @@ pub fn broker_checks(inputs: &Inputs, matched: &Matched, equity: &BTreeMap<Accou
         for t in inputs.ledger.transactions.iter().filter(|t| t.account == *account) {
             if let Some(c) = t.cash {
                 let e = own_cash.entry(c.currency).or_insert(Dec::ZERO);
-                *e = e.checked_add(c.amount).unwrap_or(*e);
+                *e = e.add_to_fit(c.amount).unwrap_or(*e);
             }
         }
         let mut differences = Vec::new();

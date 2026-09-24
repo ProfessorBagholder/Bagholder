@@ -4,7 +4,9 @@
 //! made from text or from integers and never from a float, so a float cannot
 //! become money anywhere that uses this type. Its arithmetic is checked and
 //! exact: an addition that overflows, or a product that would need more than 28
-//! decimal places, is an error rather than a rounded value. Division is the one
+//! decimal places, is an error rather than a rounded value. A total is the one
+//! sum that is rounded, and only where its exact value needs more significant
+//! digits than a `Dec` holds (`add_to_fit`). Division is the one
 //! operation that cannot be exact in general, so it is offered only as
 //! `div_rounded`, which names its places and its rounding rule.
 //!
@@ -143,6 +145,50 @@ impl Dec {
         Ok(Dec(out))
     }
 
+    /// A term added to a total: the exact sum where it fits, as `checked_add`;
+    /// where the exact sum needs more significant digits than a `Dec` holds (a
+    /// large total and a small amount of many places), that sum rounded once,
+    /// half to even, to the most places that hold it. Only a sum too large to
+    /// hold at all is an error.
+    ///
+    /// The rounding is of the exact sum: at `k` places each term splits into its
+    /// part held at `k` places and the rest below; the parts and the rests add
+    /// exactly, and the rest left over below `k` places decides the rounding.
+    pub fn add_to_fit(self, other: Dec) -> Result<Dec, DecError> {
+        match self.checked_add(other) {
+            Err(DecError::Inexact) => {}
+            exact => return exact,
+        }
+        for k in (0..self.places().max(other.places())).rev() {
+            let (a, b) = (self.round(k, Rounding::TowardZero), other.round(k, Rounding::TowardZero));
+            let Ok(high) = a.checked_add(b) else { continue };
+            let low = self.checked_sub(a)?.checked_add(other.checked_sub(b)?)?;
+            let low_held = low.round(k, Rounding::TowardZero);
+            let Ok(near) = high.checked_add(low_held) else { continue };
+            // the exact sum is `near + rest`, `rest` below one unit at `k` places
+            let rest = low.checked_sub(low_held)?;
+            let unit = Dec(Decimal::new(1, k));
+            let twice = rest.abs().checked_add(rest.abs())?;
+            let away = twice > unit || (twice == unit && !near.even_at(k));
+            let out = match (away, rest.is_negative()) {
+                (false, _) => Ok(near),
+                (true, false) => near.checked_add(unit),
+                (true, true) => near.checked_sub(unit),
+            };
+            if let Ok(sum) = out {
+                return Ok(sum);
+            }
+        }
+        Err(DecError::Overflow)
+    }
+
+    /// Whether the digit in the last of `places` places is even.
+    fn even_at(self, places: u32) -> bool {
+        let mut at = self.0;
+        at.rescale(places);
+        at.mantissa() % 2 == 0
+    }
+
     /// The exact difference, or an error, as `checked_add`.
     pub fn checked_sub(self, other: Dec) -> Result<Dec, DecError> {
         self.checked_add(other.neg())
@@ -172,6 +218,45 @@ impl Dec {
         let negative = a.is_sign_negative() != b.is_sign_negative();
         let out = Decimal::from_i128_with_scale(if negative { -m } else { m }, scale);
         Ok(Dec(out))
+    }
+
+    /// A value worked out for a figure (a quantity at a price, an amount at a
+    /// rate): the exact product where it fits, as `checked_mul`; where it needs
+    /// more significant digits than a `Dec` holds, that product rounded once,
+    /// half to even, to the most places that hold it. Only a product too large
+    /// to hold at all is an error.
+    pub fn mul_to_fit(self, other: Dec) -> Result<Dec, DecError> {
+        match self.checked_mul(other) {
+            Err(DecError::Inexact | DecError::Overflow) => {}
+            exact => return exact,
+        }
+        let (a, b) = (self.0.normalize(), other.0.normalize());
+        let mut n = Wide::product(a.mantissa().unsigned_abs(), b.mantissa().unsigned_abs());
+        let mut scale = a.scale() + b.scale();
+        // the most significant digit dropped, and whether any below it was not zero
+        let (mut first, mut below) = (0u8, false);
+        while scale > MAX_PLACES || !n.fits_96() {
+            if scale == 0 {
+                return Err(DecError::Overflow);
+            }
+            below |= first != 0;
+            first = n.div10();
+            scale -= 1;
+        }
+        if first > 5 || (first == 5 && (below || n.0[0] % 2 == 1)) {
+            n.add_one();
+            if !n.fits_96() {
+                // 99…9 rounded up to 10…0: one place fewer holds it exactly
+                if scale == 0 {
+                    return Err(DecError::Overflow);
+                }
+                n.div10();
+                scale -= 1;
+            }
+        }
+        let m = n.low_u128() as i128;
+        let negative = a.is_sign_negative() != b.is_sign_negative();
+        Ok(Dec(Decimal::from_i128_with_scale(if negative { -m } else { m }, scale)))
     }
 
     /// `self ÷ divisor` to `places` decimal places, rounded once, by `rule`,
@@ -292,6 +377,27 @@ impl Wide {
         (self.0[1] as u128) << 64 | self.0[0] as u128
     }
 
+    /// Divide by ten, answering the digit dropped.
+    fn div10(&mut self) -> u8 {
+        let mut rem: u128 = 0;
+        for i in (0..3).rev() {
+            let cur = rem << 64 | self.0[i] as u128;
+            self.0[i] = (cur / 10) as u64;
+            rem = cur % 10;
+        }
+        rem as u8
+    }
+
+    fn add_one(&mut self) {
+        for limb in self.0.iter_mut() {
+            let (v, carry) = limb.overflowing_add(1);
+            *limb = v;
+            if !carry {
+                return;
+            }
+        }
+    }
+
     /// Divide by ten when that is exact; leave it alone and say so when not.
     fn div10_exact(&mut self) -> Option<()> {
         let mut q = [0u64; 3];
@@ -399,6 +505,39 @@ mod tests {
         // a sum whose places no longer fit is refused, not rounded
         assert_eq!(d("9999999999999999999999999999").checked_add(d("0.1")), Err(DecError::Inexact));
         assert_eq!(d("9999999999999999999999999999").checked_sub(d("0.1")), Err(DecError::Inexact));
+    }
+
+    #[test]
+    fn a_total_is_exact_where_it_fits_and_rounded_once_to_fit_where_not() {
+        // exact where it fits
+        assert_eq!(d("0.1").add_to_fit(d("0.2")).unwrap(), d("0.3"));
+        // a portfolio's total and a dust coin's value: 33 significant digits, held to 23 places
+        assert_eq!(d("632070.326688").add_to_fit(d("0.000000264188636702736309916")).unwrap(), d("632070.32668826418863670273631"));
+        assert_eq!(d("-30725.453312").add_to_fit(d("-0.000000234442363297263690084")).unwrap(), d("-30725.453312234442363297263690"));
+        // a tie goes to the even digit of the whole sum, not of the part below
+        assert_eq!(d("10000000000000000000000000000").add_to_fit(d("0.5")).unwrap(), d("10000000000000000000000000000"));
+        assert_eq!(d("10000000000000000000000000001").add_to_fit(d("0.5")).unwrap(), d("10000000000000000000000000002"));
+        assert_eq!(d("-10000000000000000000000000001").add_to_fit(d("-0.5")).unwrap(), d("-10000000000000000000000000002"));
+        assert_eq!(d("10000000000000000000000000001").add_to_fit(d("-0.5")).unwrap(), d("10000000000000000000000000000"));
+        // terms of opposite signs, the rest below the unit borrowed across
+        assert_eq!(d("1000000000000000000000000000").add_to_fit(d("-0.06")).unwrap(), d("999999999999999999999999999.9"));
+        // only a sum too large to hold is an error
+        assert_eq!(d("79228162514264337593543950335").add_to_fit(Dec::ONE), Err(DecError::Overflow));
+    }
+
+    #[test]
+    fn a_value_is_exact_where_it_fits_and_rounded_once_to_fit_where_not() {
+        assert_eq!(d("35").mul_to_fit(d("0.3")).unwrap(), d("10.5"));
+        // a product needing 29 places: rounded at 28, half to even
+        assert_eq!(d("0.123456789012345").mul_to_fit(d("0.12345678901233")).unwrap(), d("0.0152415787532368172687272138"));
+        // a quantity of many digits at a price of many places
+        assert_eq!(d("74505439.293609").mul_to_fit(d("0.00001234567890123456789")).unwrap(), d("919.8202299143215591323339536"));
+        // ties go to the even digit
+        assert_eq!(d("0.0000000000000000000000000001").mul_to_fit(d("0.5")).unwrap(), Dec::ZERO);
+        assert_eq!(d("0.0000000000000000000000000003").mul_to_fit(d("0.5")).unwrap(), d("0.0000000000000000000000000002"));
+        assert_eq!(d("-0.0000000000000000000000000003").mul_to_fit(d("0.5")).unwrap(), d("-0.0000000000000000000000000002"));
+        // only a product too large to hold is an error
+        assert_eq!(d("79228162514264337593543950335").mul_to_fit(d("2")), Err(DecError::Overflow));
     }
 
     #[test]

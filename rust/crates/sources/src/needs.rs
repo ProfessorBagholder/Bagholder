@@ -3,8 +3,9 @@
 //! currencies converted and from when, the instruments whose closes a figure
 //! uses and from when, the payers held, and the span the benchmarks must cover.
 
+use bagholder_core::instrument::OptionRight;
 use bagholder_core::jiff::civil::Date;
-use bagholder_core::InstrumentId;
+use bagholder_core::{Currency, Dec, InstrumentId};
 
 use crate::contract::Listing;
 use crate::rates::Need;
@@ -28,10 +29,32 @@ pub struct PayerNeed {
     pub name: Option<String>,
 }
 
+/// An option contract whose close a figure uses, as its chain is asked for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContractNeed {
+    pub id: InstrumentId,
+    pub currency: Currency,
+    /// The underlying's symbol as its listing uses it now (`BRK.B`): the chain's name.
+    pub underlying: String,
+    pub expiry: Date,
+    pub strike: Dec,
+    pub right: OptionRight,
+    /// Its OCC symbol, where the book states one.
+    pub occ: Option<String>,
+    /// The day of a corporate event on the underlying while the contract was
+    /// held, where the book records one: the contract may have been adjusted,
+    /// and only its OCC symbol then says which contract it is.
+    pub event_on: Option<Date>,
+    pub from: Date,
+    /// The last day it is held: today while it is.
+    pub to: Date,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Needs {
     pub rates: Vec<Need>,
     pub closes: Vec<CloseNeed>,
+    pub contracts: Vec<ContractNeed>,
     pub payers: Vec<PayerNeed>,
     /// The first day the benchmarks must cover: the person's oldest day.
     pub benchmarks_from: Option<Date>,

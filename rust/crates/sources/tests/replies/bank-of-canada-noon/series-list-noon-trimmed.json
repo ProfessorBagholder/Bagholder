@@ -1,0 +1,407 @@
+{
+  "terms": {
+    "url": "https://www.bankofcanada.ca/terms/"
+  },
+  "series": {
+    "EUROCAE01": {
+      "label": "EUR_NOON",
+      "description": "European Euro",
+      "link": "https://www.bankofcanada.ca/valet/series/EUROCAE01"
+    },
+    "IEXE0101": {
+      "label": "USD_NOON",
+      "description": "U.S. dollar (noon)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0101"
+    },
+    "IEXE0101_RECIPROCAL": {
+      "label": "CAD/USD Noon Rate",
+      "description": "U.S. dollar (noon)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0101_RECIPROCAL"
+    },
+    "IEXE0102": {
+      "label": "USD_CLOSE",
+      "description": "U.S. dollar (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0102"
+    },
+    "IEXE0103": {
+      "label": "USD_HIGH",
+      "description": "U.S. dollar (high)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0103"
+    },
+    "IEXE0104": {
+      "label": "USD_LOW",
+      "description": "U.S. dollar (low)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0104"
+    },
+    "IEXE0105": {
+      "label": "USD_NOON",
+      "description": "U.S. dollar noon, 90-day",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0105"
+    },
+    "IEXE0106": {
+      "label": "USD_CLOSE_90_DAY",
+      "description": "U.S. dollar closing,90-day",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0106"
+    },
+    "IEXE0124": {
+      "label": "IEXE0124",
+      "description": "US/Canada noon 3-month forward points spread",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0124"
+    },
+    "IEXE0125": {
+      "label": "IEXE0125",
+      "description": "US/Canada noon 6-month forward points spread",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0125"
+    },
+    "IEXE0301": {
+      "label": "DKK_NOON",
+      "description": "Danish krone",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0301"
+    },
+    "IEXE0301.CL": {
+      "label": "DKK_CLOSE",
+      "description": "Danish krone (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0301.CL"
+    },
+    "IEXE0701": {
+      "label": "JPY_NOON",
+      "description": "Japanese yen",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0701"
+    },
+    "IEXE0701.CL": {
+      "label": "JPY_CLOSE",
+      "description": "Japanese yen (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0701.CL"
+    },
+    "IEXE0901": {
+      "label": "NOK_NOON",
+      "description": "Norwegian krone",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0901"
+    },
+    "IEXE0901.CL": {
+      "label": "NOK_CLOSE",
+      "description": "Norwegian krone (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE0901.CL"
+    },
+    "IEXE1001": {
+      "label": "SEK_NOON",
+      "description": "Swedish krona",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1001"
+    },
+    "IEXE1001.CL": {
+      "label": "SEK_CLOSE",
+      "description": "Swedish krona (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1001.CL"
+    },
+    "IEXE1101": {
+      "label": "CHF_NOON",
+      "description": "Swiss franc",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1101"
+    },
+    "IEXE1101.CL": {
+      "label": "CHF_CLOSE",
+      "description": "Swiss franc (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1101.CL"
+    },
+    "IEXE1201": {
+      "label": "GBP_NOON",
+      "description": "U.K. pound sterling",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1201"
+    },
+    "IEXE1201.CL": {
+      "label": "GBP_CLOSE",
+      "description": "U.K. pound sterling (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1201.CL"
+    },
+    "IEXE1401": {
+      "label": "HKD_NOON",
+      "description": "Hong Kong dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1401"
+    },
+    "IEXE1401.CL": {
+      "label": "HKD_CLOSE",
+      "description": "Hong Kong dollar (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1401.CL"
+    },
+    "IEXE1601": {
+      "label": "AUD_NOON",
+      "description": "Australian dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1601"
+    },
+    "IEXE1601.CL": {
+      "label": "AUD_CLOSE",
+      "description": "Australian dollar (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1601.CL"
+    },
+    "IEXE1901": {
+      "label": "NZD_NOON",
+      "description": "New Zealand dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1901"
+    },
+    "IEXE1901.CL": {
+      "label": "NZD_CLOSE",
+      "description": "New Zealand dollar (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE1901.CL"
+    },
+    "IEXE2001": {
+      "label": "MXN_NOON",
+      "description": "Mexican peso",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2001"
+    },
+    "IEXE2001.CL": {
+      "label": "MXN_CLOSE",
+      "description": "Mexican peso (close)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2001.CL"
+    },
+    "IEXE2101": {
+      "label": "RUB_NOON",
+      "description": "Russian ruble",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2101"
+    },
+    "IEXE2201": {
+      "label": "CNY_NOON",
+      "description": "Chinese renminbi",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2201"
+    },
+    "IEXE2301": {
+      "label": "CZK_NOON",
+      "description": "Czech Republic koruna",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2301"
+    },
+    "IEXE2401": {
+      "label": "PLN_NOON",
+      "description": "Polish zloty",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2401"
+    },
+    "IEXE2501": {
+      "label": "HUF_NOON",
+      "description": "Hungarian forint",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2501"
+    },
+    "IEXE2601": {
+      "label": "IDR_NOON",
+      "description": "Indonesian rupiah",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2601"
+    },
+    "IEXE2702": {
+      "label": "ARS_NOON",
+      "description": "Argentine peso (local)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2702"
+    },
+    "IEXE2703": {
+      "label": "ARS_NOON",
+      "description": "Argentine peso",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2703"
+    },
+    "IEXE2801": {
+      "label": "BRL_NOON",
+      "description": "Brazilian real",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2801"
+    },
+    "IEXE2901": {
+      "label": "CLP_NOON",
+      "description": "Chilean peso",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE2901"
+    },
+    "IEXE3001": {
+      "label": "INR_NOON",
+      "description": "Indian rupee",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3001"
+    },
+    "IEXE3101": {
+      "label": "KRW_NOON",
+      "description": "South Korean won",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3101"
+    },
+    "IEXE3201": {
+      "label": "MYR_NOON",
+      "description": "Malaysian ringgit",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3201"
+    },
+    "IEXE3301": {
+      "label": "PHP_NOON",
+      "description": "Philippine peso",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3301"
+    },
+    "IEXE3401": {
+      "label": "ZAR_NOON",
+      "description": "South African rand",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3401"
+    },
+    "IEXE3501": {
+      "label": "TWD_NOON",
+      "description": "Taiwanese new dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3501"
+    },
+    "IEXE3601": {
+      "label": "THB_NOON",
+      "description": "Thai baht",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3601"
+    },
+    "IEXE3701": {
+      "label": "SGD_NOON",
+      "description": "Singapore dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3701"
+    },
+    "IEXE3801": {
+      "label": "MMK_NOON",
+      "description": "Myanmar (Burma) kyat (fixed)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3801"
+    },
+    "IEXE3802": {
+      "label": "MMK_NOON",
+      "description": "Myanmar (Burma) kyat",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3802"
+    },
+    "IEXE3901": {
+      "label": "COP_NOON",
+      "description": "Colombian peso",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE3901"
+    },
+    "IEXE4001": {
+      "label": "XCD_NOON",
+      "description": "East Caribbean dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4001"
+    },
+    "IEXE4101": {
+      "label": "FJD_NOON",
+      "description": "Fiji dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4101"
+    },
+    "IEXE4301": {
+      "label": "HNL_NOON",
+      "description": "Honduran lempira",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4301"
+    },
+    "IEXE4401": {
+      "label": "ISK_NOON",
+      "description": "Icelandic krona",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4401"
+    },
+    "IEXE4501": {
+      "label": "XAF_NOON",
+      "description": "CFA franc",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4501"
+    },
+    "IEXE4601": {
+      "label": "XPF_NOON",
+      "description": "CFP franc",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4601"
+    },
+    "IEXE4701": {
+      "label": "GHC_NOON",
+      "description": "Ghanaian cedi (old)",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4701"
+    },
+    "IEXE4702": {
+      "label": "GHS_NOON",
+      "description": "Ghanaian cedi",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4702"
+    },
+    "IEXE4801": {
+      "label": "MAD_NOON",
+      "description": "Moroccan dirham",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4801"
+    },
+    "IEXE4901": {
+      "label": "ANG_NOON",
+      "description": "Neth. Antilles guilder",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE4901"
+    },
+    "IEXE5001": {
+      "label": "PKR_NOON",
+      "description": "Pakistan rupee",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5001"
+    },
+    "IEXE5101": {
+      "label": "PAB_NOON",
+      "description": "Panamanian balboa",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5101"
+    },
+    "IEXE5201": {
+      "label": "PEN_NOON",
+      "description": "Peruvian new sol",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5201"
+    },
+    "IEXE5301": {
+      "label": "ILS_NOON",
+      "description": "Israeli new shekel",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5301"
+    },
+    "IEXE5501": {
+      "label": "LKR_NOON",
+      "description": "Sri Lanka rupee",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5501"
+    },
+    "IEXE5601": {
+      "label": "TTD_NOON",
+      "description": "Trinidad and Tobago dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5601"
+    },
+    "IEXE5701": {
+      "label": "TND_NOON",
+      "description": "Tunisian dinar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5701"
+    },
+    "IEXE5802": {
+      "label": "TRY_NOON",
+      "description": "Turkish lira",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5802"
+    },
+    "IEXE5901": {
+      "label": "VEB_NOON",
+      "description": "Venezuelan bolivar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5901"
+    },
+    "IEXE5902": {
+      "label": "VEF_NOON",
+      "description": "Venezuelan bolivar fuerte",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE5902"
+    },
+    "IEXE6001": {
+      "label": "BSD_NOON",
+      "description": "Bahamian dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6001"
+    },
+    "IEXE6101": {
+      "label": "HRK_NOON",
+      "description": "Croatian kuna",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6101"
+    },
+    "IEXE6201": {
+      "label": "SKK_NOON",
+      "description": "Slovak koruna",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6201"
+    },
+    "IEXE6401": {
+      "label": "JMD_NOON",
+      "description": "Jamaican dollar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6401"
+    },
+    "IEXE6501": {
+      "label": "GTQ_NOON",
+      "description": "Guatemalan quetzal",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6501"
+    },
+    "IEXE6503": {
+      "label": "VND_NOON",
+      "description": "Vietnamese dong",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6503"
+    },
+    "IEXE6504": {
+      "label": "RSD_NOON",
+      "description": "Serbian dinar",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6504"
+    },
+    "IEXE6505": {
+      "label": "RON_NOON",
+      "description": "Romanian new leu",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6505"
+    },
+    "IEXE6506": {
+      "label": "AED_NOON",
+      "description": "U.A.E. dirham",
+      "link": "https://www.bankofcanada.ca/valet/series/IEXE6506"
+    }
+  }
+}

@@ -155,11 +155,11 @@ fn log(line: &str) {
     eprintln!("{}", line);
 }
 
-/// Wait for this host's next turn. Turns are handed out under a lock, so
-/// listings read side by side still ask each host one at a time, `seconds`
-/// apart.
+/// Space this host's requests at least `seconds` apart. The request itself
+/// takes the turn on the one limiter (`crate::http`), so listings read side by
+/// side still ask each host one at a time, `seconds` apart.
 pub fn pace(host: &str, seconds: f64) {
-    bagholder_net::machine::turn(host, std::time::Duration::from_secs_f64(seconds.max(0.0)));
+    crate::http::pace_host(host, std::time::Duration::from_secs_f64(seconds.max(0.0)));
 }
 
 fn paced(net: &Net, host: &str, seconds: f64) {
@@ -673,9 +673,9 @@ pub fn yahoo_form(conn: &Connection, symbol: &str, exchange: &str, currency: &st
         if exchange.trim().is_empty() && first.ends_with(".TO") {
             let remembered = crate::tmx::tmx_remembered(conn, &tmx_symbol(symbol));
             let bare = crate::tmx::tmx_bare(&remembered);
-            let suffix = match &remembered[bare.len()..] { ":CNX" => Some(".CN"), ":AQL" => Some(".NE"), _ => None };
-            if let Some(sfx) = suffix {
-                return format!("{}{}", crate::quotes::yahoo_root(symbol), sfx);
+            let venue = match &remembered[bare.len()..] { ":CNX" => Some("XCNQ"), ":AQL" => Some("NEOE"), _ => None };
+            if let Some(form) = venue.and_then(|mic| bagholder_sources::venue::yahoo_forms(symbol, mic).into_iter().next()) {
+                return form;
             }
         }
     }

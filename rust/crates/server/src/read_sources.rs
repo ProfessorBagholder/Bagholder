@@ -17,18 +17,20 @@ use std::sync::Arc;
 
 use bagholder_book::Book;
 use bagholder_core::instrument::{InstrumentKind, RefScheme};
+use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::Timestamp;
-use bagholder_core::InstrumentId;
+use bagholder_core::transaction::Kind;
+use bagholder_core::{Currency, InstrumentId};
 use bagholder_engine::input::{Clock, Inputs, Market, Quote, QuoteSource};
 use bagholder_engine::needs::FactNeeds;
 use bagholder_engine::Engine;
-use bagholder_net::{Limiter, Net, SystemClock};
+use bagholder_net::{Net, SystemClock};
 use bagholder_sources::cache::MarketCache;
 use bagholder_sources::contract::Listing;
-use bagholder_sources::needs::{CloseNeed, Needs, PayerNeed};
+use bagholder_sources::needs::{CloseNeed, ContractNeed, Needs, PayerNeed};
 use bagholder_sources::read::Ctx;
-use bagholder_sources::{health, market, payers, quotes, rates};
+use bagholder_sources::{health, market, options, payers, quotes, rates};
 
 use crate::engine_inputs;
 
@@ -42,9 +44,9 @@ fn err(e: impl std::fmt::Display) -> String {
 /// The market as the cache holds it: its quotes, its closes and the benchmarks.
 pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, String> {
     let mut m = Market::default();
-    let kinds: BTreeMap<InstrumentId, InstrumentKind> = book.instruments().map_err(err)?.into_iter().map(|i| (i.id, i.kind)).collect();
+    let instruments: BTreeMap<InstrumentId, (InstrumentKind, Currency)> = book.instruments().map_err(err)?.into_iter().map(|i| (i.id, (i.kind, i.currency))).collect();
     for q in cache.quotes().map_err(err)? {
-        let source = match kinds.get(&q.instrument) {
+        let source = match instruments.get(&q.instrument).map(|i| i.0) {
             Some(InstrumentKind::Crypto) => QuoteSource::Crypto,
             Some(InstrumentKind::OptionContract) => QuoteSource::OptionChain,
             _ => QuoteSource::Listing,
@@ -52,6 +54,13 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
         m.quotes.insert(q.instrument, Quote { price: q.price, change: q.change, change_pct: q.change_pct, at: Some(q.quoted_at), source });
     }
     m.closes = cache.closes().map_err(err)?;
+    // an option contract's closes are the book's, each in the contract's own currency
+    for (id, days) in book.closes().map_err(err)? {
+        if let Some((day, c)) = days.iter().find(|(_, c)| instruments.get(&id).map(|i| i.1) != Some(c.currency)) {
+            return Err(format!("the book's close of {id} on {day} is in {}, not the contract's currency", c.currency));
+        }
+        m.closes.entry(id).or_default().extend(days);
+    }
     for (b, levels) in cache.benchmarks().map_err(err)? {
         m.benchmarks.insert(b.key().to_string(), levels);
     }
@@ -73,12 +82,35 @@ fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
     Ok(Some(Listing { id, kind: i.kind, currency: i.currency, symbol: now.symbol.clone(), venue_mic: now.venue_mic.clone(), routes }))
 }
 
+/// An option contract as its chain is asked for it, held `from`..=`to`: its
+/// terms, its underlying's symbol now, the OCC symbol the book states, and the
+/// day of a corporate event on the underlying while it was held. `None` for an
+/// instrument that is not an option contract.
+fn contract(book: &Book, events: &BTreeMap<InstrumentId, Vec<Date>>, id: InstrumentId, from: Date, to: Date) -> Result<Option<ContractNeed>, String> {
+    let Some(terms) = book.option_terms(id).map_err(err)? else { return Ok(None) };
+    let i = book.instrument(id).map_err(err)?;
+    let Some(underlying) = book.names(terms.underlying).map_err(err)?.last().map(|n| n.symbol.clone()) else { return Ok(None) };
+    let occ = book.instrument_refs(id).map_err(err)?.into_iter().find(|r| r.scheme == RefScheme::Occ).map(|r| r.value);
+    let event_on = events.get(&terms.underlying).and_then(|days| days.iter().copied().find(|d| from <= *d && *d <= to.min(terms.expiry)));
+    Ok(Some(ContractNeed { id, currency: i.currency, underlying, expiry: terms.expiry, strike: terms.strike, right: terms.right, occ, event_on, from, to }))
+}
+
 /// The engine's needs, as the sources read them.
 fn needs_of(book: &Book, n: &FactNeeds) -> Result<Needs, String> {
     let mut out = Needs { benchmarks_from: n.first_day, ..Needs::default() };
     out.rates = n.rates.iter().map(|(c, d)| rates::Need { currency: *c, oldest: *d }).collect();
+    // each instrument's corporate events, by day, oldest first
+    let mut events: BTreeMap<InstrumentId, Vec<Date>> = BTreeMap::new();
+    for t in book.transactions().map_err(err)? {
+        if let (Kind::CorporateEvent, Some(i)) = (t.kind, t.instrument) {
+            events.entry(i).or_default().push(t.trade_date);
+        }
+    }
+    events.values_mut().for_each(|d| d.sort());
     for (id, (from, to)) in &n.closes {
-        if let Some(listing) = listing(book, *id)? {
+        if let Some(c) = contract(book, &events, *id, *from, *to)? {
+            out.contracts.push(c);
+        } else if let Some(listing) = listing(book, *id)? {
             out.closes.push(CloseNeed { listing, from: *from, to: *to });
         }
     }
@@ -123,7 +155,8 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
     let at = Timestamp::now();
     let (book, _) = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?;
     let (cache, _) = MarketCache::open(cache_path, crate::app::APP_VERSION, at).map_err(err)?;
-    let net = Net::new(Arc::new(SystemClock), Arc::new(Limiter::new()));
+    // the process's one limiter, which the running app's other readers share
+    let net = Net::new(Arc::new(SystemClock), bagholder_net::machine::shared());
     let clock = clock(now)?;
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now, bank: &clock.bank };
     let mut last: Option<FactNeeds> = None;
@@ -139,6 +172,7 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
         let needs = needs_of(&book, &last.as_ref().map_or_else(|| n.clone(), |l| new_in(&n, l)))?;
         rates::read(&ctx, &needs.rates).map_err(err)?;
         market::read_closes(&ctx, &needs.closes).map_err(err)?;
+        options::read(&ctx, &needs.contracts).map_err(err)?;
         if let Some(from) = needs.benchmarks_from {
             market::read_benchmarks(&ctx, from).map_err(err)?;
         }
@@ -327,6 +361,31 @@ mod tests {
         assert_eq!(todo.rates.keys().collect::<Vec<_>>(), vec![&Currency::USD]);
         assert_eq!(todo.closes.keys().collect::<Vec<_>>(), vec![&i(1)]);
         assert!(new_in(&now, &now) == FactNeeds::default());
+    }
+
+    #[test]
+    fn the_market_holds_the_caches_closes_and_the_books_option_closes() {
+        use bagholder_core::jiff::civil::date;
+        use bagholder_core::{Dec, Money};
+        let dir = tempfile::tempdir().unwrap();
+        let now: Timestamp = "2026-09-24T20:00:00Z".parse().unwrap();
+        let (book, _) = Book::open(&dir.path().join("book.db"), crate::app::APP_VERSION, now).unwrap();
+        let (cache, _) = MarketCache::open(&dir.path().join("market.db"), crate::app::APP_VERSION, now).unwrap();
+        let i = |n: u8| InstrumentId::parse(&format!("0192a000-0000-7000-8000-0000000000{n:02}")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("book.db")).unwrap();
+        for (n, kind) in [(1, "security"), (2, "option"), (3, "option")] {
+            conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES (?1, ?2, 'USD', '2026-01-01T00:00:00Z')", rusqlite::params![i(n).to_string(), kind]).unwrap();
+        }
+        let usd = |s: &str| Money::new(Dec::parse(s).unwrap(), Currency::USD);
+        let source = bagholder_core::SourceName::named("cboe-options");
+        cache.store_closes(i(1), &[(date(2026, 9, 22), Dec::parse("5.1").unwrap())], Currency::USD, &source, now).unwrap();
+        book.store_close(i(2), date(2026, 9, 22), usd("0.37"), &source, now).unwrap();
+        let m = market_from_cache(&cache, &book).unwrap();
+        assert_eq!(m.closes[&i(1)][&date(2026, 9, 22)], usd("5.1"));
+        assert_eq!(m.closes[&i(2)][&date(2026, 9, 22)], usd("0.37"));
+        // a book close in another currency than its contract's is refused
+        book.store_close(i(3), date(2026, 9, 22), Money::new(Dec::parse("0.5").unwrap(), Currency::CAD), &source, now).unwrap();
+        assert!(market_from_cache(&cache, &book).unwrap_err().contains("not the contract's currency"));
     }
 
     #[test]

@@ -103,7 +103,7 @@ fn lot_sum(currency: Currency, lots: &[Lot]) -> Fig<Money> {
     let mut gaps = Gaps::none();
     for l in lots {
         match &l.value {
-            Ok(v) if gaps.is_empty() => total = total.checked_add(*v)?,
+            Ok(v) if gaps.is_empty() => total = total.add_to_fit(*v)?,
             Ok(_) => {}
             Err(g) => gaps.merge(g),
         }
@@ -128,8 +128,8 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
             let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
             let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
             let mult = multiplier(info, *instrument);
-            let qty = lots.iter().fold(Dec::ZERO, |a, l| a.checked_add(l.qty).unwrap_or(a));
-            let fees = lots.iter().fold(Money::zero(currency), |a, l| a.checked_add(l.fee).unwrap_or(a));
+            let qty = lots.iter().fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty).unwrap_or(a));
+            let fees = lots.iter().fold(Money::zero(currency), |a, l| a.add_to_fit(l.fee).unwrap_or(a));
             let taint = book.taint.clone();
             let with_taint = |f: Fig<Money>| -> Fig<Money> {
                 if taint.is_empty() {
@@ -151,7 +151,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
             };
             let mark = mark_of(inputs, *instrument, kind, currency);
             let market = match (&mark, &units) {
-                (Ok(m), Ok(u)) => with_taint(m.price.checked_mul(*u).map(|v| Money::new(v, currency)).map_err(Gaps::from)),
+                (Ok(m), Ok(u)) => with_taint(m.price.mul_to_fit(*u).map(|v| Money::new(v, currency)).map_err(Gaps::from)),
                 (Err(g), _) | (_, Err(g)) => Err(g.clone()),
             };
             let unrealized = match (&market, &book_value) {
@@ -167,7 +167,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 }
             };
             let day_change: Fig<Option<Money>> = match (&mark, &units) {
-                (Ok(m), Ok(u)) => match m.change.map(|c| c.checked_mul(*u)) {
+                (Ok(m), Ok(u)) => match m.change.map(|c| c.mul_to_fit(*u)) {
                     Some(Ok(v)) => {
                         let v = if direction == Direction::Short { v.neg() } else { v };
                         if taint.is_empty() {
@@ -188,7 +188,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 Err(g) => Err(g.clone()),
             };
             // quantity-weighted days held
-            let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?));
+            let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?));
             let held_days = match weighted.and_then(|w| w.div_rounded(qty, 0, Rounding::HalfEven)) {
                 Ok(d) => d.to_text().parse::<i64>().unwrap_or(0),
                 Err(_) => 0,

@@ -4,7 +4,14 @@
 //! open a new TLS connection, and for a request this small the handshake is
 //! the whole cost -- which is what pinned a small board at a full core while
 //! the archive caught up.
+//!
+//! Every request here waits its turn on the process's one limiter
+//! (`bagholder_net::machine::net`), at its URL's host: the host's gap between
+//! two requests, and its rest after a refusal (429, or 503 with a
+//! `Retry-After`, honoured). A caller that wants a host spaced sets the host's
+//! pace ([`pace_host`]) and takes no turn of its own.
 
+use bagholder_net::{Ask, NetError, Pace};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -40,10 +47,40 @@ pub fn describe_failure(e: &FetchError) -> String {
     }
 }
 
+/// Space `host`'s requests at least `gap` apart on the one limiter, from now on
+/// (a host's gap is only ever raised, so the most careful caller's holds).
+pub fn pace_host(host: &str, gap: Duration) {
+    let l = bagholder_net::machine::global();
+    let pace = l.pace(host);
+    if pace.gap < gap {
+        l.configure(host, Pace { gap, ..pace });
+    }
+}
+
+/// One request on the one limiter: the answer, or an HTTP error as its status.
+fn send(ask: &Ask) -> Result<bagholder_net::Reply, FetchError> {
+    let reply = bagholder_net::machine::net().send(ask).map_err(|e| match e {
+        NetError::Resting { host, until } => {
+            FetchError::Transport(format!("{host}: refused a request; not asked again before {until}"))
+        }
+        NetError::Unreachable(m) => FetchError::Transport(m),
+    })?;
+    if reply.status >= 400 {
+        return Err(FetchError::Status(reply.status));
+    }
+    Ok(reply)
+}
+
 pub fn get_text(url: &str, headers: &[(&str, &str)]) -> Result<String, FetchError> {
+    get_bytes(url, headers).map(|b| String::from_utf8_lossy(&b).to_string())
+}
+
+/// The body as sent (a spreadsheet, a PDF).
+pub fn get_bytes(url: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>, FetchError> {
     let default: Vec<(&str, &str)> = vec![("User-Agent", UA), ("Accept", "text/csv,application/json,*/*;q=0.8")];
     let hdrs = if headers.is_empty() { &default[..] } else { headers };
-    bagholder_net::client::request("GET", url, hdrs, None, Duration::from_secs(TIMEOUT_SEC)).map(|r| r.text())
+    let ask = Ask { timeout: Duration::from_secs(TIMEOUT_SEC), ..Ask::get(url, hdrs) };
+    send(&ask).map(|r| r.body)
 }
 
 pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result<Value, FetchError> {
@@ -62,8 +99,9 @@ pub fn post_json(url: &str, payload: &Value, headers: &[(&str, &str)]) -> Result
             None => hdrs.push((k, v)),
         }
     }
-    let resp = bagholder_net::client::request("POST", url, &hdrs, Some(body.as_bytes()), Duration::from_secs(TIMEOUT_SEC))?;
-    serde_json::from_str(&resp.text()).map_err(|e| FetchError::Transport(e.to_string()))
+    let ask = Ask { timeout: Duration::from_secs(TIMEOUT_SEC), ..Ask::post(url, &hdrs, body.as_bytes()) };
+    let reply = send(&ask)?;
+    serde_json::from_str(&String::from_utf8_lossy(&reply.body)).map_err(|e| FetchError::Transport(e.to_string()))
 }
 
 /// The headers TMX's GraphQL endpoint expects.

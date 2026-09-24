@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 
+use bagholder_core::Dec;
 use bagholder_model::lenient;
 use bagholder_model::value::{get, num};
 use bagholder_store::bars::{DayBar, Ohlcv, TimeBar};
@@ -340,17 +341,23 @@ pub fn parse_cboe_options(text: &str) -> OptionChain {
 /// midpoint while both are quoted, else the last trade, else the previous
 /// close.
 pub fn option_mark(row: &OptionRow) -> Option<SourceQuote> {
-    let bid = row.bid.unwrap_or(0.0);
-    let ask = row.ask.unwrap_or(0.0);
     let prev = row.prev_day_close;
-    let px = if bid > 0.0 && ask > 0.0 {
-        (bid + ask) / 2.0
-    } else {
+    // the midpoint rule is the sources' (`bagholder_sources::adapters::
+    // cboe_options::midpoint`), exact in decimal; this reader keeps its prices
+    // in floats until stage 5, so each side crosses as the decimal its shortest
+    // form spells, and the midpoint comes back the same way
+    let side = |v: Option<f64>| v.filter(|x| x.is_finite()).and_then(|x| Dec::parse(&format!("{x}")).ok());
+    let mid = side(row.bid)
+        .zip(side(row.ask))
+        .and_then(|(bid, ask)| bagholder_sources::adapters::cboe_options::midpoint(bid, ask))
+        .and_then(|m| m.to_text().parse::<f64>().ok());
+    let px = match mid {
+        Some(m) => m,
         // a zero last trade falls through as a missing one does
-        match row.last_trade_price {
+        None => match row.last_trade_price {
             Some(v) if v != 0.0 => v,
             _ => prev.unwrap_or(0.0),
-        }
+        },
     };
     if px <= 0.0 {
         return None;

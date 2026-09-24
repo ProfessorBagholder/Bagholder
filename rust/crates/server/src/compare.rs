@@ -402,6 +402,16 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let scoped = engine.scope(&Filters { benchmark: "SP500".into(), ..Filters::default() });
     writeln!(out, "\nDashboard: realized old {:.2} new {} ({} trades, {} left out); count old {} new {}.", view.kpi.realized, scoped.kpi.realized.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.kpi.count, scoped.kpi.left_out, view.kpi.count, scoped.kpi.count).ok();
     writeln!(out, "Portfolio: market value old {:.2} new {} ({} left out); cost basis old {:.2} new {} ({} left out).", view.portfolio.market_value, scoped.portfolio.market_value.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.portfolio.market_value.left_out, view.portfolio.cost_basis, scoped.portfolio.cost_basis.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.portfolio.cost_basis.left_out).ok();
+    // each position the market value leaves out, by what it waits on
+    let mut waiting: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for p in figures.positions.iter() {
+        if let Err(g) = &p.market_cad {
+            waiting.entry(g.words().join(", ")).or_default().push(figures_symbol(&engine, p.instrument));
+        }
+    }
+    for (why, symbols) in &waiting {
+        writeln!(out, "  market value leaves out, waiting on {why} — {}: {}", symbols.len(), symbols.join(", ")).ok();
+    }
     writeln!(out, "Cashflow: all-time dividends old {:.2} new {} ({} left out).", view.cashflow.total, scoped.cashflow.total.total.amount.round(2, bagholder_core::Rounding::HalfEven).to_text(), scoped.cashflow.total.left_out).ok();
 
     // what the new engine could not apply

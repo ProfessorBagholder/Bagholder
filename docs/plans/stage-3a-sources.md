@@ -45,9 +45,9 @@ Each question below is answered from real replies before the reader that depends
    - Valet holds its daily series from 2017-01-03 and its legacy noon series from 2007-05-01 (both verified on 2026-09-23).
    - **Found:** Statistics Canada's table 10-10-0008 carries the Bank's noon spot rates from 1950-10-02 to 2017-04-28 for twelve currencies still in use (USD, EUR, GBP, JPY, CHF, AUD, NZD, HKD, MXN, DKK, NOK, SEK), equal to Valet's noon series where both exist (checked for USD). It is read as a third series under its own source name. Its web service states a non-business day explicitly (a null value with status 1) and refuses bursts, so it is paced.
    - A day before a currency's oldest series (any day before 2007-05-01 for a currency outside those twelve) is a gap named for what it is, `rate-not-held`: no source holds the Bank's published rate for that day. It is never `rate-missing`, which names a failure of the Bank source.
-4. **Which session an option chain's `prev_day_close` belongs to**, and which of the chain's prices is a contract's close for a session.
-   - Settled from chains captured before and after a session's close on the same day, and across a weekend.
-   - The recorded close must be defined one way (the chain's closing price, or the closing midpoint) before its reader is built.
+4. **Which session an option chain carries, and which of its prices is a contract's close.** *Answered.*
+   - **Found:** the chain states both. The session is the day of its underlying's `last_trade_time` (Eastern); its `timestamp` (UTC, matching `Last-Modified`) says whether Cboe made it after that session settled. Each contract states its closing bid and ask and its last trade with that trade's time. `prev_day_close` states no day, so it is not read.
+   - **The close:** the closing bid/ask midpoint where both sides are quoted, as the live price is (`SPEC.md` §2); else the last trade where its stated time falls on the session; else none, and that day takes the broker's figure or waits.
 5. **Benchmark sources.** *Answered.*
    - Replies recorded for each: FRED's S&P 500 series and TMX's `^TSX` and `^TX60` daily series (SPEC §2).
    - **Found:** FRED serves the trailing ten years only, two decimals, a holiday as a row with an empty value. Stooq now answers every request with a browser proof-of-work check instead of data, and S&P's own site refuses a plain request (403), so neither is used. Yahoo's `^GSPC` is the only reachable source for S&P 500 days before FRED's window; it agrees with FRED within half a cent on all but nine of 2,511 shared days. TMX answers `^TSX` and `^TX60` from 2001-12-11 in one reply, each row dated 16:00 with its offset.
@@ -140,7 +140,7 @@ It is keyed by the book's instrument ids. Nothing in it is a fact a figure was c
 
 A venue's session days are the days its own daily closes exist, as the sources report them. It needs no calendar of its own:
 - **A closed day** is one with a close stored, and is never read again.
-- **An option's recorded close** is dated to the underlying's session day that the chain's own time falls in or follows (research 4).
+- **An option's recorded close** is dated to the session its chain states: the day of the underlying's last trade, the chain made after that session settled (research 4).
 - **Venue hours and holidays** as a calendar (§7) are the bracket engine's need in stage 4, not a figure's.
 
 ### The fact readers (into the book, written once)
@@ -174,7 +174,7 @@ A venue's session days are the days its own daily closes exist, as the sources r
 **Distributions and schedules, from the payer itself** (research 2).
 
 - **The fund company's own publication** states a fund's schedule (how often it pays) and its distributions: ex-date, record date, pay date, amount per unit, currency. Which publication, for each of the sixteen companies the person's funds come from, is research 2's table: the fund's page, the JSON or GraphQL the page itself reads, or the company's own distribution release (Global X). One adapter per company reads it strictly: every field it needs, typed and checked; a publication that no longer carries them is a mismatch naming what is missing, never an empty schedule. The schedule is read from the company's own words, a closed list per adapter ("Twice-monthly", "Semi-Monthly", "Monthly Variable", the release table a fund sits in); a word not on the list is a mismatch.
-- **A company's own announcement** states each dividend it declares: the amount, the record date, the pay date, and the schedule in its own words ("declared a quarterly dividend of …"). One adapter per publication form (Cision's newswire.ca pages, the InvestorRoom/MediaRoom sites, Q4's feed), each company's sentence read strictly. The ex-date is the one the company states (TD), else the exchange's rule from the record date (the same day from 2024-05-27, the business day before until then).
+- **A company's own announcement** states each dividend it declares: the amount, the record date, the pay date, and the schedule in its own words ("declared a quarterly dividend of …"). One adapter per publication form (Cision's newswire.ca pages, the InvestorRoom/MediaRoom sites, Q4's feed), each company's sentence read strictly. The ex-date is the exchange's rule from the record date: the same day from 2024-05-27 (settlement in one business day). A declaration with an earlier record date is left out (Right to refuse).
 - **What a publication states, kept as stated.** A distribution's cash and reinvested parts where the payer states them (BMO, Vanguard, iShares Canada, Mackenzie, Global X's reinvested table, Fidelity's release); a row repeated identically is one row; two different rows for one ex-date, or a date outside the fund's life, are a meaning failure naming both, and the read writes nothing.
 - **Stored in the book, written once**: the distributions as one read of the payer's record (`store_declared`), so a distribution the payer withdrew is absent from the newest read (a read identical to the newest records only its time); the schedule as a stated frequency (`store_frequency`) under the payer's own source name. A later statement stands as the newest; an old one is never left standing alone.
 - **What the figures use.** The per-unit amount is the cash per unit of the latest distribution gone ex that pays cash, since the figures are income paid (`SPEC.md` §2, "Annual income"); a reinvested part pays nothing and is shown as the payer stated it. The frequency is the payer's own statement (§18's change: never assumed). The kinds stage 2 gave the engine (regular, special, non-cash) go: book migration 3 drops `declared_distributions.kind` and adds `reinvested`, the stated reinvested part per unit, beside `amount`, the cash part.
@@ -185,8 +185,10 @@ A venue's session days are the days its own daily closes exist, as the sources r
 **Option closes** (Cboe's delayed chains, `cdn.cboe.com`).
 
 - **When it is read.** After each session's close, the same day, for every held contract, including those expiring that day, which are gone from the next day's chain.
-- **What is written.** The contract's close as research 4 defines it, dated to its session, via `recorded_closes`.
-- **Checks.** The chain's `timestamp` is UTC: the reply's `Last-Modified` (03:55:02 GMT) matched it (03:54:59) on 2026-09-23. A chain whose session cannot be told is a meaning failure, and it writes nothing.
+- **What is written.** The contract's close as research 4 defines it, dated to the session the chain states, via `recorded_closes`. A chain still carrying an older session writes that session's closes where the book lacks them and leaves the day due; a chain that has moved past the day due settles it as not read.
+- **Which contract.** By the OCC symbol the book states, else by its terms, which must match exactly one contract in the chain. Where the book records a corporate event on the underlying while the contract was held, it may have been adjusted, and without its OCC symbol it is not looked up by its terms (a meaning outcome, nothing written).
+- **Checks.** The chain's `timestamp` is UTC: the reply's `Last-Modified` matched it within seconds on every capture. A chain whose session cannot be told (no underlying trade time) is a meaning failure, and it writes nothing; a chain made before its session settled quotes and closes nothing.
+- **Quotes.** The same chain quotes each contract held today: the midpoint at the chain's time less Cboe's fifteen minutes, else the last trade at its own time.
 - **Exactness.** Cboe writes prices as binary float leftovers (`224.255004882812`). That is its statement, kept exactly as written.
 - **What cannot be had, stated now.**
   - A contract's close for a day no reader ran.
@@ -212,9 +214,10 @@ The chains of `SPEC.md` §2, as adapters under the contract:
 Stooq goes from `SPEC.md` §2: it now answers with a browser check instead of data.
 
 **Every quote has a time.** How each source states it was checked on 2026-09-23:
-- **TMX:** the quote's `datetime`, with its offset.
+- **TMX:** the quote's `datetime`, with its offset: when TMX served the quote, in session and out, since TMX states no trade time (Findings). It says the price is current then, and is never presented as a trade's time.
 - **Yahoo:** the chart's `regularMarketTime`.
-- **Cboe chains:** the chain's `timestamp` (UTC, above).
+- **Cboe Canada:** the quote's `trade_time`, with its offset.
+- **Cboe chains:** a contract's midpoint at the chain's `timestamp` (UTC, above) less its fifteen minutes' delay; its last trade at that trade's own time.
 - **Coinbase, USD pairs:** the Exchange ticker (`api.exchange.coinbase.com/products/<pair>/ticker`) carries `time`. It lists only USD pairs; BTC-CAD, ETH-CAD, SOL-CAD and DOGE-CAD answer 404.
 - **Coinbase, a coin's own currency:** the spot price (`api.coinbase.com/v2/prices/<pair>/spot`) states no time, and its origin allows it to be 60 seconds old (`max-age=60`). Such a quote is stamped with the reply's `Date` less that allowance, the allowance stored with it.
 
@@ -233,7 +236,7 @@ A quote with no time is a meaning failure. How late each source is by design (Cb
 | Read | When | Reason |
 |---|---|---|
 | Bank of Canada observations | a business day after 16:30 Eastern whose rate is not stored; once when a currency first appears | the Bank publishes at 16:30 (§7) |
-| Bank holiday page | the first business day of each month | the page names this year's closures, and a closure must be known before its day passes |
+| Bank holiday page | once a month, from the month's first day (Eastern) | the page names this year's closures, and a closure must be known before its day passes |
 | A payer's page or announcement | when its next distribution is due by its own schedule and not yet read; on an announcement of distributions (3c); when a payer first appears | a payer's record changes only when it declares |
 | Option closes | each session day after the close, for held contracts | a session's close is gone the next day |
 | Daily closes | each session day after the close, for held instruments and expiring contracts' underlyings | the equity series needs each day's close |
@@ -251,29 +254,29 @@ Each is a pure due-function over the book, the cache and a clock handed in, test
 
 The template's Python, Go, shared-case and page lines do not apply: those builds are frozen, and the page does not change in this part.
 
-- [ ] **Build.** Rust, from `rust/`: the whole workspace's tests green and a warning-free build.
-- [ ] **Research.** Each of research 1–5 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
-- [ ] **Boundaries.** The boundary test holds `bagholder-net` and `bagholder-sources` to their columns, each checked by feeding the checker a violation:
+- [x] **Build.** Rust, from `rust/`: the whole workspace's tests green and a warning-free build.
+- [x] **Research.** Each of research 1–5 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
+- [x] **Boundaries.** The boundary test holds `bagholder-net` and `bagholder-sources` to their columns, each checked by feeding the checker a violation:
   - no `f64` in `bagholder-sources`;
   - no clock read in `bagholder-sources`;
   - `bagholder-net` reads time only through the clock it is handed.
-- [ ] **One copy.** `bagholder-market` calls the moved client, limiter, domain logic and HTML table reader, and none of them remains in it: a test fails on their old definitions. The old `note_source` health is gone.
-- [ ] **The reply reader**, each a test:
+- [x] **One copy.** `bagholder-market` calls the moved client, limiter, domain logic and HTML table reader, and none of them remains in it: a test fails on their old definitions. The old `note_source` health is gone.
+- [x] **The reply reader**, each a test:
   - a decimal read to its last written digit;
   - a 29-digit number is a mismatch;
   - an absent, null or wrongly typed required field is a mismatch naming its path;
   - an optional field's null reads as stated none, and its absent key is a mismatch;
   - a field not read is ignored;
   - a path gone and a path new are each reported as a shape change, against the union of the fixtures' paths with indices folded.
-- [ ] **The limiter.** One per host for every host; a minimum gap, a rest after a refusal, and `Retry-After` honoured, each on a fake clock; Yahoo's and SEDAR+'s old gates removed, their callers on the one limiter.
-- [ ] **Health.**
+- [x] **The limiter.** One per host for every host; a minimum gap, a rest after a refusal, and `Retry-After` honoured, each on a fake clock; Yahoo's and SEDAR+'s old gates removed, their callers on the one limiter.
+- [x] **Health.**
   - Each source state (`working`, `refusing`, `failing`, `shape-changed`) is a test over outcome rows.
   - A thousand quote outcomes do not evict the Bank's last outcome.
   - `source-health` prints each state.
-- [ ] **Fixtures.** Every adapter of this part has recorded real replies under `tests/replies/`, with a wrong-shaped and a wrong-meaning copy of each, and a test per reply asserting exactly what is written, or that nothing is and which outcome is recorded.
-- [ ] **Bank of Canada**, each a test on recorded replies:
+- [x] **Fixtures.** Every adapter of this part has recorded real replies under `tests/replies/`, with a wrong-shaped and a wrong-meaning copy of each, and a test per reply asserting exactly what is written, or that nothing is and which outcome is recorded.
+- [x] **Bank of Canada**, each a test on recorded replies:
   - the daily currencies stored with each series' first and last day, and the noon table's series checked against the Bank's and Statistics Canada's metadata;
-  - a reply whose series description differs from the table (IEXE0105's forward rate in place of IEXE0101) is a mismatch;
+  - a reply whose series description differs from the table (IEXE0105's forward rate in place of IEXE0101) is a meaning failure, as another series than asked is;
   - a span's rates and the span stored, clamped to the series' days (a read asked from 2010 records its daily span from 2017-01-03);
   - a weekday skipped inside a completed span is not a business day to the engine, and a weekday before a series begins is not;
   - each era stops the day before the next begins (Statistics Canada, then noon, then daily), with no conflict whichever read runs first, and a day no series holds (before the oldest, between two, after one ended) is `rate-not-held`;
@@ -282,18 +285,18 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - the holiday page's pairs stored, a weekend-dated observed holiday kept as stated, and a page with no pairs or the wrong year a mismatch;
   - the due rule on a fake clock: a business day after 16:30 Eastern with no rate is due, before 16:30 it is not, a holiday is not;
   - book migration 3 applied to a version 2 book with its rows intact, and `schema/v3.sql` committed and compared.
-- [ ] **Payers' publications**, for each fund company and announcement form, each a test on its recorded pages:
+- [x] **Payers' publications**, for each fund company and announcement form, each a test on its recorded pages:
   - the schedule and every distribution read and stored, with cash and reinvested parts where the payer states them;
   - a schedule word not on the adapter's list, and a page missing a field it must carry, each a mismatch naming it, writing nothing;
   - a repeated identical row stored once; two different rows for one ex-date, or a date outside the fund's life, a meaning failure writing nothing;
-  - a company release's amount, record date, pay date and schedule read from its own sentence, and its ex-date by the exchange's rule on each side of 2024-05-27;
+  - a company release's amount, record date, pay date and schedule read from its own sentence, its ex-date the record date from 2024-05-27, and a declaration with an earlier record date left out;
   - a read stored as a whole, a later read lacking a row leaving it absent, an identical read recording only its time; a later schedule statement replacing the earlier;
   - Mackenzie's and WisdomTree's funds: distributions from the exchange-side record, marked with its source; the schedule where a source states it, otherwise the fund's annual income a gap naming its unreadable company site; never a schedule worked out from dates.
-- [ ] **The engine**, cases passing: distribution kinds removed; the per-unit amount the cash per unit of the latest distribution gone ex that pays cash, a wholly reinvested one passed over and a year-end one with a cash part counting its cash; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` for a day before a currency's oldest series; every existing case still passing.
-- [ ] **Option closes**, each a test on recorded replies:
+- [x] **The engine**, cases passing: distribution kinds removed; the per-unit amount the cash per unit of the latest distribution gone ex that pays cash, a wholly reinvested one passed over and a year-end one with a cash part counting its cash; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` for a day before a currency's oldest series; every existing case still passing.
+- [x] **Option closes**, each a test on recorded replies:
   - a chain read after the close writes each held contract's close once, dated to its session, including a contract expiring that day;
   - a chain whose session cannot be told writes nothing and records a meaning failure.
-- [ ] **Quotes, closes and benchmarks**, on recorded replies:
+- [x] **Quotes, closes and benchmarks**, on recorded replies:
   - each chain in the order of the table, its winner remembered and asked first;
   - `NotCarried` recorded and not counted as a failure;
   - a quote without a time refused;
@@ -302,11 +305,11 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - closes stored as traded around a split (research 1);
   - an expiring contract's underlying's close read for its expiry day when the underlying was never held;
   - a form learned from TMX written back as a routing reference only when the reply's venue matches the book's.
-- [ ] **The market cache.** Migration 001 applied by the runner, `schema/v1.sql` committed and compared, a newer file refused, every table's typed write and read a test, and `Market` built from the cache and the book's option closes.
-- [ ] **Periodic reads.** Each due-function in the table is a test on a fake clock (due, not due, and after a refusal).
-- [ ] **A real run.** `bagholder read-sources` run on a copy of the person's book writes rates for every currency the engine converts from its oldest day, a declared record and a frequency statement for each payer, and closes for every held instrument's every day. Every failure it reports is attributed in Verification to a cause checked against the source (not carried, delisted, not published), and **none is a reader bug**.
-- [ ] **The comparison.** Run again with `--facts-from-book` on copies of both databases. Every difference from stage 2's run is attributed, a sample of each cause is checked against the records, and the counts are in Verification.
-- [ ] **The design review.** `docs/design-review.md` records stage 3 as three parts and 3a as done.
+- [x] **The market cache.** Migration 001 applied by the runner, `schema/v1.sql` committed and compared, a newer file refused, every table's typed write and read a test, and `Market` built from the cache and the book's option closes.
+- [x] **Periodic reads.** Each due-function in the table is a test on a fake clock (due, not due, and after a refusal).
+- [x] **A real run.** `bagholder read-sources` run on a copy of the person's book writes rates for every currency the engine converts from its oldest day, a declared record and a frequency statement for each payer, and closes for every held instrument's every day. Every failure it reports is attributed in Verification to a cause checked against the source (not carried, delisted, not published), and **none is a reader bug**.
+- [x] **The comparison.** Run again with `--facts-from-book` on copies of both databases. Every difference from stage 2's run is attributed, a sample of each cause is checked against the records, and the counts are in Verification.
+- [x] **The design review.** `docs/design-review.md` records stage 3 as three parts and 3a as done.
 
 ## Surfaces to check beyond the diff
 
@@ -324,6 +327,7 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
 ## Right to refuse
 
 - **Taken, on corporate events.** An event's values come from the official source (§6), not from Wealthsimple alone. Which source answers for which event is settled in 3b, beside the rows it explains.
+- **Taken, on company ex-dates before 2024-05-27.** Until then the ex-date was one business day before the record date (two before 2017-09-05), counted on the exchange's own calendar of sessions, which no source of this part holds (the Bank's closures are not the exchange's: the Bank closes on Remembrance Day, the exchange does not). Such a declaration is left out rather than written with a guessed ex-date. The case this leaves wrong: a company held whose latest declaration has a record date before 2024-05-27 (a dividend since suspended) shows no declared record instead of that one. None held is such a company (2026-09-24). The fix, planned for the next change to the payer readers: the exchange's sessions are the days the S&P/TSX Composite has a level (TMX, in the market cache from 2001-12-11), so the business day before a record date is read from them and handed to the company adapter.
 - **Reserved.** If research shows a field or a source this plan counts on is not there, the reader for it is not built on a guess: the plan changes first, and the change is written here.
 
 ## Anti-stub self-check
@@ -334,10 +338,45 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
 
 ## Verification
 
-(Filled in when the part is built.)
+Checked on 2026-09-24 on `svelte-migration`.
+
+**Research.** Each question is answered above with its decision, and the replies that answered it are recorded under `rust/crates/sources/tests/replies/` (the working notes in `stage-3a-research.md`):
+1. Split adjustment: `yahoo/NVDA-*`, `yahoo/SMCI-*`, `yahoo/*-splits-*`; TMX's split-adjusted series in `tmx/series-*`.
+2. Each payer's own statement: one folder per fund company and `newswire/` for the companies' releases.
+3. The Bank's rates in three eras: `bank-of-canada/`, `bank-of-canada-noon/`, `statistics-canada/`.
+4. Option chains: `cboe-options/chain-BBAI.json` and its edited copies.
+5. Benchmarks: `fred/SP500.csv`, `yahoo/GSPC-*`, `tmx/series-TSX-*`, `tmx/series-TX60-*`.
+
+**The acceptance criteria.** Each is a test in the Rust suite, checked item by item against the tests on 2026-09-24, except the real run, the comparison and the design review, which are below:
+- every recorded reply is asserted by a test, and every source has a wrong-shape and a wrong-meaning copy where its reader has a check an edit can trigger (Fidelity reads no rows, so it has no meaning check of its own; Defiance states no schedule, so it has no schedule word to get wrong);
+- the Bank's noon table is checked row by row against the Bank's own series list (all 62 rows, and what it leaves out is only the close, high, low, forward and reciprocal series), and Statistics Canada's against its series information and each vector's first days;
+- `bagholder-market` calls the moved venue forms, Yahoo suffixes and option midpoint, a test failing on the old definitions; its HTTP helpers and SEDAR+ take their turn on the one limiter, and the server's readers share it. Requests not sent through it yet, each moving later: the Wealthsimple session (3b), the updater and the local model (stage 5), and EDGAR, which takes its turn but is not rested by a refusal (stage 5, with filings);
+- CI builds the workspace with warnings denied.
+
+**A real run.** `bagholder read-sources` on a fresh copy of the person's imported book with a new market cache (2026-09-24 15:16 UTC, 83 seconds, two passes):
+- **Rates:** USD, the one currency the engine converts, 2,427 business days from 2017-01-03 to 2026-09-23, covering the book's oldest day (2023-09-07); the Bank's five closures to come.
+- **Payers:** the nine held that have paid are read by their fund companies: EASY (Evolve, 14 distributions), PLTE, RDDY, HHIS, HBIX (Harvest, 65), SXHI, CCHI (Ninepoint, 18), VEQT (Vanguard Canada, 7), each with its stated schedule (8 statements), and MSTY (YieldMax), whose page states a record date of 2036-07-30 for its 2026-07-30 distribution: a meaning failure, nothing written. The seven held that no reader reads (PLUG, LUNR, QBTS, ASTS, SMCI, two CH listings) have never paid, and no figure waits on them.
+- **Closes:** 104 instruments, 20,085 days (Yahoo 11,285, the Coinbase Exchange 8,800). Each source that does not carry a listing says so, and each was checked: the Exchange lists no CAD pair (the USD market's close is read, `SPEC.md` §2); FTM is delisted from Coinbase; CCCX merged into INFQ and Yahoo holds no history for its held span; Yahoo does not carry QMET.CN, RUG.V or PLUG.CN (TMX's series for them is split-adjusted without its splits, so it is not used); an Alpha fill's ONE is asked as ONE.TO, then ONE.V, which answers.
+- **Benchmarks:** the S&P 500 from FRED, 2,512 days from 2016-09-26; the S&P/TSX Composite and 60 from TMX, 765 days each from 2023-09-07.
+- **Option closes:** the five contracts held on 2026-09-22 have that session's close (the latest Cboe had published: its chains carried nothing of 2026-09-23 by 15:20 UTC on the 24th, so that day stays due). The 37 contracts closed before this first run are settled as not read, their chains having moved on; their days take the broker's figure or wait. QNC's chain was made in session (14:28 Eastern on the 22nd): it quotes, and closes nothing.
+- **Quotes:** 32 kept, each with its time. FTM's CAD spot price carries 33 digits, more than a decimal holds: a mismatch, nothing kept (a holding of 0.000001). TMX does not know PLUG on the CSE.
+- **A second run** a few minutes later asked only the quotes, and MSTY's page after its rest.
+- None of the failures is a reader bug.
+
+**The comparison.** `compare-figures --facts-from-book` on copies, against stage 2's run with the old store's stand-ins on the same book:
+- **Trades:** 294 against 289. The five more are BBAI puts of December 2025 closed at their expiry, which the underlying's closes now decide (all out of the money on their day, checked); their P&L waits on `leg-unstated`, the multi-leg rows 3b states.
+- **Portfolio market value:** 632,070.43 CAD with 15 holdings left out, against 466,955.48 with 34. Each left out waits on what it names: 11 on `multiplier-unstated` (the contracts, and shares delivered by an assignment; 3b states contract sizes), MSTY on `event-unknown` (a corporate event, 3b), and three on `price-unknown`: PLUG (no source carries it), FTM (above), and a BBAI put of 2025-12-26 that finished in the money with no assignment row in the imported rows (3b's rows state it).
+- **Cost basis** 662,795.93 with 14 left out, against 19; **dividends** 87,688.60 against the old model's 87,688.38; the 15 payments a cent apart are stage 2's, identical in both runs.
+- **Found while comparing:** the market value read 0 with every holding left out. A dust coin's value (27 decimal places) beside the rest of the total needed more digits than a decimal holds, and the exact sum was refused; a product did the same for PEPE. Totals and values are now rounded once to fit only in that case (`Dec::add_to_fit`, `mul_to_fit`; stage 2's definitions say so), with a case that fails without it.
 
 ## Handoff
 
-(Filled in when the part is built.)
+- **Option closes.** Read each session day after the close from Cboe's chains (`sources/src/options.rs`), dated by the session the chain states. The server calls it when due from 3c. A contract a corporate event may have adjusted is found only by its OCC symbol, which 3b's Wealthsimple rows state; until then such a contract's close is refused, not guessed.
+- **TMX quotes' time** is when TMX served the quote. 3c shows a price's age from it and never calls it a trade time.
+- **Company ex-dates before 2024-05-27** are left out (Right to refuse); the planned fix reads the exchange's sessions from the stored S&P/TSX Composite levels.
+- **Fidelity's paying funds.** Its history service lists one date per distribution and names none of them the ex-date, so a Fidelity fund that pays is refused as a mismatch naming that, never given a guessed ex-date. No held fund pays (FBTC has paid only in units). The planned fix reads Fidelity's own distribution releases, as Global X's are read.
+- **The rate archives are read whole.** A currency's noon series and its Statistics Canada archive are each asked over their whole era the first time any day in it is needed (57 years of the dollar for a need reaching back to 2007-04-25, 4.7 MB). Closes and benchmarks read from the oldest day needed and reach back when it moves; the archives are to read the same way, keeping each read's span as the daily series does. Planned with the server's due reads (3c).
+- **Engine sums that drop a term** when an addition fails (`unwrap_or` in `scope.rs`, `equity.rs`, `positions.rs`, `ledger.rs`): since `add_to_fit` only an overflow past 10^28 or a currency mismatch can fail them, but a figure must never drop a term silently. Fixed with brief 04's engine changes, before 3b.
+- **Deviations from the plan as written, each for a reason found while building:** the Bank's holiday page lists closures as articles, not a table; Defiance states its schedule only in a PDF, so none is stored for its funds; a TMX distribution row with no pay date is read as paid in units; coins' closes come from the USD market and are converted at the day's rate; a rate series the Bank has ended is stored with its last day, and a day no series holds is `rate-not-held`; a payer that states no schedule is `schedule-unstated`; an Alpha fill is asked as a TSX issue, then a Venture one; every request names the app with a contact URL (FRED and Harvest refuse one without); the client goes through `HTTPS_PROXY` where one is set; the market cache's migration 002 keeps each read's span and outcome, which is what makes a read due.
 
 - For stage 4 (brief 02): the HTTP client moved into `bagholder-net` re-sends a request once on a fresh connection when the reply fails on a reused one (`net/src/client.rs`, the two-attempt loop in `send`). That includes Wealthsimple's order POSTs (`ws/src/session.rs`), so an order can be sent twice. It moved as it was; stage 4 limits the re-send to requests that are safe to repeat.
