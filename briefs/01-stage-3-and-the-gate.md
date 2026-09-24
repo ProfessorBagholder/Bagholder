@@ -10,6 +10,7 @@
 - Build for the app as it is. The work now is making the current app work properly. Nothing is designed or built for anything the owner has not asked for.
 - The user-facing UI and UX stay exactly as they are. Lock that in with screenshot tests before the switch rewires every figure on the page.
 - At the switch, the wire moves to exact decimal text and typed ids, and the page's patches key rows by id only.
+- On open, the page draws the last figures it holds at once, and changes them only when newer data arrives.
 - Delegate only where it clearly pays. Two uses do here: an independent reviewer at the gate, and spec cases written clean-room.
 - The gate is for heavy lifts only: the switch, each later stage plan, new features and large refactors.
 
@@ -20,6 +21,7 @@
 - **Pace:** no rush. Correctness over speed.
 - **The three order bugs** in the running Python app (`docs/design-review.md`, "Money and data risks") wait for stage 4, by the owner's choice. Leave the frozen app as it is.
 - **Real figures** from the owner's data in committed docs are acceptable to the owner.
+- **On open**, the page shows the last figures it holds at once, and updates them only when newer data arrives (§2.5).
 - **What the owner reads:** not plans and docs line by line. A plan puts what the owner must decide at its top, in a few lines. The rest is for this session and the gate.
 
 ## 1. The gate
@@ -93,20 +95,27 @@ The owner's parity decision needs a mechanical guard, because the switch touches
    - mask the clock and other live regions.
 3. **Treat every diff as one of two things from then on:** an intended `SPEC.md` change, with the baseline updated in the same commit and named in its message, or a bug.
 
-### 2.5 §13: keep the principle, defer the machinery
+### 2.5 §13: the page shows what it has at once, then only what changed
 
-**Keep:** work done only on change; subscriptions for what is on screen; changes keyed by id and numbered; resync on a gap.
+**The owner's decision:** on open, the page draws the last figures it holds at once, and changes them only when newer data arrives. Last-known figures stay valid until something replaces them, so the page never makes the person wait to see them.
+
+**Build it as §13 describes:**
+- a browser-side store of each subscription's last state, drawn from at once on open;
+- resume: the page sends the version it holds, and the server answers with only what changed since, or with "unchanged";
+- changes keyed by id and numbered, where a missed number, or a version the server cannot resume from, gets the full state again;
+- work done only on change, and subscriptions for what is on screen.
+
+**Get these right:**
+- **A version that survives a restart.** Base it on something the server keeps across restarts, such as the store's change counters (kept by the design review), not a count held in memory. A page holding a version the server can no longer vouch for gets the full state, never a wrong resume.
+- **One store per book and wire version.** Key the store by the book's id and the wire's version, and drop it when either differs, so a release that changes the wire never has the page read old shapes.
+- **No loading state over kept figures.** Nothing kept (the first open on a device) shows the per-tab skeletons as now. Kept figures show no skeleton, spinner or cross-fade.
+- **Live figures arrive the same way.** A quote is a change like any other.
 
 **Defer until measured:**
-- the browser-side store, and drawing from it on open;
-- versioned conditional reads;
-- per-interaction request budgets;
-- widening the element-touch tests into a blanket rule. Keep the ones that exist.
+- paging long lists, only if the owner's data shows a list is too slow whole;
+- per-interaction request budgets, and widening the element-touch tests into a blanket rule. Keep the tests that exist.
 
-**Why:**
-- **Kept figures would show unconfirmed numbers.** Drawing kept figures on open shows numbers before the server has confirmed them, which works against §1 ("never show a number it cannot stand behind"). The server already holds current figures (§13), and on the same machine its answer should arrive almost at once. This is the owner's call (§5).
-- **Measure first.** Time the path from open to figures on the owner's real data with the whole-view load. Build subscriptions per screen, or paging, only if that time is bad.
-- **Tests that fail whenever something grows** push the work toward satisfying the test instead of the person. Pin known bugs (the tab underline, the heatmap leak) with targeted tests instead.
+A test that fails whenever something grows pushes the work toward satisfying the test instead of the person. Pin known bugs (the tab underline, the heatmap leak) with targeted tests instead.
 
 ## 3. Agents: when to delegate
 
@@ -156,9 +165,9 @@ The owner doesn't read the docs line by line, so they have to stay consistent wi
 - **Who reviews cases.** In `docs/architecture.md` §8, "reviewed by a person" should describe the process that actually runs (§3, item 2 above).
 - **Status.** Status lives in one place: the order of work in `docs/design-review.md`. Plans don't restate it.
 
-## 5. The owner's decision from this brief
+## 5. Decisions from this brief
 
-1. On open, should the page draw the last-known figures at once, before the server confirms them, or wait for the server? **Recommended: wait.** On one machine the answer is near-immediate, and §1 rules out showing a number the app cannot stand behind.
+Settled by the owner: on open, the page draws its kept figures at once and updates them only when newer data arrives (§2.5). No decision is left open.
 
 The switch's table of figures and the rollback reach the owner with their plans.
 
