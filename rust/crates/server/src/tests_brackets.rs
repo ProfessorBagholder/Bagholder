@@ -500,8 +500,11 @@ fn test_an_exit_resting_with_no_bracket_holding_it_is_swept() {
     assert_eq!(cancels(), vec![stop]);
 }
 
+/// Pins a known mistake of the old app (`docs/old-app-mistakes.md`: a sale
+/// from the ticket does not wait for the stop's cancel to be confirmed; the
+/// stop is still "cancelling" when the sell goes); fixed in stage 4.
 #[test]
-fn test_a_sell_from_the_ticket_ends_the_bracket_on_those_shares_first() {
+fn test_known_wrong_a_sell_from_the_ticket_goes_out_before_the_stops_cancel_is_confirmed() {
     let _g = setup();
     let (oid, b) = entry(json!({}));
     filled(&oid);

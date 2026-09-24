@@ -46,7 +46,7 @@ text_enum! {
         Cashback = "cashback",
         /// A change to a holding without a trade: a split, a name or ticker
         /// change, a stock dividend, a spin-off. Which, and its values, are
-        /// booked from the official record (`docs/plans/corporate-events.md`).
+        /// booked from the official record (`docs/plans/stage-2-engine.md`, "Corporate events").
         CorporateEvent = "corporate-event",
         /// A record the mapping cannot place. It carries a problem and counts in
         /// no figure.

@@ -762,8 +762,10 @@ fn test_a_partial_fill_reduces_the_position_it_does_not_close_it() {
     assert_eq!(res.open[0].qty, 5.0, "five shares still held");
 }
 
+/// Pins a known mistake of the old app (`docs/old-app-mistakes.md`: every
+/// contract taken to be 100 shares); goes with the old server at the switch.
 #[test]
-fn test_an_option_fill_nets_with_the_hundred_times_multiplier() {
+fn test_known_wrong_an_option_fill_nets_with_a_fixed_hundred_times_multiplier() {
     let _g = setup();
     let sym = "QNC 16JAN26 5.00 CALL";
     assert!(bagholder_model::symbols::is_option_symbol(sym));

@@ -26,7 +26,7 @@ These are directions the design serves now, not ones bolted on later:
 - **Self-hosted, always.** The local, self-hosted app is the product and stays one even if a hosted version appears.
 - **Possibly hosted, for many people.** Nothing is built for it ahead of need, but nothing at the centre may assume there is only one person.
 - **AI agents** working for the person (§14), scripts, the command line.
-- **More data and events**: company fundamentals; corporate events booked from the official record (`docs/plans/corporate-events.md`); more regulators and news sources.
+- **More data and events**: company fundamentals; corporate events booked from the official record (stage 3b); more regulators and news sources.
 
 ## 3. What that demands
 
@@ -238,6 +238,6 @@ These passages of `SPEC.md` describe an old implementation or contradict this de
 - An unavailable source (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card, as every failure is shown.
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
 - Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
-- Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/corporate-events.md`).
+- Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/stage-2-engine.md`, "Corporate events").
 - Freshness (§2), the store (§6), one data folder per build (§1), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §13 and §16, and moved out of the spec.
 - The page dividing by twelve (the spec's introduction): the engine gives per-month figures.

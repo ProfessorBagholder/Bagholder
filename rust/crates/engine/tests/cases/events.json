@@ -36,7 +36,7 @@
   },
   {
     "name": "a stock dividend is income, and its value is the new units' cost",
-    "spec": "docs/plans/corporate-events.md: a stock dividend's value is income and becomes the units' cost",
+    "spec": "docs/plans/stage-2-engine.md, Corporate events: a stock dividend's value is income and becomes the units' cost",
     "working": [
       "100 X bought for 1,000; 5 units paid as a dividend worth 60",
       "a dividend row of 60 in the cashflow; 105 sold for 1,260: P&L 1,260 − 1,000 − 60 = 200"
@@ -59,7 +59,7 @@
   },
   {
     "name": "a spin-off with two children: each takes its share of the parent's cost as it stood, and the parent's dates",
-    "spec": "docs/plans/corporate-events.md: the parent's cost is split, the child's lots keep the parent's acquisition dates",
+    "spec": "docs/plans/stage-2-engine.md, Corporate events: the parent's cost is split, the child's lots keep the parent's acquisition dates",
     "working": [
       "100 P bought for 1,000 (Jan 5); the event: 50 C and 20 D received, C taking 20 % of the cost and D 10 %",
       "C's cost 1,000 × 0.2 = 200, D's 1,000 × 0.1 = 100, both of the cost before the event; P keeps 700",

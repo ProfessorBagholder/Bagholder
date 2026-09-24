@@ -1,5 +1,7 @@
 # Feature parity: `SPEC.md` against the Svelte page
 
+What the page shows and how it behaves comes from here; how anything is built never does.
+
 Every behaviour `SPEC.md` gives the web app, and whether `web/src` has it. Built 2026-09-20 by reading the code, not by running it, so an item marked done here is still owed its browser test (the parity baselines taken before the switch, stage 3; `architecture-briefs` brief 01 §2.4), and anything marked **unsure** is settled by driving it. An item is closed when it works on real data and a Playwright test holds it. `L:` is a line in `ledger.html`, the reference until cutover.
 
 Counted then: about 60 done, 17 partial, 25 missing, 3 unsure.

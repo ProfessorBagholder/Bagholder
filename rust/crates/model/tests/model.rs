@@ -348,8 +348,10 @@ fn test_stkdis_name_change_nets_to_zero() {
 // SplitTest
 // --------------------------------------------------------------------------
 
+/// Pins a known mistake of the old app (`docs/old-app-mistakes.md`: split
+/// ratios inferred from fill prices); goes with the old model at the switch.
 #[test]
-fn test_reverse_split_marker_rescales_open_lots() {
+fn test_known_wrong_split_ratio_read_from_fill_prices() {
     let acts = vec![
         buy("b1", "MSTY", 100, 7.0, "2025-12-01"),
         buy("b2", "MSTY", 75, 6.9, "2025-12-05"),

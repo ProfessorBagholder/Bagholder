@@ -1,5 +1,6 @@
 //! Option rows stored under Wealthsimple's labels, relabelled and rescaled by
-//! `ensure`.
+//! `ensure`. Pins a known mistake of the old app (`docs/old-app-mistakes.md`:
+//! broker rows rewritten at every start); goes with the old store at the switch.
 
 mod common;
 use bagholder_store::{relabel, tables};
