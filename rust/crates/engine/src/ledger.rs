@@ -194,6 +194,16 @@ pub struct Beyond {
     pub qty: Dec,
 }
 
+/// An event's units as the broker states them against its ratio.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitsDisagree {
+    pub transaction: TransactionId,
+    pub account: AccountId,
+    pub instrument: InstrumentId,
+    pub stated: Dec,
+    pub by_ratio: Dec,
+}
+
 /// Units of the issuer paid as a dividend: income at the adjustment's value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StockDividend {
@@ -238,6 +248,10 @@ pub struct Matched {
     /// Fills whose stated price and cash disagree: the cash stands, and the
     /// record is a problem for the person.
     pub disagreements: Vec<TransactionId>,
+    /// Events whose units as the broker states them differ from what the
+    /// adjustment's ratio gives: the broker's units stand, and the record is a
+    /// problem for the person.
+    pub unit_disagreements: Vec<UnitsDisagree>,
     /// Transactions that moved nothing, and what they wait on.
     pub unapplied: Vec<(TransactionId, Gaps)>,
     /// Each holding's units (longs less shorts) at the end of each day they
@@ -476,6 +490,9 @@ struct Matcher<'a> {
     links_in: BTreeSet<TransactionId>,
     /// Each event row, the adjustment it is explained by.
     event_groups: BTreeMap<TransactionId, TransactionId>,
+    /// A split's fraction of a unit the broker paid in cash, for the event's
+    /// cash leg.
+    lieu_fraction: BTreeMap<(AccountId, InstrumentId), Dec>,
     /// Holdings touched since their units were last recorded.
     dirty: BTreeSet<(AccountId, InstrumentId)>,
     /// Contracts whose record has an expiry, assignment or exercise row, on any
@@ -944,6 +961,21 @@ impl<'a> Matcher<'a> {
 
     /// The round trip a roll's opening leg continues: the one closed by another
     /// leg of the same record, on a contract of the same underlying, the same way.
+    /// Note an event whose broker-stated units differ from its ratio's; with
+    /// cash paid in lieu of fractions, a whole-unit shortfall under one is the
+    /// fraction paid out, and the answer is whether it is that.
+    fn check_units(&mut self, anchor: &TransactionId, account: AccountId, instrument: InstrumentId, stated: Dec, by_ratio: Dec, lieu: bool) -> bool {
+        if stated == by_ratio {
+            return false;
+        }
+        let fraction = by_ratio.checked_sub(stated).is_ok_and(|d| d.is_positive() && d < Dec::ONE);
+        if lieu && fraction {
+            return true;
+        }
+        self.out.unit_disagreements.push(UnitsDisagree { transaction: anchor.clone(), account, instrument, stated, by_ratio });
+        false
+    }
+
     /// Whether a fill would close part of a position the account holds.
     fn meets_opposite(&self, t: &Transaction) -> bool {
         let (Some(instrument), Some(q)) = (t.instrument, t.quantity) else { return false };
@@ -1148,11 +1180,21 @@ impl<'a> Matcher<'a> {
             for r in &rows {
                 if let (Some(i), Some(q)) = (r.instrument, r.quantity) {
                     let e = m.entry(i).or_insert(Dec::ZERO);
-                    *e = e.checked_add(q).unwrap_or(*e);
+                    match e.checked_add(q) {
+                        Ok(v) => *e = v,
+                        Err(err) => {
+                            let g = Gaps::from(err);
+                            self.taint(account, i, &g);
+                            return self.unapplied(t, g);
+                        }
+                    }
                 }
             }
             m
         };
+        // holdings whose fractions the event pays in cash: the broker's whole
+        // units may fall short of the ratio by less than one
+        let lieu: BTreeSet<InstrumentId> = adjustment.legs.iter().filter(|l| l.to.is_none() && l.cash_per_unit.is_some()).filter_map(|l| l.from).collect();
         let day = t.trade_date;
         let at = t.occurred_at;
         // each holding's lots' cost before the event: every leg's share of a cost
@@ -1164,7 +1206,7 @@ impl<'a> Matcher<'a> {
             .map(|i| (i, self.book(account, i).lots.iter().filter(|l| l.direction == Direction::Long).map(|l| l.value.clone()).collect()))
             .collect();
         for leg in &adjustment.legs {
-            if let Err(g) = self.apply_leg(account, &anchor, day, at, leg, &stated, &before) {
+            if let Err(g) = self.apply_leg(account, &anchor, day, at, leg, &stated, &before, &lieu) {
                 for i in [leg.from, leg.to].into_iter().flatten() {
                     self.taint(account, i, &g);
                 }
@@ -1174,7 +1216,7 @@ impl<'a> Matcher<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, before: &BTreeMap<InstrumentId, Vec<Fig<Money>>>) -> Result<(), Gaps> {
+    fn apply_leg(&mut self, account: AccountId, anchor: &TransactionId, day: Date, at: Option<Timestamp>, leg: &AdjustmentLeg, stated: &BTreeMap<InstrumentId, Dec>, before: &BTreeMap<InstrumentId, Vec<Fig<Money>>>, lieu: &BTreeSet<InstrumentId>) -> Result<(), Gaps> {
         let unknown = || Gaps::of(Gap::EventUnknown(anchor.clone()));
         let Some(from) = leg.from else {
             // a stated cost belongs to a deposit, applied where the deposit is
@@ -1187,7 +1229,12 @@ impl<'a> Matcher<'a> {
                 if let Some(cost) = leg.cost {
                     // a stock dividend: new units at the stated value, which is income
                     let units = match stated.get(&from) {
-                        Some(q) if q.is_positive() => *q,
+                        Some(q) if q.is_positive() => {
+                            if let Some(r) = leg.units_per_unit {
+                                let _ = self.check_units(anchor, account, from, *q, held.checked_mul(r)?, lieu.contains(&from));
+                            }
+                            *q
+                        }
                         _ => held.checked_mul(leg.units_per_unit.ok_or_else(unknown)?)?,
                     };
                     let currency = self.currency(from);
@@ -1201,7 +1248,22 @@ impl<'a> Matcher<'a> {
                 }
                 // the broker's units stand where it states them; the ratio where it does not
                 let new_total = match stated.get(&from) {
-                    Some(q) if !q.is_zero() => held.checked_add(*q)?,
+                    Some(q) if !q.is_zero() => {
+                        let total = held.checked_add(*q)?;
+                        match leg.units_per_unit {
+                            Some(r) => {
+                                let by_ratio = held.checked_mul(r)?;
+                                if self.check_units(anchor, account, from, total, by_ratio, lieu.contains(&from)) {
+                                    // the ratio's units, the fraction then paid out in cash
+                                    self.lieu_fraction.insert((account, from), by_ratio.checked_sub(total)?);
+                                    by_ratio
+                                } else {
+                                    total
+                                }
+                            }
+                            None => total,
+                        }
+                    }
                     _ => held.checked_mul(leg.units_per_unit.ok_or_else(unknown)?)?,
                 };
                 self.rescale(account, from, held, new_total)?;
@@ -1214,12 +1276,17 @@ impl<'a> Matcher<'a> {
             (Some(_), Some(cash)) => {
                 self.return_capital(account, from, cash, anchor)?;
                 let shares = AdjustmentLeg { cash_per_unit: None, ..leg.clone() };
-                self.apply_leg(account, anchor, day, at, &shares, stated, before)
+                self.apply_leg(account, anchor, day, at, &shares, stated, before, lieu)
             }
             // the holding continues as another instrument, or a spin-off's child
             (Some(to), None) => {
                 let units = match stated.get(&to) {
-                    Some(q) if q.is_positive() => *q,
+                    Some(q) if q.is_positive() => {
+                        if let Some(r) = leg.units_per_unit {
+                            let _ = self.check_units(anchor, account, to, *q, held.checked_mul(r)?, lieu.contains(&from));
+                        }
+                        *q
+                    }
                     _ => held.checked_mul(leg.units_per_unit.ok_or_else(unknown)?)?,
                 };
                 let cost_share = leg.cost_share.unwrap_or(Dec::ONE);
@@ -1281,9 +1348,11 @@ impl<'a> Matcher<'a> {
             // many is the leg's share of the holding as it stands, else the units
             // the broker states went out, never the whole holding by default
             (None, Some(cash)) => {
-                let out = match (leg.units_per_unit, stated.get(&from)) {
-                    (Some(share), _) => held.checked_mul(share)?,
-                    (None, Some(q)) if q.is_negative() => q.abs(),
+                let out = match (self.lieu_fraction.remove(&(account, from)), leg.units_per_unit, stated.get(&from)) {
+                    // the fraction the broker's whole units fell short of the ratio by
+                    (Some(fraction), _, _) => fraction,
+                    (None, Some(share), _) => held.checked_mul(share)?,
+                    (None, None, Some(q)) if q.is_negative() => q.abs(),
                     _ => return Err(unknown()),
                 };
                 let currency = self.currency(from);
@@ -1380,6 +1449,7 @@ pub fn match_lots(inputs: &Inputs) -> Matched {
         links_in: ledger.transfer_links.iter().map(|(_, i)| i.clone()).collect(),
         event_groups: BTreeMap::new(),
         dirty: BTreeSet::new(),
+        lieu_fraction: BTreeMap::new(),
         ended_on_record: ledger
             .transactions
             .iter()
