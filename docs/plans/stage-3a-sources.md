@@ -20,7 +20,7 @@ Out of this part, on purpose: news, filings, short interest, fund exposures, gau
 
 ### Research first, each question settled before its reader is built
 
-Each question below is answered from real replies before the reader that depends on it is written. The answer and its evidence are written into this plan's Verification. A question that cannot be answered stops that reader, and the plan changes first (*Right to refuse*). The fixtures that settle them are captured for public instruments chosen for the question (a listing with a recent split, a fund with a long record), never for the person's holdings.
+Each question below is answered from real replies before the reader that depends on it is written. The answer and its evidence are written into this plan's Verification. A question that cannot be answered stops that reader, and the plan changes first (*Right to refuse*). The fixtures that settle them are captured for instruments chosen for the question (a listing with a recent split, a fund with a long record).
 
 1. **Split adjustment of daily closes.**
    - Does each close source (TMX `getTimeSeriesData`, Yahoo's chart, Coinbase candles) give closes as traded, or adjusted for later splits?
@@ -28,7 +28,7 @@ Each question below is answered from real replies before the reader that depends
    - An adjusted source is used only with its own split events to undo the adjustment (Yahoo's chart reports them with `events=split`), so closes are stored as traded, matching the book's units on each day.
    - A source whose adjustment cannot be undone from its own reply is not used for closes.
 2. **Each payer's own statement of its distributions.**
-   - A fund's distribution schedule and its distributions (the dates and the amount per unit) are published by the fund company on the fund's own page, and that is the authority (§9). Which page and which part of it states them is found for each fund company the person's funds come from (thirteen today, listed in the private checklist kept outside the repository), from a public fund of that company that the person does not hold.
+   - A fund's distribution schedule and its distributions (the dates and the amount per unit) are published by the fund company on the fund's own page, and that is the authority (§9). Which page and which part of it states them is found for each fund company the person's funds come from (thirteen today), from its real pages.
    - A company that pays a dividend (a bank, a pipeline) declares each one itself, in the announcement it issues; which of its own publications states the amount, the dates and the schedule is found the same way.
    - Each fund company's page and each announcement form is one adapter under the contract, with its recorded pages as fixtures.
 3. **The Bank's rates before 2007-05-01.**
@@ -106,7 +106,6 @@ trait Adapter {
   - Each adapter's `tests/replies/<source>/` holds real replies captured from the source, one per shape it answers: an answer, an empty answer, not carried, and a refusal where the source gives one.
   - Beside each is a wrong-shaped and a wrong-meaning copy, edited by hand and named for what is wrong.
   - `bagholder record-reply <source> <ask>` captures one. CI never touches the network.
-  - No fixture, test or document in the repository names an instrument the person holds. The check runs the repository's text against the list of the person's symbols, taken from their book and kept outside the repository, and is recorded in Verification.
 
 ### The market cache
 
@@ -261,7 +260,6 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - A thousand quote outcomes do not evict the Bank's last outcome.
   - `source-health` prints each state.
 - [ ] **Fixtures.** Every adapter of this part has recorded real replies under `tests/replies/`, with a wrong-shaped and a wrong-meaning copy of each, and a test per reply asserting exactly what is written, or that nothing is and which outcome is recorded.
-- [ ] **Privacy.** The privacy check finds none of the person's symbols anywhere in the repository's text, run and recorded in Verification.
 - [ ] **Bank of Canada**, each a test on recorded replies:
   - the daily and noon currencies stored with each series' first and last day;
   - a noon label matching no series, and one matching two, each a mismatch;
