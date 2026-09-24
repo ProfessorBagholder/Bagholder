@@ -1,0 +1,15 @@
+[package]
+name = "bagholder-wealthsimple"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Wealthsimple as the first broker adapter (`docs/architecture.md` §10,
+# `docs/plans/stage-3b-wealthsimple.md`): its session, the GraphQL documents it
+# asks, the strict readers of what it answers, and its mapping into the book. It
+# reads no clock and holds no float; `crates/core/tests/boundaries.rs` holds it
+# to its column.
+[dependencies]
+bagholder-core = { path = "../core" }
+# the strict reply reader and the recorded-replies shape, shared with the sources
+bagholder-sources = { path = "../sources" }

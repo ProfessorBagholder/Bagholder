@@ -323,6 +323,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bagholder-wealthsimple"
+version = "1.45.0"
+dependencies = [
+ "bagholder-core",
+ "bagholder-sources",
+]
+
+[[package]]
 name = "bagholder-ws"
 version = "1.45.0"
 dependencies = [

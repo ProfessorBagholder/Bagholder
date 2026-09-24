@@ -50,7 +50,7 @@ impl Rules {
     }
 }
 
-const CRATES: [Rules; 6] = [
+const CRATES: [Rules; 7] = [
     Rules { name: "bagholder-core", dir: "core", allowed: &["serde", "rust_decimal", "jiff", "uuid"], floats_in: &["src/dec.rs"], clock: ClockRule::Given },
     Rules { name: "bagholder-sqlite", dir: "sqlite", allowed: &["rusqlite", "jiff"], floats_in: &[], clock: ClockRule::Given },
     Rules {
@@ -68,6 +68,15 @@ const CRATES: [Rules; 6] = [
         name: "bagholder-sources",
         dir: "sources",
         allowed: &["bagholder-core", "bagholder-sqlite", "bagholder-net", "bagholder-book", "rusqlite", "jiff"],
+        floats_in: &[],
+        clock: ClockRule::Given,
+    },
+    // Wealthsimple, the first broker adapter (docs/plans/stage-3b-wealthsimple.md):
+    // no float, no clock, no old crate
+    Rules {
+        name: "bagholder-wealthsimple",
+        dir: "wealthsimple",
+        allowed: &["bagholder-core", "bagholder-book", "bagholder-broker", "bagholder-net", "bagholder-sources", "jiff"],
         floats_in: &[],
         clock: ClockRule::Given,
     },
@@ -225,8 +234,15 @@ fn the_checker_catches_each_kind_of_violation() {
     let clock = vec![("src/due.rs".to_string(), "let t = jiff::Timestamp::now();".to_string())];
     assert_eq!(violations(sources, on_book, &clock).len(), 1);
 
+    // Wealthsimple: nothing of the old crates, no float
+    let ws = CRATES.iter().find(|c| c.name == "bagholder-wealthsimple").expect("listed");
+    let on_ws = "[dependencies]\nbagholder-ws = { path = \"../ws\" }\n";
+    assert_eq!(violations(ws, on_ws, &[]), vec!["bagholder-wealthsimple depends on bagholder-ws"]);
+    let float = vec![("src/mapping.rs".to_string(), "let q: f64 = 1.0;".to_string())];
+    assert_eq!(violations(ws, "[dependencies]\n", &float), vec!["src/mapping.rs:1: uses a float"]);
+
     // the network: the clock it is handed, the machine's in one file
-    let net = &CRATES[5];
+    let net = CRATES.iter().find(|c| c.name == "bagholder-net").expect("listed");
     let deps = "[dependencies]\nopenssl = \"0.10\"\njiff = \"0.2\"\n";
     let handed = vec![("src/limiter.rs".to_string(), "let now = clock.now();".to_string())];
     assert!(violations(net, deps, &handed).is_empty(), "asking the clock handed in is not reading the machine's");
