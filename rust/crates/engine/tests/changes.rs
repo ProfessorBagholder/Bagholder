@@ -12,7 +12,7 @@ use serde_json::Value;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{Group, JournalEntry, JournalSubject};
 use bagholder_core::{Currency, Dec, Money, SourceName};
-use bagholder_engine::input::{Adjustment, AdjustmentLeg, Adjustments, BrokerAccount, Declared, DeclaredRead, DistributionKind, Inputs, Quote, QuoteSource, Sourced};
+use bagholder_engine::input::{Adjustment, AdjustmentLeg, Adjustments, BrokerAccount, Declared, DeclaredRead, Inputs, Quote, QuoteSource, Sourced};
 use bagholder_engine::{Change, Engine};
 use common::*;
 
@@ -128,7 +128,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let declared = DeclaredRead {
         read_at: "2026-04-20T12:00:00Z".parse().unwrap(),
         source: SourceName::named("tmx"),
-        items: vec![Declared { ex_date: day("2026-04-15"), record_date: None, pay_date: Some(day("2026-04-22")), amount: Money::new(d("0.12"), Currency::CAD), kind: DistributionKind::Regular }],
+        items: vec![Declared { ex_date: day("2026-04-15"), record_date: None, pay_date: Some(day("2026-04-22")), amount: Money::new(d("0.12"), Currency::CAD), reinvested: None }],
     };
     let quote = Quote { price: Money::new(d("13"), Currency::CAD), change: Some(d("1")), change_pct: None, at: None, source: QuoteSource::Listing };
     // a close of the fund, which no contract is written on

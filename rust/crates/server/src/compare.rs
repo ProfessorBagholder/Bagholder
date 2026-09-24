@@ -21,7 +21,7 @@ use bagholder_book::Book;
 use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::journal::Opening;
 use bagholder_core::{Currency, Dec, InstrumentId, Money, RecordId, TransactionId};
-use bagholder_engine::input::{Clock, Declared, DeclaredRead, DistributionKind, Inputs, Market, Quote, QuoteSource, Sourced};
+use bagholder_engine::input::{Clock, Declared, DeclaredRead, Inputs, Market, Quote, QuoteSource, Sourced};
 use bagholder_engine::scope::Filters;
 use bagholder_engine::trades::TradeKey;
 use bagholder_engine::{Change, Engine};
@@ -126,7 +126,9 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
             }
         }
         rates.covered.insert(Currency::USD, spans);
-        rates.published.insert(Currency::USD);
+        if let (Some(first), Some(last)) = (s.keys().next().copied(), s.keys().next_back().copied()) {
+            rates.series.insert(Currency::USD, vec![(first, last)]);
+        }
     }
     let mut declared: BTreeMap<InstrumentId, Vec<Declared>> = BTreeMap::new();
     let mut stmt = old.prepare("SELECT symbol, ex_date, pay_date, amount, currency FROM distributions").map_err(err)?;
@@ -140,7 +142,7 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
             record_date: None,
             pay_date: pay.as_deref().and_then(|p| p.get(..10)).and_then(|p| p.parse().ok()),
             amount: Money::new(a, currency),
-            kind: DistributionKind::Regular,
+            reinvested: None,
         });
     }
     let read_at = bagholder_core::jiff::Timestamp::UNIX_EPOCH;

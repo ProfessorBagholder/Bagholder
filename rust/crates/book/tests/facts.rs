@@ -6,7 +6,7 @@
 
 mod common;
 
-use bagholder_book::facts::{DeclaredRow, DistributionKind};
+use bagholder_book::facts::{DeclaredRow, RateSeries};
 use bagholder_book::schema::{MIGRATIONS, SCHEMA};
 use bagholder_book::Book;
 use bagholder_core::journal::{Anchor, Opening};
@@ -42,7 +42,7 @@ fn migration_two_anchors_every_trade_on_its_transaction_and_instrument() {
     .unwrap();
     drop(conn);
     let (book, done) = Book::open(&path, "test", t0()).unwrap();
-    assert_eq!((done.from, done.to), (1, 2));
+    assert_eq!((done.from, done.to), (1, MIGRATIONS.len() as u32));
     let trades = book.trades().unwrap();
     assert_eq!(
         trades[0].anchor,
@@ -90,9 +90,18 @@ fn the_first_rate_for_a_day_stands_and_a_later_different_one_is_kept_beside_it()
 #[test]
 fn the_banks_series_and_holidays_are_kept() {
     let f = Fixture::new();
-    f.book.store_rate_series(&[Currency::USD, Currency::parse("EUR").unwrap()], &boc(), t0()).unwrap();
+    let series = |c: Currency, first: &str, last: &str| RateSeries { currency: c, source: boc(), first_day: day(first), last_day: day(last) };
+    f.book.store_rate_series(&[series(Currency::USD, "2017-01-03", "2026-09-22"), series(Currency::parse("EUR").unwrap(), "2017-01-03", "2026-09-22")], t0()).unwrap();
+    // a later statement of the same series moves its last day on
+    f.book.store_rate_series(&[series(Currency::USD, "2017-01-03", "2026-09-23")], t0()).unwrap();
+    // another source's series of the same currency stands beside it
+    let noon = RateSeries { currency: Currency::USD, source: SourceName::named("bank-of-canada-noon"), first_day: day("2007-05-01"), last_day: day("2017-04-28") };
+    f.book.store_rate_series(&[noon.clone()], t0()).unwrap();
+    let held = f.book.rate_series().unwrap();
+    assert_eq!(held.len(), 3);
+    assert_eq!(held.iter().filter(|s| s.currency == Currency::USD).map(|s| (s.first_day, s.last_day)).collect::<Vec<_>>(), vec![(day("2007-05-01"), day("2017-04-28")), (day("2017-01-03"), day("2026-09-23"))]);
+    assert!(f.book.store_rate_series(&[series(Currency::USD, "2026-01-02", "2026-01-01")], t0()).is_err(), "a series holding no day");
     f.book.store_bank_holidays(&[(day("2026-02-16"), "Family Day".into())], &boc(), t0()).unwrap();
-    assert_eq!(f.book.rate_series().unwrap().len(), 2);
     assert!(f.book.bank_holidays().unwrap().contains(&day("2026-02-16")));
 }
 
@@ -102,12 +111,14 @@ fn a_funds_record_is_read_whole_and_a_withdrawn_distribution_is_gone_from_the_ne
     f.account(&["a1"]);
     let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "FUND"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let fund = f.opens(r.record).instrument;
-    let row = |ex: &str, amount: &str, kind| DeclaredRow { ex_date: day(ex), record_date: None, pay_date: None, amount: Money::new(d(amount), Currency::CAD), kind };
+    let row = |ex: &str, amount: &str, reinvested: Option<&str>| DeclaredRow { ex_date: day(ex), record_date: None, pay_date: None, amount: Money::new(d(amount), Currency::CAD), reinvested: reinvested.map(d) };
     let tmx = SourceName::named("tmx");
-    f.book.store_declared(fund, &[row("2026-02-13", "0.10", DistributionKind::Regular), row("2026-03-13", "0.50", DistributionKind::Special)], &tmx, at("2026-03-01T00:00:00Z")).unwrap();
-    f.book.store_declared(fund, &[row("2026-02-13", "0.10", DistributionKind::Regular)], &tmx, at("2026-03-02T00:00:00Z")).unwrap();
+    f.book.store_declared(fund, &[row("2026-02-13", "0.10", None), row("2026-03-13", "0.15", Some("0.12"))], &tmx, at("2026-03-01T00:00:00Z")).unwrap();
+    let first = &f.book.declared().unwrap()[&fund];
+    assert_eq!(first.items[1].reinvested, Some(d("0.12")), "a reinvested part kept as stated");
+    f.book.store_declared(fund, &[row("2026-02-13", "0.10", None)], &tmx, at("2026-03-02T00:00:00Z")).unwrap();
     let read = &f.book.declared().unwrap()[&fund];
-    assert_eq!(read.items.len(), 1, "the special one was withdrawn");
+    assert_eq!(read.items.len(), 1, "the second was withdrawn");
     assert_eq!(read.read_at, at("2026-03-02T00:00:00Z"));
     f.book.store_frequency(fund, 12, &tmx, None, at("2026-03-01T00:00:00Z")).unwrap();
     f.book.store_frequency(fund, 4, &tmx, Some(day("2026-03-02")), at("2026-03-02T00:00:00Z")).unwrap();
@@ -260,4 +271,29 @@ fn a_supersede_never_moves_two_adjustments_of_different_transactions_onto_one() 
     assert_eq!(moved.len(), 1, "one adjustment explains the new row");
     assert!(f.book.problems_of(first).unwrap().is_empty());
     assert_eq!(f.book.problems_of(second).unwrap()[0].code, "adjustment-target-gone");
+}
+
+#[test]
+fn migration_three_keeps_each_distribution_as_stated_without_a_kind() {
+    // a book at version 2 with a regular distribution and a non-cash one
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.db");
+    let v2: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..2] }));
+    let (conn, _) = migrate::open(v2, &path, "test", t0()).unwrap();
+    conn.execute_batch(
+        "INSERT INTO instruments(id, kind, currency, created_at) VALUES ('01900000-0000-7000-8000-000000000003', 'security', 'CAD', 'x');
+         INSERT INTO declared_reads(id, instrument_id, source, read_at) VALUES (1, '01900000-0000-7000-8000-000000000003', 'tmx', '2026-03-01T00:00:00Z');
+         INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, currency, kind) VALUES (1, '2026-02-13', NULL, '2026-02-20', '0.1', 'CAD', 'regular');
+         INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, currency, kind) VALUES (1, '2025-12-29', '2025-12-29', '2025-12-31', '0.84031', 'CAD', 'non-cash');
+         INSERT INTO fx_series(currency, source, received_at) VALUES ('USD', 'bank-of-canada', 'x');",
+    )
+    .unwrap();
+    drop(conn);
+    let (book, done) = Book::open(&path, "test", t0()).unwrap();
+    assert_eq!((done.from, done.to), (2, 3));
+    let fund = bagholder_core::InstrumentId::parse("01900000-0000-7000-8000-000000000003").unwrap();
+    let items = &book.declared().unwrap()[&fund].items;
+    assert_eq!((items[0].amount.amount, items[0].reinvested), (d("0"), Some(d("0.84031"))), "a non-cash row paid no cash: its amount is what was reinvested");
+    assert_eq!((items[1].amount.amount, items[1].reinvested), (d("0.1"), None));
+    assert!(book.rate_series().unwrap().is_empty(), "a series row without its days is read again");
 }

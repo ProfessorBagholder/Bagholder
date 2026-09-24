@@ -83,8 +83,11 @@ pub struct Sourced<T> {
 pub struct Rates {
     /// CAD per unit of the currency, per business day the Bank published.
     pub by_currency: BTreeMap<Currency, BTreeMap<Date, Dec>>,
-    /// The currencies the Bank publishes a rate for.
-    pub published: BTreeSet<Currency>,
+    /// Per currency, the days each series held of the Bank's rates spans (its
+    /// daily average, its noon rate, the archive of it), oldest first: a
+    /// currency with none is one the Bank publishes no rate for, and a day before
+    /// the oldest is one no source holds a rate for.
+    pub series: BTreeMap<Currency, Vec<(Date, Date)>>,
     /// The days the Bank's own schedule says it does not publish (its holidays).
     pub holidays: BTreeSet<Date>,
     /// Per currency, the spans of days completed reads of the Bank's series
@@ -101,26 +104,16 @@ pub struct Read {
     pub at: Timestamp,
 }
 
-/// What kind of distribution a fund declared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DistributionKind {
-    /// Its regular cash distribution: what a rate and a frequency are read from.
-    Regular,
-    /// A one-off cash distribution.
-    Special,
-    /// Paid in units, or reinvested: no cash.
-    NonCash,
-}
-
-/// A distribution the fund declared, as its source stated it.
+/// A distribution the payer declared, as it stated it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declared {
     pub ex_date: Date,
     pub record_date: Option<Date>,
     pub pay_date: Option<Date>,
-    /// Per unit, in the currency it is paid in.
+    /// The cash paid per unit, in the currency it is paid in.
     pub amount: Money,
-    pub kind: DistributionKind,
+    /// The part reinvested per unit, where the payer states one: it pays no cash.
+    pub reinvested: Option<Dec>,
 }
 
 /// One read of a fund's declared record, whole: a distribution the fund

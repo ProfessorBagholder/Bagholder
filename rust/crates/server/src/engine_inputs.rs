@@ -5,10 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use bagholder_book::facts::DistributionKind as BookKind;
 use bagholder_book::Book;
+use bagholder_core::jiff::civil::Date;
 use bagholder_core::names::SourceName;
-use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, DistributionKind, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
+use bagholder_core::Currency;
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, Declared, DeclaredRead, Facts, InstrumentInfo, Ledger, Rates, RecordInfo, Sourced};
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -48,9 +49,18 @@ pub fn ledger(book: &Book) -> Result<Ledger, String> {
     })
 }
 
+/// Per currency, the days each series of the Bank's rates the book holds spans.
+fn series(book: &Book) -> Result<BTreeMap<Currency, Vec<(Date, Date)>>, String> {
+    let mut out: BTreeMap<Currency, Vec<(Date, Date)>> = BTreeMap::new();
+    for s in book.rate_series().map_err(err)? {
+        out.entry(s.currency).or_default().push((s.first_day, s.last_day));
+    }
+    Ok(out)
+}
+
 /// The facts the book keeps.
 pub fn facts(book: &Book) -> Result<Facts, String> {
-    let rates = Rates { by_currency: book.rates().map_err(err)?, published: book.rate_series().map_err(err)?, holidays: book.bank_holidays().map_err(err)?, covered: book.rate_reads().map_err(err)?.into_iter().map(|(c, reads)| (c, reads.into_iter().map(|(first, last, at)| Read { first, last, at }).collect())).collect() };
+    let rates = Rates { by_currency: book.rates().map_err(err)?, series: series(book)?, holidays: book.bank_holidays().map_err(err)?, covered: book.rate_reads().map_err(err)?.into_iter().map(|(c, reads)| (c, reads.into_iter().map(|(first, last, at)| Read { first, last, at }).collect())).collect() };
     let declared = book
         .declared()
         .map_err(err)?
@@ -64,11 +74,7 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
                     record_date: d.record_date,
                     pay_date: d.pay_date,
                     amount: d.amount,
-                    kind: match d.kind {
-                        BookKind::Regular => DistributionKind::Regular,
-                        BookKind::Special => DistributionKind::Special,
-                        BookKind::NonCash => DistributionKind::NonCash,
-                    },
+                    reinvested: d.reinvested,
                 })
                 .collect();
             (i, DeclaredRead { read_at: r.read_at, source: r.source, items })

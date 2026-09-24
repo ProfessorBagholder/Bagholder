@@ -73,63 +73,78 @@
     "expect": {"cash": [{"tx": "t1", "absent": true}, {"tx": "t2", "amount_cad": "10.00"}, {"tx": "t3", "amount_cad": "12.34"}], "kpi": {"dividends": "22.34"}}
   },
   {
-    "name": "a payer's rate from its declared record: the latest regular distribution gone ex, special ones left out, frequency from the ex-dates",
-    "spec": "SPEC.md §2 Distribution rate: the declared record first; payments per year from the median of the last three gaps, snapped",
+    "name": "a payer's rate from its own record: the cash per unit of the latest distribution gone ex, every row counting; the schedule it states",
+    "spec": "SPEC.md §2 Distribution rate: the payer's own record; docs/plans/stage-3a-sources.md, what the figures use",
     "working": [
-      "regular: 0.10 ex Jan 15, Feb 13, Mar 13; 0.11 ex Apr 15 paid Apr 22; a special 0.50 ex Mar 20",
-      "today Apr 20: the latest regular gone ex is Apr 15 → 0.11",
-      "gaps 29, 28, 33 → median 29 → 365.25 ÷ 29 = 12.6 → 12 a year",
+      "0.10 ex Jan 15, Feb 13, Mar 13; 0.50 ex Mar 20; 0.11 ex Apr 15 paid Apr 22; the payer states 12 a year",
+      "today Apr 20: the latest gone ex is Apr 15 → 0.11 (the Mar 20 row counts as every row does; it is simply not the latest)",
       "the next still to be paid is the Apr 15 distribution (paid Apr 22): ex 2026-04-15"
     ],
     "today": "2026-04-20",
     "accounts": [{"id": "A"}],
     "instruments": [{"id": "F", "symbol": "FUND"}],
+    "frequencies": {"F": 12},
     "declared": {"F": [
       {"ex": "2026-01-15", "pay": "2026-01-22", "amount": "0.10"},
       {"ex": "2026-02-13", "pay": "2026-02-20", "amount": "0.10"},
       {"ex": "2026-03-13", "pay": "2026-03-20", "amount": "0.10"},
-      {"ex": "2026-03-20", "pay": "2026-03-27", "amount": "0.50", "kind": "special"},
+      {"ex": "2026-03-20", "pay": "2026-03-27", "amount": "0.50"},
       {"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.11"}
     ]},
     "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
     "expect": {"payers": [{"instrument": "F", "per": "0.11", "per_year": 12, "next_ex": "2026-04-15"}]}
   },
   {
-    "name": "a frequency a source states comes before the one read from the record",
-    "spec": "docs/architecture.md §9: a frequency the issuer states comes first",
-    "working": ["the same record; a source states 4 a year: 4"],
-    "today": "2026-04-20",
+    "name": "a distribution reinvested whole pays no cash and is passed over; one with a cash part counts its cash",
+    "spec": "docs/plans/stage-3a-sources.md, what the figures use: income paid; a reinvested part pays nothing",
+    "working": [
+      "Z (BMO-like): 0.15 cash ex Sep 26; Dec 29: 0.15 cash and 0.12 reinvested → today Jan 10: latest gone ex is Dec 29 → its cash, 0.15",
+      "B (FBTC-like): its record's only row is 0.84031 reinvested ex Dec 29, no cash → no cash distribution gone ex yet"
+    ],
+    "today": "2027-01-10",
     "accounts": [{"id": "A"}],
-    "instruments": [{"id": "F"}],
-    "frequencies": {"F": 4},
-    "declared": {"F": [
-      {"ex": "2026-01-15", "amount": "0.10"},
-      {"ex": "2026-02-13", "amount": "0.10"},
-      {"ex": "2026-03-13", "amount": "0.10"}
-    ]},
-    "transactions": [{"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
-    "expect": {"payers": [{"instrument": "F", "per": "0.10", "per_year": 4}]}
+    "instruments": [{"id": "Z"}, {"id": "B"}],
+    "frequencies": {"Z": 4, "B": 1},
+    "declared": {
+      "Z": [
+        {"ex": "2026-09-26", "amount": "0.15"},
+        {"ex": "2026-12-29", "amount": "0.15", "reinvested": "0.12"}
+      ],
+      "B": [{"ex": "2026-12-29", "amount": "0", "reinvested": "0.84031"}]
+    },
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "Z", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:01:00Z", "kind": "buy", "instrument": "B", "qty": "10", "cash": "-500"}
+    ],
+    "expect": {
+      "payers": [
+        {"instrument": "Z", "per": "0.15", "per_year": 4},
+        {"instrument": "B", "per": {"gaps": ["no-distribution-yet"]}, "per_year": 1}
+      ]
+    }
   },
   {
-    "name": "without a record, the payments that state their units give the rate; with nothing, nothing is assumed",
-    "spec": "SPEC.md §2 Distribution rate: otherwise the holding's own payments; docs/architecture.md §18: never 12 assumed",
+    "name": "without the payer's own record nothing is worked out from the payments: the rate and the schedule wait on the payer",
+    "spec": "docs/architecture.md §18: never assumed; docs/plans/stage-3a-sources.md: never filled from another source",
     "working": [
-      "G: 5.00, 5.00, 5.25 paid on 100 units on Jan 31, Feb 28, Mar 31 → per unit 5.25 ÷ 100 = 0.0525; gaps 28, 31 → median 31 → 11.8 → 12",
-      "H: one payment, with no units stated: the amount per unit and the frequency are not known"
+      "G: 5.00, 5.00, 5.25 paid on 100 units, and no record of its payer read → the rate and the schedule wait on the payer",
+      "H: its payer's record read and its schedule stated, before its first distribution goes ex → the rate waits for it; the schedule stands"
     ],
     "today": "2026-04-10",
     "accounts": [{"id": "A"}],
     "instruments": [{"id": "G"}, {"id": "H"}],
+    "frequencies": {"H": 12},
+    "declared": {"H": [{"ex": "2026-04-29", "pay": "2026-05-07", "amount": "0.16"}]},
     "transactions": [
       {"id": "t1", "account": "A", "day": "2026-01-31", "at": "2026-01-31T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.00"},
       {"id": "t2", "account": "A", "day": "2026-02-28", "at": "2026-02-28T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.00"},
       {"id": "t3", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "dividend", "instrument": "G", "qty": "100", "cash": "5.25"},
-      {"id": "t4", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "dividend", "instrument": "H", "cash": "7.00"}
+      {"id": "t4", "account": "A", "day": "2026-03-31", "at": "2026-03-31T11:00:00Z", "kind": "buy", "instrument": "H", "qty": "100", "cash": "-1000"}
     ],
     "expect": {
       "payers": [
-        {"instrument": "G", "per": "0.0525", "per_year": 12},
-        {"instrument": "H", "per": {"gaps": ["distribution-unknown"]}, "per_year": {"gaps": ["frequency-unknown"]}}
+        {"instrument": "G", "per": {"gaps": ["payer-not-read"]}, "per_year": {"gaps": ["payer-not-read"]}},
+        {"instrument": "H", "per": {"gaps": ["no-distribution-yet"]}, "per_year": 12, "next_ex": "2026-04-29"}
       ]
     }
   },

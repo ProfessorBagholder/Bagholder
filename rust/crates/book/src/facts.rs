@@ -26,40 +26,27 @@ pub struct RateConflict {
     pub later: Dec,
 }
 
-/// What kind of distribution a fund declared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DistributionKind {
-    Regular,
-    Special,
-    NonCash,
-}
-
-impl DistributionKind {
-    fn text(self) -> &'static str {
-        match self {
-            DistributionKind::Regular => "regular",
-            DistributionKind::Special => "special",
-            DistributionKind::NonCash => "non-cash",
-        }
-    }
-
-    fn parse(s: &str) -> Option<DistributionKind> {
-        match s {
-            "regular" => Some(DistributionKind::Regular),
-            "special" => Some(DistributionKind::Special),
-            "non-cash" => Some(DistributionKind::NonCash),
-            _ => None,
-        }
-    }
-}
-
+/// A distribution as its payer stated it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclaredRow {
     pub ex_date: jiff::civil::Date,
     pub record_date: Option<jiff::civil::Date>,
     pub pay_date: Option<jiff::civil::Date>,
+    /// The cash paid per unit.
     pub amount: Money,
-    pub kind: DistributionKind,
+    /// The part reinvested per unit, in the same currency, where the payer
+    /// states one.
+    pub reinvested: Option<Dec>,
+}
+
+/// One series of the Bank's rates for a currency, from one source, and the
+/// days it holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RateSeries {
+    pub currency: Currency,
+    pub source: SourceName,
+    pub first_day: jiff::civil::Date,
+    pub last_day: jiff::civil::Date,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,23 +178,39 @@ impl Book {
         Ok(out)
     }
 
-    /// The currencies the Bank's list of series says it publishes.
-    pub fn store_rate_series(&self, currencies: &[Currency], source: &SourceName, at: jiff::Timestamp) -> Result<()> {
+    /// The series a source holds, each with its first and last observation day
+    /// as the source states them now: a later statement of the same series
+    /// replaces the earlier (a daily series' last day moves on).
+    pub fn store_rate_series(&self, series: &[RateSeries], at: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
-            for c in currencies {
+            for s in series {
+                if s.first_day > s.last_day {
+                    return Err(BookError::Refused(format!("a {} series from {} to {} holds no day", s.currency, s.first_day, s.last_day)));
+                }
                 self.conn().execute(
-                    "INSERT OR IGNORE INTO fx_series(currency, source, received_at) VALUES (?, ?, ?)",
-                    params![c.as_str(), source.as_str(), at_text(at)],
+                    "INSERT OR REPLACE INTO fx_series(currency, source, first_day, last_day, received_at) VALUES (?, ?, ?, ?, ?)",
+                    params![s.currency.as_str(), s.source.as_str(), day(s.first_day), day(s.last_day), at_text(at)],
                 )?;
             }
             Ok(())
         })
     }
 
-    pub fn rate_series(&self) -> Result<BTreeSet<Currency>> {
-        let mut stmt = self.conn().prepare_cached("SELECT currency FROM fx_series")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|c| parse_currency("fx_series", "currency", &c?)).collect()
+    /// Every series of the Bank's rates held, oldest first within a currency.
+    pub fn rate_series(&self) -> Result<Vec<RateSeries>> {
+        let mut stmt = self.conn().prepare_cached("SELECT currency, source, first_day, last_day FROM fx_series ORDER BY currency, first_day")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (c, source, first, last) = row?;
+            out.push(RateSeries {
+                currency: parse_currency("fx_series", "currency", &c)?,
+                source: text::parsed("fx_series", "source", &source, SourceName::parse)?,
+                first_day: parse_day("fx_series", "first_day", &first)?,
+                last_day: parse_day("fx_series", "last_day", &last)?,
+            });
+        }
+        Ok(out)
     }
 
     /// The Bank's own holiday schedule, as read.
@@ -244,8 +247,8 @@ impl Book {
             let read = self.conn().last_insert_rowid();
             for d in items {
                 self.conn().execute(
-                    "INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, currency, kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params![read, day(d.ex_date), d.record_date.map(day), d.pay_date.map(day), d.amount.amount.to_text(), d.amount.currency.as_str(), d.kind.text()],
+                    "INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, reinvested, currency) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![read, day(d.ex_date), d.record_date.map(day), d.pay_date.map(day), d.amount.amount.to_text(), d.reinvested.map(Dec::to_text), d.amount.currency.as_str()],
                 )?;
             }
             Ok(())
@@ -262,18 +265,18 @@ impl Book {
         let mut out = BTreeMap::new();
         for (id, instrument, source, read_at) in reads {
             let mut items = Vec::new();
-            let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, currency, kind FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
+            let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, reinvested, currency FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
             let rows = s.query_map([id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?))
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?))
             })?;
             for row in rows {
-                let (ex, rec, pay, amount, currency, kind) = row?;
+                let (ex, rec, pay, amount, reinvested, currency) = row?;
                 items.push(DeclaredRow {
                     ex_date: parse_day("declared_distributions", "ex_date", &ex)?,
                     record_date: rec.map(|d| parse_day("declared_distributions", "record_date", &d)).transpose()?,
                     pay_date: pay.map(|d| parse_day("declared_distributions", "pay_date", &d)).transpose()?,
                     amount: Money::new(parse_dec("declared_distributions", "amount", &amount)?, parse_currency("declared_distributions", "currency", &currency)?),
-                    kind: DistributionKind::parse(&kind).ok_or_else(|| text::corrupt("declared_distributions", "kind", &kind, "not a kind of distribution"))?,
+                    reinvested: reinvested.map(|r| parse_dec("declared_distributions", "reinvested", &r)).transpose()?,
                 });
             }
             out.insert(

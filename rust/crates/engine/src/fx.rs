@@ -10,6 +10,11 @@
 //! it a failure of the Bank source. Nothing is ever covered by a number of the
 //! app's own.
 //!
+//! The Bank's rate is held in eras, each a series: its daily average from
+//! 2017-01-03, its noon rate before that, and Statistics Canada's archive of the
+//! noon rate before 2007 for the currencies it holds. A day before a currency's
+//! oldest series is one no source holds the published rate for.
+//!
 //! A live mark (a holding's value now) is not a transaction on a day: it uses the
 //! latest rate the Bank has published, and that rate is a failure once a later
 //! business day's 16:30 has passed without it being stored.
@@ -48,13 +53,20 @@ fn waiting(clock: &Clock, currency: Currency, d: Date) -> Gaps {
 }
 
 fn check_published(rates: &Rates, currency: Currency, day: Date) -> Result<(), Gaps> {
-    let has_series = rates.by_currency.get(&currency).is_some_and(|s| !s.is_empty());
-    if rates.published.contains(&currency) || has_series {
-        return Ok(());
+    match rates.series.get(&currency).and_then(|s| s.iter().map(|(first, _)| *first).min()) {
+        Some(oldest) if day < oldest => Err(Gaps::of(Gap::RateNotHeld { currency, day })),
+        Some(_) => Ok(()),
+        // until the lists of series have been read, a currency with no series is
+        // a rate not read, not a currency the Bank does not publish
+        None if rates.series.is_empty() => {
+            if rates.by_currency.get(&currency).is_some_and(|s| !s.is_empty()) {
+                Ok(())
+            } else {
+                Err(Gaps::of(Gap::RateMissing { currency, day }))
+            }
+        }
+        None => Err(Gaps::of(Gap::RateUnpublished(currency))),
     }
-    // until the Bank's list of series has been read, a currency with no rate is
-    // a rate not read, not a currency it does not publish
-    Err(Gaps::of(if rates.published.is_empty() { Gap::RateMissing { currency, day } } else { Gap::RateUnpublished(currency) }))
 }
 
 /// CAD per unit of `currency` for a transaction on `day`.
@@ -77,6 +89,8 @@ pub fn rate(rates: &Rates, clock: &Clock, currency: Currency, day: Date) -> Fig<
             Ok(y) => y,
             Err(_) => return Err(Gaps::of(Gap::RateMissing { currency, day })),
         };
+        // walked back past the oldest series: no source holds the governing day
+        check_published(rates, currency, d)?;
     }
 }
 

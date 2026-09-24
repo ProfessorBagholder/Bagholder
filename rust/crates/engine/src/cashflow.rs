@@ -4,10 +4,11 @@
 //! A cashflow row is one dividend, interest payment, withholding tax or interest
 //! charge, in the currency it was paid, with its CAD value on its day; a stock
 //! dividend is a dividend row paid in units. A payer's rate is its per-unit
-//! amount and its payments per year: the fund's declared record first, then the
-//! payments received; the frequency a source states first, then read from the
-//! declared ex-dates, then from the payments; with none of these it is not
-//! known, never assumed.
+//! amount and its payments per year, both from the payer's own record (its
+//! fund company's publication, its own announcement): the cash per unit of the
+//! latest distribution gone ex, and the schedule the payer states. Neither is
+//! ever worked out from the payments received or assumed; until the payer's
+//! record is read, the figure waits on it.
 
 use std::collections::BTreeMap;
 
@@ -18,9 +19,8 @@ use bagholder_core::{AccountId, Dec, InstrumentId, Money, Rounding, SourceName, 
 
 use crate::fx::to_cad;
 use crate::gap::{Fig, Gap, Gaps};
-use crate::input::{DistributionKind, Inputs};
+use crate::input::Inputs;
 use crate::ledger::Matched;
-use crate::stat::payments_per_year;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Payment {
@@ -102,15 +102,12 @@ pub fn build_cashflow(inputs: &Inputs, matched: &Matched) -> Vec<CashRow> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateSource {
     Declared(SourceName),
-    Payments,
 }
 
 /// Where its payments per year came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrequencySource {
     Stated(SourceName),
-    DeclaredDates,
-    Payments,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -153,30 +150,25 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow]) -> BTreeMap<InstrumentId, 
     for i in instruments {
         let payments = paid.get(&i).cloned().unwrap_or_default();
         let read = inputs.facts.declared.get(&i);
-        let regular: Vec<_> = read.map(|r| r.items.iter().filter(|d| d.kind == DistributionKind::Regular).collect()).unwrap_or_default();
-        // the rate: the latest regular distribution that has gone ex, else the
-        // latest payment that states its units
-        let latest = regular.iter().filter(|d| d.ex_date <= today).max_by_key(|d| d.ex_date);
+        // every row of the payer's record counts; what the figures are is income
+        // paid, so a row reinvested whole pays nothing and is passed over
+        let cash: Vec<_> = read.map(|r| r.items.iter().filter(|d| d.amount.amount.is_positive()).collect()).unwrap_or_default();
+        // the rate: the cash per unit of the latest distribution gone ex, from the
+        // payer's own record and nothing else
+        let latest = cash.iter().filter(|d| d.ex_date <= today).max_by_key(|d| d.ex_date);
         let (per, source) = match (latest, read) {
             (Some(d), Some(r)) => (Ok(d.amount), Some(RateSource::Declared(r.source.clone()))),
-            _ => match payments.iter().filter(|r| r.per.is_some()).max_by_key(|r| (r.day, r.at)) {
-                Some(r) => (Ok(r.per.expect("filtered")), Some(RateSource::Payments)),
-                None => (Err(Gaps::of(Gap::DistributionUnknown(i))), None),
-            },
+            (None, Some(_)) => (Err(Gaps::of(Gap::NoDistributionYet(i))), None),
+            (_, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
-        // payments per year: stated, then the declared ex-dates, then the payments
-        let stated = inputs.facts.frequencies.get(&i);
-        let from_declared = payments_per_year(&regular.iter().map(|d| d.ex_date).collect::<Vec<_>>());
-        let from_paid = payments_per_year(&payments.iter().map(|r| r.day).collect::<Vec<_>>());
-        let (per_year, frequency_source) = match (stated, from_declared, from_paid) {
-            (Some(s), _, _) => (Ok(s.value), Some(FrequencySource::Stated(s.source.clone()))),
-            (None, Some(n), _) => (Ok(n), Some(FrequencySource::DeclaredDates)),
-            (None, None, Some(n)) => (Ok(n), Some(FrequencySource::Payments)),
-            _ => (Err(Gaps::of(Gap::FrequencyUnknown(i))), None),
+        // payments per year: the payer's own statement, never worked out
+        let (per_year, frequency_source) = match inputs.facts.frequencies.get(&i) {
+            Some(s) => (Ok(s.value), Some(FrequencySource::Stated(s.source.clone()))),
+            None => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
         // the next distribution still to be paid, whether or not it has gone ex
         let due = |d: &&&crate::input::Declared| d.pay_date.unwrap_or(d.ex_date);
-        let mut all: Vec<_> = regular.iter().collect();
+        let mut all: Vec<_> = cash.iter().collect();
         all.sort_by_key(|d| (due(d), d.ex_date));
         let next = all.iter().find(|d| due(d) >= today).or(all.last());
         let (next_ex, next_pay) = match next {

@@ -19,6 +19,9 @@ pub enum Gap {
     RateMissing { currency: Currency, day: Date },
     /// A currency the Bank publishes no rate for.
     RateUnpublished(Currency),
+    /// A day before every series of the currency any source holds: no source
+    /// holds the rate the Bank published for it.
+    RateNotHeld { currency: Currency, day: Date },
     /// An option contract whose shares per contract no source has stated yet.
     MultiplierUnstated(InstrumentId),
     /// A transaction that moves a position and does not state by how much.
@@ -50,12 +53,12 @@ pub enum Gap {
     PriceUnknown(InstrumentId),
     /// A holding with no close on a day the equity series needs one.
     CloseUnknown { instrument: InstrumentId, day: Date },
-    /// A dividend payer whose payout frequency no source states and no record
-    /// shows yet.
-    FrequencyUnknown(InstrumentId),
-    /// A dividend payer whose amount per unit no declared record states and no
-    /// payment shows (none states the units it paid on).
-    DistributionUnknown(InstrumentId),
+    /// A payer whose own record of its distributions and schedule has not been
+    /// read: its payer's page or announcement is what the figure waits on.
+    PayerNotRead(InstrumentId),
+    /// A payer whose own record states no cash distribution gone ex yet (a new
+    /// fund before its first).
+    NoDistributionYet(InstrumentId),
     /// A record with a problem its source or mapping reported (a row the
     /// mapping could not place, a fact the row does not state): the account's
     /// own figures from its day wait until the record is corrected.
@@ -72,6 +75,7 @@ impl Gap {
             Gap::RatePending { .. } => "rate-pending",
             Gap::RateMissing { .. } => "rate-missing",
             Gap::RateUnpublished(_) => "rate-unpublished",
+            Gap::RateNotHeld { .. } => "rate-not-held",
             Gap::MultiplierUnstated(_) => "multiplier-unstated",
             Gap::QuantityUnstated(_) => "quantity-unstated",
             Gap::LegUnstated(_) => "leg-unstated",
@@ -85,8 +89,8 @@ impl Gap {
             Gap::ValueUnstated(_) => "value-unstated",
             Gap::PriceUnknown(_) => "price-unknown",
             Gap::CloseUnknown { .. } => "close-unknown",
-            Gap::FrequencyUnknown(_) => "frequency-unknown",
-            Gap::DistributionUnknown(_) => "distribution-unknown",
+            Gap::PayerNotRead(_) => "payer-not-read",
+            Gap::NoDistributionYet(_) => "no-distribution-yet",
             Gap::RecordProblem { .. } => "record-problem",
             Gap::Arithmetic(_) => "arithmetic",
         }
@@ -99,6 +103,7 @@ impl fmt::Display for Gap {
             Gap::RatePending { currency, day } => write!(f, "the Bank of Canada's {currency} rate for {day} is published at 16:30 Eastern"),
             Gap::RateMissing { currency, day } => write!(f, "the Bank of Canada's {currency} rate for {day} has not been read"),
             Gap::RateUnpublished(c) => write!(f, "the Bank of Canada publishes no rate for {c}"),
+            Gap::RateNotHeld { currency, day } => write!(f, "no source holds the Bank of Canada's {currency} rate for {day}"),
             Gap::MultiplierUnstated(i) => write!(f, "the contract size of {i} is not stated yet"),
             Gap::QuantityUnstated(t) => write!(f, "{t} does not state its quantity"),
             Gap::LegUnstated(t) => write!(f, "{t} is a multi-leg order whose legs are not on the record"),
@@ -112,8 +117,8 @@ impl fmt::Display for Gap {
             Gap::ValueUnstated(t) => write!(f, "{t} states neither its cash nor its price"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),
             Gap::CloseUnknown { instrument, day } => write!(f, "{instrument} has no close for {day}"),
-            Gap::FrequencyUnknown(i) => write!(f, "the payout frequency of {i} is not known yet"),
-            Gap::DistributionUnknown(i) => write!(f, "the amount {i} pays per unit is not known yet"),
+            Gap::PayerNotRead(i) => write!(f, "the record {i}'s payer publishes of its distributions has not been read"),
+            Gap::NoDistributionYet(i) => write!(f, "{i}'s payer states no cash distribution gone ex yet"),
             Gap::RecordProblem { transaction, code } => write!(f, "{transaction} has a problem on its record ({code})"),
             Gap::Arithmetic(why) => write!(f, "{why}"),
         }
