@@ -12,3 +12,4 @@ Read from any checkout without switching branches:
 | 01 | [Stage 3, and how we work from here](01-stage-3-and-the-gate.md) | Current |
 | 02 | [Verdict on the stage 3a plan: Go with changes](02-stage-3a-verdict.md) | Current |
 | 03 | [The instruction files](03-instructions-audit.md) | Current |
+| 04 | [A clean-room check of the engine's cases](04-clean-room-case-check.md) | Current |
