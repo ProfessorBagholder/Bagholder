@@ -77,7 +77,10 @@ fn changed(inputs: &Inputs, c: &Change) -> Inputs {
             i.market.closes.insert(k, c);
         }
         Change::Benchmark(k, b) => {
-            i.market.benchmarks.insert(k, b);
+            match b {
+                Some(b) => i.market.benchmarks.insert(k, b),
+                None => i.market.benchmarks.remove(&k),
+            };
         }
         Change::Broker(k, b) => {
             match b {
@@ -137,8 +140,8 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let _ = u;
     let broker = BrokerAccount { cash: BTreeMap::from([(Currency::CAD, d("1100"))]), net_value_now: Some(d("3100")), as_of: Some("2026-04-20T16:00:00Z".parse().unwrap()), ..BrokerAccount::default() };
     let clock = bagholder_engine::input::Clock { today: day("2026-04-21"), now: "2026-04-21T22:00:00Z".parse().unwrap(), ..i.clock.clone() };
-    let mut benchmark = i.market.benchmarks.get("SP500").cloned().unwrap_or_default();
-    benchmark.insert(day("2026-04-20"), d("5210"));
+    let mut benchmark = i.market.benchmarks.get("SP500").cloned().unwrap_or(bagholder_engine::input::BenchmarkSeries { currency: Currency::USD, closes: BTreeMap::new(), dividends: BTreeMap::new(), splits: BTreeMap::new() });
+    benchmark.closes.insert(day("2026-04-20"), d("5210"));
     vec![
         Change::Ledger(ledger),
         Change::Trades(trades),
@@ -150,7 +153,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
         Change::Frequency(f, Some(Sourced { value: 4, source: SourceName::named("tmx") })),
         Change::Quote(x, Some(quote)),
         Change::Closes(f, closes),
-        Change::Benchmark("SP500".into(), benchmark),
+        Change::Benchmark("SP500".into(), Some(benchmark)),
         Change::Broker(a, Some(broker)),
         Change::Clock(clock),
     ]

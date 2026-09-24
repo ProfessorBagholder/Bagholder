@@ -100,12 +100,8 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
         closes.entry(i).or_default().insert(d, Money::new(c, ledger.instruments[&i].instrument.currency));
     }
     market.closes = closes;
-    let mut stmt = old.prepare("SELECT symbol, date, close FROM benchmark_prices").map_err(err)?;
-    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?))).map_err(err)? {
-        let (symbol, date, close) = row.map_err(err)?;
-        let (Ok(d), Some(c)) = (date.get(..10).unwrap_or("").parse(), dec(close)) else { continue };
-        market.benchmarks.entry(symbol).or_default().insert(d, c);
-    }
+    // the old store's benchmarks are price-only index levels, not a tracker's
+    // total return: none stands in for the engine's
     let mut rates = bagholder_engine::input::Rates::default();
     let mut stmt = old.prepare("SELECT date, rate FROM fx_rates WHERE pair = 'USDCAD' ORDER BY date").map_err(err)?;
     for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))).map_err(err)? {
@@ -229,8 +225,8 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     let figures = engine.figures();
     let mut out = String::new();
     match from_book {
-        false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes, benchmarks.").ok(),
-        true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and benchmarks from the market cache, as the readers wrote them.").ok(),
+        false => writeln!(out, "Compared on {today}. Stand-ins read from the old store: the USD rate, declared distributions, stated frequencies (TMX's quote field), quotes, closes; no benchmark (the old store's are price-only levels).").ok(),
+        true => writeln!(out, "Compared on {today}. Rates, declared distributions and stated frequencies from the book; quotes, closes and the benchmarks' trackers from the market cache, as the readers wrote them.").ok(),
     };
     writeln!(out, "Re-derived with the import mapping: {} transactions changed, {} added, {} removed.", changes.changed.len(), changes.added.len(), changes.removed.len()).ok();
     let mut changed_kinds: BTreeMap<String, usize> = BTreeMap::new();

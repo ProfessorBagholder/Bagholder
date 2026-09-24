@@ -157,15 +157,35 @@ pub fn parse(v: &Value, symbol: &str) -> Outcome<Chain> {
     }
 }
 
-pub fn ask(net: &Net, symbol: &str) -> Noted<Chain> {
+/// What a read of a chain came to: a chain newer than the one named, or
+/// Cboe's word that it has none (304).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChainReply {
+    Chain { chain: Chain, last_modified: Option<String> },
+    NotModified,
+}
+
+/// Ask for `symbol`'s chain; with `since`, the `Last-Modified` of the chain
+/// held, only if Cboe has a newer one.
+pub fn ask(net: &Net, symbol: &str, since: Option<&str>) -> Noted<ChainReply> {
     let url = format!("https://{HOST}/api/global/delayed_quotes/options/{symbol}.json");
-    let reply = match ask::send(net, &Ask::get(&url, &HEADERS), &[403]) {
+    let mut headers: Vec<(&str, &str)> = HEADERS.to_vec();
+    if let Some(since) = since {
+        headers.push(("If-Modified-Since", since));
+    }
+    let reply = match net.send(&Ask::get(&url, &headers)) {
+        Ok(r) if r.status == 304 => return Noted { outcome: Outcome::Answered(ChainReply::NotModified), shape_change: None },
+        Ok(r) => r,
+        Err(e) => return Noted { outcome: e.into(), shape_change: None },
+    };
+    let reply = match ask::status(reply, &[403]) {
         Outcome::Answered(r) => r,
         other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
     };
+    let last_modified = reply.header("last-modified").map(str::to_string);
     let v = match ask::json(&reply.body) {
         Ok(v) => v,
         Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
     };
-    Noted { outcome: parse(&v, symbol), shape_change: ask::noticed(&v, &shape(), &[]) }
+    Noted { outcome: parse(&v, symbol).map(|chain| ChainReply::Chain { chain, last_modified }), shape_change: ask::noticed(&v, &shape(), &[]) }
 }

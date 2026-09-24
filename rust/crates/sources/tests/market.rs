@@ -1,13 +1,12 @@
-//! Yahoo's chart, TMX and FRED, read from recorded real replies: closes stored as
-//! traded, levels and distributions exactly as stated, and every wrong copy
-//! refused.
+//! Yahoo's chart and TMX, read from recorded real replies: closes stored as
+//! traded, distributions exactly as stated, and every wrong copy refused.
 
 mod common;
 
 use bagholder_core::jiff::civil::{date, Date};
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, Dec};
-use bagholder_sources::adapters::{fred, tmx, yahoo};
+use bagholder_sources::adapters::{tmx, yahoo};
 use bagholder_sources::outcome::{Outcome, OutcomeKind};
 
 fn dec(s: &str) -> Dec {
@@ -20,14 +19,12 @@ fn t(s: &str) -> Timestamp {
 
 const Y: &str = "yahoo";
 const TMX: &str = "tmx";
-const FRED: &str = "fred";
 
 #[test]
 fn the_recorded_shapes_are_the_answers_union() {
     common::shape_is_the_answers_union("yahoo-chart.paths", Y, "", yahoo::KEYED);
     common::shape_is_the_answers_union("tmx-quote.paths", TMX, "quote-", &[]);
     common::shape_is_the_answers_union("tmx-dividends.paths", TMX, "dividends-", &[]);
-    common::shape_is_the_answers_union("tmx-series.paths", TMX, "series-", &[]);
 }
 
 fn chart(name: &str, symbol: &str, now: &str) -> yahoo::Chart {
@@ -81,8 +78,10 @@ fn a_canadian_listing_and_a_fund_that_has_paid_nothing() {
     let wqtm = chart("WQTM-2025-10-01-2026-09-24.json", "WQTM", "2026-09-24T04:00:00Z");
     assert!(wqtm.dividends.is_empty());
     assert!(!wqtm.closes.is_empty());
-    let gspc = chart("GSPC-2016-01-04-2016-02-01.json", "^GSPC", "2026-09-24T04:00:00Z");
-    assert_eq!(gspc.closes.first().map(|c| c.0), Some(date(2016, 1, 4)));
+    // a benchmark's tracker: a year of closes and its four dividends
+    let spy = chart("SPY-2025-09-22-2026-09-23.json", "SPY", "2026-09-24T04:00:00Z");
+    assert_eq!(spy.closes.first(), Some(&(date(2025, 9, 22), dec("666.8400268554688"))));
+    assert_eq!(spy.dividends.len(), 4);
 }
 
 #[test]
@@ -146,36 +145,13 @@ fn tmx_distributions_are_cash_when_paid_on_a_date_and_in_units_otherwise() {
 }
 
 #[test]
-fn an_index_series_is_each_sessions_level_oldest_first() {
-    let span = (date(2026, 9, 1), date(2026, 9, 23));
-    let Outcome::Answered(tsx) = tmx::parse_series(&common::json(TMX, "series-TSX-2026-09-01-2026-09-23.json"), "^TSX", span) else { panic!() };
-    assert_eq!(tsx.last(), Some(&(date(2026, 9, 23), dec("35751.43"))));
-    assert!(tsx.windows(2).all(|w| w[0].0 < w[1].0));
-    assert!(tsx.iter().all(|(d, _)| *d != date(2026, 9, 7)), "Labour Day");
-    let Outcome::Answered(old) = tmx::parse_series(&common::json(TMX, "series-TSX-1995-01-01-2000-12-31.json"), "^TSX", (date(1995, 1, 1), date(2000, 12, 31))) else { panic!() };
-    assert!(old.is_empty(), "the series begins 2001-12-11");
-    assert!(matches!(tmx::parse_series(&common::json(TMX, "wrong-meaning-series-TSX-oldest-first.json"), "^TSX", span), Outcome::Meaning(_)));
-    assert!(matches!(tmx::parse_series(&common::json(TMX, "series-TSX-2026-09-01-2026-09-23.json"), "^TSX", (date(2026, 9, 10), date(2026, 9, 23))), Outcome::Meaning(w) if w.contains("outside")));
-}
-
-#[test]
-fn fred_is_asked_with_a_user_agent_naming_a_contact() {
-    let recorded = std::sync::Arc::new(common::Recorded::new().with("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500", 200, FRED, "SP500.csv"));
+fn a_source_that_wants_one_is_asked_with_a_user_agent_naming_a_contact() {
+    let recorded = std::sync::Arc::new(common::Recorded::new().with("https://cdn.cboe.com/api/global/delayed_quotes/options/BBAI.json", 200, "cboe-options", "chain-BBAI.json"));
     let net = common::net(&recorded, "2026-09-24T04:00:00Z");
-    assert!(matches!(fred::ask(&net).outcome, Outcome::Answered(_)));
+    assert!(matches!(bagholder_sources::adapters::cboe_options::ask(&net, "BBAI", None).outcome, Outcome::Answered(_)));
     let headers = recorded.headers.lock().unwrap();
     let ua = headers[0].iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.as_str());
     assert!(ua.is_some_and(|v| v.starts_with("Bagholder/") && v.contains("(+https://")), "{ua:?}");
-}
-
-#[test]
-fn fred_states_a_level_for_each_trading_day_and_none_for_a_holiday() {
-    let Outcome::Answered(levels) = fred::parse(&common::read(FRED, "SP500.csv")) else { panic!() };
-    assert_eq!(levels.first(), Some(&(date(2016, 9, 26), dec("2146.10"))));
-    assert!(levels.iter().all(|(d, _)| *d != date(2016, 11, 24)), "Thanksgiving is listed with no value");
-    assert_eq!(levels.len(), 2608 - 96);
-    assert!(matches!(fred::parse(&common::read(FRED, "wrong-shape-SP500-header.csv")), Outcome::Mismatch(m) if m.path == "header"));
-    assert!(matches!(fred::parse(&common::read(FRED, "wrong-meaning-SP500-negative.csv")), Outcome::Meaning(_)));
 }
 
 use bagholder_sources::adapters::{cboe_ca, coinbase};

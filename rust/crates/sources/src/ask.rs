@@ -24,8 +24,8 @@ pub fn send(net: &Net, ask: &Ask, not_carried: &[u16]) -> Outcome<Reply> {
 }
 
 /// How the app names itself to a source that needs a User-Agent: its name and
-/// version with a contact URL, as a well-behaved client does. FRED and Harvest
-/// each refuse a request without one.
+/// version with a contact URL, as a well-behaved client does. Harvest refuses a
+/// request without one.
 pub const USER_AGENT: &str = concat!("Bagholder/", env!("CARGO_PKG_VERSION"), " (+https://github.com/ProfessorBagholder/Bagholder)");
 
 /// The outcome a reply's status says, the reply itself when it is an answer.

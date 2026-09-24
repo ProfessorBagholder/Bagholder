@@ -248,6 +248,17 @@ pub struct BrokerAccount {
     pub buying_power: Option<Result<Dec, String>>,
 }
 
+/// The ETF that tracks a benchmark, as its source states it: each session's
+/// close as traded, each dividend by its ex-date as declared, and each split on
+/// the day it took effect (`numerator` new units for every `denominator` held).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BenchmarkSeries {
+    pub currency: Currency,
+    pub closes: BTreeMap<Date, Dec>,
+    pub dividends: BTreeMap<Date, Dec>,
+    pub splits: BTreeMap<Date, (Dec, Dec)>,
+}
+
 /// The market around the book.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Market {
@@ -257,8 +268,8 @@ pub struct Market {
     /// own, its USD market's, converted at the day's rate where it is used
     /// (`SPEC.md` §2, Coinbase).
     pub closes: BTreeMap<InstrumentId, BTreeMap<Date, Money>>,
-    /// Index levels per benchmark key (`SP500`, `TSX`, `TX60`), per day.
-    pub benchmarks: BTreeMap<String, BTreeMap<Date, Dec>>,
+    /// Each benchmark's tracker, per benchmark key (`SP500`, `TSX`, `TX60`).
+    pub benchmarks: BTreeMap<String, BenchmarkSeries>,
     pub brokers: BTreeMap<AccountId, BrokerAccount>,
 }
 

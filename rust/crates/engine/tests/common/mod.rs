@@ -18,7 +18,7 @@ use bagholder_core::journal::{Anchor, Grade, Group, JournalEntry, JournalSubject
 use bagholder_core::record::Problem;
 use bagholder_core::transaction::{Effect, Kind, Transaction};
 use bagholder_core::{AccountId, Broker, ConnectionId, Currency, Dec, GroupId, InstrumentId, Leg, MappingVersion, Money, RecordId, SourceName, TradeId, TransactionId};
-use bagholder_engine::input::{Adjustments, Read, AccountInfo, BrokerAccount, Clock, Declared, DeclaredRead, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Series, Sourced};
+use bagholder_engine::input::{Adjustments, Read, AccountInfo, BenchmarkSeries, BrokerAccount, Clock, Declared, DeclaredRead, Facts, Inputs, InstrumentInfo, Ledger, Market, Quote, QuoteSource, Rates, RecordInfo, Series, Sourced};
 use bagholder_engine::{Change, Engine};
 
 /// Labels to ids: the same label is the same id throughout a case.
@@ -274,10 +274,17 @@ pub fn build(case: &Value) -> Built {
             market.closes.entry(id).or_default().insert(day(d), close);
         }
     }
-    for (k, days) in obj(case, "benchmarks") {
-        for (d, c) in days.as_object().unwrap() {
-            market.benchmarks.entry(k.clone()).or_default().insert(day(d), dec(c.as_str().unwrap()));
-        }
+    // a benchmark's tracker: {"currency", "closes": {day: close}, "dividends": {day: amount}, "splits": {day: "n:d"}}
+    for (k, t) in obj(case, "benchmarks") {
+        let days = |field: &str| -> BTreeMap<Date, Dec> { obj(&t, field).into_iter().map(|(d, v)| (day(&d), dec(v.as_str().unwrap()))).collect() };
+        let splits = obj(&t, "splits")
+            .into_iter()
+            .map(|(d, v)| {
+                let (n, of) = v.as_str().unwrap().split_once(':').unwrap();
+                (day(&d), (dec(n), dec(of)))
+            })
+            .collect();
+        market.benchmarks.insert(k, BenchmarkSeries { currency: ccy(s(&t, "currency").unwrap_or("CAD")), closes: days("closes"), dividends: days("dividends"), splits });
     }
     for (a, b) in obj(case, "brokers") {
         let id = ids.account(&a);

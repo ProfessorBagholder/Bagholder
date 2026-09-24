@@ -2,6 +2,7 @@
 //! floating point (`docs/architecture.md` §6). Each is made from exact figures
 //! through `Dec::to_f64`, and nothing comes back from here into money.
 
+pub mod benchmark;
 pub mod returns;
 
 use bagholder_core::{Dec, Money};

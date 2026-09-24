@@ -1,7 +1,8 @@
 //! Yahoo's chart (`query1.finance.yahoo.com/v8/finance/chart/<symbol>`): daily
-//! closes of listings and of the S&P 500 before FRED's window, the dividend
-//! events of a US fund whose company's publication cannot be read, and a US
-//! listing's quote (`docs/plans/stage-3a-sources.md`, research 1 and 5).
+//! closes of listings, the closes, dividends and splits of each benchmark's
+//! tracker, the dividend events of a US fund whose company's publication cannot
+//! be read, and a US listing's quote (`docs/plans/stage-3a-sources.md`, research
+//! 1; `docs/plans/stage-3a-brief-06.md`).
 //!
 //! Its closes are adjusted for later splits, and the same reply states those
 //! splits when asked with `events=split`, so each close is stored as traded:

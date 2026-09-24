@@ -117,7 +117,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 The engine computes every figure in `SPEC.md`: round trips, positions, cash flows, distributions and their rates, **the equity series and returns**, drawdown, aggregates in CAD, the markets views, and per-month figures (the page does no money arithmetic at all).
 
 - **A pure function of the book and the cache.** No network, clock or disk inside it: today's date, the home zone and the zone rules are inputs. The same inputs always give the same figures.
-- **Equity is Bagholder's own**, computed from the record, prices and FX, so it covers every broker and every account however they report. Each broker's own net value is a check against it, and a disagreement is shown.
+- **Equity is each account's value as its broker states it** (owner, 2026-09-24): Wealthsimple's daily net value and net deposits per account, summed across accounts, returns net of the flows. It is kept per account, so an account with no broker statement can be given a computed value later; that is not built. The broker check compares Bagholder's cash and units with the broker's, exactly.
 - **Recomputes only what a change touches** and reports what moved (§13).
 - **Held to `SPEC.md` by cases written from the spec.** Each case gives inputs and the figures the spec requires, worked out from the definitions, never generated from an implementation's output. Their independence comes from the process, since no person reviews them line by line: the expected figures and working of a new case are written by a separate agent given `SPEC.md`, the case format and the inputs, and not the engine's code; the building session implements against them, and a disagreement is settled against `SPEC.md`, a genuine ambiguity going to the owner as one question. There are cases for every definition, including corporate events, unknown rates and values, several currencies, several brokers and adjustments.
 - **One implementation**, in Rust, with a typed entry point (records in, figures and changes out) and no dependency on the server.
@@ -237,7 +237,6 @@ These passages of `SPEC.md` describe an old implementation or contradict this de
 - Payout frequency (§1, §2 Distribution rate): never assumed. The spec's "12 is assumed" goes; the app finds the frequency out (§9, "Finding out what no single source says").
 - An unavailable source (§4 Disclosures, "Source off"): the spec shows nothing; §15 names it on the card, as every failure is shown.
 - Trade identity (§2 Trade): Bagholder-assigned, surviving corrections (§5); lots matched by instrument, not symbol and currency.
-- Equity series (§2 Equity): Bagholder's own, the broker's net value a check (§8).
 - Splits (§2 Trade) and option multipliers (§4 Orders, the fill booking): from the record and the contract, never inferred or fixed at 100 (§6, `docs/plans/stage-2-engine.md`, "Corporate events").
 - Freshness (§2), the store (§6), the update check's mechanics (§2 Versions), the notifier's Mac applet (§2 Notifications), connecting through a Chrome window on the server (§4): implementation, replaced by §6, §10, §12, §13 and §16, and moved out of the spec.
 - The page dividing by twelve (the spec's introduction): the engine gives per-month figures.

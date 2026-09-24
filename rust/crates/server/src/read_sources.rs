@@ -6,8 +6,8 @@
 //! reader that is due for it once, and asks again: what one read settles can
 //! make another fact needed (an expired contract's underlying's close decides
 //! whether it is still held), so the passes go on until the needs stop changing.
-//! Each listing held today is then quoted once, and each source's outcomes of
-//! the run are printed. `source-health` prints each source's state and its last
+//! Each listing and contract held today is then priced once, as a screen showing
+//! them would ask, and each source's outcomes of the run are printed. `source-health` prints each source's state and its last
 //! outcome of each kind.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::transaction::Kind;
 use bagholder_core::{Currency, InstrumentId};
-use bagholder_engine::input::{Clock, Inputs, Market, Quote, QuoteSource};
+use bagholder_engine::input::{BenchmarkSeries, Clock, Inputs, Market, Quote, QuoteSource};
 use bagholder_engine::needs::FactNeeds;
 use bagholder_engine::Engine;
 use bagholder_net::{Net, SystemClock};
@@ -41,7 +41,8 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// The market as the cache holds it: its quotes, its closes and the benchmarks.
+/// The market as the cache holds it: its quotes, its closes and the benchmarks'
+/// trackers.
 pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, String> {
     let mut m = Market::default();
     let instruments: BTreeMap<InstrumentId, (InstrumentKind, Currency)> = book.instruments().map_err(err)?.into_iter().map(|i| (i.id, (i.kind, i.currency))).collect();
@@ -54,15 +55,8 @@ pub fn market_from_cache(cache: &MarketCache, book: &Book) -> Result<Market, Str
         m.quotes.insert(q.instrument, Quote { price: q.price, change: q.change, change_pct: q.change_pct, at: Some(q.quoted_at), source });
     }
     m.closes = cache.closes().map_err(err)?;
-    // an option contract's closes are the book's, each in the contract's own currency
-    for (id, days) in book.closes().map_err(err)? {
-        if let Some((day, c)) = days.iter().find(|(_, c)| instruments.get(&id).map(|i| i.1) != Some(c.currency)) {
-            return Err(format!("the book's close of {id} on {day} is in {}, not the contract's currency", c.currency));
-        }
-        m.closes.entry(id).or_default().extend(days);
-    }
-    for (b, levels) in cache.benchmarks().map_err(err)? {
-        m.benchmarks.insert(b.key().to_string(), levels);
+    for (b, s) in cache.benchmark_series().map_err(err)? {
+        m.benchmarks.insert(b.key().to_string(), BenchmarkSeries { currency: b.tracker().1, closes: s.closes, dividends: s.dividends, splits: s.splits });
     }
     Ok(m)
 }
@@ -82,36 +76,49 @@ fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String> {
     Ok(Some(Listing { id, kind: i.kind, currency: i.currency, symbol: now.symbol.clone(), venue_mic: now.venue_mic.clone(), routes }))
 }
 
-/// An option contract as its chain is asked for it, held `from`..=`to`: its
-/// terms, its underlying's symbol now, the OCC symbol the book states, and the
-/// day of a corporate event on the underlying while it was held. `None` for an
-/// instrument that is not an option contract.
+/// An option contract as its chain is asked for it, first on the record on
+/// `from`: its terms, its underlying's symbol now, the OCC symbol the book
+/// states, and the day of a corporate event on the underlying since, up to its
+/// expiry or `to`. `None` for an instrument that is not an option contract.
 fn contract(book: &Book, events: &BTreeMap<InstrumentId, Vec<Date>>, id: InstrumentId, from: Date, to: Date) -> Result<Option<ContractNeed>, String> {
     let Some(terms) = book.option_terms(id).map_err(err)? else { return Ok(None) };
     let i = book.instrument(id).map_err(err)?;
     let Some(underlying) = book.names(terms.underlying).map_err(err)?.last().map(|n| n.symbol.clone()) else { return Ok(None) };
     let occ = book.instrument_refs(id).map_err(err)?.into_iter().find(|r| r.scheme == RefScheme::Occ).map(|r| r.value);
     let event_on = events.get(&terms.underlying).and_then(|days| days.iter().copied().find(|d| from <= *d && *d <= to.min(terms.expiry)));
-    Ok(Some(ContractNeed { id, currency: i.currency, underlying, expiry: terms.expiry, strike: terms.strike, right: terms.right, occ, event_on, from, to }))
+    Ok(Some(ContractNeed { id, currency: i.currency, underlying, expiry: terms.expiry, strike: terms.strike, right: terms.right, occ, event_on }))
 }
 
-/// The engine's needs, as the sources read them.
-fn needs_of(book: &Book, n: &FactNeeds) -> Result<Needs, String> {
+/// The engine's needs, as the sources read them; `today` bounds a contract's
+/// corporate events.
+fn needs_of(book: &Book, n: &FactNeeds, today: Date) -> Result<Needs, String> {
     let mut out = Needs { benchmarks_from: n.first_day, ..Needs::default() };
     out.rates = n.rates.iter().map(|(c, d)| rates::Need { currency: *c, oldest: *d }).collect();
     // each instrument's corporate events, by day, oldest first
+    // and each instrument's first day on the record
     let mut events: BTreeMap<InstrumentId, Vec<Date>> = BTreeMap::new();
+    let mut first: BTreeMap<InstrumentId, Date> = BTreeMap::new();
     for t in book.transactions().map_err(err)? {
-        if let (Kind::CorporateEvent, Some(i)) = (t.kind, t.instrument) {
-            events.entry(i).or_default().push(t.trade_date);
+        if let Some(i) = t.instrument {
+            let f = first.entry(i).or_insert(t.trade_date);
+            *f = (*f).min(t.trade_date);
+            if t.kind == Kind::CorporateEvent {
+                events.entry(i).or_default().push(t.trade_date);
+            }
         }
     }
     events.values_mut().for_each(|d| d.sort());
-    for (id, (from, to)) in &n.closes {
-        if let Some(c) = contract(book, &events, *id, *from, *to)? {
+    for (id, days) in &n.closes {
+        if let Some(listing) = listing(book, *id)? {
+            out.closes.extend(days.iter().map(|d| CloseNeed { listing: listing.clone(), from: *d, to: *d }));
+        }
+    }
+    for id in &n.held {
+        let from = first.get(id).copied().unwrap_or(today);
+        if let Some(c) = contract(book, &events, *id, from, today)? {
             out.contracts.push(c);
         } else if let Some(listing) = listing(book, *id)? {
-            out.closes.push(CloseNeed { listing, from: *from, to: *to });
+            out.held.push(listing);
         }
     }
     for id in &n.payers {
@@ -124,12 +131,19 @@ fn needs_of(book: &Book, n: &FactNeeds) -> Result<Needs, String> {
 }
 
 /// What `now` needs that `before` did not: a currency new or needed from an
-/// earlier day, an instrument's closes new or over a wider span, a payer new, and
-/// the benchmarks only when the oldest day moved earlier.
+/// earlier day, a close of a day not needed before, a payer new, and the
+/// benchmarks only when the oldest day moved earlier. What is held is quoted
+/// once after the passes, not per pass.
 fn new_in(now: &FactNeeds, before: &FactNeeds) -> FactNeeds {
     FactNeeds {
         rates: now.rates.iter().filter(|(c, d)| before.rates.get(c).is_none_or(|b| *d < b)).map(|(c, d)| (*c, *d)).collect(),
-        closes: now.closes.iter().filter(|(i, (f, t))| before.closes.get(i).is_none_or(|(bf, bt)| f < bf || t > bt)).map(|(i, s)| (*i, *s)).collect(),
+        closes: now
+            .closes
+            .iter()
+            .map(|(i, days)| (*i, days.iter().filter(|d| before.closes.get(i).is_none_or(|b| !b.contains(d))).copied().collect::<std::collections::BTreeSet<Date>>()))
+            .filter(|(_, days)| !days.is_empty())
+            .collect(),
+        held: Default::default(),
         payers: now.payers.difference(&before.payers).copied().collect(),
         first_day: now.first_day.filter(|d| before.first_day.is_none_or(|b| *d < b)),
     }
@@ -169,10 +183,9 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
         }
         // what this run has not asked for yet: a read that failed is not asked
         // again in the same run, only on its source's own schedule
-        let needs = needs_of(&book, &last.as_ref().map_or_else(|| n.clone(), |l| new_in(&n, l)))?;
+        let needs = needs_of(&book, &last.as_ref().map_or_else(|| n.clone(), |l| new_in(&n, l)), clock.today)?;
         rates::read(&ctx, &needs.rates).map_err(err)?;
         market::read_closes(&ctx, &needs.closes).map_err(err)?;
-        options::read(&ctx, &needs.contracts).map_err(err)?;
         if let Some(from) = needs.benchmarks_from {
             market::read_benchmarks(&ctx, from).map_err(err)?;
         }
@@ -181,16 +194,18 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
         last = Some(n);
         passes += 1;
     }
-    // a quote for each listing held today, once
+    // a price for each listing and contract held today, once: the command
+    // stands for a screen showing every holding
     if let Some(n) = &last {
-        let held: Vec<Listing> = needs_of(&book, n)?.closes.into_iter().filter(|c| c.to >= clock.today).map(|c| c.listing).collect();
-        quotes::read_quotes(&ctx, &held).map_err(err)?;
+        let held = needs_of(&book, n, clock.today)?;
+        quotes::read_quotes(&ctx, &held.held).map_err(err)?;
+        options::read(&ctx, &held.contracts).map_err(err)?;
     }
     let mut out = String::new();
     let _ = writeln!(out, "{passes} pass(es) of reads");
     // each payer held, and the source that reads it
     if let Some(n) = &last {
-        let held = needs_of(&book, n)?;
+        let held = needs_of(&book, n, clock.today)?;
         let mut by: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for p in &held.payers {
             let source = payers::adapter_for(p).map_or_else(|| "no source".to_string(), |a| a.source().to_string());
@@ -338,54 +353,93 @@ mod tests {
         let i = |n: u8| InstrumentId::parse(&format!("0192a000-0000-7000-8000-0000000000{n:02}")).unwrap();
         let before = FactNeeds {
             rates: [(Currency::USD, date(2024, 1, 2))].into(),
-            closes: [(i(1), (date(2024, 1, 2), date(2026, 9, 24)))].into(),
+            closes: [(i(1), [date(2026, 6, 19)].into())].into(),
+            held: [i(1)].into(),
             payers: [i(1)].into(),
             first_day: Some(date(2024, 1, 2)),
         };
         let now = FactNeeds {
             rates: [(Currency::USD, date(2024, 1, 2)), (Currency::parse("EUR").unwrap(), date(2025, 3, 3))].into(),
-            closes: [(i(1), (date(2024, 1, 2), date(2026, 9, 24))), (i(2), (date(2026, 6, 19), date(2026, 6, 19)))].into(),
+            closes: [(i(1), [date(2026, 6, 19), date(2026, 7, 17)].into()), (i(2), [date(2026, 6, 19)].into())].into(),
+            held: [i(1), i(3)].into(),
             payers: [i(1), i(3)].into(),
             first_day: Some(date(2024, 1, 2)),
         };
         let todo = new_in(&now, &before);
         assert_eq!(todo.rates, [(Currency::parse("EUR").unwrap(), date(2025, 3, 3))].into());
-        assert_eq!(todo.closes, [(i(2), (date(2026, 6, 19), date(2026, 6, 19)))].into());
+        assert_eq!(todo.closes, [(i(1), [date(2026, 7, 17)].into()), (i(2), [date(2026, 6, 19)].into())].into());
         assert_eq!(todo.payers, [i(3)].into());
+        assert!(todo.held.is_empty(), "what is held is priced once after the passes");
         assert_eq!(todo.first_day, None);
-        // a currency needed from an earlier day, a wider span: asked again
+        // a currency needed from an earlier day: asked again
         let mut earlier = now.clone();
         earlier.rates.insert(Currency::USD, date(2023, 5, 1));
-        earlier.closes.insert(i(1), (date(2023, 5, 1), date(2026, 9, 24)));
         let todo = new_in(&earlier, &now);
         assert_eq!(todo.rates.keys().collect::<Vec<_>>(), vec![&Currency::USD]);
-        assert_eq!(todo.closes.keys().collect::<Vec<_>>(), vec![&i(1)]);
         assert!(new_in(&now, &now) == FactNeeds::default());
     }
 
     #[test]
-    fn the_market_holds_the_caches_closes_and_the_books_option_closes() {
+    fn the_market_holds_the_caches_closes_and_each_trackers_series_in_its_currency() {
         use bagholder_core::jiff::civil::date;
         use bagholder_core::{Dec, Money};
+        use bagholder_sources::cache::TrackerEvent;
+        use bagholder_sources::contract::Benchmark;
         let dir = tempfile::tempdir().unwrap();
         let now: Timestamp = "2026-09-24T20:00:00Z".parse().unwrap();
         let (book, _) = Book::open(&dir.path().join("book.db"), crate::app::APP_VERSION, now).unwrap();
         let (cache, _) = MarketCache::open(&dir.path().join("market.db"), crate::app::APP_VERSION, now).unwrap();
         let i = |n: u8| InstrumentId::parse(&format!("0192a000-0000-7000-8000-0000000000{n:02}")).unwrap();
         let conn = rusqlite::Connection::open(dir.path().join("book.db")).unwrap();
-        for (n, kind) in [(1, "security"), (2, "option"), (3, "option")] {
-            conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES (?1, ?2, 'USD', '2026-01-01T00:00:00Z')", rusqlite::params![i(n).to_string(), kind]).unwrap();
-        }
-        let usd = |s: &str| Money::new(Dec::parse(s).unwrap(), Currency::USD);
-        let source = bagholder_core::SourceName::named("cboe-options");
-        cache.store_closes(i(1), &[(date(2026, 9, 22), Dec::parse("5.1").unwrap())], Currency::USD, &source, now).unwrap();
-        book.store_close(i(2), date(2026, 9, 22), usd("0.37"), &source, now).unwrap();
+        conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES (?1, 'security', 'USD', '2026-01-01T00:00:00Z')", rusqlite::params![i(1).to_string()]).unwrap();
+        let d = |s: &str| Dec::parse(s).unwrap();
+        let yahoo = bagholder_core::SourceName::named("yahoo");
+        cache.store_closes(i(1), &[(date(2026, 9, 22), d("5.1"))], Currency::USD, &yahoo, now).unwrap();
+        cache.store_benchmark_closes(Benchmark::Sp500, &[(date(2026, 9, 18), d("660")), (date(2026, 9, 22), d("661"))], &yahoo, now).unwrap();
+        cache.store_benchmark_events(Benchmark::Sp500, &[(date(2026, 9, 18), TrackerEvent::Dividend(d("1.889")))], &yahoo, now).unwrap();
+        cache.store_benchmark_closes(Benchmark::Tsx, &[(date(2026, 9, 22), d("57.29"))], &yahoo, now).unwrap();
         let m = market_from_cache(&cache, &book).unwrap();
-        assert_eq!(m.closes[&i(1)][&date(2026, 9, 22)], usd("5.1"));
-        assert_eq!(m.closes[&i(2)][&date(2026, 9, 22)], usd("0.37"));
-        // a book close in another currency than its contract's is refused
-        book.store_close(i(3), date(2026, 9, 22), Money::new(Dec::parse("0.5").unwrap(), Currency::CAD), &source, now).unwrap();
-        assert!(market_from_cache(&cache, &book).unwrap_err().contains("not the contract's currency"));
+        assert_eq!(m.closes[&i(1)][&date(2026, 9, 22)], Money::new(d("5.1"), Currency::USD));
+        let spy = &m.benchmarks["SP500"];
+        assert_eq!((spy.currency, spy.closes.len(), spy.dividends[&date(2026, 9, 18)]), (Currency::USD, 2, d("1.889")));
+        assert_eq!(m.benchmarks["TSX"].currency, Currency::CAD);
+    }
+
+    /// Brief 06: each tracker's total return, as the engine chains it from the
+    /// closes and dividends Yahoo states, is Yahoo's own adjusted close, on every
+    /// session of a recorded year (to Yahoo's single-precision digits).
+    #[test]
+    fn each_trackers_total_return_is_yahoos_adjusted_close() {
+        use bagholder_engine::stat::benchmark::total_return_cad;
+        use bagholder_sources::adapters::yahoo;
+        use bagholder_sources::outcome::Outcome;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sources/tests/replies/yahoo");
+        let now: Timestamp = "2026-09-24T04:00:00Z".parse().unwrap();
+        for symbol in ["SPY", "XIC.TO", "XIU.TO"] {
+            let text = std::fs::read_to_string(dir.join(format!("{symbol}-2025-09-22-2026-09-23.json"))).unwrap();
+            let Outcome::Answered(chart) = yahoo::parse(&bagholder_sources::reply::parse(&text).unwrap(), symbol, now) else { panic!("{symbol}") };
+            // compared in the tracker's own currency: the conversion has its own test
+            let series = BenchmarkSeries { currency: Currency::CAD, closes: chart.closes.into_iter().collect(), dividends: chart.dividends.into_iter().collect(), splits: chart.splits.iter().map(|s| (s.day, (s.numerator, s.denominator))).collect() };
+            let levels = total_return_cad(&series, &Default::default(), &clock(now).unwrap());
+            // Yahoo's adjusted close per session, from the same reply
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let r = &v["chart"]["result"][0];
+            let offset = r["meta"]["gmtoffset"].as_i64().unwrap();
+            let adjusted: BTreeMap<Date, f64> = r["timestamp"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(r["indicators"]["adjclose"][0]["adjclose"].as_array().unwrap())
+                .filter_map(|(t, a)| Some((Timestamp::from_second(t.as_i64()? + offset).ok()?.to_zoned(TimeZone::UTC).date(), a.as_f64()?)))
+                .collect();
+            let days: Vec<&Date> = levels.keys().collect();
+            assert!(days.len() > 240, "{symbol}: {} sessions", days.len());
+            for w in days.windows(2) {
+                let ours = levels[w[1]] / levels[w[0]];
+                let theirs = adjusted[w[1]] / adjusted[w[0]];
+                assert!((ours / theirs - 1.0).abs() < 1e-6, "{symbol} {}: {ours} against Yahoo's {theirs}", w[1]);
+            }
+        }
     }
 
     #[test]

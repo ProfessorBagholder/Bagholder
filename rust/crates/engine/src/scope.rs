@@ -483,6 +483,7 @@ pub fn scope(
     cash_rows: &[CashRow],
     rates: &BTreeMap<InstrumentId, PayerRate>,
     equity: &BTreeMap<AccountId, AccountEquity>,
+    benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>,
 ) -> Scoped {
     let today = inputs.clock.today;
     let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
@@ -540,7 +541,7 @@ pub fn scope(
 
     let portfolio = portfolio(f, inputs, positions);
     let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
-    let equity = equity_block(f, inputs, equity, today);
+    let equity = equity_block(f, equity, benchmarks, today);
     Scoped {
         kpi: kpi(&in_scope),
         trades: in_scope.iter().map(|t| t.key.clone()).collect(),
@@ -784,7 +785,7 @@ fn in_currency_live(inputs: &Inputs, amount: Money, currency: Currency) -> Fig<M
 /// The equity series of the accounts in scope, and what it says. A day is in
 /// the series when every account in scope that has begun has a value that day;
 /// its return is the value-weighted return of the accounts that formed one.
-fn equity_block(f: &Filters, inputs: &Inputs, equity: &BTreeMap<AccountId, AccountEquity>, today: Date) -> EquityBlock {
+fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchmarks: &BTreeMap<String, crate::stat::benchmark::Levels>, today: Date) -> EquityBlock {
     let accounts: Vec<&AccountEquity> = equity.values().filter(|e| f.accounts.is_empty() || f.accounts.contains(&e.account)).collect();
     let mut values: BTreeMap<Date, (Dec, usize, Option<Dec>)> = BTreeMap::new();
     for e in &accounts {
@@ -802,7 +803,7 @@ fn equity_block(f: &Filters, inputs: &Inputs, equity: &BTreeMap<AccountId, Accou
     let complete: BTreeMap<Date, (Dec, Option<Dec>)> = values.into_iter().filter(|(d, (_, n, _))| *n == begun(*d)).map(|(d, (v, _, flow))| (d, (v, flow))).collect();
     let per_account: Vec<&[(Date, Ratio, Dec)]> = accounts.iter().map(|e| e.returns.as_slice()).collect();
     let series = returns::combine(&complete, &per_account);
-    let benchmark = inputs.market.benchmarks.get(&f.benchmark);
+    let benchmark = benchmarks.get(&f.benchmark);
     let years = returns::yearly_returns(&series, today, benchmark);
     EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series }
 }

@@ -1,6 +1,0 @@
-.
-data
-data.getTimeSeriesData
-data.getTimeSeriesData[]
-data.getTimeSeriesData[].close
-data.getTimeSeriesData[].dateTime

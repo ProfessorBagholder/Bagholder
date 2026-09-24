@@ -1,27 +1,26 @@
-//! Option contracts' closes into the book, and their quotes into the market
-//! cache, from Cboe's delayed chains (`docs/plans/stage-3a-sources.md`, "Option
-//! closes").
+//! Held option contracts' prices into the market cache, from Cboe's delayed
+//! chains, read only when needed (`SPEC.md` §2, Cboe; owner, 2026-09-24;
+//! `docs/plans/stage-3a-brief-06.md`).
 //!
-//! A contract's close is kept in the book because no source gives a past
-//! session's again. It is read from what the chain states, never from when the
-//! chain was published:
-//! - **The session.** A chain carries the session of its underlying's last trade
-//!   (its day, Eastern). Its prices are that session's closing ones once Cboe
-//!   made it after the session settled (16:30 Eastern, the closing prints fifteen
-//!   minutes delayed); a chain made earlier is in session and closes nothing.
-//! - **The close.** The closing bid/ask midpoint where both sides are quoted, as
-//!   the live price is (`SPEC.md` §2), else the last trade where its stated time
-//!   falls on the session, else none: the chain states no close for the contract
-//!   that day, and the day takes the broker's figure or waits.
-//! - **When it is due.** A held contract's latest settled session day, until the
-//!   book holds its close or a read made after it settled covered it. A chain
-//!   still carrying an older session writes that session's closes where the book
-//!   lacks them and leaves the day due; a chain that has moved past the day
-//!   settles it as not read, since no source states it again.
+//! A chain is read for the contracts a screen shows, never because a page
+//! opened. It is due when:
+//! - no chain of the underlying has been read; or
+//! - the chain held was made in session, and the market is open or its session
+//!   has settled (16:30 Eastern: options trade to 16:15, the prints fifteen
+//!   minutes delayed), so Cboe may have a later one or the final prices; or
+//! - the chain held carries a settled session's final prices, and a later
+//!   session is open: until then the final prices stand.
 //!
-//! One chain is asked per underlying, for its contracts due a close and those
-//! held today, which are quoted from it: the midpoint at the chain's time less
-//! Cboe's delay, else the last trade at its own time.
+//! A contract shown for the first time is due whatever the chain's age. A failed
+//! read waits out the source's rest. Every
+//! other read sends back the `Last-Modified` of the chain held, so Cboe answers
+//! with a chain only when it has a newer one, and otherwise with a bare 304.
+//!
+//! What a chain states is read as it states it (research 4): the session it
+//! carries is the day of the underlying's last trade, and it holds that
+//! session's final prices once Cboe made it after the session settled. A
+//! contract's price is the bid/ask midpoint where both are quoted, at the
+//! chain's time less Cboe's delay, else its last trade at that trade's time.
 //!
 //! A contract is found in the chain by the OCC symbol the book states for it;
 //! else by its terms, which must match exactly one contract. Where the book
@@ -29,40 +28,45 @@
 //! contract may have been adjusted, and without its OCC symbol it is not looked
 //! up by its terms.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use bagholder_core::jiff::civil::Date;
+use bagholder_core::jiff::civil::Weekday;
+use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
-use bagholder_core::{Dec, Money};
+use bagholder_core::{Dec, InstrumentId, Money};
 
-use crate::adapters::cboe_options::{self, Chain, ChainContract, HOST, LATE_BY};
-use crate::cache::StoredQuote;
+use crate::adapters::cboe_options::{self, Chain, ChainContract, ChainReply, HOST, LATE_BY};
+use crate::cache::{ChainRead, ReadRow, StoredQuote};
 use crate::contract::{DataKind, Market};
-use crate::market::{due_span, keep_read, latest_settled, settled_at, CloseState};
+use crate::market::{resting, settled_at};
 use crate::needs::ContractNeed;
-use crate::outcome::{Noted, Outcome, OutcomeKind};
+use crate::outcome::{Noted, Outcome};
 use crate::read::{Ctx, Result};
 
-/// The last day a contract can have a close: the last day it is held, and never
-/// after its expiry.
-fn last_day(c: &ContractNeed) -> Date {
-    c.to.min(c.expiry)
+/// Whether US options trade (their delayed prints still arriving) at `now`: a
+/// weekday from 09:30 to 16:30 Eastern.
+fn in_session(now: Timestamp, bank: &TimeZone) -> bool {
+    let z = now.to_zoned(bank.clone());
+    let minutes = i32::from(z.hour()) * 60 + i32::from(z.minute());
+    !matches!(z.weekday(), Weekday::Saturday | Weekday::Sunday) && (9 * 60 + 30..16 * 60 + 30).contains(&minutes)
 }
 
-/// The session day due for a contract's close, if any.
-fn due_day(ctx: &Ctx, c: &ContractNeed, recorded: Option<&BTreeMap<Date, Money>>) -> Result<Option<Date>> {
-    let Some(latest) = latest_settled(Market::UsOptions, last_day(c), ctx.now, ctx.bank) else { return Ok(None) };
-    if latest < c.from {
-        return Ok(None);
+/// Whether a chain holds its session's final prices: Cboe made it after the
+/// session settled.
+pub fn is_final(c: &ChainRead, bank: &TimeZone) -> bool {
+    settled_at(Market::UsOptions, c.session, bank).is_some_and(|s| c.made_at >= s)
+}
+
+/// Whether an underlying's chain is due for a contract on screen, given the
+/// chain last read.
+pub fn chain_due(held: Option<&ChainRead>, now: Timestamp, bank: &TimeZone) -> bool {
+    let Some(c) = held else { return true };
+    let open = in_session(now, bank);
+    if is_final(c, bank) {
+        // the final prices stand until a later session trades
+        return open && now.to_zoned(bank.clone()).date() > c.session;
     }
-    let state = CloseState { days: recorded.map(|m| m.keys().copied().collect()).unwrap_or_default(), reads: ctx.cache.reads(&c.id.to_string(), DataKind::OptionClose)? };
-    let rest = ctx.net.limiter().pace(HOST).rest;
-    Ok(due_span(Market::UsOptions, latest, last_day(c), &state, ctx.now, ctx.bank, rest).map(|(d, _)| d))
-}
-
-/// The close the chain states for a contract on its session, if any.
-pub fn close_of(k: &ChainContract, session: Date) -> Option<Dec> {
-    k.midpoint().or_else(|| k.last.filter(|(_, at)| at.date() == session).map(|(p, _)| p))
+    open || settled_at(Market::UsOptions, c.session, bank).is_some_and(|s| now >= s)
 }
 
 /// The contract in the chain, or why it cannot be told.
@@ -82,90 +86,63 @@ fn find<'a>(chain: &'a Chain, c: &ContractNeed, symbol: &str) -> std::result::Re
     }
 }
 
-fn note(ctx: &Ctx, c: &ContractNeed, outcome: Outcome<()>) -> Result<()> {
-    ctx.record(&cboe_options::source(), HOST, DataKind::OptionClose, Some(c.id), &Noted { outcome, shape_change: None })
-}
-
-/// The quote a chain gives a contract: the midpoint at the chain's time less
-/// Cboe's delay, else the last trade at its own time.
-fn quote_of(ctx: &Ctx, k: &ChainContract, made_at: Timestamp) -> Option<(Dec, Timestamp)> {
+/// The price a chain gives a contract, and when it was current: the midpoint
+/// at the chain's time less Cboe's delay, else the last trade at its own time.
+fn quote_of(bank: &TimeZone, k: &ChainContract, made_at: Timestamp) -> Option<(Dec, Timestamp)> {
     if let Some(mid) = k.midpoint() {
         return Some((mid, made_at - SignedDuration::try_from(LATE_BY).ok()?));
     }
     let (price, at) = k.last?;
-    Some((price, at.to_zoned(ctx.bank.clone()).ok()?.timestamp()))
+    Some((price, at.to_zoned(bank.clone()).ok()?.timestamp()))
 }
 
-/// Read each underlying's chain once for its contracts due a close or held today.
-pub fn read(ctx: &Ctx, contracts: &[ContractNeed]) -> Result<()> {
-    let recorded = ctx.book.closes()?;
-    let today = ctx.today();
-    let mut by: BTreeMap<&str, Vec<(&ContractNeed, Option<Date>)>> = BTreeMap::new();
-    for c in contracts {
-        let due = due_day(ctx, c, recorded.get(&c.id))?;
-        if due.is_some() || last_day(c) >= today {
-            by.entry(c.underlying.as_str()).or_default().push((c, due));
-        }
+/// Read the chain of each shown contract's underlying where it is due, and keep
+/// each contract's price with its time.
+pub fn read(ctx: &Ctx, shown: &[ContractNeed]) -> Result<()> {
+    let mut by: BTreeMap<&str, Vec<&ContractNeed>> = BTreeMap::new();
+    for c in shown.iter().filter(|c| c.expiry >= ctx.today()) {
+        by.entry(c.underlying.as_str()).or_default().push(c);
     }
     let source = cboe_options::source();
+    let priced: BTreeSet<InstrumentId> = ctx.cache.quotes()?.into_iter().filter(|q| q.source == source).map(|q| q.instrument).collect();
     for (symbol, group) in by {
-        let noted = cboe_options::ask(ctx.net, symbol);
-        ctx.record_detail(&source, HOST, DataKind::OptionClose, None, &noted, symbol)?;
-        let chain = match noted.outcome {
-            Outcome::Answered(chain) => chain,
-            other => {
-                let kind = other.kind();
-                for (c, due) in &group {
-                    if let Some(d) = due {
-                        keep_read(ctx, &c.id.to_string(), DataKind::OptionClose, &source, (*d, *d), kind, None)?;
-                    }
+        let held = ctx.cache.option_chain(symbol)?;
+        // a failed read waits out the source's rest, whatever is shown
+        let subject = format!("chain:{symbol}");
+        if resting(&ctx.cache.reads(&subject, DataKind::Quote)?, ctx.now, ctx.net.limiter().pace(HOST).rest) {
+            continue;
+        }
+        // a contract shown for the first time needs the chain whatever its age
+        let new = group.iter().any(|c| !priced.contains(&c.id));
+        if !new && !chain_due(held.as_ref(), ctx.now, ctx.bank) {
+            continue;
+        }
+        let since = held.as_ref().filter(|_| !new).and_then(|h| h.last_modified.as_deref());
+        let noted = cboe_options::ask(ctx.net, symbol, since);
+        ctx.record_detail(&source, HOST, DataKind::Quote, None, &noted, symbol)?;
+        let today = ctx.today();
+        ctx.cache.store_read(&subject, DataKind::Quote, &ReadRow { source: source.clone(), first: today, last: today, outcome: noted.outcome.kind(), at: ctx.now })?;
+        let (chain, last_modified) = match noted.outcome {
+            Outcome::Answered(ChainReply::Chain { chain, last_modified }) => (chain, last_modified),
+            Outcome::Answered(ChainReply::NotModified) => {
+                if let Some(h) = held {
+                    ctx.cache.store_option_chain(&ChainRead { received_at: ctx.now, ..h })?;
                 }
                 continue;
             }
+            _ => continue,
         };
-        let settled = settled_at(Market::UsOptions, chain.session, ctx.bank).is_some_and(|s| chain.made_at >= s);
-        for (c, due) in group {
-            let subject = c.id.to_string();
-            // a chain past the day due: that session's close is stated nowhere now
-            if let Some(d) = due.filter(|d| settled && chain.session > *d) {
-                let named = c.occ.clone().unwrap_or_else(|| format!("{symbol} {} {} {}", c.expiry, c.strike, c.right.as_str()));
-                note(ctx, c, Outcome::NotCarried(format!("{named} {d}: the chain has moved on to {}", chain.session)))?;
-                keep_read(ctx, &subject, DataKind::OptionClose, &source, (d, chain.session.yesterday().unwrap_or(d)), OutcomeKind::NotCarried, None)?;
-                if last_day(c) < chain.session {
-                    continue;
-                }
-            }
+        ctx.cache.store_option_chain(&ChainRead { underlying: symbol.to_string(), session: chain.session, made_at: chain.made_at, last_modified, received_at: ctx.now })?;
+        for c in group {
             let k = match find(&chain, c, symbol) {
                 Ok(k) => k,
                 Err(outcome) => {
-                    let kind = outcome.kind();
-                    note(ctx, c, outcome)?;
-                    // the chain settles the due day when it carries that session
-                    if let Some(d) = due.filter(|d| settled && chain.session == *d) {
-                        keep_read(ctx, &subject, DataKind::OptionClose, &source, (d, d), kind, None)?;
-                    }
+                    ctx.record(&source, HOST, DataKind::Quote, Some(c.id), &Noted { outcome, shape_change: None })?;
                     continue;
                 }
             };
-            if last_day(c) >= today {
-                if let Some((price, at)) = quote_of(ctx, k, chain.made_at) {
-                    ctx.cache.store_quote(&StoredQuote { instrument: c.id, source: source.clone(), price: Money::new(price, c.currency), change: None, change_pct: None, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: ctx.now })?;
-                }
-            }
-            if !settled {
-                continue;
-            }
-            let s = chain.session;
-            if c.from <= s && s <= last_day(c) {
-                let held = recorded.get(&c.id).and_then(|m| m.get(&s));
-                match (close_of(k, s), held) {
-                    (Some(close), None) => ctx.book.store_close(c.id, s, Money::new(close, c.currency), &source, ctx.now)?,
-                    (Some(close), Some(before)) if before.amount != close || before.currency != c.currency => {
-                        note(ctx, c, Outcome::Meaning(format!("{} {s}: {} stands, {close} came later", k.occ, before.amount)))?;
-                    }
-                    _ => {}
-                }
-                keep_read(ctx, &subject, DataKind::OptionClose, &source, (s, s), OutcomeKind::Answered, Some(s))?;
+            if let Some((price, at)) = quote_of(ctx.bank, k, chain.made_at) {
+                ctx.cache.store_quote(&StoredQuote { instrument: c.id, source: source.clone(), price: Money::new(price, c.currency), change: None, change_pct: None, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: ctx.now })?;
             }
         }
     }

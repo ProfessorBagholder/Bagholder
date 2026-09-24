@@ -6,7 +6,7 @@ use std::time::Duration;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, Dec, InstrumentId, Money, SourceName};
-use bagholder_sources::cache::{MarketCache, OutcomeRow, ReadRow, StoredQuote, MIGRATIONS, SCHEMA};
+use bagholder_sources::cache::{ChainRead, MarketCache, OutcomeRow, ReadRow, StoredQuote, TrackerEvent, MIGRATIONS, SCHEMA};
 use bagholder_sources::contract::{Benchmark, DataKind};
 use bagholder_sources::health::{self, State};
 use bagholder_sources::outcome::OutcomeKind;
@@ -110,15 +110,57 @@ fn a_closed_day_is_written_once_and_a_later_different_value_is_kept_beside_it() 
 }
 
 #[test]
-fn a_benchmark_level_is_written_once() {
+fn a_trackers_close_and_events_are_written_once() {
     let (_d, c) = open();
-    let fred = SourceName::named("fred");
-    c.store_benchmark(Benchmark::Sp500, &[(d("2026-09-22"), dec("6600.01"))], &fred, t("2026-09-23T12:00:00Z")).unwrap();
-    let later = c.store_benchmark(Benchmark::Sp500, &[(d("2026-09-22"), dec("6600.02")), (d("2026-09-23"), dec("6610"))], &fred, t("2026-09-24T12:00:00Z")).unwrap();
+    let yahoo = SourceName::named("yahoo");
+    c.store_benchmark_closes(Benchmark::Sp500, &[(d("2026-09-22"), dec("660.01"))], &yahoo, t("2026-09-23T12:00:00Z")).unwrap();
+    let later = c.store_benchmark_closes(Benchmark::Sp500, &[(d("2026-09-22"), dec("660.02")), (d("2026-09-23"), dec("661"))], &yahoo, t("2026-09-24T12:00:00Z")).unwrap();
     assert_eq!(later.len(), 1);
-    let levels = c.benchmarks().unwrap();
-    assert_eq!(levels[&Benchmark::Sp500][&d("2026-09-22")], dec("6600.01"));
+    let events = [(d("2026-09-19"), TrackerEvent::Dividend(dec("1.993"))), (d("2026-09-23"), TrackerEvent::Split { numerator: dec("2"), denominator: dec("1") })];
+    assert!(c.store_benchmark_events(Benchmark::Sp500, &events, &yahoo, t("2026-09-24T12:00:00Z")).unwrap().is_empty());
+    // the same again says nothing; a different dividend that day is kept beside it
+    assert!(c.store_benchmark_events(Benchmark::Sp500, &events, &yahoo, t("2026-09-24T13:00:00Z")).unwrap().is_empty());
+    let differs = c.store_benchmark_events(Benchmark::Sp500, &[(d("2026-09-19"), TrackerEvent::Dividend(dec("1.994")))], &yahoo, t("2026-09-24T14:00:00Z")).unwrap();
+    assert_eq!((differs[0].kind, differs[0].stands.as_str(), differs[0].later.as_str()), ("dividend", "1.993", "1.994"));
+    let series = c.benchmark_series().unwrap();
+    let spy = &series[&Benchmark::Sp500];
+    assert_eq!(spy.closes[&d("2026-09-22")], dec("660.01"));
+    assert_eq!(spy.dividends[&d("2026-09-19")], dec("1.993"));
+    assert_eq!(spy.splits[&d("2026-09-23")], (dec("2"), dec("1")));
     assert_eq!(c.benchmark_days(Benchmark::Sp500).unwrap().len(), 2);
+}
+
+#[test]
+fn migration_3_clears_the_index_levels_their_reads_and_the_option_closes_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("market.db");
+    let v2: &'static migrate::Schema = Box::leak(Box::new(migrate::Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..2] }));
+    {
+        let (conn, _) = migrate::open(v2, &path, "test", t("2026-09-24T00:00:00Z")).unwrap();
+        conn.execute("INSERT INTO benchmarks (benchmark, day, level, source, first, received_at) VALUES ('SP500', '2026-09-22', '6600.01', 'fred', 1, '2026-09-23T12:00:00Z')", []).unwrap();
+        for kind in ["benchmark", "option-close", "daily-close"] {
+            conn.execute("INSERT INTO reads (subject, kind, source, first, last, outcome, at) VALUES ('s', ?1, 'x', '2026-09-01', '2026-09-22', 'answered', '2026-09-23T12:00:00Z')", [kind]).unwrap();
+            conn.execute("INSERT INTO outcomes (source, host, kind, outcome, detail, at) VALUES ('x', 'h', ?1, 'answered', '', '2026-09-23T12:00:00Z')", [kind]).unwrap();
+        }
+    }
+    let (c, _) = MarketCache::open(&path, "test", t("2026-09-24T01:00:00Z")).unwrap();
+    assert!(c.benchmark_series().unwrap().is_empty());
+    assert!(c.reads("s", DataKind::Benchmark).unwrap().is_empty());
+    assert_eq!(c.reads("s", DataKind::DailyClose).unwrap().len(), 1, "other reads stay");
+    let kinds: Vec<String> = c.connection().prepare("SELECT kind FROM reads UNION ALL SELECT kind FROM outcomes").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert!(!kinds.iter().any(|k| k == "option-close"), "{kinds:?}");
+}
+
+#[test]
+fn the_chain_last_read_for_an_underlying_reads_back_exactly() {
+    let (_d, c) = open();
+    assert_eq!(c.option_chain("BBAI").unwrap(), None);
+    let read = ChainRead { underlying: "BBAI".into(), session: d("2026-09-22"), made_at: t("2026-09-23T03:30:07Z"), last_modified: Some("Wed, 23 Sep 2026 03:30:10 GMT".into()), received_at: t("2026-09-23T04:00:00Z") };
+    c.store_option_chain(&read).unwrap();
+    assert_eq!(c.option_chain("BBAI").unwrap(), Some(read.clone()));
+    let later = ChainRead { session: d("2026-09-23"), made_at: t("2026-09-23T20:40:00Z"), last_modified: None, ..read };
+    c.store_option_chain(&later).unwrap();
+    assert_eq!(c.option_chain("BBAI").unwrap(), Some(later));
 }
 
 #[test]

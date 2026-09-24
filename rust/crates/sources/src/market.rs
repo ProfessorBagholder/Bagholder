@@ -1,6 +1,6 @@
-//! Daily closes and benchmark levels into the market cache
+//! Daily closes and the benchmarks' trackers into the market cache
 //! (`docs/plans/stage-3a-sources.md`, "Quotes, daily closes and benchmarks",
-//! "Periodic reads").
+//! "Periodic reads"; `docs/plans/stage-3a-brief-06.md`).
 //!
 //! A session's close is read once it has settled: 16:30 Eastern for a listing
 //! (the closing auction printed), the end of the UTC day for a coin. A day is due
@@ -12,31 +12,27 @@
 //!
 //! The chains: a listing's closes from Yahoo, under the Yahoo form the book
 //! routes it by or its venue's; a coin's from the Exchange, its own pair's market
-//! first, else its USD market's (`SPEC.md` §2). The S&P 500 from FRED for FRED's
-//! trailing ten years and from Yahoo's `^GSPC` before them; the S&P/TSX Composite
-//! and 60 from TMX, from 2001-12-11. Each reaches back when the oldest day needed
-//! moves earlier.
+//! first, else its USD market's (`SPEC.md` §2). Each benchmark's tracker from
+//! Yahoo, with its dividends and splits (`SPEC.md` §2, Index). Each reaches back
+//! when the oldest day needed moves earlier.
 
 use std::collections::BTreeSet;
 
 use bagholder_core::instrument::RefScheme;
-use bagholder_core::jiff::civil::{date, Date, Weekday};
+use bagholder_core::jiff::civil::{Date, Weekday};
 use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
 use std::time::Duration;
 
 use bagholder_core::{Currency, Dec, InstrumentId, SourceName};
 
-use crate::adapters::{coinbase, fred, tmx, yahoo};
+use crate::adapters::{coinbase, yahoo};
 use crate::contract::{Benchmark, DataKind, Market};
 use crate::needs::CloseNeed;
-use crate::cache::ReadRow;
+use crate::cache::{ReadRow, TrackerEvent};
 use crate::outcome::{Noted, Outcome, OutcomeKind};
 use crate::read::{Ctx, Result};
 use crate::venue;
-
-/// The first day TMX holds the S&P/TSX Composite and 60 (research 5).
-pub const TSX_FIRST: Date = date(2001, 12, 11);
 
 fn is_weekend(d: Date) -> bool {
     matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday)
@@ -236,58 +232,42 @@ pub fn read_closes(ctx: &Ctx, needs: &[CloseNeed]) -> Result<()> {
     Ok(())
 }
 
-/// Read one benchmark's span from its source, storing what it holds and the read.
-fn benchmark_span(ctx: &Ctx, b: Benchmark, source: &SourceName, host: &str, asked: (Date, Date), noted: Noted<Vec<(Date, Dec)>>, detail: &str) -> Result<()> {
-    ctx.record_detail(source, host, DataKind::Benchmark, None, &noted, detail)?;
-    let kind = noted.outcome.kind();
-    let mut held_last = None;
-    if let Outcome::Answered(levels) = noted.outcome {
-        let levels: Vec<(Date, Dec)> = levels.into_iter().filter(|(d, _)| *d >= asked.0 && *d <= asked.1).collect();
-        held_last = levels.last().map(|l| l.0);
-        ctx.cache.store_benchmark(b, &levels, source, ctx.now)?;
-    }
-    keep_read(ctx, b.key(), DataKind::Benchmark, source, asked, kind, held_last)
-}
-
-/// Read the benchmark levels due, from `from` (the person's oldest day). Each
-/// index's days are due as a close's are: every settled session day from the
-/// oldest needed that is neither stored nor covered by a read made after it
-/// settled, so the span reaches back when the oldest day moves earlier.
+/// Read the benchmarks' trackers due, from `from` (the person's oldest day):
+/// each tracker's closes, dividends and splits from Yahoo. A tracker's days are
+/// due as an instrument's closes are: every settled session day from the oldest
+/// needed that is neither stored nor covered by a read made after it settled, so
+/// the span reaches back when the oldest day moves earlier. A dividend or split
+/// is stored with the span that holds its day.
 pub fn read_benchmarks(ctx: &Ctx, from: Date) -> Result<()> {
     let today = ctx.today();
-    let key = Benchmark::Sp500.key();
-    // the S&P 500: FRED's trailing ten years in one reply, which settles from its
-    // first day to its last; before FRED's first day, Yahoo's ^GSPC
-    let state = |b: Benchmark| -> Result<CloseState> { Ok(CloseState { days: ctx.cache.benchmark_days(b)?, reads: ctx.cache.reads(b.key(), DataKind::Benchmark)? }) };
-    let fred_reads: Vec<ReadRow> = state(Benchmark::Sp500)?.reads.into_iter().filter(|r| r.source == fred::source()).collect();
-    let fred_from = fred_reads.iter().filter(|r| r.outcome == OutcomeKind::Answered).map(|r| r.first).min().unwrap_or(from).max(from);
-    let fred_state = CloseState { days: ctx.cache.benchmark_days(Benchmark::Sp500)?, reads: fred_reads };
-    if let Some((_, to)) = due_span(Market::UnitedStates, fred_from, today, &fred_state, ctx.now, ctx.bank, rest_of(ctx, fred::HOST)) {
-        let noted = fred::ask(ctx.net);
-        // FRED answers its whole window whatever is asked: the read settles from
-        // the first day it held
-        let first = match &noted.outcome {
-            Outcome::Answered(l) => l.first().map_or(fred_from, |f| f.0),
-            _ => fred_from,
-        };
-        benchmark_span(ctx, Benchmark::Sp500, &fred::source(), fred::HOST, (first, to), noted, key)?;
-    }
-    let fred_first = ctx.cache.reads(key, DataKind::Benchmark)?.iter().filter(|r| r.source == fred::source() && r.outcome == OutcomeKind::Answered).map(|r| r.first).min();
-    if let Some(fred_first) = fred_first.filter(|f| *f > from) {
-        let before = fred_first.yesterday().unwrap_or(fred_first);
-        let gspc = CloseState { days: ctx.cache.benchmark_days(Benchmark::Sp500)?, reads: ctx.cache.reads(key, DataKind::Benchmark)?.into_iter().filter(|r| r.source == yahoo::source()).collect() };
-        if let Some((a, b)) = due_span(Market::UnitedStates, from, before, &gspc, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST)) {
-            let noted = yahoo::ask_span(ctx.net, "^GSPC", a, b, ctx.now);
-            let noted = Noted { outcome: noted.outcome.map(|c| c.closes), shape_change: noted.shape_change };
-            benchmark_span(ctx, Benchmark::Sp500, &yahoo::source(), yahoo::HOST, (a, b), noted, "^GSPC")?;
+    let source = yahoo::source();
+    for b in Benchmark::ALL {
+        let (symbol, currency) = b.tracker();
+        let state = CloseState { days: ctx.cache.benchmark_days(b)?, reads: ctx.cache.reads(b.key(), DataKind::Benchmark)? };
+        let Some((first, last)) = due_span(b.market(), from, today, &state, ctx.now, ctx.bank, rest_of(ctx, yahoo::HOST)) else { continue };
+        let mut noted = yahoo::ask_span(ctx.net, symbol, first, last, ctx.now);
+        if let Outcome::Answered(c) = &noted.outcome {
+            if c.currency != currency {
+                noted.outcome = Outcome::Meaning(format!("{symbol} is answered in {}, it trades in {currency}", c.currency));
+            }
         }
-    }
-    // the S&P/TSX Composite and 60 from TMX, from 2001-12-11
-    for (b, symbol) in [(Benchmark::Tsx, "^TSX"), (Benchmark::Tx60, "^TX60")] {
-        if let Some((a, z)) = due_span(Market::Canada, from.max(TSX_FIRST), today, &state(b)?, ctx.now, ctx.bank, rest_of(ctx, tmx::HOST)) {
-            let noted = tmx::ask_series(ctx.net, symbol, a, z);
-            benchmark_span(ctx, b, &tmx::source(), tmx::HOST, (a, z), noted, symbol)?;
+        ctx.record_detail(&source, yahoo::HOST, DataKind::Benchmark, None, &noted, symbol)?;
+        let kind = noted.outcome.kind();
+        let mut held_last = None;
+        if let Outcome::Answered(c) = noted.outcome {
+            let inside = |d: &Date| *d >= first && *d <= last;
+            let closes: Vec<(Date, Dec)> = c.closes.into_iter().filter(|(d, _)| inside(d)).collect();
+            held_last = closes.last().map(|c| c.0);
+            let mut events: Vec<(Date, TrackerEvent)> = c.dividends.into_iter().filter(|(d, _)| inside(d)).map(|(d, a)| (d, TrackerEvent::Dividend(a))).collect();
+            events.extend(c.splits.into_iter().filter(|s| inside(&s.day)).map(|s| (s.day, TrackerEvent::Split { numerator: s.numerator, denominator: s.denominator })));
+            let mut later: Vec<String> = ctx.cache.store_benchmark_closes(b, &closes, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: close {} stands, {} came later", d.day, d.stands, d.later)).collect();
+            later.extend(ctx.cache.store_benchmark_events(b, &events, &source, ctx.now)?.into_iter().map(|d| format!("{symbol} {}: {} {} stands, {} came later", d.day, d.kind, d.stands, d.later)));
+            for why in later {
+                // a later value for a closed day: the first stands, and this is a meaning outcome
+                ctx.record(&source, yahoo::HOST, DataKind::Benchmark, None, &Noted::<()> { outcome: Outcome::Meaning(why), shape_change: None })?;
+            }
         }
+        keep_read(ctx, b.key(), DataKind::Benchmark, &source, (first, last), kind, held_last)?;
     }
     Ok(())
 }

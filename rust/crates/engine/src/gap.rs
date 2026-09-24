@@ -57,7 +57,6 @@ pub enum Gap {
     /// A holding with no price: no quote from its own kind's source and no last close.
     PriceUnknown(InstrumentId),
     /// A holding with no close on a day the equity series needs one.
-    CloseUnknown { instrument: InstrumentId, day: Date },
     /// A payer whose own record of its distributions and schedule has not been
     /// read: its payer's page or announcement is what the figure waits on.
     PayerNotRead(InstrumentId),
@@ -98,7 +97,6 @@ impl Gap {
             Gap::CurrencyUnstated(_) => "currency-unstated",
             Gap::ValueUnstated(_) => "value-unstated",
             Gap::PriceUnknown(_) => "price-unknown",
-            Gap::CloseUnknown { .. } => "close-unknown",
             Gap::PayerNotRead(_) => "payer-not-read",
             Gap::NoDistributionYet(_) => "no-distribution-yet",
             Gap::ScheduleUnstated(_) => "schedule-unstated",
@@ -128,7 +126,6 @@ impl fmt::Display for Gap {
             Gap::CurrencyUnstated(t) => write!(f, "{t} is paid in another currency than its instrument's, at no stated rate"),
             Gap::ValueUnstated(t) => write!(f, "{t} states neither its cash nor its price"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),
-            Gap::CloseUnknown { instrument, day } => write!(f, "{instrument} has no close for {day}"),
             Gap::PayerNotRead(i) => write!(f, "the record {i}'s payer publishes of its distributions has not been read"),
             Gap::NoDistributionYet(i) => write!(f, "{i}'s payer states no cash distribution gone ex yet"),
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),

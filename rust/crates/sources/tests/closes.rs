@@ -1,4 +1,4 @@
-//! When closes and benchmark levels are read (on a clock handed in), and what a
+//! When closes and the benchmarks' trackers are read (on a clock handed in), and what a
 //! run stores in the market cache from recorded replies.
 
 mod common;
@@ -105,10 +105,9 @@ fn a_coins_day_settles_at_the_end_of_the_utc_day_every_day() {
 }
 
 const YAHOO: &str = "https://query1.finance.yahoo.com/v8/finance/chart/";
-const TMX: &str = "https://app-money.tmx.com/graphql";
 
 #[test]
-fn a_run_stores_closes_and_levels_and_asks_again_only_when_due() {
+fn a_run_stores_closes_and_asks_again_only_when_due() {
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-24T04:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
@@ -119,14 +118,7 @@ fn a_run_stores_closes_and_levels_and_asks_again_only_when_due() {
             .with(&format!("{YAHOO}ENB.TO?period1=1785715200&period2=1790208000&interval=1d&events=div%7Csplit"), 200, "yahoo", "ENB.TO-2026-08-03-2026-09-24.json")
             // BTC in CAD: its own pair has no market; its USD market answers
             .with("https://api.exchange.coinbase.com/products/BTC-CAD/candles?granularity=86400&start=2026-09-01T00:00:00Z&end=2026-09-04T00:00:00Z", 404, "coinbase-exchange", "candles-BTC-CAD-status-404.json")
-            .with("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400&start=2026-09-01T00:00:00Z&end=2026-09-04T00:00:00Z", 200, "coinbase-exchange", "candles-BTC-USD-2026-09-01-2026-09-05.json")
-            // the benchmarks: FRED, then ^GSPC before FRED's first day, then TMX's two series
-            .with("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500", 200, "fred", "SP500.csv")
-            .with(&format!("{YAHOO}%5EGSPC?period1=1474675200&period2=1790294400&interval=1mo&events=split"), 200, "yahoo", "GSPC-splits-2016-09-24-2026-09-24.json")
-            .with(&format!("{YAHOO}%5EGSPC?period1=1451865600&period2=1474675200&interval=1d&events=div%7Csplit"), 200, "yahoo", "GSPC-2016-01-04-2016-09-23.json")
-            .with_body(TMX, "\"symbol\":\"^TSX\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json")
-            // (the ^TSX reply stands in for ^TX60's here: the reader checks the days, not the index's name)
-            .with_body(TMX, "\"symbol\":\"^TX60\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json"),
+            .with("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400&start=2026-09-01T00:00:00Z&end=2026-09-04T00:00:00Z", 200, "coinbase-exchange", "candles-BTC-USD-2026-09-01-2026-09-05.json"),
     );
     let net = common::net(&recorded, "2026-09-24T04:00:00Z");
     let zone = eastern();
@@ -142,20 +134,10 @@ fn a_run_stores_closes_and_levels_and_asks_again_only_when_due() {
     assert_eq!(closes[&id(2)][&date(2026, 9, 1)], Money::new(Dec::parse("77398.69").unwrap(), Currency::USD));
     assert_eq!(cache.winner(id(1), DataKind::DailyClose).unwrap().map(|w| w.1), Some("ENB.TO".to_string()));
     assert_eq!(cache.winner(id(2), DataKind::DailyClose).unwrap().map(|w| w.1), Some("BTC-USD".to_string()));
-
-    market::read_benchmarks(&ctx, date(2016, 1, 4)).unwrap();
-    let levels = cache.benchmarks().unwrap();
-    assert_eq!(levels[&Benchmark::Sp500].get(&date(2016, 9, 26)), Some(&Dec::parse("2146.10").unwrap()));
-    assert!(levels[&Benchmark::Sp500].contains_key(&date(2016, 1, 4)), "the days before FRED's window from ^GSPC");
-    assert!(levels[&Benchmark::Tsx].contains_key(&date(2026, 9, 23)));
-    assert!(levels[&Benchmark::Tx60].contains_key(&date(2026, 9, 23)));
     let asked = recorded.asked.lock().unwrap().len();
-    // ^GSPC before FRED asks its later splits first: eight requests
-    assert_eq!(asked, 8);
 
     // the same moment again: nothing is due
     market::read_closes(&ctx, &needs).unwrap();
-    market::read_benchmarks(&ctx, date(2016, 1, 4)).unwrap();
     assert_eq!(recorded.asked.lock().unwrap().len(), asked);
 }
 
@@ -319,81 +301,84 @@ fn dec(s: &str) -> Dec {
     Dec::parse(s).unwrap()
 }
 
-const FRED: &str = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500";
+/// Each tracker's recorded reply, 2025-09-22 to 2026-09-23, under the URL the
+/// reader asks for that span.
+fn trackers(r: common::Recorded) -> common::Recorded {
+    let url = |symbol: &str| format!("{YAHOO}{symbol}?period1=1758499200&period2=1790208000&interval=1d&events=div%7Csplit");
+    r.with(&url("SPY"), 200, "yahoo", "SPY-2025-09-22-2026-09-23.json").with(&url("XIC.TO"), 200, "yahoo", "XIC.TO-2025-09-22-2026-09-23.json").with(&url("XIU.TO"), 200, "yahoo", "XIU.TO-2025-09-22-2026-09-23.json")
+}
 
-/// Read the benchmarks from 2026-09-01 at `now` on `recorded`, returning how many
+/// Read the benchmarks from 2025-09-22 at `now` on `recorded`, returning how many
 /// requests it made.
 fn benchmarks_at(book: &Book, cache: &MarketCache, recorded: &Arc<common::Recorded>, now: Timestamp) -> usize {
     let before = recorded.asked.lock().unwrap().len();
     let net = common::net(recorded, &now.to_string());
     let zone = eastern();
     let ctx = Ctx { book, cache, net: &net, now, bank: &zone };
-    market::read_benchmarks(&ctx, date(2026, 9, 1)).unwrap();
+    market::read_benchmarks(&ctx, date(2025, 9, 22)).unwrap();
     recorded.asked.lock().unwrap().len() - before
 }
 
-fn tmx_series(r: common::Recorded) -> common::Recorded {
-    // (the ^TSX reply stands in for ^TX60's here, as above)
-    r.with_body(TMX, "\"symbol\":\"^TSX\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json").with_body(TMX, "\"symbol\":\"^TX60\"", 200, "tmx", "series-TSX-2026-09-01-2026-09-23.json")
-}
-
 #[test]
-fn a_benchmarks_session_day_is_due_after_1630_eastern_until_read() {
+fn each_tracker_is_read_with_its_dividends_once_its_sessions_settle() {
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-23T20:30:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let zone = eastern();
-    let state = |b: Benchmark| {
-        // as `read_benchmarks` sees it: the S&P 500's FRED reads, each TMX index's reads
-        let reads = cache.reads(b.key(), DataKind::Benchmark).unwrap().into_iter().filter(|r| b != Benchmark::Sp500 || r.source.as_str() == "fred").collect();
-        CloseState { days: cache.benchmark_days(b).unwrap(), reads }
-    };
-    let due = |b: Benchmark, now: &str| market::due_span(if b == Benchmark::Sp500 { Market::UnitedStates } else { Market::Canada }, date(2026, 9, 1), date(2026, 9, 24), &state(b), t(now), &zone, REST);
+    let state = |b: Benchmark| CloseState { days: cache.benchmark_days(b).unwrap(), reads: cache.reads(b.key(), DataKind::Benchmark).unwrap() };
+    let due = |b: Benchmark, now: &str| market::due_span(b.market(), date(2025, 9, 22), date(2026, 9, 24), &state(b), t(now), &zone, REST);
     // nothing stored: at 16:29 Eastern on Wednesday the 23rd the days to the 22nd are due, at 16:30 the 23rd too
-    for b in [Benchmark::Sp500, Benchmark::Tsx, Benchmark::Tx60] {
-        assert_eq!(due(b, "2026-09-23T20:29:59Z"), Some((date(2026, 9, 1), date(2026, 9, 22))), "{b:?}");
-        assert_eq!(due(b, "2026-09-23T20:30:00Z"), Some((date(2026, 9, 1), date(2026, 9, 23))), "{b:?}");
+    for b in Benchmark::ALL {
+        assert_eq!(due(b, "2026-09-23T20:29:59Z"), Some((date(2025, 9, 22), date(2026, 9, 22))), "{b:?}");
+        assert_eq!(due(b, "2026-09-23T20:30:00Z"), Some((date(2025, 9, 22), date(2026, 9, 23))), "{b:?}");
     }
-    // read at 16:30: each index asked once, through the 23rd
-    let recorded = Arc::new(tmx_series(common::Recorded::new().with(FRED, 200, "fred", "SP500.csv")));
+    // read at 16:30: each tracker asked once, through the 23rd
+    let recorded = Arc::new(trackers(common::Recorded::new()));
     assert_eq!(benchmarks_at(&book, &cache, &recorded, at), 3);
-    let levels = cache.benchmarks().unwrap();
-    assert_eq!(levels[&Benchmark::Sp500][&date(2026, 9, 23)], dec("7706.03"));
-    assert_eq!(levels[&Benchmark::Tsx][&date(2026, 9, 23)], dec("35751.43"));
-    assert_eq!(levels[&Benchmark::Tx60][&date(2026, 9, 23)], dec("35751.43"));
-    assert_eq!(levels[&Benchmark::Tsx][&date(2026, 9, 1)], dec("35825.73"));
+    let series = cache.benchmark_series().unwrap();
+    let spy = &series[&Benchmark::Sp500];
+    assert_eq!(spy.closes[&date(2026, 9, 23)], dec("767.8099975585938"));
+    assert_eq!(spy.closes[&date(2025, 9, 22)], dec("666.8400268554688"));
+    assert_eq!(spy.dividends, [(date(2025, 12, 19), dec("1.993")), (date(2026, 3, 20), dec("1.797")), (date(2026, 6, 18), dec("1.904")), (date(2026, 9, 18), dec("1.889"))].into());
+    assert!(spy.splits.is_empty());
+    let xic = &series[&Benchmark::Tsx];
+    assert_eq!(xic.closes[&date(2026, 9, 23)], dec("57.290000915527344"));
+    assert_eq!(xic.dividends[&date(2025, 9, 24)], dec("0.281"));
+    // Yahoo states no close for XIC on the 22nd: the read covered it, and it is not asked again
+    assert!(!xic.closes.contains_key(&date(2026, 9, 22)));
+    assert!(series[&Benchmark::Tx60].closes.contains_key(&date(2026, 9, 23)));
     // once read, not due again: that evening, the next morning, nor at 16:29 on the 24th
     for now in ["2026-09-23T23:00:00Z", "2026-09-24T14:00:00Z", "2026-09-24T20:29:59Z"] {
         assert_eq!(benchmarks_at(&book, &cache, &recorded, t(now)), 0, "{now}");
     }
-    // at 16:30 on the 24th, a session day not stored, the 24th alone is due for each index
-    for b in [Benchmark::Sp500, Benchmark::Tsx, Benchmark::Tx60] {
-        assert_eq!(due(b, "2026-09-24T20:29:59Z"), None, "{b:?}");
+    // at 16:30 on the 24th the 24th alone is due for each tracker
+    for b in Benchmark::ALL {
         assert_eq!(due(b, "2026-09-24T20:30:00Z"), Some((date(2026, 9, 24), date(2026, 9, 24))), "{b:?}");
     }
 }
 
 #[test]
-fn a_benchmarks_failed_read_is_not_asked_again_within_its_sources_rest() {
+fn a_tracker_answered_in_another_currency_is_refused_and_asked_again_after_its_rest() {
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-23T20:30:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    let failing = Arc::new(tmx_series(common::Recorded::new().with(FRED, 200, "fred", "wrong-meaning-SP500-negative.csv")));
-    let rest = common::net(&failing, "2026-09-23T20:30:00Z").limiter().pace(bagholder_sources::adapters::fred::HOST).rest;
-    // FRED's reply fails its meaning: nothing of the S&P 500 written, the failure recorded
+    let url = format!("{YAHOO}SPY?period1=1758499200&period2=1790208000&interval=1d&events=div%7Csplit");
+    // SPY's reply stating its prices in CAD
+    let failing = Arc::new(trackers(common::Recorded::new().with(&url, 200, "yahoo", "wrong-meaning-SPY-in-CAD.json")));
+    let rest = common::net(&failing, "2026-09-23T20:30:00Z").limiter().pace(bagholder_sources::adapters::yahoo::HOST).rest;
     assert_eq!(benchmarks_at(&book, &cache, &failing, at), 3);
-    assert!(!cache.benchmarks().unwrap().contains_key(&Benchmark::Sp500));
-    let fred = cache.outcomes(&SourceName::named("fred")).unwrap();
-    assert_eq!((fred[0].kind, fred[0].outcome), (DataKind::Benchmark, OutcomeKind::Meaning));
-    // within the rest nothing is asked; the TSX's indexes are read and not due
+    assert!(!cache.benchmark_series().unwrap().contains_key(&Benchmark::Sp500));
+    let yahoo = cache.outcomes(&SourceName::named("yahoo")).unwrap();
+    assert!(yahoo.iter().any(|o| o.kind == DataKind::Benchmark && o.outcome == OutcomeKind::Meaning && o.detail.contains("SPY is answered in CAD")), "{yahoo:?}");
+    // within the rest nothing is asked; the TSX's trackers are read and not due
     let within = at + bagholder_core::jiff::SignedDuration::try_from(rest).unwrap() - bagholder_core::jiff::SignedDuration::from_secs(1);
     assert_eq!(benchmarks_at(&book, &cache, &failing, within), 0);
-    // once the rest is over FRED is asked again, and its answer written
-    let answering = Arc::new(common::Recorded::new().with(FRED, 200, "fred", "SP500.csv"));
+    // once the rest is over SPY is asked again, and its answer written
+    let answering = Arc::new(trackers(common::Recorded::new()));
     let after = at + bagholder_core::jiff::SignedDuration::try_from(rest).unwrap();
     assert_eq!(benchmarks_at(&book, &cache, &answering, after), 1);
-    assert_eq!(*answering.asked.lock().unwrap(), vec![FRED.to_string()]);
-    assert_eq!(cache.benchmarks().unwrap()[&Benchmark::Sp500][&date(2026, 9, 23)], dec("7706.03"));
+    assert_eq!(*answering.asked.lock().unwrap(), vec![url]);
+    assert_eq!(cache.benchmark_series().unwrap()[&Benchmark::Sp500].closes[&date(2026, 9, 23)], dec("767.8099975585938"));
 }

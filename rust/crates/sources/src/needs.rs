@@ -1,7 +1,8 @@
 //! What the figures need read, as the caller works it out from the book and the
 //! engine (this crate depends on neither the engine nor the server): the
-//! currencies converted and from when, the instruments whose closes a figure
-//! uses and from when, the payers held, and the span the benchmarks must cover.
+//! currencies converted and from when, the closes that decide a contract's
+//! expiry, the contracts whose prices are shown, the payers held, and the span
+//! the benchmarks must cover.
 
 use bagholder_core::instrument::OptionRight;
 use bagholder_core::jiff::civil::Date;
@@ -11,13 +12,12 @@ use crate::contract::Listing;
 use crate::rates::Need;
 
 /// An instrument whose daily closes a figure uses, and the days it needs them:
-/// from the first day it was held (or the one day an expiring contract's
-/// underlying is needed on) to its last.
+/// the one day an expiring contract's underlying is needed on, or, for a chart
+/// someone opens, its span.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CloseNeed {
     pub listing: Listing,
     pub from: Date,
-    /// The last day a close is needed: today while it is held.
     pub to: Date,
 }
 
@@ -29,7 +29,7 @@ pub struct PayerNeed {
     pub name: Option<String>,
 }
 
-/// An option contract whose close a figure uses, as its chain is asked for it.
+/// An option contract whose price is shown, as its chain is asked for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractNeed {
     pub id: InstrumentId,
@@ -45,16 +45,16 @@ pub struct ContractNeed {
     /// held, where the book records one: the contract may have been adjusted,
     /// and only its OCC symbol then says which contract it is.
     pub event_on: Option<Date>,
-    pub from: Date,
-    /// The last day it is held: today while it is.
-    pub to: Date,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Needs {
     pub rates: Vec<Need>,
     pub closes: Vec<CloseNeed>,
+    /// The contracts held today, whose prices are shown.
     pub contracts: Vec<ContractNeed>,
+    /// The listings held today, quoted.
+    pub held: Vec<Listing>,
     pub payers: Vec<PayerNeed>,
     /// The first day the benchmarks must cover: the person's oldest day.
     pub benchmarks_from: Option<Date>,

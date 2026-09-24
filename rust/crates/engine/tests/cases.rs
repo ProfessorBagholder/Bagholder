@@ -397,7 +397,9 @@ fn run(path: &Path) -> Vec<String> {
             let account = b.ids.account(s(&want, "account").unwrap());
             let d = day(s(&want, "day").unwrap());
             let Some(eq) = f.equity.get(&account) else {
-                c.fail(format!("no equity for {}", s(&want, "account").unwrap()));
+                if want.get("value") != Some(&Value::Null) {
+                    c.fail(format!("no equity for {}", s(&want, "account").unwrap()));
+                }
                 continue;
             };
             let point = eq.points.iter().find(|p| p.day == d);
@@ -407,21 +409,15 @@ fn run(path: &Path) -> Vec<String> {
                 (Some(Value::Null), Some(p)) => c.fail(format!("{what}: expected no value, got {}", p.value.to_text())),
                 (Some(v), Some(p)) => {
                     c.figure(&what, v, &Ok(p.value));
-                    if let Some(src) = s(&want, "source") {
-                        let got = if p.source == bagholder_engine::equity::ValueSource::Own { "own" } else { "broker" };
-                        if got != src {
-                            c.fail(format!("{what}: expected source {src}, got {got}"));
-                        }
+                    match (want.get("flow"), p.flow) {
+                        (None, _) => {}
+                        (Some(Value::Null), None) => {}
+                        (Some(f), Some(got)) => c.figure(&format!("{what} flow"), f, &Ok(got)),
+                        (Some(f), got) => c.fail(format!("{what}: expected flow {f}, got {got:?}")),
                     }
                 }
                 (Some(v), None) => c.fail(format!("{what}: expected {v}, got no value")),
                 (None, _) => {}
-            }
-            if let Some(v) = want.get("own_gaps") {
-                match eq.own.get(&d) {
-                    Some(Err(g)) => c.words(&format!("{what} own gaps"), v, gaps_words(g)),
-                    other => c.fail(format!("{what}: expected own gaps {v}, got {other:?}")),
-                }
             }
             if let Some(v) = want.get("return") {
                 let r = eq.returns.iter().find(|(rd, _, _)| *rd == d).map(|(_, r, _)| *r);
@@ -585,7 +581,7 @@ fn every_case_gives_the_figures_the_spec_requires() {
 /// name, for every case. The figures are scanned through their debug form, which prints
 /// every gap they carry wherever it sits.
 #[test]
-fn the_needs_name_every_rate_and_close_a_figure_waits_on() {
+fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
     use bagholder_core::Currency;
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases");
     let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
@@ -621,15 +617,6 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on() {
                         failures.push(format!("{name}: a figure waits on the {c} rate for {day}, which the needs do not name"));
                     }
                 }
-                for part in text.split("CloseUnknown { instrument: ").skip(1) {
-                    let id: String = part.trim_start_matches("InstrumentId(").chars().take_while(|c| c.is_ascii_hexdigit() || *c == '-').collect();
-                    let i = InstrumentId::parse(&id).unwrap_or_else(|_| panic!("{name}: {part:.60}"));
-                    let day: bagholder_core::jiff::civil::Date = part.split("day: ").nth(1).unwrap()[..10].parse().unwrap();
-                    seen += 1;
-                    if !needs.closes.get(&i).is_some_and(|(from, to)| *from <= day && day <= *to) {
-                        failures.push(format!("{name}: a figure waits on {i}'s close for {day}, which the needs do not name"));
-                    }
-                }
                 // every security held today whose rate a figure states or waits on
                 let today = b.inputs.clock.today;
                 for i in f.payers.keys() {
@@ -640,13 +627,29 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on() {
                         failures.push(format!("{name}: {i} is held and pays, and the needs do not name it a payer"));
                     }
                 }
+                // closes are read only to decide an expiry: an underlying on its
+                // contract's expiry day
+                for (i, days) in &needs.closes {
+                    for day in days {
+                        seen += 1;
+                        if !b.inputs.ledger.instruments.values().any(|x| x.terms.as_ref().is_some_and(|t| t.underlying == *i && t.expiry == *day)) {
+                            failures.push(format!("{name}: the needs name {i}'s close of {day}, which decides no expiry"));
+                        }
+                    }
+                }
+                // every instrument held today is quoted, and nothing else
+                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_zero()).map(|(_, x)| *x).collect();
+                seen += 1;
+                if needs.held != held {
+                    failures.push(format!("{name}: held today {held:?}, the needs name {:?}", needs.held));
+                }
                 // a contract past its expiry with nothing on the record waits on its
                 // underlying's close that day
                 for part in text.split("NoExpiryRecord(InstrumentId(").skip(1) {
                     let i = InstrumentId::parse(&part[..36]).unwrap_or_else(|_| panic!("{name}: {part:.60}"));
                     let terms = b.inputs.ledger.instruments[&i].terms.as_ref().expect("a contract has terms");
                     seen += 1;
-                    if !needs.closes.get(&terms.underlying).is_some_and(|(from, to)| *from <= terms.expiry && terms.expiry <= *to) {
+                    if !needs.closes.get(&terms.underlying).is_some_and(|days| days.contains(&terms.expiry)) {
                         failures.push(format!("{name}: {i} waits on its underlying's close for {}, which the needs do not name", terms.expiry));
                     }
                 }

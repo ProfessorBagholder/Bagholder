@@ -8,7 +8,7 @@ use bagholder_core::jiff::civil::Date;
 use bagholder_core::Dec;
 
 /// One day of the series in scope: its value, and the day's return where one
-/// was formed (between two days of the same source, `equity::daily_returns`).
+/// was formed (between two consecutive stated days, `equity::account_equity`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Day {
     pub day: Date,
@@ -73,16 +73,16 @@ fn peak(series: &[Day]) -> f64 {
 
 /// The index over the same span: its last level on or before the end over its
 /// last level before the start (or its first in the span).
-pub fn benchmark_return(levels: &BTreeMap<Date, Dec>, from: Date, to: Date) -> Option<f64> {
-    let start = levels.range(..from).next_back().or_else(|| levels.range(from..=to).next()).map(|(_, v)| v.to_f64())?;
-    let end = levels.range(..=to).next_back().map(|(_, v)| v.to_f64())?;
+pub fn benchmark_return(levels: &BTreeMap<Date, f64>, from: Date, to: Date) -> Option<f64> {
+    let start = levels.range(..from).next_back().or_else(|| levels.range(from..=to).next()).map(|(_, v)| *v)?;
+    let end = levels.range(..=to).next_back().map(|(_, v)| *v)?;
     (start != 0.0).then(|| end / start - 1.0)
 }
 
 /// Every calendar year of the series, newest last. A balance under 1 % of the
 /// series' peak is pre-history: a year that never clears it is left out, and a
 /// year that first clears it part way through is measured from that first day.
-pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<Date, Dec>>) -> Vec<YearReturn> {
+pub fn yearly_returns(series: &[Day], today: Date, benchmark: Option<&BTreeMap<Date, f64>>) -> Vec<YearReturn> {
     let floor = peak(series) * 0.01;
     let mut years: Vec<i16> = series.iter().map(|d| d.day.year()).collect();
     years.dedup();

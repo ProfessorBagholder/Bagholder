@@ -1,6 +1,7 @@
-//! The facts the figures use (`docs/plans/stage-3a-sources.md`, "The command"):
-//! which currencies the engine converts and from which day, which instruments'
-//! closes it values and over which days, and which payers are held. The readers
+//! The facts the figures use (`docs/plans/stage-3a-sources.md`, "The command";
+//! `docs/plans/stage-3a-brief-06.md`): which currencies the engine converts and
+//! from which day, which closes decide a contract's expiry, which instruments are
+//! held today (their prices are quoted), and which payers are held. The readers
 //! read what this names and nothing else, so it is worked out here, beside the
 //! figures that use it, and not guessed by the caller.
 
@@ -17,10 +18,12 @@ use crate::ledger::Matched;
 pub struct FactNeeds {
     /// Each currency converted to CAD, and the oldest day it is converted on.
     pub rates: BTreeMap<Currency, Date>,
-    /// Each instrument whose close a figure uses, and the first and last day it
-    /// does: the days it is held (to today while it is held), and the expiry day
-    /// of a contract that expired open, for its underlying.
-    pub closes: BTreeMap<InstrumentId, (Date, Date)>,
+    /// Each instrument whose close a figure uses, and the days it does: an
+    /// underlying on the expiry day of each contract held into it, whose close
+    /// says whether the contract expired worthless.
+    pub closes: BTreeMap<InstrumentId, BTreeSet<Date>>,
+    /// Each instrument held today in some account: its price is quoted.
+    pub held: BTreeSet<InstrumentId>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,
     /// The person's oldest day: the span the benchmarks must cover.
@@ -36,9 +39,8 @@ impl FactNeeds {
         *e = (*e).min(day);
     }
 
-    fn close(&mut self, i: InstrumentId, from: Date, to: Date) {
-        let e = self.closes.entry(i).or_insert((from, to));
-        *e = (e.0.min(from), e.1.max(to));
+    fn close(&mut self, i: InstrumentId, day: Date) {
+        self.closes.entry(i).or_default().insert(day);
     }
 }
 
@@ -82,35 +84,50 @@ pub fn fact_needs(inputs: &Inputs, matched: &Matched) -> FactNeeds {
             n.first_day = Some(n.first_day.map_or(*d, |f| f.min(*d)));
         }
     }
-    // each holding, valued at its close in its own currency over the days it is held
-    for ((_, i), units) in &matched.units {
+    // each holding: its currency converted from its first day held (its lots'
+    // cost and value in CAD), quoted while held today, a security's payer read,
+    // and a contract held into its expiry decided by its underlying's close that day
+    for ((account, i), units) in &matched.units {
+        let held_today = !matched.units_on(*account, *i, today).is_zero();
         for (from, to) in held_spans(units, today) {
-            n.close(*i, from, to);
             if let Some(c) = currency(i) {
                 n.rate(c, from);
             }
-            // a coin is closed in its USD market where its own pair has none
-            if kind(i) == Some(InstrumentKind::Crypto) {
-                n.rate(Currency::USD, from);
+            if held_today && to >= today {
+                n.held.insert(*i);
+                if kind(i) == Some(InstrumentKind::Security) {
+                    n.payers.insert(*i);
+                }
+                // a holding priced by its last stored close in another currency
+                // (a coin's USD market's), converted on that close's day
+                if let Some((day, m)) = inputs.market.closes.get(i).and_then(|c| c.range(..=today).next_back()) {
+                    if Some(m.currency) != currency(i) {
+                        n.rate(m.currency, *day);
+                    }
+                }
             }
-            if kind(i) == Some(InstrumentKind::Security) && to >= today {
-                n.payers.insert(*i);
-            }
-            // a contract held into its expiry: its underlying's close that day
-            // says whether it expired worthless
             if let Some(terms) = ledger.instruments.get(i).and_then(|x| x.terms.as_ref()) {
                 if terms.expiry >= from && terms.expiry <= to.min(today) {
-                    n.close(terms.underlying, terms.expiry, terms.expiry);
+                    n.close(terms.underlying, terms.expiry);
                 }
             }
         }
     }
     // a close stored in another currency than its instrument's is converted on its day
     for (i, closes) in &inputs.market.closes {
-        let Some((from, to)) = n.closes.get(i).copied() else { continue };
-        for (day, m) in closes.range(from..=to) {
+        let Some(days) = n.closes.get(i).cloned() else { continue };
+        for (day, m) in closes.iter().filter(|(d, _)| days.contains(d)) {
             if Some(m.currency) != currency(i) {
                 n.rate(m.currency, *day);
+            }
+        }
+    }
+    // a benchmark's tracker in another currency, converted from the person's
+    // oldest day or its own first session, whichever is later
+    if let Some(first) = n.first_day {
+        for s in inputs.market.benchmarks.values() {
+            if let Some(d) = s.closes.keys().find(|d| **d >= first) {
+                n.rate(s.currency, *d);
             }
         }
     }

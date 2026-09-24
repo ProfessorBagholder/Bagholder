@@ -1,27 +1,53 @@
 [
   {
     "name": "a year's return chains its daily returns net of the money moved; the index over the same span; the drawdown",
-    "spec": "SPEC.md §2 Equity and returns: yearly return chain-linked, net of deposits; the index over the same span; max drawdown of the flow-adjusted index",
+    "spec": "SPEC.md §2 Equity and returns: Yearly return chain-linked, net of deposits; Index over the same span; Max drawdown of the flow-adjusted index",
     "working": [
-      "Dec 31: 1,000 deposited, 10 X bought for 1,000, X closes 100 → 1,000",
-      "Jan 1 (no close; Dec 31's): 1,000, return 0. Jan 2: X 110 → 1,100, return 0.1. Jan 3–4: 1,100, return 0",
-      "Jan 5: 500 deposited, X 110 → 1,600, return (1,600 − 500) ÷ 1,100 − 1 = 0",
-      "Jan 6 (today, X's last close 99): 990 + 500 = 1,490, return 1,490 ÷ 1,600 − 1 = −0.06875",
-      "2026: Dec 31 cleared 1 % of the peak, so the year runs from Jan 1: 1.1 × 0.93125 − 1 = 0.024375",
-      "S&P 500 5,000 on Dec 31 and 5,100 on Jan 6: 0.02",
-      "the index peaks at 1.1 (last on Jan 5) and falls to 1.024375 on Jan 6: −0.06875"
+      "all-time peak 1600, 1 % = 16: every balance clears it, so 2026 is measured from 1 January, over 2025-12-31's 1000 (the last stated day before it)",
+      "daily returns: 01-01 1000 ÷ 1000 − 1 = 0; 01-02 1100 ÷ 1000 − 1 = 0.1",
+      "01-05: 500 deposited, counted at the end of the day: (1600 − 500) ÷ 1100 − 1 = 0",
+      "01-06: 1490 ÷ 1600 − 1 = −0.06875",
+      "2026: 1 × 1.1 × 1 × 0.93125 − 1 = 0.024375",
+      "index over the same span, from 1 January over the last close before it (2025-12-31, 500) to 2026-01-06: 510 ÷ 500 − 1 = 0.02",
+      "flow-adjusted index 1, 1, 1.1, 1.1, 1.024375: peak 1.1 (01-02), trough 1.024375 on 01-06, 1.024375 ÷ 1.1 − 1 = −0.06875"
     ],
     "today": "2026-01-06",
     "accounts": [{"id": "A"}],
-    "instruments": [{"id": "X"}],
-    "closes": {"X": {"2025-12-31": "100", "2026-01-02": "110", "2026-01-05": "110", "2026-01-06": "99"}},
-    "benchmarks": {"SP500": {"2025-12-31": "5000", "2026-01-06": "5100"}},
-    "transactions": [
-      {"id": "t1", "account": "A", "day": "2025-12-31", "at": "2025-12-31T15:00:00Z", "kind": "deposit", "cash": "1000"},
-      {"id": "t2", "account": "A", "day": "2025-12-31", "at": "2025-12-31T16:00:00Z", "kind": "buy", "instrument": "X", "qty": "10", "cash": "-1000"},
-      {"id": "t3", "account": "A", "day": "2026-01-05", "at": "2026-01-05T15:00:00Z", "kind": "deposit", "cash": "500"}
-    ],
+    "brokers": {"A": {
+      "net_value": {"2025-12-31": "1000", "2026-01-01": "1000", "2026-01-02": "1100", "2026-01-05": "1600", "2026-01-06": "1490"},
+      "net_deposits": {"2025-12-31": "1000", "2026-01-01": "1000", "2026-01-02": "1000", "2026-01-05": "1500", "2026-01-06": "1500"}
+    }},
+    "benchmarks": {"SP500": {"currency": "CAD", "closes": {"2025-12-31": "500", "2026-01-02": "505", "2026-01-05": "505", "2026-01-06": "510"}}},
     "expect": {"kpi": {"years": [{"year": 2026, "r": 0.024375, "benchmark": 0.02, "from": "2026-01-01"}], "drawdown": -0.06875, "drawdown_at": "2026-01-06"}}
+  },
+  {
+    "name": "the index is a total return in CAD: a dividend stays in it, a split is counted back, a USD tracker moves with each session's rate",
+    "spec": "SPEC.md §2 Equity and returns: Index; Yearly return",
+    "working": [
+      "account: measured from 1 January over 2025-12-31's 1000 (all-time peak 1100, every balance clears 11); 1100 on 2026-01-09, flow 0: r = 0.1",
+      "index, each session close ÷ (previous close − dividend ex that session), in CAD at each session's rate:",
+      "01-02: 99 × 1.40 ÷ ((100 − 1) × 1.40) = 1",
+      "01-05: 99 ÷ 99 = 1",
+      "01-06: 99 × 1.47 ÷ (99 × 1.40) = 1.05",
+      "01-07: split 2:1 counted back, 50 × 2 ÷ 1 = 100; 100 × 1.47 ÷ (99 × 1.47) = 100/99",
+      "01-08, 01-09: 1",
+      "2026: 1.05 × 100/99 − 1 = 105/99 − 1 = 2/33 = 0.060606…",
+      "drawdown: the account's flow-adjusted index goes 1 → 1.1 and never falls: 0, no trough date"
+    ],
+    "today": "2026-01-09",
+    "now": "2026-01-09T23:00:00Z",
+    "accounts": [{"id": "A"}],
+    "rates": {"USD": {"2025-12-31": "1.40", "2026-01-02": "1.40", "2026-01-05": "1.40", "2026-01-06": "1.47", "2026-01-07": "1.47", "2026-01-08": "1.47", "2026-01-09": "1.47"}},
+    "covered": {"USD": [["2025-12-29", "2026-01-09"]]},
+    "series": {"USD": [["2017-01-03", "2026-12-31"]]},
+    "brokers": {"A": {"net_value": {"2025-12-31": "1000", "2026-01-09": "1100"}, "net_deposits": {"2025-12-31": "1000", "2026-01-09": "1000"}}},
+    "benchmarks": {"SP500": {
+      "currency": "USD",
+      "closes": {"2025-12-31": "100", "2026-01-02": "99", "2026-01-05": "99", "2026-01-06": "99", "2026-01-07": "50", "2026-01-08": "50", "2026-01-09": "50"},
+      "dividends": {"2026-01-02": "1"},
+      "splits": {"2026-01-07": "2:1"}
+    }},
+    "expect": {"kpi": {"years": [{"year": 2026, "r": 0.1, "benchmark": 0.06060606060606061, "from": "2026-01-01"}], "drawdown": 0}}
   },
   {
     "name": "the tiles over one account",

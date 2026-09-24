@@ -32,6 +32,7 @@ A test in the old crates that records one of these as it behaves today is named 
 - **A position marked at the person's own fill** when no price was read. Guarded: scan for `last_fill`, `LastFill`.
 - **A tolerance for coins sold beyond what was held.** Guarded: scan for `fn dust`, `0.01 *`.
 - **A residue under a dollar dropped.** Guarded: scan for `< 1.0)`.
+- **A price-only index beside a total return.** The yearly return keeps dividends in the account's value, while its S&P 500 and S&P/TSX benchmarks were index levels without dividends (FRED, TMX), so every year flattered the account by the index's yield. Guarded: the tracker's total return in CAD (`engine/src/stat/benchmark.rs`), checked against Yahoo's adjusted close on recorded replies; case "the index is a total return in CAD" (`returns_filters_checks.json`).
 - **Payout frequency assumed monthly, or worked out from past distribution dates** (which showed Ninepoint's funds as monthly for six weeks after they went twice a month). Guarded: scan for `payments_per_year`; case "without the payer's own record nothing is worked out from the payments" (`positions_and_income.json`).
 
 ## Orders and brackets (stage 4)

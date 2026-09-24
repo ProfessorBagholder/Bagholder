@@ -49,34 +49,3 @@ fn quu_is_asked_on_one_page_when_the_page_is_not_full() {
     assert_eq!(rows, match tmx::parse_dividends(&common::json(TMX, "dividends-QUU.json"), "QUU") { Outcome::Answered(r) => r, other => panic!("{other:?}") });
     assert_eq!(recorded.asked.lock().unwrap().len(), 1);
 }
-
-#[test]
-fn the_tsx_60_begins_2001_12_11_and_each_session_is_its_level() {
-    let recorded = Arc::new(common::Recorded::new().with_body(URL, "\"symbol\":\"^TX60\"", 200, TMX, "series-TX60-2001-12-01-2001-12-31.json"));
-    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
-    let noted = tmx::ask_series(&net, "^TX60", date(2001, 12, 1), date(2001, 12, 31));
-    assert_eq!(noted.shape_change, None);
-    let Outcome::Answered(levels) = noted.outcome else { panic!("{:?}", noted.outcome) };
-    let expected: Vec<(Date, Dec)> = [
-        (11, "435.9"),
-        (12, "438.3"),
-        (13, "430.1"),
-        (14, "428.6"),
-        (17, "434.6"),
-        (18, "439.7"),
-        (19, "434.3"),
-        (20, "430.5"),
-        (21, "434.6"),
-        (24, "435.7"),
-        (26, "435.7"),
-        (27, "441.1"),
-        (28, "442.4"),
-        (31, "442.6"),
-    ]
-    .into_iter()
-    .map(|(d, v)| (date(2001, 12, d), dec(v)))
-    .collect();
-    assert_eq!(levels, expected);
-    // asked for a span that begins after its first session: a day outside the span
-    assert!(matches!(tmx::parse_series(&common::json(TMX, "series-TX60-2001-12-01-2001-12-31.json"), "^TX60", (date(2001, 12, 12), date(2001, 12, 31))), Outcome::Meaning(w) if w == "^TX60 answered 2001-12-11, outside the 2001-12-12 to 2001-12-31 asked"));
-}

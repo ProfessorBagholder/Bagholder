@@ -18,11 +18,10 @@ pub enum DataKind {
     Rate,
     Holidays,
     Distributions,
-    OptionClose,
 }
 
 impl DataKind {
-    pub const ALL: [DataKind; 7] = [DataKind::Quote, DataKind::DailyClose, DataKind::Benchmark, DataKind::Rate, DataKind::Holidays, DataKind::Distributions, DataKind::OptionClose];
+    pub const ALL: [DataKind; 6] = [DataKind::Quote, DataKind::DailyClose, DataKind::Benchmark, DataKind::Rate, DataKind::Holidays, DataKind::Distributions];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -32,7 +31,6 @@ impl DataKind {
             DataKind::Rate => "rate",
             DataKind::Holidays => "holidays",
             DataKind::Distributions => "distributions",
-            DataKind::OptionClose => "option-close",
         }
     }
 
@@ -69,7 +67,8 @@ pub struct Offer {
     pub late_by: Duration,
 }
 
-/// The benchmarks the yearly returns are measured against (`SPEC.md` §2).
+/// The benchmarks the yearly returns are measured against (`SPEC.md` §2,
+/// Index), each read as the total return of an ETF that tracks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Benchmark {
     Sp500,
@@ -91,6 +90,25 @@ impl Benchmark {
 
     pub fn parse(s: &str) -> Option<Benchmark> {
         Benchmark::ALL.into_iter().find(|b| b.key() == s)
+    }
+
+    /// The ETF read for it, as Yahoo names it, and the currency it trades in:
+    /// SPY for the S&P 500; XIC, which tracks the capped Composite, for the
+    /// S&P/TSX Composite; XIU for the S&P/TSX 60.
+    pub fn tracker(self) -> (&'static str, Currency) {
+        match self {
+            Benchmark::Sp500 => ("SPY", Currency::USD),
+            Benchmark::Tsx => ("XIC.TO", Currency::CAD),
+            Benchmark::Tx60 => ("XIU.TO", Currency::CAD),
+        }
+    }
+
+    /// The market its tracker trades on, whose sessions its closes settle by.
+    pub fn market(self) -> Market {
+        match self {
+            Benchmark::Sp500 => Market::UnitedStates,
+            Benchmark::Tsx | Benchmark::Tx60 => Market::Canada,
+        }
     }
 }
 

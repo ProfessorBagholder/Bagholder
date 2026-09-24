@@ -1,7 +1,8 @@
 //! The market cache (`docs/plans/stage-3a-sources.md`, "The market cache"): the
 //! second store, `market.db` in the data folder. What the sources answered that
-//! can be asked again: quotes, daily closes, benchmark levels, which source won
-//! for each instrument, and every request's outcome. Every read and write is
+//! can be asked again: quotes, daily closes, the benchmark trackers' closes and
+//! events, the option chain last read per underlying, which source won for each
+//! instrument, and every request's outcome. Every read and write is
 //! typed; a stored value that does not read back is an error naming its table
 //! and column, never a default.
 
@@ -19,9 +20,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 2] = [
+pub static MIGRATIONS: [Migration; 3] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
+    Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {
@@ -124,6 +126,45 @@ pub struct Disagreement {
     pub stands: Dec,
     pub later: Dec,
     pub source: SourceName,
+}
+
+/// A benchmark tracker's event, as its source states it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackerEvent {
+    /// Per unit, by its ex-date.
+    Dividend(Dec),
+    /// `numerator` new units for every `denominator` held, the day it took effect.
+    Split { numerator: Dec, denominator: Dec },
+}
+
+/// A later statement of a tracker's event that differs from the one standing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventDisagreement {
+    pub day: Date,
+    pub kind: &'static str,
+    pub stands: String,
+    pub later: String,
+}
+
+/// A tracker's standing closes and events.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrackerSeries {
+    pub closes: BTreeMap<Date, Dec>,
+    pub dividends: BTreeMap<Date, Dec>,
+    pub splits: BTreeMap<Date, (Dec, Dec)>,
+}
+
+/// The option chain last read for an underlying, as it stated itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainRead {
+    pub underlying: String,
+    /// The day of the underlying's last trade: the session the chain carries.
+    pub session: Date,
+    /// When Cboe made it.
+    pub made_at: Timestamp,
+    /// Its `Last-Modified`, sent back with the next read.
+    pub last_modified: Option<String>,
+    pub received_at: Timestamp,
 }
 
 /// One read of a subject: the days it settled, how it ended, and when.
@@ -274,52 +315,125 @@ impl MarketCache {
 
     // -- benchmarks ------------------------------------------------------------
 
-    /// Keep an index's levels, a closed day written once as closes are.
-    pub fn store_benchmark(&self, b: Benchmark, levels: &[(Date, Dec)], from: &SourceName, at: Timestamp) -> Result<Vec<Disagreement>> {
+    /// Keep a tracker's closes, a closed day written once as an instrument's are.
+    pub fn store_benchmark_closes(&self, b: Benchmark, closes: &[(Date, Dec)], from: &SourceName, at: Timestamp) -> Result<Vec<Disagreement>> {
         let mut disagreements = Vec::new();
         bagholder_sqlite::atomically(&self.conn, || {
-            for (d, level) in levels {
-                let standing: Option<String> = self.conn.query_row("SELECT level FROM benchmarks WHERE benchmark = ?1 AND day = ?2 AND first = 1", params![b.key(), d.to_string()], |r| r.get(0)).optional()?;
+            for (d, close) in closes {
+                let standing: Option<String> = self.conn.query_row("SELECT close FROM benchmark_closes WHERE benchmark = ?1 AND day = ?2 AND first = 1", params![b.key(), d.to_string()], |r| r.get(0)).optional()?;
                 let first = match &standing {
                     None => true,
-                    Some(l) if *l == level.to_text() => continue,
+                    Some(c) if *c == close.to_text() => continue,
                     Some(_) => false,
                 };
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO benchmarks (benchmark, day, level, source, first, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![b.key(), d.to_string(), level.to_text(), from.as_str(), first as i64, at.to_string()],
+                    "INSERT OR IGNORE INTO benchmark_closes (benchmark, day, close, source, first, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![b.key(), d.to_string(), close.to_text(), from.as_str(), first as i64, at.to_string()],
                 )?;
-                if let Some(l) = standing {
-                    disagreements.push((*d, l, *level));
+                if let Some(c) = standing {
+                    disagreements.push((*d, c, *close));
                 }
             }
             Ok(())
         })?;
-        disagreements.into_iter().map(|(d, l, later)| Ok(Disagreement { day: d, stands: dec("benchmarks", "level", &l)?, later, source: from.clone() })).collect()
+        disagreements.into_iter().map(|(d, c, later)| Ok(Disagreement { day: d, stands: dec("benchmark_closes", "close", &c)?, later, source: from.clone() })).collect()
     }
 
-    pub fn benchmarks(&self) -> Result<BTreeMap<Benchmark, BTreeMap<Date, Dec>>> {
-        const T: &str = "benchmarks";
-        let mut stmt = self.conn.prepare("SELECT benchmark, day, level FROM benchmarks WHERE first = 1")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-        let mut out: BTreeMap<Benchmark, BTreeMap<Date, Dec>> = BTreeMap::new();
+    /// Keep a tracker's dividends and splits, each written once: a later
+    /// different statement of the same day's event is kept beside it and
+    /// returned, and the first stands.
+    pub fn store_benchmark_events(&self, b: Benchmark, events: &[(Date, TrackerEvent)], from: &SourceName, at: Timestamp) -> Result<Vec<EventDisagreement>> {
+        let mut out = Vec::new();
+        bagholder_sqlite::atomically(&self.conn, || {
+            for (d, e) in events {
+                let (kind, amount, denominator) = match e {
+                    TrackerEvent::Dividend(a) => ("dividend", a.to_text(), None),
+                    TrackerEvent::Split { numerator, denominator } => ("split", numerator.to_text(), Some(denominator.to_text())),
+                };
+                let standing: Option<(String, Option<String>)> = self
+                    .conn
+                    .query_row("SELECT amount, denominator FROM benchmark_events WHERE benchmark = ?1 AND day = ?2 AND kind = ?3 AND first = 1", params![b.key(), d.to_string(), kind], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()?;
+                let first = match &standing {
+                    None => true,
+                    Some((a, den)) if *a == amount && *den == denominator => continue,
+                    Some(_) => false,
+                };
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO benchmark_events (benchmark, day, kind, amount, denominator, source, first, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![b.key(), d.to_string(), kind, amount, denominator, from.as_str(), first as i64, at.to_string()],
+                )?;
+                if let Some((a, den)) = standing {
+                    let text = |a: &str, den: &Option<String>| den.as_ref().map_or_else(|| a.to_string(), |den| format!("{a}:{den}"));
+                    out.push(EventDisagreement { day: *d, kind, stands: text(&a, &den), later: text(&amount, &denominator) });
+                }
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Every tracker's standing closes and events.
+    pub fn benchmark_series(&self) -> Result<BTreeMap<Benchmark, TrackerSeries>> {
+        let mut out: BTreeMap<Benchmark, TrackerSeries> = BTreeMap::new();
+        let bench = |t: &'static str, s: &str| Benchmark::parse(s).ok_or_else(|| corrupt(t, "benchmark", s, "not a benchmark"));
+        {
+            const T: &str = "benchmark_closes";
+            let mut stmt = self.conn.prepare("SELECT benchmark, day, close FROM benchmark_closes WHERE first = 1")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+            for row in rows {
+                let (b, d, c) = row?;
+                out.entry(bench(T, &b)?).or_default().closes.insert(day(T, "day", &d)?, dec(T, "close", &c)?);
+            }
+        }
+        const T: &str = "benchmark_events";
+        let mut stmt = self.conn.prepare("SELECT benchmark, day, kind, amount, denominator FROM benchmark_events WHERE first = 1")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)))?;
         for row in rows {
-            let (b, d, l) = row?;
-            let b = Benchmark::parse(&b).ok_or_else(|| corrupt(T, "benchmark", &b, "not a benchmark"))?;
-            out.entry(b).or_default().insert(day(T, "day", &d)?, dec(T, "level", &l)?);
+            let (b, d, kind, amount, den) = row?;
+            let series = out.entry(bench(T, &b)?).or_default();
+            let (d, amount) = (day(T, "day", &d)?, dec(T, "amount", &amount)?);
+            match (kind.as_str(), den) {
+                ("dividend", None) => {
+                    series.dividends.insert(d, amount);
+                }
+                ("split", Some(den)) => {
+                    series.splits.insert(d, (amount, dec(T, "denominator", &den)?));
+                }
+                _ => return Err(corrupt(T, "kind", &kind, "not a dividend or a split with its denominator")),
+            }
         }
         Ok(out)
     }
 
-    /// The days a benchmark has a level for.
+    /// The days a tracker has a close for.
     pub fn benchmark_days(&self, b: Benchmark) -> Result<BTreeSet<Date>> {
-        let mut stmt = self.conn.prepare("SELECT day FROM benchmarks WHERE benchmark = ?1 AND first = 1")?;
+        let mut stmt = self.conn.prepare("SELECT day FROM benchmark_closes WHERE benchmark = ?1 AND first = 1")?;
         let rows = stmt.query_map(params![b.key()], |r| r.get::<_, String>(0))?;
         let mut out = BTreeSet::new();
         for d in rows {
-            out.insert(day("benchmarks", "day", &d?)?);
+            out.insert(day("benchmark_closes", "day", &d?)?);
         }
         Ok(out)
+    }
+
+    // -- option chains ---------------------------------------------------------
+
+    pub fn store_option_chain(&self, c: &ChainRead) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO option_chains (underlying, session, made_at, last_modified, received_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (underlying) DO UPDATE SET session = excluded.session, made_at = excluded.made_at, last_modified = excluded.last_modified, received_at = excluded.received_at",
+            params![c.underlying, c.session.to_string(), c.made_at.to_string(), c.last_modified, c.received_at.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The chain last read for an underlying.
+    pub fn option_chain(&self, underlying: &str) -> Result<Option<ChainRead>> {
+        const T: &str = "option_chains";
+        let row: Option<(String, String, Option<String>, String)> =
+            self.conn.query_row("SELECT session, made_at, last_modified, received_at FROM option_chains WHERE underlying = ?1", params![underlying], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
+        row.map(|(s, m, lm, r)| Ok(ChainRead { underlying: underlying.to_string(), session: day(T, "session", &s)?, made_at: instant(T, "made_at", &m)?, last_modified: lm, received_at: instant(T, "received_at", &r)? })).transpose()
     }
 
     // -- chains ----------------------------------------------------------------

@@ -7,12 +7,13 @@ use std::fmt::Debug;
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{Group, JournalEntry, JournalSubject, Trade};
-use bagholder_core::{AccountId, Dec, InstrumentId, Money, TransactionId};
+use bagholder_core::{AccountId, InstrumentId, Money, TransactionId};
 
+use crate::stat::benchmark::{build_benchmarks, total_return_cad};
 use crate::cashflow::{build_cashflow, payer_rates, CashRow, PayerRate};
 use crate::equity::{broker_checks, build_equity, AccountEquity, BrokerCheck};
 use crate::identity::{identify, Identity};
-use crate::input::{Adjustments, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
+use crate::input::{Adjustments, BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, Quote, Rates, Sourced};
 use crate::ledger::{match_lots, Direction, Matched};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
@@ -35,7 +36,7 @@ pub enum Change {
     Frequency(InstrumentId, Option<Sourced<u32>>),
     Quote(InstrumentId, Option<Quote>),
     Closes(InstrumentId, BTreeMap<Date, Money>),
-    Benchmark(String, BTreeMap<Date, Dec>),
+    Benchmark(String, Option<BenchmarkSeries>),
     Broker(AccountId, Option<BrokerAccount>),
     /// The day turning, the instant moving (16:30 passing), the home zone.
     Clock(Clock),
@@ -154,13 +155,13 @@ impl Fields for PayerRate {
 
 impl Fields for AccountEquity {
     fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("own", &self.own), f("flows", &self.flows), f("points", &self.points), f("returns", &self.returns)]
+        vec![f("points", &self.points), f("returns", &self.returns)]
     }
 }
 
 impl Fields for BrokerCheck {
     fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![f("differences", &self.differences), f("pending", &self.pending), f("value_difference", &self.value_difference)]
+        vec![f("differences", &self.differences), f("pending", &self.pending)]
     }
 }
 
@@ -205,6 +206,8 @@ pub struct Engine {
     payers: BTreeMap<InstrumentId, PayerRate>,
     equity: BTreeMap<AccountId, AccountEquity>,
     checks: Vec<BrokerCheck>,
+    /// Each benchmark's total return in CAD, as a level per session.
+    benchmarks: BTreeMap<String, crate::stat::benchmark::Levels>,
 }
 
 /// The figures, read.
@@ -215,6 +218,7 @@ pub struct Figures<'a> {
     pub payers: &'a BTreeMap<InstrumentId, PayerRate>,
     pub equity: &'a BTreeMap<AccountId, AccountEquity>,
     pub checks: &'a [BrokerCheck],
+    pub benchmarks: &'a BTreeMap<String, crate::stat::benchmark::Levels>,
     pub matched: &'a Matched,
 }
 
@@ -222,7 +226,8 @@ impl Engine {
     pub fn build(inputs: Inputs) -> Engine {
         let matched = match_lots(&inputs);
         let identity = identify(&inputs.ledger, &matched);
-        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![] };
+        let mut e = Engine { inputs, matched, identity, trades: vec![], positions: vec![], cash: vec![], payers: BTreeMap::new(), equity: BTreeMap::new(), checks: vec![], benchmarks: BTreeMap::new() };
+        e.benchmarks = build_benchmarks(&e.inputs.market.benchmarks, &e.inputs.facts.rates, &e.inputs.clock);
         e.derive();
         e
     }
@@ -234,8 +239,8 @@ impl Engine {
         self.positions = build_positions(i, &self.matched, &self.identity, None);
         self.cash = build_cashflow(i, &self.matched);
         self.payers = payer_rates(i, &self.cash);
-        self.equity = build_equity(i, &self.matched, None);
-        self.checks = broker_checks(i, &self.matched, &self.equity);
+        self.equity = build_equity(i, None);
+        self.checks = broker_checks(i, &self.matched);
     }
 
     fn rematch(&mut self) {
@@ -258,16 +263,11 @@ impl Engine {
     }
 
     pub fn figures(&self) -> Figures<'_> {
-        Figures { trades: &self.trades, positions: &self.positions, cash: &self.cash, payers: &self.payers, equity: &self.equity, checks: &self.checks, matched: &self.matched }
+        Figures { trades: &self.trades, positions: &self.positions, cash: &self.cash, payers: &self.payers, equity: &self.equity, checks: &self.checks, benchmarks: &self.benchmarks, matched: &self.matched }
     }
 
     pub fn scope(&self, filters: &Filters) -> Scoped {
-        scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity)
-    }
-
-    /// The accounts that hold, or ever held, an instrument.
-    fn holders(&self, instrument: InstrumentId) -> BTreeSet<AccountId> {
-        self.matched.units.keys().filter(|(_, i)| *i == instrument).map(|(a, _)| *a).collect()
+        scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks)
     }
 
     /// Whether a close of this instrument can decide a contract's expiry.
@@ -296,12 +296,14 @@ impl Engine {
                 let before = self.snapshot(Parts::ALL);
                 self.inputs.clock = c;
                 self.rematch();
+                self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
                 self.compare(&before, &mut moved);
             }
             Change::Rates(r) => {
                 let before = self.snapshot(Parts::ALL);
                 self.inputs.facts.rates = r;
                 self.derive();
+                self.benchmarks = build_benchmarks(&self.inputs.market.benchmarks, &self.inputs.facts.rates, &self.inputs.clock);
                 self.compare(&before, &mut moved);
             }
             Change::Trades(t) => {
@@ -362,9 +364,18 @@ impl Engine {
                     self.reprice(i, &mut moved);
                 }
             }
-            Change::Benchmark(k, levels) => {
-                // read only by the scoped returns, computed when asked for
-                self.inputs.market.benchmarks.insert(k, levels);
+            Change::Benchmark(k, series) => {
+                // read only by the scoped returns
+                match series {
+                    Some(s) => {
+                        self.benchmarks.insert(k.clone(), total_return_cad(&s, &self.inputs.facts.rates, &self.inputs.clock));
+                        self.inputs.market.benchmarks.insert(k, s);
+                    }
+                    None => {
+                        self.benchmarks.remove(&k);
+                        self.inputs.market.benchmarks.remove(&k);
+                    }
+                }
             }
             Change::Broker(a, b) => {
                 let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
@@ -378,8 +389,8 @@ impl Engine {
                     p.broker_qty = self.inputs.market.brokers.get(&a).and_then(|b| b.held.get(&p.instrument)).copied();
                 }
                 self.equity.remove(&a);
-                self.equity.extend(build_equity(&self.inputs, &self.matched, Some(&BTreeSet::from([a]))));
-                self.checks = broker_checks(&self.inputs, &self.matched, &self.equity);
+                self.equity.extend(build_equity(&self.inputs, Some(&BTreeSet::from([a]))));
+                self.checks = broker_checks(&self.inputs, &self.matched);
                 diff(&mut moved, before_positions.iter().map(|p| (position_entity(p), p)), self.positions.iter().filter(|p| p.account == a).map(|p| (position_entity(p), p)));
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
                 diff(&mut moved, before_check.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().filter(|c| c.account == a).map(|c| (Entity::BrokerCheck(c.account), c)));
@@ -388,22 +399,14 @@ impl Engine {
         moved
     }
 
-    /// A price moved: that instrument's positions, and the series of every
-    /// account that holds or held it.
+    /// A price moved: that instrument's positions.
     fn reprice(&mut self, instrument: InstrumentId, moved: &mut Moved) {
-        let holders: BTreeSet<AccountId> = self.holders(instrument);
         let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.instrument == instrument).cloned().collect();
-        let before_equity: Vec<(AccountId, AccountEquity)> = holders.iter().filter_map(|a| self.equity.get(a).map(|e| (*a, e.clone()))).collect();
-        let before_checks: Vec<BrokerCheck> = self.checks.iter().filter(|c| holders.contains(&c.account)).cloned().collect();
         let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument));
         self.positions.retain(|p| p.instrument != instrument);
         self.positions.extend(fresh);
         self.positions.sort_by(|a, b| (a.account, a.instrument, a.direction).cmp(&(b.account, b.instrument, b.direction)));
-        self.equity.extend(build_equity(&self.inputs, &self.matched, Some(&holders)));
-        self.checks = broker_checks(&self.inputs, &self.matched, &self.equity);
         diff(moved, before_positions.iter().map(|p| (position_entity(p), p)), self.positions.iter().filter(|p| p.instrument == instrument).map(|p| (position_entity(p), p)));
-        diff(moved, before_equity.iter().map(|(a, e)| (Entity::Equity(*a), e)), holders.iter().filter_map(|a| self.equity.get(a).map(|e| (Entity::Equity(*a), e))));
-        diff(moved, before_checks.iter().map(|c| (Entity::BrokerCheck(c.account), c)), self.checks.iter().filter(|c| holders.contains(&c.account)).map(|c| (Entity::BrokerCheck(c.account), c)));
     }
 
     fn snapshot(&self, parts: Parts) -> Snapshot {

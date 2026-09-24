@@ -1,6 +1,5 @@
 //! TMX Money's GraphQL service (`app-money.tmx.com/graphql`): the quote of a
-//! Canadian listing, the S&P/TSX Composite and S&P/TSX 60 daily levels, and the
-//! exchange-side record of distributions for a fund whose company's own
+//! Canadian listing, and the exchange-side record of distributions for a fund whose company's own
 //! publication cannot be read (Mackenzie's QCN and QUU; the owner's exception of
 //! 2026-09-24).
 //!
@@ -29,7 +28,7 @@ use bagholder_net::{Ask, Net};
 
 use crate::ask;
 use crate::outcome::{Noted, Outcome};
-use crate::reply::{day_from, Mismatch, Node, RecordedShape};
+use crate::reply::{Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "tmx";
 pub const HOST: &str = "app-money.tmx.com";
@@ -38,7 +37,6 @@ const HEADERS: [(&str, &str); 5] = [("Content-Type", "application/json"), ("loca
 
 const QUOTE: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName exchangeCode price priceChange percentChange prevClose currency datetime dividendFrequency } }";
 const DIVIDENDS: &str = "query getDividendsForSymbol($symbol: String!, $page: Int, $batch: Int) { dividends: getDividendsForSymbol(symbol: $symbol, page: $page, batch: $batch) { dividends { exDate recordDate payableDate declarationDate amount currency } } }";
-const SERIES: &str = "query getTimeSeriesData($symbol: String!, $freq: String, $interval: Int, $start: String, $end: String) { getTimeSeriesData(symbol: $symbol, freq: $freq, interval: $interval, start: $start, end: $end) { dateTime close } }";
 /// Rows per page of distributions; a full page means another is asked.
 const BATCH: usize = 100;
 /// The most pages asked: a century of monthly distributions.
@@ -56,9 +54,6 @@ pub fn dividends_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/tmx-dividends.paths"))
 }
 
-pub fn series_shape() -> RecordedShape {
-    ask::recorded_shape(include_str!("../../shapes/tmx-series.paths"))
-}
 
 /// A listing's quote as TMX states it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,42 +235,6 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
     Ok(Ok(out))
 }
 
-/// Read a daily series reply: each session's close, oldest first.
-pub fn parse_series(v: &Value, symbol: &str, span: (Date, Date)) -> Outcome<Vec<(Date, Dec)>> {
-    match read_series(v, symbol, span) {
-        Ok(Ok(d)) => Outcome::Answered(d),
-        Ok(Err(why)) => Outcome::Meaning(why),
-        Err(m) => Outcome::Mismatch(m),
-    }
-}
-
-fn read_series(v: &Value, symbol: &str, span: (Date, Date)) -> Result<Result<Vec<(Date, Dec)>, String>, Mismatch> {
-    let rows = Node::root(v).obj("data")?.list("getTimeSeriesData")?;
-    let mut out: Vec<(Date, Dec)> = Vec::new();
-    for r in rows {
-        let text = r.text("dateTime")?;
-        // the session's day is the day the row is stamped in its own offset
-        let d = match text.get(..10).map(day_from) {
-            Some(Ok(d)) => d,
-            _ => return Err(r.field("dateTime")?.mismatch(format!("{text:?} does not begin with a day"))),
-        };
-        if d < span.0 || d > span.1 {
-            return Ok(Err(format!("{symbol} answered {d}, outside the {} to {} asked", span.0, span.1)));
-        }
-        // newest first
-        if out.last().is_some_and(|(l, _)| d >= *l) {
-            return Ok(Err(format!("{symbol}'s series repeats or reorders {d}")));
-        }
-        let close = r.dec("close")?;
-        if close <= Dec::ZERO {
-            return Ok(Err(format!("{symbol}'s level on {d} is {close}")));
-        }
-        out.push((d, close));
-    }
-    out.reverse();
-    Ok(Ok(out))
-}
-
 /// Ask for `form`'s quote.
 pub fn ask_quote(net: &Net, form: &str) -> Noted<TmxQuote> {
     let b = body("getQuoteBySymbol", &format!("{{\"symbol\":{},\"locale\":\"en\"}}", escaped(form)), QUOTE);
@@ -316,13 +275,4 @@ pub fn ask_dividends(net: &Net, form: &str) -> Noted<Vec<TmxDistribution>> {
         }
     }
     Noted { outcome: Outcome::Answered(all), shape_change }
-}
-
-/// Ask for an index's daily levels from `from` through `to`.
-pub fn ask_series(net: &Net, symbol: &str, from: Date, to: Date) -> Noted<Vec<(Date, Dec)>> {
-    let b = body("getTimeSeriesData", &format!("{{\"symbol\":{},\"freq\":\"day\",\"interval\":1,\"start\":\"{from}\",\"end\":\"{to}\"}}", escaped(symbol)), SERIES);
-    match post(net, &b) {
-        Ok(v) => Noted { outcome: parse_series(&v, symbol, (from, to)), shape_change: ask::noticed(&v, &series_shape(), &[]) },
-        Err(o) => Noted { outcome: o.failed().unwrap_or(Outcome::Unreachable("no reply".into())), shape_change: None },
-    }
 }

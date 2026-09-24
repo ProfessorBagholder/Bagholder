@@ -154,19 +154,6 @@ fn an_identical_read_of_a_funds_record_records_only_its_time() {
     assert_eq!(stored, vec![("2026-03-02T00:00:00Z".to_string(), 2)], "one stored read, its time the newer one");
 }
 
-#[test]
-fn a_recorded_close_is_written_once() {
-    let f = Fixture::new();
-    f.account(&["a1"]);
-    let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]));
-    let i = f.opens(r.record).instrument;
-    let cboe = SourceName::named("cboe");
-    f.book.store_close(i, day("2026-01-02"), Money::new(d("1.25"), Currency::CAD), &cboe, t0()).unwrap();
-    f.book.store_close(i, day("2026-01-02"), Money::new(d("1.25"), Currency::CAD), &cboe, t0()).unwrap();
-    assert!(f.book.store_close(i, day("2026-01-02"), Money::new(d("1.30"), Currency::CAD), &cboe, t0()).is_err());
-    assert_eq!(f.book.closes().unwrap()[&i][&day("2026-01-02")].amount, d("1.25"));
-}
-
 /// An event row, and a record explaining it.
 fn event_and_its_adjustment(f: &Fixture) -> (bagholder_core::RecordId, TransactionId) {
     f.account(&["a1"]);

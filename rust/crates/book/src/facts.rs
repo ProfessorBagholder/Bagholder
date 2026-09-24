@@ -355,43 +355,6 @@ impl Book {
     }
 
     // ------------------------------------------------------------------
-    // recorded closes
-    // ------------------------------------------------------------------
-
-    /// A daily close no source can give again later; the first stored for a
-    /// day stands, and a different later one is refused.
-    pub fn store_close(&self, instrument: InstrumentId, d: jiff::civil::Date, close: Money, source: &SourceName, at: jiff::Timestamp) -> Result<()> {
-        self.atomically(|| {
-            let stored: Option<(String, String)> = self
-                .conn()
-                .query_row("SELECT close, currency FROM recorded_closes WHERE instrument_id = ? AND day = ?", params![instrument.to_string(), day(d)], |r| Ok((r.get(0)?, r.get(1)?)))
-                .optional()?;
-            if let Some((c, cur)) = stored {
-                let before = Money::new(parse_dec("recorded_closes", "close", &c)?, parse_currency("recorded_closes", "currency", &cur)?);
-                return if before == close { Ok(()) } else { Err(BookError::Refused(format!("{instrument} already closed at {before:?} on {d}; {close:?} does not replace it"))) };
-            }
-            self.conn().execute(
-                "INSERT INTO recorded_closes(instrument_id, day, close, currency, source, received_at) VALUES (?, ?, ?, ?, ?, ?)",
-                params![instrument.to_string(), day(d), close.amount.to_text(), close.currency.as_str(), source.as_str(), at_text(at)],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn closes(&self) -> Result<BTreeMap<InstrumentId, BTreeMap<jiff::civil::Date, Money>>> {
-        let mut stmt = self.conn().prepare_cached("SELECT instrument_id, day, close, currency FROM recorded_closes")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
-        let mut out: BTreeMap<InstrumentId, BTreeMap<jiff::civil::Date, Money>> = BTreeMap::new();
-        for row in rows {
-            let (i, d, c, cur) = row?;
-            out.entry(text::parsed("recorded_closes", "instrument_id", &i, InstrumentId::parse)?)
-                .or_default()
-                .insert(parse_day("recorded_closes", "day", &d)?, Money::new(parse_dec("recorded_closes", "close", &c)?, parse_currency("recorded_closes", "currency", &cur)?));
-        }
-        Ok(out)
-    }
-
-    // ------------------------------------------------------------------
     // adjustments
     // ------------------------------------------------------------------
 
