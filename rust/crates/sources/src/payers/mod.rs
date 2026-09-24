@@ -20,15 +20,19 @@
 //! distribution, or a date far past the fund's life are a meaning failure, and
 //! nothing is written.
 
+pub mod evolve;
 pub mod exchange;
+pub mod harvest;
 pub mod ninepoint;
 pub mod run;
+pub mod vanguard_ca;
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
 use bagholder_core::{Currency, Dec, SourceName};
 use bagholder_net::Net;
 
+use crate::contract::Market;
 use crate::needs::PayerNeed;
 use crate::outcome::Noted;
 
@@ -60,18 +64,34 @@ pub trait Payer: Send + Sync {
     /// The brand words a fund's name carries when it is this company's,
     /// lower-case.
     fn brands(&self) -> &'static [&'static str];
+    /// The markets whose listings this company's publication covers (one brand
+    /// can be two companies: Vanguard Canada and Vanguard in the US).
+    fn markets(&self) -> &'static [Market];
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record>;
 }
 
+/// Canadian listings, on any Canadian venue.
+pub const CANADA: &[Market] = &[Market::Canada, Market::CboeCanada];
+pub const US: &[Market] = &[Market::UnitedStates];
+
 /// Every payer adapter, in the order a fund's name is tried against them.
 pub fn all() -> Vec<Box<dyn Payer>> {
-    vec![Box::new(ninepoint::Ninepoint), Box::new(exchange::Mackenzie), Box::new(exchange::WisdomTree)]
+    vec![
+        Box::new(ninepoint::Ninepoint),
+        Box::new(evolve::Evolve),
+        Box::new(harvest::Harvest),
+        Box::new(vanguard_ca::VanguardCanada),
+        Box::new(exchange::Mackenzie),
+        Box::new(exchange::WisdomTree),
+    ]
 }
 
-/// The adapter for a payer, by the brand its name carries.
+/// The adapter for a payer, by the brand its name carries and the market it
+/// trades in.
 pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
     let name = need.name.as_deref()?.to_lowercase();
-    all().into_iter().find(|p| p.brands().iter().any(|b| name.contains(b)))
+    let market = need.listing.market()?;
+    all().into_iter().find(|p| p.markets().contains(&market) && p.brands().iter().any(|b| name.contains(b)))
 }
 
 /// A record checked, repeats folded: a meaning failure names what is wrong.

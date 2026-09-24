@@ -113,6 +113,10 @@ impl Payer for Ninepoint {
         &["ninepoint"]
     }
 
+    fn markets(&self) -> &'static [crate::contract::Market] {
+        crate::payers::CANADA
+    }
+
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let failed = |o: Outcome<bagholder_net::Reply>| Noted { outcome: o.failed().expect("not answered"), shape_change: None };
         let list = match ask::send(net, &Ask::get(FUNDS, &[]), &[]) {

@@ -39,6 +39,10 @@ impl Payer for Mackenzie {
         &["mackenzie"]
     }
 
+    fn markets(&self) -> &'static [crate::contract::Market] {
+        crate::payers::CANADA
+    }
+
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
         let l = &need.listing;
         let Some(form) = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic)) else {
@@ -78,6 +82,10 @@ impl Payer for WisdomTree {
 
     fn brands(&self) -> &'static [&'static str] {
         &["wisdomtree"]
+    }
+
+    fn markets(&self) -> &'static [crate::contract::Market] {
+        crate::payers::US
     }
 
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {
