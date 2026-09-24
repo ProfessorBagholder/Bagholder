@@ -451,6 +451,16 @@ impl Response {
     }
 }
 
+/// Requests this process has tried to send off the machine (to any host but
+/// loopback), whether or not they got through: what a test that must never touch
+/// the network asserts is zero.
+static OUTBOUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many requests this process has tried to send off the machine.
+pub fn outbound_requests() -> usize {
+    OUTBOUND.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Whether the process was told to stay off the network (`BAGHOLDER_OFFLINE`).
 pub fn offline() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -491,7 +501,11 @@ fn send(
         // BAGHOLDER_OFFLINE=1: nothing leaves this machine. The browser tests run the
         // real server on a made-up book this way, so they read the same on any
         // machine and ask nothing of anyone.
-        if offline() && !matches!(u.host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        let loopback = matches!(u.host.as_str(), "127.0.0.1" | "localhost" | "::1");
+        if !loopback {
+            OUTBOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if offline() && !loopback {
             return Err(Error::Transport("offline: BAGHOLDER_OFFLINE is set".into()));
         }
         // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
