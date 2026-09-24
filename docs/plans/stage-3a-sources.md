@@ -22,25 +22,26 @@ Out of this part, on purpose: news, filings, short interest, fund exposures, gau
 
 Each question below is answered from real replies before the reader that depends on it is written. The answer and its evidence are written into this plan's Verification. A question that cannot be answered stops that reader, and the plan changes first (*Right to refuse*). The fixtures that settle them are captured for instruments chosen for the question (a listing with a recent split, a fund with a long record).
 
-1. **Split adjustment of daily closes.**
+1. **Split adjustment of daily closes.** *Answered.*
    - Does each close source (TMX `getTimeSeriesData`, Yahoo's chart, Coinbase candles) give closes as traded, or adjusted for later splits?
    - Checked on a listing with a known split, before and after it.
    - An adjusted source is used only with its own split events to undo the adjustment (Yahoo's chart reports them with `events=split`), so closes are stored as traded, matching the book's units on each day.
    - A source whose adjustment cannot be undone from its own reply is not used for closes.
+   - **Found:** Yahoo's closes are split-adjusted and its reply states the splits (NVDA's 10:1 of 2024-06-10), so they are undone from the same reply. TMX's are adjusted too and its reply states no split (SHOP's 10:1 of 2022-06-29), so TMX is not a close source. Listings' daily closes come from Yahoo alone.
 2. **Each payer's own statement of its distributions.**
    - A fund's distribution schedule and its distributions (the dates and the amount per unit) are published by the fund company on the fund's own page, and that is the authority (§9). Which page and which part of it states them is found for each fund company the person's funds come from (thirteen today), from its real pages.
    - A company that pays a dividend (a bank, a pipeline) declares each one itself, in the announcement it issues; which of its own publications states the amount, the dates and the schedule is found the same way.
    - Each fund company's page and each announcement form is one adapter under the contract, with its recorded pages as fixtures.
-3. **The Bank's rates before 2007-05-01.**
+3. **The Bank's rates before 2007-05-01.** *Answered.*
    - Valet holds its daily series from 2017-01-03 and its legacy noon series from 2007-05-01 (both verified on 2026-09-23).
-   - The Bank published noon rates for decades before that.
-   - Candidate archives: the Bank's own historical files and Statistics Canada's tables carrying them. The one that answers is read as a third series with its own source name.
-   - If none answers, a day before 2007-05-01 is a gap named for what it is, `rate-not-held` (no source holds the Bank's published rate for that day). It is never `rate-missing`, which names a failure of the Bank source.
+   - **Found:** Statistics Canada's table 10-10-0008 carries the Bank's noon spot rates from 1950-10-02 to 2017-04-28 for twelve currencies still in use (USD, EUR, GBP, JPY, CHF, AUD, NZD, HKD, MXN, DKK, NOK, SEK), equal to Valet's noon series where both exist (checked for USD). It is read as a third series under its own source name. Its web service states a non-business day explicitly (a null value with status 1) and refuses bursts, so it is paced.
+   - A day before a currency's oldest series (any day before 2007-05-01 for a currency outside those twelve) is a gap named for what it is, `rate-not-held`: no source holds the Bank's published rate for that day. It is never `rate-missing`, which names a failure of the Bank source.
 4. **Which session an option chain's `prev_day_close` belongs to**, and which of the chain's prices is a contract's close for a session.
    - Settled from chains captured before and after a session's close on the same day, and across a weekend.
    - The recorded close must be defined one way (the chain's closing price, or the closing midpoint) before its reader is built.
-5. **Benchmark sources.**
-   - Replies recorded for each: FRED's S&P 500 series (Stooq as fallback) and TMX's `^TSX` and `^TX60` daily series (SPEC §2).
+5. **Benchmark sources.** *Answered.*
+   - Replies recorded for each: FRED's S&P 500 series and TMX's `^TSX` and `^TX60` daily series (SPEC §2).
+   - **Found:** FRED serves the trailing ten years only, two decimals, a holiday as a row with an empty value. Stooq now answers every request with a browser proof-of-work check instead of data, and S&P's own site refuses a plain request (403), so neither is used. Yahoo's `^GSPC` is the only reachable source for S&P 500 days before FRED's window; it agrees with FRED within half a cent on all but nine of 2,511 shared days. TMX answers `^TSX` and `^TX60` from 2001-12-11 in one reply, each row dated 16:00 with its offset.
 
 ### Two new crates, and where the existing code goes
 
@@ -139,19 +140,19 @@ A venue's session days are the days its own daily closes exist, as the sources r
 
 - **The currencies.**
   - The group `FX_RATES_DAILY` lists the currencies the Bank publishes daily (26, from `FXAUDCAD` to `FXZARCAD`).
-  - The group `LEGACY_NOON_RATES` lists those it published at noon until April 2017, each series found by the code in its label (`IEXE0101` is `USD_NOON`); a code matching no series or several is a mismatch.
-  - A currency in neither is `rate-unpublished`.
+  - The noon archives ended in April 2017 and never change, so which series is a currency's noon spot rate is a fixed table in the adapter, written from the Bank's and Statistics Canada's own metadata: series code, description, first and last day. A label alone does not name one series (`USD_NOON` is both IEXE0101, the spot rate, and IEXE0105, a 90-day forward; `ARS_NOON` and `MMK_NOON` are each two series in turn). Every read checks the reply's description against the table; a different one is a mismatch.
+  - A currency in none of them is `rate-unpublished`.
   - Each series is stored with its first and last observation day. This needs **book migration 3**: `fx_series(currency, source, first_day, last_day, received_at)`, keyed by currency and source, with `schema/v3.sql` committed.
 - **Which currencies are read.** Every currency the engine converts: every transaction's cash and fee currency, every instrument's currency, and every currency a broker states a balance in.
 - **Observations.**
   - `observations/FX<CUR>CAD/json?start_date=…&end_date=…` answers `observations[] { d, FX<CUR>CAD { v } }`, with `v` a decimal string.
   - The reader checks that the reply names the series asked for, every `d` lies inside the span, every `v` is a positive decimal, and no day repeats.
   - A completed read stores its rates and its span with `received_at` (`store_rates`). **The span stored is clamped to the series' own first and last days**, so a read asked from 2010 records its daily span from 2017-01-03, and no weekday before a series begins ever reads as a day the Bank did not publish (stage 2's rule).
-- **Two eras, never overlapping.**
-  - The daily series is the Bank's rate from its first day.
-  - The noon series is read, and its rates stored, only up to the day before that.
-  - So the two never both state a day, whichever read runs first.
-  - A day before the noon series begins follows research 3.
+- **Three eras per currency, never overlapping.**
+  - The daily series (Valet) is the Bank's rate from its first day.
+  - Before it, the Bank's noon series (Valet's legacy noon), read and stored only up to the day before the daily series begins.
+  - Before that, Statistics Canada's 10-10-0008 noon spot rate, for the twelve currencies it holds, read and stored only up to the day before the noon series begins.
+  - So no two series ever state the same day, whichever read runs first. A day before a currency's oldest series is `rate-not-held`.
 - **What is read.** For each currency, from the person's oldest day that needs it to today, then forward from the last span's end. A day's rate is written once, and a different later value is kept beside it and reported (stage 2).
 - **Holidays.**
   - The Bank's holiday schedule page (`/press/upcoming-events/bank-of-canada-holiday-schedule/`) lists this year's closures as date and name pairs.
@@ -188,12 +189,14 @@ The chains of `SPEC.md` §2, as adapters under the contract:
 
 | Instrument | Quotes | Daily closes |
 |---|---|---|
-| Canadian listings (TSX, TSX-V, CSE) | TMX quote | TMX `getTimeSeriesData`, then Yahoo |
-| Cboe Canada listings | Cboe Canada | the same chain |
+| Canadian listings (TSX, TSX-V, CSE) | TMX quote | Yahoo (research 1) |
+| Cboe Canada listings | Cboe Canada | Yahoo |
 | US listings | Yahoo | Yahoo |
 | Coins | Coinbase | Coinbase Exchange candles |
 | US options | Cboe chain | the option close (book) |
-| Benchmarks | none | FRED (Stooq as fallback) for the S&P 500; TMX for `^TSX`, `^TX60` |
+| Benchmarks | none | FRED for the S&P 500, Yahoo's `^GSPC` for days before FRED's ten years; TMX for `^TSX`, `^TX60` (from 2001-12-11) |
+
+Stooq goes from `SPEC.md` §2: it now answers with a browser check instead of data.
 
 **Every quote has a time.** How each source states it was checked on 2026-09-23:
 - **TMX:** the quote's `datetime`, with its offset.
@@ -215,7 +218,7 @@ A quote with no time is a meaning failure. How late each source is by design (Cb
 
 - **Distribution kinds removed** (`DistributionKind` in the engine and the book): every row of the record counts, as `SPEC.md` §2 defines; the existing cases rewritten to that.
 - **The frequency is the payer's statement**, first in `cashflow.rs`; a payer with none waits, named. Cases: a stated schedule used; a payer with no statement shown as waiting.
-- **`rate-not-held`**, if research 3 finds no archive: a gap for a day no source holds the Bank's rate for, with a case.
+- **`rate-not-held`** (research 3): a gap for a day no source holds the Bank's rate for, with a case.
 
 ### Periodic reads, each listed with its reason
 
@@ -241,7 +244,7 @@ Each is a pure due-function over the book, the cache and a clock handed in, test
 The template's Python, Go, shared-case and page lines do not apply: those builds are frozen, and the page does not change in this part.
 
 - [ ] **Build.** Rust, from `rust/`: the whole workspace's tests green and a warning-free build.
-- [ ] **Research.** Each of research 1–6 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
+- [ ] **Research.** Each of research 1–5 answered in Verification with the replies that answered it (recorded as fixtures) and the decision taken; no reader built on a question left open.
 - [ ] **Boundaries.** The boundary test holds `bagholder-net` and `bagholder-sources` to their columns, each checked by feeding the checker a violation:
   - no `f64` in `bagholder-sources`;
   - no clock read in `bagholder-sources`;
@@ -261,18 +264,18 @@ The template's Python, Go, shared-case and page lines do not apply: those builds
   - `source-health` prints each state.
 - [ ] **Fixtures.** Every adapter of this part has recorded real replies under `tests/replies/`, with a wrong-shaped and a wrong-meaning copy of each, and a test per reply asserting exactly what is written, or that nothing is and which outcome is recorded.
 - [ ] **Bank of Canada**, each a test on recorded replies:
-  - the daily and noon currencies stored with each series' first and last day;
-  - a noon label matching no series, and one matching two, each a mismatch;
+  - the daily currencies stored with each series' first and last day, and the noon table's series checked against the Bank's and Statistics Canada's metadata;
+  - a reply whose series description differs from the table (IEXE0105's forward rate in place of IEXE0101) is a mismatch;
   - a span's rates and the span stored, clamped to the series' days (a read asked from 2010 records its daily span from 2017-01-03);
   - a weekday skipped inside a completed span is not a business day to the engine, and a weekday before a series begins is not;
-  - noon rates stop the day before the daily series begins, with no conflict whichever read runs first;
+  - each era stops the day before the next begins (Statistics Canada, then noon, then daily), with no conflict whichever read runs first, and a day before a currency's oldest series is `rate-not-held`;
   - a repeated day, another series than asked, a non-decimal value and a day outside the span are each a failure writing nothing;
   - the currencies read are every currency the engine converts;
   - the holiday page's pairs stored, a weekend-dated observed holiday kept as stated, and a page with no pairs or the wrong year a mismatch;
   - the due rule on a fake clock: a business day after 16:30 Eastern with no rate is due, before 16:30 it is not, a holiday is not;
   - book migration 3 applied to a version 2 book with its rows intact, and `schema/v3.sql` committed and compared.
 - [ ] **Payers' pages**, for each fund company and announcement form, each a test on its recorded pages: the schedule and every distribution read and stored; a page missing a field it must carry is a mismatch naming the field and writes nothing; a read stored as a whole, a later read lacking a row leaving it absent, an identical read recording only its time; a later schedule statement replacing the earlier.
-- [ ] **The engine**, cases passing: distribution kinds removed, every row of a record counting as `SPEC.md` §2 defines; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` if research 3 needs it; every existing case still passing.
+- [ ] **The engine**, cases passing: distribution kinds removed, every row of a record counting as `SPEC.md` §2 defines; the payer's stated frequency used, and a payer with none shown as waiting; `rate-not-held` for a day before a currency's oldest series; every existing case still passing.
 - [ ] **Option closes**, each a test on recorded replies:
   - a chain read after the close writes each held contract's close once, dated to its session, including a contract expiring that day;
   - a chain whose session cannot be told writes nothing and records a meaning failure.
