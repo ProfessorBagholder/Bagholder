@@ -239,6 +239,24 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(page.getByLabel('Folder')).toHaveValue('')
 })
 
+test('Load folder: the watched folder arriving late does not replace what was typed', async ({ page }) => {
+  let answer: () => void = () => {}
+  const held = new Promise<void>((r) => (answer = r))
+  await page.route('**/api/watch', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    await held
+    return route.fulfill({ json: { path: '/the/watched/one', watching: true, account: '', lastScan: '', scanError: '', files: [] } })
+  })
+  await page.goto('/')
+  await ready(page)
+  await openMenu(page)
+  await page.getByText('Load folder').click()
+  await page.getByLabel('Folder').fill('/typed/first')
+  answer()
+  await expect(page.locator('#modalDlg')).toContainText('Watching /the/watched/one')
+  await expect(page.getByLabel('Folder')).toHaveValue('/typed/first')
+})
+
 test('Clear data: a box for each kind, Clear all ticks every one, nothing is sent until the button with something ticked', async ({ page }) => {
   let asked = 0
   let sent: unknown = null

@@ -328,12 +328,15 @@ export function openFolder(): void {
   ui.menuOpen = false
   ui.modal = 'folder'
   ui.folderError = ''
+  ui.folderPath = ''
+  ui.importAccount = ''
   call('GET /api/watch').then((w) => {
     if (w.ok === false) ui.folderError = w.error || 'Could not read the watched folder.'
     else {
       ui.watch = w
-      ui.folderPath = w.path
-      ui.importAccount = w.account
+      // the folder watched fills the boxes, unless the person has typed or chosen already
+      if (ui.folderPath === '') ui.folderPath = w.path
+      if (ui.importAccount === '') ui.importAccount = w.account
     }
   })
 }
