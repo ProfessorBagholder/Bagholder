@@ -48,6 +48,9 @@ pub struct Bus {
     watchers: AtomicUsize,
     streams: Mutex<HashMap<u64, Arc<Mutex<Wanted>>>>,
     next_stream: AtomicU64,
+    /// Streams whose page saw a message out of its order: each is sent its whole
+    /// state again at its next step.
+    resync: Mutex<std::collections::HashSet<u64>>,
 }
 
 impl Bus {
@@ -58,6 +61,7 @@ impl Bus {
             watchers: AtomicUsize::new(0),
             streams: Mutex::new(HashMap::new()),
             next_stream: AtomicU64::new(1),
+            resync: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -142,6 +146,21 @@ impl Bus {
     }
 
     /// Whether any page is showing the document `key` now.
+    /// A page missed a message of stream `id`: its whole state goes again. False
+    /// for a stream that is not open.
+    pub fn resync(&self, id: u64) -> bool {
+        if !self.streams.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id) {
+            return false;
+        }
+        self.resync.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
+        self.signal();
+        true
+    }
+
+    fn take_resync(&self, id: u64) -> bool {
+        self.resync.lock().unwrap_or_else(|e| e.into_inner()).remove(&id)
+    }
+
     pub fn watched(&self, key: &str) -> bool {
         self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
     }
@@ -249,6 +268,11 @@ impl Feed {
     /// the runtime's own threads.
     pub fn step(&mut self, status: &dyn Fn(&Arc<App>) -> crate::status::Status) -> Vec<Message> {
         let mut out: Vec<Message> = Vec::new();
+        if self.app.events.take_resync(self.id()) {
+            // the page missed a message: everything it shows is sent whole again
+            self.sent = None;
+            self.sent_docs.clear();
+        }
         let (filters, detail) = (self.filters.clone(), self.detail.clone());
         let app = self.app.clone();
         let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || app.view(filters.as_ref(), detail.as_deref()))) {
@@ -352,5 +376,21 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(!app.events.park_until_or(&app, Duration::from_millis(80), || false));
         assert!(started.elapsed() >= Duration::from_millis(80));
+    }
+
+    #[test]
+    fn test_a_page_that_missed_a_message_is_sent_its_whole_state_again() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+        let mut feed = Feed::open(app.clone(), None, None);
+        let first = feed.step(&crate::status::status);
+        assert!(first.iter().any(|(name, _)| *name == "snapshot"), "the first step sends the whole state");
+        assert!(feed.step(&crate::status::status).is_empty(), "nothing moved, nothing sent");
+        assert!(app.events.resync(feed.id()));
+        let again = feed.step(&crate::status::status);
+        assert!(again.iter().any(|(name, m)| *name == "snapshot" && m["doc"] == "model"), "{again:?}");
+        // a stream that is not open is not one to resync
+        assert!(!app.events.resync(u64::MAX));
     }
 }

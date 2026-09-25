@@ -20,6 +20,8 @@ pub fn routes() -> Routed {
         get "/api/status" => status;
         get "/api/model" => model;
         get "/api/trade" => trade;
+        get "/api/figures" => figures;
+        get "/api/figures/detail" => figures_detail;
         get "/api/book" => book;
         get "/api/data" => data;
         post "/api/data/clear" => data_clear;
@@ -144,6 +146,41 @@ async fn model(State(state): State<AppState>, Params(q): Params<ModelQuery>) -> 
     })
     .await??;
     Ok(Json(built))
+}
+
+#[derive(Deserialize, TS)]
+pub struct FiguresQuery {
+    /// The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
+    #[serde(default, deserialize_with = "trimmed")]
+    filters: Option<String>,
+}
+
+/// `GET /api/figures`: the figures document from the engine, for the page's
+/// filters. A filter the engine does not know is refused, naming it; before a
+/// page has stated its zone there is nothing to build.
+async fn figures(State(state): State<AppState>, Params(q): Params<FiguresQuery>) -> Api<crate::wire::figures::Figures> {
+    let app = state.app;
+    let built = blocking(move || -> Result<crate::wire::figures::Figures, ApiError> {
+        let filters: crate::wire::filters::Filters = match q.filters {
+            Some(raw) => serde_json::from_str(&raw).map_err(|e| ApiError::BadRequest(format!("the filters: {e}")))?,
+            None => Default::default(),
+        };
+        let filters = filters.to_engine().map_err(ApiError::BadRequest)?;
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        let book = f.book().map_err(ApiError::Failed)?;
+        let names = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?.map_err(ApiError::Failed)?;
+        f.read(|e| crate::wire::build::build(e, &names, &filters)).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))
+    })
+    .await??;
+    Ok(Json(built))
+}
+
+/// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.
+async fn figures_detail(State(state): State<AppState>, Params(q): Params<TradeQuery>) -> Api<crate::wire::figures::Detail> {
+    let app = state.app;
+    let id = q.id.unwrap_or_default();
+    let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::detail(e, &id))).flatten()).await?;
+    Ok(Json(found.ok_or_else(|| ApiError::NotFound("no such trade or holding".into()))?))
 }
 
 #[derive(Deserialize, TS)]

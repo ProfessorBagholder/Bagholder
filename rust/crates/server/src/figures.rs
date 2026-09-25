@@ -227,23 +227,13 @@ fn merge(into: &mut Moved, more: Moved) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bagholder_broker::pull::pull;
-    use bagholder_core::Broker;
-    use bagholder_wealthsimple::adapter::Wealthsimple;
-    use bagholder_wealthsimple::replay::Replay;
 
     fn at(s: &str) -> Timestamp {
         s.parse().unwrap()
     }
 
-    /// A book with one account's month from the recorded Wealthsimple replies.
     fn pulled(home: &Path) {
-        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at("2025-11-19T20:00:00Z")).unwrap();
-        let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", at("2025-11-19T20:00:00Z")).unwrap();
-        let replies = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wealthsimple/tests/replies/wealthsimple-pull");
-        let mut ws = Wealthsimple::new(Replay::read(&replies).unwrap());
-        let r = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at("2025-11-19T20:00:00Z")).unwrap();
-        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        crate::tests_common::pulled_book(home)
     }
 
     /// The engine the figure path holds, against one built fresh from the files.

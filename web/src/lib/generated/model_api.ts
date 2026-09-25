@@ -69,3 +69,15 @@ export type ModelLiveAnswer = { ok: boolean, today: string, currency: string, ma
 export type ModelAnswer = { status: Status, ok: boolean, today: string, syncedAt: string, currency: string, market: MarketDates, filters: Filters, options: Options, kpi: Kpi, equity: EquityBlock, years: Array<YearRow>, benchmark: BenchmarkRef, monthly: Array<MonthlyBar>, bySymbol: Array<BySymbolRow>, grades: Grades, queue: Array<QueueRow>, trades: Array<Trade>, tradeCount: number, tradeTotal: number, positions: Array<Position>, positionsSummary: PositionsSummary, portfolio: Portfolio, markets: Markets, cashflow: Cashflow, unmatched: Array<Unmatched>, accounts: Array<Account>, activityCount: number, };
 
 export type ModelViewAnswer = ModelLiveAnswer | ModelAnswer;
+
+export type FiguresQuery = { 
+/**
+ * The page's filters, as the JSON it keeps them in (`wire::filters::Filters`).
+ */
+filters: string | null, };
+
+export type Resync = { 
+/**
+ * the stream this page holds, from its `hello`
+ */
+id: number, };

@@ -135,6 +135,22 @@ export interface Holder<T> {
   data: T | null
 }
 
+/**
+ * The order a stream's messages are numbered in, from 1: `seen` takes each
+ * message's number and calls `gap` when one is not the next, so a message lost
+ * on the way is made good by the whole state (`POST /api/events/resync`).
+ */
+export function numbering(gap: () => void): (id: string) => void {
+  let last = 0
+  return (id: string) => {
+    const n = Number(id)
+    if (!Number.isInteger(n) || n <= 0) return
+    if (n === 1) last = 0 // a new connection counts from the start
+    if (last && n !== last + 1) gap()
+    last = n
+  }
+}
+
 let source: EventSource | null = null
 let url = ''
 let streamId = 0
@@ -207,11 +223,16 @@ export function connect(sink: Sink, filters: unknown): void {
   if (!sink.model) sink.loading = true
   const es = new EventSource(next)
   source = es
+  const seen = numbering(() => {
+    if (streamId) void post('/api/events/resync', { id: streamId })
+  })
   es.addEventListener('hello', (e) => {
+    seen((e as MessageEvent).lastEventId)
     streamId = (JSON.parse((e as MessageEvent).data) as { id: number }).id
     sayWanted() // a new stream knows nothing of what this page shows
   })
   es.addEventListener('snapshot', (e) => {
+    seen((e as MessageEvent).lastEventId)
     const { doc, data } = JSON.parse((e as MessageEvent).data) as { doc: string; data: unknown }
     if (doc === 'model') {
       const shown = !!sink.model
@@ -231,6 +252,7 @@ export function connect(sink: Sink, filters: unknown): void {
     w.changed?.()
   })
   es.addEventListener('patch', (e) => {
+    seen((e as MessageEvent).lastEventId)
     const { doc, ops } = JSON.parse((e as MessageEvent).data) as { doc: string; ops: Op[] }
     if (doc === 'model') {
       if (sink.model) afterChange(applyOps(sink.model, ops))

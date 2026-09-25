@@ -23,7 +23,7 @@ pub(crate) mod model;
 mod notifications;
 pub(crate) mod orders;
 mod session;
-mod stream;
+pub mod stream;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -217,6 +217,7 @@ pub fn router(state: AppState) -> Router {
         .merge(session::routes().router)
         .merge(notifications::routes().router)
         .route("/api/events/watch", post(stream::watch))
+        .route("/api/events/resync", post(stream::resync))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, ROUTE_TIMEOUT));
     let streams = Router::new()
         .route("/api/events", get(stream::events))

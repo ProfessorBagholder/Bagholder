@@ -13,6 +13,9 @@ use bagholder_core::Dec;
 pub struct Day {
     pub day: Date,
     pub value: f64,
+    /// The same value exactly, as the accounts' stated values add up; none when
+    /// the sum is too large to hold. What is shown; `value` is what is computed with.
+    pub exact: Option<Dec>,
     pub ret: Option<f64>,
     /// The money moved in (positive) or out that day, where known.
     pub flow: Option<f64>,
@@ -38,6 +41,12 @@ pub struct Annualized {
     pub count: usize,
     pub first: Option<i16>,
     pub last: Option<i16>,
+}
+
+/// A statistic's amount in dollars, to the cent: the one place a statistic's
+/// float becomes an amount that is shown (a drawdown's size at its peak).
+pub fn cents(x: f64) -> Option<Dec> {
+    x.is_finite().then(|| Dec::parse(&format!("{x:.2}")).ok()).flatten()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +76,7 @@ pub fn combine(values: &BTreeMap<Date, Vec<(Dec, Option<Dec>)>>, accounts: &[&[(
         .map(|(d, each)| Day {
             day: *d,
             value: each.iter().map(|(v, _)| v.to_f64()).sum(),
+            exact: each.iter().try_fold(Dec::ZERO, |a, (v, _)| a.checked_add(*v)).ok(),
             ret: rets.get(d).and_then(|(s, w)| (*w > 0.0).then(|| s / w)),
             flow: each.iter().map(|(_, f)| f.map(|x| x.to_f64())).sum(),
         })
@@ -212,7 +222,7 @@ mod tests {
     use super::*;
 
     fn day(d: Date, value: f64, ret: Option<f64>) -> Day {
-        Day { day: d, value, ret, flow: Some(0.0) }
+        Day { day: d, value, exact: None, ret, flow: Some(0.0) }
     }
 
     #[test]

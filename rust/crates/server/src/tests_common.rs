@@ -43,3 +43,16 @@ pub fn app() -> Arc<App> {
 pub fn app_ref() -> &'static App {
     APP.get().expect("guard() sets up the app")
 }
+
+/// A book in `home` holding one account's month, pulled from the recorded
+/// Wealthsimple replies (`wealthsimple/tests/replies/wealthsimple-pull`).
+pub fn pulled_book(home: &std::path::Path) {
+    use bagholder_core::Broker;
+    let at: bagholder_core::jiff::Timestamp = "2025-11-19T20:00:00Z".parse().unwrap();
+    let (book, _) = bagholder_book::Book::open_in(home, crate::app::APP_VERSION, at).unwrap();
+    let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", at).unwrap();
+    let replies = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wealthsimple/tests/replies/wealthsimple-pull");
+    let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::replay::Replay::read(&replies).unwrap());
+    let r = bagholder_broker::pull::pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at).unwrap();
+    assert!(r.failures.is_empty(), "{:?}", r.failures);
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, reconcile, rowKey, type Op } from './live'
+import { applyOps, numbering, reconcile, rowKey, type Op } from './live'
 
 // The page holds each entity as one object for as long as the entity lives, and a
 // change is written into it (docs/architecture.md, rule 0). These hold that: after
@@ -100,5 +100,24 @@ describe('what tells rows apart', () => {
     expect(rowKey([{ symbol: 'CH', v: 1 }, { symbol: 'CH', v: 2 }])).toBe(null) // rows that repeat
     expect(rowKey(['a', 'b'])).toBe(null)
     expect(rowKey([{ d: '2026-01-01' }, { d: '2026-01-02' }])).toBe('d')
+  })
+})
+
+describe('the numbers of a stream\'s messages', () => {
+  it('a number that is not the next asks for the whole state; a new connection counts from 1', () => {
+    let gaps = 0
+    const seen = numbering(() => gaps++)
+    for (const id of ['1', '2', '3']) seen(id)
+    expect(gaps).toBe(0)
+    seen('5') // 4 was lost
+    expect(gaps).toBe(1)
+    seen('6')
+    expect(gaps).toBe(1)
+    seen('1') // the browser connected again: a new stream
+    seen('2')
+    expect(gaps).toBe(1)
+    seen('') // a message without a number (the keep-alive) says nothing
+    seen('3')
+    expect(gaps).toBe(1)
   })
 })

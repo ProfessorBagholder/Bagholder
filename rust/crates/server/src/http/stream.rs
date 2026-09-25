@@ -80,7 +80,9 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
     }
     });
     let messages = stream::iter([vec![hello]]).chain(changes).flat_map(stream::iter);
-    Sse::new(messages.map(|(name, data)| Ok(Event::default().event(name).data(data.to_string()))))
+    // each message numbered, from 1: a page that sees a number out of order asks
+    // for the whole state again (`POST /api/events/resync`)
+    Sse::new(messages.enumerate().map(|(i, (name, data))| Ok(Event::default().id((i + 1).to_string()).event(name).data(data.to_string()))))
         .keep_alive(KeepAlive::new().interval(events::KEEPALIVE).text("ping"))
 }
 
@@ -98,6 +100,19 @@ pub struct Watch {
 #[derive(serde::Serialize, ts_rs::TS)]
 pub struct WatchAck {
     pub ok: bool,
+}
+
+#[derive(Deserialize, Default, ts_rs::TS)]
+pub struct Resync {
+    /// the stream this page holds, from its `hello`
+    #[serde(default)]
+    pub id: u64,
+}
+
+/// `POST /api/events/resync`: the page saw a message out of its order, and is
+/// sent the whole state again on its stream.
+pub async fn resync(axum::extract::State(state): axum::extract::State<AppState>, Body(r): Body<Resync>) -> Api<WatchAck> {
+    Ok(Json(WatchAck { ok: state.app.events.resync(r.id) }))
 }
 
 /// `POST /api/events/watch`

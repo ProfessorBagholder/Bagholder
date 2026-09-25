@@ -326,6 +326,7 @@ fn model_api_declarations() -> String {
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
         crate::http::model::Notes, crate::http::model::NotesAnswer, crate::http::model::Import,
         crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
+        crate::http::model::FiguresQuery, crate::http::stream::Resync,
     ];
     let mut out = String::from(
         "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { LegacyNote } from './book'\nimport type { Status } from './status'\n\n",
@@ -366,6 +367,8 @@ fn generated_file_of(name: &str) -> &'static str {
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
+        "Figures" | "Detail" => "figures",
+        "FiguresQuery" | "Resync" => "model_api",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }
@@ -413,4 +416,63 @@ fn test_the_pages_routes_are_the_servers() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/routes.ts is not what the server's route table generates: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The figures document (`wire`), generated to `web/src/lib/generated/figures.ts`.
+/// Money, quantities and prices are `Dec`, exact decimal text the page formats
+/// without a float (`web/src/lib/dec.ts`, which also holds `Fig`'s helpers).
+fn figures_declarations() -> String {
+    use crate::wire::figures::*;
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![
+        crate::wire::Fig<()>,
+        Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
+        Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, AccountOption, InstrumentOption, Options, Figures,
+        crate::wire::filters::Range, crate::wire::filters::Filters,
+    ];
+    let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\n\n");
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_figures_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/figures.ts");
+    let want = figures_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/figures.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// No amount on the figures wire is a float: a field typed `number` is a ratio,
+/// a count, a number of days or a year, and is named here; anything else that is
+/// a number fails (`docs/plans/stage-3c-switch.md`, §4, "Decimals as text").
+#[test]
+fn test_no_amount_on_the_figures_wire_is_a_number() {
+    const NUMBERS: [&str; 19] = [
+        "leftOut", "realizedLeftOut", "count", "wins", "losses", "breakeven", "winRate", "profitFactor", "pct", "rate", "r", "spR", "n", "graded", "share", "positionCount", "navAccounts", "activityCount", "holdDays",
+    ];
+    const MORE: [&str; 8] = ["pnlPct", "unrealPct", "percentChange", "held", "avgHold", "unrealizedPct", "marginUsedPct", "cashPct"];
+    const MORE2: [&str; 4] = ["dayChangePct", "yield", "yoc", "currentYield"];
+    // the declarations without their doc comments
+    let text = regex::Regex::new(r"(?s)/\*\*.*?\*/").unwrap().replace_all(&figures_declarations(), "").to_string();
+    let field = regex::Regex::new(r"(\w+)\??: ([^,;}]*)").unwrap();
+    let mut numbers: Vec<String> = field.captures_iter(&text).filter(|c| c[2].contains("number")).map(|c| c[1].to_string()).collect();
+    numbers.sort();
+    numbers.dedup();
+    let allowed: Vec<&str> = NUMBERS.iter().chain(MORE.iter()).chain(MORE2.iter()).copied().collect();
+    let stray: Vec<&String> = numbers.iter().filter(|n| !allowed.contains(&n.as_str())).collect();
+    assert!(stray.is_empty(), "a number on the figures wire that is not a ratio, count or day: {stray:?}");
+    // the scan finds what it looks for
+    assert!(field.captures_iter("{ total: number, ").any(|c| &c[1] == "total" && c[2].contains("number")));
 }

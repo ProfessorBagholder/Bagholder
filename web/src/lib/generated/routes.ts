@@ -4,9 +4,10 @@
 import type { Appended, Book, BookAppend, ImportReport, ScanWithStatus, WatchFolder, WatchSetAnswer, WatchStatus } from './book'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
+import type { Detail, Figures } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
-import type { Clear, DataSummary, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
+import type { Clear, DataSummary, FiguresQuery, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -54,6 +55,8 @@ export interface Routes {
   'GET /api/status': { answer: StatusAnswer }
   'GET /api/model': { query: ModelQuery; answer: ModelViewAnswer }
   'GET /api/trade': { query: TradeQuery; answer: TradeAnswer }
+  'GET /api/figures': { query: FiguresQuery; answer: Figures }
+  'GET /api/figures/detail': { query: TradeQuery; answer: Detail }
   'GET /api/book': { answer: Book }
   'GET /api/data': { answer: DataSummary }
   'POST /api/data/clear': { body: Clear; answer: DataSummary }
