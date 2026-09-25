@@ -34,7 +34,7 @@ fn bce() -> PayerNeed {
 }
 
 fn stored(ex: Date, record: Date, pay: Date) -> DeclaredRow {
-    DeclaredRow { ex_date: ex, record_date: Some(record), pay_date: Some(pay), amount: Money::new(Dec::parse("0.4375").unwrap(), Currency::CAD), reinvested: None }
+    DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: ex, record_date: Some(record), pay_date: Some(pay), amount: Money::new(Dec::parse("0.4375").unwrap(), Currency::CAD), reinvested: None }
 }
 
 /// BCE's organization page, its second quarter's release as captured, and its

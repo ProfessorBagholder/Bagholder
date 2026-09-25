@@ -7,17 +7,13 @@
 //! symbol answered on another venue than the one asked is another listing, and is
 //! refused by the caller against the venue the book names.
 //!
-//! **Distributions.** TMX states each distribution's ex-date and amount, and its
-//! record, pay and declaration dates where it has them. It does not say whether a
-//! distribution was paid in cash or in units. Its rows with no pay date are, for
-//! Mackenzie's funds, the year-end distributions paid in units: four of the five
-//! QCN lists (2018, 2021, 2022, 2023) equal the difference between Mackenzie's own
-//! yearly tax totals and its cash rows; the fifth (2021-03-22) is a cash payment
-//! TMX lists without any of its dates. A cash payment has a pay date, so a row
-//! with one is read as cash, and a row with none as paying no cash (its amount
-//! kept as the part paid in units). Only the latest distribution gone ex feeds a
-//! figure, and a year-end distribution in units is exactly the row that would
-//! otherwise stand as the latest for three months.
+//! **Distributions.** TMX states each distribution's ex-date and amount per
+//! unit, and its record, pay and declaration dates where it has them. It does
+//! not say whether a distribution is paid in cash or in units: a year-end
+//! distribution paid in units can be listed with or without a pay date, and a
+//! cash payment can be listed without any of its dates. So each row's amount is
+//! kept as TMX lists it, its form unstated, and the form is found from the
+//! record (`payers::exchange`, `SPEC.md` §2, Distribution rate).
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
@@ -78,10 +74,9 @@ pub struct TmxDistribution {
     pub ex_date: Date,
     pub record_date: Option<Date>,
     pub pay_date: Option<Date>,
-    /// The cash paid per unit: the amount of a row with a pay date, else none.
-    pub cash: Dec,
-    /// The amount of a row with no pay date: paid in units.
-    pub in_units: Option<Dec>,
+    /// The amount per unit, as TMX lists it: TMX does not say whether it is paid
+    /// in cash or in units.
+    pub amount: Dec,
     pub currency: Currency,
 }
 
@@ -206,7 +201,8 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
         let ex_date = r.day("exDate")?;
         let record_date = r.opt_day("recordDate")?;
         let pay_date = r.opt_day("payableDate")?;
-        let declared = r.opt_day("declarationDate")?;
+        // a date or absent, read strictly; nothing a figure uses
+        r.opt_day("declarationDate")?;
         let amount = r.dec("amount")?;
         if amount < Dec::ZERO {
             return Ok(Err(format!("{form} lists a distribution of {amount} going ex {ex_date}")));
@@ -218,18 +214,7 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
             Ok(c) => c,
             Err(e) => return Ok(Err(format!("{form}'s distribution currency: {e}"))),
         };
-        // research 2: a row with a pay date is cash; the undated rows are the
-        // year-ends paid in units. Every row TMX dates with its declaration also
-        // states its pay date (the zero-amount year-end notice apart), so a dated
-        // declaration of an amount with no pay date is not a form TMX has shown:
-        // whether it pays cash is not stated
-        let (cash, in_units) = match pay_date {
-            Some(_) => (amount, None),
-            None if amount.is_zero() => (Dec::ZERO, None),
-            None if declared.is_some() => return Ok(Err(format!("{form} declares {amount} going ex {ex_date} with no pay date: whether it is paid in cash is not stated"))),
-            None => (Dec::ZERO, Some(amount)),
-        };
-        out.push(TmxDistribution { ex_date, record_date, pay_date, cash, in_units, currency });
+        out.push(TmxDistribution { ex_date, record_date, pay_date, amount, currency });
     }
     Ok(Ok(out))
 }

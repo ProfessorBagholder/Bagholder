@@ -132,6 +132,9 @@ pub struct Declared {
     pub amount: Money,
     /// The part reinvested per unit, where the payer states one: it pays no cash.
     pub reinvested: Option<Dec>,
+    /// Whether the source states how it is paid; an unstated row's `amount` is
+    /// the whole per unit, its form found from the record (`cashflow`).
+    pub form: bagholder_core::distribution::Form,
 }
 
 /// One read of a fund's declared record, whole: a distribution the fund

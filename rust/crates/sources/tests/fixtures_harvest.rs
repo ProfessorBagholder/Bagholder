@@ -42,7 +42,7 @@ fn need(symbol: &str, mic: &str, currency: Currency, name: &str) -> PayerNeed {
 }
 
 fn stored(ex: Date, record: Option<Date>, pay: Option<Date>, cash: &str, currency: Currency, reinvested: Option<&str>) -> DeclaredRow {
-    DeclaredRow { ex_date: ex, record_date: record, pay_date: pay, amount: Money::new(dec(cash), currency), reinvested: reinvested.map(dec) }
+    DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: ex, record_date: record, pay_date: pay, amount: Money::new(dec(cash), currency), reinvested: reinvested.map(dec) }
 }
 
 /// What one run of the payers' read left behind: the book, the market cache's

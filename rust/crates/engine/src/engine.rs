@@ -241,7 +241,7 @@ impl Engine {
         self.trades = build_trades(i, &self.matched, &self.identity);
         self.positions = build_positions(i, &self.matched, &self.identity, None);
         self.cash = build_cashflow(i, &self.matched);
-        self.payers = payer_rates(i, &self.cash);
+        self.payers = payer_rates(i, &self.cash, &self.matched);
         self.equity = build_equity(i, None);
         self.checks = broker_checks(i, &self.matched);
     }
@@ -336,7 +336,7 @@ impl Engine {
                     Some(d) => self.inputs.facts.declared.insert(i, d),
                     None => self.inputs.facts.declared.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash);
+                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
                 self.compare(&before, &mut moved);
             }
             Change::Frequency(i, s) => {
@@ -345,7 +345,7 @@ impl Engine {
                     Some(s) => self.inputs.facts.frequencies.insert(i, s),
                     None => self.inputs.facts.frequencies.remove(&i),
                 };
-                self.payers = payer_rates(&self.inputs, &self.cash);
+                self.payers = payer_rates(&self.inputs, &self.cash, &self.matched);
                 self.compare(&before, &mut moved);
             }
             Change::Quote(i, q) => {

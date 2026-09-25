@@ -112,7 +112,7 @@ fn a_funds_record_is_read_whole_and_a_withdrawn_distribution_is_gone_from_the_ne
     f.account(&["a1"]);
     let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "FUND"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let fund = f.opens(r.record).instrument;
-    let row = |ex: &str, amount: &str, reinvested: Option<&str>| DeclaredRow { ex_date: day(ex), record_date: None, pay_date: None, amount: Money::new(d(amount), Currency::CAD), reinvested: reinvested.map(d) };
+    let row = |ex: &str, amount: &str, reinvested: Option<&str>| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: day(ex), record_date: None, pay_date: None, amount: Money::new(d(amount), Currency::CAD), reinvested: reinvested.map(d) };
     let tmx = SourceName::named("tmx");
     f.book.store_declared(fund, &[row("2026-02-13", "0.10", None), row("2026-03-13", "0.15", Some("0.12"))], &tmx, at("2026-03-01T00:00:00Z")).unwrap();
     let first = &f.book.declared().unwrap()[&fund];
@@ -134,8 +134,8 @@ fn an_identical_read_of_a_funds_record_records_only_its_time() {
     let r = f.store(&Spelled::v(1), "buy", &legs(vec![buy("a1", share("CA0000000001", "FUND"), "10", "-100", "2026-01-02T15:00:00Z")]));
     let fund = f.opens(r.record).instrument;
     let rows = vec![
-        DeclaredRow { ex_date: day("2026-02-13"), record_date: Some(day("2026-02-13")), pay_date: Some(day("2026-02-20")), amount: Money::new(d("0.10"), Currency::CAD), reinvested: None },
-        DeclaredRow { ex_date: day("2026-03-13"), record_date: Some(day("2026-03-13")), pay_date: Some(day("2026-03-20")), amount: Money::new(d("0.15"), Currency::CAD), reinvested: Some(d("0.12")) },
+        DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: day("2026-02-13"), record_date: Some(day("2026-02-13")), pay_date: Some(day("2026-02-20")), amount: Money::new(d("0.10"), Currency::CAD), reinvested: None },
+        DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: day("2026-03-13"), record_date: Some(day("2026-03-13")), pay_date: Some(day("2026-03-20")), amount: Money::new(d("0.15"), Currency::CAD), reinvested: Some(d("0.12")) },
     ];
     let tmx = SourceName::named("tmx");
     f.book.store_declared(fund, &rows, &tmx, at("2026-03-01T00:00:00Z")).unwrap();

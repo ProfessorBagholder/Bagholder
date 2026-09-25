@@ -37,6 +37,9 @@ pub struct DeclaredRow {
     /// The part reinvested per unit, in the same currency, where the payer
     /// states one.
     pub reinvested: Option<Dec>,
+    /// Whether the source states how it is paid: an unstated row's amount is
+    /// the whole per unit, cash or units not said.
+    pub form: bagholder_core::distribution::Form,
 }
 
 /// One series of the Bank's rates for a currency, from one source, and the
@@ -254,7 +257,7 @@ impl Book {
                 .query_row("SELECT id, source FROM declared_reads WHERE instrument_id = ? ORDER BY read_at DESC, id DESC LIMIT 1", [instrument.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))
                 .optional()?;
             if let Some((id, stored_source)) = newest {
-                let key = |d: &DeclaredRow| (d.ex_date, d.record_date, d.pay_date, d.amount.amount.to_text(), d.amount.currency.as_str().to_string(), d.reinvested.map(Dec::to_text));
+                let key = |d: &DeclaredRow| (d.ex_date, d.record_date, d.pay_date, d.amount.amount.to_text(), d.amount.currency.as_str().to_string(), d.reinvested.map(Dec::to_text), d.form);
                 let mut stored: Vec<_> = self.declared_rows(id)?.iter().map(key).collect();
                 let mut now: Vec<_> = items.iter().map(key).collect();
                 stored.sort();
@@ -271,8 +274,8 @@ impl Book {
             let read = self.conn().last_insert_rowid();
             for d in items {
                 self.conn().execute(
-                    "INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, reinvested, currency) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params![read, day(d.ex_date), d.record_date.map(day), d.pay_date.map(day), d.amount.amount.to_text(), d.reinvested.map(Dec::to_text), d.amount.currency.as_str()],
+                    "INSERT INTO declared_distributions(read_id, ex_date, record_date, pay_date, amount, reinvested, currency, form) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![read, day(d.ex_date), d.record_date.map(day), d.pay_date.map(day), d.amount.amount.to_text(), d.reinvested.map(Dec::to_text), d.amount.currency.as_str(), d.form.as_str()],
                 )?;
             }
             Ok(())
@@ -282,18 +285,19 @@ impl Book {
     /// The distributions one read of a declared record stored, by ex-date.
     fn declared_rows(&self, read: i64) -> Result<Vec<DeclaredRow>> {
         let mut items = Vec::new();
-        let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, reinvested, currency FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
+        let mut s = self.conn().prepare_cached("SELECT ex_date, record_date, pay_date, amount, reinvested, currency, form FROM declared_distributions WHERE read_id = ? ORDER BY ex_date")?;
         let rows = s.query_map([read], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?))
         })?;
         for row in rows {
-            let (ex, rec, pay, amount, reinvested, currency) = row?;
+            let (ex, rec, pay, amount, reinvested, currency, form) = row?;
             items.push(DeclaredRow {
                 ex_date: parse_day("declared_distributions", "ex_date", &ex)?,
                 record_date: rec.map(|d| parse_day("declared_distributions", "record_date", &d)).transpose()?,
                 pay_date: pay.map(|d| parse_day("declared_distributions", "pay_date", &d)).transpose()?,
                 amount: Money::new(parse_dec("declared_distributions", "amount", &amount)?, parse_currency("declared_distributions", "currency", &currency)?),
                 reinvested: reinvested.map(|r| parse_dec("declared_distributions", "reinvested", &r)).transpose()?,
+                form: bagholder_core::distribution::Form::parse(&form).ok_or_else(|| text::corrupt("declared_distributions", "form", &form, "not stated or unstated"))?,
             });
         }
         Ok(items)

@@ -43,7 +43,7 @@ fn need(symbol: &str, mic: &str, currency: Currency, name: &str) -> PayerNeed {
 }
 
 fn stored(ex: Date, record: Option<Date>, pay: Option<Date>, cash: &str, currency: Currency, reinvested: Option<&str>) -> DeclaredRow {
-    DeclaredRow { ex_date: ex, record_date: record, pay_date: pay, amount: Money::new(dec(cash), currency), reinvested: reinvested.map(dec) }
+    DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: ex, record_date: record, pay_date: pay, amount: Money::new(dec(cash), currency), reinvested: reinvested.map(dec) }
 }
 
 /// What one run of the payers' read left behind: the book, the market cache's
@@ -166,7 +166,7 @@ fn a_row_without_its_ex_date_is_a_mismatch_naming_it_writing_nothing() {
 #[test]
 fn two_amounts_for_one_ex_date_are_a_meaning_failure_writing_nothing() {
     let rows = answered(us_pages::yieldmax_page(&common::read(YM, "wrong-meaning-page-msty-two-amounts-one-ex-date.html")));
-    let err = payers::checked(Record { rows, per_year: Some(52), by_record: vec![] }, t(AT)).unwrap_err();
+    let err = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year: Some(52), by_record: vec![] }, t(AT)).unwrap_err();
     assert_eq!(err, "two different distributions go ex 2024-05-06: 2.5239 and 2.5293");
     let ran = run_payer(replies("distribution-frequency.json", "wrong-meaning-page-msty-two-amounts-one-ex-date.html"), &msty(), YM);
     assert_eq!(ran.outcome(), (OutcomeKind::Meaning, err));

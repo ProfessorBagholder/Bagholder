@@ -7,6 +7,7 @@ pub mod text_enum;
 pub mod account;
 pub mod adjustment;
 pub mod dec;
+pub mod distribution;
 pub mod ids;
 pub mod json;
 pub mod instrument;

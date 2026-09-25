@@ -59,7 +59,7 @@ pub fn next_due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequen
 }
 
 fn stored_rows(record: &Record) -> Vec<DeclaredRow> {
-    record.rows.iter().map(|r| DeclaredRow { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, amount: Money::new(r.cash, r.currency), reinvested: r.reinvested }).collect()
+    record.rows.iter().map(|r| DeclaredRow { form: record.form, ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, amount: Money::new(r.cash, r.currency), reinvested: r.reinvested }).collect()
 }
 
 /// Date a record's distributions stated by record date on the exchange's

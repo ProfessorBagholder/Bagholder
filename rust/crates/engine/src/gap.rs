@@ -67,6 +67,10 @@ pub enum Gap {
     /// states (a company whose own site cannot be read, whose distributions
     /// come from the exchange-side record): its annual income waits on it.
     ScheduleUnstated(InstrumentId),
+    /// A payer whose latest distribution gone ex was listed by a source that
+    /// does not say whether it is paid in cash or in units, and whose payment
+    /// has not posted yet: its rate waits on it.
+    FormUnstated(InstrumentId),
     /// A record with a problem its source or mapping reported (a row the
     /// mapping could not place, a fact the row does not state): the account's
     /// own figures from its day wait until the record is corrected.
@@ -100,6 +104,7 @@ impl Gap {
             Gap::PayerNotRead(_) => "payer-not-read",
             Gap::NoDistributionYet(_) => "no-distribution-yet",
             Gap::ScheduleUnstated(_) => "schedule-unstated",
+            Gap::FormUnstated(_) => "form-unstated",
             Gap::RecordProblem { .. } => "record-problem",
             Gap::Arithmetic(_) => "arithmetic",
         }
@@ -129,6 +134,7 @@ impl fmt::Display for Gap {
             Gap::PayerNotRead(i) => write!(f, "the record {i}'s payer publishes of its distributions has not been read"),
             Gap::NoDistributionYet(i) => write!(f, "{i}'s payer states no cash distribution gone ex yet"),
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),
+            Gap::FormUnstated(i) => write!(f, "whether {i}'s latest distribution is paid in cash or in units is not stated, and its payment has not posted"),
             Gap::RecordProblem { transaction, code } => write!(f, "{transaction} has a problem on its record ({code})"),
             Gap::Arithmetic(why) => write!(f, "{why}"),
         }

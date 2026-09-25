@@ -59,8 +59,11 @@ impl Payer for TmxRecord {
         };
         let rows = tmx::ask_dividends(net, &form);
         let shape_change = quote.shape_change.or(rows.shape_change);
+        // TMX states each distribution's amount per unit and not whether it is paid
+        // in cash or in units: the form is found from the record
         let outcome = rows.outcome.map(|rows| Record {
-            rows: rows.into_iter().map(|r| Distribution { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, cash: r.cash, reinvested: r.in_units, currency: r.currency }).collect(),
+            form: bagholder_core::distribution::Form::Unstated,
+            rows: rows.into_iter().map(|r| Distribution { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, cash: r.amount, reinvested: None, currency: r.currency }).collect(),
             per_year,
             by_record: vec![],
         });
@@ -101,7 +104,10 @@ impl Payer for YahooRecord {
         // every dividend event the chart holds, from before any fund's first trade
         let today = now.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).date();
         let chart = yahoo::ask_span(net, &form, date(2000, 1, 3), today, now);
+        // Yahoo states each dividend event's amount and not whether it is paid in
+        // cash or in units: the form is found from the record
         let outcome = chart.outcome.map(|c| Record {
+            form: bagholder_core::distribution::Form::Unstated,
             rows: c.dividends.into_iter().map(|(ex, amount)| Distribution { ex_date: ex, record_date: None, pay_date: None, cash: amount, reinvested: None, currency: c.currency }).collect(),
             per_year: None,
             by_record: vec![],

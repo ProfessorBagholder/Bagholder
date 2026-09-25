@@ -18,6 +18,6 @@ fn goldman_states_each_class_its_schedule_and_every_distribution() {
     // the page repeats 2025-12-23 identically: one row once checked
     let n = rows.iter().filter(|r| r.ex_date == date(2025, 12, 23)).count();
     assert_eq!(n, 2);
-    let checked = payers::checked(Record { rows, per_year: Some(4), by_record: vec![] }, "2026-09-24T04:00:00Z".parse().unwrap()).unwrap();
+    let checked = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year: Some(4), by_record: vec![] }, "2026-09-24T04:00:00Z".parse().unwrap()).unwrap();
     assert_eq!(checked.rows.iter().filter(|r| r.ex_date == date(2025, 12, 23)).count(), 1);
 }

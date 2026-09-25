@@ -142,6 +142,8 @@ fn old_market(old: &Connection, book: &Book, ledger: &bagholder_engine::input::L
             pay_date: pay.as_deref().and_then(|p| p.get(..10)).and_then(|p| p.parse().ok()),
             amount: Money::new(a, currency),
             reinvested: None,
+            // the old store's rows, as the earlier app read them
+            form: bagholder_core::distribution::Form::Stated,
         });
     }
     let read_at = bagholder_core::jiff::Timestamp::UNIX_EPOCH;

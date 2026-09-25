@@ -133,8 +133,47 @@ impl PayerRate {
     }
 }
 
+/// How a distribution whose source does not state its form was paid, as the
+/// record shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Found {
+    Cash,
+    Units,
+    NotYet,
+}
+
+/// Business days a paid distribution takes to post after its pay date, at most.
+const POSTS_WITHIN: i64 = 2;
+
+/// The form of a distribution its source lists without saying (`SPEC.md` §2,
+/// Distribution rate): cash where a dividend was paid on the instrument between
+/// its ex-date and the next; units where none had posted two business days after
+/// its pay date in an account that held the instrument on its ex-date (a
+/// distribution paid in units that are then consolidated posts no row); not
+/// known yet otherwise.
+fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRow], held_on_ex: bool, today: Date) -> Found {
+    if paid.iter().any(|r| r.day >= d.ex_date && next_ex.is_none_or(|n| r.day < n)) {
+        return Found::Cash;
+    }
+    let posted_by = d.pay_date.and_then(|p| {
+        let mut day = p;
+        let mut left = POSTS_WITHIN;
+        while left > 0 {
+            day = day.tomorrow().ok()?;
+            if !matches!(day.weekday(), bagholder_core::jiff::civil::Weekday::Saturday | bagholder_core::jiff::civil::Weekday::Sunday) {
+                left -= 1;
+            }
+        }
+        Some(day)
+    });
+    match posted_by {
+        Some(by) if held_on_ex && today > by => Found::Units,
+        _ => Found::NotYet,
+    }
+}
+
 /// Every instrument that has paid a dividend or has a declared record: its rate.
-pub fn payer_rates(inputs: &Inputs, rows: &[CashRow]) -> BTreeMap<InstrumentId, PayerRate> {
+pub fn payer_rates(inputs: &Inputs, rows: &[CashRow], matched: &Matched) -> BTreeMap<InstrumentId, PayerRate> {
     let today = inputs.clock.today;
     let mut paid: BTreeMap<InstrumentId, Vec<&CashRow>> = BTreeMap::new();
     for r in rows.iter().filter(|r| r.kind == Payment::Dividend && r.in_units.is_none()) {
@@ -154,11 +193,38 @@ pub fn payer_rates(inputs: &Inputs, rows: &[CashRow]) -> BTreeMap<InstrumentId, 
         // paid, so a row reinvested whole pays nothing and is passed over
         let cash: Vec<_> = read.map(|r| r.items.iter().filter(|d| d.amount.amount.is_positive()).collect()).unwrap_or_default();
         // the rate: the cash per unit of the latest distribution gone ex, from the
-        // payer's own record and nothing else
-        let latest = cash.iter().filter(|d| d.ex_date <= today).max_by_key(|d| d.ex_date);
+        // payer's own record and nothing else. A row whose source does not state
+        // its form counts as cash once the record shows it paid in cash, is passed
+        // over once it shows it paid in units, and holds the rate until then.
+        let mut gone: Vec<&&crate::input::Declared> = cash.iter().filter(|d| d.ex_date <= today).collect();
+        gone.sort_by_key(|d| std::cmp::Reverse(d.ex_date));
+        let accounts: Vec<AccountId> = matched.units.keys().filter(|(_, x)| *x == i).map(|(a, _)| *a).collect();
+        let held_on = |day: Date| accounts.iter().any(|a| day.yesterday().ok().is_some_and(|before| matched.units_on(*a, i, before).is_ok_and(|q| q.is_positive())));
+        let mut latest: Result<Option<&crate::input::Declared>, Gap> = Ok(None);
+        for (n, d) in gone.iter().enumerate() {
+            let use_it = match d.form {
+                bagholder_core::distribution::Form::Stated => true,
+                bagholder_core::distribution::Form::Unstated => {
+                    let next_ex = if n == 0 { None } else { Some(gone[n - 1].ex_date) };
+                    match found_form(d, next_ex, &payments, held_on(d.ex_date), today) {
+                        Found::Cash => true,
+                        Found::Units => false,
+                        Found::NotYet => {
+                            latest = Err(Gap::FormUnstated(i));
+                            break;
+                        }
+                    }
+                }
+            };
+            if use_it {
+                latest = Ok(Some(d));
+                break;
+            }
+        }
         let (per, source) = match (latest, read) {
-            (Some(d), Some(r)) => (Ok(d.amount), Some(RateSource::Declared(r.source.clone()))),
-            (None, Some(_)) => (Err(Gaps::of(Gap::NoDistributionYet(i))), None),
+            (Err(g), Some(_)) => (Err(Gaps::of(g)), None),
+            (Ok(Some(d)), Some(r)) => (Ok(d.amount), Some(RateSource::Declared(r.source.clone()))),
+            (Ok(None), Some(_)) => (Err(Gaps::of(Gap::NoDistributionYet(i))), None),
             (_, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
         // payments per year: the payer's own statement, never worked out; a

@@ -131,7 +131,7 @@ fn every_change(b: &mut Built, e: &Engine) -> Vec<Change> {
     let declared = DeclaredRead {
         read_at: "2026-04-20T12:00:00Z".parse().unwrap(),
         source: SourceName::named("tmx"),
-        items: vec![Declared { ex_date: day("2026-04-15"), record_date: None, pay_date: Some(day("2026-04-22")), amount: Money::new(d("0.12"), Currency::CAD), reinvested: None }],
+        items: vec![Declared { ex_date: day("2026-04-15"), record_date: None, pay_date: Some(day("2026-04-22")), amount: Money::new(d("0.12"), Currency::CAD), reinvested: None, form: bagholder_core::distribution::Form::Stated }],
     };
     let quote = Quote { price: Money::new(d("13"), Currency::CAD), change: Some(d("1")), change_pct: None, at: None, source: QuoteSource::Listing };
     // a close of the fund, which no contract is written on

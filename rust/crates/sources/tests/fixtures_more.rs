@@ -85,7 +85,7 @@ fn a_companys_release_paying_before_its_record_date_is_refused_as_a_whole() {
     let r = newswire::release(&common::read("newswire", "wrong-meaning-release-bce-paid-before-record.html")).unwrap();
     let row = companies::declared(bce, &r).unwrap().with_ex(date(2026, 9, 15));
     assert_eq!(row, cad(date(2026, 9, 15), date(2026, 9, 15), date(2026, 9, 1), "0.4375", None));
-    assert_eq!(payers::checked(Record { rows: vec![row], per_year: Some(4), by_record: vec![] }, t(AT)).unwrap_err(), "the distribution going ex 2026-09-15 is paid 2026-09-01");
+    assert_eq!(payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![row], per_year: Some(4), by_record: vec![] }, t(AT)).unwrap_err(), "the distribution going ex 2026-09-15 is paid 2026-09-01");
 }
 
 #[test]

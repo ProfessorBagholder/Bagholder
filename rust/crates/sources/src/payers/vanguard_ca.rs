@@ -176,7 +176,7 @@ impl Payer for VanguardCanada {
             Err(o) => return fail(o),
         };
         let outcome = match ask::json(&history.body) {
-            Ok(v) => parse_distributions(&v, &port_id).map(|rows| Record { rows, per_year, by_record: vec![] }),
+            Ok(v) => parse_distributions(&v, &port_id).map(|rows| Record { form: bagholder_core::distribution::Form::Stated, rows, per_year, by_record: vec![] }),
             Err(m) => Outcome::Mismatch(m),
         };
         Noted { outcome, shape_change: None }

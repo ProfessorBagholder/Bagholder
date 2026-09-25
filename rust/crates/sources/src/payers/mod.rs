@@ -82,6 +82,10 @@ impl ByRecord {
 /// What one read of a payer's publication states.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
+    /// Whether the source states how each distribution is paid: an exchange's
+    /// record states an amount per unit, each row's `cash`, and not whether it is
+    /// paid in cash or in units.
+    pub form: bagholder_core::distribution::Form,
     pub rows: Vec<Distribution>,
     /// Payments a year, where the publication states the schedule.
     pub per_year: Option<u32>,

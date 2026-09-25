@@ -74,6 +74,7 @@ pub fn facts(book: &Book) -> Result<Facts, String> {
                     pay_date: d.pay_date,
                     amount: d.amount,
                     reinvested: d.reinvested,
+                    form: d.form,
                 })
                 .collect();
             (i, DeclaredRead { read_at: r.read_at, source: r.source, items })

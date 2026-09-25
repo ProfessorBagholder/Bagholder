@@ -391,6 +391,6 @@ impl Payer for Companies {
         // each company here states its schedule, in its releases or on its page:
         // a statement gone is a change of its wording, not a schedule unstated
         let Some(per_year) = per_year else { return mismatch(schedule_missing(c)) };
-        Noted { outcome: Outcome::Answered(Record { rows, per_year: Some(per_year), by_record }), shape_change: None }
+        Noted { outcome: Outcome::Answered(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year: Some(per_year), by_record }), shape_change: None }
     }
 }

@@ -149,6 +149,6 @@ impl Payer for GlobalX {
         if rows.is_empty() {
             return Noted { outcome: Outcome::NotCarried(format!("no Global X release lists {ticker}")), shape_change: None };
         }
-        Noted { outcome: Outcome::Answered(Record { rows, per_year, by_record: vec![] }), shape_change: None }
+        Noted { outcome: Outcome::Answered(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year, by_record: vec![] }), shape_change: None }
     }
 }

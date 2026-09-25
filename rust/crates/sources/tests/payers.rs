@@ -88,23 +88,23 @@ fn row(ex: Date, cash: &str) -> Distribution {
 fn a_record_is_checked_before_anything_is_written() {
     let now = t("2026-09-24T04:00:00Z");
     // an identical repeat is one row
-    let r = payers::checked(Record { rows: vec![row(date(2026, 9, 15), "0.1"), row(date(2026, 9, 15), "0.1")], per_year: Some(12), by_record: vec![] }, now).unwrap();
+    let r = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![row(date(2026, 9, 15), "0.1"), row(date(2026, 9, 15), "0.1")], per_year: Some(12), by_record: vec![] }, now).unwrap();
     assert_eq!(r.rows.len(), 1);
     // a record date ten years ahead (a typo in the publication) is past the fund's life
     let mut far = row(date(2036, 7, 30), "0.1");
     far.record_date = Some(date(2036, 7, 30));
-    assert!(payers::checked(Record { rows: vec![far], per_year: None, by_record: vec![] }, now).unwrap_err().contains("past the fund's life"));
+    assert!(payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![far], per_year: None, by_record: vec![] }, now).unwrap_err().contains("past the fund's life"));
     // paid before it goes ex
     let mut early = row(date(2026, 9, 15), "0.1");
     early.pay_date = Some(date(2026, 9, 1));
-    assert!(payers::checked(Record { rows: vec![early], per_year: None, by_record: vec![] }, now).is_err());
+    assert!(payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![early], per_year: None, by_record: vec![] }, now).is_err());
 }
 
 fn read(at: &str, items: &[Date]) -> DeclaredReadRow {
     DeclaredReadRow {
         read_at: t(at),
         source: SourceName::named("ninepoint"),
-        items: items.iter().map(|d| DeclaredRow { ex_date: *d, record_date: None, pay_date: None, amount: Money::new(dec("0.1"), Currency::CAD), reinvested: None }).collect(),
+        items: items.iter().map(|d| DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: *d, record_date: None, pay_date: None, amount: Money::new(dec("0.1"), Currency::CAD), reinvested: None }).collect(),
     }
 }
 
@@ -171,8 +171,10 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
     // a Canadian listing no company reader serves: the exchange's record and the
     // schedule it states, marked as TMX's
     assert_eq!(declared[&id(2)].source.as_str(), "tmx");
-    let units = declared[&id(2)].items.iter().find(|r| r.ex_date == date(2023, 12, 28)).unwrap();
-    assert_eq!((units.amount.amount, units.reinvested), (Dec::ZERO, Some(dec("0.35705"))));
+    // its rows as listed, their form unstated: TMX does not say cash or units
+    let row = declared[&id(2)].items.iter().find(|r| r.ex_date == date(2023, 12, 28)).unwrap();
+    assert_eq!((row.amount.amount, row.reinvested, row.form), (dec("0.35705"), None, bagholder_core::distribution::Form::Unstated));
+    assert_eq!(declared[&id(1)].items[0].form, bagholder_core::distribution::Form::Stated, "a company states its own");
     assert_eq!((freq[&id(2)].per_year, freq[&id(2)].source.as_str()), (4, "tmx"));
     // a US listing no company reader serves: Yahoo's record (nothing paid yet), and
     // no schedule, since Yahoo states none
@@ -248,11 +250,11 @@ fn a_cash_row_and_a_units_row_for_one_ex_date_are_one_distribution() {
     let ex = date(2026, 9, 29);
     let cash = Distribution { ex_date: ex, record_date: Some(ex), pay_date: Some(date(2026, 10, 7)), cash: dec("0.10"), reinvested: None, currency: Currency::CAD };
     let units = Distribution { cash: Dec::ZERO, reinvested: Some(dec("0.25")), ..cash };
-    let r = payers::checked(Record { rows: vec![units, cash], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap();
+    let r = payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![units, cash], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap();
     assert_eq!(r.rows, vec![Distribution { reinvested: Some(dec("0.25")), ..cash }]);
     // two different cash amounts for one ex-date are still a conflict
     let other = Distribution { cash: dec("0.11"), ..cash };
-    assert!(payers::checked(Record { rows: vec![cash, other], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
+    assert!(payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![cash, other], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
 }
 
 #[test]

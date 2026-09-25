@@ -124,24 +124,24 @@ fn a_tmx_quote_states_its_venue_and_schedule() {
 }
 
 #[test]
-fn tmx_distributions_are_cash_when_paid_on_a_date_and_in_units_otherwise() {
+fn tmx_distributions_are_kept_as_listed_whatever_their_dates() {
+    // TMX states an amount per unit and not whether it is paid in cash or in
+    // units: every row is kept as listed, dated or not
     let Outcome::Answered(rows) = tmx::parse_dividends(&common::json(TMX, "dividends-QCN.json"), "QCN") else { panic!() };
     assert_eq!(rows.len(), 40);
     let on = |d: Date| rows.iter().find(|r| r.ex_date == d).copied().unwrap();
     let latest = on(date(2026, 9, 21));
-    assert_eq!((latest.cash, latest.in_units, latest.pay_date, latest.record_date), (dec("1.13892"), None, Some(date(2026, 9, 28)), Some(date(2026, 9, 21))));
-    // a year-end distribution paid in units: no pay date
-    let units = on(date(2023, 12, 28));
-    assert_eq!((units.cash, units.in_units), (Dec::ZERO, Some(dec("0.35705"))));
-    // a year-end row of nothing
-    let nothing = on(date(2025, 12, 31));
-    assert_eq!((nothing.cash, nothing.in_units), (Dec::ZERO, None));
+    assert_eq!((latest.amount, latest.pay_date, latest.record_date), (dec("1.13892"), Some(date(2026, 9, 28)), Some(date(2026, 9, 21))));
+    let undated = on(date(2023, 12, 28));
+    assert_eq!((undated.amount, undated.pay_date), (dec("0.35705"), None));
+    assert_eq!(on(date(2025, 12, 31)).amount, Dec::ZERO);
+    // a declared amount with no pay date is listed as the others
+    let Outcome::Answered(declared) = tmx::parse_dividends(&common::json(TMX, "edited-dividends-QCN-declared-without-pay-date.json"), "QCN") else { panic!() };
+    assert!(declared.iter().any(|r| r.pay_date.is_none() && r.amount > Dec::ZERO));
     // an unknown symbol lists nothing: whether it is one is the quote's to say
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "dividends-ZZZQX-unknown.json"), "ZZZQX"), Outcome::Answered(r) if r.is_empty()));
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-shape-dividends-QCN-amount-as-text.json"), "QCN"), Outcome::Mismatch(m) if m.path == "data.dividends.dividends[0].amount"));
     assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-meaning-dividends-QCN-paid-before-ex.json"), "QCN"), Outcome::Meaning(w) if w.contains("before")));
-    // a declared amount with no pay date: whether it is cash is not stated
-    assert!(matches!(tmx::parse_dividends(&common::json(TMX, "wrong-meaning-dividends-QCN-declared-without-pay-date.json"), "QCN"), Outcome::Meaning(w) if w.contains("no pay date")));
 }
 
 #[test]

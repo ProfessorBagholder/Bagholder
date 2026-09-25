@@ -227,6 +227,8 @@ pub fn build(case: &Value) -> Built {
                 pay_date: s(d, "pay").map(day),
                 amount: Money::new(dec(s(d, "amount").unwrap()), ccy(s(d, "currency").unwrap_or("CAD"))),
                 reinvested: s(d, "reinvested").map(dec),
+                // what the case's source states of how it is paid; stated unless the case says
+                form: s(d, "form").map(|f| bagholder_core::distribution::Form::parse(f).expect("stated or unstated")).unwrap_or(bagholder_core::distribution::Form::Stated),
             })
             .collect();
         declared.insert(ids.instrument(&i), DeclaredRead { read_at: Timestamp::UNIX_EPOCH, source: SourceName::named("tmx"), items });

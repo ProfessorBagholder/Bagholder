@@ -87,7 +87,7 @@ pub fn parse_page(html: &str, currency: bagholder_core::Currency) -> Outcome<Rec
             rows.push(Distribution { ex_date: ex, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency });
         }
     }
-    Outcome::Answered(Record { rows, per_year, by_record: vec![] })
+    Outcome::Answered(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year, by_record: vec![] })
 }
 
 pub struct Evolve;

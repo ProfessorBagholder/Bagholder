@@ -294,7 +294,7 @@ mod tests {
         assert!(!f.price_changed(held).unwrap().is_empty(), "its position moved");
         same_as_fresh(&f, now);
         // the payer's declared record
-        let row = bagholder_book::facts::DeclaredRow { ex_date: "2025-11-03".parse().unwrap(), record_date: None, pay_date: None, amount: bagholder_core::Money::new(bagholder_core::Dec::parse("0.10").unwrap(), currency), reinvested: None };
+        let row = bagholder_book::facts::DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: "2025-11-03".parse().unwrap(), record_date: None, pay_date: None, amount: bagholder_core::Money::new(bagholder_core::Dec::parse("0.10").unwrap(), currency), reinvested: None };
         book.store_declared(held, &[row], &bagholder_core::SourceName::named("tmx"), now).unwrap();
         f.payer_changed(held).unwrap();
         same_as_fresh(&f, now);

@@ -282,6 +282,6 @@ impl Payer for FidelityCanada {
                 Err(m) => return mismatch(Mismatch { path: format!("{} {}", l.path, m.path), why: m.why }),
             }
         }
-        Noted { outcome: Outcome::Answered(Record { rows, per_year, by_record }), shape_change: None }
+        Noted { outcome: Outcome::Answered(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year, by_record }), shape_change: None }
     }
 }
