@@ -222,6 +222,11 @@ pub fn endpoint() -> String {
         if !st.endpoint.is_empty() {
             return st.endpoint.clone();
         }
+        // while an attempt is under way or resting, nothing is asked: a caller
+        // checking many times a second never probes a server once per check
+        if !may_try(&st) {
+            return String::new();
+        }
     }
     if let Some((url, model)) = detect_running() {
         let mut st = state().lock().unwrap();
@@ -237,6 +242,16 @@ pub fn endpoint() -> String {
     String::new()
 }
 
+/// Whether a new attempt may start now: none is under way, and a failed one
+/// has had its rest (a download that cannot reach its host is not asked for
+/// twice a second).
+fn may_try(st: &State) -> bool {
+    if ["detecting", "downloading", "starting"].contains(&st.phase) {
+        return false;
+    }
+    st.rest.map_or(true, |(since, rest)| since.elapsed() >= rest)
+}
+
 /// Start provisioning if it is not already under way.
 pub fn ensure() {
     if hooks::ENSURE.with(|h| h.borrow().as_ref().map(|f| f()).is_some()) {
@@ -244,15 +259,8 @@ pub fn ensure() {
     }
     {
         let mut st = state().lock().unwrap();
-        if ["detecting", "downloading", "starting"].contains(&st.phase) || !st.endpoint.is_empty() {
+        if !st.endpoint.is_empty() || !may_try(&st) {
             return;
-        }
-        // a failed attempt is tried again once its rest is over, never at once: a
-        // download that cannot reach its host is not asked for twice a second
-        if let Some((since, rest)) = st.rest {
-            if since.elapsed() < rest {
-                return;
-            }
         }
         st.phase = "detecting";
     }
@@ -484,6 +492,9 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
 mod rest_tests {
     use super::*;
 
+    /// The model's state is process-wide; these tests take turns with it.
+    static LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn a_failed_attempt_rests_thirty_seconds_then_twice_as_long_each_time_up_to_half_an_hour() {
         assert_eq!(next_rest(None), Duration::from_secs(30));
@@ -494,6 +505,7 @@ mod rest_tests {
 
     #[test]
     fn a_failure_is_not_tried_again_while_it_rests() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         reset_state();
         set("failed", "download failed");
         ensure();
@@ -501,6 +513,28 @@ mod rest_tests {
         let st = state().lock().unwrap();
         assert_eq!(st.rest.map(|(_, d)| d), Some(REST_FIRST));
         drop(st);
+        reset_state();
+    }
+
+    #[test]
+    fn nothing_is_probed_while_an_attempt_is_under_way_or_resting() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let probes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let p = probes.clone();
+        hooks::DETECT.with(|h| *h.borrow_mut() = Some(Box::new(move || { p.set(p.get() + 1); None })));
+        hooks::ENSURE.with(|h| *h.borrow_mut() = Some(Box::new(|| {})));
+        for phase in ["detecting", "downloading", "starting", "failed"] {
+            reset_state();
+            set(phase, "");
+            for _ in 0..100 {
+                assert_eq!(endpoint(), "");
+            }
+        }
+        assert_eq!(probes.get(), 0, "a check during an attempt or its rest asks no server");
+        reset_state();
+        assert_eq!(endpoint(), "");
+        assert_eq!(probes.get(), 1, "with nothing under way, one check probes once");
+        hooks::clear();
         reset_state();
     }
 }
