@@ -23,9 +23,11 @@ export type TradeQuery = { id: string | null, };
 
 export type TradeAnswer = { ok: boolean, id: string, legs: Array<Leg>, fills: Array<Fill>, };
 
-export type DataSummary = { ok: boolean, path: string, activities: number, firstActivity: string, lastActivity: string, accounts: number, balances: number, navDays: number, securities: number, journal: number, fxDays: number, benchmarkDays: number, filings: number, syncedAt: string, sessionPresent: boolean, };
+export type Clear = { kinds: Array<Kind>, };
 
-export type Clear = { journal?: boolean, market?: boolean, session?: boolean, };
+export type ClearAnswer = { ok: boolean, };
+
+export type Kind = "broker" | "entries" | "journal" | "market" | "orders" | "settings" | "login";
 
 export type JournalEntryRequest = { 
 /**

@@ -10,10 +10,9 @@ use ts_rs::TS;
 
 use super::extract::trimmed;
 use super::{api_routes, blocking, with_store, Api, ApiError, AppState, Body, Params, Routed};
-use std::sync::Arc;
 
 use crate::app::App;
-use crate::{feeds, session};
+use crate::feeds;
 
 pub fn routes() -> Routed {
     let mut routed = api_routes! {
@@ -23,7 +22,6 @@ pub fn routes() -> Routed {
         get "/api/figures" => figures;
         get "/api/figures/detail" => figures_detail;
         get "/api/book" => book;
-        get "/api/data" => data;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
         post "/api/entries" => entries;
@@ -214,88 +212,33 @@ async fn book(State(state): State<AppState>) -> Api<bagholder_store::book::Book>
     with_store(&state, |conn| bagholder_store::book::book(conn)).await
 }
 
-/// The row counts the Data & storage dialog shows before a wipe.
-#[derive(Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct DataSummary {
-    ok: bool,
-    path: String,
-    activities: i64,
-    first_activity: String,
-    last_activity: String,
-    accounts: i64,
-    balances: i64,
-    nav_days: i64,
-    securities: i64,
-    journal: usize,
-    fx_days: i64,
-    benchmark_days: i64,
-    filings: i64,
-    synced_at: String,
-    session_present: bool,
-}
-
-fn data_summary(app: &Arc<App>, conn: &rusqlite::Connection) -> rusqlite::Result<DataSummary> {
-    let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |r| r.get(0)) };
-    let journal = bagholder_store::admin::journal(conn)?;
-    let (first_act, last_act): (Option<String>, Option<String>) =
-        conn.query_row("SELECT MIN(transaction_date), MAX(transaction_date) FROM activities", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(DataSummary {
-        ok: true,
-        path: app.db_path().display().to_string(),
-        activities: count("SELECT COUNT(*) FROM activities")?,
-        first_activity: first_act.unwrap_or_default(),
-        last_activity: last_act.unwrap_or_default(),
-        accounts: count("SELECT COUNT(*) FROM accounts")?,
-        balances: count("SELECT COUNT(*) FROM balances")?,
-        nav_days: count("SELECT COUNT(*) FROM nav_history")?,
-        securities: count("SELECT COUNT(*) FROM securities")?,
-        journal: journal.len(),
-        fx_days: count("SELECT COUNT(*) FROM fx_rates")?,
-        benchmark_days: count("SELECT COUNT(*) FROM benchmark_prices")?,
-        filings: count("SELECT COUNT(*) FROM filings")?,
-        synced_at: bagholder_store::tables::get_meta(conn, "synced_at", "")?,
-        session_present: session::load_session(app).is_some(),
-    })
-}
-
-async fn data(State(state): State<AppState>) -> Api<DataSummary> {
-    let app = state.app.clone();
-    with_store(&state, move |conn| data_summary(&app, conn)).await
-}
-
-/// What `POST /api/data/clear` removes besides the synced rows.
+/// `POST /api/data/clear`: the kinds of data ticked.
 #[derive(Deserialize, Default, TS)]
+#[serde(deny_unknown_fields)]
 pub struct Clear {
-    #[serde(default)]
-    #[ts(optional)]
-    journal: Option<bool>,
-    #[serde(default)]
-    #[ts(optional)]
-    market: Option<bool>,
-    #[serde(default)]
-    #[ts(optional)]
-    session: Option<bool>,
+    kinds: Vec<crate::clear::Kind>,
 }
 
-async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> Api<DataSummary> {
-    if state.app.state.lock().unwrap().syncing {
-        return Err(ApiError::Conflict("A sync is running. Wait for it to finish.".into()));
+#[derive(Serialize, TS)]
+pub struct ClearAnswer {
+    ok: bool,
+}
+
+async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> Api<ClearAnswer> {
+    if what.kinds.is_empty() {
+        return Err(ApiError::BadRequest("nothing was ticked".into()));
     }
-    let app = state.app.clone();
-    with_store(&state, move |conn| {
-        bagholder_store::admin::clear_synced_data(conn, !what.journal.unwrap_or(false), !what.market.unwrap_or(false))?;
-        if what.session.unwrap_or(false) {
-            session::delete_session(&app);
+    let app = state.app;
+    blocking(move || -> Result<ClearAnswer, ApiError> {
+        let f = open_figures(&app)?;
+        match crate::clear::clear(&app, f, &what.kinds, bagholder_core::jiff::Timestamp::now()) {
+            Ok(()) => Ok(ClearAnswer { ok: true }),
+            Err(e @ (crate::clear::Refused::Pulling | crate::clear::Refused::BracketLive(_))) => Err(ApiError::Conflict(e.to_string())),
+            Err(crate::clear::Refused::Failed(why)) => Err(ApiError::Failed(why)),
         }
-        {
-            let mut st = app.state.lock().unwrap();
-            st.last_sync.clear();
-            st.error.clear();
-        }
-        data_summary(&app, conn)
     })
-    .await
+    .await?
+    .map(Json)
 }
 
 /// One trade's journal entry, whole: the page sends all three fields.

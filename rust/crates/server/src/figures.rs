@@ -128,6 +128,21 @@ impl Figures {
         Ok(f)
     }
 
+    /// Build the engine again from what the book and the cache hold now: after
+    /// Clear data, where what changed is everything. Nothing is built before a
+    /// page has stated its zone.
+    pub fn rebuild(&self, now: Timestamp) -> Result<(), String> {
+        let book = self.book()?;
+        let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
+        let mut e = build(&book, &self.cache()?, clock(&z.zone, now)?)?;
+        settle_trades(&book, &mut e, now)?;
+        *self.engine.write().unwrap_or_else(|e| e.into_inner()) = Some(e);
+        *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
+        self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.wake();
+        Ok(())
+    }
+
     /// A connection to the book, of this thread's own.
     pub fn book(&self) -> Result<Book, String> {
         Book::open_in(&self.home, crate::app::APP_VERSION, Timestamp::now()).map(|(b, _)| b).map_err(err)

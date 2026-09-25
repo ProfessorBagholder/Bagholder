@@ -8,7 +8,7 @@ import { waits } from './dec'
 // the server's own types, generated
 import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/model_api'
 import type { LoginInput } from './generated/session'
-import type { EntryRequest } from './generated/model_api'
+import type { EntryRequest, Kind as DataKind } from './generated/model_api'
 
 export interface TradeForm {
   /** A trade, or an opening balance: what units that arrived without a cost cost. */
@@ -52,6 +52,9 @@ export const ui = $state<{
   importReport: ImportReport | null
   /** the account files are imported into, or a folder's go to; '' the Manual account */
   importAccount: string
+  /** the kinds ticked in Clear data, and why the server refused them */
+  clearKinds: DataKind[]
+  clearError: string
   folderPath: string
   folderError: string
   watch: WatchStatus | null
@@ -70,6 +73,8 @@ export const ui = $state<{
   tradeForm: freshTradeForm(),
   importReport: null,
   importAccount: '',
+  clearKinds: [],
+  clearError: '',
   folderPath: '',
   folderError: '',
   watch: null,
@@ -205,13 +210,35 @@ export function disconnectNow(): void {
   call('POST /api/disconnect')
 }
 
+/** The kinds of data Clear data offers, in the order its dialog lists them. */
+export const DATA_KINDS: { kind: DataKind; label: string }[] = [
+  { kind: 'broker', label: 'Wealthsimple records' },
+  { kind: 'entries', label: 'Your entries and imports' },
+  { kind: 'journal', label: 'Journal' },
+  { kind: 'market', label: 'Market data' },
+  { kind: 'orders', label: 'Orders and brackets' },
+  { kind: 'settings', label: 'Watchlist, tiles and notifications' },
+  { kind: 'login', label: 'Wealthsimple login' },
+]
 export function openData(): void {
   ui.menuOpen = false
+  ui.clearKinds = []
+  ui.clearError = ''
   ui.confirm = 'clear'
 }
-export function clearDataNow(): void {
+/** Clear what is ticked: the dialog stays open, saying why, when the server refuses. */
+export async function clearDataNow(): Promise<void> {
+  if (!ui.clearKinds.length) return
+  ui.busy = 'clearing'
+  ui.clearError = ''
+  const r = await call('POST /api/data/clear', { body: { kinds: ui.clearKinds } })
+  ui.busy = ''
+  if (!r.ok) {
+    ui.clearError = r.error || 'Could not clear it.'
+    return
+  }
   ui.confirm = ''
-  call('POST /api/data/clear', { body: { journal: true, market: true } })
+  flash('Data cleared')
 }
 
 export function openTradeModal(): void {

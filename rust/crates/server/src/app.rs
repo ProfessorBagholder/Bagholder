@@ -173,10 +173,6 @@ impl App {
         spawn(name, move || f(app));
     }
 
-    pub fn db_path(&self) -> PathBuf {
-        self.home.join("bagholder.db")
-    }
-
     /// A connection to the store, on loan from the pool: used as a `&Connection`
     /// and given back when dropped.
     pub fn open(&self) -> rusqlite::Result<bagholder_store::pool::Pooled<'_>> {

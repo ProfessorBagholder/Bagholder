@@ -321,7 +321,7 @@ fn model_api_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
-        crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::DataSummary, crate::http::model::Clear,
+        crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
         crate::http::model::Notes, crate::http::model::NotesAnswer,
         crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
@@ -364,7 +364,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
         "Appended" | "BookAppend" | "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" | "ModelQuery" | "ModelViewAnswer" => "model_api",
+        "TradeQuery" | "TradeAnswer" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" | "ModelQuery" | "ModelViewAnswer" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",

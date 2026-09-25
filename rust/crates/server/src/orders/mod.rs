@@ -61,7 +61,7 @@ fn spawn<F: FnOnce() + Send + 'static>(name: &str, f: F) {
 use crate::notify;
 use crate::session::{ensure_fresh_token, load_session};
 
-mod brackets;
+pub(crate) mod brackets;
 mod edit;
 mod manual;
 pub mod preview;

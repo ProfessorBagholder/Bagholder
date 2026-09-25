@@ -18,7 +18,7 @@ pub(super) const BRACKET_TIF: &str = "UNTIL_CANCEL";
 pub(super) const BRACKET_ENDED_QUIETLY: [&str; 5] = ["stopped", "target", "cancelled by the user", "both legs removed", "sold from the ticket"];
 
 /// A bracket that still has work to do stands at one of these.
-pub(super) const BRACKET_LIVE_ST: [BracketStatus; 6] =
+pub(crate) const BRACKET_LIVE_ST: [BracketStatus; 6] =
     [BracketStatus::Waiting, BracketStatus::Armed, BracketStatus::Firing, BracketStatus::TargetPlaced, BracketStatus::Stopping, BracketStatus::Closing];
 
 /// Resting at Wealthsimple: it can still fill, and it can be cancelled.

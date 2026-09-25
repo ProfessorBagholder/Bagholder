@@ -145,26 +145,6 @@
       "securities": []
     }
   },
-  "data": {
-    "status": 200,
-    "body": {
-      "ok": true,
-      "path": "<db-path>",
-      "activities": 0,
-      "firstActivity": "",
-      "lastActivity": "",
-      "accounts": 0,
-      "balances": 0,
-      "navDays": 0,
-      "securities": 0,
-      "journal": 0,
-      "fxDays": 0,
-      "benchmarkDays": 0,
-      "filings": 0,
-      "syncedAt": "",
-      "sessionPresent": false
-    }
-  },
   "trade_missing": {
     "status": 404,
     "body": {

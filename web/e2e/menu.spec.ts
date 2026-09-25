@@ -239,15 +239,20 @@ test('Load folder: a folder that is not one is refused, a watched one lists its 
   await expect(page.getByLabel('Folder')).toHaveValue('')
 })
 
-test('Clear data asks once: Esc and an unfocused Enter leave it standing, only the button acts', async ({ page }) => {
+test('Clear data: a box for each kind, Clear all ticks every one, nothing is sent until the button with something ticked', async ({ page }) => {
   let asked = 0
-  await page.route('**/api/data/clear', (route) => { asked++; return route.fulfill({ json: { ok: true } }) })
+  let sent: unknown = null
+  await page.route('**/api/data/clear', (route) => { sent = route.request().postDataJSON(); asked++; return route.fulfill({ json: { ok: true } }) })
   await page.goto('/')
   await ready(page)
   await openMenu(page)
   await page.getByText('Clear data').click()
+  const dlg = page.locator('#confirmDlg')
   await expect(page.getByRole('heading', { name: 'Clear data' })).toBeVisible()
-  await expect(page.locator('#confirmDlg')).toContainText('Deletes everything synced from Wealthsimple, your journal and the downloaded market data from this machine. Your Wealthsimple login stays.')
+  const kinds = ['Wealthsimple records', 'Your entries and imports', 'Journal', 'Market data', 'Orders and brackets', 'Watchlist, tiles and notifications', 'Wealthsimple login']
+  for (const k of kinds) await expect(dlg.getByLabel(k)).not.toBeChecked()
+  // nothing ticked: the button does nothing
+  await expect(dlg.getByRole('button', { name: 'Clear data' })).toBeDisabled()
 
   await page.keyboard.press('Escape')
   await expect(page.getByRole('heading', { name: 'Clear data' })).toHaveCount(0)
@@ -255,16 +260,35 @@ test('Clear data asks once: Esc and an unfocused Enter leave it standing, only t
 
   await openMenu(page)
   await page.getByText('Clear data').click()
-  await page.keyboard.press('Enter') // nothing is focused inside the dialog; Enter is not a shortcut for it
+  await dlg.getByLabel('Journal').check()
+  await page.keyboard.press('Enter') // Enter on a box is not a shortcut for the button
   await expect(page.getByRole('heading', { name: 'Clear data' })).toBeVisible()
   expect(asked).toBe(0)
-
-  let sent: Record<string, unknown> | null = null
-  await page.route('**/api/data/clear', (route) => { sent = route.request().postDataJSON(); asked++; return route.fulfill({ json: { ok: true } }) })
-  await page.locator('#confirmDlg').getByRole('button', { name: 'Clear data' }).click()
-  await expect.poll(() => asked).toBe(1)
-  expect(sent).toEqual({ journal: true, market: true })
+  await dlg.getByRole('button', { name: 'Clear data' }).click()
+  await expect.poll(() => sent).toEqual({ kinds: ['journal'] })
   await expect(page.getByRole('heading', { name: 'Clear data' })).toHaveCount(0)
+
+  // Clear all ticks every box
+  await openMenu(page)
+  await page.getByText('Clear data').click()
+  await expect(dlg.getByLabel('Journal')).not.toBeChecked()
+  await dlg.getByRole('button', { name: 'Clear all' }).click()
+  for (const k of kinds) await expect(dlg.getByLabel(k)).toBeChecked()
+  await dlg.getByRole('button', { name: 'Clear data' }).click()
+  await expect.poll(() => (sent as { kinds: string[] }).kinds).toEqual(['broker', 'entries', 'journal', 'market', 'orders', 'settings', 'login'])
+})
+
+test('Clear data refused says why in the dialog and leaves it open', async ({ page }) => {
+  await page.route('**/api/data/clear', (route) => route.fulfill({ status: 409, json: { ok: false, error: 'The bracket on ZZQQ is live. Cancel it in the Orders panel first.' } }))
+  await page.goto('/')
+  await ready(page)
+  await openMenu(page)
+  await page.getByText('Clear data').click()
+  const dlg = page.locator('#confirmDlg')
+  await dlg.getByLabel('Orders and brackets').check()
+  await dlg.getByRole('button', { name: 'Clear data' }).click()
+  await expect(dlg.locator('.status-err')).toHaveText('The bracket on ZZQQ is live. Cancel it in the Orders panel first.')
+  await expect(page.getByRole('heading', { name: 'Clear data' })).toBeVisible()
 })
 
 test('Disconnect asks once, and Esc keeps the session while the button ends it', async ({ page, request }) => {

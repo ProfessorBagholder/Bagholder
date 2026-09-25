@@ -7,6 +7,7 @@
 //! The book never reads the clock: every write is given the time it happened.
 
 pub mod canon;
+pub mod clear;
 pub mod facts;
 pub mod identity;
 pub mod import;
@@ -100,6 +101,12 @@ impl Book {
     }
 
     pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// The connection, for a test that counts what each table holds.
+    #[doc(hidden)]
+    pub fn conn_for_tests(&self) -> &Connection {
         &self.conn
     }
 

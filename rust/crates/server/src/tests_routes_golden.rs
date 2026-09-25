@@ -95,7 +95,6 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
         ("status", req(Method::GET, "/api/status", None)),
         ("model_live_empty", req(Method::GET, "/api/model?only=live", None)),
         ("book", req(Method::GET, "/api/book", None)),
-        ("data", req(Method::GET, "/api/data", None)),
         ("trade_missing", req(Method::GET, "/api/trade?id=golden-no-such-trade", None)),
         ("journal", req(Method::POST, "/api/journal", Some(json!({"id": "golden-journal", "grade": "B", "tags": ["golden"], "thesis": "golden fixture"})))),
         ("groups", req(Method::POST, "/api/groups", Some(json!({"groups": []})))),
