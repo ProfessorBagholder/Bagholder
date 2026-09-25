@@ -258,6 +258,10 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         }
         Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())?))
     }
+    fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
+        let row = Node::root(payload).obj("activity").ok()?;
+        Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())?))
+    }
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date {
         self.zones.day(at, ZONE).unwrap_or_else(|_| at.to_zoned(jiff::tz::TimeZone::UTC).date())
     }

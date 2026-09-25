@@ -32,6 +32,8 @@ pub struct Report {
     pub records_unchanged: usize,
     /// Imported records a broker record replaced.
     pub superseded: usize,
+    /// Records of rows the broker no longer lists over a span it was read in.
+    pub removed: usize,
     pub transfers_linked: usize,
     pub days_stored: usize,
     /// Days the broker stated again differently: kept beside the first.
@@ -119,6 +121,8 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     let mut rows: Vec<Row> = Vec::new();
     let mut read_accounts: Vec<(AccountId, jiff::Timestamp)> = Vec::new();
+    // the day each account's activity was read from (the whole of it when `None`)
+    let mut spans: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
     for a in &stated {
         let id = ids[&a.key];
         let last = book.activity_read_at(id)?;
@@ -132,6 +136,7 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
                 report.rows_read += r.len();
                 rows.extend(r);
                 read_accounts.push((id, now));
+                spans.insert(a.key.clone(), from);
             }
             Err(f) => {
                 book.note_activity_read(id, now, false)?;
@@ -172,6 +177,15 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
                 stored_second.push((id, row));
             }
         }
+    }
+    let listed: BTreeSet<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    let mut keys_all: BTreeMap<AccountId, Vec<&str>> = BTreeMap::new();
+    for a in &stated {
+        keys_all.entry(ids[&a.key]).or_default().push(&a.key);
+    }
+    for r in unlisted(book, adapter, &scheme, &spans, &keys_all, &listed)? {
+        book.mark_removed(r, now)?;
+        report.removed += 1;
     }
     for (id, at) in &read_accounts {
         book.note_activity_read(*id, *at, true)?;
@@ -290,6 +304,50 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         report.days_restated += book.store_account_days(id, &days, &read)?.len();
     }
     Ok(report)
+}
+
+/// The records of rows the broker no longer lists over a span it was read in:
+/// a row posted again under another id once final (a card purchase's pending
+/// row), a row withdrawn. Its own records by the account and day they name; an
+/// imported record of its rows by its transactions' account, once every
+/// account of the broker's behind it was read, and their day.
+fn unlisted(book: &Book, adapter: &dyn BrokerAdapter, scheme: &str, spans: &BTreeMap<String, Option<jiff::civil::Date>>, keys_all: &BTreeMap<AccountId, Vec<&str>>, listed: &BTreeSet<&str>) -> Result<Vec<RecordId>> {
+    let covers = |from: &Option<jiff::civil::Date>, day: jiff::civil::Date| from.is_none_or(|f| day >= f);
+    let mut out = Vec::new();
+    for r in book.live_records(&adapter.mapping().source())? {
+        let rec = book.record(r)?;
+        if listed.contains(rec.source_key.as_str()) {
+            continue;
+        }
+        let Some((_, _, payload)) = book.revisions(r)?.pop() else { continue };
+        let Some((account, day)) = json::parse(&payload).ok().and_then(|v| adapter.placed(&v)) else { continue };
+        if spans.get(&account).is_some_and(|from| covers(from, day)) {
+            out.push(r);
+        }
+    }
+    // the span every account behind a book account was read over: the latest start
+    let span_of = |id: &AccountId| -> Option<Option<jiff::civil::Date>> {
+        let mut span = None;
+        for k in keys_all.get(id)? {
+            span = Some(match (span.flatten(), *spans.get(*k)?) {
+                (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
+                (a, b) => a.or(b),
+            });
+        }
+        span
+    };
+    for (r, key) in book.live_records_by_scheme(scheme, &adapter.mapping().source())? {
+        if listed.contains(key.as_str()) {
+            continue;
+        }
+        let txs = book.transactions_of(r)?;
+        let Some(first) = txs.iter().map(|t| t.occurred_at.map_or(t.trade_date, |at| adapter.day(at))).min() else { continue };
+        let accounts: BTreeSet<AccountId> = txs.iter().map(|t| t.account).collect();
+        if accounts.iter().all(|a| span_of(a).is_some_and(|from| covers(&from, first))) {
+            out.push(r);
+        }
+    }
+    Ok(out)
 }
 
 /// Store one row's record, replacing the imported record of the same broker id.

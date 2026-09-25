@@ -575,6 +575,23 @@ impl Book {
         Ok(out)
     }
 
+    /// The live records known by a value in `scheme` that another source than
+    /// `except` stated, with that value: an imported record of a broker's row
+    /// that the broker's own record has not replaced.
+    pub fn live_records_by_scheme(&self, scheme: &str, except: &SourceName) -> Result<Vec<(RecordId, String)>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT r.id, x.value FROM record_refs x JOIN source_records r ON r.id = x.record_id
+             WHERE x.scheme = ? AND r.state = 'live' AND r.source != ? ORDER BY r.first_received_at, r.rowid",
+        )?;
+        let rows = stmt.query_map(params![scheme, except.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, value) = row?;
+            out.push((text::parsed("source_records", "id", &id, RecordId::parse)?, value));
+        }
+        Ok(out)
+    }
+
     /// The live records of a source, oldest first.
     pub fn live_records(&self, source: &SourceName) -> Result<Vec<RecordId>> {
         let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND state = 'live' ORDER BY first_received_at, rowid")?;

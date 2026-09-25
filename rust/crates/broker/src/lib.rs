@@ -137,6 +137,9 @@ pub trait BrokerAdapter {
     /// A stored record whose row is not final yet (pending, a placeholder):
     /// its account and day, so the next pull reads it again.
     fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
+    /// A stored record's account and day: whether a read of that account
+    /// from a day covers it.
+    fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
     /// Each account's cash per currency now.
