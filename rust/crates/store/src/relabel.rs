@@ -139,6 +139,10 @@ pub fn scale_option_unit_prices(conn: &Connection) -> Result<()> {
 /// scaling stamped so it never runs twice.
 pub fn ensure(conn: &Connection) -> Result<()> {
     crate::schema::init_schema(conn)?;
+    // the rows these repairs mend are the book's now
+    if crate::schema::figures_moved(conn)? {
+        return Ok(());
+    }
     relabel_when_rows_changed(conn)?;
     let stamped: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key = ?", [OPTION_UNIT_PRICE_SCALE_META], |r| r.get(0))

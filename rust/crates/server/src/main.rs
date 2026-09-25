@@ -111,6 +111,16 @@ fn serve() -> i32 {
     // the figure path: a book this build cannot open stops the server, saying why
     match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
         Ok(f) => {
+            // the earlier store's figure tables, once the book holds their rows
+            match (a.open(), f.book()) {
+                (Ok(conn), Ok(book)) => match legacy_import::retire_old_figures(&a.home, &conn, &book, bagholder_core::jiff::Timestamp::now()) {
+                    Ok(Some(snapshot)) => log(&format!("bagholder: the earlier store's figure tables are the book's now; the file as it was is kept at {}", snapshot.display())),
+                    Ok(None) => {}
+                    Err(e) => log(&format!("bagholder: {e}")),
+                },
+                (Err(e), _) => log(&format!("bagholder: the store could not be opened: {e}")),
+                (_, Err(e)) => log(&format!("bagholder: {e}")),
+            }
             let _ = a.figures.set(f);
         }
         Err(e) => {

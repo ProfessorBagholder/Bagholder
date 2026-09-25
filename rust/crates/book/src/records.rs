@@ -600,6 +600,12 @@ impl Book {
         Ok(out)
     }
 
+    /// How many records of a source the book has ever kept, whatever became of them.
+    pub fn record_count(&self, source: &SourceName) -> Result<usize> {
+        let n: i64 = self.conn().query_row("SELECT COUNT(*) FROM source_records WHERE source = ?", [source.as_str()], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
     /// The live records of a source, oldest first.
     pub fn live_records(&self, source: &SourceName) -> Result<Vec<RecordId>> {
         let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND state = 'live' ORDER BY first_received_at, rowid")?;

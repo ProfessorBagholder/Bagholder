@@ -266,6 +266,30 @@ fn note(v: &Value, older: bool) -> Result<JournalEntry, String> {
     Ok(JournalEntry { thesis, grade, tags: uniq })
 }
 
+/// Drop the earlier store's figure tables from the live file once the book
+/// holds their rows (`docs/plans/stage-3c-switch.md` §8), the file snapshotted
+/// first beside the book's own snapshots, where an import or `compare-figures`
+/// can still read it: the snapshot's path, or none when there was nothing to do.
+/// Refused while the file holds activity the book never imported.
+pub fn retire_old_figures(home: &Path, conn: &Connection, book: &Book, at: jiff::Timestamp) -> Result<Option<std::path::PathBuf>, String> {
+    let e = |e: rusqlite::Error| e.to_string();
+    if bagholder_store::schema::figures_moved(conn).map_err(e)? {
+        return Ok(None);
+    }
+    let rows: i64 = conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get(0)).map_err(e)?;
+    let imported = book.record_count(&bagholder_book::import::import_source()).map_err(|e| e.to_string())?;
+    if rows > 0 && imported == 0 {
+        return Err(format!("the earlier store holds {rows} activity rows the book has not imported; its tables are kept"));
+    }
+    // beside the book's own snapshots
+    let dir = home.join("snapshots");
+    std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    let snapshot = dir.join(format!("bagholder-before-the-book-{}.db", at.as_millisecond()));
+    bagholder_book::import::copy_database(&home.join("bagholder.db"), &snapshot).map_err(|e| e.to_string())?;
+    bagholder_store::schema::drop_figure_tables(conn, &at.to_string()).map_err(e)?;
+    Ok(Some(snapshot))
+}
+
 /// Import the database at `old` into the book in `home`, as of `at`: copy it,
 /// translate its keys, import. The database at `old` is only read.
 pub fn import(old: &Path, home: &Path, at: jiff::Timestamp) -> Result<Report, String> {
@@ -431,5 +455,44 @@ mod tests {
         let again = import(&old, &home, at).unwrap();
         assert_eq!((again.records_new, again.records_unchanged), (0, 1));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_earlier_store_s_figure_tables_go_once_the_book_holds_them_and_the_file_as_it_was_is_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("bagholder.db");
+        {
+            let conn = bagholder_store::open_db(&file).unwrap();
+            bagholder_store::schema::init_schema(&conn).unwrap();
+            trade(&conn, "b1", "QNC", "BUY", 10.0, "2026-01-02T15:00:00+00:00");
+            set_meta(&conn, "journal_v2", r#"{"rt:b1": {"thesis": "kept", "tags": [], "grade": ""}}"#);
+        }
+        let at: jiff::Timestamp = "2026-09-25T12:00:00Z".parse().unwrap();
+        let tables = |c: &Connection| -> Vec<String> { c.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap() };
+        // a book that has not imported it: refused, and nothing dropped
+        let empty = tempfile::tempdir().unwrap();
+        let (unimported, _) = Book::open_in(empty.path(), "test", at).unwrap();
+        let conn = bagholder_store::open_db(&file).unwrap();
+        assert!(retire_old_figures(home.path(), &conn, &unimported, at).unwrap_err().contains("1 activity rows"));
+        assert!(tables(&conn).contains(&"activities".to_string()));
+        drop(conn);
+        // the first start: the book imports it, then its figure tables go
+        import(&file, home.path(), at).unwrap();
+        let (book, _) = Book::open_in(home.path(), "test", at).unwrap();
+        let conn = bagholder_store::open_db(&file).unwrap();
+        let snapshot = retire_old_figures(home.path(), &conn, &book, at).unwrap().expect("a snapshot");
+        let left = tables(&conn);
+        for t in bagholder_store::schema::FIGURE_TABLES {
+            assert!(!left.contains(&t.to_string()), "{t} is still in the live file");
+        }
+        assert!(left.contains(&"orders".to_string()) && left.contains(&"meta".to_string()), "what the book did not take over stays");
+        // the snapshot is the file as it was: its rows, for an import or the comparison
+        let kept = Connection::open(&snapshot).unwrap();
+        let n: i64 = kept.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        // the next start: the schema and its repairs make none of them again, and there is nothing more to do
+        bagholder_store::relabel::ensure(&conn).unwrap();
+        assert!(!tables(&conn).contains(&"activities".to_string()));
+        assert_eq!(retire_old_figures(home.path(), &conn, &book, at).unwrap(), None);
     }
 }

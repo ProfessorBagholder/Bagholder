@@ -20,7 +20,7 @@ use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_model::securities::Security;
 use bagholder_store::bars::ChartBars;
 use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator, StoredGauge, StoredShorts};
-use bagholder_store::rows;
+
 use bagholder_store::tables::{get_meta, set_meta};
 
 use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, ENRICH_VERSION};
@@ -89,18 +89,14 @@ enum ExposureJob {
 pub fn refresh_exposures(app: &Arc<App>) {
     let c = match conn(app) { Some(c) => c, None => return };
     let b = match base(app) { Some(b) => b, None => return };
-    let mut secs: HashMap<String, Security> = HashMap::new();
-    for sec in rows::securities(&c).unwrap_or_default() {
-        if !sec.id.is_empty() {
-            secs.insert(sec.id.clone(), sec);
+    let secs: HashMap<String, Security> = match crate::market_context::securities(app) {
+        Ok(v) => v.into_iter().filter(|s| !s.id.is_empty()).map(|s| (s.id.clone(), s)).collect(),
+        Err(e) => {
+            log(&format!("bagholder exposure: the book's securities could not be read: {e}"));
+            return;
         }
-    }
-    let mut held: HashSet<String> = b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares).map(|p| p.security_id.clone()).collect();
-    for bal in rows::balances(&c).unwrap_or_default() {
-        if bal.quantity > 0.0 && bal.security_id.starts_with("sec-s-") {
-            held.insert(bal.security_id);
-        }
-    }
+    };
+    let held: HashSet<String> = b.positions.iter().filter(|p| p.kind == bagholder_model::activity::Kind::Shares).map(|p| p.security_id.clone()).collect();
     let mut held: Vec<String> = held.into_iter().filter(|sid| !sid.is_empty() && !sid.starts_with("sec-c-")).collect();
     held.sort();
     let (today_s, _, _) = bagholder_market::clock_now();
@@ -466,7 +462,7 @@ pub fn news_symbol_payload_with(
     let clock = news::Clock { today: today_s.clone(), now: now as i64 };
     let (mut ex, mut ccy) = (exchange.trim().to_string(), currency.trim().to_string());
     // the name is what Google is searched for: the security record's, else the one TMX's quote gives
-    let (known, known_ex, known_ccy) = instrument_meta(&c, &sym);
+    let (known, known_ex, known_ccy) = instrument_meta(app, &sym);
     let mut name = if known != sym { known } else { String::new() };
     if ex.is_empty() {
         // the venue from what the app already knows: the security records the
@@ -524,9 +520,21 @@ pub const FILINGS_SWEEP_AGE_MIN: f64 = 30.0;
 
 /// (issuer name, exchange, currency) the book
 /// holds for a symbol, else the bare symbol.
-pub fn instrument_meta(c: &Connection, symbol: &str) -> (String, String, String) {
+pub fn instrument_meta(app: &App, symbol: &str) -> (String, String, String) {
+    let secs = match crate::market_context::securities(app) {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("bagholder: the book's securities could not be read for {symbol}: {e}"));
+            vec![]
+        }
+    };
+    meta_of(&secs, symbol)
+}
+
+/// (issuer name, exchange, currency) of the first of `secs` under `symbol`, else the bare symbol.
+pub fn meta_of(secs: &[Security], symbol: &str) -> (String, String, String) {
     let sym = symbol.trim().to_uppercase();
-    for sec in bagholder_store::admin::list_securities(c).unwrap_or_default() {
+    for sec in secs {
         if sec.symbol.trim().to_uppercase() == sym {
             let name = sec.name.trim().to_string();
             return (if name.is_empty() { sym } else { name }, sec.primary_exchange.trim().to_string(), sec.currency.trim().to_string());
@@ -1379,7 +1387,7 @@ pub fn refresh_filings_in(app: &Arc<App>, c: &Connection, sym: &str, name: Optio
     {
         let c = c;
         let sym = sym.to_string();
-        let (mut iname, ex, cur) = instrument_meta(c, &sym);
+        let (mut iname, ex, cur) = instrument_meta(app, &sym);
         if let Some(n) = name.filter(|n| !n.is_empty()) {
             iname = n.to_string();
         }
@@ -1961,7 +1969,7 @@ pub fn shorts_payload(app: &Arc<App>, symbol: &str, exchange: Option<&str>, curr
         return Err("symbol required".to_string());
     }
     let c = conn(app).ok_or_else(|| "store unavailable".to_string())?;
-    let meta = instrument_meta(&c, &sym);
+    let meta = instrument_meta(app, &sym);
     let listed_as = if meta.0 == sym { String::new() } else { meta.0.clone() };
     let mut ex = exchange.unwrap_or("").trim().to_string();
     let mut ccy = currency.unwrap_or("").trim().to_string();
@@ -2121,7 +2129,11 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
     // the book's holdings and trades of that ticker, by the figures' own ids
     let Some((positions, trades)) = f.read(|e| crate::wire::build::listed(e, &names, &named)) else { return ListingAnswer::err("no page has stated its zone yet") };
     let watchlist: Vec<ListedRow> = b.watchlist.iter().filter(|w| named(&w.symbol)).map(|w| ListedRow { symbol: w.symbol.clone(), exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone(), ..ListedRow::default() }).collect();
-    listing_payload_in(&c, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|rec| {
+    let securities = crate::market_context::securities(app).unwrap_or_else(|e| {
+        log(&format!("bagholder: the book's securities could not be read for {sym}: {e}"));
+        vec![]
+    });
+    listing_payload_in(&securities, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|rec| {
         bagholder_market::quotes::peek_quote(&c, rec, &day)
     })
 }
@@ -2142,7 +2154,7 @@ pub struct ListedRow {
 /// `listing_payload` over the book given, with the quote lookup given.
 #[allow(clippy::too_many_arguments)]
 pub fn listing_payload_in(
-    c: &Connection,
+    securities: &[Security],
     positions: &[ListedRow],
     trades: &[ListedRow],
     watchlist: &[ListedRow],
@@ -2172,7 +2184,7 @@ pub fn listing_payload_in(
     let watched = watchlist.iter().find(|w| same(w));
     let empty = ListedRow::default();
     let known: &ListedRow = trades.first().copied().or(watched).unwrap_or(&empty);
-    let meta = instrument_meta(c, &sym);
+    let meta = meta_of(securities, &sym);
     if ex.is_empty() {
         ex = known.exchange.clone();
         if ex.is_empty() {
@@ -3158,11 +3170,10 @@ mod tests {
     fn listing(positions: &[Value], trades: &[Value], watchlist: &[Value], q: (f64, f64), args: (&str, &str, &str, &str)) -> Value {
         let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(row).collect() };
         let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
-        let c = store();
         let quote = move |_: &bagholder_model::input::Listing| {
             Some(bagholder_market::quotes::Glance { price: Some(q.0), percent_change: Some(q.1), ..Default::default() })
         };
-        serde_json::to_value(listing_payload_in(&c, positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)).unwrap()
+        serde_json::to_value(listing_payload_in(&[], positions, trades, watchlist, args.0, args.1, args.2, args.3, &quote)).unwrap()
     }
 
     #[test]

@@ -47,6 +47,42 @@ fn add_missing(conn: &Connection, table: &str, cols: &[(&str, &str)]) -> Result<
 }
 
 /// `_init_schema`.
+/// The tables the book took over (`docs/plans/stage-3c-switch.md` §8): what the
+/// earlier app kept of the person's money. Once their rows are in the book they
+/// are dropped from the live file (`drop_figure_tables`), the file snapshotted
+/// first; an earlier file, or its snapshot, still holds them for the import and
+/// the comparison to read.
+pub const FIGURE_TABLES: [&str; 11] = [
+    "activities", "securities", "accounts", "balances", "nav_history", "grouped_trades",
+    "fx_rates", "benchmark_prices", "distributions", "distribution_fetches", "margin",
+];
+
+/// The meta key that says the figure tables were dropped from this file.
+pub const FIGURES_MOVED_META: &str = "figure_tables_moved";
+
+/// Whether this file's figure tables were dropped, the book holding their rows.
+pub fn figures_moved(conn: &Connection) -> Result<bool> {
+    if !table_exists(conn, "meta")? {
+        return Ok(false);
+    }
+    let v: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = ?", [FIGURES_MOVED_META], |r| r.get(0)).ok();
+    Ok(v.is_some_and(|v| !v.is_empty()))
+}
+
+/// Drop the figure tables from this file, and note when.
+pub fn drop_figure_tables(conn: &Connection, at: &str) -> Result<()> {
+    crate::atomically(conn, || {
+        for t in FIGURE_TABLES {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+        }
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![FIGURES_MOVED_META, at],
+        )?;
+        Ok(())
+    })
+}
+
 pub fn init_schema(conn: &Connection) -> Result<()> {
     crate::atomically(conn, || {
         conn.execute_batch(SCHEMA_0)?;
@@ -73,6 +109,12 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         )?;
         // last, so the triggers are made from the columns as the migrations left them
         crate::gens::install(conn)?;
+        // a file whose figures the book holds keeps none of their tables
+        if figures_moved(conn)? {
+            for t in FIGURE_TABLES {
+                conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+            }
+        }
         Ok(())
     })
 }

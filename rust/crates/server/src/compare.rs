@@ -235,6 +235,9 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     std::fs::create_dir_all(&scratch).map_err(err)?;
     bagholder_book::import::copy_database(old_path, &scratch.join("bagholder.db")).map_err(err)?;
     let old = bagholder_store::connect(&scratch).map_err(err)?;
+    if bagholder_store::schema::figures_moved(&old).map_err(err)? {
+        return Err(format!("{} no longer holds the earlier figures: the book took them over, and the file as it was is in snapshots/ (bagholder-before-the-book-…db)", old_path.display()));
+    }
     bagholder_store::schema::init_schema(&old).map_err(err)?;
     let today_text = today.to_string();
     let base = old_base(&old, &today_text).map_err(err)?;
@@ -580,5 +583,25 @@ pub fn cli(args: &[String]) -> i32 {
             eprintln!("the comparison failed: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_whose_figures_the_book_took_over_is_refused_naming_the_snapshot() {
+        let home = tempfile::tempdir().unwrap();
+        let at: bagholder_core::jiff::Timestamp = "2026-09-25T12:00:00Z".parse().unwrap();
+        let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, at).unwrap();
+        book.state_zone("America/Toronto", at).unwrap();
+        let file = home.path().join("bagholder.db");
+        let conn = bagholder_store::open_db(&file).unwrap();
+        bagholder_store::schema::init_schema(&conn).unwrap();
+        bagholder_store::schema::drop_figure_tables(&conn, &at.to_string()).unwrap();
+        drop(conn);
+        let why = compare(&file, home.path(), None, FactsFrom::OldStore).unwrap_err();
+        assert!(why.contains("no longer holds the earlier figures") && why.contains("snapshots/"), "{why}");
     }
 }

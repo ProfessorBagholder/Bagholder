@@ -88,6 +88,39 @@ fn build(f: &Figures, conn: &rusqlite::Connection, today: String) -> Result<Mark
     })
 }
 
+/// Every Wealthsimple security the book has met, as the earlier readers take
+/// one: its id, what the book calls it now, its venue and currency, and for a
+/// contract what it is on.
+pub fn securities(app: &App) -> Result<Vec<bagholder_model::securities::Security>, String> {
+    use bagholder_core::instrument::RefScheme;
+    let f = app.figures.get().ok_or("the figures are not open")?;
+    let book = f.book()?;
+    let e = |e: bagholder_book::BookError| e.to_string();
+    let ws = bagholder_core::Broker::named("wealthsimple");
+    let ws_id = |i: bagholder_core::InstrumentId| -> Result<Option<String>, String> {
+        Ok(book.instrument_refs(i).map_err(e)?.into_iter().find(|r| r.scheme == RefScheme::BrokerSecurity(ws.clone())).map(|r| r.value))
+    };
+    let mut out = Vec::new();
+    for i in book.instruments().map_err(e)? {
+        let Some(id) = ws_id(i.id)? else { continue };
+        let name = book.names(i.id).map_err(e)?.last().cloned();
+        let underlying_id = match book.option_terms(i.id).map_err(e)? {
+            Some(t) => ws_id(t.underlying)?,
+            None => None,
+        };
+        out.push(bagholder_model::securities::Security {
+            id,
+            symbol: name.as_ref().map(|n| n.symbol.clone()).unwrap_or_default(),
+            name: name.as_ref().and_then(|n| n.name.clone()).unwrap_or_default(),
+            primary_exchange: name.as_ref().and_then(|n| n.venue_name.clone()).unwrap_or_default(),
+            primary_mic: name.as_ref().and_then(|n| n.venue_mic.clone()).unwrap_or_default(),
+            currency: i.currency.as_str().to_string(),
+            underlying_id: underlying_id.unwrap_or_default(),
+        });
+    }
+    Ok(out)
+}
+
 /// The context of the earlier store's tables alone, holding nothing: for a test
 /// of what the readers make of those tables.
 #[cfg(test)]
@@ -121,5 +154,25 @@ mod tests {
         assert_eq!(got, want);
         // nothing moved: the same context, not a new one
         assert!(std::sync::Arc::ptr_eq(&a, &app.market_base().unwrap()));
+    }
+
+    #[test]
+    fn every_wealthsimple_security_the_book_has_met_is_listed_by_its_id_under_its_name() {
+        use bagholder_core::instrument::RefScheme;
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let secs = super::securities(&app).unwrap();
+        let book = app.figures.get().unwrap().book().unwrap();
+        let ws = RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple"));
+        let mut want: Vec<(String, String, String)> = vec![];
+        for i in book.instruments().unwrap() {
+            if let Some(r) = book.instrument_refs(i.id).unwrap().into_iter().find(|r| r.scheme == ws) {
+                let symbol = book.names(i.id).unwrap().last().map(|n| n.symbol.clone()).unwrap_or_default();
+                want.push((r.value, symbol, i.currency.as_str().to_string()));
+            }
+        }
+        let got: Vec<(String, String, String)> = secs.iter().map(|s| (s.id.clone(), s.symbol.clone(), s.currency.clone())).collect();
+        assert!(!got.is_empty());
+        assert_eq!(got, want);
     }
 }

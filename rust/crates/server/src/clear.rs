@@ -155,9 +155,11 @@ pub fn book_clearing(kinds: &[Kind]) -> Clearing {
 pub fn clear_old(conn: &rusqlite::Connection, kinds: &[Kind]) -> Result<(), String> {
     let e = |e: rusqlite::Error| e.to_string();
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate).map_err(e)?;
+    let present: Vec<String> = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").map_err(e)?.query_map([], |r| r.get(0)).map_err(e)?.collect::<rusqlite::Result<_>>().map_err(e)?;
     for (table, place) in OLD_TABLES {
         if let Place::Of(k) = place {
-            if kinds.contains(k) {
+            // a figure table the book took over is no longer in the file
+            if kinds.contains(k) && present.iter().any(|p| p == table) {
                 conn.execute(&format!("DELETE FROM {table}"), []).map_err(e)?;
             }
         }

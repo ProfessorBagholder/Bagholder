@@ -486,7 +486,13 @@ pub fn orders_doc(app: &Arc<App>, kick: bool) -> OrdersDoc {
     if kick {
         kick_orders_refresh(app);
     }
-    let exchanges: HashMap<String, String> = must(bagholder_store::admin::list_securities(&db(app))).iter().map(|s| (s.id.clone(), s.primary_exchange.clone())).collect();
+    let exchanges: HashMap<String, String> = match crate::market_context::securities(app) {
+        Ok(v) => v.into_iter().map(|s| (s.id, s.primary_exchange)).collect(),
+        Err(e) => {
+            log(&format!("bagholder orders: the book's securities could not be read: {e}"));
+            HashMap::new()
+        }
+    };
     let orders = orders_all(app).into_iter().map(|order| OrderCard { exchange: exchanges.get(&order.security_id).cloned().unwrap_or_default(), order }).collect();
     OrdersDoc { ok: true, orders, brackets: must(so::typed::list_brackets(&db(app), &[])), live: orders_live(), refreshed_at: refreshed_at(app) }
 }
