@@ -25,6 +25,7 @@ pub mod synth;
 pub mod securities;
 pub mod book;
 pub mod clock;
+pub mod context;
 pub mod trades;
 pub mod positions;
 pub mod unichars;

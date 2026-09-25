@@ -154,7 +154,7 @@ fn underlying_symbol(inputs: &Inputs, i: InstrumentId) -> String {
     shown(inputs, scope::underlying_of(inputs, i)).symbol
 }
 
-fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Option<String>) -> Trade {
+pub(crate) fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Option<String>) -> Trade {
     let s = shown(inputs, t.instrument);
     Trade {
         id: trade_id(t),
@@ -193,7 +193,7 @@ fn ratio(d: bagholder_core::Dec) -> f64 {
     d.to_f64()
 }
 
-fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: String) -> Position {
+pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: String) -> Position {
     let s = shown(inputs, p.instrument);
     let last = Fig::of(&p.mark, |m| Dec(m.price));
     let percent_change = p.mark.as_ref().ok().and_then(|m| m.change_pct).map(|c| ratio(c) / 100.0);
@@ -359,7 +359,7 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
 }
 
 /// Everything the page shows of the book under `filters`.
-pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder_model::base::Base) -> Figures {
+pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder_model::context::MarketBase) -> Figures {
     let inputs = engine.inputs();
     let figs = engine.figures();
     let scoped: Scoped = engine.scope(filters);
@@ -454,7 +454,15 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder
         })
     };
 
-    let context = super::context::context(base, &positions);
+    // each holding in scope with its value in CAD, as the context sizes it
+    let valued: Vec<(Position, Option<f64>)> = scoped
+        .portfolio
+        .positions
+        .iter()
+        .zip(&positions)
+        .map(|(i, p)| (p.clone(), figs.positions[*i].market_cad.as_ref().ok().map(|m| m.amount.to_f64())))
+        .collect();
+    let context = super::context::context(base, &valued);
     Figures {
         waiting: figs
             .matched
@@ -748,7 +756,7 @@ mod tests {
     #[test]
     fn the_document_from_a_real_month_names_every_row_by_its_id() {
         let _g = crate::tests_common::guard();
-        let base = crate::tests_common::app().base().unwrap();
+        let base = crate::tests_common::app().market_base().unwrap();
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();

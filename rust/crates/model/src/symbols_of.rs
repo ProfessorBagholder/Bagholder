@@ -7,12 +7,11 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::activity::Kind;
-use crate::base::Base;
+use crate::context::MarketBase as Base;
 use crate::fifo::Slice;
 use crate::input::Listing;
 use crate::trades::{group_id_for_keys, slice_member_key};
 use crate::value::field_s;
-use crate::wire::Payment;
 
 fn listing(symbol: &str, exchange: &str, currency: &str, kind: &str) -> Listing {
     Listing { symbol: symbol.into(), exchange: exchange.into(), currency: currency.into(), kind: kind.into(), quote_key: None, yahoo: None, start: None }
@@ -22,18 +21,6 @@ fn listing(symbol: &str, exchange: &str, currency: &str, kind: &str) -> Listing 
 pub fn held_symbols(base: &Base) -> Vec<Listing> {
     let mut seen = HashSet::new();
     base.positions.iter().filter(|p| seen.insert(p.symbol.as_str())).map(|p| listing(&p.symbol, &p.exchange, &p.currency, p.kind.as_str())).collect()
-}
-
-/// Held positions that have paid a distribution.
-pub fn payer_symbols(base: &Base) -> Vec<Listing> {
-    let payers: HashSet<&str> = base.cashflow.iter().filter(|r| r.kind == Payment::Dividend).map(|r| r.symbol.as_str()).collect();
-    let mut seen = HashSet::new();
-    base.positions
-        .iter()
-        .filter(|p| !p.short && payers.contains(p.symbol.as_str()))
-        .filter(|p| seen.insert(p.symbol.as_str()))
-        .map(|p| listing(&p.symbol, if p.exchange == "Crypto" { "" } else { &p.exchange }, &p.currency, ""))
-        .collect()
 }
 
 /// Every symbol traded or held in the past year, with the earliest date its bars
@@ -49,7 +36,7 @@ pub fn intraday_archive_symbols(base: &Base) -> Vec<Listing> {
             out.insert(charted.symbol.clone(), Listing { start: Some(start.to_string()), ..charted });
         }
     };
-    for t in base.trades.iter().filter(|t| t.exit_date >= since) {
+    for t in base.traded.iter().filter(|t| t.exit_date.is_empty() || t.exit_date >= since) {
         want(&t.symbol, &t.exchange, &t.currency, t.kind, &t.entry_date);
     }
     for p in base.positions.iter() {

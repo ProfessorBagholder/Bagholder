@@ -1,13 +1,12 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { Appended, Book, BookAppend } from './book'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Figures } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
-import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, FiguresQuery, Groups, GroupsAnswer, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery, WatchRequest, WatchStatus } from './model_api'
+import type { Clear, ClearAnswer, EntryAnswer, EntryRequest, FiguresQuery, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, TradeQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -33,7 +32,6 @@ export interface Routes {
   'POST /api/order/modify': { body: Modify; answer: OrderActionAnswer }
   'POST /api/bracket/adjust': { body: Adjust; answer: OrderActionAnswer }
   'POST /api/bracket/cancel': { body: Named; answer: OrderActionAnswer }
-  'POST /api/book/append': { body: BookAppend; answer: Appended }
   'POST /api/orders/refresh': { answer: RefreshAndOrders }
   'GET /api/order/quote': { query: QuoteOf; answer: TicketQuote }
   'POST /api/order/preview': { body: PreviewRequest; answer: Preview }
@@ -54,16 +52,11 @@ export interface Routes {
   'POST /api/watchlist/remove': { body: WatchlistBody; answer: WatchlistAnswer }
   'POST /api/tiles/set': { body: TilesSet; answer: TilesAnswer }
   'GET /api/status': { answer: StatusAnswer }
-  'GET /api/model': { query: ModelQuery; answer: ModelViewAnswer }
-  'GET /api/trade': { query: TradeQuery; answer: TradeAnswer }
   'GET /api/figures': { query: FiguresQuery; answer: Figures }
   'GET /api/figures/detail': { query: TradeQuery; answer: Detail }
-  'GET /api/book': { answer: Book }
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
   'POST /api/entries': { body: EntryRequest; answer: EntryAnswer }
-  'POST /api/groups': { body: Groups; answer: GroupsAnswer }
-  'POST /api/notes': { body: Notes; answer: NotesAnswer }
   'POST /api/import': { body: ImportRequest; answer: ImportReport }
   'POST /api/watch/clear': { answer: WatchStatus }
   'GET /api/watch': { answer: WatchStatus }

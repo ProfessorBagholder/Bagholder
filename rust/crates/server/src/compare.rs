@@ -34,6 +34,52 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// The earlier model built once, whole, from an earlier database: what the
+/// comparison measures the engine against.
+fn old_base(conn: &Connection, today: &str) -> rusqlite::Result<bagholder_model::base::Base> {
+    use bagholder_model::base::{self, Base, Inputs, Layers};
+    use bagholder_store::{activities, market, rows, tables};
+    use std::sync::Arc;
+    let mut i = Inputs::default();
+    i.set_raw_activities(activities::all_raw_activities(conn)?);
+    i.securities = Arc::new(rows::securities(conn)?);
+    i.fx = Arc::new(rows::fx(conn, tables::FX_PAIR)?);
+    i.benchmark = Arc::new(rows::benchmark(conn, tables::BENCHMARK_SYMBOL)?);
+    let mut all = std::collections::HashMap::new();
+    for sym in market::BENCHMARK_SYMBOLS.iter() {
+        all.insert((*sym).to_string(), rows::benchmark(conn, sym)?);
+    }
+    i.benchmarks = Arc::new(all);
+    i.distributions = Arc::new(rows::distributions(conn)?);
+    i.quotes = Arc::new(rows::quotes(conn)?);
+    i.groups = Arc::new(rows::groups(conn)?);
+    i.journal = Arc::new(rows::journal(conn)?);
+    i.accounts = Arc::new(rows::accounts(conn)?);
+    i.balances = Arc::new(rows::balances(conn)?);
+    i.margin = Arc::new(rows::margin(conn)?);
+    let (nav, by_account) = rows::nav(conn)?;
+    i.nav = Arc::new(nav);
+    i.nav_by_account = Arc::new(by_account);
+    i.exposures = Arc::new(rows::exposures(conn)?);
+    i.watchlist = Arc::new(rows::watchlist(conn)?);
+    i.news = Arc::new(rows::news(conn)?);
+    i.universes = Arc::new(rows::universes(conn)?);
+    i.tiles = Arc::new(rows::tiles(conn)?);
+    i.synced_at = tables::get_meta(conn, "synced_at", "")?;
+    let book = Arc::new(base::book_layer(&i, today));
+    let (equity, equity_by_account) = base::equity_layer(&i);
+    let layers = Layers {
+        trades: Arc::new(base::trades_layer(&book, &i)),
+        cashflow: Arc::new(base::cashflow_layer(&book, &i)),
+        positions: Arc::new(base::positions_layer(&book, &i, today)),
+        accounts: Arc::new(base::accounts_layer(&i)),
+        equity: Arc::new(equity),
+        equity_by_account: Arc::new(equity_by_account),
+        book,
+    };
+    Ok(Base::assemble(today, &i, &layers))
+}
+
 /// A float the old store kept, as the decimal it prints as: a stand-in value
 /// only, never written to the book.
 fn dec(v: f64) -> Option<Dec> {
@@ -191,7 +237,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::j
     let old = bagholder_store::connect(&scratch).map_err(err)?;
     bagholder_store::schema::init_schema(&old).map_err(err)?;
     let today_text = today.to_string();
-    let base = crate::model_cache::ModelCache::new().base(&old, &today_text).map_err(err)?;
+    let base = old_base(&old, &today_text).map_err(err)?;
     let view = bagholder_model::view::build_view(&base, None);
 
     let (book, _) = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?;

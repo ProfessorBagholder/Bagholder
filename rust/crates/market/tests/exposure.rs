@@ -394,7 +394,7 @@ fn test_watch_rows_carry_the_quote_the_sector_and_the_holding() {
     let market = json!({"quotes": {"SHOP@TSX": {"price": 212.06, "priceChange": 1.56, "percentChange": 0.74}}});
     let base = bagholder_model::base::build_base(&snapshot, &market, &Default::default(), Some("2026-09-16"));
     let positions = vec![json!({"id": "p9", "symbol": "SHOP", "exchange": "TSX"})];
-    let rows = bagholder_model::markets::watch_rows(&base, &held(&positions).iter().collect::<Vec<_>>());
+    let rows = bagholder_model::markets::watch_rows(&bagholder_model::context::MarketBase::of_base(&base), &held(&positions).iter().collect::<Vec<_>>());
     let got: Vec<Vec<Value>> = bagholder_model::testing::sent(&rows).iter().map(|r| row(r, &["symbol", "last", "percentChange", "sector", "positionId"])).collect();
     assert_eq!(got, vec![
         vec![json!("SHOP"), json!(212.06), json!(0.74), json!("Information Technology"), json!("p9")],

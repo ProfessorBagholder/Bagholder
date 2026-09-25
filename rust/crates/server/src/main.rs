@@ -22,8 +22,8 @@ mod events;
 mod feeds;
 mod http;
 mod legacy_import;
+mod market_context;
 mod login;
-mod model_cache;
 mod notify;
 mod orders;
 mod session;
@@ -162,9 +162,6 @@ fn serve() -> i32 {
     // Wealthsimple: the pull and the balances, each when it is due
     a.spawn_with("bagholder-broker", broker_reads::run);
     a.spawn_with("bagholder-token", session::token_loop);
-    a.spawn_with("bagholder-market", |app| {
-        feeds::refresh_market_data(&app);
-    });
     a.spawn_with("bagholder-update-check", |app| {
         update::check_for_update(&app);
     });

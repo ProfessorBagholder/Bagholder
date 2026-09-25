@@ -7,11 +7,10 @@
 //! and a donut draw, never an amount the page adds.
 
 use bagholder_model::activity::Kind;
-use bagholder_model::base::Base;
+use bagholder_model::context::MarketBase;
 use bagholder_model::wire::{ExposureSlice, Markets, Mark, Position as OldPosition};
 
 use super::figures::Position;
-use super::Fig;
 
 /// The context as the page draws it.
 #[derive(Clone, Debug)]
@@ -21,15 +20,9 @@ pub struct Context {
     pub regions: Vec<ExposureSlice>,
 }
 
-fn number(f: &Fig<super::Dec>) -> f64 {
-    match f {
-        Fig::Stated(d) => d.0.to_f64(),
-        Fig::Waits { .. } => 0.0,
-    }
-}
-
-/// A holding as the old readers take one: what they read of it.
-fn old(p: &Position) -> OldPosition {
+/// A holding as the old readers take one: what they read of it, valued in CAD
+/// (`mv_cad`, none where its value waits: it is sized by nothing).
+pub(crate) fn old(p: &Position, mv_cad: Option<f64>) -> OldPosition {
     OldPosition {
         id: p.id.clone(),
         symbol: p.symbol.clone(),
@@ -53,8 +46,7 @@ fn old(p: &Position) -> OldPosition {
         // the old readers take a percentage
         percent_change: p.percent_change.map(|f| f * 100.0),
         day_change: None,
-        // a holding with no value states none: it is sized by nothing
-        mv: number(&p.mv),
+        mv: mv_cad.unwrap_or(0.0),
         unreal: 0.0,
         unreal_pct: None,
         held: 0,
@@ -82,11 +74,12 @@ fn folded(rows: Vec<ExposureSlice>, cap: usize) -> Vec<ExposureSlice> {
     known
 }
 
-/// The context for the holdings in scope.
-pub fn context(base: &Base, positions: &[Position]) -> Context {
-    let olds: Vec<OldPosition> = positions.iter().map(old).collect();
+/// The context for the holdings in scope, each with its value in CAD.
+pub fn context(base: &MarketBase, positions: &[(Position, Option<f64>)]) -> Context {
+    let olds: Vec<OldPosition> = positions.iter().map(|(p, v)| old(p, *v)).collect();
     let refs: Vec<&OldPosition> = olds.iter().collect();
-    let cad = |amount: f64, currency: &str| bagholder_model::fx::to_cad(&base.fx, amount, currency, &base.today);
+    // every value is in CAD already
+    let cad = |amount: f64, _currency: &str| amount;
     let (sectors, regions) = bagholder_model::exposure::exposure_slices(&refs, &base.exposures, &cad);
     Context { markets: bagholder_model::markets::markets_view(base, &refs), sectors: folded(sectors, 12), regions: folded(regions, 10) }
 }

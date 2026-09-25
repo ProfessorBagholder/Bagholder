@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bagholder_model::base::Base;
 
 pub const APP_VERSION: &str = "1.46.3";
 /// Bumped whenever the page and the server change together.
@@ -104,7 +103,7 @@ pub struct App {
     pub stop: AtomicBool,
     stop_bell: (Mutex<()>, std::sync::Condvar),
     pub exit_code: AtomicI32,
-    model: crate::model_cache::ModelCache,
+    market: crate::market_context::MarketContext,
     store: Arc<bagholder_store::pool::Pool>,
     jobs: Mutex<HashMap<String, Job>>,
     /// Every page's live connection to this app: what changed, who is looking,
@@ -153,7 +152,7 @@ impl App {
             stop: AtomicBool::new(false),
             stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
             exit_code: AtomicI32::new(0),
-            model: crate::model_cache::ModelCache::new(),
+            market: crate::market_context::MarketContext::new(),
             jobs: Mutex::new(HashMap::new()),
             events,
             docs: crate::docs::DocsState::default(),
@@ -217,45 +216,9 @@ impl App {
         self.notify.wake_streams();
     }
 
-    /// The model as it stands: each layer rebuilt only when something it reads
-    /// has changed (`model_cache`).
-    pub fn base(&self) -> rusqlite::Result<std::sync::Arc<Base>> {
-        let conn = self.open()?;
-        let today = bagholder_model::clock::today_local();
-        let base = self.model.base(&conn, &today)?;
-        // Once a run: notes an older version kept per trade are carried into the
-        // journal. The save moves the journal's counter, so the next build has them.
-        static CARRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !CARRIED.swap(true, Ordering::SeqCst) {
-            let notes = bagholder_store::tables::trade_notes(&conn)?;
-            if !notes.is_empty() && bagholder_store::admin::journal(&conn)?.is_empty() {
-                let groups = bagholder_store::tables::trade_groups(&conn)?;
-                let groups_val: Vec<Value> = groups.iter().map(|g| serde_json::to_value(g).unwrap_or(Value::Null)).collect();
-                let notes_val: Value = serde_json::to_value(&notes).unwrap_or(Value::Null);
-                let notes_map = notes_val.as_object().cloned().unwrap_or_default();
-                let migrated = bagholder_model::symbols_of::migrate_legacy_notes(&base.book.fifo.closed, &groups_val, &notes_map);
-                if !migrated.is_empty() {
-                    let journal = bagholder_model::input::journal_from(&migrated);
-                    bagholder_store::admin::save_journal(&conn, &journal)?;
-                    return self.model.base(&conn, &today);
-                }
-            }
-        }
-        Ok(base)
-    }
-
-    /// The model as the page is sent it, under these filters and with this
-    /// trade's detail: built once for a base, then shared.
-    pub fn view(&self, filters: Option<&bagholder_model::filters::Filters>, detail: Option<&str>) -> rusqlite::Result<std::sync::Arc<bagholder_model::wire::View>> {
-        let base = self.base()?;
-        Ok(self.model.view(&base, filters, detail))
-    }
-
-    /// Forget the model. Nothing in the app needs this -- the store's counters say
-    /// exactly what changed -- it is for a test that swaps the database under it.
-    #[cfg(test)]
-    pub fn invalidate(&self) {
-        self.model.clear();
+    /// The market's context the earlier readers are given (`market_context`).
+    pub fn market_base(&self) -> Result<std::sync::Arc<bagholder_model::context::MarketBase>, String> {
+        self.market.get(self)
     }
 
     /// Run `f` only when no other call of that name
@@ -326,10 +289,6 @@ pub fn stamp_of(secs: i64) -> String {
     let (y, m, d) = bagholder_model::dates::from_days(secs.div_euclid(86400));
     let r = secs.rem_euclid(86400);
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, r / 3600, (r % 3600) / 60, r % 60)
-}
-
-pub fn today_utc() -> String {
-    now_iso()[..10].to_string()
 }
 
 /// An ISO instant as unix seconds.

@@ -100,7 +100,6 @@ fn setup() -> MutexGuard<'static, ()> {
             let _ = c.execute(&format!("DELETE FROM \"{}\"", t), []);
         }
     }
-    app().invalidate();
     *app_ref().orders.refreshed_at.lock().unwrap() = String::new();
     {
         let mut s = app_ref().state.lock().unwrap();

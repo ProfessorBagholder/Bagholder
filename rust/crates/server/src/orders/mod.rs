@@ -63,7 +63,6 @@ use crate::session::{ensure_fresh_token, load_session};
 
 pub(crate) mod brackets;
 mod edit;
-mod manual;
 pub mod preview;
 mod readback;
 mod ticket;
@@ -71,7 +70,6 @@ mod tools;
 
 pub use brackets::*;
 pub use edit::*;
-pub use manual::*;
 pub use readback::*;
 pub use ticket::*;
 pub use tools::*;

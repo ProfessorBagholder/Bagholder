@@ -6,10 +6,6 @@ import type { TradeGroup } from './model_api'
 
 export type ActivityRow = { id: string, canonicalId: string | null, occurredAt: string, transactionDate: string, settlementDate: string, accountId: string, bookId: string, fifoId: string, accountType: string, activityType: string, activitySubType: string, description: string, direction: string, symbol: string, name: string, currency: string, quantity: number, unitPrice: number, commission: number, netCashAmount: number, category: string, balance: number | null, source: string, rawType: string, aftType: string, counterSymbol: string, securityId: string | null, };
 
-export type Appended = { ok: boolean, added: number, duplicates: number, activity: ActivityRow | null, activities: Array<ActivityRow> | null, };
-
-export type BookAppend = { activities: Array<ActivityRow>, activity: ActivityRow | null, side: string, qty: number | null, quantity: number | null, price: number | null, unitPrice: number | null, date: string, transactionDate: string, occurredAt: string, symbol: string, currency: string, accountId: string, account: string, accountType: string, commission: number | null, };
-
 export type LegacyNote = { thesis: string, tag: string, grade: string, tradeId: string, };
 
 export type BrokerAccount = { id: string, nickname: string, unifiedAccountType: string, currency: string, status: string, type: string, netLiquidationValue: number | null, 

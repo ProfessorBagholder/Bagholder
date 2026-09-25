@@ -4,9 +4,8 @@
 //! holds, and the news items each tagged with the listings they were read for.
 
 use crate::activity::Kind;
-use crate::base::Base;
+use crate::context::MarketBase as Base;
 use crate::exposure::{norm_sector, underlying_exposure, Exposure, Exposures, UNCLASSIFIED};
-use crate::fx::to_cad;
 use crate::input::Listing;
 use crate::instruments;
 use crate::venues::{tmx_symbol, watch_exposure_key};
@@ -360,7 +359,8 @@ pub fn news_rows(base: &Base, positions: &[&Position], watch: &[WatchItem]) -> V
 }
 
 pub fn markets_view(base: &Base, positions: &[&Position]) -> Markets {
-    let cad = |amount: f64, currency: &str| to_cad(&base.fx, amount, currency, &base.today);
+    // a holding's value is already in CAD
+    let cad = |amount: f64, _currency: &str| amount;
     let watchlist = watch_rows(base, positions);
     let universes = base
         .universes

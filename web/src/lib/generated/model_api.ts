@@ -21,8 +21,6 @@ locked: boolean, members: Array<string>, };
 
 export type TradeQuery = { id: string | null, };
 
-export type TradeAnswer = { ok: boolean, id: string, legs: Array<Leg>, fills: Array<Fill>, };
-
 export type Clear = { kinds: Array<Kind>, };
 
 export type ClearAnswer = { ok: boolean, };
@@ -40,38 +38,6 @@ id: string, thesis: string,
 grade: string, tags: Array<string>, };
 
 export type JournalAnswer = { ok: true, };
-
-export type Groups = { groups: Array<TradeGroup>, };
-
-export type GroupsAnswer = { ok: boolean, groups: Array<TradeGroup>, };
-
-export type Notes = { notes: { [key in string]: LegacyNote }, };
-
-export type NotesAnswer = { ok: boolean, notes: { [key in string]: LegacyNote }, };
-
-export type ModelQuery = { 
-/**
- * the page's filters, as the JSON it keeps them in
- */
-filters: string | null, 
-/**
- * the trade whose detail to carry
- */
-trade: string | null, 
-/**
- * `live`: only what a price moves (the legacy page's quote tick)
- */
-only: string | null, 
-/**
- * with `only=live`: the heatmap is on screen and wants its tiles too
- */
-markets: string | null, };
-
-export type ModelLiveAnswer = { ok: boolean, today: string, currency: string, market: MarketDates, positions: Array<Position>, positionsSummary: PositionsSummary, portfolio: Portfolio, markets?: Markets, status: Status, };
-
-export type ModelAnswer = { status: Status, ok: boolean, today: string, syncedAt: string, currency: string, market: MarketDates, filters: Filters, options: Options, kpi: Kpi, equity: EquityBlock, years: Array<YearRow>, benchmark: BenchmarkRef, monthly: Array<MonthlyBar>, bySymbol: Array<BySymbolRow>, grades: Grades, queue: Array<QueueRow>, trades: Array<Trade>, tradeCount: number, tradeTotal: number, positions: Array<Position>, positionsSummary: PositionsSummary, portfolio: Portfolio, markets: Markets, cashflow: Cashflow, unmatched: Array<Unmatched>, accounts: Array<Account>, activityCount: number, };
-
-export type ModelViewAnswer = ModelLiveAnswer | ModelAnswer;
 
 export type FiguresQuery = { 
 /**

@@ -93,12 +93,7 @@ fn cases(app: &Arc<App>) -> Vec<(&'static str, Request<Body>)> {
     let req = |method: Method, uri: &str, body: Option<Value>| from_the_page(app, method, uri, body);
     vec![
         ("status", req(Method::GET, "/api/status", None)),
-        ("model_live_empty", req(Method::GET, "/api/model?only=live", None)),
-        ("book", req(Method::GET, "/api/book", None)),
-        ("trade_missing", req(Method::GET, "/api/trade?id=golden-no-such-trade", None)),
         ("journal", req(Method::POST, "/api/journal", Some(json!({"id": "golden-journal", "grade": "B", "tags": ["golden"], "thesis": "golden fixture"})))),
-        ("groups", req(Method::POST, "/api/groups", Some(json!({"groups": []})))),
-        ("notes", req(Method::POST, "/api/notes", Some(json!({"notes": {}})))),
         ("watch_status", req(Method::GET, "/api/watch", None)),
         ("watch_set_no_path", req(Method::POST, "/api/watch", Some(json!({"path": "", "account": ""})))),
         ("watch_scan_no_folder", req(Method::POST, "/api/watch/scan", None)),
@@ -276,7 +271,6 @@ fn test_orders_routes_golden() {
     for t in ["orders", "brackets", "activities", "accounts", "securities"] {
         let _ = conn.execute(&format!("DELETE FROM \"{}\"", t), []);
     }
-    app.invalidate();
     *app.orders.refreshed_at.lock().unwrap() = String::new();
     app.state.lock().unwrap().connected = false;
     drop(conn);
@@ -298,16 +292,6 @@ fn test_orders_routes_golden() {
     assert_eq!(get(req(Method::POST, "/api/order/modify", Some(json!({"id": "golden-no-such-order"})))), json!({"status": 200, "body": {"ok": false, "error": "No such order."}}));
     assert_eq!(get(req(Method::POST, "/api/bracket/adjust", Some(json!({"id": "golden-no-such-bracket", "leg": "sl"})))), json!({"status": 200, "body": {"ok": false, "error": "No such bracket."}}));
     assert_eq!(get(req(Method::POST, "/api/bracket/cancel", Some(json!({"id": "golden-no-such-bracket"})))), json!({"status": 200, "body": {"ok": false, "error": "No such bracket."}}));
-
-    // a manual fill: local only, no session needed
-    let appended = get(req(
-        Method::POST,
-        "/api/book/append",
-        Some(json!({"side": "BUY", "qty": 5, "price": 1.75, "symbol": "GOLDEN", "currency": "USD", "accountId": "acct-golden", "date": "2026-09-23"})),
-    ));
-    assert_eq!(appended["status"], json!(200));
-    assert_eq!(appended["body"]["ok"], json!(true));
-    assert_eq!(appended["body"]["added"], json!(1));
 
     // a resting order, cancelled through the stand-in for Wealthsimple's cancel mutation
     let golden_order: so::Order = serde_json::from_value(json!({"id": "golden-order-1", "accountId": "acct-golden", "account": "Golden", "securityId": "sec-golden", "symbol": "GOLDEN", "currency": "USD", "side": "BUY", "type": "LIMIT", "quantity": 5, "limitPrice": 1.75, "tif": "DAY", "status": "sent", "source": "bagholder", "role": "entry"})).unwrap();

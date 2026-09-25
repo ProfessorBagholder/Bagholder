@@ -89,7 +89,7 @@ fn test_every_answer_is_private_and_every_failure_has_one_shape() {
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
 
         assert_eq!(json_of(from_the_page(Method::GET, "/api/nothing", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "not found"})));
-        assert_eq!(json_of(from_the_page(Method::GET, "/api/trade?id=none-such", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no such trade"})));
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/figures/detail?id=none-such", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no such trade or holding"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/filings?symbol=%20", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol required"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/filings/doc?symbol=QNC", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol and id required"})));
         assert_eq!(json_of(from_the_page(Method::POST, "/api/journal", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "id required"})));
@@ -117,7 +117,7 @@ fn test_a_write_with_no_body_is_a_write_with_nothing_to_say() {
         let f = a.figures.get().unwrap();
         let book = f.book().unwrap();
         let names = f.names().unwrap();
-        let base = app().base().unwrap();
+        let base = app().market_base().unwrap();
         let doc = f.read(|e| crate::wire::build::build(e, &names, &Default::default(), &base)).unwrap();
         let id = doc.trades[0].id.clone();
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(&format!(r#"{{"id":"{id}","grade":"A","tags":["x", " "],"thesis":"why"}}"#)))).await;
@@ -231,14 +231,3 @@ fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     assert_eq!(added.values().next().unwrap()["title"], json!(row.title));
 }
 
-/// `GET /api/book` answers exactly what `bagholder_store::book::book` builds,
-/// as `Book`'s own JSON -- the route does nothing to it besides serializing it.
-#[test]
-fn test_the_book_route_is_the_store_books_own_json() {
-    let _g = guard();
-    let conn = app_ref().open().unwrap();
-    let expected = serde_json::to_value(bagholder_store::book::book(&conn).unwrap()).unwrap();
-    let (code, body) = runtime().block_on(json_of(from_the_page(Method::GET, "/api/book", None)));
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(body, expected);
-}

@@ -84,15 +84,11 @@ fn yearly_returns(series: &[Point], bench: &BTreeMap<String, f64>, today: &str) 
 }
 
 fn held_symbols(base: &Base) -> Vec<Value> {
-    sent(&bagholder_model::symbols_of::held_symbols(base))
-}
-
-fn payer_symbols(base: &Base) -> Vec<Value> {
-    sent(&bagholder_model::symbols_of::payer_symbols(base))
+    sent(&bagholder_model::symbols_of::held_symbols(&bagholder_model::context::MarketBase::of_base(base)))
 }
 
 fn intraday_archive_symbols(base: &Base) -> Vec<Value> {
-    sent(&bagholder_model::symbols_of::intraday_archive_symbols(base))
+    sent(&bagholder_model::symbols_of::intraday_archive_symbols(&bagholder_model::context::MarketBase::of_base(base)))
 }
 
 fn snap(acts: Vec<Value>) -> Value {
@@ -1298,20 +1294,6 @@ fn test_declared_record_beats_own_history_and_tracks_schedule_change() {
     assert_eq!(h["rateSource"], "payments");
     assert_eq!(h["freqVerified"], false);
     assert_eq!(h["priceSource"], "fill");
-}
-
-#[test]
-fn test_payer_symbols_are_held_dividend_payers() {
-    let snapshot = snap(vec![
-        cf_buy("b1", "RDDY", 100, 7, "2026-01-05"),
-        div_row("d1", "RDDY", 100.0, 0.2, 20.0, "2026-02-06", "Cashflow"),
-        cf_buy("b2", "TD", 10, 80, "2025-01-05"),
-        div_row("d2", "TD", 10.0, 1.0, 10.0, "2025-02-06", "Cashflow"),
-        sell_x("s2", "TD", 10, 90, "2025-03-01", json!({"accountType": "Cashflow"})),
-        cf_buy("b3", "AAA", 10, 5, "2026-01-05"),
-    ]);
-    let base = base_of(&snapshot, empty_market(), json!({}), "2026-09-06");
-    assert_eq!(payer_symbols(&base), vec![json!({"symbol": "RDDY", "exchange": "", "currency": "CAD"})]);
 }
 
 // --------------------------------------------------------------------------

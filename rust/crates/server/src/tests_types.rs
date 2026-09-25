@@ -21,7 +21,7 @@ use bagholder_store::feeds::{Notification, NotificationExtra};
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
 use crate::orders::{
-    Appended, OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
+    OrderAccount, OrderActionAnswer, OrderCard, OrdersDoc, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
 };
 
 fn declarations() -> String {
@@ -162,7 +162,7 @@ fn book_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![
-        ActivityRow, Appended, crate::orders::BookAppend, LegacyNote,
+        ActivityRow, LegacyNote,
         bagholder_store::broker::Account, bagholder_model::securities::Security, bagholder_store::book::BookBalance, bagholder_store::book::BookNav, bagholder_store::book::Book,
     ];
     let mut out = String::from(
@@ -321,10 +321,8 @@ fn model_api_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
-        crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
-        crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
-        crate::http::model::Notes, crate::http::model::NotesAnswer,
-        crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
+        crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
+        crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer,
         crate::http::model::FiguresQuery, crate::http::stream::Resync,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::csv_import::ImportRequest, crate::csv_import::RowNote, crate::csv_import::ImportReport,
@@ -362,9 +360,9 @@ fn generated_file_of(name: &str) -> &'static str {
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
-        "Appended" | "BookAppend" | "LegacyNote" => "book",
+        "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "TradeAnswer" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" | "ModelQuery" | "ModelViewAnswer" => "model_api",
+        "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" => "model_api",
         "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",

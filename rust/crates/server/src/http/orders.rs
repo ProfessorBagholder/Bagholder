@@ -15,7 +15,6 @@ pub fn routes() -> Routed {
         post "/api/order/modify" => modify;
         post "/api/bracket/adjust" => bracket_adjust;
         post "/api/bracket/cancel" => bracket_cancel;
-        post "/api/book/append" => book_append;
         post "/api/orders/refresh" => refresh;
         get "/api/order/quote" => quote;
         post "/api/order/preview" => preview;
@@ -151,9 +150,4 @@ async fn bracket_adjust(State(state): State<AppState>, Body(a): Body<Adjust>) ->
 
 async fn bracket_cancel(State(state): State<AppState>, Body(b): Body<Named>) -> Api<orders::OrderActionAnswer> {
     answer(move || orders::cancel_bracket(&state.app, &b.id)).await
-}
-
-/// `POST /api/book/append`: a fill the person enters by hand.
-async fn book_append(State(state): State<AppState>, Body(body): Body<orders::BookAppend>) -> Api<orders::Appended> {
-    answer(move || orders::append_manual(&state.app, &body)).await
 }

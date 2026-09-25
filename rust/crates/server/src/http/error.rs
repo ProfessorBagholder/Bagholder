@@ -18,8 +18,6 @@ pub enum ApiError {
     Conflict(String),
     /// The store failed. 500; the cause is logged, not sent.
     Store(rusqlite::Error),
-    /// The model could not be built. 500; the cause is logged, not sent.
-    Model(String),
     /// An outside source failed. 502.
     Upstream(String),
     /// A failure with a message the page shows. 500.
@@ -43,10 +41,6 @@ impl IntoResponse for ApiError {
             ApiError::Store(e) => {
                 log(&format!("bagholder: {}", e));
                 (StatusCode::INTERNAL_SERVER_ERROR, "store failed".to_string())
-            }
-            ApiError::Model(e) => {
-                log(&format!("model failed: {}", e));
-                (StatusCode::INTERNAL_SERVER_ERROR, "model failed".to_string())
             }
             ApiError::Upstream(m) => (StatusCode::BAD_GATEWAY, m),
             ApiError::Failed(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),

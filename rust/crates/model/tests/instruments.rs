@@ -15,8 +15,8 @@ fn v(s: &[&str]) -> Vec<String> {
     s.iter().map(|x| x.to_string()).collect()
 }
 
-fn base_with(snapshot: Value, quotes: Value) -> bagholder_model::base::Base {
-    build_base(&snapshot, &json!({"fx": {}, "benchmark": {}, "quotes": quotes}), &Default::default(), Some("2026-09-16"))
+fn base_with(snapshot: Value, quotes: Value) -> bagholder_model::context::MarketBase {
+    bagholder_model::context::MarketBase::of_base(&build_base(&snapshot, &json!({"fx": {}, "benchmark": {}, "quotes": quotes}), &Default::default(), Some("2026-09-16")))
 }
 
 fn sent<T: serde::Serialize>(rows: &[T]) -> Vec<serde_json::Value> {

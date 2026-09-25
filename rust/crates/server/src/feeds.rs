@@ -15,7 +15,6 @@ use bagholder_diff_derive::Diff;
 
 use bagholder_market::disclosures::{self, Gathered, SourceOutcome};
 use bagholder_market::{edgar, enrich, exposure, fear, history, localmodel, news, sedar, shorts};
-use bagholder_model::base::Base;
 use bagholder_model::instruments;
 use bagholder_model::venues::{tmx_form, tmx_symbol};
 use bagholder_model::securities::Security;
@@ -59,8 +58,9 @@ fn own_conn(app: &Arc<App>) -> Option<Connection> {
     bagholder_store::connect(&app.home).ok()
 }
 
-fn base(app: &Arc<App>) -> Option<Arc<Base>> {
-    app.base().ok()
+/// The market's context the earlier readers are given (stage 5 moves them).
+fn base(app: &Arc<App>) -> Option<Arc<bagholder_model::context::MarketBase>> {
+    app.market_base().ok()
 }
 
 fn today() -> String {
@@ -612,7 +612,7 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymb
     let mut rows: Vec<FilingCandidate> = Vec::new();
     let mut b = None;
     if has("held") || has("all") {
-        match app.base() {
+        match app.market_base() {
             Ok(x) => b = Some(x),
             Err(e) => log(&format!("bagholder disclosures: the book not read for the sweep: {}", e)),
         }
@@ -626,7 +626,7 @@ pub fn known_filing_symbols(app: &Arc<App>, scopes: &[String]) -> Vec<FilingSymb
             name: String::new(),
         }));
         if has("all") {
-            for t in b.trades.iter() {
+            for t in b.traded.iter() {
                 let mut rec = FilingCandidate { symbol: t.symbol.clone(), exchange: t.exchange.clone(), currency: t.currency.clone(), kind: t.kind.to_string(), name: String::new() };
                 if rec.kind == "Options" {
                     let under = bagholder_model::symbols::underlying_symbol(&rec.symbol);
@@ -2314,40 +2314,17 @@ pub fn ledger_path(app: &Arc<App>) -> std::path::PathBuf {
     app.root.join("ledger.html")
 }
 
-fn payer_symbols(app: &Arc<App>) -> Vec<bagholder_model::input::Listing> {
-    base(app).map(|b| bagholder_model::symbols_of::payer_symbols(&b)).unwrap_or_default()
-}
-
-/// USD/CAD, S&P 500, declared distributions
-/// and quotes. Never fails.
-pub fn refresh_market_data(app: &Arc<App>) {
-    app.single_flight("market", (), || {
-        let c = match conn(app) { Some(c) => c, None => return };
-        bagholder_market::refresh::refresh_all(&c, &payer_symbols(app));
-        refresh_quotes(app);
-    })
-}
-
-/// Prices for held positions and watched listings.
+/// Prices for the watched listings and the Markets tiles: what the market's
+/// context shows. A holding's price is the figure path's (`due.rs`).
 pub fn refresh_quotes(app: &Arc<App>) -> usize {
     app.single_flight("quotes", 0, || {
         let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return 0 };
-        let mut syms = bagholder_model::symbols_of::held_symbols(&b);
-        syms.extend(bagholder_model::markets::quote_symbols(&b));
+        let syms = bagholder_model::markets::quote_symbols(&b);
         let (today_s, now, stamp) = bagholder_market::clock_now();
         let n = bagholder_market::quotes::refresh_quotes(&c, &syms, &today_s, now, &stamp).unwrap_or(0);
         if n > 0 {
         }
         n
-    })
-}
-
-/// The rates, benchmarks and distributions
-/// on their own clocks. Never fails; nothing when one is already running.
-pub fn refresh_periodic_market(app: &Arc<App>) {
-    app.single_flight("periodic", (), || {
-        let c = match conn(app) { Some(c) => c, None => return };
-        bagholder_market::refresh::refresh_periodic(&c, &payer_symbols(app));
     })
 }
 
@@ -2407,19 +2384,17 @@ pub fn archive_loop(app: Arc<App>) {
             // Nothing is due. The next top-up falls due at a known moment (a stored
             // read passing its age), and new work can otherwise only come from the
             // book gaining a listing: wait for whichever is first.
-            let was = base(&app);
+            let listings = || base(&app).map(|b| bagholder_model::symbols_of::intraday_archive_symbols(&b));
+            let was = listings();
             let due = match (conn(&app), was.as_ref()) {
-                (Some(c), Some(b)) => {
-                    let recs = bagholder_model::symbols_of::intraday_archive_symbols(b);
+                (Some(c), Some(recs)) => {
                     let (today_s, now, _) = bagholder_market::clock_now();
-                    history::archive_next_due_secs(&c, &recs, &today_s, now)
+                    history::archive_next_due_secs(&c, recs, &today_s, now)
                 }
                 _ => None,
             };
-            let moved = || match (base(&app), was.as_ref()) {
-                (Some(now), Some(was)) => !Arc::ptr_eq(&now.book, &was.book),
-                (now, was) => now.is_some() != was.is_some(),
-            };
+            // the listings charted changed: one traded or held that was not
+            let moved = || listings() != was;
             match due {
                 Some(secs) => { app.events.park_until_or(&app, Duration::from_secs_f64(secs.max(ARCHIVE_MIN_SEC)), moved); }
                 None => { app.events.park_until(&app, moved); }
@@ -2454,10 +2429,9 @@ pub fn quote_loop(app: Arc<App>) {
     }
 }
 
-/// The periodic records and the update check, hourly.
+/// The update check, hourly (`SPEC.md` §2, Versions).
 pub fn market_loop(app: Arc<App>) {
     while !app.wait(Duration::from_secs(60 * bagholder_market::refresh::MARKET_CHECK_MINUTES)) {
-        refresh_periodic_market(&app);
         crate::update::check_for_update_if_due(&app);
     }
 }

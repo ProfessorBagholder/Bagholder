@@ -264,7 +264,7 @@ impl Feed {
         let filters = self.filters.clone()?;
         let Some(f) = self.app.figures.get() else { return Err("the figures are not open".into()) };
         // the market's context still comes from the earlier model's readers (stage 5)
-        let base = self.app.base().map_err(|e| format!("the market's context: {e}"))?;
+        let base = self.app.market_base().map_err(|e| format!("the market's context: {e}"))?;
         let key = (f.version(), Arc::as_ptr(&base) as usize);
         if self.built == Some(key) && self.sent.is_some() {
             return Ok(None);

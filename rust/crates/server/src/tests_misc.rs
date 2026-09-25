@@ -72,7 +72,6 @@ fn test_status_carries_the_data_version_so_the_page_can_reload() {
     assert_ne!(v1, crate::status::answer(&app()).data_version);
     let _ = conn.execute("DELETE FROM quotes WHERE symbol = 'RDDY'", []);
     let _ = conn.execute("DELETE FROM distributions WHERE symbol = 'RDDY'", []);
-    app().invalidate();
 }
 
 /// The clock cannot be stood in for here: the version is checked to carry
@@ -227,7 +226,7 @@ fn test_a_row_moves_both() {
 // TilesTest
 // ---------------------------------------------------------------------------
 
-fn base_of(conn: &Connection, quotes: Option<Value>) -> std::sync::Arc<bagholder_model::base::Base> {
+fn base_of(conn: &Connection, quotes: Option<Value>) -> bagholder_model::context::MarketBase {
     if let Some(q) = quotes {
         for (key, v) in q.as_object().cloned().unwrap_or_default() {
             let rec = bagholder_store::market::QuoteRecord {
@@ -239,9 +238,7 @@ fn base_of(conn: &Connection, quotes: Option<Value>) -> std::sync::Arc<bagholder
             bagholder_store::market::upsert_quote(conn, &key, &rec, "test", "2026-01-01T00:00:00Z").unwrap();
         }
     }
-    let cache = crate::model_cache::ModelCache::new();
-    let today = bagholder_model::clock::today_local();
-    cache.base(conn, &today).unwrap()
+    crate::market_context::tables_only(conn, &bagholder_model::clock::today_local())
 }
 
 /// The model half; the store half is in crates/store/tests/tables.rs.
@@ -287,11 +284,10 @@ fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twel
     let conn = app_ref().open().unwrap();
     let saved = bagholder_store::tables::get_meta(&conn, bagholder_store::rows::TILES_META, "").unwrap();
     bagholder_store::admin::save_tiles(&conn, &[bagholder_model::input::TileRef { symbol: "VIX".into(), exchange: "Index".into() }, bagholder_model::input::TileRef { symbol: "GC".into(), exchange: "COMEX".into() }]).unwrap();
-    app().invalidate();
     let too_many: Vec<Value> = ["SPX", "NDX", "IXIC", "DJI", "RUT", "VIX", "TSX", "FTSE", "DAX", "N225", "HSI", "STOXX50E", "DXY"].iter().map(|s| json!({"symbol": s, "exchange": "Index"})).collect();
     let too_many_tiles: Vec<bagholder_model::input::TileRef> = too_many.iter().map(|v| bagholder_model::input::TileRef { symbol: v["symbol"].as_str().unwrap().to_string(), exchange: v["exchange"].as_str().unwrap().to_string() }).collect();
     assert_eq!(serde_json::to_value(crate::feeds::tiles_set(&app(), &too_many_tiles)).unwrap()["ok"], false);
-    let b = app().base().unwrap();
+    let b = app().market_base().unwrap();
     let syms: Vec<String> = bagholder_model::markets::tile_rows(&b).iter().map(|t| t.symbol.to_string()).collect();
     assert_eq!(syms, vec!["VIX", "GC"], "a refused save changes nothing");
     if saved.is_empty() {
@@ -299,7 +295,6 @@ fn test_the_set_route_keeps_only_directory_instruments_in_order_and_caps_at_twel
     } else {
         bagholder_store::tables::set_meta(&conn, bagholder_store::rows::TILES_META, &saved).unwrap();
     }
-    app().invalidate();
 }
 
 // ---------------------------------------------------------------------------
