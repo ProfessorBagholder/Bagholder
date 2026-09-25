@@ -1,4 +1,4 @@
-//! What moved between two states of the page's data: the entities and the fields,
+//! `bagholder-diff`: what moved between two states of the page's data: the entities and the fields,
 //! and nothing else (docs/architecture.md, rule 0).
 //!
 //! The page holds each entity -- a position, a trade, a tile, a headline -- as one
@@ -333,7 +333,8 @@ impl<T: Diff> Diff for [T] {
 
 /// An object keyed by name: each value compared under its key, a key gained set,
 /// a key lost deleted.
-fn keyed<'a, V: Diff + 'a>(
+/// Diff a keyed map's entries by key: for a map type of another crate.
+pub fn keyed<'a, V: Diff + 'a>(
     old: impl Fn(&str) -> Option<&'a V>,
     new: impl Iterator<Item = (&'a String, &'a V)>,
     gone: impl Iterator<Item = &'a String>,
@@ -356,7 +357,8 @@ fn keyed<'a, V: Diff + 'a>(
 }
 
 /// A map's values under `*`.
-fn value_keys<V: Diff>(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+/// The keyed lists under a map's values: for a map type of another crate.
+pub fn value_keys<V: Diff>(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
     path.push("*".into());
     V::keys(path, out);
     path.pop();
@@ -374,16 +376,6 @@ impl<V: Diff> Diff for std::collections::BTreeMap<String, V> {
 impl<V: Diff> Diff for std::collections::HashMap<String, V> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         keyed(|k| self.get(k), new.iter(), self.keys().filter(|k| !new.contains_key(*k)), path, ops)
-    }
-    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
-        value_keys::<V>(path, out)
-    }
-}
-
-impl<V: Diff> Diff for crate::wire::Ordered<V> {
-    fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
-        let find = |m: &'_ crate::wire::Ordered<V>, k: &str| m.0.iter().position(|(key, _)| key == k);
-        keyed(|k| find(self, k).map(|i| &self.0[i].1), new.0.iter().map(|(k, v)| (k, v)), self.0.iter().map(|(k, _)| k).filter(|k| find(new, k).is_none()), path, ops)
     }
     fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
         value_keys::<V>(path, out)

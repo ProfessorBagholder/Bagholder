@@ -873,3 +873,13 @@ impl View {
         serde_json::to_value(self).expect("a view is plain data")
     }
 }
+
+impl<V: bagholder_diff::Diff> bagholder_diff::Diff for Ordered<V> {
+    fn diff(&self, new: &Self, path: &mut Vec<serde_json::Value>, ops: &mut Vec<serde_json::Value>) {
+        let find = |m: &'_ Ordered<V>, k: &str| m.0.iter().position(|(key, _)| key == k);
+        bagholder_diff::keyed(|k| find(self, k).map(|i| &self.0[i].1), new.0.iter().map(|(k, v)| (k, v)), self.0.iter().map(|(k, _)| k).filter(|k| find(new, k).is_none()), path, ops)
+    }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        bagholder_diff::value_keys::<V>(path, out)
+    }
+}

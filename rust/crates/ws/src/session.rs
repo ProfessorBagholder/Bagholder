@@ -636,3 +636,62 @@ impl<'a> Client<'a> {
         }
     }
 }
+
+// -- when the token is refreshed ------------------------------------------------
+
+/// How long before the token's expiry it is refreshed.
+pub const TOKEN_REFRESH_MARGIN_SEC: f64 = 300.0;
+
+pub fn expires_at_unix(sess: &Session) -> Option<f64> {
+    match sess.expires_at.as_ref()? {
+        Expiry::Unix(f) => Some(*f),
+        Expiry::Text(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            if let Ok(f) = s.parse::<f64>() {
+                return Some(f);
+            }
+            parse_instant(s)
+        }
+    }
+}
+
+/// Seconds since the epoch for an ISO instant, with a `Z` or an offset.
+fn parse_instant(s: &str) -> Option<f64> {
+    let s = if s.ends_with('Z') { format!("{}+00:00", &s[..s.len() - 1]) } else { s.to_string() };
+    let (d, t) = s.split_once('T')?;
+    let (y, m, day) = bagholder_model::dates::parse_iso(d)?;
+    let mut rest = t;
+    let mut offset = 0.0_f64;
+    if let Some(pos) = t.rfind(['+', '-']) {
+        if pos > 0 {
+            let sign = if t.as_bytes()[pos] == b'-' { -1.0 } else { 1.0 };
+            let off = &t[pos + 1..];
+            let (oh, om) = off.split_once(':').unwrap_or((off, "0"));
+            offset = sign * (oh.parse::<f64>().unwrap_or(0.0) * 3600.0 + om.parse::<f64>().unwrap_or(0.0) * 60.0);
+            rest = &t[..pos];
+        }
+    }
+    let parts: Vec<&str> = rest.split(':').collect();
+    let hh: f64 = parts.first()?.parse().ok()?;
+    let mm: f64 = parts.get(1).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+    let ss: f64 = parts.get(2).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+    Some(bagholder_model::dates::to_days(y, m, day) as f64 * 86400.0 + hh * 3600.0 + mm * 60.0 + ss - offset)
+}
+
+/// Seconds from `now` until the token should be refreshed; zero when it already should.
+pub fn seconds_until_token_refresh(sess: &Session, now: f64) -> f64 {
+    match expires_at_unix(sess) {
+        None => 0.0,
+        Some(exp) => (exp - TOKEN_REFRESH_MARGIN_SEC - now).max(0.0),
+    }
+}
+
+pub fn token_refresh_needed(sess: &Session, now: f64) -> bool {
+    match expires_at_unix(sess) {
+        None => true,
+        Some(exp) => now >= exp - TOKEN_REFRESH_MARGIN_SEC,
+    }
+}

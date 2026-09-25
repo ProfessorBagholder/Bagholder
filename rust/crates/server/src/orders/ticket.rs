@@ -350,12 +350,12 @@ pub enum TicketQuote {
     Refused(crate::http::OkOr),
 }
 
-impl bagholder_model::patch::Diff for TicketQuote {
+impl bagholder_diff::Diff for TicketQuote {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         match (self, new) {
             (TicketQuote::Ok(a), TicketQuote::Ok(b)) => a.diff(b, path, ops),
             // a refusal never becomes another shape while the same page holds it
-            _ => bagholder_model::patch::as_json(self, new, path, ops),
+            _ => bagholder_diff::as_json(self, new, path, ops),
         }
     }
     fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {

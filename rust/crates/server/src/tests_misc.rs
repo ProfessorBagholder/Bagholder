@@ -478,7 +478,7 @@ const TIMED_WAITS: [(&str, usize, &str); 15] = [
     ("server/src/app.rs", 1, "`wait` itself"),
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
-    ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather, midnight; three in its tests"),
+    ("server/src/events.rs", 6, "`park_until_or` itself, the 40 ms gather; three in its tests (the day turning is the scheduler's, `due.rs`)"),
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),

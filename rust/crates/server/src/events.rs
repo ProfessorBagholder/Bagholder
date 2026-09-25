@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use bagholder_model::patch;
+
 
 use crate::app::App;
 
@@ -308,7 +308,7 @@ impl Feed {
                 // the figures stand: only the status can have moved
                 if let Some((doc, was_status)) = &self.sent {
                     let now = status(&self.app);
-                    let ops = patch::typed_under(&["status"], was_status, &now);
+                    let ops = bagholder_diff::typed_under(&["status"], was_status, &now);
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
                     }
@@ -324,8 +324,8 @@ impl Feed {
                         out.push(("snapshot", serde_json::json!({"doc": "model", "data": whole})));
                     }
                     Some((was, was_status)) => {
-                        let mut ops = patch::typed(&**was, &*doc);
-                        ops.extend(patch::typed_under(&["status"], was_status, &now));
+                        let mut ops = bagholder_diff::typed(&**was, &*doc);
+                        ops.extend(bagholder_diff::typed_under(&["status"], was_status, &now));
                         if !ops.is_empty() {
                             out.push(("patch", serde_json::json!({"doc": "model", "ops": ops})));
                         }
@@ -344,7 +344,7 @@ impl Feed {
             match self.sent_docs.get(key) {
                 None => out.push(("snapshot", serde_json::json!({"doc": key, "data": now}))),
                 Some(was) => {
-                    let ops = patch::typed(was, &now);
+                    let ops = bagholder_diff::typed(was, &now);
                     if !ops.is_empty() {
                         out.push(("patch", serde_json::json!({"doc": key, "ops": ops})));
                     }
@@ -354,19 +354,6 @@ impl Feed {
         }
         out
     }
-}
-
-/// The day is an input of the model (an option expires, year-to-date rolls over).
-/// It turns at a known moment, so that moment is waited for; nothing checks the
-/// clock in between.
-pub fn signal_at_each_midnight(app: Arc<App>) {
-    crate::app::spawn("bagholder-midnight", move || loop {
-        let secs = bagholder_model::clock::seconds_until_local_midnight().max(1) + 1;
-        if app.wait(Duration::from_secs(secs)) {
-            return;
-        }
-        app.events.signal();
-    });
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use bagholder_diff_derive::Diff;
-use bagholder_model::patch::Diff;
+use bagholder_diff::Diff;
 use ts_rs::TS;
 
 use crate::app::App;
@@ -72,7 +72,7 @@ impl Diff for FilingsAnswer {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         match (self, new) {
             (FilingsAnswer::Ok(a), FilingsAnswer::Ok(b)) => a.diff(b, path, ops),
-            _ => bagholder_model::patch::as_json(self, new, path, ops),
+            _ => bagholder_diff::as_json(self, new, path, ops),
         }
     }
     fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
@@ -123,7 +123,7 @@ impl Diff for Doc {
             // a key's document never actually changes shape once opened: kept only
             // so a mismatch here is a whole-object diff (as the untyped differ gave
             // two unlike objects), never a panic
-            _ => bagholder_model::patch::as_json(self, new, path, ops),
+            _ => bagholder_diff::as_json(self, new, path, ops),
         }
     }
 }

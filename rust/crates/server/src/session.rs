@@ -150,7 +150,7 @@ pub fn ensure_fresh_token(app: &Arc<App>, sess: Option<Session>) -> bool {
         }
     };
     let connected = app.state.lock().unwrap().connected;
-    if connected && !bagholder_ws::sync::token_refresh_needed(&sess, now_unix()) {
+    if connected && !bagholder_ws::session::token_refresh_needed(&sess, now_unix()) {
         return true;
     }
     let ok = refresh_session(app, &mut sess, true);
@@ -320,7 +320,7 @@ pub fn token_loop(app: Arc<App>) {
         let sleep = match retry {
             Some(d) => d,
             None if !login => Duration::MAX, // nothing to keep fresh until someone signs in
-            None => Duration::from_secs_f64(load_session(&app).map_or(0.0, |s| bagholder_ws::sync::seconds_until_token_refresh(&s, now)).max(0.0)),
+            None => Duration::from_secs_f64(load_session(&app).map_or(0.0, |s| bagholder_ws::session::seconds_until_token_refresh(&s, now)).max(0.0)),
         };
         let was = (connected, login);
         let changed = || (app.state.lock().unwrap().connected, has_login(&app)) != was;

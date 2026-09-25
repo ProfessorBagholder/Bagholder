@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the diff `#[derive(Diff)]` implements
+bagholder-diff = { path = "../diff" }
 # "rc": a trade's legs and fills are shared, not copied, between the model and each view of it
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

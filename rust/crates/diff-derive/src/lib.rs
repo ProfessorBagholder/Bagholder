@@ -1,5 +1,5 @@
 //! `#[derive(Diff)]`: what moved between two values of a wire type, as the page's
-//! patch operations (`bagholder_model::patch`).
+//! patch operations (`bagholder_diff`).
 //!
 //! A struct is compared field by field under the name serde gives the field, so the
 //! paths are the paths of the JSON the page holds; a field serde leaves out when it
@@ -132,7 +132,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
     let c = container(input)?;
-    let patch = quote!(::bagholder_model::patch);
+    let patch = quote!(::bagholder_diff);
     // where this type's lists of rows are: each field's, under its JSON name
     let mut key_steps: Vec<proc_macro2::TokenStream> = Vec::new();
     let body = match &input.data {

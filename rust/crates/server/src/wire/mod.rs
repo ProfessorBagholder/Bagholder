@@ -19,7 +19,7 @@ pub mod figures;
 use serde::Serialize;
 use ts_rs::TS;
 
-use bagholder_model::patch::Diff;
+use bagholder_diff::Diff;
 
 /// An exact decimal, as text. The page types it `Dec` (`web/src/lib/dec.ts`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, TS)]
@@ -34,7 +34,7 @@ impl From<bagholder_core::Dec> for Dec {
 
 impl Diff for Dec {
     fn diff(&self, new: &Self, path: &mut Vec<serde_json::Value>, ops: &mut Vec<serde_json::Value>) {
-        bagholder_model::patch::leaf(self, new, path, ops)
+        bagholder_diff::leaf(self, new, path, ops)
     }
 }
 
@@ -51,7 +51,7 @@ pub enum Fig<T> {
 
 impl<T: Serialize> Diff for Fig<T> {
     fn diff(&self, new: &Self, path: &mut Vec<serde_json::Value>, ops: &mut Vec<serde_json::Value>) {
-        bagholder_model::patch::leaf(self, new, path, ops)
+        bagholder_diff::leaf(self, new, path, ops)
     }
 }
 
@@ -68,7 +68,7 @@ impl<T> Fig<T> {
 #[cfg(test)]
 mod tests {
     use super::figures::*;
-    use bagholder_model::patch::Diff;
+    use bagholder_diff::Diff;
 
     fn key<T: Diff>() -> Option<&'static str> {
         T::KEY

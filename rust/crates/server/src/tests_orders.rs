@@ -272,31 +272,6 @@ fn test_ticket_quote_for_a_listing_wealthsimple_lacks_says_so() {
     unpatch();
 }
 
-#[test]
-fn test_collateral_account_names_the_margin_account_it_backs() {
-    let _g = setup();
-    let raw: Vec<bagholder_ws::wire::AccountNode> = typed_rows(&[
-        json!({"id": "acct-margin", "nickname": "Trading", "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN", "currency": "CAD", "status": "open", "type": "non_registered",
-         "custodianAccounts": [{"id": "cust-margin-1"}], "accountFeatures": [{"name": "MARGIN", "enabled": true, "functional": true, "metadata": null}]}),
-        json!({"id": "acct-tfsa", "nickname": "TFSA", "unifiedAccountType": "SELF_DIRECTED_TFSA", "currency": "CAD", "status": "open", "type": "tfsa",
-         "custodianAccounts": [{"id": "cust-tfsa-1"}], "accountFeatures": [{"name": "MARGIN_BOOST", "enabled": true, "functional": true, "metadata": {"__typename": "MarginBoostFeatureMetadata", "targetMarginAccountId": "cust-margin-1"}}]}),
-        json!({"id": "acct-rrsp", "nickname": "RRSP", "unifiedAccountType": "SELF_DIRECTED_RRSP", "currency": "CAD", "status": "open", "type": "rrsp",
-         "custodianAccounts": [{"id": "cust-rrsp-1"}], "accountFeatures": [{"name": "MARGIN_BOOST", "enabled": false, "functional": false, "metadata": {"__typename": "MarginBoostFeatureMetadata", "targetMarginAccountId": "cust-margin-1"}}]}),
-        json!({"id": "acct-lira", "nickname": "LIRA", "unifiedAccountType": "SELF_DIRECTED_LIRA", "currency": "CAD", "status": "open", "type": "lira", "custodianAccounts": [], "accountFeatures": []}),
-    ]);
-    let slim_v = bagholder_ws::sync::slim_accounts(&raw);
-    let slim: HashMap<String, bagholder_store::broker::Account> = slim_v.iter().map(|a| (a.id.clone(), a.clone())).collect();
-    assert_eq!(slim["acct-tfsa"].margin_account_id, "acct-margin");
-    assert_eq!(slim["acct-rrsp"].margin_account_id, "", "a feature that is not enabled links nothing");
-    assert_eq!((slim["acct-margin"].margin_account_id.clone(), slim["acct-lira"].margin_account_id.clone()), (String::new(), String::new()));
-    bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
-    let kept: HashMap<String, bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
-    assert_eq!(kept["acct-tfsa"].margin_account_id, "acct-margin", "the link survives the store");
-    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
-    assert_eq!(by_id["acct-margin"].margin_account_id, "acct-margin");
-    assert_eq!(by_id["acct-tfsa"].margin_account_id, "acct-margin");
-}
-
 fn qnc_summary() -> Value {
     json!({"securities": [{"id": "sec-s-us", "buyable": true, "sellable": true, "wsTradeEligible": true, "securityType": "EQUITY", "currency": "USD",
         "stock": {"name": "Quantum Emotion Corp", "symbol": "QNC", "primaryExchange": "NYSE"},

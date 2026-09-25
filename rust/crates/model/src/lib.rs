@@ -41,6 +41,7 @@ pub mod venues;
 pub mod instruments;
 pub mod markets;
 pub mod view;
-pub mod patch;
+/// The diff the model's wire types derive, re-exported where the earlier code finds it.
+pub use bagholder_diff as patch;
 pub mod cases;
 pub mod testing;

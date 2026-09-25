@@ -163,8 +163,7 @@ fn serve() -> i32 {
 
     // from here on a change reaches an open page because it happened: every commit
     // on any connection (wired to the bus when the app was built), every write to
-    // the app's state, the day turning
-    events::signal_at_each_midnight(a.clone());
+    // the app's state; the day turning in the person's zone is the scheduler's (`due.rs`)
     let events_for_localmodel = a.events.clone();
     bagholder_market::localmodel::on_change(move || events_for_localmodel.signal());
     // the figure path's reads, each when it is due
@@ -437,3 +436,5 @@ mod tests_types;
 mod tests_docs_golden;
 #[cfg(test)]
 mod tests_routes_golden;
+#[cfg(test)]
+mod tests_boundary;

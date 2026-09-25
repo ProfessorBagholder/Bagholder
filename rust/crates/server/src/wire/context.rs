@@ -7,8 +7,12 @@
 //! and a donut draw, never an amount the page adds.
 
 use bagholder_model::activity::Kind;
-use bagholder_model::context::MarketBase;
-use bagholder_model::wire::{ExposureSlice, Markets, Mark, Position as OldPosition};
+use bagholder_model::wire::{Mark, Position as OldPosition};
+
+// The context's types, as the document carries them: the one place the figure
+// path meets the earlier model, until stage 5 (the boundary test holds it to this file).
+pub use bagholder_model::context::MarketBase;
+pub use bagholder_model::wire::{ExposureSlice, Markets};
 
 use super::figures::Position;
 

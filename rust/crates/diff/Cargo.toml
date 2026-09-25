@@ -1,0 +1,12 @@
+[package]
+name = "bagholder-diff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# What moved between two states of a document, entity by entity and field by
+# field (`docs/architecture.md`, rule 0): the trait `#[derive(Diff)]` implements,
+# on its own so the figure path uses it without the earlier model.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# the diff `#[derive(Diff)]` implements
+bagholder-diff = { path = "../diff" }
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
 # model's are: the two sides of the wire cannot drift
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings", "indexmap-impl"] }

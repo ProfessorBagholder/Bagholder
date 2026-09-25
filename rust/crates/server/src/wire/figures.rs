@@ -533,7 +533,7 @@ pub struct Figures {
     /// What waits on the person, whatever the filters.
     pub waiting: Vec<Waiting>,
     /// The market around the book, from its readers (`context`).
-    pub markets: bagholder_model::wire::Markets,
-    pub sectors: Vec<bagholder_model::wire::ExposureSlice>,
-    pub regions: Vec<bagholder_model::wire::ExposureSlice>,
+    pub markets: super::context::Markets,
+    pub sectors: Vec<super::context::ExposureSlice>,
+    pub regions: Vec<super::context::ExposureSlice>,
 }

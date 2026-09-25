@@ -359,7 +359,7 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
 }
 
 /// Everything the page shows of the book under `filters`.
-pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder_model::context::MarketBase) -> Figures {
+pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &super::context::MarketBase) -> Figures {
     let inputs = engine.inputs();
     let figs = engine.figures();
     let scoped: Scoped = engine.scope(filters);

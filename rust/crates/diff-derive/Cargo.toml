@@ -6,7 +6,7 @@ edition.workspace = true
 [lib]
 proc-macro = true
 
-# `#[derive(Diff)]` for the model's wire types (bagholder_model::patch). These three
+# `#[derive(Diff)]` for the wire types (bagholder_diff). These three
 # are already in the build, under serde's and ts-rs's own derives: nothing new is
 # fetched or trusted for them.
 [dependencies]
