@@ -70,7 +70,13 @@ fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, n
     let mut out = String::new();
     use std::fmt::Write as _;
     let _ = writeln!(out, "accounts added {}, linked {}", r.accounts_added, r.accounts_linked);
-    let _ = writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; imported records replaced {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.superseded, r.removed);
+    let _ = writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; imported records replaced {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.superseded, r.removed.len());
+    for (record, key) in &r.removed {
+        let _ = writeln!(out, "  removed {key} (record {record})");
+    }
+    for (account, why) in &r.suspect {
+        let _ = writeln!(out, "suspect read of {account}, nothing removed: {why}");
+    }
     let _ = writeln!(out, "moves of holdings linked {}", r.transfers_linked);
     let _ = writeln!(out, "account days stored {}, restated {}", r.days_stored, r.days_restated);
     let _ = writeln!(out, "requests {}", adapter.source.requests());

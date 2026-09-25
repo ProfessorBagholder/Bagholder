@@ -19,6 +19,9 @@
 //!                   between accounts that states no amount, both accounts' days
 //!                   from the day before its own to the first on which either's
 //!                   net deposits changed (FetchAccountHistoricalFinancials)
+//!   "stated_moves": for a move that states no amount, the other moves between
+//!                   the same two accounts over the days its cash can move in
+//!                   that state theirs
 //!   "withheld":     a withdrawal's tax withheld rows (sharing its id): its
 //!                   gross amount is what reached the other account and the tax
 //!   "siblings":     moves between the same two accounts on neighbouring days; for
@@ -50,6 +53,7 @@ pub struct Record {
     pub transfer: Option<Value>,
     pub deposits: Vec<Deposits>,
     pub withheld: Vec<Value>,
+    pub stated_moves: Vec<Value>,
     /// Moves between the same two accounts on neighbouring days, read with it.
     pub siblings: Vec<Value>,
     pub positions: Vec<Positions>,
@@ -85,7 +89,7 @@ pub struct BookMove {
 impl Record {
     /// A row with nothing read beside it yet.
     pub fn of(activity: Value) -> Record {
-        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, transfer: None, deposits: vec![], withheld: vec![], siblings: vec![], positions: vec![], book: vec![] }
+        Record { activity, securities: BTreeMap::new(), order: None, entitlements: None, conversion: None, transfer: None, deposits: vec![], withheld: vec![], stated_moves: vec![], siblings: vec![], positions: vec![], book: vec![] }
     }
 
     /// The payload the book stores.
@@ -112,6 +116,9 @@ impl Record {
                 })
                 .collect();
             m.insert("deposits".to_string(), Value::Array(items));
+        }
+        if !self.stated_moves.is_empty() {
+            m.insert("stated_moves".to_string(), Value::Array(self.stated_moves.clone()));
         }
         if !self.withheld.is_empty() {
             m.insert("withheld".to_string(), Value::Array(self.withheld.clone()));

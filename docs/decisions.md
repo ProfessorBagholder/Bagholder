@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each names the test that fails if it is broken, or says "review only" where no test can hold it (brief 07).
 
+## 2026-09-25
+
+- **A managed account's trades make no round trips.** The buys and sales Wealthsimple makes in an account it manages count in holdings, cash, income, account value and the broker check, and are in no Trades list, journal or trade statistic: they are not the person's trades. (Owner; brief 08.) Held by: `engine/tests/cases/open_trades.json` (a managed account's buys and sales make no round trip, and its holding stays).
+
 ## 2026-09-24
 
 - **Calls to Wealthsimple's unofficial API are kept to what is necessary.** The first pull reads each account in full once; after that only what changed is read, and an account is re-read only over the span a broker-check difference points to. Held by a test counting a pull's requests (stage 3b). (Owner; brief 07.) Held by: `wealthsimple/tests/pull.rs` (a pull with nothing new, a pull with one new trade).

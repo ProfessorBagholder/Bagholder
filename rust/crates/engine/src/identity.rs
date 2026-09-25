@@ -41,10 +41,21 @@ fn anchors(ledger: &Ledger) -> BTreeMap<TripKey, TradeId> {
     out
 }
 
+/// Whether an account is managed by its broker: the trades the broker makes in
+/// it are not the person's, and make no round trip (`docs/decisions.md`,
+/// 2026-09-25). Its holdings, cash, income and value count as any account's.
+pub fn managed(ledger: &Ledger, account: bagholder_core::AccountId) -> bool {
+    ledger.accounts.get(&account).is_some_and(|a| matches!(a.account.account_type, bagholder_core::account::AccountType::Known { managed: true, .. }))
+}
+
 pub fn identify(ledger: &Ledger, matched: &Matched) -> Identity {
     let anchored = anchors(ledger);
     let mut out = Identity::default();
     for (key, trip) in &matched.trips {
+        // a trip held in a managed account is no trade of the person's
+        if managed(ledger, trip.account) {
+            continue;
+        }
         let mut found = trip.openings.iter().filter_map(|o| anchored.get(o).copied());
         match found.next() {
             Some(keeps) => {

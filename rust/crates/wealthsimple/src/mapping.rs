@@ -21,8 +21,8 @@
 //!   security moved is one whose units fell in one account by what they rose in
 //!   the other. A move that states no amount at all (a "full in kind" move of an
 //!   account sold to cash first) states none in its detail either; its cash moves
-//!   days after its row, on the day the two accounts' net deposits fall and rise
-//!   by the same amount.
+//!   days after its row, on the one day within the week after it that the two
+//!   accounts' net deposits fall and rise by the same amount.
 //! - a transfer in from another institution states the value asked for, not what
 //!   arrived: the cash arrives days later, less the other institution's fee or
 //!   more by its interest, and its detail leaves the value that arrived empty
@@ -74,6 +74,10 @@ impl Mapping for WealthsimpleMapping {
             Ok(v) => v,
             Err(e) => return Mapped::unreadable(format!("a Wealthsimple record that is not JSON: {e}")),
         };
+        // a row the adapter could not read: kept, with why
+        if let Ok(why) = Node::root(&v).text("unread") {
+            return Mapped::unreadable(format!("a Wealthsimple row the adapter could not read: {why}"));
+        }
         match map_record(ctx, &v) {
             Ok(m) => m,
             Err(Failed::Reply(m)) => Mapped::unreadable(format!("Wealthsimple's reply does not have the shape read: {m}")),
@@ -771,19 +775,10 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
         if row.amount.is_some() {
             return cash_leg(out);
         }
-        // the row states no amount: the accounts' net deposits show it moving
-        // (below); else the move's detail states it, in the source account's
-        // currency, and on the destination's side in the same currency where
-        // its rate is one
-        if let Some((day, m)) = moved_by_deposits(root, row, incoming)? {
-            // on the day it moved, whose instant is not stated
-            let mut d = base.draft(row_leg(), kind);
-            d.occurred_at = None;
-            d.trade_date = day;
-            d.cash = Some(m);
-            out.legs.push(d);
-            return Ok(());
-        }
+        // the row states no amount: its detail states it where Wealthsimple
+        // kept one, in the source account's currency, and on the destination's
+        // side in the same currency where its rate is one; else the accounts'
+        // net deposits show it moving (below)
         if let Some((detail, amount)) = root.obj("conversion").ok().and_then(|d| d.opt_dec_text("amount").ok().flatten().map(|a| (d, a))) {
             let currency = Currency::parse(&detail.text("currency")?.to_uppercase()).map_err(|e| Problem::new("unreadable", e.to_string()))?;
             let same = detail.opt_dec_text("fxRate")?.is_none_or(|r| r == Dec::ONE) && detail.opt_dec_text("fxAdjustedAmount")?.is_none_or(|a| a == amount);
@@ -793,6 +788,15 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
             }
             let mut d = base.draft(row_leg(), kind);
             d.cash = Some(Money::new(if incoming { amount.abs() } else { amount.abs().neg() }, currency));
+            out.legs.push(d);
+            return Ok(());
+        }
+        if let Some((day, m)) = moved_by_deposits(root, row, base.day, incoming)? {
+            // on the day it moved, whose instant is not stated
+            let mut d = base.draft(row_leg(), kind);
+            d.occurred_at = None;
+            d.trade_date = day;
+            d.cash = Some(m);
             out.legs.push(d);
             return Ok(());
         }
@@ -851,12 +855,20 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
     Ok(())
 }
 
+/// The days after a move's own within which its cash moves: the sales that
+/// fund a move of an account sold to cash settle in one or two business days
+/// (T+2 in Canada until 2024-05-27, T+1 since), and the cash moves on a
+/// business day after, which weekends and a holiday keep within a week.
+pub const SETTLES_WITHIN: i64 = 7;
+
 /// A move between two accounts that states no amount: the cash its two
-/// accounts' net deposits show moving, and the day: the first from the row's own on
-/// which one's fell by exactly what the other's rose (their other deposits and
-/// withdrawals change one account alone). None where the days are not kept or
-/// no day shows it.
-fn moved_by_deposits(root: &Node, row: &Row, incoming: bool) -> Result<Option<(jiff::civil::Date, Money)>, Failed> {
+/// accounts' net deposits show moving, and the day: the one day, from the
+/// row's own to `SETTLES_WITHIN` days after, on which one account's fell by
+/// exactly what the other's rose (their other deposits and withdrawals change
+/// one account alone), apart from the days the other moves between them that
+/// state their amount account for. None where the days are not kept, or no day or more
+/// than one shows it: which is this move's is then not stated.
+fn moved_by_deposits(root: &Node, row: &Row, day: jiff::civil::Date, incoming: bool) -> Result<Option<(jiff::civil::Date, Money)>, Failed> {
     let Some(other) = row.node.opt_text("opposingAccountId")? else { return Ok(None) };
     let Ok(list) = root.list("deposits") else { return Ok(None) };
     let mut days: BTreeMap<&str, Vec<bagholder_broker::DayValue>> = BTreeMap::new();
@@ -865,17 +877,29 @@ fn moved_by_deposits(root: &Node, row: &Row, incoming: bool) -> Result<Option<(j
         days.insert(d.text("account")?, crate::read::history(&nodes)?);
     }
     let (Some(mine), Some(theirs)) = (days.get(row.account), days.get(other)) else { return Ok(None) };
-    let Some((day, moved)) = mirrored_day(mine, theirs)? else { return Ok(None) };
+    let last = day.checked_add(jiff::Span::new().days(SETTLES_WITHIN)).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+    let mut found = mirrored_days(mine, theirs, last);
+    // a day another move between the two states its amount for is that move's
+    if let Ok(list) = root.list("stated_moves") {
+        for m in list {
+            let amount = m.dec_text("amount")?.abs();
+            if let Some(i) = found.iter().position(|(_, c)| c.amount.abs() == amount) {
+                found.remove(i);
+            }
+        }
+    }
+    let [(on, moved)] = found.as_slice() else { return Ok(None) };
     let this_way = if incoming { moved.amount.is_positive() } else { moved.amount.is_negative() };
-    Ok(this_way.then_some((day, moved)))
+    Ok(this_way.then_some((*on, *moved)))
 }
 
-/// The first day on which two accounts' net deposits changed by exactly
-/// opposite amounts, and the first account's change: each list is one
+/// Each day up to `last` on which two accounts' net deposits changed by
+/// exactly opposite amounts, and the first account's change: each list is one
 /// account's days in order from the day before a move.
-pub fn mirrored_day(a: &[bagholder_broker::DayValue], b: &[bagholder_broker::DayValue]) -> Read<Option<(jiff::civil::Date, Money)>> {
+pub fn mirrored_days(a: &[bagholder_broker::DayValue], b: &[bagholder_broker::DayValue], last: jiff::civil::Date) -> Vec<(jiff::civil::Date, Money)> {
     let changes = |days: &[bagholder_broker::DayValue]| -> BTreeMap<jiff::civil::Date, Money> {
         days.windows(2)
+            .filter(|w| w[1].day <= last)
             .filter_map(|w| {
                 let d = w[1].net_deposits.amount.checked_sub(w[0].net_deposits.amount).ok()?;
                 (!d.is_zero() && w[1].net_deposits.currency == w[0].net_deposits.currency).then(|| (w[1].day, Money::new(d, w[1].net_deposits.currency)))
@@ -883,7 +907,7 @@ pub fn mirrored_day(a: &[bagholder_broker::DayValue], b: &[bagholder_broker::Day
             .collect()
     };
     let (ca, cb) = (changes(a), changes(b));
-    Ok(ca.into_iter().find(|(day, m)| cb.get(day).is_some_and(|o| o.currency == m.currency && o.amount.checked_add(m.amount).ok() == Some(Dec::ZERO))))
+    ca.into_iter().filter(|(day, m)| cb.get(day).is_some_and(|o| o.currency == m.currency && o.amount.checked_add(m.amount).ok() == Some(Dec::ZERO))).collect()
 }
 
 /// The instant a transfer from another institution completed: its detail's

@@ -106,7 +106,8 @@ pub fn build(case: &Value) -> Built {
         let kind = AccountKind::parse(s(&a, "kind").unwrap_or("cash")).unwrap();
         let registration = Registration::parse(s(&a, "registration").unwrap_or("none")).unwrap();
         let status = AccountStatus::parse(s(&a, "status").unwrap_or("open")).unwrap();
-        let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed: false, joint: false }, status, nickname: Some(label.to_string()) };
+        let managed = a.get("managed").and_then(Value::as_bool).unwrap_or(false);
+        let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed, joint: false }, status, nickname: Some(label.to_string()) };
         accounts.insert(id, AccountInfo { account, broker: broker.clone() });
     }
     let first_day = arr(case, "transactions").iter().filter_map(|t| s(t, "day")).map(day).min().unwrap_or(day("2020-01-01"));

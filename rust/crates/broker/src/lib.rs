@@ -60,14 +60,26 @@ pub struct Row {
     pub key: String,
     /// The broker's account id.
     pub account: String,
-    /// The day the broker files it under.
-    pub day: jiff::civil::Date,
+    /// The day the broker files it under; None where the row states none
+    /// that reads (it is then `unread`).
+    pub day: Option<jiff::civil::Date>,
     /// Whether the row's status is final: a row not yet final is read again.
     pub settled: bool,
     /// Whether what the row moved is read from positions, net of the book's
     /// own moves: it is recorded after the rows that move by themselves.
     pub reads_positions: bool,
+    /// Why the adapter could not read the row, where it could not: it is
+    /// kept as a record with that problem and read again.
+    pub unread: Option<String>,
     pub value: Value,
+}
+
+/// An account's activity as read: its rows, and each row that states no id
+/// of its own to keep it by (the read is then incomplete).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Activity {
+    pub rows: Vec<Row>,
+    pub unkeyed: Vec<String>,
 }
 
 /// A position as the broker states it on a day.
@@ -121,7 +133,7 @@ pub trait BrokerAdapter {
     }
     fn accounts(&mut self) -> Answer<Vec<AccountStated>>;
     /// An account's activity, from `from` (the whole of it when `None`).
-    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Row>>;
+    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Activity>;
     /// The rows about to be recorded, so an adapter can read what they share
     /// in as few requests as its broker takes (their securities, in batches).
     fn prepare(&mut self, _rows: &[&Row]) {}
@@ -134,9 +146,10 @@ pub trait BrokerAdapter {
     /// Whether a stored record's row is read against positions (its moves are
     /// not the book's own).
     fn reads_positions(&self, payload: &Value) -> bool;
-    /// A stored record whose row is not final yet (pending, a placeholder):
-    /// its account and day, so the next pull reads it again.
-    fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
+    /// A stored record whose row is not final yet (pending, a placeholder, one
+    /// the adapter could not read): its account and day, so the next pull
+    /// reads it again (the whole account where its day is not known).
+    fn unsettled(&self, payload: &Value) -> Option<(String, Option<jiff::civil::Date>)>;
     /// A stored record's account and day: whether a read of that account
     /// from a day covers it.
     fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;

@@ -32,8 +32,13 @@ pub struct Report {
     pub records_unchanged: usize,
     /// Imported records a broker record replaced.
     pub superseded: usize,
-    /// Records of rows the broker no longer lists over a span it was read in.
-    pub removed: usize,
+    /// Records of rows the broker no longer lists over a span it was read in,
+    /// each removed: the record and the broker's id for its row.
+    pub removed: Vec<(RecordId, String)>,
+    /// Accounts whose read would have removed what a sound read does not (a
+    /// final row older than the rows read again, or more than a few final
+    /// rows): nothing was removed for them, and why.
+    pub suspect: Vec<(String, String)>,
     pub transfers_linked: usize,
     pub days_stored: usize,
     /// Days the broker stated again differently: kept beside the first.
@@ -110,12 +115,16 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
 
     // each account's activity: whole the first time, then from its last full read
     // a row stored before it was final is read again, from its day
-    let mut unsettled: BTreeMap<String, jiff::civil::Date> = BTreeMap::new();
+    // (from its first day where one's day is not known)
+    let mut unsettled: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
     for r in book.live_records(&adapter.mapping().source())? {
         if let Some((_, _, payload)) = book.revisions(r)?.pop() {
             if let Some((account, day)) = json::parse(&payload).ok().and_then(|v| adapter.unsettled(&v)) {
                 let e = unsettled.entry(account).or_insert(day);
-                *e = (*e).min(day);
+                *e = match (*e, day) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    _ => None,
+                };
             }
         }
     }
@@ -123,6 +132,8 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let mut read_accounts: Vec<(AccountId, jiff::Timestamp)> = Vec::new();
     // the day each account's activity was read from (the whole of it when `None`)
     let mut spans: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
+    // the day of each account's last full read before this one
+    let mut read_before: BTreeMap<String, jiff::civil::Date> = BTreeMap::new();
     for a in &stated {
         let id = ids[&a.key];
         let last = book.activity_read_at(id)?;
@@ -130,13 +141,27 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
             // a closed account already read in full has nothing new
             continue;
         }
-        let from = last.map(|t| adapter.day(t)).map(|d| unsettled.get(&a.key).map_or(d, |u| d.min(*u)));
+        if let Some(t) = last {
+            read_before.insert(a.key.clone(), adapter.day(t));
+        }
+        let from = last.map(|t| adapter.day(t)).and_then(|d| match unsettled.get(&a.key) {
+            None => Some(d),
+            Some(Some(u)) => Some(d.min(*u)),
+            Some(None) => None,
+        });
         match adapter.activity(&a.key, from) {
-            Ok(r) => {
-                report.rows_read += r.len();
-                rows.extend(r);
-                read_accounts.push((id, now));
-                spans.insert(a.key.clone(), from);
+            Ok(read) => {
+                report.rows_read += read.rows.len();
+                rows.extend(read.rows);
+                if read.unkeyed.is_empty() {
+                    read_accounts.push((id, now));
+                    spans.insert(a.key.clone(), from);
+                } else {
+                    // rows it cannot keep: the read is not complete, and
+                    // nothing is removed on it
+                    book.note_activity_read(id, now, false)?;
+                    report.failed(format!("activity:{}", a.key), Failure::Mismatch(format!("rows that state no id to keep them by: {}", read.unkeyed.join("; "))));
+                }
             }
             Err(f) => {
                 book.note_activity_read(id, now, false)?;
@@ -183,9 +208,9 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     for a in &stated {
         keys_all.entry(ids[&a.key]).or_default().push(&a.key);
     }
-    for r in unlisted(book, adapter, &scheme, &spans, &keys_all, &listed)? {
+    for (r, key) in unlisted(book, adapter, &scheme, &spans, &keys_all, &listed, &read_before, &mut report)? {
         book.mark_removed(r, now)?;
-        report.removed += 1;
+        report.removed.push((r, key));
     }
     for (id, at) in &read_accounts {
         book.note_activity_read(*id, *at, true)?;
@@ -328,23 +353,65 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     Ok(report)
 }
 
+/// More final rows than this gone from one account in one read makes the read
+/// suspect.
+const FEW: usize = 3;
+
 /// The records of rows the broker no longer lists over a span it was read in:
 /// a row posted again under another id once final (a card purchase's pending
 /// row), a row withdrawn. Its own records by the account and day they name; an
 /// imported record of its rows by its transactions' account, once every
 /// account of the broker's behind it was read, and their day.
-fn unlisted(book: &Book, adapter: &dyn BrokerAdapter, scheme: &str, spans: &BTreeMap<String, Option<jiff::civil::Date>>, keys_all: &BTreeMap<AccountId, Vec<&str>>, listed: &BTreeSet<&str>) -> Result<Vec<RecordId>> {
+///
+/// A row not yet final that is gone is the pending row's life; a final row
+/// gone is not, so an account whose read would remove a final row older than
+/// the rows read again (before the last full read's day, where only rows not
+/// yet final are read again), or more than a few final rows, removes nothing
+/// and is reported suspect (brief 08). The imported records are not held to that
+/// guard: they are replaced on the first full read, and those the broker no
+/// longer lists are the import's copies of rows it has since posted again
+/// (the owner's card: 35 at once), which a count would keep counted twice.
+fn unlisted(
+    book: &Book,
+    adapter: &dyn BrokerAdapter,
+    scheme: &str,
+    spans: &BTreeMap<String, Option<jiff::civil::Date>>,
+    keys_all: &BTreeMap<AccountId, Vec<&str>>,
+    listed: &BTreeSet<&str>,
+    read_before: &BTreeMap<String, jiff::civil::Date>,
+    report: &mut Report,
+) -> Result<Vec<(RecordId, String)>> {
     let covers = |from: &Option<jiff::civil::Date>, day: jiff::civil::Date| from.is_none_or(|f| day >= f);
     let mut out = Vec::new();
+    // the broker's own records, by account: a row not final that is gone was
+    // posted again or withdrawn; a final row gone is a guard's matter
+    let mut own: BTreeMap<String, Vec<(RecordId, String, jiff::civil::Date, bool)>> = BTreeMap::new();
     for r in book.live_records(&adapter.mapping().source())? {
         let rec = book.record(r)?;
         if listed.contains(rec.source_key.as_str()) {
             continue;
         }
         let Some((_, _, payload)) = book.revisions(r)?.pop() else { continue };
-        let Some((account, day)) = json::parse(&payload).ok().and_then(|v| adapter.placed(&v)) else { continue };
+        let Ok(v) = json::parse(&payload) else { continue };
+        let Some((account, day)) = adapter.placed(&v) else { continue };
         if spans.get(&account).is_some_and(|from| covers(from, day)) {
-            out.push(r);
+            let settled = adapter.unsettled(&v).is_none();
+            own.entry(account).or_default().push((r, rec.source_key, day, settled));
+        }
+    }
+    for (account, gone) in own {
+        let final_rows: Vec<&(RecordId, String, jiff::civil::Date, bool)> = gone.iter().filter(|g| g.3).collect();
+        // before the last full read's day the account is read again only for
+        // its rows not yet final: a final row there was read in full before
+        let older = final_rows.iter().find(|g| read_before.get(&account).is_some_and(|d| g.2 < *d));
+        let why = match older {
+            Some(g) => Some(format!("{} is final, older than the rows read again, and no longer listed", g.1)),
+            None if final_rows.len() > FEW => Some(format!("{} final rows are no longer listed", final_rows.len())),
+            None => None,
+        };
+        match why {
+            Some(w) => report.suspect.push((account, w)),
+            None => out.extend(gone.into_iter().map(|(r, k, _, _)| (r, k))),
         }
     }
     // the span every account behind a book account was read over: the latest start
@@ -366,7 +433,7 @@ fn unlisted(book: &Book, adapter: &dyn BrokerAdapter, scheme: &str, spans: &BTre
         let Some(first) = txs.iter().map(|t| t.occurred_at.map_or(t.trade_date, |at| adapter.day(at))).min() else { continue };
         let accounts: BTreeSet<AccountId> = txs.iter().map(|t| t.account).collect();
         if accounts.iter().all(|a| span_of(a).is_some_and(|from| covers(&from, first))) {
-            out.push(r);
+            out.push((r, key));
         }
     }
     Ok(out)

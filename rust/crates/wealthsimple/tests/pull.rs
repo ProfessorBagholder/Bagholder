@@ -123,14 +123,15 @@ fn a_pending_row_posted_again_under_another_id_leaves_the_book() {
         let pending = row_as(rows, "anon-pending-1", "PENDING");
         rows.push(pending);
     });
-    assert_eq!((first.records_new, first.removed), (54, 0));
+    assert_eq!((first.records_new, first.removed.len()), (54, 0));
     // final now: Wealthsimple lists it under another id, and the pending one no longer
     let (second, _) = once_with(&book, &dir(), "2025-11-19T21:00:00Z", |rows| {
         let settled = row_as(rows, "anon-settled-1", "COMPLETED");
         rows.push(settled);
     });
     assert!(second.failures.is_empty(), "{:?}", second.failures);
-    assert_eq!((second.records_new, second.removed), (1, 1));
+    assert_eq!((second.records_new, second.removed.len()), (1, 1));
+    assert_eq!(second.removed.iter().map(|(_, k)| k.as_str()).collect::<Vec<_>>(), vec!["anon-pending-1"]);
     assert_eq!(state(&book, "wealthsimple", "anon-pending-1"), RecordState::Removed);
     assert_eq!(state(&book, "wealthsimple", "anon-settled-1"), RecordState::Live);
     // nothing left pending: the next pull reads from its last full read, and removes nothing
@@ -138,7 +139,7 @@ fn a_pending_row_posted_again_under_another_id_leaves_the_book() {
         let settled = row_as(rows, "anon-settled-1", "COMPLETED");
         rows.push(settled);
     });
-    assert_eq!((third.records_new, third.removed), (0, 0));
+    assert_eq!((third.records_new, third.removed.len()), (0, 0));
 }
 
 /// An imported record: one cash leg, known by the broker's id of its row.
@@ -189,7 +190,7 @@ fn an_imported_row_the_broker_no_longer_lists_leaves_the_book_on_the_first_full_
         book.store(&Imported, &Incoming { connection: Some(c), source_key: key, payload, refs: vec![("broker-record:wealthsimple".into(), broker_id)] }, at(now)).unwrap();
     }
     let (first, _) = once(&book, &dir(), now);
-    assert_eq!((first.superseded, first.removed), (1, 1));
+    assert_eq!((first.superseded, first.removed.len()), (1, 1));
     assert_eq!(state(&book, "bagholder-import", "old-listed"), RecordState::Superseded);
     assert_eq!(state(&book, "bagholder-import", "old-pending"), RecordState::Removed);
 }
@@ -226,4 +227,95 @@ fn a_credit_card_s_cash_is_what_is_owed_on_it() {
     let card = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-ca-4")).unwrap().unwrap();
     let (_, stated) = book.stated(card).unwrap().cash.expect("the card's cash stated");
     assert_eq!(stated.get(&Currency::parse("CAD").unwrap()), Some(&Dec::parse("-5140.28").unwrap()));
+}
+
+fn with(mut row: Value, key: &str, value: Value) -> Value {
+    if let Value::Object(o) = &mut row {
+        o.insert(key.into(), value);
+    }
+    row
+}
+
+#[test]
+fn a_row_the_adapter_cannot_read_is_kept_with_why_and_the_rest_of_its_account_is_read() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    let (first, _) = once_with(&book, &dir(), "2025-11-19T20:00:00Z", |rows| {
+        let unlisted = with(row_as(rows, "anon-odd-status", "COMPLETED"), "unifiedStatus", Value::String("ON_HOLD".into()));
+        let no_time = with(row_as(rows, "anon-no-time", "COMPLETED"), "occurredAt", Value::String("yesterday".into()));
+        rows.push(unlisted);
+        rows.push(no_time);
+    });
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    assert_eq!(first.records_new, 55);
+    for key in ["anon-odd-status", "anon-no-time"] {
+        let r = book.record_by_key(Some(connection(&book, "2025-11-19T20:00:00Z")), &SourceName::named("wealthsimple"), key).unwrap().unwrap();
+        let codes: Vec<String> = book.problems_of(r).unwrap().into_iter().map(|p| p.code).collect();
+        assert_eq!(codes, vec!["unreadable".to_string()], "{key}");
+        assert!(book.transactions_of(r).unwrap().is_empty());
+    }
+    // the account's read is complete: the rest of its rows are on the record
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    assert!(book.activity_read_at(account).unwrap().is_some());
+    // and the two are read again: the next pull reads the whole account, as
+    // one of them states no day
+    let (_, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
+    assert!(asked.contains(&"activity anon-tfsa-1".to_string()));
+}
+
+#[test]
+fn a_row_with_no_id_to_keep_it_by_leaves_its_account_s_read_incomplete_named() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    let (first, _) = once_with(&book, &dir(), "2025-11-19T20:00:00Z", |rows| {
+        let mut keyless = row_as(rows, "anon-x", "COMPLETED");
+        if let Value::Object(o) = &mut keyless {
+            o.remove("canonicalId");
+        }
+        rows.push(keyless);
+    });
+    assert_eq!(first.failures.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), vec!["activity:anon-tfsa-1"]);
+    assert!(first.failures[0].1.to_string().contains("no id"), "{}", first.failures[0].1);
+    // the rows it could keep are kept; the read is not a full one
+    assert_eq!(first.records_new, 53);
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    assert!(book.activity_read_at(account).unwrap().is_none());
+}
+
+#[test]
+fn a_read_that_would_remove_more_than_a_few_final_rows_removes_nothing_and_is_suspect() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    // four final rows on the last day read, then a read that no longer lists them
+    let extra = |rows: &mut Vec<Value>| {
+        for i in 0..4 {
+            let r = row_as(rows, &format!("anon-final-{i}"), "COMPLETED");
+            rows.push(with(r, "occurredAt", Value::String("2025-11-19T15:00:00.000000+00:00".into())));
+        }
+    };
+    once_with(&book, &dir(), "2025-11-19T20:00:00Z", extra);
+    let (second, _) = once(&book, &dir(), "2025-11-19T21:00:00Z");
+    assert!(second.removed.is_empty(), "{:?}", second.removed);
+    assert_eq!(second.suspect.len(), 1);
+    assert!(second.suspect[0].1.contains("4 final rows"), "{:?}", second.suspect);
+    assert_eq!(state(&book, "wealthsimple", "anon-final-0"), RecordState::Live);
+}
+
+#[test]
+fn a_read_that_would_remove_a_final_row_older_than_the_rows_read_again_removes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    // a pending row two days before the full read, and a final row the day
+    // before it; the next read starts at the pending row's day to read it
+    // again, and lists neither
+    once_with(&book, &dir(), "2025-11-19T20:00:00Z", |rows| {
+        let pending = with(row_as(rows, "anon-pending-2", "PENDING"), "occurredAt", Value::String("2025-11-17T15:00:00.000000+00:00".into()));
+        let done = with(row_as(rows, "anon-final-9", "COMPLETED"), "occurredAt", Value::String("2025-11-18T15:00:00.000000+00:00".into()));
+        rows.push(pending);
+        rows.push(done);
+    });
+    let (second, _) = once(&book, &dir(), "2025-11-20T21:00:00Z");
+    assert!(second.removed.is_empty(), "{:?}", second.removed);
+    assert!(second.suspect.iter().any(|(_, w)| w.contains("anon-final-9") && w.contains("older than the rows read again")), "{:?}", second.suspect);
+    assert_eq!(state(&book, "wealthsimple", "anon-pending-2"), RecordState::Live);
 }

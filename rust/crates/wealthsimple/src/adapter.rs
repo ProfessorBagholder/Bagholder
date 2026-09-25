@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_book::mapping::Mapping;
-use bagholder_broker::{AccountStated, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
+use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
 use bagholder_core::json::Value;
 use bagholder_book::mapping::InstrumentDraft;
 use bagholder_core::instrument::Reference;
@@ -174,6 +174,23 @@ impl<S: Source> Replies for Wealthsimple<S> {
             .cloned()
             .collect()
     }
+    fn stated_moves(&mut self, account: &str, other: &str, first: &str, last: &str, except: &str) -> Vec<Value> {
+        let (Ok(first), Ok(last)) = (first.parse::<jiff::civil::Date>(), last.parse::<jiff::civil::Date>()) else { return vec![] };
+        self.rows
+            .iter()
+            .filter(|r| {
+                let n = Node::root(r);
+                n.text("type").ok() == Some("INTERNAL_TRANSFER")
+                    && n.text("unifiedStatus").ok() == Some("COMPLETED")
+                    && n.opt_text("amount").ok().flatten().is_some()
+                    && n.text("accountId").ok() == Some(account)
+                    && n.opt_text("opposingAccountId").ok().flatten() == Some(other)
+                    && n.opt_text("externalCanonicalId").ok().flatten() != Some(except)
+                    && self.day_of(r).is_some_and(|d| d >= first && d <= last)
+            })
+            .cloned()
+            .collect()
+    }
     fn withheld(&mut self, account: &str, id: &str) -> Vec<Value> {
         self.rows
             .iter()
@@ -221,7 +238,22 @@ pub fn row_of(value: &Value, day: jiff::civil::Date) -> Result<Row, Mismatch> {
     let reads_positions = assemble::needs(value, &day.to_string())?.reads_positions();
     let status = n.text("unifiedStatus")?;
     let settled = settled(status).ok_or_else(|| n.field("unifiedStatus").map(|f| f.mismatch(format!("a status Wealthsimple's web app does not list: {status:?}"))).unwrap_or_else(|m| m))?;
-    Ok(Row { key: n.text("canonicalId")?.to_string(), account: n.text("accountId")?.to_string(), day, settled, reads_positions, value: value.clone() })
+    Ok(Row { key: n.text("canonicalId")?.to_string(), account: n.text("accountId")?.to_string(), day: Some(day), settled, reads_positions, unread: None, value: value.clone() })
+}
+
+/// A row read from an account's activity: one the adapter cannot read is kept
+/// with why, not final, so the rest of the account is read and it is read
+/// again; one with no id to keep it by is None.
+fn read_row(value: &Value, account: &str, day: Option<jiff::civil::Date>) -> Option<Row> {
+    let key = Node::root(value).text("canonicalId").ok()?.to_string();
+    let unread = |why: String, day: Option<jiff::civil::Date>| Row { key: key.clone(), account: account.to_string(), day, settled: false, reads_positions: false, unread: Some(why), value: value.clone() };
+    Some(match day {
+        None => unread("a row whose occurredAt is not an instant".to_string(), None),
+        Some(d) => match row_of(value, d) {
+            Ok(r) => r,
+            Err(m) => unread(m.to_string(), Some(d)),
+        },
+    })
 }
 
 /// Whether a status is final: a row pending or in progress is read again.
@@ -272,12 +304,17 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         }
         Ok(stated)
     }
-    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Row>> {
+    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Activity> {
         let values = self.source.activity(account, from)?;
-        let mut out = Vec::new();
+        let mut out = Activity::default();
         for v in &values {
-            let day = self.day_of(v).ok_or_else(|| Failure::Mismatch("a row whose occurredAt is not an instant".into()))?;
-            out.push(row_of(v, day).map_err(mismatch)?);
+            match read_row(v, account, self.day_of(v)) {
+                Some(r) => out.rows.push(r),
+                None => {
+                    let n = Node::root(v);
+                    out.unkeyed.push(format!("{} {}", n.text("type").unwrap_or("a row"), n.text("occurredAt").unwrap_or("of no stated time")));
+                }
+            }
         }
         self.rows.extend(values);
         Ok(out)
@@ -292,14 +329,19 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     }
     fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value> {
         self.failed = None;
-        let needs = assemble::needs(&row.value, &row.day.to_string()).map_err(mismatch)?;
+        // a row it could not read is kept as it came, with why
+        let (Some(day), None) = (row.day, &row.unread) else {
+            let why = row.unread.clone().unwrap_or_else(|| "a row whose day is not known".to_string());
+            return Ok(Value::Object(BTreeMap::from([("activity".to_string(), row.value.clone()), ("unread".to_string(), Value::String(why))])));
+        };
+        let needs = assemble::needs(&row.value, &day.to_string()).map_err(mismatch)?;
         if let Some(t) = &needs.transfer {
             // the book's moves in the account from the row's day to the day the
             // transfer completed
             let done = self.transfer(t).and_then(|v| crate::mapping::completed_on(&Node::root(&v)).ok().flatten());
             if let Some(done) = done {
                 let mut span = Vec::new();
-                let mut d = row.day;
+                let mut d = day;
                 while d <= done {
                     span.push(d.to_string());
                     match d.tomorrow() {
@@ -313,8 +355,8 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         if !needs.positions.is_empty() {
             // the book's moves over the days the row's group spans, a day either side
             let group = self.siblings(&row.value);
-            let days: Vec<jiff::civil::Date> = group.iter().filter_map(|g| self.day_of(g)).chain([row.day]).collect();
-            let (first, last) = (days.iter().min().copied().unwrap_or(row.day), days.iter().max().copied().unwrap_or(row.day));
+            let days: Vec<jiff::civil::Date> = group.iter().filter_map(|g| self.day_of(g)).chain([day]).collect();
+            let (first, last) = (days.iter().min().copied().unwrap_or(day), days.iter().max().copied().unwrap_or(day));
             let mut accounts: BTreeSet<String> = needs.positions.iter().map(|(a, _)| a.clone()).collect();
             for g in &group {
                 let n = Node::root(g);
@@ -332,7 +374,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             }
             self.moves = book_moves(book, &accounts.into_iter().collect::<Vec<_>>(), &span);
         }
-        let record = assemble::assemble(row.value.clone(), &row.day.to_string(), self).map_err(mismatch);
+        let record = assemble::assemble(row.value.clone(), &day.to_string(), self).map_err(mismatch);
         self.moves.clear();
         if let Some(f) = self.failed.take() {
             return Err(f);
@@ -344,12 +386,14 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         let Some(day) = self.day_of(row.value()) else { return false };
         assemble::needs(row.value(), &day.to_string()).is_ok_and(|n| n.reads_positions())
     }
-    fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
-        let row = Node::root(payload).obj("activity").ok()?;
-        if settled(row.text("unifiedStatus").ok()?) != Some(false) {
+    fn unsettled(&self, payload: &Value) -> Option<(String, Option<jiff::civil::Date>)> {
+        let root = Node::root(payload);
+        let row = root.obj("activity").ok()?;
+        let unread = root.field("unread").is_ok();
+        if !unread && row.text("unifiedStatus").ok().and_then(settled) != Some(false) {
             return None;
         }
-        Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())?))
+        Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())))
     }
     fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
         let row = Node::root(payload).obj("activity").ok()?;

@@ -58,6 +58,9 @@ pub trait Replies {
     fn others(&mut self, account: &str, first: &str, last: &str, except: &str) -> Vec<Value>;
     /// The account's tax withheld rows that share this id.
     fn withheld(&mut self, account: &str, id: &str) -> Vec<Value>;
+    /// The completed moves between these two accounts, filed from `first` to
+    /// `last`, that state their amount, other than `except`.
+    fn stated_moves(&mut self, account: &str, other: &str, first: &str, last: &str, except: &str) -> Vec<Value>;
     /// The position nodes of one account as of one day.
     fn positions(&mut self, account: &str, day: &str) -> Option<Value>;
     /// The moves of holdings between the same two accounts as `row` (or, from
@@ -189,16 +192,19 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
                 read.push((a.clone(), nodes));
             }
         }
-        // kept up to the first day the two show the move, or the day before
-        // alone where none does
+        // kept over the days its cash can move in: from the day before it to
+        // `SETTLES_WITHIN` days after
         let date = |v: &Value| Node::root(v).text("date").unwrap_or("").to_string();
-        let cut = match read.as_slice() {
-            [(_, a), (_, b)] => crate::mapping::mirrored_day(&crate::read::history(a)?, &crate::read::history(b)?)?.map(|(d, _)| d.to_string()),
-            _ => None,
-        };
+        let last = day.parse::<jiff::civil::Date>().ok().and_then(|d| d.checked_add(jiff::Span::new().days(crate::mapping::SETTLES_WITHIN)).ok()).map(|d| d.to_string()).unwrap_or_else(|| day.to_string());
         for (account, nodes) in read {
-            let kept: Vec<Value> = nodes.into_iter().filter(|n| cut.as_ref().is_some_and(|c| date(n) <= *c) || date(n) == from).collect();
+            let kept: Vec<Value> = nodes.into_iter().filter(|n| date(n) >= from && date(n) <= last).collect();
             r.deposits.push(Deposits { account, nodes: Value::Array(kept) });
+        }
+        // the moves between the same two accounts over those days that state
+        // their amount: a day one of them shows is theirs
+        if let [a, b] = needs.deposits.as_slice() {
+            let except = Node::root(&r.activity).opt_text("externalCanonicalId")?.unwrap_or("").to_string();
+            r.stated_moves = replies.stated_moves(a, b, &from, &last, &except);
         }
     }
     // a move of holdings is read with its siblings, over the days they span

@@ -323,7 +323,8 @@ pub fn build_trades(inputs: &Inputs, matched: &Matched, identity: &Identity) -> 
         }
     }
     for (key, trip) in &matched.trips {
-        if used.contains(key) {
+        // a trip held in a managed account is the broker's, not a trade
+        if used.contains(key) || crate::identity::managed(&inputs.ledger, trip.account) {
             continue;
         }
         let trade = identity.trade_of.get(key).copied();

@@ -851,5 +851,6 @@
     ]
    }
   }
- }
+ },
+  {"name": "a managed account's buys and sales make no round trip, and its holding stays", "spec": "docs/decisions.md 2026-09-25 (managed accounts: holdings, cash, income and value, no round trips)", "today": "2026-03-10", "accounts": [{"id": "M", "managed": true}], "instruments": [{"id": "X"}], "quotes": {"X": {"price": "12", "change": "0.5"}}, "transactions": [{"id": "t1", "account": "M", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"}, {"id": "t2", "account": "M", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "sell", "instrument": "X", "qty": "-40", "cash": "600"}], "working": ["Wealthsimple buys 100 X for 1000 and sells 40 for 600 in a managed account: no trade, open or closed.", "The holding stays: 60 X, book 60 x 10 = 600.00, market 60 x 12 = 720.00, unrealized 120.00."], "expect": {"trade_count": 0, "trades": [], "positions": [{"account": "M", "instrument": "X", "qty": "60", "book": "600.00", "avg": "10", "market": "720.00", "unrealized": "120.00", "market_cad": "720.00"}]}}
 ]

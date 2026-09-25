@@ -276,3 +276,100 @@ fn a_credit_card_s_balance_is_what_is_owed_on_it() {
     let card = Node::root(&v).obj("data").unwrap().obj("creditCardAccount").unwrap().value().clone();
     assert_eq!(bagholder_wealthsimple::read::card_balance(&card, "anon-ca-4").unwrap(), dec("5140.28"));
 }
+
+/// A no-amount move's record as the pull puts it together, its source side.
+fn no_amount_record() -> Value {
+    let mut r = replay(&fixtures());
+    let rows = r.source.rows.clone();
+    let accounts: std::collections::BTreeSet<String> = rows.iter().map(|x| Node::root(x).text("accountId").unwrap().to_string()).collect();
+    for a in accounts {
+        bagholder_broker::BrokerAdapter::activity(&mut r, &a, None).unwrap();
+    }
+    let row = rows.iter().find(|x| text(x, "type") == Some("INTERNAL_TRANSFER") && text(x, "amount").is_none() && text(x, "subType") == Some("SOURCE") && text(x, "unifiedStatus") == Some("COMPLETED") && text(x, "transferType") == Some("full_in_kind")).unwrap();
+    let row = bagholder_wealthsimple::adapter::row_of(row, day_of(row)).unwrap();
+    bagholder_broker::BrokerAdapter::record(&mut r, &row, &mut Moves::default()).unwrap()
+}
+
+/// Edit a record's part in place: `edit` gets the object under `key`.
+fn edit(v: &mut Value, key: &str, f: impl FnOnce(&mut Value)) {
+    let Value::Object(m) = v else { panic!() };
+    f(m.get_mut(key).unwrap_or_else(|| panic!("no {key}")));
+}
+
+fn cash_of(m: &Mapped) -> Option<bagholder_core::Money> {
+    m.legs.first().and_then(|l| l.cash)
+}
+
+#[test]
+fn a_move_s_stated_amount_wins_over_what_net_deposits_show() {
+    let mut v = no_amount_record();
+    edit(&mut v, "conversion", |c| {
+        let Value::Object(c) = c else { panic!() };
+        c.insert("amount".into(), Value::String("100.00".into()));
+    });
+    let m = map_payload(&v);
+    assert_eq!(cash_of(&m).map(|c| c.amount), Some(dec("-100.00")));
+}
+
+#[test]
+fn a_move_whose_week_shows_two_mirrored_days_is_unstated() {
+    assert!(cash_of(&map_payload(&no_amount_record())).is_some(), "the fixture's move is read");
+    // a second day in the week on which the two accounts' net deposits move
+    // by opposite amounts: which is this move's is not stated
+    let mut v = no_amount_record();
+    edit(&mut v, "deposits", |d| {
+        let Value::Array(accounts) = d else { panic!() };
+        // from the day after the move's own (the destination took another
+        // deposit that day), one account's net deposits 1.00 higher and the
+        // other's 1.00 lower
+        for (k, a) in accounts.iter_mut().enumerate() {
+            let Value::Object(a) = a else { panic!() };
+            let Some(Value::Array(nodes)) = a.get_mut("nodes") else { panic!() };
+            nodes.sort_by(|x, y| Node::root(x).text("date").unwrap().cmp(Node::root(y).text("date").unwrap()));
+            for node in nodes.iter_mut().skip(2) {
+                let Value::Object(o) = node else { panic!() };
+                let Some(Value::Object(nd)) = o.get_mut("netDepositsV2") else { panic!() };
+                let cents = Node::root(&Value::Object(nd.clone())).dec("cents").unwrap();
+                let shift = if k == 0 { dec("100") } else { dec("-100") };
+                nd.insert("cents".into(), Value::Number(cents.checked_add(shift).unwrap().to_text()));
+            }
+        }
+    });
+    let m = map_payload(&v);
+    assert!(m.problems.iter().any(|p| p.code == "moved-holdings-unstated"), "{:?} {:?}", m.legs, m.problems);
+    assert!(cash_of(&m).is_none());
+}
+
+#[test]
+fn a_move_whose_cash_shows_after_its_week_is_unstated() {
+    // the fixture's days reach the day the cash moved; with the row a week and
+    // more earlier, no day in its week shows it
+    let mut v = no_amount_record();
+    edit(&mut v, "activity", |a| {
+        let Value::Object(a) = a else { panic!() };
+        let at: bagholder_core::jiff::Timestamp = match a.get("occurredAt") { Some(Value::String(s)) => s.parse().unwrap(), _ => panic!() };
+        let earlier = at.checked_sub(bagholder_core::jiff::SignedDuration::from_hours(24 * 8)).unwrap();
+        a.insert("occurredAt".into(), Value::String(earlier.to_string()));
+    });
+    let m = map_payload(&v);
+    assert!(cash_of(&m).is_none(), "{:?}", m.legs);
+    assert!(m.problems.iter().any(|p| p.code == "moved-holdings-unstated"));
+}
+
+#[test]
+fn a_day_another_stated_move_between_the_accounts_accounts_for_is_not_this_move_s() {
+    // the week after the move shows two opposite changes: its own, and a
+    // later 1.58 whose own rows state it
+    let v = no_amount_record();
+    let Value::Object(o) = &v else { panic!() };
+    assert!(matches!(o.get("stated_moves"), Some(Value::Array(m)) if !m.is_empty()));
+    assert_eq!(cash_of(&map_payload(&v)).map(|c| c.amount), Some(dec("-9307.07")));
+    // without those rows, which day is this move's is not stated
+    let mut bare = v.clone();
+    if let Value::Object(o) = &mut bare {
+        o.remove("stated_moves");
+    }
+    let m = map_payload(&bare);
+    assert!(cash_of(&m).is_none(), "{:?}", m.legs);
+    assert!(m.problems.iter().any(|p| p.code == "moved-holdings-unstated"));
+}
