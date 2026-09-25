@@ -100,7 +100,7 @@ pub fn contract_of(symbol: &str) -> Option<(String, bagholder_core::jiff::civil:
 }
 
 /// The instrument the book holds by `symbol` in `currency`, if exactly one.
-fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency) -> Option<InstrumentId> {
+pub(crate) fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency) -> Option<InstrumentId> {
     let mut found = e
         .inputs()
         .ledger
@@ -113,7 +113,7 @@ fn held_by_symbol(e: &Engine, symbol: &str, currency: Currency) -> Option<Instru
 }
 
 /// The account a trade entered without one goes to: made the first time.
-fn manual_account(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<AccountId, Refused> {
+pub(crate) fn manual_account(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<AccountId, Refused> {
     let book = f.book().map_err(Refused::Failed)?;
     let manual = Broker::named("manual");
     let r = AccountRef::new(manual.clone(), "manual");

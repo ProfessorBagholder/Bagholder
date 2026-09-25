@@ -11,6 +11,7 @@ use bagholder_core::instrument::Reference;
 use bagholder_core::json::Value;
 use bagholder_core::{Broker, Currency, Dec, Money};
 
+pub mod csv;
 pub mod pull;
 
 /// Why a read did not answer.

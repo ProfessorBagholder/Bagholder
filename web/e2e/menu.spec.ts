@@ -141,78 +141,102 @@ test('Export trades CSV downloads the book as a CSV file', async ({ page }) => {
   expect(download.suggestedFilename()).toBe('bagholder-trades.csv')
 })
 
-test('Import CSV reads the file, sends its name and text, and reports what was added and skipped', async ({ page }) => {
-  const csv = 'Date,Action,Symbol,Quantity,Price,Amount\n2026-01-05,Buy,ZZZQ,10,2.50,-25.00\nbad-date,Buy,ZZZQ,5,1.00,-5.00\n'
-  let sent: Record<string, unknown> | null = null
+/** Import CSV: the account chosen, then the files through the browser's picker. */
+async function importFiles(page: Page, files: { name: string; text: string }[], account?: string) {
+  await openMenu(page)
+  await page.getByText('Import CSV').click()
+  await expect(page.getByRole('heading', { name: 'Import CSV' })).toBeVisible()
+  await expect(page.getByLabel('Account')).toHaveValue('')
+  if (account) await page.getByLabel('Account').selectOption({ label: account })
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Choose files' }).click()
+  await (await chooser).setFiles(files.map((f) => ({ name: f.name, mimeType: 'text/csv', buffer: Buffer.from(f.text) })))
+}
+
+test('Import CSV sends each file with the account chosen and reports what its rows did', async ({ page }) => {
+  const csv = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
+  const sent: Record<string, unknown>[] = []
   await page.route('**/api/import', (route) => {
-    sent = route.request().postDataJSON()
+    sent.push(route.request().postDataJSON())
     return route.fulfill({
       json: {
-        ok: true, file: 'trades.csv', format: 'legacy', rows: 2, added: 1, duplicates: 0,
-        skipped: [{ row: 3, message: 'Unparsed row (missing or invalid date)' }], skippedCount: 1,
-        footerStripped: false, countsByType: { Trade: 1 },
+        file: 'trades.csv', layout: 'simple', account: 'Trading', rows: 3, added: 2, unchanged: 1, linked: 1,
+        ambiguous: [{ line: 3, message: 'the same fill as 2 of the broker\'s rows: not linked' }],
+        problems: [{ line: 4, message: 'the date "01/05/2026" is not a day written YYYY-MM-DD' }],
       },
     })
   })
   await page.goto('/')
   await ready(page)
-  await openMenu(page)
-  const chooserPromise = page.waitForEvent('filechooser')
-  await page.getByText('Import CSV').click()
-  const chooser = await chooserPromise
-  await chooser.setFiles([{ name: 'trades.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) }])
-
-  await expect(page.getByRole('heading', { name: 'Import CSV' })).toBeVisible()
-  await expect.poll(() => (sent as { name?: string } | null)?.name).toBe('trades.csv')
-  expect((sent as unknown as { text?: string }).text).toBe(csv)
-  await expect(page.locator('#modalDlg')).toContainText('1 file · 1 new activity · 0 already stored')
-  await expect(page.locator('#modalDlg')).toContainText('legacy · 2 rows · 1 new · 0 duplicates')
-  await expect(page.locator('#modalDlg')).toContainText('1 skipped')
-  await expect(page.locator('#modalDlg')).toContainText('row 3: Unparsed row (missing or invalid date)')
+  const m = await (await page.request.get('/api/figures')).json()
+  const account = m.accounts.find((a: { name: string; brokerAccount: string }) => a.name && a.brokerAccount !== 'manual')
+  await importFiles(page, [{ name: 'trades.csv', text: csv }], account.name)
+  await expect.poll(() => sent.length).toBe(1)
+  expect(sent[0]).toEqual({ name: 'trades.csv', text: csv, account: account.id })
+  const dlg = page.locator('#modalDlg')
+  await expect(dlg).toContainText('1 file · 2 new · 1 linked · 1 already stored')
+  await expect(dlg).toContainText('Trading · simple · 3 rows · 2 new · 1 linked · 1 already stored')
+  await expect(dlg).toContainText('1 not linked')
+  await expect(dlg).toContainText("line 3: the same fill as 2 of the broker's rows: not linked")
+  await expect(dlg).toContainText('1 with a problem')
+  await expect(dlg).toContainText('line 4: the date "01/05/2026" is not a day written YYYY-MM-DD')
   await page.getByRole('button', { name: 'Done' }).click()
   await expect(page.getByRole('heading', { name: 'Import CSV' })).toHaveCount(0)
 })
 
-test('the watch-folder box shows an error for a bad path, then the watch, Scan now and Stop watching once one is set', async ({ page }) => {
-  await page.route('**/api/watch', (route) => {
-    if (route.request().method() !== 'GET') return route.continue()
-    return route.fulfill({ json: { ok: true, watching: false } })
-  })
+test('Import CSV keeps a file\'s rows in the Manual account, and says why a file it cannot read was refused', async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  const good = 'Date,Action,Symbol,Quantity,Price,Amount,Currency\n2026-01-05,Buy,ZZZQ,10,2.50,25.00,USD\n'
+  await importFiles(page, [{ name: 'mine.csv', text: good }, { name: 'other.csv', text: 'foo,bar\n1,2\n' }])
+  const dlg = page.locator('#modalDlg')
+  await expect(dlg).toContainText('2 files · 1 new · 0 linked · 0 already stored')
+  await expect(dlg).toContainText('Manual · simple · 1 rows · 1 new · 0 linked · 0 already stored')
+  await expect(dlg).toContainText('other.csv')
+  await expect(dlg).toContainText('its headers (foo, bar) are none of the layouts read')
+})
+
+test('Load folder: a folder that is not one is refused, a watched one lists its files, Scan now and Stop watching', async ({ page }) => {
   await page.goto('/')
   await ready(page)
   await openMenu(page)
   await page.getByText('Load folder').click()
   await expect(page.getByRole('heading', { name: 'Load folder' })).toBeVisible()
+  // the real server: no such folder
+  await page.getByLabel('Folder').fill('/nowhere/at/all')
+  await page.getByRole('button', { name: 'Watch folder' }).click()
+  await expect(page.locator('#modalDlg .status-err')).toHaveText('/nowhere/at/all is not a folder')
 
-  let lastPath = ''
+  const report = { file: 'a.csv', layout: 'activities', account: 'Manual', rows: 3, added: 2, unchanged: 1, linked: 0, ambiguous: [], problems: [] }
+  const watched = {
+    path: '/some/watched/folder', watching: true, account: '', lastScan: '2026-09-20T12:00:00Z', scanError: '',
+    files: [
+      { file: 'a.csv', size: 10, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'imported', report } },
+      { file: 'b.csv', size: 3, modified: '2026-09-20T11:00:00Z', scannedAt: '2026-09-20T12:00:00Z', read: { outcome: 'failed', error: 'the file is not UTF-8 text' } },
+    ],
+  }
+  let sent: unknown = null
   await page.route('**/api/watch', (route) => {
     if (route.request().method() !== 'POST') return route.continue()
-    lastPath = (route.request().postDataJSON() as { path: string }).path
-    return route.fulfill({ status: 400, json: { ok: false, error: 'Not a folder: ' + lastPath } })
+    sent = route.request().postDataJSON()
+    return route.fulfill({ json: watched })
   })
-  await page.getByPlaceholder('/Users/you/Downloads/wealthsimple').fill('/nowhere/at/all')
+  await page.getByLabel('Folder').fill('/some/watched/folder')
   await page.getByRole('button', { name: 'Watch folder' }).click()
-  await expect(page.locator('.status-err')).toHaveText('Not a folder: /nowhere/at/all')
+  await expect.poll(() => sent).toEqual({ path: '/some/watched/folder', account: '' })
+  const dlg = page.locator('#modalDlg')
+  await expect(dlg).toContainText('Watching /some/watched/folder')
+  await expect(dlg).toContainText('Manual · activities · 3 rows · 2 new · 0 linked · 1 already stored')
+  await expect(dlg).toContainText('the file is not UTF-8 text')
 
-  await page.route('**/api/watch', (route) => {
-    if (route.request().method() !== 'POST') return route.continue()
-    return route.fulfill({ json: { ok: true, path: '/some/watched/folder', status: { ok: true, path: '/some/watched/folder', watching: true, lastScan: '', files: [] } } })
-  })
-  await page.getByPlaceholder('/Users/you/Downloads/wealthsimple').fill('/some/watched/folder')
-  await page.getByRole('button', { name: 'Watch folder' }).click()
-  await expect(page.locator('#modalDlg')).toContainText('Watching /some/watched/folder')
-  await expect(page.getByRole('button', { name: 'Scan now' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Stop watching' })).toBeVisible()
-
-  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ok: true, path: '/some/watched/folder', files: [{ file: 'a.csv', format: 'legacy', added: 2, duplicates: 1 }], status: { ok: true, path: '/some/watched/folder', watching: true, lastScan: '2026-09-20T12:00:00Z', files: [{ file: 'a.csv', format: 'legacy', added: 2, duplicates: 1, scannedAt: '2026-09-20T12:00:00Z' }] } } }))
+  await page.route('**/api/watch/scan', (route) => route.fulfill({ json: { ...watched, scanError: 'the folder: No such file or directory' } }))
   await page.getByRole('button', { name: 'Scan now' }).click()
-  await expect(page.locator('#modalDlg')).toContainText('a.csv')
-  await expect(page.locator('#modalDlg')).toContainText('legacy · 2 new · 1 dup')
+  await expect(dlg.locator('.status-err')).toHaveText('the folder: No such file or directory')
 
-  await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { ok: true, watching: false } }))
+  await page.route('**/api/watch/clear', (route) => route.fulfill({ json: { path: '', watching: false, account: '', lastScan: '', scanError: '', files: [] } }))
   await page.getByRole('button', { name: 'Stop watching' }).click()
   await expect(page.getByRole('button', { name: 'Stop watching' })).toHaveCount(0)
-  await expect(page.getByPlaceholder('/Users/you/Downloads/wealthsimple')).toHaveValue('')
+  await expect(page.getByLabel('Folder')).toHaveValue('')
 })
 
 test('Clear data asks once: Esc and an unfocused Enter leave it standing, only the button acts', async ({ page }) => {

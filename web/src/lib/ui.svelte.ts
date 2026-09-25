@@ -5,8 +5,8 @@ import { request, call } from './api'
 import { localDay, waiting } from './fmt'
 import { waits } from './dec'
 
-// the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
-import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
+// the server's own types, generated
+import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/model_api'
 import type { LoginInput } from './generated/session'
 import type { EntryRequest } from './generated/model_api'
 
@@ -27,14 +27,10 @@ export interface TradeForm {
   acquired: string
   error: string
 }
-/** One file's report from `/api/import`: the server's own shape, or, when the
- * request itself failed, just a file name and an error -- so every field but
- * `file` is read as optional, as the modal that lists these does. */
-export type ImportFileReport = Partial<ImportedFileReport> & { file: string; error?: string }
+/** One file's import: what it did, or why it was refused. */
+export type ImportFileReport = { file: string; report: ImportedFileReport } | { file: string; error: string }
 export interface ImportReport {
   files: ImportFileReport[]
-  added: number
-  duplicates: number
 }
 
 function today(): string {
@@ -51,9 +47,11 @@ export const ui = $state<{
   confirm: string
   notice: string
   noticeKind: '' | 'ok' | 'err'
-  busy: '' | 'trade' | 'folder' | 'clearing' | 'refresh'
+  busy: '' | 'trade' | 'import' | 'folder' | 'clearing' | 'refresh'
   tradeForm: TradeForm
   importReport: ImportReport | null
+  /** the account files are imported into, or a folder's go to; '' the Manual account */
+  importAccount: string
   folderPath: string
   folderError: string
   watch: WatchStatus | null
@@ -71,6 +69,7 @@ export const ui = $state<{
   busy: '',
   tradeForm: freshTradeForm(),
   importReport: null,
+  importAccount: '',
   folderPath: '',
   folderError: '',
   watch: null,
@@ -256,9 +255,15 @@ export async function saveTrade(): Promise<void> {
   flash(f.mode === 'opening' ? 'Opening balance added' : 'Trade added')
 }
 
-// Import CSVs via a native file picker, then show the report modal.
+// Import CSV: the account chosen, then files through the browser's picker, each
+// sent to the server and its report shown.
 export function importCsv(): void {
   ui.menuOpen = false
+  ui.importReport = null
+  ui.importAccount = ''
+  ui.modal = 'import'
+}
+export function chooseFiles(): void {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.csv,text/csv'
@@ -274,57 +279,59 @@ export function importCsv(): void {
 async function importFiles(list: FileList | null): Promise<void> {
   const files = Array.from(list || []).filter((f) => /\.csv$/i.test(f.name) && !/^\._/.test(f.name))
   if (!files.length) return
-  ui.modal = 'import'
-  ui.importReport = null
-  const report: ImportReport = { files: [], added: 0, duplicates: 0 }
+  ui.busy = 'import'
+  const report: ImportReport = { files: [] }
   for (const file of files) {
+    let text: string
     try {
-      const text = await file.text()
-      const r = await call('POST /api/import', { body: { name: file.name, text } })
-      if (!r || !r.ok) report.files.push({ file: file.name, error: (r && r.error) || 'Import failed' })
-      else {
-        report.files.push(r)
-        report.added += r.added || 0
-        report.duplicates += r.duplicates || 0
-      }
+      text = await file.text()
     } catch (e) {
       report.files.push({ file: file.name, error: String(e) })
+      continue
     }
+    const r = await call('POST /api/import', { body: { name: file.name, text, account: ui.importAccount } })
+    if (r.ok === false || typeof r.rows !== 'number') report.files.push({ file: file.name, error: r.error || 'Import failed' })
+    else report.files.push({ file: file.name, report: r })
   }
+  ui.busy = ''
   ui.importReport = report
 }
 
 export function openFolder(): void {
   ui.menuOpen = false
   ui.modal = 'folder'
+  ui.folderError = ''
   call('GET /api/watch').then((w) => {
-    ui.watch = w && w.ok ? w : null
+    if (w.ok === false) ui.folderError = w.error || 'Could not read the watched folder.'
+    else {
+      ui.watch = w
+      ui.folderPath = w.path
+      ui.importAccount = w.account
+    }
   })
+}
+function watched(w: Awaited<ReturnType<typeof call<'GET /api/watch'>>>): void {
+  ui.busy = ''
+  if (w.ok === false) ui.folderError = w.error || 'Could not watch that folder.'
+  else {
+    ui.folderError = ''
+    ui.watch = w
+  }
 }
 export function watchFolder(): void {
   ui.busy = 'folder'
   ui.folderError = ''
-  call('POST /api/watch', { body: { path: ui.folderPath } }).then((r) => {
-    ui.busy = ''
-    if (!r || !r.ok || !('status' in r)) ui.folderError = (r && 'error' in r && r.error) || 'Could not watch that folder.'
-    else {
-      ui.watch = r.status
-    }
-  })
+  call('POST /api/watch', { body: { path: ui.folderPath, account: ui.importAccount } }).then(watched)
 }
 export function scanFolder(): void {
   ui.busy = 'folder'
-  call('POST /api/watch/scan').then((r) => {
-    ui.busy = ''
-    if (r && r.ok) {
-      ui.watch = r.status
-    }
-  })
+  call('POST /api/watch/scan').then(watched)
 }
 export function stopWatch(): void {
   call('POST /api/watch/clear').then((w) => {
-    ui.watch = w && w.ok ? w : null
+    watched(w)
     ui.folderPath = ''
+    ui.importAccount = ''
   })
 }
 

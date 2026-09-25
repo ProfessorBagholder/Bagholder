@@ -10,7 +10,7 @@ test('Enter in the folder box asks for that folder to be watched', async ({ page
   await page.getByText('Load folder').click()
   await page.getByPlaceholder('/Users/you/Downloads/wealthsimple').fill('/nowhere/at/all')
   await page.keyboard.press('Enter')
-  await expect.poll(() => sent).toEqual({ path: '/nowhere/at/all' })
+  await expect.poll(() => sent).toEqual({ path: '/nowhere/at/all', account: '' })
 })
 
 test('Enter in the Add trade boxes submits the trade', async ({ page }) => {

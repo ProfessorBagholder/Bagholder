@@ -12,7 +12,7 @@ use super::extract::trimmed;
 use super::{api_routes, blocking, with_store, Api, ApiError, AppState, Body, Params, Routed};
 use std::sync::Arc;
 
-use crate::app::{self, App};
+use crate::app::App;
 use crate::{feeds, session};
 
 pub fn routes() -> Routed {
@@ -398,93 +398,77 @@ async fn notes(State(state): State<AppState>, Body(n): Body<Notes>) -> Api<Notes
     with_store(&state, move |conn| Ok(NotesAnswer { ok: true, notes: bagholder_store::tables::save_trade_notes(conn, &n.notes)? })).await
 }
 
-/// A CSV the page read from a file the person chose.
-#[derive(Deserialize, Default, TS)]
-pub struct Import {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    name: String,
+/// The figures, or a failure saying they are not open.
+fn open_figures(app: &App) -> Result<&crate::figures::Figures, ApiError> {
+    app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))
 }
 
-async fn import(State(state): State<AppState>, Body(i): Body<Import>) -> Api<bagholder_store::csvimport::ImportReport> {
-    if bagholder_model::textrules::trim_space(&i.text).is_empty() {
-        return Err(ApiError::BadRequest("text required".into()));
+fn refused(r: crate::entries::Refused) -> ApiError {
+    match r {
+        crate::entries::Refused::Entry(why) => ApiError::BadRequest(why),
+        crate::entries::Refused::Failed(why) => ApiError::Failed(why),
     }
-    let name = if i.name.is_empty() { "upload.csv".to_string() } else { i.name };
+}
+
+fn account_of(text: &str) -> Result<Option<bagholder_core::AccountId>, ApiError> {
+    match text.trim() {
+        "" => Ok(None),
+        a => bagholder_core::AccountId::parse(a).map(Some).map_err(|_| ApiError::BadRequest(format!("{a:?} is not an account"))),
+    }
+}
+
+/// `POST /api/import`: a file's rows kept, and what they did.
+async fn import(State(state): State<AppState>, Body(i): Body<crate::csv_import::ImportRequest>) -> Api<crate::csv_import::ImportReport> {
     let app = state.app;
-    let report = blocking(move || -> Result<bagholder_store::csvimport::ImportReport, ApiError> {
-        let conn = app.open()?;
-        bagholder_store::csvimport::import_text(&conn, &name, &i.text).map_err(|e| {
-            app::log(&format!("bagholder: import failed: {}", e));
-            ApiError::Failed(e.to_string())
-        })
+    blocking(move || -> Result<crate::csv_import::ImportReport, ApiError> {
+        let name = if i.name.trim().is_empty() { "upload.csv" } else { i.name.trim() };
+        crate::csv_import::import(open_figures(&app)?, name, &i.text, account_of(&i.account)?, bagholder_core::jiff::Timestamp::now()).map_err(refused)
     })
-    .await??;
-    Ok(Json(report))
+    .await?
+    .map(Json)
 }
 
-async fn watch_status(State(state): State<AppState>) -> Api<bagholder_store::csvimport::WatchStatus> {
-    with_store(&state, |conn| bagholder_store::csvimport::status(conn)).await
-}
-
-#[derive(Deserialize, Default, TS)]
-pub struct WatchFolder {
-    #[serde(default)]
-    path: String,
-}
-
-/// A folder scanned, with the watch status it left: `POST /api/watch` (once
-/// the path is accepted) and `POST /api/watch/scan` answer this shape.
-#[derive(Serialize, TS)]
-pub struct ScanWithStatus {
-    #[serde(flatten)]
-    #[ts(flatten)]
-    report: bagholder_store::csvimport::ScanReport,
-    status: bagholder_store::csvimport::WatchStatus,
-}
-
-/// `POST /api/watch`: the path refused (`WatchSet`, with `ok: false`), or
-/// accepted and scanned at once.
-#[derive(Serialize, TS)]
-#[serde(untagged)]
-pub enum WatchSetAnswer {
-    Refused(bagholder_store::csvimport::WatchSet),
-    Scanned(ScanWithStatus),
-}
-
-async fn watch_set(State(state): State<AppState>, Body(w): Body<WatchFolder>) -> Result<(axum::http::StatusCode, Json<WatchSetAnswer>), ApiError> {
+async fn watch_status(State(state): State<AppState>) -> Api<crate::csv_import::WatchStatus> {
     let app = state.app;
-    let out = blocking(move || -> rusqlite::Result<(bool, WatchSetAnswer)> {
-        let conn = app.open()?;
-        let set = bagholder_store::csvimport::set_watch_folder(&conn, &w.path)?;
-        if !set.ok {
-            return Ok((false, WatchSetAnswer::Refused(set)));
+    blocking(move || crate::csv_import::watch_status(open_figures(&app)?).map_err(ApiError::Failed)).await?.map(Json)
+}
+
+/// `POST /api/watch`: the folder watched, its files going to the account named,
+/// and every one read at once.
+async fn watch_set(State(state): State<AppState>, Body(w): Body<crate::csv_import::WatchRequest>) -> Api<crate::csv_import::WatchStatus> {
+    let app = state.app;
+    blocking(move || -> Result<crate::csv_import::WatchStatus, ApiError> {
+        let f = open_figures(&app)?;
+        let now = bagholder_core::jiff::Timestamp::now();
+        crate::csv_import::watch(f, &w, now).map_err(refused)?;
+        app.events.signal();
+        crate::csv_import::scan(f, true, now).map_err(ApiError::Failed)
+    })
+    .await?
+    .map(Json)
+}
+
+/// `POST /api/watch/scan`: every file of the watched folder read again.
+async fn watch_scan(State(state): State<AppState>) -> Api<crate::csv_import::WatchStatus> {
+    let app = state.app;
+    blocking(move || -> Result<crate::csv_import::WatchStatus, ApiError> {
+        let f = open_figures(&app)?;
+        if !crate::csv_import::watching(f) {
+            return Err(ApiError::BadRequest("no folder is watched".into()));
         }
-        let report = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        let status = bagholder_store::csvimport::status(&conn)?;
-        Ok((true, WatchSetAnswer::Scanned(ScanWithStatus { report, status })))
+        crate::csv_import::scan(f, true, bagholder_core::jiff::Timestamp::now()).map_err(ApiError::Failed)
     })
-    .await??;
-    Ok((if out.0 { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(out.1)))
+    .await?
+    .map(Json)
 }
 
-async fn watch_scan(State(state): State<AppState>) -> Result<(axum::http::StatusCode, Json<ScanWithStatus>), ApiError> {
+async fn watch_clear(State(state): State<AppState>) -> Api<crate::csv_import::WatchStatus> {
     let app = state.app;
-    let out = blocking(move || -> rusqlite::Result<ScanWithStatus> {
-        let conn = app.open()?;
-        let report = bagholder_store::csvimport::scan_folder(&conn, None, true)?;
-        let status = bagholder_store::csvimport::status(&conn)?;
-        Ok(ScanWithStatus { report, status })
+    blocking(move || -> Result<crate::csv_import::WatchStatus, ApiError> {
+        let f = open_figures(&app)?;
+        crate::csv_import::unwatch(f, bagholder_core::jiff::Timestamp::now()).map_err(ApiError::Failed)?;
+        crate::csv_import::watch_status(f).map_err(ApiError::Failed)
     })
-    .await??;
-    Ok((if out.report.ok { axum::http::StatusCode::OK } else { axum::http::StatusCode::BAD_REQUEST }, Json(out)))
-}
-
-async fn watch_clear(State(state): State<AppState>) -> Api<bagholder_store::csvimport::WatchStatus> {
-    with_store(&state, |conn| {
-        bagholder_store::csvimport::clear_watch_folder(conn)?;
-        bagholder_store::csvimport::status(conn)
-    })
-    .await
+    .await?
+    .map(Json)
 }

@@ -181,6 +181,8 @@ dependencies = [
  "bagholder-book",
  "bagholder-core",
  "jiff",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -92,15 +92,61 @@ struct Amount {
     currency: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+/// An option contract's terms as a record keeps them: its underlying named by
+/// references, never the book's id.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ContractTerms {
-    underlying: Vec<(String, String)>,
-    underlying_kind: String,
-    underlying_symbol: String,
-    expiry: String,
-    strike: String,
-    right: String,
+pub struct ContractTerms {
+    pub underlying: Vec<(String, String)>,
+    pub underlying_kind: String,
+    pub underlying_symbol: String,
+    pub expiry: String,
+    pub strike: String,
+    pub right: String,
+}
+
+/// An instrument as a record the book writes names it (an entry, a file's row):
+/// by a reference any source can match, its kind, its currency, the symbol it
+/// was given and, for a contract, its terms.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Named {
+    pub refs: Vec<(String, String)>,
+    pub kind: String,
+    pub currency: String,
+    pub symbol: String,
+    pub contract: Option<ContractTerms>,
+}
+
+impl Named {
+    /// The instrument as a mapping describes it, seen on `day`.
+    pub fn draft(&self, day: jiff::civil::Date) -> std::result::Result<InstrumentDraft, String> {
+        let currency = Currency::parse(&self.currency).map_err(|e| e.to_string())?;
+        let option = match &self.contract {
+            None => None,
+            Some(c) => Some(crate::mapping::OptionDraft {
+                underlying: Box::new(InstrumentDraft {
+                    refs: refs(&c.underlying)?,
+                    kind: InstrumentKind::parse(&c.underlying_kind).map_err(|e| e.to_string())?,
+                    currency,
+                    name: Some(NameDraft { symbol: c.underlying_symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
+                    option: None,
+                }),
+                expiry: c.expiry.parse().map_err(|e: jiff::Error| e.to_string())?,
+                strike: Dec::parse(&c.strike).map_err(|e| e.to_string())?,
+                right: bagholder_core::instrument::OptionRight::parse(&c.right).map_err(|e| e.to_string())?,
+                // no record the book writes states a contract's size: what depends on it waits
+                multiplier: None,
+            }),
+        };
+        Ok(InstrumentDraft {
+            refs: refs(&self.refs)?,
+            kind: InstrumentKind::parse(&self.kind).map_err(|e| e.to_string())?,
+            currency,
+            name: Some(NameDraft { symbol: self.symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
+            option,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -143,24 +189,8 @@ impl Mapping for PersonMapping {
             let read = || -> std::result::Result<Draft, String> {
                 let day: jiff::civil::Date = day.parse().map_err(|e: jiff::Error| e.to_string())?;
                 let q = Dec::parse(quantity).map_err(|e| e.to_string())?;
-                let currency = Currency::parse(currency).map_err(|e| e.to_string())?;
-                let option = match contract {
-                    None => None,
-                    Some(c) => Some(crate::mapping::OptionDraft {
-                        underlying: Box::new(InstrumentDraft {
-                            refs: refs(&c.underlying)?,
-                            kind: InstrumentKind::parse(&c.underlying_kind).map_err(|e| e.to_string())?,
-                            currency,
-                            name: Some(NameDraft { symbol: c.underlying_symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
-                            option: None,
-                        }),
-                        expiry: c.expiry.parse().map_err(|e: jiff::Error| e.to_string())?,
-                        strike: Dec::parse(&c.strike).map_err(|e| e.to_string())?,
-                        right: bagholder_core::instrument::OptionRight::parse(&c.right).map_err(|e| e.to_string())?,
-                        // the person does not state a contract's size: what depends on it waits
-                        multiplier: None,
-                    }),
-                };
+                let named = Named { refs: instrument.clone(), kind: kind.clone(), currency: currency.clone(), symbol: symbol.clone(), contract: contract.clone() };
+                let instrument = named.draft(day)?;
                 let (kind_tx, q) = match side.as_str() {
                     "buy" => (Kind::Buy, q),
                     "sell" => (Kind::Sell, q.neg()),
@@ -174,13 +204,7 @@ impl Mapping for PersonMapping {
                     settle_date: None,
                     kind: kind_tx,
                     effect: None,
-                    instrument: Some(InstrumentDraft {
-                        refs: refs(instrument)?,
-                        kind: InstrumentKind::parse(kind).map_err(|e| e.to_string())?,
-                        currency,
-                        name: Some(NameDraft { symbol: symbol.clone(), venue_mic: None, venue_name: None, name: None, seen: day }),
-                        option,
-                    }),
+                    instrument: Some(instrument),
                     quantity: Some(q),
                     price: Some(money(price)?),
                     cash: None,
@@ -233,6 +257,67 @@ impl Book {
         Ok((r.scheme.to_text(), r.value))
     }
 
+    /// The id the broker states for an account: what a record the book writes
+    /// places it by.
+    pub fn account_ref(&self, account: AccountId) -> Result<AccountRef> {
+        let a = self.account(account)?;
+        let broker = self.connections()?.into_iter().find(|c| c.id == a.connection).map(|c| c.broker).ok_or_else(|| BookError::Refused(format!("account {account} has no connection")))?;
+        self.account_refs(account)?.into_iter().find(|r| r.broker == broker).ok_or_else(|| BookError::Refused(format!("account {account} has no id its broker states")))
+    }
+
+    /// How a record the book writes for `account` names what was traded: an
+    /// instrument the book holds by its strongest reference, one it has not met by
+    /// its symbol and currency within the account's connection.
+    pub fn name(&self, account: AccountId, traded: &Traded) -> Result<Named> {
+        let a = self.account(account)?;
+        let (refs, kind, currency, symbol, contract) = match traded {
+            Traded::Held(i) => {
+                let held = self.instrument(*i)?;
+                let symbol = self.names(*i)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
+                let strong = self.strong_ref(*i).or_else(|_| {
+                    // one a connection names by its symbol: the same reference again
+                    self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
+                })?;
+                (vec![strong], held.kind, held.currency, symbol, None)
+            }
+            Traded::Named { symbol, currency, contract } => {
+                let symbol = symbol.trim().to_uppercase();
+                if symbol.is_empty() {
+                    return Err(BookError::Refused("a trade of no symbol".into()));
+                }
+                let r = Reference::connection_symbol(a.connection, &symbol, *currency);
+                let terms = match contract {
+                    None => None,
+                    Some(c) => {
+                        if !c.strike.is_positive() {
+                            return Err(BookError::Refused(format!("a strike of {}", c.strike.to_text())));
+                        }
+                        let (underlying, underlying_kind, underlying_symbol) = match &c.underlying {
+                            Underlying::Held(u) => {
+                                let held = self.instrument(*u)?;
+                                if held.currency != *currency {
+                                    return Err(BookError::Refused(format!("a contract in {currency} on an instrument priced in {}", held.currency)));
+                                }
+                                let name = self.names(*u)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {u} has no name")))?;
+                                let strong = self.strong_ref(*u).or_else(|_| self.instrument_refs(*u)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {u} has no reference"))))?;
+                                (vec![strong], held.kind, name)
+                            }
+                            Underlying::Named(u) => {
+                                let u = u.trim().to_uppercase();
+                                let r = Reference::connection_symbol(a.connection, &u, *currency);
+                                (vec![(r.scheme.to_text(), r.value)], InstrumentKind::Security, u)
+                            }
+                        };
+                        Some(ContractTerms { underlying, underlying_kind: underlying_kind.as_str().to_string(), underlying_symbol, expiry: c.expiry.to_string(), strike: c.strike.to_text(), right: c.right.as_str().to_string() })
+                    }
+                };
+                let kind = if terms.is_some() { InstrumentKind::OptionContract } else { InstrumentKind::Security };
+                (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms)
+            }
+        };
+        Ok(Named { refs, kind: kind.as_str().to_string(), currency: currency.to_string(), symbol, contract })
+    }
+
     /// Keep an entry of the person's, each its own record. An entry the book
     /// cannot stand behind is refused, named: a cost or an amount in another
     /// currency than the instrument's, a share of cost outside (0, 1], a
@@ -274,54 +359,8 @@ impl Book {
                 Payload::ReturnOfCapital { applies_to: distribution.to_string(), instrument: vec![self.strong_ref(*instrument)?], per_unit: Amount { amount: per_unit.amount.to_text(), currency: per_unit.currency.to_string() } }
             }
             Entry::Trade { account, instrument, day, side, quantity, price, fee } => {
-                let a = self.account(*account)?;
-                let broker = self.connections()?.into_iter().find(|c| c.id == a.connection).map(|c| c.broker).ok_or_else(|| BookError::Refused(format!("account {account} has no connection")))?;
-                let r = self.account_refs(*account)?.into_iter().find(|r| r.broker == broker).ok_or_else(|| BookError::Refused(format!("account {account} has no id its broker states")))?;
-                let (refs, kind, currency, symbol, contract) = match instrument {
-                    Traded::Held(i) => {
-                        let held = self.instrument(*i)?;
-                        let symbol = self.names(*i)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {i} has no name to enter a trade of")))?;
-                        let strong = self.strong_ref(*i).or_else(|_| {
-                            // one a connection names by its symbol: the same reference again
-                            self.instrument_refs(*i)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {i} has no reference")))
-                        })?;
-                        (vec![strong], held.kind, held.currency, symbol, None)
-                    }
-                    Traded::Named { symbol, currency, contract } => {
-                        let symbol = symbol.trim().to_uppercase();
-                        if symbol.is_empty() {
-                            return refused("a trade of no symbol".into());
-                        }
-                        let r = Reference::connection_symbol(a.connection, &symbol, *currency);
-                        let terms = match contract {
-                            None => None,
-                            Some(c) => {
-                                if !c.strike.is_positive() {
-                                    return refused(format!("a strike of {}", c.strike.to_text()));
-                                }
-                                let (underlying, underlying_kind, underlying_symbol) = match &c.underlying {
-                                    Underlying::Held(u) => {
-                                        let held = self.instrument(*u)?;
-                                        if held.currency != *currency {
-                                            return refused(format!("a contract in {currency} on an instrument priced in {}", held.currency));
-                                        }
-                                        let name = self.names(*u)?.last().map(|n| n.symbol.clone()).ok_or_else(|| BookError::Refused(format!("instrument {u} has no name")))?;
-                                        let strong = self.strong_ref(*u).or_else(|_| self.instrument_refs(*u)?.into_iter().next().map(|r| (r.scheme.to_text(), r.value)).ok_or_else(|| BookError::Refused(format!("instrument {u} has no reference"))))?;
-                                        (vec![strong], held.kind, name)
-                                    }
-                                    Underlying::Named(u) => {
-                                        let u = u.trim().to_uppercase();
-                                        let r = Reference::connection_symbol(a.connection, &u, *currency);
-                                        (vec![(r.scheme.to_text(), r.value)], InstrumentKind::Security, u)
-                                    }
-                                };
-                                Some(ContractTerms { underlying, underlying_kind: underlying_kind.as_str().to_string(), underlying_symbol, expiry: c.expiry.to_string(), strike: c.strike.to_text(), right: c.right.as_str().to_string() })
-                            }
-                        };
-                        let kind = if terms.is_some() { InstrumentKind::OptionContract } else { InstrumentKind::Security };
-                        (vec![(r.scheme.to_text(), r.value)], kind, *currency, symbol, terms)
-                    }
-                };
+                let (r, named) = (self.account_ref(*account)?, self.name(*account, instrument)?);
+                let currency = Currency::parse(&named.currency).map_err(|e| BookError::Refused(e.to_string()))?;
                 if !quantity.is_positive() {
                     return refused(format!("a quantity of {} (units bought or sold are more than none)", quantity.to_text()));
                 }
@@ -335,11 +374,11 @@ impl Book {
                 }
                 Payload::Trade {
                     account: (r.broker.to_string(), r.value),
-                    instrument: refs,
-                    kind: kind.as_str().to_string(),
-                    currency: currency.to_string(),
-                    symbol,
-                    contract,
+                    instrument: named.refs,
+                    kind: named.kind,
+                    currency: named.currency,
+                    symbol: named.symbol,
+                    contract: named.contract,
                     day: day.to_string(),
                     side: match side {
                         Side::Buy => "buy",

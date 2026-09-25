@@ -246,6 +246,11 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     let report = pulled.map_err(|e| e.to_string())?;
     // what was stored is applied whatever else failed
     f.record_changed(now)?;
+    // a file's row the broker's own row now reports is linked to it
+    let linking = crate::csv_import::link(f, now)?;
+    if !linking.linked.is_empty() || !linking.ambiguous.is_empty() {
+        log(&format!("bagholder: rows imported from files: {} linked to the broker's own, {} with more than one they could be", linking.linked.len(), linking.ambiguous.len()));
+    }
     log(&format!(
         "bagholder: pulled Wealthsimple: {} rows read, {} new, {} revised, {} removed, {} imported replaced",
         report.rows_read,

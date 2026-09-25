@@ -15,7 +15,6 @@ use bagholder_store::feeds::{
 use bagholder_store::orders::{Bracket, BracketStatus, Order, OrderStatus, OrderType, Role, Side, SlKind, SlMode, Source, StopLoss, TakeProfit, TrailUnit};
 
 use bagholder_store::activities::ActivityRow;
-use bagholder_store::csvimport::{CsvFile, ImportReport, ScanReport, ScannedFile, Skipped, StatusFile, WatchSet, WatchStatus};
 use bagholder_store::tables::LegacyNote;
 use bagholder_store::feeds::{Notification, NotificationExtra};
 
@@ -163,12 +162,11 @@ fn book_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![
-        ActivityRow, Skipped, ImportReport, CsvFile, WatchSet, ScannedFile, ScanReport, StatusFile, WatchStatus, Appended, crate::orders::BookAppend, LegacyNote,
+        ActivityRow, Appended, crate::orders::BookAppend, LegacyNote,
         bagholder_store::broker::Account, bagholder_model::securities::Security, bagholder_store::book::BookBalance, bagholder_store::book::BookNav, bagholder_store::book::Book,
-        crate::http::model::WatchFolder, crate::http::model::ScanWithStatus, crate::http::model::WatchSetAnswer,
     ];
     let mut out = String::from(
-        "// Generated from rust/crates/store/src/activities.rs, rust/crates/store/src/csvimport.rs, book.rs,\n// broker.rs and the server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\nimport type { TradeGroup } from './model_api'\n\n",
+        "// Generated from rust/crates/store/src/activities.rs, book.rs,\n// broker.rs and the server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\nimport type { TradeGroup } from './model_api'\n\n",
     );
     for d in decls {
         out.push_str("export ");
@@ -325,10 +323,12 @@ fn model_api_declarations() -> String {
         bagholder_model::input::JournalEntry, bagholder_model::input::TradeGroup,
         crate::http::model::TradeQuery, crate::http::model::TradeAnswer, crate::http::model::DataSummary, crate::http::model::Clear,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::Groups, crate::http::model::GroupsAnswer,
-        crate::http::model::Notes, crate::http::model::NotesAnswer, crate::http::model::Import,
+        crate::http::model::Notes, crate::http::model::NotesAnswer,
         crate::http::model::ModelQuery, crate::http::model::ModelLiveAnswer, crate::http::model::ModelAnswer, crate::http::model::ModelViewAnswer,
         crate::http::model::FiguresQuery, crate::http::stream::Resync,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
+        crate::csv_import::ImportRequest, crate::csv_import::RowNote, crate::csv_import::ImportReport,
+        crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
     ];
     let mut out = String::from(
         "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { LegacyNote } from './book'\nimport type { Status } from './status'\n\n",
@@ -362,10 +362,10 @@ fn generated_file_of(name: &str) -> &'static str {
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
-        "Appended" | "BookAppend" | "ImportReport" | "WatchStatus" | "LegacyNote" => "book",
+        "Appended" | "BookAppend" | "LegacyNote" => "book",
         "StatusAnswer" => "status",
-        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" | "ModelQuery" | "ModelViewAnswer" => "model_api",
-        "Book" | "WatchFolder" | "ScanWithStatus" | "WatchSetAnswer" => "book",
+        "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "ImportRequest" | "ImportReport" | "WatchRequest" | "WatchStatus" | "ModelQuery" | "ModelViewAnswer" => "model_api",
+        "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",

@@ -71,12 +71,13 @@ const CRATES: [Rules; 8] = [
         floats_in: &[],
         clock: ClockRule::Given,
     },
-    // the broker interface and the pull (docs/plans/stage-3b-wealthsimple.md):
-    // no broker's reply types, no float, no clock
+    // the broker interface, the pull and the file adapter
+    // (docs/plans/stage-3b-wealthsimple.md, stage-3c-switch.md §6): no broker's
+    // reply types, no float, no clock; a file's row kept as JSON
     Rules {
         name: "bagholder-broker",
         dir: "broker",
-        allowed: &["bagholder-core", "bagholder-book", "jiff"],
+        allowed: &["bagholder-core", "bagholder-book", "jiff", "serde", "serde_json"],
         floats_in: &[],
         clock: ClockRule::Given,
     },

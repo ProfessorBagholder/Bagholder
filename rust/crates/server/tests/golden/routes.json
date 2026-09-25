@@ -196,10 +196,11 @@
   "watch_status": {
     "status": 200,
     "body": {
-      "ok": true,
       "path": "<db-path>",
       "watching": false,
+      "account": "",
       "lastScan": "",
+      "scanError": "",
       "files": []
     }
   },
@@ -207,30 +208,24 @@
     "status": 400,
     "body": {
       "ok": false,
-      "error": "Folder path required"
+      "error": "a folder is required"
     }
   },
   "watch_scan_no_folder": {
     "status": 400,
     "body": {
       "ok": false,
-      "error": "No folder is being watched",
-      "status": {
-        "ok": true,
-        "path": "",
-        "watching": false,
-        "lastScan": "",
-        "files": []
-      }
+      "error": "no folder is watched"
     }
   },
   "watch_clear": {
     "status": 200,
     "body": {
-      "ok": true,
       "path": "<db-path>",
       "watching": false,
+      "account": "",
       "lastScan": "",
+      "scanError": "",
       "files": []
     }
   },
@@ -238,7 +233,7 @@
     "status": 400,
     "body": {
       "ok": false,
-      "error": "text required"
+      "error": "the file is empty"
     }
   },
   "notifications_list": {

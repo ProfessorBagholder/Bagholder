@@ -2464,22 +2464,26 @@ pub fn market_loop(app: Arc<App>) {
 
 pub const WATCH_SCAN_SEC: u64 = 10 * 60;
 
-/// New or changed CSVs imported. Never fails.
-pub fn scan_watched_folder(app: &Arc<App>) -> Option<bagholder_store::csvimport::ScanReport> {
-    let c = conn(app)?;
-    if bagholder_store::csvimport::watch_folder(&c).ok()?.is_empty() {
-        return None;
-    }
-    bagholder_store::csvimport::scan_folder(&c, None, false).ok()
-}
-
 pub fn watch_loop(app: Arc<App>) {
-    // Only while a folder is set to be watched; until one is, this waits for the
-    // setting. The folder itself is looked at on a period: the standard library has
-    // no file-system notification (docs/architecture.md, "Timers that remain").
-    let set = || conn(&app).and_then(|c| bagholder_store::csvimport::watch_folder(&c).ok()).map_or(false, |f| !f.is_empty());
-    while app.events.park_until(&app, set) {
-        scan_watched_folder(&app);
+    // the folder an earlier version watched is watched again
+    if let (Some(f), Some(c)) = (app.figures.get(), conn(&app)) {
+        if let Ok(old) = bagholder_store::csvimport::watch_folder(&c) {
+            if let Err(e) = crate::csv_import::adopt(f, &old, bagholder_core::jiff::Timestamp::now()) {
+                crate::app::log(&format!("bagholder: the folder watched before: {e}"));
+            }
+        }
+    }
+    // Only while a folder is watched and the figures are built; until then, this
+    // waits for them. The folder itself is looked at on a period: the standard
+    // library has no file-system notification (docs/architecture.md, "Timers that remain").
+    let ready = || app.figures.get().is_some_and(|f| f.read(|_| ()).is_some() && crate::csv_import::watching(f));
+    while app.events.park_until(&app, ready) {
+        if let Some(f) = app.figures.get() {
+            // a failure is kept with the folder, and the folder's dialog says it
+            if let Err(e) = crate::csv_import::scan(f, false, bagholder_core::jiff::Timestamp::now()) {
+                crate::app::log(&format!("bagholder: the watched folder: {e}"));
+            }
+        }
         if app.wait(Duration::from_secs(WATCH_SCAN_SEC)) {
             return;
         }

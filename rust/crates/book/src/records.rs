@@ -607,6 +607,19 @@ impl Book {
         ids.map(|s| text::parsed("source_records", "id", &s?, RecordId::parse)).collect()
     }
 
+    /// The records that have superseded a record of `source`: each has taken
+    /// the place of one already, and takes no other's.
+    pub fn superseding(&self, source: &SourceName) -> Result<Vec<RecordId>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT DISTINCT t.record_id FROM link_records f
+             JOIN link_records t ON t.link_id = f.link_id AND t.side = 'to'
+             JOIN source_records r ON r.id = f.record_id
+             WHERE f.side = 'from' AND r.source = ? ORDER BY t.record_id",
+        )?;
+        let ids = stmt.query_map([source.as_str()], |r| r.get::<_, String>(0))?;
+        ids.map(|s| text::parsed("link_records", "record_id", &s?, RecordId::parse)).collect()
+    }
+
     /// The trades anchored on a record's transactions, with their anchors.
     pub(crate) fn trades_anchored_on(&self, record: RecordId) -> Result<Vec<(TradeId, Opening)>> {
         let mut stmt = self.conn().prepare_cached("SELECT id, anchor_leg, anchor_instrument FROM trades WHERE anchor_record = ? ORDER BY created_at, rowid")?;

@@ -1,13 +1,13 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { Appended, Book, BookAppend, ImportReport, ScanWithStatus, WatchFolder, WatchSetAnswer, WatchStatus } from './book'
+import type { Appended, Book, BookAppend } from './book'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Figures } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
-import type { Clear, DataSummary, EntryAnswer, EntryRequest, FiguresQuery, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
+import type { Clear, DataSummary, EntryAnswer, EntryRequest, FiguresQuery, Groups, GroupsAnswer, ImportReport, ImportRequest, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
 import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -65,9 +65,9 @@ export interface Routes {
   'POST /api/entries': { body: EntryRequest; answer: EntryAnswer }
   'POST /api/groups': { body: Groups; answer: GroupsAnswer }
   'POST /api/notes': { body: Notes; answer: NotesAnswer }
-  'POST /api/import': { body: Import; answer: ImportReport }
+  'POST /api/import': { body: ImportRequest; answer: ImportReport }
   'POST /api/watch/clear': { answer: WatchStatus }
   'GET /api/watch': { answer: WatchStatus }
-  'POST /api/watch': { body: WatchFolder; answer: WatchSetAnswer }
-  'POST /api/watch/scan': { answer: ScanWithStatus }
+  'POST /api/watch': { body: WatchRequest; answer: WatchStatus }
+  'POST /api/watch/scan': { answer: WatchStatus }
 }

@@ -51,4 +51,25 @@ impl Book {
             Ok(true)
         })
     }
+
+    /// A setting the person made, by its name: its value, if one is kept.
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn().query_row("SELECT value FROM settings WHERE key = ?", [key], |r| r.get(0)).optional()?)
+    }
+
+    /// Keep a setting the person made (`None` forgets it).
+    pub fn set_setting(&self, key: &str, value: Option<&str>, at: jiff::Timestamp) -> Result<()> {
+        if key == ZONE {
+            return Err(BookError::Refused("the zone is stated by a page".into()));
+        }
+        match value {
+            None => self.conn().execute("DELETE FROM settings WHERE key = ?", [key])?,
+            Some(v) => self.conn().execute(
+                "INSERT INTO settings(key, value, source, set_at) VALUES (?1, ?2, 'person', ?3)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, source = excluded.source, set_at = excluded.set_at",
+                params![key, v, at_text(at)],
+            )?,
+        };
+        Ok(())
+    }
 }

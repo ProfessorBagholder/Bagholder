@@ -47,8 +47,6 @@ export type Notes = { notes: { [key in string]: LegacyNote }, };
 
 export type NotesAnswer = { ok: boolean, notes: { [key in string]: LegacyNote }, };
 
-export type Import = { text: string, name: string, };
-
 export type ModelQuery = { 
 /**
  * the page's filters, as the JSON it keeps them in
@@ -90,3 +88,54 @@ export type EntryRequest = { "entry": "trade", account: string, instrument: stri
 export type ChildShare = { instrument: string, costShare: string, };
 
 export type EntryAnswer = { ok: true, };
+
+export type ImportRequest = { name: string, text: string, 
+/**
+ * The account its rows go to; empty is the Manual account. A row naming
+ * an account of its own goes there.
+ */
+account: string, };
+
+export type RowNote = { line: number, message: string, };
+
+export type ImportReport = { file: string, layout: string, 
+/**
+ * The account its rows went to, by its name.
+ */
+account: string, rows: number, 
+/**
+ * Rows the book did not hold before.
+ */
+added: number, 
+/**
+ * Rows it held already (the same row in an earlier import).
+ */
+unchanged: number, 
+/**
+ * Rows linked to the broker's own row for the same fill.
+ */
+linked: number, 
+/**
+ * Rows with more than one broker row they could be: not linked.
+ */
+ambiguous: Array<RowNote>, 
+/**
+ * Rows kept with a problem, counted in no figure until it is resolved.
+ */
+problems: Array<RowNote>, };
+
+export type WatchRequest = { path: string, account: string, };
+
+export type WatchStatus = { path: string, watching: boolean, 
+/**
+ * The account its files go to; empty is the Manual account.
+ */
+account: string, lastScan: string, 
+/**
+ * Why the last scan of the folder failed, until one succeeds.
+ */
+scanError: string, files: Array<WatchedFile>, };
+
+export type WatchedFile = { file: string, size: number, modified: string, scannedAt: string, read: FileOutcome, };
+
+export type FileOutcome = { "outcome": "imported", report: ImportReport, } | { "outcome": "failed", error: string, };

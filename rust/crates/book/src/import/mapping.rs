@@ -78,24 +78,26 @@ fn origin(source: &str) -> Option<Origin> {
     }
 }
 
-/// How the table books a row.
-struct Rule {
-    kind: Kind,
-    effect: Option<Effect>,
+/// How the table books a row: Wealthsimple's activity type and sub-type as
+/// Bagholder's kind, read the same way wherever a row states them (an earlier
+/// database's row, a file Wealthsimple exported).
+pub struct Rule {
+    pub kind: Kind,
+    pub effect: Option<Effect>,
     /// What the instrument is, for a row that concerns one.
-    instrument: Option<InstrumentKind>,
-    quantity: Qty,
-    cash: Cash,
+    pub instrument: Option<InstrumentKind>,
+    pub quantity: Qty,
+    pub cash: Cash,
     /// Whether the earlier app signed this row's quantity and cash itself (share
     /// and option orders, expiries): a sign against the kind is then a problem to
     /// see. Coin and event-contract rows kept Wealthsimple's unsigned quantity and
     /// its `amountSign`, which is not the cash's direction, so their signs are
     /// set by the kind alone.
-    signed: bool,
+    pub signed: bool,
 }
 
 #[derive(Clone, Copy)]
-enum Qty {
+pub enum Qty {
     None,
     /// The row's quantity made positive.
     In,
@@ -106,7 +108,7 @@ enum Qty {
 }
 
 #[derive(Clone, Copy)]
-enum Cash {
+pub enum Cash {
     None,
     /// The row's cash with its own sign.
     AsSigned,
@@ -116,7 +118,7 @@ enum Cash {
     Received,
 }
 
-fn rule(ty: &str, sub: &str, cash: Option<Dec>, direction: &str) -> Option<Rule> {
+pub fn rule(ty: &str, sub: &str, cash: Option<Dec>, direction: &str) -> Option<Rule> {
     use InstrumentKind as I;
     let signed = matches!(ty, "Trade" | "OPTIONS_BUY" | "OPTIONS_SELL" | "EXPIR");
     let r = |kind, effect, instrument, quantity, cash| Some(Rule { kind, effect, instrument, quantity, cash, signed });
