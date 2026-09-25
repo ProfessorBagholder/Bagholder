@@ -165,8 +165,8 @@ jobs:
       BAGHOLDER_E2E_LIBFAKETIME: /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
     steps:
       - uses: actions/checkout@v4
-      - name: faketime and a linker
-        run: apt-get update && apt-get install -y --no-install-recommends faketime build-essential
+      - name: faketime, a linker and the libraries the build links
+        run: apt-get update && apt-get install -y --no-install-recommends faketime build-essential pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
