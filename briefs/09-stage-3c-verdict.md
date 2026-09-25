@@ -62,7 +62,7 @@ Record each in `docs/decisions.md` with the test that holds it, or "review only"
      - The owner requires it to work whatever the symbol.
    - **The design:**
      - Every held payer gets the market's record of its distributions: TMX for a Canadian listing, Yahoo's dividend events for a US listing. These are the readers `exchange.rs` already uses. The schedule is taken wherever that record states it.
-     - Where a reader exists for the payer's company, its record is used instead, since the company states a schedule change first (brief 01, the Ninepoint case).
+     - Where a reader exists for the payer's company, its record is used instead, since the company states a schedule change first (brief 01).
      - A failed read by an existing company reader is that source's failure: the last record is kept, the read is retried, and the header shows it. It is never a switch to another source.
      - The income figure waits only where no source states the schedule.
    - No symbol or fund company is a case of its own in the plan, the docs or the owner's list. Brief 02 named three funds; that framing is withdrawn.
@@ -90,10 +90,11 @@ Record each in `docs/decisions.md` with the test that holds it, or "review only"
    - It fails on any table that Clear all leaves filled, and on any table it does not know about.
 
 6. **Time** (the plan's §2, "The home zone", and its criterion): as decision 5.
-   - Test: with the server process in UTC and again in UTC+14, and the page in America/Edmonton:
-     - a 23:30 fill falls on the Edmonton day;
-     - a stated pay date is unchanged;
-     - a page that then states America/Toronto moves "today" to Toronto's.
+   - The test holds for every zone, not for one chosen zone. It runs every zone in the time-zone database as the page's zone, with the server process in several zones, UTC among them.
+   - Every moment, including those around daylight-saving changes, falls on its day in the page's zone.
+   - A stated date never changes.
+   - A page that then states another zone moves "today" to that zone's.
+   - Plans and docs name no particular zone.
 
 7. **The real run** runs with:
    - `BAGHOLDER_DRY_ORDERS=1` and `BAGHOLDER_NO_BROWSER=1`;
