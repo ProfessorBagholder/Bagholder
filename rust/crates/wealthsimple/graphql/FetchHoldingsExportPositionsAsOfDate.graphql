@@ -1,0 +1,64 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchHoldingsExportPositionsAsOfDate($accountIds: [String!]!, $asOf: Date!, $currency: Currency, $currencyOverride: CurrencyOverride) {
+  accounts(ids: $accountIds) {
+    id
+    financials {
+      current(currency: $currency) {
+        id
+        positionsAsOfDate(asOf: $asOf) {
+          edges {
+            node {
+              ...HoldingsExportPositionAsOfDate
+            }
+          }
+        }
+      }
+    }
+  }
+}
+fragment HoldingsExportPositionAsOfDate on PositionAsOfDateNode {
+  id
+  quantity
+  direction
+  bookValue {
+    amount
+    currency
+  }
+  marketBookValue: bookValue(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  totalValue(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  marketUnrealizedReturns: unrealizedReturns(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  closePrice(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  security {
+    id
+    securityType
+    stock {
+      name
+      symbol
+      listedSymbol
+      primaryExchange
+      primaryMic
+    }
+    optionDetails {
+      osiSymbol
+      underlyingSecurity {
+        id
+        stock {
+          primaryExchange
+          primaryMic
+        }
+      }
+    }
+  }
+}

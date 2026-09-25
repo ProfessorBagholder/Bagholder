@@ -8,16 +8,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use bagholder_book::mapping::Mapping;
-use bagholder_broker::{AccountStated, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
+use bagholder_broker::{Answer, Failure};
 use bagholder_core::json::{self, Value};
-use bagholder_core::{Broker, Currency, Dec};
-use bagholder_sources::reply::{Mismatch, Node};
+use bagholder_sources::reply::Node;
 
-use crate::assemble::{self, Replies};
-use crate::mapping::{broker, WealthsimpleMapping, ZONE};
-use crate::record::BookMove;
+use crate::adapter::Source;
+use crate::mapping::ZONE;
 
+/// The replies of a capture, answering as Wealthsimple did.
 pub struct Replay {
     pub rows: Vec<Value>,
     accounts: Vec<Value>,
@@ -29,15 +27,9 @@ pub struct Replay {
     /// The balances replies' accounts, each as Wealthsimple sent it.
     balances: Vec<Value>,
     history: BTreeMap<String, Vec<Value>>,
-    /// The book's own moves for the record being put together.
-    moves: Vec<BookMove>,
     /// What was asked, in order: what a pull would have sent.
     pub asked: Vec<String>,
     zones: bagholder_book::zones::Zones,
-}
-
-fn mismatch(m: Mismatch) -> Failure {
-    Failure::Mismatch(m.to_string())
 }
 
 impl Replay {
@@ -52,7 +44,6 @@ impl Replay {
             positions: BTreeMap::new(),
             balances: vec![],
             history: BTreeMap::new(),
-            moves: vec![],
             asked: vec![],
             zones: bagholder_book::zones::Zones::default(),
         };
@@ -144,160 +135,44 @@ impl Replay {
     }
 }
 
-impl Replies for Replay {
-    fn security(&mut self, id: &str) -> Option<Value> {
-        self.asked.push(format!("security {id}"));
-        self.securities.get(id).cloned()
-    }
-    fn order(&mut self, batch: &str) -> Option<Value> {
-        self.asked.push(format!("order {batch}"));
-        self.orders.get(batch).cloned()
-    }
-    fn entitlements(&mut self, activity: &str) -> Option<Value> {
-        self.asked.push(format!("entitlements {activity}"));
-        self.entitlements.get(activity).cloned()
-    }
-    fn conversion(&mut self, id: &str) -> Option<Value> {
-        self.asked.push(format!("conversion {id}"));
-        self.conversions.get(id).cloned()
-    }
-    fn positions(&mut self, account: &str, day: &str) -> Option<Value> {
-        self.asked.push(format!("positions {account} {day}"));
-        self.positions.get(&(account.to_string(), day.to_string())).cloned()
-    }
-    fn siblings(&mut self, row: &Value) -> Vec<Value> {
-        let zones = &self.zones;
-        assemble::group(row, &self.rows, |r| {
-            let at: jiff::Timestamp = Node::root(r).text("occurredAt").ok()?.parse().ok()?;
-            zones.day(at, ZONE).ok()
-        })
-    }
-    fn book(&mut self, accounts: &[String], days: &[String]) -> Vec<BookMove> {
-        self.moves.iter().filter(|m| accounts.contains(&m.account) && days.contains(&m.day)).cloned().collect()
-    }
-}
-
-/// The adapter's reading of one row, for the pull.
-pub fn row_of(value: &Value, day: jiff::civil::Date) -> Result<Row, Mismatch> {
-    let n = Node::root(value);
-    let reads_positions = !assemble::needs(value, &day.to_string())?.positions.is_empty();
-    Ok(Row {
-        key: n.text("canonicalId")?.to_string(),
-        account: n.text("accountId")?.to_string(),
-        day,
-        settled: settled(n.text("unifiedStatus")?),
-        reads_positions,
-        value: value.clone(),
-    })
-}
-
-/// Whether a status is final: a row pending or in progress is read again.
-pub fn settled(status: &str) -> bool {
-    !matches!(status, "PENDING" | "IN_PROGRESS" | "PROCESSING")
-}
-
-/// The book's moves in the form a record keeps (`sec-c-<currency>` for cash).
-pub fn book_moves(book: &mut dyn BookMoves, accounts: &[String], days: &[String]) -> Vec<BookMove> {
-    let days: Vec<jiff::civil::Date> = days.iter().filter_map(|d| d.parse().ok()).collect();
-    book.moves(accounts, &days)
-        .into_iter()
-        .map(|m| BookMove {
-            account: m.account,
-            day: m.day.to_string(),
-            security: match m.what {
-                MovedWhat::Instrument(r) => r.value,
-                MovedWhat::Cash(c) => format!("sec-c-{}", c.to_string().to_lowercase()),
-            },
-            quantity: m.quantity.to_text(),
-        })
-        .collect()
-}
-
-impl BrokerAdapter for Replay {
-    fn broker(&self) -> Broker {
-        broker()
-    }
-    fn mapping(&self) -> &dyn Mapping {
-        &WealthsimpleMapping
-    }
-    fn accounts(&mut self) -> Answer<Vec<AccountStated>> {
+impl Source for Replay {
+    fn accounts(&mut self) -> Answer<Vec<Value>> {
         self.asked.push("accounts".into());
-        crate::read::accounts(&self.accounts).map_err(mismatch)
+        Ok(self.accounts.clone())
     }
-    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Row>> {
+    fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked.push(format!("activity {account}"));
-        let mut out = Vec::new();
-        for r in &self.rows {
-            if Node::root(r).text("accountId").ok() != Some(account) {
-                continue;
-            }
-            let day = self.day_of(r).ok_or_else(|| Failure::Mismatch("a row whose instant is not a time".into()))?;
-            if from.is_some_and(|f| day < f) {
-                continue;
-            }
-            out.push(row_of(r, day).map_err(mismatch)?);
-        }
-        Ok(out)
+        Ok(self.rows.iter().filter(|r| Node::root(r).text("accountId").ok() == Some(account) && from.is_none_or(|f| self.day_of(r).is_some_and(|d| d >= f))).cloned().collect())
     }
-    fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value> {
-        let needs = assemble::needs(&row.value, &row.day.to_string()).map_err(mismatch)?;
-        if !needs.positions.is_empty() {
-            // the book's moves over the days the row's group spans, a day either side
-            let group = self.siblings(&row.value);
-            let days: Vec<jiff::civil::Date> = group.iter().filter_map(|g| self.day_of(g)).chain([row.day]).collect();
-            let (first, last) = (days.iter().min().copied().unwrap_or(row.day), days.iter().max().copied().unwrap_or(row.day));
-            let mut accounts: BTreeSet<String> = needs.positions.iter().map(|(a, _)| a.clone()).collect();
-            for g in &group {
-                let n = Node::root(g);
-                accounts.extend([n.text("accountId").ok(), n.opt_text("opposingAccountId").ok().flatten()].into_iter().flatten().map(str::to_string));
-            }
-            let mut span = Vec::new();
-            let mut d = first.yesterday().unwrap_or(first);
-            let end = last.tomorrow().unwrap_or(last);
-            while d <= end {
-                span.push(d.to_string());
-                match d.tomorrow() {
-                    Ok(n) => d = n,
-                    Err(_) => break,
-                }
-            }
-            self.moves = book_moves(book, &accounts.into_iter().collect::<Vec<_>>(), &span);
-        }
-        let record = assemble::assemble(row.value.clone(), &row.day.to_string(), self).map_err(mismatch)?;
-        self.moves.clear();
-        Ok(record.to_value())
+    fn securities(&mut self, ids: &[String]) -> Answer<Vec<Value>> {
+        self.asked.push(format!("securities {}", ids.len()));
+        Ok(ids.iter().filter_map(|i| self.securities.get(i).cloned()).collect())
     }
-    fn reads_positions(&self, payload: &Value) -> bool {
-        let Ok(row) = Node::root(payload).obj("activity") else { return false };
-        let Some(day) = self.day_of(row.value()) else { return false };
-        assemble::needs(row.value(), &day.to_string()).is_ok_and(|n| !n.positions.is_empty())
+    fn order(&mut self, batch: &str) -> Answer<Option<Value>> {
+        self.asked.push(format!("order {batch}"));
+        Ok(self.orders.get(batch).cloned())
     }
-    fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
-        let row = Node::root(payload).obj("activity").ok()?;
-        if settled(row.text("unifiedStatus").ok()?) {
-            return None;
-        }
-        Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())?))
+    fn entitlements(&mut self, activity: &str) -> Answer<Option<Value>> {
+        self.asked.push(format!("entitlements {activity}"));
+        Ok(self.entitlements.get(activity).cloned())
     }
-    fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date {
-        self.zones.day(at, ZONE).unwrap_or_else(|_| at.to_zoned(jiff::tz::TimeZone::UTC).date())
+    fn conversion(&mut self, id: &str) -> Answer<Option<Value>> {
+        self.asked.push(format!("conversion {id}"));
+        Ok(self.conversions.get(id).cloned())
     }
-    fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>> {
+    fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
+        self.asked.push(format!("positions {account} {day}"));
+        self.positions.get(&(account.to_string(), day.to_string())).cloned().ok_or_else(|| Failure::Refused(format!("no positions of {account} as of {day} in the capture")))
+    }
+    fn balances(&mut self, _accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
-        let all = crate::read::cash(&self.balances).map_err(mismatch)?;
-        Ok(all.into_iter().filter(|(k, _)| accounts.contains(k)).collect())
+        Ok(self.balances.clone())
     }
-    fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>> {
-        self.asked.push(format!("units {account} {day}"));
-        let Some(nodes) = self.positions.get(&(account.to_string(), day.to_string())) else {
-            return Err(Failure::Refused(format!("no positions of {account} as of {day} in the capture")));
-        };
-        crate::read::units(nodes).map_err(mismatch)
-    }
-    fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>> {
+    fn history(&mut self, account: &str, _from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked.push(format!("history {account}"));
-        let nodes = self.history.get(account).cloned().unwrap_or_default();
-        let days = crate::read::history(&nodes).map_err(mismatch)?;
-        Ok(days.into_iter().filter(|d| from.is_none_or(|f| d.day >= f)).collect())
+        Ok(self.history.get(account).cloned().unwrap_or_default())
+    }
+    fn requests(&self) -> usize {
+        self.asked.len()
     }
 }

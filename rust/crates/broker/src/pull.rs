@@ -144,7 +144,22 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     // after, net of the book's own moves
     let source = adapter.mapping().source();
     let scheme = adapter.record_scheme();
-    let (first, second): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| !r.reads_positions);
+    // a row its stored record already holds as it is changed nothing, and is
+    // not put together again
+    let mut changed: Vec<&Row> = Vec::new();
+    for row in &rows {
+        let same = match book.record_by_key(Some(connection), &source, &row.key)? {
+            Some(r) => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, row))),
+            None => false,
+        };
+        if same {
+            report.records_unchanged += 1;
+        } else {
+            changed.push(row);
+        }
+    }
+    adapter.prepare(&changed);
+    let (first, second): (Vec<&Row>, Vec<&Row>) = changed.into_iter().partition(|r| !r.reads_positions);
     let mut empty = Index { by: BTreeMap::new() };
     for row in &first {
         store_row(book, adapter, &mut empty, connection, row, &scheme, &mut report, now)?;
@@ -194,6 +209,10 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     for (id, ks) in &keys_of {
+        // units already stated as of that day are not asked again
+        if book.stated(*id)?.units.is_some_and(|(d, _)| d == as_of) {
+            continue;
+        }
         let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
         let mut complete = true;
         for k in ks {
@@ -230,7 +249,12 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
     for a in &stated {
         let id = ids[&a.key];
-        let from = book.last_account_day(id)?.and_then(|d| d.tomorrow().ok());
+        let last = book.last_account_day(id)?;
+        // an account whose days are stated up to the last full day has none new
+        if last.is_some_and(|d| d >= as_of) || (!a.open && last.is_some()) {
+            continue;
+        }
+        let from = last.and_then(|d| d.tomorrow().ok());
         match adapter.history(&a.key, from) {
             Ok(days) => {
                 let e = days_of.entry(id).or_default();

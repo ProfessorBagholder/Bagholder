@@ -7,16 +7,19 @@ use bagholder_wealthsimple::anonymise::{leaks, Anonymiser};
 
 #[test]
 fn every_recorded_reply_holds_only_stand_ins() {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple");
     let mut seen = 0;
+    for folder in ["tests/replies/wealthsimple", "tests/replies/wealthsimple-pull"] {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(folder);
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "json") {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.ends_with(".json") || name.ends_with(".json.later") {
             let v = json::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
             let left = leaks(&v);
             assert!(left.is_empty(), "{}: identifying values at {left:?}", path.display());
             seen += 1;
         }
+    }
     }
     assert!(seen > 0, "no recorded replies");
 }

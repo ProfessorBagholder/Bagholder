@@ -1,0 +1,250 @@
+# Wealthsimple's own document, from its web app (release 0.3.668812, read 2026-09-24).
+query FetchFundingIntent($ids: [ID!], $identityId: ID, $state: [FundingIntentStateEnum!], $fundableType: [FundableTypeEnum!], $fundingMethodType: [FundingMethodTypeEnum!], $destination: [FundingPointInput!], $source: [FundingPointInput!], $first: Int, $cursor: String, $sortBy: FundingIntentSortByEnum, $sortOrder: SortOrder, $transactionType: [FundingIntentTransactionTypeEnum!], $createdInTheLast: ISO8601Duration) {
+  searchFundingIntents: search_funding_intents(canonical_ids: $ids, identity_id: $identityId, state: $state, destination: $destination, source: $source, fundable_type: $fundableType, funding_method_type: $fundingMethodType, sort_by: $sortBy, sort_order: $sortOrder, first: $first, after: $cursor, transaction_type: $transactionType, created_in_the_last: $createdInTheLast) {
+    edges {
+      node {
+        ...FundingIntent
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+fragment FundingIntent on FundingIntent {
+  id
+  state
+  idempotencyKey: idempotency_key
+  createdAt: created_at
+  updatedAt: updated_at
+  externalReferenceId: external_reference_id
+  fundableType: fundable_type
+  transactionType: transaction_type
+  fundableDetails: fundable_details {
+    ...FundingIntentFundableWithdrawal
+    ...FundingIntentFundableDeposit
+    ...FundingIntentFundableCurrencyConversion
+    ...FundingIntentFundableInternalTransfer
+  }
+  source {
+    ...FundingPoint
+  }
+  destination {
+    ...FundingPoint
+  }
+  postDated: post_dated
+  transactionMetadata: transaction_metadata {
+    ...FundingIntentETransferP2PTransactionMetadata
+    ...FundingIntentBankDraftSendTransactionMetadata
+    ...FundingIntentWireSendTransactionMetadata
+  }
+  transferMetadata: transfer_metadata {
+    ...FundingIntentETransferTransactionMetadata
+    ...FundingIntentETransferReceiveMetadata
+    ...FundingIntentETransferRequestTransactionMetadata
+    ...FundingIntentOnlineBillPayMetadataFields
+    ...WSBankAccountTransferMetadata
+  }
+  transferMetadataV2 {
+    ...BankDraftSendTransactionMetadata
+    ...CashDepositTransactionMetadata
+    ...ChequeDepositTransactionMetadata
+    ...ChequeSendTransactionMetadata
+    ...IncomingAchTransferTransactionMetadata
+    ...WireSendTransactionMetadata
+  }
+  userReferenceId: user_reference_id
+  recurrence {
+    ...FundingIntentRecurrence
+  }
+}
+fragment BankDraftSendTransactionMetadata on BankDraftSendTransactionMetadata {
+  amountExcludingFee
+  fee
+  totalAmount
+  mailingAddress
+  cashedAt
+  reversalRequestedAt
+}
+fragment CashDepositTransactionMetadata on CashDepositTransactionMetadata {
+  feeAmount
+  paidAmount
+  paymentMethod
+  psiLocationAddress
+  psiLocationDescription
+  psiLocationId
+  psiTransactionNumber
+  rejectionReason
+}
+fragment ChequeDepositTransactionMetadata on ChequeDepositTransactionMetadata {
+  rejectionReason
+  rejectionReasonDescription
+  estimatedCompletionAt
+  state
+}
+fragment ChequeSendTransactionMetadata on ChequeSendTransactionMetadata {
+  chequeImageUrl
+}
+fragment FundingIntentBankDraftSendTransactionMetadata on FundingIntentBankDraftSendTransactionMetadata {
+  assignedCourier
+  deliveryDate
+  bankDraftReason
+  bankDraftRecipient
+  bankDraftDeliveryInstructions
+  bankDraftDueDate
+  shippingType
+  bankDraftMailingAddress {
+    apartment_number
+    city
+    country_code
+    postal_code
+    province_state
+    street_address
+  }
+}
+fragment FundingIntentETransferP2PTransactionMetadata on FundingIntentETransferP2PTransactionMetadata {
+  recipientName: recipient_name
+  recipientIdentifier: recipient_identifier
+  recipientIdentifierType: recipient_identifier_type
+  autodeposit: autodeposit
+  fulfillmentRequestId
+  securityQuestion: security_question
+  securityAnswer: security_answer
+  memo: memo
+}
+fragment FundingIntentETransferReceiveMetadata on FundingIntentETransferReceiveMetadata {
+  memo
+  paymentType
+  recipient_email
+  recipient_phone_number
+}
+fragment FundingIntentETransferRequestTransactionMetadata on FundingIntentETransferRequestTransactionMetadata {
+  sourceEmail: source_email
+  sourceFinancialInstitution: source_financial_institution
+  sourceName: source_name
+  sourceProvider: source_provider
+  sourceProviderStatus: source_provider_status
+  sourceProviderStatusUpdatedAt: source_provider_status_updated_at
+  lastErrorStatus: last_error_status
+  lastErrorStatusUpdatedAt: last_error_status_updated_at
+}
+fragment FundingIntentETransferTransactionMetadata on FundingIntentETransferTransactionMetadata {
+  autoDeposit: auto_deposit
+  securityQuestion: security_question
+  securityAnswer: security_answer
+  recipientIdentifier: recipient_identifier
+  networkPaymentRefId
+  memo
+  requestMemo
+}
+fragment FundingIntentFundableCurrencyConversion on FundingIntentCurrencyConversion {
+  targetCurrency: target_currency
+  fxAdjustedAmount: fx_adjusted_amount
+}
+fragment FundingIntentFundableDeposit on FundingIntentDeposit {
+  createdAt: created_at
+  amount
+  currency
+  completedAt: completed_at
+  provisionalCredit: provisional_credit {
+    quantity
+  }
+}
+fragment FundingIntentFundableInternalTransfer on FundingIntentInternalTransfer {
+  overdraftTransfer: overdraft_transfer {
+    ...OverdraftTransfer
+  }
+}
+fragment OverdraftTransfer on OverdraftTransfer {
+  id
+  activityId: activity_id
+  amount {
+    ...Money
+  }
+  createdAt: created_at
+  sourceAccountCanonicalId: source_account_canonical_id
+  overdraftType: overdraft_type
+  updatedAt: updated_at
+}
+fragment Money on Money {
+  amount
+  cents
+  currency
+}
+fragment FundingIntentFundableWithdrawal on FundingIntentWithdrawal {
+  requestedAmountValue: requested_amount_value
+  requestedAmountUnit: requested_amount_unit
+  finalAmount: final_amount {
+    ...Money
+  }
+  notifiedCustodianAt: notified_custodian_at
+  completedAt: completed_at
+  overdraftTransfer: overdraft_transfer {
+    ...OverdraftTransfer
+  }
+  taxWithholding: tax_withholding {
+    ...TaxWithholding
+  }
+}
+fragment TaxWithholding on TaxWithholding {
+  id
+  netAmount: net_amount
+}
+fragment FundingIntentOnlineBillPayMetadataFields on FundingIntentOnlineBillPayMetadata {
+  payee {
+    company {
+      companyName: company_name
+    }
+  }
+}
+fragment FundingIntentRecurrence on FundingIntentRecurrence {
+  id
+  every
+  interval
+  next
+  latestFundingIntentId
+}
+fragment FundingIntentWireSendTransactionMetadata on FundingIntentWireSendTransactionMetadata {
+  beneficiary_account_number
+  beneficiary_address {
+    apartment_number
+    city
+    country_code
+    postal_code
+    province_state
+    street_address
+  }
+  beneficiary_bank {
+    bic
+    name
+    routing_number
+  }
+  beneficiary_name
+  beneficiary_type
+  wire_type
+  memo
+  reason
+  fee
+  amount_excluding_fee
+}
+fragment FundingPoint on FundingPoint {
+  id
+  type
+}
+fragment IncomingAchTransferTransactionMetadata on IncomingAchTransferTransactionMetadata {
+  formattedCompanyName
+  formattedCompanyDiscretionaryData
+  formattedType
+}
+fragment WSBankAccountTransferMetadata on WsBankAccountTransferMetadata {
+  originatorName: originator_name
+  transactionCode: transaction_code
+  transactionType: transaction_type
+  transactionCategory: transaction_category
+  settlementDate: settlement_date
+}
+fragment WireSendTransactionMetadata on WireSendTransactionMetadata {
+  fee
+  uetr
+}

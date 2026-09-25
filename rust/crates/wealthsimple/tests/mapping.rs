@@ -111,7 +111,7 @@ fn an_order_that_filled_nothing_moves_nothing() {
 #[test]
 fn a_row_whose_legs_do_not_net_to_it_is_kept_with_a_problem() {
     let rec = replay(&fixtures());
-    let row = rec.rows.iter().find(|r| text(r, "type") == Some("OPTIONS_MULTILEG") && text(r, "unifiedStatus") == Some("COMPLETED")).unwrap().clone();
+    let row = rec.source.rows.iter().find(|r| text(r, "type") == Some("OPTIONS_MULTILEG") && text(r, "unifiedStatus") == Some("COMPLETED")).unwrap().clone();
     // the order with one leg's cash changed by hand
     let edited = json::parse(&std::fs::read_to_string(fixtures().join("wrong-meaning-multileg-legs-not-the-row.json")).unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();

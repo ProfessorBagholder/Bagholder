@@ -14,14 +14,17 @@ use bagholder_core::json::Value;
 use bagholder_core::RecordId;
 use bagholder_sources::reply::Node;
 use bagholder_wealthsimple::mapping::{WealthsimpleMapping, ZONE};
-use bagholder_wealthsimple::replay::{row_of, Replay};
+use bagholder_wealthsimple::adapter::{row_of, Wealthsimple};
+use bagholder_wealthsimple::replay::Replay;
 
 pub fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple")
 }
 
-pub fn replay(dir: &std::path::Path) -> Replay {
-    Replay::read(dir).unwrap()
+pub type Ws = Wealthsimple<Replay>;
+
+pub fn replay(dir: &std::path::Path) -> Ws {
+    Wealthsimple::new(Replay::read(dir).unwrap())
 }
 
 /// The day Wealthsimple files a row under.
@@ -48,21 +51,26 @@ pub fn map_payload(payload: &Value) -> Mapped {
 }
 
 /// A row mapped, with the book's moves given.
-pub fn map_row_with(r: &mut Replay, row: &Value, moves: &mut Moves) -> Mapped {
+pub fn map_row_with(r: &mut Ws, row: &Value, moves: &mut Moves) -> Mapped {
     let row = row_of(row, day_of(row)).unwrap();
     let payload = r.record(&row, moves).unwrap();
     map_payload(&payload)
 }
 
-pub fn map_row(r: &mut Replay, row: &Value) -> Mapped {
+pub fn map_row(r: &mut Ws, row: &Value) -> Mapped {
     map_row_with(r, row, &mut Moves::default())
 }
 
 /// Every row mapped as a pull stores them: first the rows that move by
 /// themselves, their moves kept as the book's, then the rows read against
 /// positions, net of those moves.
-pub fn map_all(r: &mut Replay) -> Vec<(Value, Mapped)> {
-    let rows = r.rows.clone();
+pub fn map_all(r: &mut Ws) -> Vec<(Value, Mapped)> {
+    let rows = r.source.rows.clone();
+    // the rows read as a pull reads them, for a move's siblings
+    let accounts: std::collections::BTreeSet<String> = rows.iter().map(|x| Node::root(x).text("accountId").unwrap().to_string()).collect();
+    for a in accounts {
+        r.activity(&a, None).unwrap();
+    }
     let mut moves = Moves::default();
     let mut out = Vec::new();
     let reads = |row: &Value| row_of(row, day_of(row)).unwrap().reads_positions;

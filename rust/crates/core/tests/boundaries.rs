@@ -81,13 +81,14 @@ const CRATES: [Rules; 8] = [
         clock: ClockRule::Given,
     },
     // Wealthsimple, the first broker adapter (docs/plans/stage-3b-wealthsimple.md):
-    // no float, no clock, no old crate
+    // no float, no old crate, and the time only from the clock it is handed
     Rules {
         name: "bagholder-wealthsimple",
         dir: "wealthsimple",
         allowed: &["bagholder-core", "bagholder-book", "bagholder-broker", "bagholder-net", "bagholder-sources", "jiff"],
         floats_in: &[],
-        clock: ClockRule::Given,
+        // the session asks the clock the network is handed, when a token expires
+        clock: ClockRule::Handed { machine_in: &[] },
     },
     // the network: no float, and the time only from the clock it is handed, the
     // machine's read in one file

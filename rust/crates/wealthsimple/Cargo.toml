@@ -8,13 +8,15 @@ rust-version.workspace = true
 # `docs/plans/stage-3b-wealthsimple.md`): its session, the GraphQL documents it
 # asks, the strict readers of what it answers, and its mapping into the book. It
 # reads no clock and holds no float; `crates/core/tests/boundaries.rs` holds it
-# to its column.
+# to its column; the one time it asks is the handed clock's (a token's expiry).
 [dependencies]
 bagholder-core = { path = "../core" }
 # the mapping the book derives Wealthsimple's records by
 bagholder-book = { path = "../book" }
 # the broker interface it implements
 bagholder-broker = { path = "../broker" }
+# every request through the one limiter, on the clock it is handed
+bagholder-net = { path = "../net" }
 jiff = "0.2"
 # the strict reply reader and the recorded-replies shape, shared with the sources
 bagholder-sources = { path = "../sources" }

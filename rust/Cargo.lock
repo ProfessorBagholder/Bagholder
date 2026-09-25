@@ -340,6 +340,7 @@ dependencies = [
  "bagholder-book",
  "bagholder-broker",
  "bagholder-core",
+ "bagholder-net",
  "bagholder-sources",
  "jiff",
  "tempfile",

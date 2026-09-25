@@ -122,9 +122,15 @@ pub trait BrokerAdapter {
     fn accounts(&mut self) -> Answer<Vec<AccountStated>>;
     /// An account's activity, from `from` (the whole of it when `None`).
     fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Row>>;
+    /// The rows about to be recorded, so an adapter can read what they share
+    /// in as few requests as its broker takes (their securities, in batches).
+    fn prepare(&mut self, _rows: &[&Row]) {}
     /// A row's record: the row and every reply read once for it, as the book
     /// stores it.
     fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value>;
+    /// Whether a stored record holds this row as it is now: nothing about it
+    /// changed, and it is not put together again.
+    fn holds(&self, payload: &Value, row: &Row) -> bool;
     /// Whether a stored record's row is read against positions (its moves are
     /// not the book's own).
     fn reads_positions(&self, payload: &Value) -> bool;
