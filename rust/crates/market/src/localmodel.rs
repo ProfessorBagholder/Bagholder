@@ -62,6 +62,7 @@ pub fn reset_state() {
     st.proc = None;
     st.endpoint.clear();
     st.model.clear();
+    st.rest = None;
 }
 
 fn env(name: &str, default: &str) -> String {
@@ -114,11 +115,22 @@ struct State {
     proc: Option<Child>,
     endpoint: String,
     model: String,
+    /// After a failure, how long the next attempt waits, and from when.
+    rest: Option<(std::time::Instant, Duration)>,
+}
+
+/// The first rest after a failed provisioning, doubled on each failure after it, up to the most.
+pub const REST_FIRST: Duration = Duration::from_secs(30);
+pub const REST_MOST: Duration = Duration::from_secs(30 * 60);
+
+/// The rest after a failure, from the one before it.
+pub fn next_rest(before: Option<Duration>) -> Duration {
+    before.map_or(REST_FIRST, |d| (d * 2).min(REST_MOST))
 }
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new() }))
+    S.get_or_init(|| Mutex::new(State { phase: "off", detail: String::new(), proc: None, endpoint: String::new(), model: String::new(), rest: None }))
 }
 
 fn home() -> PathBuf {
@@ -216,6 +228,7 @@ pub fn endpoint() -> String {
         st.endpoint = url.clone();
         st.model = model;
         st.phase = "ready";
+        st.rest = None;
         drop(st);
         changed();
         return url;
@@ -233,6 +246,13 @@ pub fn ensure() {
         let mut st = state().lock().unwrap();
         if ["detecting", "downloading", "starting"].contains(&st.phase) || !st.endpoint.is_empty() {
             return;
+        }
+        // a failed attempt is tried again once its rest is over, never at once: a
+        // download that cannot reach its host is not asked for twice a second
+        if let Some((since, rest)) = st.rest {
+            if since.elapsed() < rest {
+                return;
+            }
         }
         st.phase = "detecting";
     }
@@ -258,6 +278,11 @@ fn set(phase: &'static str, detail: &str) {
         let mut st = state().lock().unwrap();
         st.phase = phase;
         st.detail = detail.to_string();
+        match phase {
+            "failed" => st.rest = Some((std::time::Instant::now(), next_rest(st.rest.map(|(_, d)| d)))),
+            "ready" => st.rest = None,
+            _ => {}
+        }
     }
     changed();
 }
@@ -268,6 +293,7 @@ fn provision() {
         st.endpoint = url;
         st.model = model;
         st.phase = "ready";
+        st.rest = None;
         drop(st);
         changed();
         return;
@@ -291,6 +317,7 @@ fn provision() {
         st.endpoint = format!("http://{}:{}", MANAGED_HOST, managed_port());
         st.model = "local".into();
         st.phase = "ready";
+        st.rest = None;
         drop(st);
         changed();
     } else {
@@ -450,5 +477,30 @@ pub fn chat(prompt: &str, max_tokens: i64) -> String {
         Some(Value::String(s)) => bagholder_model::textrules::trim_space(s).to_string(),
         Some(Value::Null) | None => String::new(),
         Some(other) => bagholder_model::textrules::trim_space(&bagholder_model::value::s(Some(other))).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod rest_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_attempt_rests_thirty_seconds_then_twice_as_long_each_time_up_to_half_an_hour() {
+        assert_eq!(next_rest(None), Duration::from_secs(30));
+        assert_eq!(next_rest(Some(Duration::from_secs(30))), Duration::from_secs(60));
+        assert_eq!(next_rest(Some(Duration::from_secs(20 * 60))), REST_MOST);
+        assert_eq!(next_rest(Some(REST_MOST)), REST_MOST);
+    }
+
+    #[test]
+    fn a_failure_is_not_tried_again_while_it_rests() {
+        reset_state();
+        set("failed", "download failed");
+        ensure();
+        assert_eq!(status(), "failed", "resting: nothing started");
+        let st = state().lock().unwrap();
+        assert_eq!(st.rest.map(|(_, d)| d), Some(REST_FIRST));
+        drop(st);
+        reset_state();
     }
 }
