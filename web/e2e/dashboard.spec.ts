@@ -345,6 +345,19 @@ test('a grade with no graded trades yet does nothing when clicked', async ({ pag
   await expect(page).toHaveURL('/')
 })
 
+test('By symbol shows two underlyings that share a symbol as two rows', async ({ page, request }) => {
+  // a symbol two listings share (a company on the TSX and a fund in New York) is two underlyings
+  await openWithStatus(page, request, {}, '', (m) => {
+    m.bySymbol = [
+      { id: 'u-1', symbol: 'CH', pnl: '120', n: 2, winRate: 1, avgHold: 4, tradeIds: [] },
+      { id: 'u-2', symbol: 'CH', pnl: '-30', n: 1, winRate: 0, avgHold: 9, tradeIds: [] },
+    ]
+  })
+  await ready(page)
+  const card = page.locator('.card', { has: page.locator('h5', { hasText: 'By symbol' }) })
+  await expect(card.locator('tbody tr')).toHaveCount(2)
+})
+
 test('By symbol is grouped by underlying, sorted by P&L, and every column sorts on click', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.bySymbol = [

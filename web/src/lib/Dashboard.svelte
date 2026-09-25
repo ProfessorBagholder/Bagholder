@@ -375,7 +375,7 @@
             </th>
           {/each}
         </tr></thead><tbody>
-          {#each bySymRows as r (r.symbol)}
+          {#each bySymRows as r (r.id)}
             <tr class="tab" style="cursor:pointer" onclick={() => symbolOpen(r)}>
               <td style="font-weight:500;font-variant-numeric:normal">{symText(r.symbol)}</td>
               <td style="text-align:right" class={cls(r.pnl)}>{money(r.pnl)}</td>
