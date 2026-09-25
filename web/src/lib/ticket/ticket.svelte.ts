@@ -34,7 +34,19 @@ const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl',
 function tkLookup(symbol: string, securityId: string): { securityId: string; kind: string; position: Position | null } {
   const m = store.model
   const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
-  const pos = (m?.positions ?? []).find(is) || null
+  // held in more than one account: the margin account among them, else the first by name
+  const accounts = m?.accounts ?? []
+  const rank = (accountId: string) => {
+    const a = accounts.find((x) => x.id === accountId)
+    return [a?.margin ? 0 : 1, a?.name ?? ''] as const
+  }
+  const pos =
+    (m?.positions ?? [])
+      .filter(is)
+      .sort((a, b) => {
+        const [x, y] = [rank(a.accountId), rank(b.accountId)]
+        return x[0] - y[0] || x[1].localeCompare(y[1])
+      })[0] || null
   const t = pos || (m?.trades ?? []).find(is) || null
   return { securityId: t ? t.security : securityId, kind: t ? t.kind : '', position: pos }
 }

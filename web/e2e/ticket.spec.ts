@@ -22,8 +22,13 @@ const quoteKey = (symbol: string, security: string, account: string, exchange: s
 // and the quantity a Sell starts from.
 async function holding(request: import('@playwright/test').APIRequestContext, symbol: string): Promise<{ account: string; qty: string }> {
   const m = await figures(request)
-  const p = (m.positions as { symbol: string; accountId: string; qty: string }[]).find((x) => x.symbol === symbol)!
-  const account = (m.accounts as { id: string; brokerAccount: string | null }[]).find((a) => a.id === p.accountId)!.brokerAccount!
+  // held in more than one account: the margin account among them, else the first by name (SPEC §4 Order ticket)
+  const accounts = m.accounts as { id: string; name: string; margin: boolean; brokerAccount: string | null }[]
+  const of = (id: string) => accounts.find((a) => a.id === id)!
+  const p = (m.positions as { symbol: string; accountId: string; qty: string }[])
+    .filter((x) => x.symbol === symbol)
+    .sort((a, b) => Number(of(b.accountId).margin) - Number(of(a.accountId).margin) || of(a.accountId).name.localeCompare(of(b.accountId).name))[0]
+  const account = of(p.accountId).brokerAccount!
   return { account, qty: p.qty }
 }
 // the account a Buy on a symbol the book does not hold opens on: the book's first open,

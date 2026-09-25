@@ -275,6 +275,10 @@ mod tests {
         .unwrap()
     }
 
+    fn t0_account(f: &Figures) -> AccountId {
+        f.read(|e| e.figures().positions.iter().find(|p| p.kind == InstrumentKind::Security).unwrap().account).unwrap()
+    }
+
     fn person_trades(f: &Figures) -> Vec<bagholder_core::transaction::Transaction> {
         let book = f.book().unwrap();
         let person: std::collections::BTreeSet<_> = book.live_records(&bagholder_core::SourceName::person()).unwrap().into_iter().collect();
@@ -310,6 +314,12 @@ mod tests {
         let terms = book.option_terms(contract).unwrap().unwrap();
         assert_eq!((terms.underlying, terms.multiplier), (share, None), "on the share entered first, its size not assumed");
         assert!(t.iter().all(|t| t.fee.is_none()), "no fee entered is none");
+        // no order can be placed in it: the ticket does not offer it
+        let names = f.names().unwrap();
+        let accounts = f.read(|e| crate::wire::build::accounts(e.inputs(), &names)).unwrap();
+        let listed = |id: AccountId| accounts.iter().find(|a| a.id == id.to_string()).unwrap().tradable;
+        assert!(!listed(manual), "the Manual account is not tradable");
+        assert!(listed(t0_account(&f)), "a Wealthsimple cash or margin account is");
     }
 
     #[test]
