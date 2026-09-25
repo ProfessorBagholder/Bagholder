@@ -476,3 +476,50 @@ fn test_no_amount_on_the_figures_wire_is_a_number() {
     // the scan finds what it looks for
     assert!(field.captures_iter("{ total: number, ").any(|c| &c[1] == "total" && c[2].contains("number")));
 }
+
+/// Each document's lists of rows and the field each is told apart by, as the
+/// server's differ keys them, generated to `web/src/lib/generated/keys.ts`: what the
+/// page reconciles a whole state by when one arrives again, never a key guessed
+/// from the data.
+fn keys_declarations() -> String {
+    use bagholder_model::patch::keys_of;
+    let docs: Vec<(&str, Vec<(String, &'static str)>)> = vec![
+        ("model", {
+            let mut k = keys_of::<crate::wire::figures::Figures>();
+            k.extend(keys_of::<crate::status::Status>().into_iter().map(|(p, f)| (format!("status.{p}"), f)));
+            k
+        }),
+        ("orders", keys_of::<crate::orders::OrdersDoc>()),
+        ("shorts", keys_of::<crate::feeds::ShortsFeed>()),
+        ("notifications", keys_of::<crate::notify::NotificationsDoc>()),
+        ("filings", keys_of::<crate::docs::FilingsAnswer>()),
+        ("filings-feed", keys_of::<crate::feeds::FilingsFeed>()),
+        ("fear", keys_of::<crate::feeds::FearDoc>()),
+        ("quote", keys_of::<crate::orders::TicketQuote>()),
+        ("history", keys_of::<crate::docs::HistoryPending>()),
+    ];
+    let mut out = String::from("// Generated from the server's differ (`bagholder_model::patch::keys_of`). Do not edit:\n// change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_row_keys`.\n\n/** Each document's lists of rows, by path (`*` for a list's rows or a map's values), and the field that tells the rows apart. */\nexport const ROW_KEYS: Record<string, Record<string, string>> = {\n");
+    for (doc, keys) in docs {
+        out.push_str(&format!("  '{doc}': {{\n"));
+        for (path, field) in keys {
+            out.push_str(&format!("    '{path}': '{field}',\n"));
+        }
+        out.push_str("  },\n");
+    }
+    out.push_str("}\n");
+    out
+}
+
+#[test]
+fn test_the_pages_row_keys_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/keys.ts");
+    let want = keys_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/keys.ts is not what the server's differ keys: run with BAGHOLDER_BLESS=1 and check the page");
+    // the figures' own lists are all there, each by its id
+    assert!(want.contains("'trades': 'id'") && want.contains("'positions': 'id'") && want.contains("'cashflow.tiles': 'label'"), "{want}");
+}

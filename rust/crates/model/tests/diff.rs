@@ -1,9 +1,8 @@
-//! The typed differ (`patch::typed`, the stream's) against the JSON one
-//! (`patch::diff`) on real views: every shared case turned into every other, and
-//! each case turned by the changes the stream carries -- a price moving, a grade
-//! set, a headline arriving, a listing watched, an activity arriving, another
-//! filter, a trade opened. Both must give the same operations, and those applied to
-//! the old view's JSON must give the new one's.
+//! The typed differ (`patch::typed`, the stream's) and the JSON one (`patch::diff`)
+//! on real views: every shared case turned into every other, and each case turned
+//! by the changes the stream carries -- a price moving, a grade set, a headline
+//! arriving, a listing watched, an activity arriving, another filter, a trade
+//! opened. What each sends, applied to the old view's JSON, must give the new one's.
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -38,10 +37,12 @@ fn check(label: &str, a: &View, b: &View, failures: &mut Vec<String>) -> usize {
     if got != jb {
         failures.push(format!("{label}: the typed patch does not give the new view"));
     }
-    if t != g {
-        let first = t.iter().zip(&g).position(|(x, y)| x != y).unwrap_or(t.len().min(g.len()));
-        let show = |ops: &[Value]| ops.get(first).map(|o| { let s = o.to_string(); s.chars().take(300).collect::<String>() }).unwrap_or_default();
-        failures.push(format!("{label}: typed {} ops, json {} ops; first difference at {first}:\n  typed {}\n  json  {}", t.len(), g.len(), show(&t), show(&g)));
+    // the untyped differ keys no list (a list compared as JSON goes whole), so it
+    // never sends less than the typed one, and what it sends gives the new view too
+    let mut plain = ja.clone();
+    apply(&mut plain, &g);
+    if plain != jb {
+        failures.push(format!("{label}: the JSON patch does not give the new view"));
     }
     t.len()
 }
@@ -53,7 +54,7 @@ fn edited(doc: &Value, f: impl Fn(&mut Value)) -> Value {
 }
 
 #[test]
-fn test_the_typed_differ_sends_what_the_json_one_sends() {
+fn test_both_differs_patch_every_view_into_every_other() {
     let docs = cases();
     assert!(docs.len() >= 30);
     let mut failures = Vec::new();

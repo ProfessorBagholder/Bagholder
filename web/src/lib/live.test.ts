@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, numbering, reconcile, rowKey, type Op } from './live'
+import { applyOps, numbering, reconcile, type Op } from './live'
+import { ROW_KEYS } from './generated/keys'
 
 // The page holds each entity as one object for as long as the entity lives, and a
 // change is written into it (docs/architecture.md, rule 0). These hold that: after
 // a change, everything that did not change is the very same object it was.
+
+// the model's own lists, keyed as the server's differ keys them
+const KEYS = ROW_KEYS.model
 
 const book = () => ({
   kpi: { realized: 1200.5 },
@@ -75,7 +79,7 @@ describe('a whole view arriving over one already shown', () => {
     const next = book()
     next.positions = [{ ...next.positions[1], last: 0.21 }, { id: 'p:NEW', symbol: 'NEW', last: 5, mv: 50, tags: [] }]
     next.kpi.realized = 1300
-    reconcile(m as never, next as never)
+    reconcile(m as never, next as never, KEYS)
     expect(m.positions.map((p) => p.id)).toEqual(['p:CH', 'p:NEW'])
     expect(m.positions[0]).toBe(ch) // the holding that stayed is the object it was
     expect(ch.last).toBe(0.21)
@@ -86,7 +90,7 @@ describe('a whole view arriving over one already shown', () => {
   it('the same view again changes no object', () => {
     const m = book()
     const before = { positions: m.positions, qnc: m.positions[0], news: m.markets.news, tags: m.positions[0].tags }
-    reconcile(m as never, book() as never)
+    reconcile(m as never, book() as never, KEYS)
     expect(m.positions).toBe(before.positions)
     expect(m.positions[0]).toBe(before.qnc)
     expect(m.markets.news).toBe(before.news)
@@ -95,11 +99,26 @@ describe('a whole view arriving over one already shown', () => {
 })
 
 describe('what tells rows apart', () => {
-  it('is the first usual field every row has and no two share', () => {
-    expect(rowKey([{ id: 'a' }, { id: 'b' }])).toBe('id')
-    expect(rowKey([{ symbol: 'CH', v: 1 }, { symbol: 'CH', v: 2 }])).toBe(null) // rows that repeat
-    expect(rowKey(['a', 'b'])).toBe(null)
-    expect(rowKey([{ d: '2026-01-01' }, { d: '2026-01-02' }])).toBe('d')
+  it('is the field the server declares for the list, never one guessed from the data', () => {
+    const m = { rows: [{ id: 'a', symbol: 'X', v: 1 }, { id: 'b', symbol: 'X', v: 2 }], plain: [{ symbol: 'Y', v: 1 }] }
+    const [a, b] = m.rows
+    const plain = m.plain[0]
+    reconcile(m as never, { rows: [{ id: 'b', symbol: 'X', v: 3 }, { id: 'a', symbol: 'X', v: 1 }], plain: [{ symbol: 'Y', v: 1 }] } as never, { rows: 'id' })
+    expect(m.rows[0]).toBe(b) // matched by id, though both rows carry the same symbol
+    expect(m.rows[1]).toBe(a)
+    expect(b.v).toBe(3)
+    expect(m.plain[0]).toBe(plain) // a list no key is declared for is left alone while it is the same
+    reconcile(m as never, { rows: m.rows, plain: [{ symbol: 'Y', v: 2 }] } as never, { rows: 'id' })
+    expect(m.plain[0]).not.toBe(plain) // and written whole when it differs
+    expect(m.plain[0].v).toBe(2)
+  })
+
+  it('rows whose declared key repeats are written whole, as the server sends them', () => {
+    const m = { rows: [{ id: 'a', v: 1 }] }
+    const was = m.rows[0]
+    reconcile(m as never, { rows: [{ id: 'a', v: 1 }, { id: 'a', v: 2 }] } as never, { rows: 'id' })
+    expect(m.rows.length).toBe(2)
+    expect(m.rows[0]).not.toBe(was)
   })
 })
 

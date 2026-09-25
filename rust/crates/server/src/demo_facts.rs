@@ -57,6 +57,9 @@ pub fn write(home: &Path) -> Result<String, String> {
     }
     let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(err)?;
     let (cache, _) = MarketCache::open(&home.join(crate::figures::CACHE_FILE), crate::app::APP_VERSION, at).map_err(err)?;
+    // the zone the browser tests' pages run in, as a page states it: the figures are
+    // built from the first start, before any page has opened
+    book.state_zone("America/Toronto", at).map_err(err)?;
     let bank = SourceName::named("bank-of-canada");
     let demo = SourceName::named("demo");
 

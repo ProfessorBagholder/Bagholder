@@ -363,6 +363,9 @@ impl bagholder_model::patch::Diff for TicketQuote {
             _ => bagholder_model::patch::as_json(self, new, path, ops),
         }
     }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        TicketQuoteOk::keys(path, out)
+    }
 }
 
 impl TicketQuote {

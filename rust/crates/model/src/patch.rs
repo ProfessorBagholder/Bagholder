@@ -28,27 +28,12 @@
 
 use serde_json::{json, Map, Value};
 
-/// The fields a row may be told apart by, in the order they are tried.
-const KEYS: [&str; 9] = ["id", "key", "d", "year", "symbol", "grade", "label", "date", "name"];
-
 fn key_text(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
         _ => None,
     }
-}
-
-/// The field that tells this list's rows apart: every row has it and no two
-/// share a value. `None` for a list that is not rows, or whose rows repeat.
-pub fn row_key(rows: &[Value]) -> Option<&'static str> {
-    if rows.is_empty() || !rows.iter().all(|r| r.is_object()) {
-        return None;
-    }
-    KEYS.iter().copied().find(|k| {
-        let mut seen = std::collections::HashSet::new();
-        rows.iter().all(|r| r.get(*k).and_then(key_text).map_or(false, |t| seen.insert(t)))
-    })
 }
 
 fn step(key: &str, value: &str) -> Value {
@@ -77,29 +62,8 @@ fn diff_into(old: &Value, new: &Value, path: &[Value], ops: &mut Vec<Value>) {
                 ops.push(json!(["del", with(path, json!(k))]));
             }
         }
-        (Value::Array(a), Value::Array(b)) => {
-            // the same identity must hold on both sides, or a row could be matched to a stranger
-            let key = match (row_key(a), row_key(b)) {
-                (Some(x), Some(y)) if x == y => x,
-                (None, Some(y)) if a.is_empty() => y,
-                _ => {
-                    ops.push(json!(["set", path, new]));
-                    return;
-                }
-            };
-            let id = |r: &Value| key_text(&r[key]).unwrap_or_default();
-            let was: std::collections::HashMap<String, &Value> = a.iter().map(|r| (id(r), r)).collect();
-            let order: Vec<String> = b.iter().map(id).collect();
-            if a.iter().map(id).collect::<Vec<_>>() != order {
-                let added: Map<String, Value> = b.iter().filter(|r| !was.contains_key(&id(r))).map(|r| (id(r), r.clone())).collect();
-                ops.push(json!(["rows", path, key, order, added]));
-            }
-            for r in b {
-                if let Some(before) = was.get(&id(r)) {
-                    diff_into(before, r, &with(path, step(key, &id(r))), ops);
-                }
-            }
-        }
+        // a list compared as JSON declares no key for its rows: it goes whole
+        // (a list of rows is compared by its row type, `Diff for [T]`)
         _ => ops.push(json!(["set", path, new])),
     }
 }
@@ -138,6 +102,39 @@ pub trait Diff: serde::Serialize {
     }
     /// Push onto `ops` what turns `self` into `new`, under `path`.
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>);
+    /// Where this type's lists of rows are, and the field each is told apart by:
+    /// a path of JSON field names under `path`, `*` for a list's rows or a map's
+    /// values. What the page reconciles a whole state again by (`keys_of`).
+    fn keys(_path: &mut Vec<String>, _out: &mut Vec<(String, &'static str)>)
+    where
+        Self: Sized,
+    {
+    }
+}
+
+/// Every keyed list of `T`, by its path from `T`'s root (`trades`, `cashflow.tiles`,
+/// `trades.*.fills`), and the field its rows are told apart by.
+pub fn keys_of<T: Diff>() -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    T::keys(&mut Vec::new(), &mut out);
+    out
+}
+
+/// A list's rows under `path`: the list itself where its rows carry a key, and theirs.
+pub fn list_keys<T: Diff>(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+    if let Some(k) = T::KEY {
+        out.push((path.join("."), k));
+    }
+    path.push("*".into());
+    T::keys(path, out);
+    path.pop();
+}
+
+/// One field's keyed lists, under its JSON name.
+pub fn field_keys<T: Diff>(name: &str, path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+    path.push(name.into());
+    T::keys(path, out);
+    path.pop();
 }
 
 /// The operations that turn `old` into `new`.
@@ -231,12 +228,15 @@ impl<T: Diff + ?Sized> Diff for &T {
     }
 }
 
-impl<T: Diff + ?Sized> Diff for std::sync::Arc<T> {
+impl<T: Diff> Diff for std::sync::Arc<T> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         // the one value both states hold has not moved
         if !std::sync::Arc::ptr_eq(self, new) {
             (**self).diff(new, path, ops)
         }
+    }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        T::keys(path, out)
     }
 }
 
@@ -247,6 +247,9 @@ impl<T: Diff> Diff for Option<T> {
             (None, None) => {}
             _ => set(path, new, ops),
         }
+    }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        T::keys(path, out)
     }
 }
 
@@ -274,6 +277,9 @@ impl<T: Diff> Diff for Vec<T> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         self.as_slice().diff(new.as_slice(), path, ops)
     }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        list_keys::<T>(path, out)
+    }
 }
 
 // serde writes arrays of a fixed length only up to 32, each length its own impl
@@ -282,6 +288,9 @@ macro_rules! arrays {
         impl<T: Diff> Diff for [T; $n] {
             fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
                 self.as_slice().diff(new.as_slice(), path, ops)
+            }
+            fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+                list_keys::<T>(path, out)
             }
         }
     )*};
@@ -346,9 +355,19 @@ fn keyed<'a, V: Diff + 'a>(
     }
 }
 
+/// A map's values under `*`.
+fn value_keys<V: Diff>(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+    path.push("*".into());
+    V::keys(path, out);
+    path.pop();
+}
+
 impl<V: Diff> Diff for std::collections::BTreeMap<String, V> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         keyed(|k| self.get(k), new.iter(), self.keys().filter(|k| !new.contains_key(*k)), path, ops)
+    }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        value_keys::<V>(path, out)
     }
 }
 
@@ -356,12 +375,18 @@ impl<V: Diff> Diff for std::collections::HashMap<String, V> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         keyed(|k| self.get(k), new.iter(), self.keys().filter(|k| !new.contains_key(*k)), path, ops)
     }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        value_keys::<V>(path, out)
+    }
 }
 
 impl<V: Diff> Diff for crate::wire::Ordered<V> {
     fn diff(&self, new: &Self, path: &mut Vec<Value>, ops: &mut Vec<Value>) {
         let find = |m: &'_ crate::wire::Ordered<V>, k: &str| m.0.iter().position(|(key, _)| key == k);
         keyed(|k| find(self, k).map(|i| &self.0[i].1), new.0.iter().map(|(k, v)| (k, v)), self.0.iter().map(|(k, _)| k).filter(|k| find(new, k).is_none()), path, ops)
+    }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        value_keys::<V>(path, out)
     }
 }
 
@@ -456,49 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn test_one_price_moving_is_that_holdings_figures_and_the_totals_and_nothing_else() {
-        let (old, mut new) = (book(), book());
-        new["positions"][0]["last"] = json!(1.80);
-        new["positions"][0]["mv"] = json!(180.0);
-        new["positions"][0]["unreal"] = json!(30.0);
-        new["positionsSummary"]["mv"] = json!(580.0);
-        new["positionsSummary"]["unreal"] = json!(-10.0);
-        let ops = turns(&old, &new);
-        let row = json!({"k": "id", "v": "p:QNC"});
-        assert_eq!(ops, vec![
-            json!(["set", ["positions", row, "last"], 1.80]),
-            json!(["set", ["positions", row, "mv"], 180.0]),
-            json!(["set", ["positions", row, "unreal"], 30.0]),
-            json!(["set", ["positionsSummary", "mv"], 580.0]),
-            json!(["set", ["positionsSummary", "unreal"], -10.0]),
-        ]);
-        let text = serde_json::to_string(&ops).unwrap();
-        assert!(!text.contains("CH") && !text.contains("AAA") && !text.contains("headline"), "the other holding, the trades and the news are not mentioned");
-    }
-
-    #[test]
-    fn test_a_grade_set_is_one_field_of_one_trade() {
-        let (old, mut new) = (book(), book());
-        new["trades"][0]["grade"] = json!("B");
-        assert_eq!(turns(&old, &new), vec![json!(["set", ["trades", {"k": "id", "v": "t1"}, "grade"], "B"])]);
-    }
-
-    #[test]
-    fn test_a_headline_arriving_is_one_row_inserted_not_the_list_again() {
+    fn test_a_list_compared_as_json_is_sent_whole() {
         let (old, mut new) = (book(), book());
         new["markets"]["news"].as_array_mut().unwrap().insert(0, json!({"id": "n3", "headline": "three"}));
         let ops = turns(&old, &new);
-        assert_eq!(ops, vec![json!(["rows", ["markets", "news"], "id", ["n3", "n1", "n2"], {"n3": {"id": "n3", "headline": "three"}}])]);
-    }
-
-    #[test]
-    fn test_a_row_leaving_and_the_rest_reordering() {
-        let (old, mut new) = (book(), book());
-        new["positions"].as_array_mut().unwrap().remove(0);
-        assert_eq!(turns(&old, &new), vec![json!(["rows", ["positions"], "id", ["p:CH"], {}])]);
-        let mut swapped = book();
-        swapped["markets"]["news"].as_array_mut().unwrap().reverse();
-        assert_eq!(turns(&old, &swapped), vec![json!(["rows", ["markets", "news"], "id", ["n2", "n1"], {}])]);
+        assert_eq!(ops, vec![json!(["set", ["markets", "news"], new["markets"]["news"]])], "a list compared as JSON goes whole");
     }
 
     #[test]
@@ -507,26 +494,6 @@ mod tests {
         new["kpi"]["winRate"] = json!(0.5);
         new["kpi"].as_object_mut().unwrap().remove("count");
         assert_eq!(turns(&old, &new), vec![json!(["set", ["kpi", "winRate"], 0.5]), json!(["del", ["kpi", "count"]])]);
-    }
-
-    #[test]
-    fn test_a_list_that_is_not_rows_is_sent_whole_and_rows_that_repeat_are_too() {
-        let (old, mut new) = (book(), book());
-        new["positions"][0]["tags"] = json!(["core", "swing"]);
-        assert_eq!(turns(&old, &new), vec![json!(["set", ["positions", {"k": "id", "v": "p:QNC"}, "tags"], ["core", "swing"]])]);
-        // two rows with the same symbol and no id: no field tells them apart
-        let a = json!({"alloc": [{"symbol": "CH", "v": 1}, {"symbol": "CH", "v": 2}]});
-        let mut b = a.clone();
-        b["alloc"][1]["v"] = json!(3);
-        assert_eq!(row_key(a["alloc"].as_array().unwrap()), None);
-        assert_eq!(turns(&a, &b), vec![json!(["set", ["alloc"], b["alloc"]])]);
-    }
-
-    #[test]
-    fn test_the_first_rows_of_an_empty_list() {
-        let old = json!({"watchlist": []});
-        let new = json!({"watchlist": [{"symbol": "QNC", "exchange": "TSX-V"}]});
-        assert_eq!(turns(&old, &new), vec![json!(["rows", ["watchlist"], "symbol", ["QNC"], {"QNC": {"symbol": "QNC", "exchange": "TSX-V"}}])]);
     }
 
     #[test]

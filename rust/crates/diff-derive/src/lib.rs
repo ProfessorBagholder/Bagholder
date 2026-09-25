@@ -133,6 +133,8 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
     let c = container(input)?;
     let patch = quote!(::bagholder_model::patch);
+    // where this type's lists of rows are: each field's, under its JSON name
+    let mut key_steps: Vec<proc_macro2::TokenStream> = Vec::new();
     let body = match &input.data {
         Data::Enum(_) => {
             quote!(#patch::as_json(self, new, path, ops))
@@ -149,10 +151,12 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 if a.skip {
                     continue;
                 }
+                let ty = &f.ty;
                 if a.flatten {
                     // its fields join the parent's own JSON object: compared at the
                     // parent's own path, under no name of its own
                     steps.push(quote!(#patch::Diff::diff(&self.#ident, &new.#ident, path, ops);));
+                    key_steps.push(quote!(<#ty as #patch::Diff>::keys(path, out);));
                     continue;
                 }
                 let raw = ident.to_string();
@@ -162,6 +166,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     (None, Some(rule)) => renamed(rule, raw, ident.span())?,
                     (None, None) => raw.to_string(),
                 };
+                key_steps.push(quote!(#patch::field_keys::<#ty>(#json, path, out);));
                 steps.push(match &a.skip_if {
                     None => quote!(#patch::field(&self.#ident, &new.#ident, #json, path, ops);),
                     Some(skip) => quote!(#patch::field_present(&self.#ident, &new.#ident, !#skip(&self.#ident), !#skip(&new.#ident), #json, path, ops);),
@@ -223,6 +228,10 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             #key
             fn diff(&self, new: &Self, path: &mut Vec<::serde_json::Value>, ops: &mut Vec<::serde_json::Value>) {
                 #body
+            }
+            fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+                let _ = (&path, &out);
+                #(#key_steps)*
             }
         }
     })

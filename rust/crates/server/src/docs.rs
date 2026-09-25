@@ -75,6 +75,9 @@ impl Diff for FilingsAnswer {
             _ => bagholder_model::patch::as_json(self, new, path, ops),
         }
     }
+    fn keys(path: &mut Vec<String>, out: &mut Vec<(String, &'static str)>) {
+        FilingsDoc::keys(path, out)
+    }
 }
 
 /// `history:<the chart's own query>`: only whether its intraday bars are still

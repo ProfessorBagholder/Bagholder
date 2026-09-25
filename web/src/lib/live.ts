@@ -15,28 +15,16 @@
 import type { Model } from './model'
 
 import { post } from './api'
+import { ROW_KEYS } from './generated/keys'
 
 export type Step = string | { k: string; v: string }
 export type Op = ['set', Step[], unknown] | ['del', Step[]] | ['rows', Step[], string, string[], Record<string, unknown>]
 
 type Obj = Record<string, unknown>
 
-// The fields a row may be told apart by, tried in this order: the same list, in the
-// same order, as the server's (patch.rs KEYS).
-const KEYS = ['id', 'key', 'd', 'year', 'symbol', 'grade', 'label', 'date', 'name']
-
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 const keyText = (v: unknown): string | null => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : null)
 
-/** The field that tells this list's rows apart: every row has it, no two share it. */
-export function rowKey(rows: unknown[]): string | null {
-  if (!rows.length || !rows.every(isObj)) return null
-  for (const k of KEYS) {
-    const seen = new Set<string>()
-    if (rows.every((r) => { const t = keyText((r as Obj)[k]); return t !== null && !seen.has(t) && !!seen.add(t) })) return k
-  }
-  return null
-}
 
 function walk(root: unknown, path: Step[]): unknown {
   let at: unknown = root
@@ -89,35 +77,66 @@ function same(a: unknown, b: unknown): boolean {
   return false
 }
 
+/** The document kind a key names: `model`, `orders`, or the part before `:` (`quote:…`). */
+export const docKind = (doc: string): string => doc.split(':')[0]
+
+/** The field that tells the rows of the list at `path` apart, as the server's differ keys it (`generated/keys.ts`). */
+function keyAt(keys: Record<string, string>, path: string[]): string | null {
+  for (const [p, field] of Object.entries(keys)) {
+    const steps = p.split('.')
+    if (steps.length === path.length && steps.every((s, i) => s === '*' || s === path[i])) return field
+  }
+  return null
+}
+
+/** Each row's key, when every row has one and no two share it: as the server's differ reads them. */
+function keysOf(rows: unknown[], key: string): string[] | null {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const r of rows) {
+    const t = isObj(r) ? keyText(r[key]) : null
+    if (t === null || seen.has(t)) return null
+    seen.add(t)
+    out.push(t)
+  }
+  return out
+}
+
 /**
  * Make `target` say what `source` says, keeping every object that is still there.
  * For a whole view arriving over one already shown (the filters changed, the
  * connection was lost and made again): a trade in both is the same object
  * afterwards, with only its differing fields written, so its row is not rebuilt.
+ * A list's rows are matched by the field its row type declares (`keys`, the
+ * document's entry of `ROW_KEYS`); a list with none is written whole when it differs.
  */
-export function reconcile(target: Obj, source: Obj): void {
+export function reconcile(target: Obj, source: Obj, keys: Record<string, string>, path: string[] = []): void {
   for (const k of Object.keys(target)) if (!(k in source)) delete target[k]
   for (const [k, v] of Object.entries(source)) {
     const was = target[k]
-    if (isObj(was) && isObj(v)) reconcile(was, v)
-    else if (Array.isArray(was) && Array.isArray(v)) reconcileRows(was, v)
+    const at = [...path, k]
+    if (isObj(was) && isObj(v)) reconcile(was, v, keys, at)
+    else if (Array.isArray(was) && Array.isArray(v)) reconcileRows(was, v, keys, at)
     else if (!same(was, v)) target[k] = v
   }
 }
 
-function reconcileRows(target: unknown[], source: unknown[]): void {
-  const key = rowKey(source)
-  if (!key || (target.length > 0 && rowKey(target) !== key)) {
+function reconcileRows(target: unknown[], source: unknown[], keys: Record<string, string>, path: string[]): void {
+  const key = keyAt(keys, path)
+  const now = key ? keysOf(source, key) : null
+  const was = key ? keysOf(target, key) : null
+  if (!key || !now || !was) {
     if (!same(target, source)) target.splice(0, target.length, ...source)
     return
   }
   const have = new Map<string, Obj>()
-  for (const r of target) have.set(keyText((r as Obj)[key]) ?? '', r as Obj)
-  const next = source.map((r) => {
-    const was = have.get(keyText((r as Obj)[key]) ?? '')
-    if (!was) return r
-    reconcile(was, r as Obj)
-    return was
+  target.forEach((r, i) => have.set(was[i], r as Obj))
+  const rows = [...path, '*']
+  const next = source.map((r, i) => {
+    const held = have.get(now[i])
+    if (!held) return r
+    reconcile(held, r as Obj, keys, rows)
+    return held
   })
   if (next.length !== target.length || next.some((r, i) => r !== target[i])) target.splice(0, target.length, ...next)
 }
@@ -237,7 +256,7 @@ export function connect(sink: Sink, filters: unknown): void {
     if (doc === 'model') {
       const shown = !!sink.model
       const was = startedAt(sink.model)
-      if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj)
+      if (sink.model) reconcile(sink.model as unknown as Obj, data as Obj, ROW_KEYS.model)
       else sink.model = data as Model
       if (was && startedAt(data) && was !== startedAt(data)) afterRestart()
       if (shown) afterChange('all') // a view over the one shown: anything in it may have moved while away
@@ -247,7 +266,7 @@ export function connect(sink: Sink, filters: unknown): void {
     }
     const w = wanted.get(doc)
     if (!w) return
-    if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data)
+    if (isObj(w.holder.data) && isObj(data)) reconcile(w.holder.data, data, ROW_KEYS[docKind(doc)] ?? {})
     else w.holder.data = data
     w.changed?.()
   })
