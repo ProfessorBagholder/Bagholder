@@ -19,7 +19,7 @@ const WIDTHS = [1200, 1340, 1440, 1680]
 
 // What changes from run to run without the page changing: the release number, and how
 // long ago a source was read.
-const masks = (page: Page) => [page.getByText(/^v\d+\.\d+\.\d+$/), page.getByText(/^read .* ago$/)]
+const masks = (page: Page) => [page.getByText(/^v\d+\.\d+\.\d+$/), page.getByText(/^read (.* ago|just now)$/)]
 
 async function open(page: Page, width: number, hash: string) {
   await page.clock.setFixedTime(NOW)
@@ -51,7 +51,7 @@ for (const width of WIDTHS) {
 
     test('a holding', async ({ page }) => {
       await open(page, width, 'portfolio')
-      await page.locator('tbody tr', { hasText: 'NVDA' }).filter({ hasText: 'Trading' }).first().click()
+      await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'TD', exact: true }) }).first().click()
       await expect(page.getByText(/^Executions/)).toBeVisible()
       await shot(page, `holding-${width}`)
     })
