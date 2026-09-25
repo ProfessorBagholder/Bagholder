@@ -68,6 +68,11 @@ export function cmp(a: Dec, b: Dec): -1 | 0 | 1 {
   return (sa < 0 ? -m : m) as -1 | 0 | 1
 }
 
+/** The decimal with its sign turned: `12.5` to `-12.5`, a writing, not arithmetic. */
+export function neg(d: Dec): Dec {
+  return (sign(d) === 0 ? d : d.startsWith('-') ? d.slice(1) : '-' + d) as Dec
+}
+
 /** The decimal without its sign. */
 export function abs(d: Dec): Dec {
   return (d.startsWith('-') ? d.slice(1) : d) as Dec

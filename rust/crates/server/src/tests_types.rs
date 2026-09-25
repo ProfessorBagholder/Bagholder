@@ -34,8 +34,9 @@ fn declarations() -> String {
         Side, OrderType, OrderStatus, Role, Source, BracketStatus, SlKind, TrailUnit, SlMode, StopLoss, TakeProfit, Order, OrderCard, Bracket, OrdersDoc,
         OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
         PlaceTicketAnswer,
+        crate::orders::preview::StopInput, crate::orders::preview::TargetInput, crate::orders::preview::QuoteInput, crate::orders::preview::PreviewRequest, crate::orders::preview::Preview,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/orders/types.rs and the server's orders document. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.\n\nimport type { OkOr } from './common'\nimport type { Dec } from '../dec'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -360,7 +361,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" => "notifications",
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
-        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" => "orders",
+        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" => "orders",
         "Appended" | "BookAppend" | "ImportReport" | "WatchStatus" | "LegacyNote" => "book",
         "StatusAnswer" => "status",
         "TradeQuery" | "TradeAnswer" | "DataSummary" | "Clear" | "JournalEntryRequest" | "JournalAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "Groups" | "GroupsAnswer" | "Notes" | "NotesAnswer" | "Import" | "ModelQuery" | "ModelViewAnswer" => "model_api",

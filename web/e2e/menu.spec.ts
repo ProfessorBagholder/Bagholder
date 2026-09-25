@@ -109,23 +109,24 @@ test('the theme choice persists across a reload', async ({ page }) => {
   await page.locator('.menu.sub button', { hasText: 'Nocturne' }).click()
 })
 
-test('Add trade requires a date, symbol, positive quantity and a price, and submits once they are given', async ({ page }) => {
+test('Add trade requires a date, symbol, quantity and price, and sends the entry once they are given', async ({ page }) => {
   await page.goto('/')
   await ready(page)
   await openMenu(page)
   await page.getByText('Add trade').click()
   await expect(page.getByRole('heading', { name: 'Add trade' })).toBeVisible()
   await page.getByRole('button', { name: 'Add trade' }).click()
-  await expect(page.locator('.status-err')).toHaveText('Date, symbol, a positive quantity and a price are required.')
+  await expect(page.locator('.status-err')).toHaveText('Date, symbol, a quantity and a price are required.')
 
   let sent: Record<string, unknown> | null = null
-  await page.route('**/api/book/append', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ json: { ok: true, added: true } }) })
+  await page.route('**/api/entries', (route) => { sent = route.request().postDataJSON(); return route.fulfill({ json: { ok: true } }) })
   await page.getByPlaceholder('e.g. LUNR or LUNR 15JAN27 12.00 CALL').fill('zzzq')
   const boxes = page.locator('.input[inputmode="decimal"]')
   await boxes.nth(0).fill('10')
   await boxes.nth(1).fill('2.5')
   await page.getByRole('button', { name: 'Add trade' }).click()
-  await expect.poll(() => sent?.symbol).toBe('ZZZQ')
+  // the person's entry, its quantity and price the text typed, for the server to read exactly
+  await expect.poll(() => sent).toMatchObject({ entry: 'trade', account: '', symbol: 'ZZZQ', side: 'BUY', quantity: '10', price: '2.5', currency: 'CAD', fee: '' })
   await expect(page.getByText('Trade added')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Add trade' })).toHaveCount(0)
 })

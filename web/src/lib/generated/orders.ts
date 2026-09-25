@@ -2,6 +2,7 @@
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_order_types`.
 
 import type { OkOr } from './common'
+import type { Dec } from '../dec'
 
 export type Side = "" | "BUY" | "SELL";
 
@@ -83,3 +84,91 @@ export type TicketTarget = { price: number | null, };
 export type Ticket = { symbol: string, securityId: string, accountId: string, side: string, type: string, tif: string | null, quantity: number | null, limitPrice: number | null, stopPrice: number | null, currency: string | null, stopLoss: TicketStop | null, takeProfit: TicketTarget | null, };
 
 export type PlaceTicketAnswer = { ok: boolean, error?: string, id?: string, status?: string, order?: Order, wsOrderId?: string, bracketId?: string, };
+
+export type StopInput = { on: boolean, 
+/**
+ * `stop` or `trail`.
+ */
+kind: string, 
+/**
+ * `amt` or `pct`: a fixed stop typed as a price, or as a percent below the working price.
+ */
+priceUnit: string, price: string | null, pct: string | null, trail: string | null, 
+/**
+ * `pct` or `amt`: the trail's distance as a percent or an amount.
+ */
+unit: string, };
+
+export type TargetInput = { on: boolean, 
+/**
+ * `amt` or `pct`.
+ */
+unit: string, price: string | null, pct: string | null, };
+
+export type QuoteInput = { last: string | null, ask: string | null, bid: string | null, 
+/**
+ * Shares a unit: a contract's size, 1 otherwise.
+ */
+multiplier: string | null, currency: string, };
+
+export type PreviewRequest = { 
+/**
+ * `BUY` or `SELL`.
+ */
+side: string, 
+/**
+ * `MARKET`, `LIMIT`, `STOP` or `STOP_LIMIT`.
+ */
+type: string, quantity: string | null, 
+/**
+ * The order's value typed in Amount: the quantity becomes the whole units it buys.
+ */
+amount: string | null, limit: string | null, stop: string | null, sl: StopInput, tp: TargetInput, quote: QuoteInput, fxUsdCad: string | null, marginRate: string | null, marginAvailable: string | null, cash: string | null, buyingPower: string | null, 
+/**
+ * The account borrows; `linked_margin`, it backs a margin account.
+ */
+margin: boolean, linkedMargin: boolean, 
+/**
+ * The accounts' value, CAD.
+ */
+nav: string | null, };
+
+export type Preview = { 
+/**
+ * The price the order works at: the ask or bid for a market order, the stop
+ * for a stop order, the limit otherwise.
+ */
+entry: Dec | null, 
+/**
+ * The limit as the order carries it: typed, else the last price at an order's tick.
+ */
+limit: Dec | null, 
+/**
+ * The stop as the order carries it: typed, else 2% through the last price.
+ */
+stop: Dec | null, quantity: Dec, notional: Dec | null, stopLossOn: boolean, takeProfitOn: boolean, trailing: boolean, 
+/**
+ * The trail's distance as typed (a percent or an amount), and in price.
+ */
+trail: Dec | null, trailDistance: Dec | null, stopLossPctIn: Dec, stopLossPrice: Dec | null, takeProfitPctIn: Dec, takeProfitPrice: Dec | null, 
+/**
+ * What the stop loss loses and the target gains, in the instrument's currency.
+ */
+risk: Dec | null, gain: Dec | null, stopLossPct: number | null, takeProfitPct: number | null, rewardToRisk: number | null, 
+/**
+ * The order's value in CAD, and its share of the accounts' value.
+ */
+cad: Dec | null, positionShare: number | null, 
+/**
+ * The margin account's available margin after the order.
+ */
+marginAfter: Dec | null, 
+/**
+ * What the review's last line shows: available margin after on a margin
+ * account, cash after on any other.
+ */
+after: Dec | null, 
+/**
+ * The whole units the buying power covers at the working price (a Buy).
+ */
+maxQuantity: Dec | null, };

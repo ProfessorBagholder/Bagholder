@@ -4,7 +4,8 @@ import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live'
 import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
-import { computeVals, tick, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
+import { view, previewRequest, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
+import type { Preview } from '../generated/orders'
 import { call } from '../api'
 import { ticketNumber } from '../dec'
 
@@ -13,7 +14,7 @@ import { ticketNumber } from '../dec'
 // kept in localStorage so reopening the same symbol/side restores what was typed,
 // and it also surfaces as a card in the Orders panel until resumed or discarded.
 
-export const ticketStore = $state<{ t: Ticket | null }>({ t: null })
+export const ticketStore = $state<{ t: Ticket | null; preview: Preview | null; previewError: string }>({ t: null, preview: null, previewError: '' })
 
 // The set-aside draft (legacy state.ticketDraft): the Orders panel reads it to
 // show the Pending draft card with Resume / Discard.
@@ -56,25 +57,42 @@ export function ticketAccounts(): TicketAccount[] {
     })
   return out
 }
-function nav(): number {
-  return ticketNumber(store.model?.navTotal) ?? 0
+// the accounts' value, for the order's share of it
+function nav() {
+  const n = store.model?.navTotal
+  return n == null || typeof n !== 'string' ? null : n
 }
 export function ctx(): ValsCtx {
   return { nav: nav(), accounts: ticketAccounts() }
 }
 export function vals() {
-  return ticketStore.t ? computeVals(ticketStore.t, ctx()) : null
+  return ticketStore.t ? view(ticketStore.t, ctx(), ticketStore.preview) : null
+}
+
+// The ticket's figures, asked of the server whenever what it holds changes; an
+// answer to something since changed is not shown.
+let asked = 0
+export async function refreshPreview(): Promise<void> {
+  const t = ticketStore.t
+  if (!t) return
+  const n = ++asked
+  const r = await call('POST /api/order/preview', { body: previewRequest(t, ctx()) })
+  if (n !== asked || ticketStore.t !== t) return
+  if ('error' in r && r.error) {
+    ticketStore.previewError = r.error
+    return
+  }
+  ticketStore.previewError = ''
+  ticketStore.preview = r as Preview
 }
 
 // Max: on a Buy the whole shares the account's buying power covers at the working
-// price, on a Sell the position's shares.
+// price (the server's), on a Sell the position's shares.
 export function maxQty(): number | null {
   const t = ticketStore.t
   if (!t) return null
-  const v = computeVals(t, ctx())
-  const d = t.data || {}
-  if (!v.buy) return t.heldQty != null && t.heldQty > 0 ? t.heldQty : null
-  return d.buyingPower != null && v.entry != null && v.entry > 0 ? Math.max(0, Math.floor(d.buyingPower / (v.entry * v.mult))) : null
+  if (t.side !== 'BUY') return t.heldQty != null && t.heldQty > 0 ? t.heldQty : null
+  return ticketNumber(ticketStore.preview?.maxQuantity)
 }
 
 // the account picked last time, when it is still one the ticket offers
@@ -122,6 +140,7 @@ export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', 
   const d = draftStore.d // what was typed before the ticket closed
   if (d && d.symbol === symbol && d.side === t.side) for (const k of TK_DRAFT_KEYS) if ((d as unknown as Record<string, unknown>)[k] != null) (t as unknown as Record<string, unknown>)[k] = (d as unknown as Record<string, unknown>)[k]
   ticketStore.t = t
+  ticketStore.preview = null
   fetchQuote()
 }
 
@@ -169,26 +188,27 @@ export function fetchQuote() {
   })
 }
 
-function notice(v: ReturnType<typeof computeVals>, sent: boolean) {
+function notice(v: ReturnType<typeof view>, sent: boolean) {
   const t = ticketStore.t!
   const head = sent ? 'Order placed · ' : 'Not sent (orders are off) · '
-  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qtyN) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
+  return head + (v.buy ? 'Buy ' : 'Sell ') + qtyFmt(v.qty) + ' ' + symText(v.q.symbol || t.symbol) + ' at ' + (t.type === 'MARKET' ? 'market' : px(v.entry) + ' ' + v.typeWord.toLowerCase()) +
     (v.slOn ? ', stop ' + px(v.slPrice) : '') + (v.tpOn ? ', target ' + px(v.tpPrice) : '')
 }
 
 export async function submit() {
   const t = ticketStore.t
   if (!t || t.busy) return
-  const v = computeVals(t, ctx())
+  const v = view(t, ctx(), ticketStore.preview)
   const q = v.q
+  // the order API takes numbers: the server's figures cross into them here
   const body = {
     symbol: t.symbol, securityId: q.securityId || t.securityId || '', accountId: t.accountId, side: t.side, type: t.type, tif: t.tif,
-    quantity: v.qtyN,
-    limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? v.limit : null,
-    stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? v.stop : null,
+    quantity: ticketNumber(v.qty),
+    limitPrice: t.type === 'LIMIT' || t.type === 'STOP_LIMIT' ? ticketNumber(v.limit) : null,
+    stopPrice: t.type === 'STOP' || t.type === 'STOP_LIMIT' ? ticketNumber(v.stop) : null,
     currency: q.currency || '',
-    stopLoss: v.slOn ? { kind: t.sl.kind, price: v.slPrice, trail: v.trail, trailUnit: t.sl.unit } : null,
-    takeProfit: v.tpOn ? { price: v.tpPrice } : null,
+    stopLoss: v.slOn ? { kind: t.sl.kind, price: ticketNumber(v.slPrice), trail: ticketNumber(v.trail), trailUnit: t.sl.unit } : null,
+    takeProfit: v.tpOn ? { price: ticketNumber(v.tpPrice) } : null,
   }
   t.busy = true
   t.submitError = ''
@@ -212,4 +232,4 @@ export function resumeDraft() {
 }
 export function discardDraft() { dropDraft() }
 
-export { tick, plain }
+export { plain }

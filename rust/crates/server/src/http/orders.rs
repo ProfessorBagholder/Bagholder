@@ -18,6 +18,7 @@ pub fn routes() -> Routed {
         post "/api/book/append" => book_append;
         post "/api/orders/refresh" => refresh;
         get "/api/order/quote" => quote;
+        post "/api/order/preview" => preview;
         post "/api/order" => place;
     }
 }
@@ -86,6 +87,12 @@ pub struct QuoteOf {
 
 async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
     answer(move || orders::ticket_quote(&state.app, &q.symbol, &q.security, &q.account, &q.exchange)).await
+}
+
+/// `POST /api/order/preview`: the ticket's figures, worked out exactly from what it
+/// holds (`orders::preview`); nothing is sent anywhere.
+async fn preview(State(_state): State<AppState>, Body(r): Body<orders::preview::PreviewRequest>) -> Api<orders::preview::Preview> {
+    orders::preview::preview(&r).map(axum::Json).map_err(|orders::preview::Unread(why)| super::ApiError::BadRequest(why))
 }
 
 /// `POST /api/order`. The body is read as a ticket; `place_ticket` checks it field by

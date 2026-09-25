@@ -1,10 +1,12 @@
-// The order ticket's derived figures — entry, notional, the stop-loss/take-profit
-// prices, the risk/gain/reward, cash-or-margin-after — ported verbatim from the
-// legacy tkVals so the numbers match. Pure and testable: it takes the ticket and
-// a context (nav, the chosen account) rather than reading global state, so the
-// risk math can be verified without a live quote.
+// The order ticket's form state and how it is shown. Its figures -- the working
+// price, the stop loss and take profit, what is at risk and what the target gains,
+// the order's value in CAD, the cash or margin after -- are the server's, worked out
+// exactly from what the ticket holds (`POST /api/order/preview`,
+// rust/crates/server/src/orders/preview.rs); the page does no money arithmetic.
 
 import { money, signedMoney, px } from '../fmt'
+import { dec, sign, type Dec } from '../dec'
+import type { Preview, PreviewRequest } from '../generated/orders'
 
 export interface Quote {
   symbol?: string
@@ -34,78 +36,85 @@ export interface Ticket {
   error: string; busy: boolean; submitError: string
 }
 
-export interface ValsCtx { nav: number; accounts: TicketAccount[] }
+export interface ValsCtx { nav: Dec | null; accounts: TicketAccount[] }
 
-// a price an order may carry: two decimals from $1, four below it
-export function tick(p: number | null): number | null {
-  return p == null || !isFinite(p) ? p : +p.toFixed(p >= 1 ? 2 : 4)
-}
-
-// tkPlain: an integer as-is, otherwise up to two decimals
-export function plain(n: number | null | undefined): string {
-  return n == null ? '—' : Number.isInteger(n) ? String(n) : String(+n.toFixed(2))
-}
-// tkAmt / tkSAmt: money with zero decimals when the amount is whole, two otherwise
-export function amt(n: number | null | undefined): string {
-  return n == null || !isFinite(n) ? '—' : money(n, '', Number.isInteger(+n.toFixed(2)) ? 0 : 2)
-}
-export function sAmt(n: number | null | undefined): string {
-  return n == null || !isFinite(n) ? '—' : signedMoney(n, '', Number.isInteger(+n.toFixed(2)) ? 0 : 2)
-}
-// tkNum: the number typed into a field, punctuation stripped
-export function parseNum(v: string): number | null {
-  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''))
-  return isNaN(n) ? null : n
+// a number the ticket holds, as the decimal text the preview reads (never exponent form);
+// the order API's own numbers stay numbers
+const txt = (n: number | null | undefined): string | null => {
+  if (n == null || !isFinite(n)) return null
+  const s = String(n)
+  return /e/i.test(s) ? n.toFixed(20).replace(/0+$/, '').replace(/\.$/, '') : s
 }
 
-export function computeVals(t: Ticket, ctx: ValsCtx) {
+/** What the server works the ticket's figures from (`POST /api/order/preview`). */
+export function previewRequest(t: Ticket, ctx: ValsCtx): PreviewRequest {
+  const d = t.data || {}
+  const q = d.quote || {}
+  const acct = ctx.accounts.find((a) => a.id === t.accountId) || null
+  return {
+    side: t.side, type: t.type,
+    quantity: txt(t.qty), amount: t.text.amt ?? null, limit: txt(t.limit), stop: txt(t.stop),
+    sl: { on: t.sl.on, kind: t.sl.kind, priceUnit: t.sl.priceUnit, price: txt(t.sl.price), pct: txt(t.sl.pct), trail: txt(t.sl.trail), unit: t.sl.unit },
+    tp: { on: t.tp.on, unit: t.tp.unit, price: txt(t.tp.price), pct: txt(t.tp.pct) },
+    quote: { last: txt(q.last), ask: txt(q.ask), bid: txt(q.bid), multiplier: txt(q.multiplier), currency: q.currency ?? '' },
+    fxUsdCad: txt(d.fxUsdCad), marginRate: txt(d.marginRate), marginAvailable: txt(d.marginAvailable), cash: txt(d.cash), buyingPower: txt(d.buyingPower),
+    margin: !!(acct && acct.margin), linkedMargin: !!(acct && !acct.margin && acct.marginAccountId), nav: ctx.nav,
+  }
+}
+
+/** The ticket as the form and the review show it: its words, and the server's figures (`p`, none until the first answer). */
+export function view(t: Ticket, ctx: ValsCtx, p: Preview | null) {
   const d = t.data || {}
   const q = d.quote || {}
   const buy = t.side === 'BUY'
-  const dir = buy ? 1 : -1
-  const last = q.last != null ? q.last : null
-  const mult = q.multiplier || 1
-  const qtyN = t.qty != null ? t.qty : 0
-  const limit = t.limit != null ? t.limit : tick(last) // a quote can carry more decimals than an order may
-  const stop = t.stop != null ? t.stop : last != null ? +(last * (buy ? 1.02 : 0.98)).toFixed(2) : null
-  const entry = t.type === 'MARKET' ? (buy ? (q.ask != null ? q.ask : last) : q.bid != null ? q.bid : last) : t.type === 'STOP' ? stop : limit
-  const notional = entry != null ? qtyN * entry * mult : null
-  const brackets = buy // a sell leaves nothing to protect
-  const slOn = brackets && t.sl.on
-  const tpOn = brackets && t.tp.on
-  const isTrail = t.sl.kind === 'trail'
-  const trail = t.sl.trail != null ? t.sl.trail : t.sl.unit === 'pct' ? 5 : entry != null ? +(entry * 0.05).toFixed(2) : null
-  const trailDist = entry == null || trail == null ? null : t.sl.unit === 'pct' ? (entry * trail) / 100 : trail
-  const slPctIn = t.sl.pct != null ? t.sl.pct : 5 // a fixed stop typed as a percent below the working price
-  const slPrice = isTrail
-    ? entry != null && trailDist != null ? +(entry - dir * trailDist).toFixed(2) : null
-    : t.sl.priceUnit === 'pct'
-      ? entry != null ? +(entry * (1 - (dir * slPctIn) / 100)).toFixed(2) : null
-      : t.sl.price != null ? t.sl.price : entry != null ? +(entry * (1 - dir * 0.05)).toFixed(2) : null
-  const tpPctIn = t.tp.pct != null ? t.tp.pct : 10 // a target typed as a percent above the working price
-  const tpPrice = t.tp.unit === 'pct'
-    ? entry != null ? +(entry * (1 + (dir * tpPctIn) / 100)).toFixed(2) : null
-    : t.tp.price != null ? t.tp.price : entry != null ? +(entry * (1 + dir * 0.1)).toFixed(2) : null
-  // a trail is defined by its distance, so its loss is that distance exactly; a fixed stop or target is the price the order carries
-  const risk = entry != null && slPrice != null ? (isTrail && trailDist != null ? trailDist : dir * (entry - slPrice)) * qtyN * mult : null
-  const gain = entry != null && tpPrice != null ? dir * (tpPrice - entry) * qtyN * mult : null
-  const slPct = entry ? (isTrail && trailDist != null ? -trailDist / entry : (dir * (slPrice! - entry)) / entry) : null
-  const tpPct = entry ? (dir * (tpPrice! - entry)) / entry : null
-  const rr = slOn && tpOn && risk != null && risk > 0 && gain != null ? gain / risk : null
-  const fx = q.currency === 'USD' && d.fxUsdCad ? d.fxUsdCad : 1
-  const cad = notional != null ? notional * fx : null
   const acct = ctx.accounts.find((a) => a.id === t.accountId) || null
   const isMargin = !!(acct && acct.margin)
   const linkedMargin = !!(acct && !acct.margin && acct.marginAccountId) // collateral for a margin account: its margin moves too
-  const rate = d.marginRate != null ? d.marginRate : 1
-  const marginAfter = (isMargin || linkedMargin) && d.marginAvailable != null && cad != null ? d.marginAvailable - dir * cad * rate : null
-  const after = isMargin ? marginAfter : d.cash != null && notional != null ? d.cash - dir * notional : null
   const typeWord = ({ MARKET: 'Market', LIMIT: 'Limit', STOP: 'Stop', STOP_LIMIT: 'Stop limit' } as Record<string, string>)[t.type]
   const tifWord = t.tif === 'DAY' ? 'Day' : 'GTC'
+  const trail = p?.trail ?? null
   const trailWord = t.sl.unit === 'pct' ? plain(trail) + '%' : px(trail)
   return {
-    buy, dir, last, mult, qtyN, limit, stop, entry, notional, slOn, tpOn, isTrail, trail, trailDist, slPctIn,
-    slPrice, tpPctIn, tpPrice, risk, gain, slPct, tpPct, rr, cad, nav: ctx.nav, acct, isMargin, linkedMargin,
-    marginAfter, after, typeWord, tifWord, trailWord, q, d,
+    buy, q, d, acct, isMargin, linkedMargin, typeWord, tifWord, trailWord,
+    qty: p?.quantity ?? txtDec(t.qty),
+    entry: p?.entry ?? null, limit: p?.limit ?? null, stop: p?.stop ?? null, notional: p?.notional ?? null,
+    slOn: p ? p.stopLossOn : buy && t.sl.on, tpOn: p ? p.takeProfitOn : buy && t.tp.on, isTrail: t.sl.kind === 'trail',
+    trail, trailDist: p?.trailDistance ?? null, slPctIn: p?.stopLossPctIn ?? null, slPrice: p?.stopLossPrice ?? null,
+    tpPctIn: p?.takeProfitPctIn ?? null, tpPrice: p?.takeProfitPrice ?? null, risk: p?.risk ?? null, gain: p?.gain ?? null,
+    slPct: p?.stopLossPct ?? null, tpPct: p?.takeProfitPct ?? null, rr: p?.rewardToRisk ?? null,
+    cad: p?.cad ?? null, positionShare: p?.positionShare ?? null, marginAfter: p?.marginAfter ?? null, after: p?.after ?? null,
+    maxQuantity: p?.maxQuantity ?? null,
   }
+}
+
+const txtDec = (n: number | null | undefined): Dec | null => {
+  const s = txt(n)
+  return s == null ? null : dec(s)
+}
+
+// whether exact decimal text is a whole number
+const whole = (d: Dec) => !d.includes('.') || /\.0*$/.test(d)
+// the text up to two decimals, trailing zeros dropped: a percent or a count as typed
+const upTo2 = (d: Dec) => {
+  const [i, f = ''] = d.replace(/^-/, '').split('.')
+  const two = (f + '00').slice(0, 2).replace(/0+$/, '')
+  return (sign(d) < 0 ? '-' : '') + i + (two ? '.' + two : '')
+}
+/** A whole number as it is, otherwise up to two decimals: a percent or a count as the ticket shows it. */
+export function plain(n: Dec | number | null | undefined): string {
+  if (n == null) return '—'
+  if (typeof n === 'number') return Number.isInteger(n) ? String(n) : String(+n.toFixed(2))
+  return whole(n) ? n.replace(/\.0*$/, '') : upTo2(n)
+}
+/** Money with no decimals when the amount is whole, two otherwise. */
+export function amt(n: Dec | null | undefined): string {
+  return n == null ? '—' : money(n, '', whole(n) ? 0 : 2)
+}
+export function sAmt(n: Dec | null | undefined): string {
+  return n == null ? '—' : signedMoney(n, '', whole(n) ? 0 : 2)
+}
+/** The number typed into a field, punctuation stripped: what the ticket holds while it is typed. */
+export function parseNum(v: string): number | null {
+  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''))
+  return isNaN(n) ? null : n
 }

@@ -9,7 +9,7 @@ import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody } from './markets'
 import type { Clear, DataSummary, EntryAnswer, EntryRequest, FiguresQuery, Groups, GroupsAnswer, Import, JournalAnswer, JournalEntryRequest, ModelQuery, ModelViewAnswer, Notes, NotesAnswer, TradeAnswer, TradeQuery } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer } from './notifications'
-import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
+import type { Adjust, Modify, Named, OrderActionAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
 import type { StatusAnswer } from './status'
 
@@ -36,6 +36,7 @@ export interface Routes {
   'POST /api/book/append': { body: BookAppend; answer: Appended }
   'POST /api/orders/refresh': { answer: RefreshAndOrders }
   'GET /api/order/quote': { query: QuoteOf; answer: TicketQuote }
+  'POST /api/order/preview': { body: PreviewRequest; answer: Preview }
   'POST /api/order': { body: Ticket; answer: PlaceTicketAnswer }
   'GET /api/symbols/search': { query: Search; answer: SymbolSearchAnswer }
   'GET /api/symbols/quote': { query: Listing; answer: GlanceAnswer }

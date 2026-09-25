@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty } from './ticket.svelte'
+  import { ticketStore, ticketAccounts, closeTicket, fetchQuote, submit, vals, maxQty, refreshPreview } from './ticket.svelte'
+  import { neg, sign, ticketNumber } from '../dec'
   import { plain, parseNum, amt as tkAmt, sAmt as tkSAmt } from './vals'
   import { px, pct, money, qty as qtyFmt, num } from '../fmt'
   import { symText } from '../sym'
@@ -10,6 +11,11 @@
 
   const t = $derived(ticketStore.t!)
   const v = $derived(vals()!)
+  // the server's figures, asked again whenever what the ticket holds changes
+  $effect(() => {
+    void JSON.stringify([t.side, t.type, t.accountId, t.qty, t.text.amt, t.limit, t.stop, t.sl, t.tp, t.data])
+    refreshPreview()
+  })
   const accounts = $derived(ticketAccounts())
   const maxOff = $derived(maxQty() == null)
   const types = $derived((t.data && t.data.orderTypes) || TK_TYPES.map((x) => x[0]))
@@ -26,7 +32,7 @@
   const tpText = $derived(t.tp.unit === 'pct' ? plain(v.tpPctIn) : px(v.tpPrice))
   const slRead = $derived.by(() => {
     const verb = v.buy ? 'Sells at ' : 'Buys at '
-    return [v.isTrail ? 'Starts at ' + px(v.slPrice) : verb + px(v.slPrice), v.risk == null ? '—' : tkSAmt(-v.risk) + ' (' + pct(v.slPct) + ')']
+    return [v.isTrail ? 'Starts at ' + px(v.slPrice) : verb + px(v.slPrice), v.risk == null ? '—' : tkSAmt(neg(v.risk)) + ' (' + pct(v.slPct) + ')']
   })
   const tpRead = $derived.by(() => [(v.buy ? 'Sells at ' : 'Buys at ') + px(v.tpPrice), v.gain == null ? '—' : tkSAmt(v.gain) + ' (' + pct(v.tpPct) + ')'])
   const rrStr = $derived(v.rr == null ? '—' : '1:' + plain(+v.rr.toFixed(1)))
@@ -38,7 +44,8 @@
     const n = parseNum(value)
     switch (id) {
       case 'tk-qty': t.text.qty = value; t.qty = n == null ? 0 : n; t.text.amt = null; break
-      case 'tk-amt': { t.text.amt = value; const raw = n != null && v.entry != null && v.entry > 0 ? n / (v.entry * v.mult) : 0; t.qty = Math.floor(raw); t.text.qty = null; break }
+      // the whole units the amount buys are the server's (the preview's quantity)
+      case 'tk-amt': t.text.amt = value; t.text.qty = null; break
       case 'tk-limit': t.text.limit = value; t.limit = n; break
       case 'tk-stop': t.text.stop = value; t.stop = n; break
       case 'tk-slprice': t.text.slprice = value; if (t.sl.priceUnit === 'pct') t.sl.pct = n; else t.sl.price = n; break
@@ -49,6 +56,8 @@
   function onBlur(id: string) {
     const key = ({ 'tk-qty': 'qty', 'tk-amt': 'amt', 'tk-limit': 'limit', 'tk-stop': 'stop', 'tk-slprice': 'slprice', 'tk-sltrail': 'sltrail', 'tk-tp': 'tp' } as Record<string, string>)[id]
     if (!key) return
+    // an amount typed leaves the units it bought
+    if (key === 'amt' && t.text.amt != null) t.qty = ticketNumber(ticketStore.preview?.quantity) ?? t.qty
     t.text[key] = null
     if (key === 'qty' && !(t.qty != null && t.qty > 0)) t.qty = 1
     if (key === 'limit' && !(t.limit != null && t.limit > 0)) t.limit = null
@@ -62,7 +71,7 @@
   function setSlUnit(u: 'amt' | 'pct') { if (t.sl.kind === 'trail') { t.sl.unit = u; t.sl.trail = null; t.text.sltrail = null } else { t.sl.priceUnit = u; t.sl.price = null; t.sl.pct = null; t.text.slprice = null } }
   function setTpUnit(u: 'amt' | 'pct') { t.tp.unit = u; t.tp.price = null; t.tp.pct = null; t.text.tp = null }
   function doMax() { const m = maxQty(); if (m != null) { t.qty = m; t.text.qty = null; t.text.amt = null } }
-  function review() { if (!(v.qtyN > 0)) t.qty = 1; t.step = 'review'; t.submitError = '' }
+  function review() { if (!(t.qty != null && t.qty > 0)) t.qty = 1; t.step = 'review'; t.submitError = '' }
 </script>
 
 <div id="tkWrap">
@@ -104,7 +113,7 @@
             <span class="tk-sel"><select class="tk-in" id="tk-account" value={t.accountId} onchange={(e) => setAccount((e.target as HTMLSelectElement).value)}>{#each accounts as a (a.id)}<option value={a.id}>{a.name}</option>{/each}</select><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.caretDown} /></svg></span>
           </label>
           <label class="tk-f"><span class="tk-l">Shares</span>
-            <span class="tk-wrap"><input class="tk-in num has-max" id="tk-qty" inputmode="decimal" autocomplete="off" value={val('qty', qtyFmt(v.qtyN))} oninput={(e) => onInput('tk-qty', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-qty')} /><button type="button" class="tk-max" class:off={maxOff} onclick={doMax}>Max</button></span>
+            <span class="tk-wrap"><input class="tk-in num has-max" id="tk-qty" inputmode="decimal" autocomplete="off" value={val('qty', qtyFmt(v.qty))} oninput={(e) => onInput('tk-qty', (e.target as HTMLInputElement).value)} onblur={() => onBlur('tk-qty')} /><button type="button" class="tk-max" class:off={maxOff} onclick={doMax}>Max</button></span>
           </label>
           <label class="tk-f"><span class="tk-l">Order type</span>
             <span class="tk-sel"><select class="tk-in" id="tk-type" bind:value={t.type}>{#each TK_TYPES.filter((x) => types.indexOf(x[0]) >= 0) as [k, l] (k)}<option value={k}>{l}</option>{/each}</select><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.caretDown} /></svg></span>
@@ -181,7 +190,7 @@
     {:else}
       <div class="tk-body">
         <div style="padding-bottom:14px;box-shadow:inset 0 -1px 0 rgba(var(--ink-rgb),.10)">
-          <div style="font-size:20px;line-height:1.2;font-weight:500"><span style="color:{v.buy ? 'var(--pos)' : 'var(--neg)'}">{v.buy ? 'Buy' : 'Sell'}</span> {qtyFmt(v.qtyN)} {symText(v.q.symbol || t.symbol)}</div>
+          <div style="font-size:20px;line-height:1.2;font-weight:500"><span style="color:{v.buy ? 'var(--pos)' : 'var(--neg)'}">{v.buy ? 'Buy' : 'Sell'}</span> {qtyFmt(v.qty)} {symText(v.q.symbol || t.symbol)}</div>
           <div style="font-size:12px;color:var(--ink55);margin-top:2px">{line}</div>
         </div>
         {#if v.buy}
@@ -192,14 +201,14 @@
         {/if}
         <div style="display:flex;flex-direction:column;gap:10px;padding-top:16px;box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.10)">
           {#if v.buy}
-            <div class="tk-row"><span class="l">At risk</span><span class="num" style="text-align:right;color:var(--neg);font-weight:500">{v.slOn && v.risk != null ? tkSAmt(-v.risk) + ' (' + pct(v.slPct) + ')' : '—'}</span></div>
+            <div class="tk-row"><span class="l">At risk</span><span class="num" style="text-align:right;color:var(--neg);font-weight:500">{v.slOn && v.risk != null ? tkSAmt(neg(v.risk)) + ' (' + pct(v.slPct) + ')' : '—'}</span></div>
             <div class="tk-row"><span class="l">Target</span><span class="num" style="text-align:right;color:var(--pos);font-weight:500">{v.tpOn && v.gain != null ? tkSAmt(v.gain) + ' (' + pct(v.tpPct) + ')' : '—'}</span></div>
             <div class="tk-row"><span class="l">Risk / reward</span><span class="num" style="text-align:right">{rrStr}</span></div>
           {/if}
-          <div class="tk-row"><span class="l">Position size</span><span class="num" style="text-align:right">{v.cad != null && v.nav > 0 ? ((v.cad / v.nav) * 100).toFixed(1) + '% of net asset value' : '—'}</span></div>
-          <div class="tk-row"><span class="l">{v.isMargin ? 'Available margin after' : 'Cash after'}</span><span class="num" style="text-align:right{v.after != null && v.after < 0 ? ';color:var(--neg)' : ''}">{v.after == null ? '—' : money(v.after, '', 0)}</span></div>
+          <div class="tk-row"><span class="l">Position size</span><span class="num" style="text-align:right">{v.positionShare != null ? (v.positionShare * 100).toFixed(1) + '% of net asset value' : '—'}</span></div>
+          <div class="tk-row"><span class="l">{v.isMargin ? 'Available margin after' : 'Cash after'}</span><span class="num" style="text-align:right{v.after != null && sign(v.after) < 0 ? ';color:var(--neg)' : ''}">{v.after == null ? '—' : money(v.after, '', 0)}</span></div>
           {#if v.linkedMargin}
-            <div class="tk-row"><span class="l">Available margin after</span><span class="num" style="text-align:right{v.marginAfter != null && v.marginAfter < 0 ? ';color:var(--neg)' : ''}">{v.marginAfter == null ? '—' : money(v.marginAfter, '', 0)}</span></div>
+            <div class="tk-row"><span class="l">Available margin after</span><span class="num" style="text-align:right{v.marginAfter != null && sign(v.marginAfter) < 0 ? ';color:var(--neg)' : ''}">{v.marginAfter == null ? '—' : money(v.marginAfter, '', 0)}</span></div>
           {/if}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:16px;box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.10)"><span style="font-size:13px;font-weight:500">{v.buy ? 'Estimated cost' : 'Estimated proceeds'}</span><span class="num" style="font-size:20px;line-height:1.2;font-weight:500">{(t.type === 'MARKET' ? '≈ ' : '') + tkAmt(v.notional)}</span></div>

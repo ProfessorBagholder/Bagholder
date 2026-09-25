@@ -64,6 +64,7 @@ use crate::session::{ensure_fresh_token, load_session};
 mod brackets;
 mod edit;
 mod manual;
+pub mod preview;
 mod readback;
 mod ticket;
 mod tools;
