@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest'
+
 // No browser tooltip anywhere on the page (docs/decisions.md, 2026-09-25): a `title`
 // attribute, an SVG <title> or a `title` set from script shows the browser's own
 // unstyled tooltip. A hover that is needed goes through the app's styled tooltip.

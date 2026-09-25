@@ -11,6 +11,11 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      update_baselines:
+        description: Write the screenshot baselines instead of comparing them (they come back as the run's artifact)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -145,6 +150,51 @@ jobs:
       - name: The browser tests
         run: npm run e2e
         working-directory: web
+
+  # The screenshot baselines of every screen at the four widths (web/e2e/baselines.spec.ts).
+  # A screenshot depends on the machine that renders it, so they are made and compared in
+  # this one image only, with the server's clock set to one instant so a figure measured to
+  # today reads the same on every run. Run by hand with update_baselines to write them.
+  baselines:
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:v1.63.0-noble
+    env:
+      HOME: /root
+      BAGHOLDER_BASELINES: "1"
+      BAGHOLDER_E2E_FAKETIME: "2026-09-10T16:00:00Z"
+      BAGHOLDER_E2E_LIBFAKETIME: /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: faketime and a linker
+        run: apt-get update && apt-get install -y --no-install-recommends faketime build-essential
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          shared-key: baselines
+      - run: npm ci
+        working-directory: web
+      - name: The server and the made-up book
+        run: cargo build --bin bagholder --bin demo-book
+        working-directory: rust
+      - name: The page
+        run: npx vite build
+        working-directory: web
+      - name: The baselines
+        run: npx playwright test e2e/baselines.spec.ts --reporter=line ${{ inputs.update_baselines && '--update-snapshots' || '' }}
+        working-directory: web
+      - name: The baselines written
+        if: ${{ inputs.update_baselines }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: baselines
+          path: web/e2e/baselines.spec.ts-snapshots
+      - name: What differed
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-differences
+          path: web/test-results
 
   go:
     runs-on: ubuntu-latest

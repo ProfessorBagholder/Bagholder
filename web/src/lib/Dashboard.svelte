@@ -242,7 +242,7 @@
             <div>
               <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
                 <span class="tab">{y.year}</span>
-                <span class="tab" style="color:{color(y.r)}">{pct(y.r)}<span class="muted"> / {y.spR == null ? '—' : pct(y.spR)}</span></span>
+                <span class="tab" style="color:{color(y.r)}">{pct(y.r)}<span class="muted">{' / '}{y.spR == null ? '—' : pct(y.spR)}</span></span>
               </div>
               <div style="display:flex;flex-direction:column;gap:3px">
                 <div style="height:7px;width:{Math.max(2, (Math.abs(y.r) / yearScale) * 100).toFixed(0)}%;background:{color(y.r)};border-radius:2px"></div>

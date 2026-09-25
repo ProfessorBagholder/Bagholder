@@ -154,13 +154,14 @@
   const status = $derived(store.model?.status ?? null)
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
 
-  const sel = $derived(
-    DETAIL_PAGES.includes(route.tab) && route.sub && store.model
-      ? store.model.trades.find((t) => t.id === route.sub) ??
-          store.model.positions?.find((p) => p.id === route.sub) ??
-          null
-      : null,
-  )
+  // A holding and the trade its sold part closed can carry one id (a round trip's id is its
+  // opening fill's): the address's tab says which is meant, a holding under Portfolio.
+  const sel = $derived.by(() => {
+    if (!DETAIL_PAGES.includes(route.tab) || !route.sub || !store.model) return null
+    const trade = store.model.trades.find((t) => t.id === route.sub)
+    const position = store.model.positions?.find((p) => p.id === route.sub)
+    return (route.tab === 'portfolio' ? position ?? trade : trade ?? position) ?? null
+  })
   // the heatmap on its own: no header, no tabs, no frame
   $effect(() => {
     document.documentElement.classList.toggle('display-heat', !!route.heat)
@@ -343,7 +344,7 @@
     {#if sel}
       <div style="display:flex;align-items:center;gap:6px;flex:none;min-width:0;white-space:nowrap;margin-left:6px">
         <span style="font-size:13px;color:rgba(var(--ink-rgb),.4)">›</span>
-        <span style="font:500 13px Inter,system-ui;padding:11px 0;max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)">{symText(sel.symbol)}</span>
+        <span style="font:500 13px var(--font);padding:11px 0;max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--accent-300);box-shadow:inset 0 -2px 0 var(--accent)">{symText(sel.symbol)}</span>
       </div>
     {/if}
     <div style="margin-left:auto;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 0">

@@ -74,5 +74,5 @@
     {/if}
   </div>
   <div class="sep"></div>
-  <button style="color:var(--neg)" disabled={!status?.connected && !status?.email} onclick={disconnect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.signout} /></svg>Disconnect</button>
+  <button style={status?.connected || status?.email ? 'color:var(--neg)' : undefined} disabled={!status?.connected && !status?.email} onclick={disconnect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.signout} /></svg>Disconnect</button>
 </div>

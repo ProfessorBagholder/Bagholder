@@ -44,6 +44,12 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
   let series: ISeriesApi<'Candlestick'> | null = null
   let marks: ISeriesMarkersPluginApi<Time> | null = null
   let relabel: (r: LogicalRange | null) => void = () => {}
+  // A framing asked for before the chart knows its width cannot take: it is done again
+  // when the width arrives (autoSize measures the element after it is laid out).
+  let unframed: (() => void) | null = null
+  // While new bars go in and the view is framed, the chart moves its own range (setData
+  // reports the library's default span): none of that is a range the person chose.
+  let settling = false
 
   const orderedFills = (p: TradeChartParams) =>
     (p.fills || []).filter((f) => isFinite(Date.parse(f.when))).sort((a, b) => (a.when < b.when ? -1 : a.when > b.when ? 1 : 0))
@@ -54,7 +60,9 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
       layout: { background: { color: 'transparent' }, textColor: c.text, fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true },
       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
       rightPriceScale: { borderColor: c.grid },
-      timeScale: { borderColor: c.grid, timeVisible: (STEP[p.tf] || 0) > 0, secondsVisible: false },
+      // a resize keeps the span in view (the trade as framed, or as the person zoomed it),
+      // not the bar spacing: the card's width is measured after the chart is made
+      timeScale: { borderColor: c.grid, timeVisible: (STEP[p.tf] || 0) > 0, secondsVisible: false, lockVisibleTimeRangeOnResize: true },
     }
   }
   const seriesOptions = (c: ChartColors) => ({ upColor: c.up, downColor: c.down, borderUpColor: c.up, borderDownColor: c.down, wickUpColor: c.up, wickDownColor: c.down })
@@ -69,8 +77,12 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     })
     series = chart.addSeries(CandlestickSeries, { ...seriesOptions(p.colors), priceLineVisible: false, lastValueVisible: false })
     marks = createSeriesMarkers(series, [])
+    chart.timeScale().subscribeSizeChange((w) => {
+      if (w > 0 && unframed) unframed()
+    })
     chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-      if (r && shown && !shown.provisional) _chartRange[shown.rangeKey] = r
+      // a range is the person's to keep only once the chart is framed at its width
+      if (r && shown && !shown.provisional && !settling && !unframed && chart!.timeScale().width() > 0) _chartRange[shown.rangeKey] = r
       if (r) relabel(r)
     })
   }
@@ -101,7 +113,11 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
 
   function frame(p: TradeChartParams, idx: number[]) {
     const fit = () => {
-      if (!chart || shown !== p) return
+      if (!chart || shown !== p) {
+        if (unframed === fit) unframed = null
+        return
+      }
+      unframed = chart.timeScale().width() > 0 ? null : fit
       const kept = _chartRange[p.rangeKey]
       if (kept) chart.timeScale().setVisibleLogicalRange(kept)
       else if (!idx.length) chart.timeScale().fitContent()
@@ -114,8 +130,6 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
       relabel(chart.timeScale().getVisibleLogicalRange())
     }
     fit()
-    // autoSize learns the card's width a frame after it is made; fit again then
-    requestAnimationFrame(() => requestAnimationFrame(fit))
   }
 
   function show(p: TradeChartParams) {
@@ -126,6 +140,7 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     const colors = !!was && !sameColors(was.colors, p.colors)
     const view = bars || was!.rangeKey !== p.rangeKey
     shown = p
+    settling = view
     if (colors || (was && was.tf !== p.tf)) chart!.applyOptions(chartOptions(p))
     if (colors) series!.applyOptions(seriesOptions(p.colors))
     if (bars) {
@@ -142,6 +157,7 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
     if (fills || colors || view) {
       const idx = mark(p)
       if (view) frame(p, idx)
+      settling = false
       // a canvas says nothing to a screen reader: what it shows is said in words
       node.setAttribute('role', 'img')
       node.setAttribute('aria-label', `Price chart, ${p.tf.toUpperCase()}: ${p.bars.length} bars, ${idx.length} of ${orderedFills(p).length} executions marked`)

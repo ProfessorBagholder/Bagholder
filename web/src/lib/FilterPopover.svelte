@@ -325,7 +325,7 @@
   {#if !active}
     <!-- fields view: search box + matches, or the list of fields -->
     <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:8px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-      <input value={fieldsQ} oninput={(e) => onFieldsInput((e.target as HTMLInputElement).value)} onkeydown={onFieldsKey} bind:this={boxEl} placeholder="Search symbol, account, tag…" aria-label="Search" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
+      <input value={fieldsQ} oninput={(e) => onFieldsInput((e.target as HTMLInputElement).value)} onkeydown={onFieldsKey} bind:this={boxEl} placeholder="Search symbol, account, tag…" aria-label="Search" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
     </div>
     <div>
       {#if hasMatches}
@@ -363,16 +363,16 @@
   {:else}
     <!-- one field's editor -->
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
-      <button onclick={openFields} aria-label="Back" style="cursor:pointer;border:0;background:transparent;color:var(--ink60);font:400 13px Inter,system-ui;padding:2px 5px;border-radius:5px">←</button>
+      <button onclick={openFields} aria-label="Back" style="cursor:pointer;border:0;background:transparent;color:var(--ink60);font:400 13px var(--font);padding:2px 5px;border-radius:5px">←</button>
       <span class="lbl">{active.label}</span>
       <span style="margin-left:auto;font-size:11px;color:var(--ink55)">{subheadSummary}</span>
-      {#if hasValue}<button onclick={() => clearFieldAct(active.key)} style="cursor:pointer;border:0;background:transparent;color:var(--accent);font:400 11px Inter,system-ui;padding:2px 6px;border-radius:5px">Clear</button>{/if}
+      {#if hasValue}<button onclick={() => clearFieldAct(active.key)} style="cursor:pointer;border:0;background:transparent;color:var(--accent);font:400 11px var(--font);padding:2px 6px;border-radius:5px">Clear</button>{/if}
     </div>
 
     {#if active.kind === 'list'}
       {#if active.search}
         <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:6px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">
-          <input value={valueQuery} oninput={(e) => { valueQuery = (e.target as HTMLInputElement).value; valueHi = 0 }} onkeydown={onValueKey} bind:this={boxEl} placeholder="Search" aria-label="Search values" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px Inter,system-ui;color:var(--ink)" />
+          <input value={valueQuery} oninput={(e) => { valueQuery = (e.target as HTMLInputElement).value; valueHi = 0 }} onkeydown={onValueKey} bind:this={boxEl} placeholder="Search" aria-label="Search values" autocomplete="off" style="flex:1;min-width:0;border:0;background:transparent;outline:none;font:400 12.5px var(--font);color:var(--ink)" />
         </div>
       {/if}
       <div class="scroll" style="max-height:260px;display:flex;flex-direction:column;gap:1px">
