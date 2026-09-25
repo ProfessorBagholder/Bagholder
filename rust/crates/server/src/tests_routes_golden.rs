@@ -138,6 +138,7 @@ fn seed_refreshable_session(app: &Arc<App>) {
         access_token: "old-access".into(),
         refresh_token: "old-refresh".into(),
         client_id: bagholder_ws::standin::FAKE_CLIENT_ID.into(),
+        ids: bagholder_ws::session::IdentityKeys { identity_canonical_id: "identity-1".into(), ..Default::default() },
         ..Default::default()
     };
     crate::session::save_session(app, &sess).unwrap();
@@ -220,25 +221,35 @@ fn test_routes_golden() {
     }
 }
 
-/// `POST /api/refresh`'s connected branch, on the stand-in Wealthsimple
-/// server rather than the real one -- not golden-pinned (the stand-in's port
-/// is picked fresh each run), asserted directly instead.
+/// `POST /api/refresh`'s connected branch: the refresh goes through the one
+/// session (`bagholder_wealthsimple::session`), here on a network that answers
+/// Wealthsimple's token endpoint.
 #[test]
-fn test_refresh_route_reaches_a_connected_answer_through_the_standin() {
+fn test_refresh_route_reaches_a_connected_answer() {
     let _g = crate::tests_common::guard();
     std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
-    let app = isolated();
-    seed_refreshable_session(&app);
-    let _ws = bagholder_ws::standin::fixture(Box::new(|req| {
-        if req.path.ends_with("/token") {
-            bagholder_ws::standin::ok_json(json!({"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600}))
-        } else {
-            bagholder_ws::standin::ok_json(json!({}))
+    struct Token(std::sync::Mutex<Vec<String>>);
+    struct Shared(std::sync::Arc<Token>);
+    impl bagholder_net::Transport for Shared {
+        fn answer(&self, ask: &bagholder_net::Ask) -> Result<bagholder_net::Answer, bagholder_net::NetError> {
+            self.0 .0.lock().unwrap().push(ask.url.to_string());
+            assert_eq!(ask.url, bagholder_wealthsimple::session::TOKEN_URL, "only the token endpoint is asked");
+            Ok((200, ask.url.to_string(), vec![], br#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#.to_vec()))
         }
-    }));
+    }
+    let asked = std::sync::Arc::new(Token(std::sync::Mutex::new(vec![])));
+    let dir = std::env::temp_dir().join(format!("bh-routes-refresh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let net = bagholder_net::Net::answered_by(std::sync::Arc::new(bagholder_net::SystemClock), std::sync::Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(asked.clone())));
+    let app = App::with_net(dir, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
+    bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+    seed_refreshable_session(&app);
     let req = from_the_page(&app, Method::POST, "/api/refresh", None);
-    let got = runtime().block_on(json_of(app, req));
+    let got = runtime().block_on(json_of(app.clone(), req));
     assert_eq!(got, json!({"status": 200, "body": {"ok": true, "error": "", "connected": true}}));
+    assert_eq!(asked.0.lock().unwrap().len(), 1);
+    assert_eq!(crate::session::load_session(&app).unwrap().refresh_token, "new-refresh");
 }
 
 /// `http::orders`'s routes, on the shared app the way `tests_orders.rs`

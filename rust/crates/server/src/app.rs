@@ -120,10 +120,21 @@ pub struct App {
     pub notify: crate::notify::NotifyState,
     /// The order loops' own state: brackets in flight, and the last readback.
     pub orders: crate::orders::OrdersState,
+    /// The figure path: the book, the market cache and the engine, opened when
+    /// the server starts (`figures`).
+    pub figures: std::sync::OnceLock<crate::figures::Figures>,
+    /// The network the figure path's readers and the Wealthsimple session use:
+    /// the process's one limiter, on the machine's clock (a test answers it).
+    pub net: bagholder_net::Net,
 }
 
 impl App {
     pub fn new(home: PathBuf, root: PathBuf, bind_host: String) -> Arc<App> {
+        App::with_net(home, root, bind_host, bagholder_net::Net::new(Arc::new(bagholder_net::SystemClock), bagholder_net::machine::shared()))
+    }
+
+    /// An app on the network given.
+    pub fn with_net(home: PathBuf, root: PathBuf, bind_host: String, net: bagholder_net::Net) -> Arc<App> {
         let events = Arc::new(crate::events::Bus::new());
         let hook = {
             let events = events.clone();
@@ -148,6 +159,8 @@ impl App {
             feeds: crate::feeds::FeedsState::default(),
             notify: crate::notify::NotifyState::default(),
             orders: crate::orders::OrdersState::default(),
+            figures: std::sync::OnceLock::new(),
+            net,
         })
     }
 

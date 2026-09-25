@@ -20,6 +20,10 @@ use bagholder_sources::reply::{Node, Read};
 
 pub const TOKEN_URL: &str = "https://api.production.wealthsimple.com/v1/oauth/v2/token";
 
+/// What the person is told when Wealthsimple refused the saved sign-in
+/// (`SPEC.md`: the status reads it).
+pub const REFUSED_SIGN_IN: &str = "Saved login refused. Connect Wealthsimple again.";
+
 /// What a request is signed with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tokens {
@@ -112,7 +116,7 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
         return Ok(on_disk);
     }
     if REFUSED.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(held.refresh.as_str()) {
-        return Err(Failure::Lapsed("Wealthsimple refused the saved sign-in; sign in again".into()));
+        return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
     }
     let mut body = BTreeMap::new();
     body.insert("grant_type".to_string(), Value::String("refresh_token".into()));
@@ -127,7 +131,7 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
         let code = n.opt_text("error").ok().flatten().unwrap_or("");
         if code == "invalid_grant" || reply.status == 401 {
             *REFUSED.lock().unwrap_or_else(|e| e.into_inner()) = Some(held.refresh.clone());
-            return Err(Failure::Lapsed(format!("Wealthsimple refused the saved sign-in ({code}); sign in again")));
+            return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
         }
         return Err(Failure::Refused(format!("the token refresh answered {}: {code}", reply.status)));
     }

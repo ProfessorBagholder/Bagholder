@@ -197,7 +197,9 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
  * view; when one is already shown it is reconciled into the objects on screen.
  */
 export function connect(sink: Sink, filters: unknown): void {
-  const next = '/api/events?filters=' + encodeURIComponent(JSON.stringify(filters))
+  // the browser's time zone: the person's days, months and "today" are in it
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const next = '/api/events?filters=' + encodeURIComponent(JSON.stringify(filters)) + '&zone=' + encodeURIComponent(zone)
   if (source && next === url && source.readyState !== EventSource.CLOSED) return
   source?.close()
   url = next

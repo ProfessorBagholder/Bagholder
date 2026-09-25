@@ -511,7 +511,7 @@
     "status": 200,
     "body": {
       "ok": false,
-      "error": "transport"
+      "error": "Wealthsimple did not say whose login this is: transport"
     }
   }
 }

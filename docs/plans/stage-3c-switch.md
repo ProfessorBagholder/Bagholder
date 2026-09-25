@@ -196,9 +196,9 @@ The changes listed at the top, and from the stage 2 list: trade marks (each mark
 Each step is a commit with the whole suite green (Rust, the page, the browser tests); a baseline changes only where a `SPEC.md` change in that step names it.
 
 1. **Parity baselines** (§1), on the old path.
-2. **The server's state and scheduler** (§2, §3, §3a, §3b): the engine held and applied, the zone, the due-readers, one session.
+2. **The server's state and scheduler** (§2, §3, §3a, §3b): the engine held and applied, the zone, the due-readers of the public sources, one session. Wealthsimple is read once at any time, so the pull and the balances read stay with the old sync until step 4.
 3. **The wire** (§4).
-4. **The page** (§5), on the new wire.
+4. **The page** (§5), on the new wire; with it, the pull and the balances read move to the scheduler and the old sync and portfolio loops stop, so the page's figures and the book are fed by one read of Wealthsimple.
 5. **CSV** (§6).
 6. **Clear data** (§7).
 7. **The Equity switch** (§10).
@@ -254,7 +254,9 @@ Three departures from what was written before, each argued:
 
 ## Verification
 
-(Filled as it is built.)
+**Step 1, parity baselines (9eb0cf31, 307f9aed).** Both pages on the made-up book at 1200, 1340, 1440 and 1680 px: every tab, a closed trade, a holding, the ticket, the Orders and notifications panels, the menu and the filter; every text box compared for position, size, font and colour, and the screenshots diffed. Fixed: Inter was never loaded by the Svelte page (now shipped with it: the variable font with its optical sizes, as the original was served); the space before `/` in Annualized returns; the trade and holding pages' 20 px margin; Disconnect red while greyed; the trade chart kept the library's default span instead of the trade framed. After the fixes every tab matches box for box at every width; the differences left are named in `docs/parity.md`. The 48 baselines are made in the CI job `baselines` (the Playwright image, the server's clock fixed by faketime) and compared there on every run.
+
+**Step 2, the server's state and scheduler.** The book opens migration 007 (`settings`, the zone); the server opens the book and the market cache at start (the old database imported the first time), builds the engine once a page states its zone, and keeps it current with one writer per kind of change, each applied only when what it read differs (`figures.rs`). The scheduler (`due.rs`) runs the Bank's rates, the closes the figures need, the benchmarks, every held payer (§3a) and, while a page is open, the quotes of what is held, and sleeps until the next known deadline, listed in `TIMED_WAITS`. Every token refresh in the process goes through the adapter's session. Tests: each writer leaves the engine as a fresh build would (`figures::tests`); every zone in the time-zone database puts "today" in it and moves no stated date, and nothing on the figure path reads the machine's own zone; the day turning, the Bank's 16:30 and a market's settlement are found for every zone (`due::tests`); two refreshes at once post the refresh token once (`wealthsimple/tests/session.rs`); Avg annualized and distributions for any payer (§3a, §3b).
 
 ## Handoff
 

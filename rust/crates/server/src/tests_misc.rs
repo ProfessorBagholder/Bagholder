@@ -476,11 +476,12 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 13] = [
+const TIMED_WAITS: [(&str, usize, &str); 14] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("server/src/app.rs", 1, "`wait` itself"),
+    ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather, midnight; three in its tests"),
     ("server/src/feeds.rs", 14, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),

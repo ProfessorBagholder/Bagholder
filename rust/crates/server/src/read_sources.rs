@@ -18,7 +18,6 @@ use std::sync::Arc;
 use bagholder_book::Book;
 use bagholder_core::instrument::{InstrumentKind, RefScheme};
 use bagholder_core::jiff::civil::Date;
-use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::Timestamp;
 use bagholder_core::transaction::Kind;
 use bagholder_core::{Currency, InstrumentId};
@@ -91,7 +90,7 @@ fn contract(book: &Book, events: &BTreeMap<InstrumentId, Vec<Date>>, id: Instrum
 
 /// The engine's needs, as the sources read them; `today` bounds a contract's
 /// corporate events.
-fn needs_of(book: &Book, n: &FactNeeds, today: Date) -> Result<Needs, String> {
+pub(crate) fn needs_of(book: &Book, n: &FactNeeds, today: Date) -> Result<Needs, String> {
     let mut out = Needs { benchmarks_from: n.first_day, ..Needs::default() };
     out.rates = n.rates.iter().map(|(c, d)| rates::Need { currency: *c, oldest: *d }).collect();
     // each instrument's corporate events, by day, oldest first
@@ -156,11 +155,11 @@ fn engine(book: &Book, cache: &MarketCache, clock: Clock) -> Result<Engine, Stri
     Ok(Engine::build(Inputs { ledger, facts, market, clock }))
 }
 
-fn clock(now: Timestamp) -> Result<Clock, String> {
-    let bank = TimeZone::get("America/Toronto").map_err(err)?;
-    let home = TimeZone::system();
-    let today = now.to_zoned(home.clone()).date();
-    Ok(Clock { today, now, home, bank })
+/// The engine's clock at `now`, the person's days in the zone the book holds
+/// (the one their page last stated): the machine's own zone is never used.
+fn clock(book: &Book, now: Timestamp) -> Result<Clock, String> {
+    let zone = book.zone().map_err(err)?.ok_or("the book holds no zone: open the app once, so its page states the zone of its browser")?;
+    crate::figures::clock(&zone.zone, now)
 }
 
 /// Run every due reader until the needs stop changing; the report lists each
@@ -171,7 +170,7 @@ pub fn read_sources(book_dir: &Path, cache_path: &Path, now: Timestamp) -> Resul
     let (cache, _) = MarketCache::open(cache_path, crate::app::APP_VERSION, at).map_err(err)?;
     // the process's one limiter, which the running app's other readers share
     let net = Net::new(Arc::new(SystemClock), bagholder_net::machine::shared());
-    let clock = clock(now)?;
+    let clock = clock(&book, now)?;
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now, bank: &clock.bank };
     let mut last: Option<FactNeeds> = None;
     let mut passes = 0;
@@ -338,6 +337,7 @@ pub fn cli_health(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use bagholder_core::jiff::tz::TimeZone;
     use bagholder_core::jiff::SignedDuration;
     use bagholder_core::SourceName;
     use bagholder_sources::cache::OutcomeRow;
@@ -420,7 +420,7 @@ mod tests {
             let Outcome::Answered(chart) = yahoo::parse(&bagholder_sources::reply::parse(&text).unwrap(), symbol, now) else { panic!("{symbol}") };
             // compared in the tracker's own currency: the conversion has its own test
             let series = BenchmarkSeries { currency: Currency::CAD, closes: chart.closes.into_iter().collect(), dividends: chart.dividends.into_iter().collect(), splits: chart.splits.iter().map(|s| (s.day, (s.numerator, s.denominator))).collect() };
-            let levels = total_return_cad(&series, &Default::default(), &clock(now).unwrap());
+            let levels = total_return_cad(&series, &Default::default(), &crate::figures::clock(&TimeZone::UTC, now).unwrap());
             // Yahoo's adjusted close per session, from the same reply
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
             let r = &v["chart"]["result"][0];

@@ -40,6 +40,24 @@ pub fn due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, 
     today >= window && read_on < today
 }
 
+/// The first instant at which [`due`] holds for this payer: now, for one never
+/// read; a week after its last read, where no source states its schedule; else
+/// the start of the day its window opens in `zone`, or of the next day where it
+/// was read today.
+pub fn next_due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> Timestamp {
+    let Some(read) = read else { return now };
+    let start = |d: Date| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX);
+    let read_on = read.read_at.to_zoned(zone.clone()).date();
+    let day_after_read = read_on.tomorrow().map(start).unwrap_or(Timestamp::MAX);
+    let Some(per_year) = frequency.map(|f| f.per_year).filter(|n| *n > 0) else {
+        return read.read_at.checked_add(SignedDuration::from_hours(24 * 7)).unwrap_or(Timestamp::MAX);
+    };
+    let Some(latest) = read.items.iter().map(|d| d.ex_date).max() else { return day_after_read };
+    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
+    let window = latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).map(start).unwrap_or(Timestamp::MAX);
+    window.max(day_after_read)
+}
+
 fn stored_rows(record: &Record) -> Vec<DeclaredRow> {
     record.rows.iter().map(|r| DeclaredRow { ex_date: r.ex_date, record_date: r.record_date, pay_date: r.pay_date, amount: Money::new(r.cash, r.currency), reinvested: r.reinvested }).collect()
 }

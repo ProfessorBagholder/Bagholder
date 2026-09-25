@@ -178,8 +178,11 @@ pub enum FactsFrom<'a> {
     Book { cache: &'a Path },
 }
 
-pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::civil::Date, from: FactsFrom) -> Result<String, String> {
+pub fn compare(old_path: &Path, book_dir: &Path, today: Option<bagholder_core::jiff::civil::Date>, from: FactsFrom) -> Result<String, String> {
     let at = bagholder_core::jiff::Timestamp::now();
+    // the person's zone, as their page last stated it; the machine's is never used
+    let zone = Book::open_in(book_dir, crate::app::APP_VERSION, at).map_err(err)?.0.zone().map_err(err)?.ok_or("the book holds no zone: open the app once, so its page states the zone of its browser")?.zone;
+    let today = today.unwrap_or_else(|| at.to_zoned(zone.clone()).date());
     let scratch = std::env::temp_dir().join(format!("bh-compare-{}", at.as_millisecond()));
     std::fs::create_dir_all(&scratch).map_err(err)?;
     bagholder_book::import::copy_database(old_path, &scratch.join("bagholder.db")).map_err(err)?;
@@ -210,7 +213,7 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
         }
     };
     let bank = bagholder_core::jiff::tz::TimeZone::get("America/Toronto").map_err(err)?;
-    let home = bagholder_core::jiff::tz::TimeZone::system();
+    let home = zone;
     // the end of the day in the Bank's zone: every rate of the day is out
     let now = today.at(23, 0, 0, 0).to_zoned(bank.clone()).map_err(err)?.timestamp();
     let clock = Clock { today, now, home, bank };
@@ -501,9 +504,9 @@ pub fn cli(args: &[String]) -> i32 {
         }
     }
     let (old, book, today) = match positional.as_slice() {
-        [old, book] => (old, book, bagholder_core::jiff::Zoned::now().date()),
+        [old, book] => (old, book, None),
         [old, book, day] => match day.parse() {
-            Ok(d) => (old, book, d),
+            Ok(d) => (old, book, Some(d)),
             Err(e) => {
                 eprintln!("{day} is not a day: {e}");
                 return 2;

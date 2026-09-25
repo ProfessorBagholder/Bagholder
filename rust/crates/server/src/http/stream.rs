@@ -24,6 +24,9 @@ pub struct EventsQuery {
     /// the trade whose page is open, when one is
     #[serde(default, deserialize_with = "trimmed")]
     trade: Option<String>,
+    /// the time zone of the page's browser (IANA): the person's days are in it
+    #[serde(default, deserialize_with = "trimmed")]
+    zone: Option<String>,
 }
 
 /// `GET /api/events`: the page's data once, then only what changes in it. A task,
@@ -34,6 +37,18 @@ pub struct EventsQuery {
 pub async fn events(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<EventsQuery>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let filters = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
     let app = state.app;
+    if let Some(zone) = q.zone {
+        // the zone of the browser in use: kept, and "today" follows it
+        let a = app.clone();
+        let _ = blocking(move || {
+            if let Some(f) = a.figures.get() {
+                if let Err(e) = f.state_zone(&zone, bagholder_core::jiff::Timestamp::now()) {
+                    crate::app::log(&format!("bagholder: the zone the page stated ({zone}) was not taken: {e}"));
+                }
+            }
+        })
+        .await;
+    }
     let feed = Feed::open(app.clone(), filters, q.trade);
     let hello = feed.hello();
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {

@@ -134,3 +134,26 @@ fn every_request_goes_through_the_limiter_at_wealthsimple_s_pace() {
     // and is answered once the gap has passed on that clock
     assert_eq!(q.asked.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn two_refreshes_at_once_post_the_refresh_token_once() {
+    // a read and an order finding the access token stale at the same moment:
+    // one posts, the other adopts what it saved
+    let q = queue(&[(200, r#"{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":1800}"#)]);
+    let (_d, file) = session_file("shared-token");
+    let n = net(&q);
+    let start = std::sync::Barrier::new(2);
+    let got: Vec<Tokens> = std::thread::scope(|s| {
+        let both: Vec<_> = (0..2)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    refresh(&n, &file, &held("shared-token")).unwrap()
+                })
+            })
+            .collect();
+        both.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(q.asked.lock().unwrap().len(), 1, "the refresh token is posted once");
+    assert!(got.iter().all(|t| t.refresh == "fresh-refresh"), "{got:?}");
+}

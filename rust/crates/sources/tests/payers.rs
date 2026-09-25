@@ -254,3 +254,30 @@ fn a_cash_row_and_a_units_row_for_one_ex_date_are_one_distribution() {
     let other = Distribution { cash: dec("0.11"), ..cash };
     assert!(payers::checked(Record { rows: vec![cash, other], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
 }
+
+#[test]
+fn a_payer_is_next_due_at_the_first_instant_its_rule_holds() {
+    // every kind of record, in every zone: the instant `next_due` names is the
+    // first at which `due` holds, the second before it not
+    let reads = [
+        read("2026-09-20T12:00:00Z", &[]),
+        read("2026-09-20T12:00:00Z", &[date(2026, 9, 15)]),
+        read("2026-10-08T11:00:00Z", &[date(2026, 9, 15), date(2026, 10, 15)]),
+    ];
+    let schedules = [None, Some(freq(12)), Some(freq(4)), Some(freq(52)), Some(freq(1))];
+    let db = bagholder_core::jiff::tz::TimeZoneDatabase::bundled();
+    let now = t("2026-09-21T00:00:00Z");
+    for name in db.available() {
+        let z = db.get(name.as_str()).unwrap();
+        for r in &reads {
+            for f in &schedules {
+                let at = run::next_due(Some(r), f.as_ref(), now, &z);
+                assert!(run::due(Some(r), f.as_ref(), at, &z), "{} {:?} {:?}: due at {at}", name.as_str(), r.read_at, f.as_ref().map(|f| f.per_year));
+                let before = at - bagholder_core::jiff::SignedDuration::from_secs(1);
+                assert!(!run::due(Some(r), f.as_ref(), before, &z), "{} {:?} {:?}: already due at {before}", name.as_str(), r.read_at, f.as_ref().map(|f| f.per_year));
+            }
+        }
+    }
+    // never read: due now
+    assert_eq!(run::next_due(None, None, now, &eastern()), now);
+}

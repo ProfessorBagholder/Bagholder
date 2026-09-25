@@ -201,7 +201,7 @@ test('switching the annualized-returns benchmark highlights the new choice, pers
     page.waitForRequest((r) => r.url().includes('/api/events?filters=') && decodeURIComponent(r.url()).includes('"benchmark":"TSX"')),
     tsx.click(),
   ])
-  const filters = JSON.parse(decodeURIComponent(req.url().split('filters=')[1]))
+  const filters = JSON.parse(new URL(req.url()).searchParams.get('filters') ?? '')
   expect(filters.benchmark).toBe('TSX')
   await expect(tsx).toHaveClass(/\bon\b/)
   await expect(sp500).not.toHaveClass(/\bon\b/)

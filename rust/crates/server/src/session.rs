@@ -46,18 +46,60 @@ fn set_step(app: &Arc<App>, msg: &str) {
     app.state.lock().unwrap().sync_step = msg.to_string();
 }
 
-/// The refresh grant, one at a time. A failure
-/// says why on the header.
+/// The refresh grant. A failure says why on the header.
 pub fn refresh_session(app: &Arc<App>, sess: &mut Session, adopt: bool) -> bool {
-    let home = app.ws_home();
-    let client = Client { home: &home };
-    match client.refresh_session(sess, adopt) {
+    match one_refresh(app, sess, adopt) {
         Ok(()) => true,
         Err(msg) => {
             set_error(app, &msg);
             false
         }
     }
+}
+
+/// Every refresh in the process goes through the adapter's session
+/// (`bagholder_wealthsimple::session`): one lock, the file read again under it so
+/// a token another caller rotated is adopted without a post, and a refresh token
+/// Wealthsimple refused never posted again. The reads, the orders and the sign-in
+/// share it, so two of them at once post a refresh token once
+/// (`docs/plans/stage-3c-switch.md`, §3, "One session"). A login newer than the
+/// file (`adopt` false, a sign-in just captured) is written to the file first.
+fn one_refresh(app: &Arc<App>, sess: &mut Session, adopt: bool) -> Result<(), String> {
+    let home = app.ws_home();
+    let client_id = Client { home: &home }.client_id_for(sess);
+    if client_id.is_empty() {
+        return Err("session has no client id".into());
+    }
+    sess.client_id = client_id.clone();
+    if !adopt {
+        home.save_session(sess).map_err(|e| format!("Could not save the Wealthsimple login: {e}"))?;
+    }
+    if sess.identity().is_empty() {
+        // the adapter asks for the accounts by it: a login without it cannot be read
+        return Err("Wealthsimple did not say whose login this is; connect again".into());
+    }
+    let held = bagholder_wealthsimple::session::Tokens {
+        access: sess.access_token.clone(),
+        refresh: sess.refresh_token.clone(),
+        client_id,
+        identity: sess.identity(),
+        expires_at: None,
+    };
+    if held.refresh.is_empty() {
+        return Err("missing refresh token".into());
+    }
+    let file = bagholder_wealthsimple::session::SessionFile { path: home.session_path() };
+    let fresh = bagholder_wealthsimple::session::refresh(&app.net, &file, &held).map_err(|f| match f {
+        bagholder_broker::Failure::Lapsed(why) => why,
+        other => other.to_string(),
+    })?;
+    sess.access_token = fresh.access;
+    sess.refresh_token = fresh.refresh;
+    sess.client_id = fresh.client_id;
+    if let Some(at) = fresh.expires_at {
+        sess.expires_at = Some(bagholder_ws::session::Expiry::Text(at.to_string()));
+    }
+    Ok(())
 }
 
 pub fn token_info(app: &Arc<App>, sess: &Session) -> bagholder_ws::session::TokenInfo {
@@ -790,9 +832,15 @@ pub fn capture_tokens(app: &Arc<App>, capture: &Capture) -> OkOr {
     if ident.is_empty() {
         ident = info.identity();
     }
-    if !ident.is_empty() {
-        sess.ids.identity_canonical_id = ident;
+    if ident.is_empty() {
+        // the accounts are asked for by it: a login that does not say whose it is
+        // cannot be taken over
+        let why = info.error.as_ref().map(|e| e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())).unwrap_or_else(|| "no answer".into());
+        let err = format!("Wealthsimple did not say whose login this is: {why}");
+        app.state.lock().unwrap().error = err.clone();
+        return OkOr::err(err);
     }
+    sess.ids.identity_canonical_id = ident;
     if sess.session_id.is_empty() {
         sess.session_id = crate::app::uuid4();
     }

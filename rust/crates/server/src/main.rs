@@ -8,7 +8,9 @@
 mod app;
 mod compare;
 mod docs;
+mod due;
 mod engine_inputs;
+mod figures;
 mod pull_broker;
 mod read_sources;
 mod events;
@@ -102,6 +104,16 @@ fn serve() -> i32 {
             return 1;
         }
     }
+    // the figure path: a book this build cannot open stops the server, saying why
+    match figures::Figures::open(&a.home, bagholder_core::jiff::Timestamp::now()) {
+        Ok(f) => {
+            let _ = a.figures.set(f);
+        }
+        Err(e) => {
+            log(&format!("bagholder: {e}"));
+            return 1;
+        }
+    }
     session::boot_session(&a);
 
     // The runtime the HTTP server and the page streams run on. Everything else --
@@ -141,6 +153,8 @@ fn serve() -> i32 {
     events::signal_at_each_midnight(a.clone());
     let events_for_localmodel = a.events.clone();
     bagholder_market::localmodel::on_change(move || events_for_localmodel.signal());
+    // the figure path's reads, each when it is due
+    a.spawn_with("bagholder-figures", due::run);
     a.spawn_with("bagholder-auto-sync", session::auto_sync_loop);
     a.spawn_with("bagholder-market", |app| {
         feeds::refresh_market_data(&app);
