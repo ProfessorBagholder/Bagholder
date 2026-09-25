@@ -146,10 +146,11 @@ mod tests {
         let app = crate::tests_common::app();
         let f = app.figures.get().unwrap();
         let a = app.market_base().unwrap();
-        let want: Vec<(String, f64)> = f
-            .read(|e| e.figures().positions.iter().map(|p| (p.currency.as_str().to_string(), p.market_cad.as_ref().map(|m| m.amount.to_f64()).unwrap_or(0.0))).collect())
+        let want: Vec<(String, Option<f64>)> = f
+            .read(|e| e.figures().positions.iter().map(|p| (p.currency.as_str().to_string(), p.market_cad.as_ref().ok().map(|m| m.amount.to_f64()))).collect())
             .unwrap();
-        let got: Vec<(String, f64)> = a.positions.iter().map(|p| (p.currency.clone(), p.mv)).collect();
+        // a value not known is NaN, never 0
+        let got: Vec<(String, Option<f64>)> = a.positions.iter().map(|p| (p.currency.clone(), (!p.mv.is_nan()).then_some(p.mv))).collect();
         assert!(!got.is_empty());
         assert_eq!(got, want);
         // nothing moved: the same context, not a new one

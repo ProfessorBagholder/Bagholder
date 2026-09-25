@@ -25,7 +25,7 @@ pub struct Context {
 }
 
 /// A holding as the old readers take one: what they read of it, valued in CAD
-/// (`mv_cad`, none where its value waits: it is sized by nothing).
+/// (`mv_cad`, none where its value waits: NaN, a value not known).
 pub(crate) fn old(p: &Position, mv_cad: Option<f64>) -> OldPosition {
     OldPosition {
         id: p.id.clone(),
@@ -50,7 +50,9 @@ pub(crate) fn old(p: &Position, mv_cad: Option<f64>) -> OldPosition {
         // the old readers take a percentage
         percent_change: p.percent_change.map(|f| f * 100.0),
         day_change: None,
-        mv: mv_cad.unwrap_or(0.0),
+        // a value not known is said so, never read as none: the heatmap sizes it
+        // as the smallest holding, and nothing adds it
+        mv: mv_cad.unwrap_or(f64::NAN),
         unreal: 0.0,
         unreal_pct: None,
         held: 0,
@@ -84,6 +86,7 @@ pub fn context(base: &MarketBase, positions: &[(Position, Option<f64>)]) -> Cont
     let refs: Vec<&OldPosition> = olds.iter().collect();
     // every value is in CAD already
     let cad = |amount: f64, _currency: &str| amount;
-    let (sectors, regions) = bagholder_model::exposure::exposure_slices(&refs, &base.exposures, &cad);
+    let valued: Vec<&OldPosition> = olds.iter().filter(|p| !p.mv.is_nan()).collect();
+    let (sectors, regions) = bagholder_model::exposure::exposure_slices(&valued, &base.exposures, &cad);
     Context { markets: bagholder_model::markets::markets_view(base, &refs), sectors: folded(sectors, 12), regions: folded(regions, 10) }
 }

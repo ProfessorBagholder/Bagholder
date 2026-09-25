@@ -178,11 +178,16 @@ pub fn watch_rows(base: &Base, positions: &[&Position]) -> Vec<WatchItem> {
 
 /// One tile per symbol held, its market value in CAD summed over the accounts
 /// holding it.
+/// One tile per held symbol, sized by its value in CAD. A holding whose value is
+/// not known (`mv` NaN: its price waits) is still one of the holdings: it takes the
+/// smallest holding's size, as a watched listing not held does.
 pub fn heatmap_items(positions: &[&Position], exposures: &Exposures, cad: &dyn Fn(f64, &str) -> f64) -> Vec<HeldTile> {
     let mut out: Vec<HeldTile> = Vec::new();
+    let mut unvalued: Vec<usize> = Vec::new();
     for p in positions {
-        let value = cad(p.mv, &p.currency);
-        if !(value > 0.0) {
+        let known = !p.mv.is_nan();
+        let value = if known { cad(p.mv, &p.currency) } else { 0.0 };
+        if known && !(value > 0.0) {
             continue;
         }
         if let Some(tile) = out.iter_mut().find(|t| t.symbol == p.symbol && t.exchange.to_uppercase() == p.exchange.to_uppercase()) {
@@ -195,7 +200,17 @@ pub fn heatmap_items(positions: &[&Position], exposures: &Exposures, cad: &dyn F
             Kind::Options => dominant_sector(underlying_exposure(exposures, &p.underlying, &p.currency)),
             _ => dominant_sector(exposures.get(&p.security_id)),
         };
+        if !known {
+            unvalued.push(out.len());
+        }
         out.push(HeldTile { id: p.id.clone(), symbol: p.symbol.clone(), exchange: p.exchange.clone(), value, percent_change: p.percent_change, sector });
+    }
+    let smallest = out.iter().enumerate().filter(|(i, _)| !unvalued.contains(i)).map(|(_, t)| t.value).fold(f64::INFINITY, f64::min);
+    let size = if smallest.is_finite() { smallest } else { 1.0 };
+    for i in unvalued {
+        if out[i].value == 0.0 {
+            out[i].value = size;
+        }
     }
     out
 }
@@ -381,5 +396,31 @@ pub fn markets_view(base: &Base, positions: &[&Position]) -> Markets {
         universes: Ordered(universes),
         tiles: tile_rows(base),
         instruments: instruments::INSTRUMENTS.iter().map(|r| MarketInstrument { symbol: r.symbol, label: instruments::label(r.symbol), name: r.name, exchange: r.exchange, kind: r.kind, aliases: r.aliases }).collect(),
+    }
+}
+
+#[cfg(test)]
+mod heatmap_tests {
+    use super::*;
+
+    fn held(symbol: &str, mv: f64) -> Position {
+        Position {
+            id: symbol.into(), symbol: symbol.into(), underlying: symbol.into(), name: String::new(), exchange: "TSX".into(), kind: Kind::Shares,
+            account: String::new(), account_id: String::new(), currency: "CAD".into(), security_id: String::new(), short: false,
+            qty: 0.0, mult: 0, avg: 0.0, cost: 0.0, fees: 0.0, last: 0.0, price_source: crate::wire::Mark::Quote, price_change: None,
+            percent_change: None, day_change: None, mv, unreal: 0.0, unreal_pct: None, held: 0, opened: String::new(), ws_qty: None,
+            rt: None, lots: Vec::new(), fills: None, grade: String::new(), thesis: String::new(), tags: Vec::new(), alloc: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_holding_whose_value_waits_is_a_tile_the_smallest_holding_s_size() {
+        let (a, b, c) = (held("AAA", 500.0), held("BBB", 120.0), held("CCC", f64::NAN));
+        let tiles = heatmap_items(&[&a, &b, &c], &Exposures::default(), &|v, _| v);
+        let size: Vec<(&str, f64)> = tiles.iter().map(|t| (t.symbol.as_str(), t.value)).collect();
+        assert_eq!(size, vec![("AAA", 500.0), ("BBB", 120.0), ("CCC", 120.0)]);
+        // with no holding valued, each is the same size
+        let only = heatmap_items(&[&c], &Exposures::default(), &|v, _| v);
+        assert_eq!(only[0].value, 1.0);
     }
 }
