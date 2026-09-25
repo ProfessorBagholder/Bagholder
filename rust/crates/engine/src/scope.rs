@@ -139,6 +139,24 @@ impl Filters {
     }
 
     /// The filters in force the Cashflow tab does not read.
+    /// The filters set that an account's value does not read: all but the account.
+    pub fn unread_by_value(&self) -> Vec<&'static str> {
+        let dates = match &self.dates {
+            Dates::All => false,
+            Dates::Years(ys) => !ys.is_empty(),
+            _ => true,
+        };
+        let mut out = vec![];
+        if dates {
+            out.push("date");
+        }
+        if !self.instruments.is_empty() || !self.search.trim().is_empty() {
+            out.push("symbol");
+        }
+        out.extend(self.unread_by_cashflow());
+        out
+    }
+
     pub fn unread_by_cashflow(&self) -> Vec<&'static str> {
         [
             ("grade", !self.grades.is_empty()),
@@ -439,6 +457,18 @@ pub struct EquityBlock {
     pub years: Vec<YearReturn>,
     pub annualized: Annualized,
     pub drawdown: Drawdown,
+    /// The filters set that the value series does not read: it follows the accounts alone.
+    pub unread_filters: Vec<&'static str>,
+}
+
+/// The realized P&L in scope, as a running total by the day each part was
+/// realized, in CAD: each sale in the dates of a trade the filters keep.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PnlCurve {
+    /// Each day a part was realized, and the total to the end of it.
+    pub days: Vec<(Date, Fig<Money>)>,
+    /// Parts whose P&L waits on something, left out of every total.
+    pub left_out: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -453,6 +483,7 @@ pub struct Scoped {
     pub portfolio: Portfolio,
     pub cashflow: Cashflow,
     pub equity: EquityBlock,
+    pub pnl_curve: PnlCurve,
 }
 
 /// Σ amounts in CAD: the failure when they cannot be added (a total too large
@@ -602,7 +633,9 @@ pub fn scope(
     let portfolio = portfolio(f, inputs, positions);
     let cashflow = cashflow(f, inputs, positions, cash_rows, rates, &portfolio);
     let equity = equity_block(f, equity, benchmarks, today);
+    let pnl_curve = pnl_curve(&parts.iter().map(|(_, r)| *r).collect::<Vec<_>>());
     Scoped {
+        pnl_curve,
         kpi: kpi(&closed, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
         trades: in_scope.iter().map(|t| t.key.clone()).collect(),
         monthly,
@@ -882,7 +915,28 @@ fn equity_block(f: &Filters, equity: &BTreeMap<AccountId, AccountEquity>, benchm
     for e in &accounts {
         gaps.merge(&e.gaps);
     }
-    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series, gaps }
+    EquityBlock { annualized: returns::annualized(&years), drawdown: returns::drawdown(&series), years, series, gaps, unread_filters: f.unread_by_value() }
+}
+
+/// The running total of the realized parts by their days.
+fn pnl_curve(parts: &[&crate::trades::Realized]) -> PnlCurve {
+    let mut by_day: BTreeMap<Date, Vec<Money>> = BTreeMap::new();
+    let mut left_out = 0;
+    for r in parts {
+        match &r.pnl_cad {
+            Ok(p) => by_day.entry(r.day).or_default().push(*p),
+            Err(_) => left_out += 1,
+        }
+    }
+    let mut running: Fig<Money> = Ok(Money::zero(Currency::CAD));
+    let days = by_day
+        .into_iter()
+        .map(|(day, pnls)| {
+            running = running.clone().and_then(|r| money_sum(std::iter::once(r).chain(pnls)));
+            (day, running.clone())
+        })
+        .collect();
+    PnlCurve { days, left_out }
 }
 
 #[cfg(test)]
@@ -894,6 +948,35 @@ mod tests {
     }
 
     const HUGE: &str = "70000000000000000000000000000";
+
+    #[test]
+    fn the_pnl_curve_runs_each_realized_part_on_its_own_day_and_leaves_out_what_waits() {
+        let d = |s: &str| -> Date { s.parse().unwrap() };
+        let part = |day: &str, p: Fig<Money>| crate::trades::Realized { day: d(day), pnl_cad: p };
+        let waits = || Err(Gaps::of(crate::gap::Gap::Arithmetic("waits".into())));
+        let parts = [part("2025-01-03", Ok(cad("10"))), part("2025-01-02", Ok(cad("-4"))), part("2025-01-03", Ok(cad("1.5"))), part("2025-01-05", waits())];
+        let c = pnl_curve(&parts.iter().collect::<Vec<_>>());
+        assert_eq!(c.days, vec![(d("2025-01-02"), Ok(cad("-4"))), (d("2025-01-03"), Ok(cad("7.5")))]);
+        assert_eq!(c.left_out, 1);
+        // a running total too large to hold is a gap from that day on, never a total missing a term
+        let parts = [part("2025-01-02", Ok(cad(HUGE))), part("2025-01-03", Ok(cad(HUGE))), part("2025-01-04", Ok(cad("1")))];
+        let c = pnl_curve(&parts.iter().collect::<Vec<_>>());
+        assert!(c.days[0].1.is_ok() && c.days[1].1.is_err() && c.days[2].1.is_err(), "{:?}", c.days);
+    }
+
+    #[test]
+    fn the_value_series_names_every_filter_set_but_the_account() {
+        let mut f = Filters::default();
+        assert!(f.unread_by_value().is_empty());
+        f.accounts.insert(AccountId::parse("01900000-0000-7000-8000-000000000001").unwrap());
+        assert!(f.unread_by_value().is_empty(), "the account is read");
+        f.dates = Dates::Years([2024].into());
+        f.search = "abc".into();
+        f.tags.insert("x".into());
+        assert_eq!(f.unread_by_value(), vec!["date", "symbol", "tag"]);
+        f.dates = Dates::Years(BTreeSet::new());
+        assert_eq!(f.unread_by_value(), vec!["symbol", "tag"], "no year chosen is no date filter");
+    }
 
     #[test]
     fn a_total_too_large_to_hold_is_a_gap_never_a_total_missing_a_term() {

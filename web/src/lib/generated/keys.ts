@@ -7,6 +7,7 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'options.accounts': 'id',
     'options.instruments': 'id',
     'equity.series': 'd',
+    'equity.pnl.series': 'd',
     'years': 'year',
     'monthly': 'key',
     'bySymbol': 'id',

@@ -431,7 +431,7 @@ fn figures_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
-        Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
+        Partial, Status, Trade, Position, Fill, Detail, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
         Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options, Figures,
         crate::wire::filters::Range, crate::wire::filters::Filters,
     ];

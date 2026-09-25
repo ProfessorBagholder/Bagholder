@@ -19,6 +19,8 @@ interface DashModel {
     series: { d: string; v: string }[]
     drawdown: { pct: number | null; abs: string | null; at: string | null }
     annualized: { rate: number | null; count: number }
+    skippedFilters: string[]
+    pnl: { series: { d: string; v: string }[]; leftOut: number; gaps: string[] }
   }
   trades: Trade[]
 }
@@ -84,7 +86,7 @@ test('positive KPI figures read in the positive colour class, negative in the ne
   else if (!waits(k) && sign(k) < 0) await expect(realizedTile).toHaveClass(/\bneg\b/)
 })
 
-test('the equity curve draws a line for the series in scope and dims the chart past the hovered day', async ({ page, request }) => {
+test('the equity curve\'s Value draws a line for the series in scope and dims the chart past the hovered day', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.equity.series = [
       { d: '2026-01-05', v: '10000' },
@@ -96,6 +98,7 @@ test('the equity curve draws a line for the series in scope and dims the chart p
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
+  await card.getByRole('button', { name: 'Value' }).click()
   await expect(card.locator('svg path')).toHaveCount(2) // the area fill and the line
   const plot = card.locator('[role="presentation"]')
   const box = (await plot.boundingBox())!
@@ -120,13 +123,59 @@ test('the equity curve draws a line for the series in scope and dims the chart p
   expect(maskAfterLeave).toBe('')
 })
 
-test('the equity curve says there is no NAV history yet when the series is empty', async ({ page, request }) => {
+test('the equity curve says what it has nothing of: no NAV history for Value, no realized P&L for P&L', async ({ page, request }) => {
   await openWithStatus(page, request, {}, '', (m) => {
     m.equity.series = []
+    m.equity.pnl = { series: [], leftOut: 0, gaps: [] }
   })
   await ready(page)
   const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
+  await expect(card).toContainText('No realized P&L in scope.')
+  await card.getByRole('button', { name: 'Value' }).click()
   await expect(card).toContainText('No NAV history yet. Sync to load it.')
+})
+
+test('the equity curve opens on P&L, a running total that reaches below zero, and remembers Value across a reload', async ({ page, request }) => {
+  await openWithStatus(page, request, {}, '', (m) => {
+    m.equity.pnl = { series: [{ d: '2026-01-05', v: '-400' }, { d: '2026-02-10', v: '250.5' }, { d: '2026-03-15', v: '1200' }], leftOut: 2, gaps: [] }
+    m.equity.series = [{ d: '2026-01-05', v: '10000' }, { d: '2026-03-15', v: '12000' }]
+    m.equity.skippedFilters = ['date', 'symbol']
+  })
+  await ready(page)
+  const card = page.locator('.card', { has: page.locator('h5', { hasText: 'Equity curve' }) })
+  await expect(card.getByRole('button', { name: 'P&L' })).toHaveClass(/on/)
+  await expect(card).toContainText('2 waiting')
+  // the axis runs from below zero to above the peak
+  await expect(card.locator('.tab span').first()).toHaveText('$1,200')
+  await expect(card.locator('.tab span').last()).toHaveText('−$600')
+  const plot = card.locator('[role="presentation"]')
+  const box = (await plot.boundingBox())!
+  await page.mouse.move(box.x + 2, box.y + box.height / 2)
+  await expect(card.locator('.tip .tv')).toHaveText(money0('-400'))
+  await expect(card.locator('.tip .tv')).toHaveClass(/neg/)
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2)
+  await expect(card.locator('.tip .tv')).toHaveText('$1,200')
+  // the value names the filters it does not read; P&L reads them all
+  await expect(card).not.toContainText('do not apply')
+  await card.getByRole('button', { name: 'Value' }).click()
+  await expect(card).toContainText("date, symbol filters do not apply to the accounts' value — only the account narrows it.")
+  await expect(card).not.toContainText('waiting')
+  await page.reload()
+  await ready(page)
+  await expect(card.getByRole('button', { name: 'Value' })).toHaveClass(/on/)
+})
+
+test('the P&L curve ends at the Realized P&L in scope, whatever the filters', async ({ request }) => {
+  const m0 = await getModel(request)
+  const trade = m0.trades.find((t) => t.status === 'closed')!
+  const account = (m0 as unknown as { accounts: { id: string; name: string }[] }).accounts.find((a) => a.name)!
+  for (const filters of [undefined, { search: trade.symbol }, { lists: { account: [account.id] } }, { lists: { grade: ['Ungraded'] } }, { years: ['2026'] }]) {
+    const m = (await figures(request, filters)) as DashModel
+    const last = m.equity.pnl.series.at(-1)
+    if (m.equity.pnl.leftOut || waits(m.kpi.realized)) continue
+    expect(last ? last.v : '0', JSON.stringify(filters)).toBe(m.kpi.realized)
+    expect(m.equity.pnl.leftOut).toBe(m.kpi.realizedLeftOut)
+  }
 })
 
 test('annualized returns lists the years newest first, each with two bars, and a footer counting years beaten', async ({ page, request }) => {

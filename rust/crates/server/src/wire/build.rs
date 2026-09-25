@@ -392,6 +392,25 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder
         drawdown: Drawdown { pct: e.drawdown.pct, abs: e.drawdown.abs.and_then(bagholder_engine::stat::returns::cents).map(Dec), at: e.drawdown.at.map(|d| d.to_string()) },
         annualized: Annualized { rate: e.annualized.rate, count: e.annualized.count },
         gaps: equity_gaps,
+        skipped_filters: e.unread_filters.iter().map(|s| s.to_string()).collect(),
+        pnl: {
+            let c = &scoped.pnl_curve;
+            let mut gaps: Vec<String> = vec![];
+            for (_, v) in &c.days {
+                if let Err(g) = v {
+                    for w in g.words() {
+                        if !gaps.iter().any(|x| x == w) {
+                            gaps.push(w.to_string());
+                        }
+                    }
+                }
+            }
+            PnlCurve {
+                series: c.days.iter().filter_map(|(d, v)| v.as_ref().ok().map(|m| Point { d: d.to_string(), v: Dec(m.amount) })).collect(),
+                left_out: c.left_out as u32,
+                gaps,
+            }
+        },
     };
     let years = e.years.iter().map(|y| YearRow { year: y.year.to_string(), r: y.r, sp_r: y.benchmark }).collect();
 

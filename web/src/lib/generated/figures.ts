@@ -110,11 +110,33 @@ export type Drawdown = { pct: number | null, abs: Dec | null, at: string | null,
 
 export type Annualized = { rate: number | null, count: number, };
 
-export type Equity = { series: Array<Point>, drawdown: Drawdown, annualized: Annualized, 
+export type PnlCurve = { series: Array<Point>, 
+/**
+ * Parts whose P&L waits on something, left out of every total.
+ */
+leftOut: number, 
+/**
+ * What the series waits on: a day whose total does not fit is not drawn.
+ */
+gaps: Array<string>, };
+
+export type Equity = { 
+/**
+ * The accounts' value by day: what Returns, the years and Max drawdown read.
+ */
+series: Array<Point>, drawdown: Drawdown, annualized: Annualized, 
 /**
  * What the series waits on.
  */
-gaps: Array<string>, };
+gaps: Array<string>, 
+/**
+ * The filters set that the value series does not read.
+ */
+skippedFilters: Array<string>, 
+/**
+ * The realized P&L in scope, a running total by day.
+ */
+pnl: PnlCurve, };
 
 export type YearRow = { year: string, r: number, spR: number | null, };
 

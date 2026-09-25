@@ -33,19 +33,41 @@
     const step = Math.pow(10, Math.max(0, String(Math.round(peak / 3)).length - 2))
     return Math.max(step * 3, Math.ceil(peak / (step * 3)) * step * 3)
   }
+  // the curve's span: from zero to its peak, reaching below zero where the P&L does
   function eqGeom(series: EquityPoint[]) {
     const vals = series.map((p) => plot(p.v))
-    const peak = Math.max.apply(null, vals.concat([0]))
-    const max = niceMax(peak)
+    const hi = niceMax(Math.max.apply(null, vals.concat([0])))
+    const low = Math.min.apply(null, vals.concat([0]))
+    const lo = low < 0 ? -niceMax(-low) : 0
     const W = 880, H = 260, pad = 8, top = 6
     const n = Math.max(1, vals.length - 1)
-    const pts = vals.map((v, i) => [(i / n) * W, H - pad - (v / max) * (H - pad - top)] as [number, number])
+    const y = (v: number) => H - pad - ((v - lo) / (hi - lo)) * (H - pad - top)
+    const pts = vals.map((v, i) => [(i / n) * W, y(v)] as [number, number])
     const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')
-    return { max, path, area: path + ' L880 252 L0 252 Z', pts }
+    const base = y(0).toFixed(1)
+    const ticks = [0, 1, 2, 3].map((i) => hi - ((hi - lo) * i) / 3)
+    return { ticks, path, area: path + ' L' + W + ' ' + base + ' L0 ' + base + ' Z', pts, up: vals.length ? vals[vals.length - 1] >= 0 : true }
   }
-  const eqSeries = $derived(model.equity.series || [])
+  // P&L (the realized P&L in scope, running by day) or Value (the accounts' value), remembered on this machine
+  const EQ_MODE = 'bh2.equityMode'
+  let eqMode = $state<'pnl' | 'value'>((() => {
+    try {
+      return localStorage.getItem(EQ_MODE) === 'value' ? 'value' : 'pnl'
+    } catch {
+      return 'pnl'
+    }
+  })())
+  function setEqMode(m: 'pnl' | 'value') {
+    eqMode = m
+    try {
+      localStorage.setItem(EQ_MODE, m)
+    } catch {
+      /* the choice holds for this page */
+    }
+  }
+  const eqSeries = $derived((eqMode === 'pnl' ? model.equity.pnl.series : model.equity.series) || [])
   const g = $derived(eqSeries.length ? eqGeom(eqSeries) : null)
-  const eqTick = (v: number) => '$' + Math.round(v).toLocaleString('en-US')
+  const eqTick = (v: number) => (v < 0 ? '−$' : '$') + Math.abs(Math.round(v)).toLocaleString('en-US')
   const eqAxis = $derived.by(() => {
     const s = eqSeries
     if (!s.length) return [] as string[]
@@ -54,10 +76,14 @@
     for (let i = 0; i < want; i++) out.push(stamp(s[Math.round((i * (s.length - 1)) / Math.max(1, want - 1))].d))
     return [...new Set(out)]
   })
+  const eqNote = $derived.by(() => {
+    const skipped = eqMode === 'value' ? model.equity.skippedFilters : []
+    return skipped.length ? skipped.join(', ') + (skipped.length > 1 ? ' filters do not' : ' filter does not') + ' apply to the accounts\' value — only the account narrows it.' : ''
+  })
 
   // equity hover — crosshair, dot, tip, and the dim-after-cursor mask
   let eqPlot = $state<HTMLElement>()
-  let eqHover = $state<{ x: string; y: string; tv: string; tl: string; tx: string } | null>(null)
+  let eqHover = $state<{ x: string; y: string; tv: string; tl: string; tx: string; up: boolean } | null>(null)
   function onEqMove(e: MouseEvent) {
     const s = eqSeries
     if (!s.length || !eqPlot || !g) return
@@ -68,6 +94,7 @@
       x: (frac * 100).toFixed(2) + '%',
       y: ((g.pts[i][1] / 260) * 100).toFixed(2) + '%',
       tv: money0(s[i].v),
+      up: abs(s[i].v) === s[i].v,
       tl: stampDay(s[i].d),
       tx: i < s.length * 0.1 ? '0%' : i > s.length * 0.9 ? '-100%' : '-50%',
     }
@@ -202,24 +229,32 @@
   <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">
     <!-- equity curve -->
     <div class="card elev-sm" style="padding:16px 18px 12px">
-      <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px"><h5>Equity curve</h5></div>
+      <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px">
+        <h5>Equity curve</h5>
+        {#if eqMode === 'pnl' && model.equity.pnl.leftOut}<span class="muted" style="font-size:11px">{model.equity.pnl.leftOut} waiting</span>{/if}
+        <div style="display:flex;gap:4px;margin-left:auto">
+          {#each [['pnl', 'P&L'], ['value', 'Value']] as const as m (m[0])}
+            <button class="pill" class:on={eqMode === m[0]} style="padding:2px 8px;font-size:11px;width:auto" onclick={() => setEqMode(m[0])}>{m[1]}</button>
+          {/each}
+        </div>
+      </div>
       {#if !g}
-        <div class="empty muted" style="padding:40px 0">No NAV history yet. Sync to load it.</div>
+        <div class="empty muted" style="padding:40px 0">{eqMode === 'pnl' ? 'No realized P&L in scope.' : 'No NAV history yet. Sync to load it.'}</div>
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">
-            {#each [[2.3, g.max], [33.8, (g.max * 2) / 3], [65.4, g.max / 3], [96.9, 0]] as t (t[0])}
-              <span style="position:absolute;left:0;top:{t[0]}%;transform:translateY(-50%)">{eqTick(t[1])}</span>
+            {#each [2.3, 33.8, 65.4, 96.9] as top, i (top)}
+              <span style="position:absolute;left:0;top:{top}%;transform:translateY(-50%)">{eqTick(g.ticks[i])}</span>
             {/each}
           </div>
           <div bind:this={eqPlot} style="position:relative;flex:1;min-width:0" role="presentation" onmousemove={onEqMove} onmouseleave={onEqLeave}>
             <div class="xline" hidden={!eqHover} style="left:{eqHover?.x ?? '0'}"></div>
-            <div style="position:absolute;width:7px;height:7px;margin:-4px 0 0 -3px;border-radius:50%;background:var(--pos);box-shadow:0 0 0 2px var(--surface);pointer-events:none" hidden={!eqHover} style:left={eqHover?.x} style:top={eqHover?.y}></div>
-            <div class="tip" hidden={!eqHover} style="left:{eqHover?.x ?? '0'};transform:translateX({eqHover?.tx ?? '-50%'})"><div class="tv pos">{eqHover?.tv ?? ''}</div><div class="tl">{eqHover?.tl ?? ''}</div></div>
+            <div style="position:absolute;width:7px;height:7px;margin:-4px 0 0 -3px;border-radius:50%;background:var(--{eqHover?.up === false ? 'neg' : 'pos'});box-shadow:0 0 0 2px var(--surface);pointer-events:none" hidden={!eqHover} style:left={eqHover?.x} style:top={eqHover?.y}></div>
+            <div class="tip" hidden={!eqHover} style="left:{eqHover?.x ?? '0'};transform:translateX({eqHover?.tx ?? '-50%'})"><div class="tv {eqHover?.up === false ? 'neg' : 'pos'}">{eqHover?.tv ?? ''}</div><div class="tl">{eqHover?.tl ?? ''}</div></div>
             <svg viewBox="0 0 880 260" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
-              <defs><linearGradient id="bhEq" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--pos);stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--pos);stop-opacity:0" /></linearGradient></defs>
+              <defs><linearGradient id="bhEq" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:0" /></linearGradient></defs>
               <line x1="0" y1="6" x2="880" y2="6" style="stroke:var(--grid)" /><line x1="0" y1="88" x2="880" y2="88" style="stroke:var(--grid)" /><line x1="0" y1="170" x2="880" y2="170" style="stroke:var(--grid)" /><line x1="0" y1="252" x2="880" y2="252" style="stroke:var(--hair)" />
-              <path d={g.area} fill="url(#bhEq)" /><path d={g.path} fill="none" style="stroke:var(--pos)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+              <path d={g.area} fill="url(#bhEq)" /><path d={g.path} fill="none" style="stroke:var(--{g.up ? 'pos' : 'neg'})" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
             </svg>
           </div>
         </div>
@@ -227,6 +262,7 @@
           {#each eqAxis as a (a)}<span>{a}</span>{/each}
         </div>
       {/if}
+      {#if eqNote}<div class="dim" style="font-size:11px;line-height:1.5;margin-top:6px">{eqNote}</div>{/if}
     </div>
 
     <!-- annualized returns -->

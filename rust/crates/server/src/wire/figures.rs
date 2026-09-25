@@ -198,11 +198,28 @@ pub struct Annualized {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
 pub struct Equity {
+    /// The accounts' value by day: what Returns, the years and Max drawdown read.
     pub series: Vec<Point>,
     pub drawdown: Drawdown,
     pub annualized: Annualized,
     /// What the series waits on.
+    pub gaps: Vec<String>,
+    /// The filters set that the value series does not read.
+    pub skipped_filters: Vec<String>,
+    /// The realized P&L in scope, a running total by day.
+    pub pnl: PnlCurve,
+}
+
+/// The realized P&L in scope, CAD, the total to the end of each day a part was realized.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct PnlCurve {
+    pub series: Vec<Point>,
+    /// Parts whose P&L waits on something, left out of every total.
+    pub left_out: u32,
+    /// What the series waits on: a day whose total does not fit is not drawn.
     pub gaps: Vec<String>,
 }
 
