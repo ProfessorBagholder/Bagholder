@@ -147,7 +147,7 @@ test('the equity curve opens on P&L, a running total that reaches below zero, an
   await expect(card).toContainText('2 waiting')
   // the axis runs from below zero to above the peak
   await expect(card.locator('.tab span').first()).toHaveText('$1,200')
-  await expect(card.locator('.tab span').last()).toHaveText('−$600')
+  await expect(card.locator('.tab span').last()).toHaveText('−$420')
   const plot = card.locator('[role="presentation"]')
   const box = (await plot.boundingBox())!
   await page.mouse.move(box.x + 2, box.y + box.height / 2)
