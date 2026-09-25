@@ -98,7 +98,7 @@
   function tagOf(s: string, ex: string): NewsTag {
     const w = (store.model?.markets?.watchlist || []).find((x) => bareSymbol(x.symbol) === s)
     const p = (store.model?.positions || []).find((x) => bareSymbol(x.symbol) === s)
-    return { symbol: s, exchange: ex || (p && p.exchange) || (w && w.exchange) || '', held: !!p, watched: !!w, percentChange: p ? p.percentChange : w ? w.percentChange : null, positionId: p ? p.id : null }
+    return { symbol: s, exchange: ex || (p && p.exchange) || (w && w.exchange) || '', held: !!p, watched: !!w, percentChange: p ? (p.percentChange == null ? null : p.percentChange * 100) : w ? w.percentChange : null, positionId: p ? p.id : null }
   }
   function filedReleases(only: Chip | null, sc: string, wire: NewsItem[]): NewsItem[] {
     let rows: DiscRow[]

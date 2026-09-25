@@ -25,7 +25,7 @@
   // ---- the chart: mount the wanted timeframe, falling back a step coarser when a
   // timeframe is not offered, and showing the daily chart while minute data loads.
   // a listing brings its own fills (none); a trade's or a holding's are asked for when it opens
-  const fills = $derived((trade.fills ?? (detail.id === trade.id ? detail.fills : undefined)) as Fill[] | undefined)
+  const fills = $derived(trade.fills ?? (detail.id === trade.id ? detail.fills : undefined))
   let loaded = $state<{ tf: string; hist: History; provisional: boolean } | null>(null)
   let wantedTf = $state('')
 
@@ -140,18 +140,18 @@
   function thesisInput() {
     clearTimeout(thesisTimer)
     thesisTimer = setTimeout(() => {
-      if (trade.thesis !== thesisDraft) saveJournal(trade.id, { thesis: thesisDraft })
+      if (trade.thesis !== thesisDraft) saveJournal(trade.journal ?? trade.id, { thesis: thesisDraft })
     }, 600)
   }
   function thesisBlur() {
     clearTimeout(thesisTimer)
-    if (trade.thesis !== thesisDraft) saveJournal(trade.id, { thesis: thesisDraft })
+    if (trade.thesis !== thesisDraft) saveJournal(trade.journal ?? trade.id, { thesis: thesisDraft })
   }
   function setGrade(g: string) {
-    saveJournal(trade.id, { grade: trade.grade === g ? '' : g })
+    saveJournal(trade.journal ?? trade.id, { grade: trade.grade === g ? '' : g })
   }
   function removeTag(tag: string) {
-    saveJournal(trade.id, { tags: (trade.tags || []).filter((x) => x !== tag) })
+    saveJournal(trade.journal ?? trade.id, { tags: (trade.tags || []).filter((x) => x !== tag) })
     tagEl?.focus()
   }
 
@@ -167,7 +167,7 @@
       .slice(0, 6)
   })
   function addTag(tag: string) {
-    if ((trade.tags || []).indexOf(tag) < 0) saveJournal(trade.id, { tags: [...(trade.tags || []), tag] })
+    if ((trade.tags || []).indexOf(tag) < 0) saveJournal(trade.journal ?? trade.id, { tags: [...(trade.tags || []), tag] })
     tagDraft = ''
     tagHi = 0
     tagEl?.focus()
@@ -176,7 +176,7 @@
     const v = tagDraft.trim().replace(/,$/, '')
     tagDraft = ''
     if (v && (trade.tags || []).indexOf(v) < 0) {
-      saveJournal(trade.id, { tags: [...(trade.tags || []), v] })
+      saveJournal(trade.journal ?? trade.id, { tags: [...(trade.tags || []), v] })
       tagEl?.focus()
     }
   }
@@ -281,7 +281,7 @@
             {@render fact('Market', money0(trade.mv ?? null, trade.currency))}
           {:else}
             {@render fact('Open', trade.entryDate)}
-            {@render fact('Close', trade.exitDate)}
+            {@render fact('Close', trade.exitDate ?? 'Open')}
             {@render fact('Entry', px(trade.entry))}
             {@render fact('Exit', px(trade.exit))}
           {/if}
@@ -314,6 +314,7 @@
               {/each}
             </tbody>
           </table>
+          {#if detail.id === trade.id && detail.error}<div class="neg" style="padding:12px 0;font-size:12px">{detail.error}</div>{/if}
         </div>
       </div>
 

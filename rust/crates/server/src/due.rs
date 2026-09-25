@@ -41,6 +41,7 @@ pub fn run(app: Arc<App>) {
     let Some(f) = app.figures.get() else { return };
     while !app.stopping() {
         let now = Timestamp::now();
+        let before = f.version();
         let next = match pass(&app, f, now) {
             Ok(next) => next,
             Err(e) => {
@@ -50,6 +51,10 @@ pub fn run(app: Arc<App>) {
                 None
             }
         };
+        if f.version() != before {
+            // a figure moved: every page's stream looks
+            app.events.signal();
+        }
         // until the next deadline, or until something that can make a read due
         match next {
             Some(n) => {

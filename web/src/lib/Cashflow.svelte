@@ -1,7 +1,8 @@
 <script lang="ts">
   import { roll } from './actions/roll'
-  import type { Model, Cashflow, CashflowHolding, CashflowRow } from './model'
-  import { money, money0, signedMoney, pctPlain, qty, px, color } from './fmt'
+  import type { Model, Partial } from './model'
+  import { money, money0, signedMoney, pctPlain, qty, px, color, leftOut, waiting } from './fmt'
+  import { absBelow, plot, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
 
@@ -11,27 +12,11 @@
   function monthLong(key: string): string {
     return MON_LONG[+key.slice(5, 7) - 1] + ' ' + key.slice(0, 4)
   }
-  // The month's margin interest, CAD, from the Interest charge rows in scope.
-  function cfInterestByMonth(c: Cashflow): Record<string, number> {
-    const out: Record<string, number> = {}
-    ;(c.other || []).forEach((r) => {
-      if (r.kind === 'Interest charge') {
-        const k = String(r.date).slice(0, 7)
-        out[k] = (out[k] || 0) - r.amountCad
-      }
-    })
-    return out
-  }
-  // The pie: each income holding's share of the whole by projected monthly income.
-  function pieSlices(rows: CashflowHolding[]): { total: number; items: { symbol: string; account: string; v: number; share: number; color: string }[] } {
-    const val = (h: CashflowHolding) => (h.annual != null ? h.annual / 12 : null)
-    const items = rows
-      .map((h) => ({ symbol: h.symbol, account: h.account, v: val(h) }))
-      .filter((x): x is { symbol: string; account: string; v: number } => x.v != null && x.v > 0)
-      .sort((a, b) => b.v - a.v)
-    const total = items.reduce((a, x) => a + x.v, 0)
-    return { total, items: items.map((x, i) => Object.assign(x, { share: total ? x.v / total : 0, color: 'var(--pie-' + ((i % 8) + 1) + ')' })) }
-  }
+  // a figure's height on a chart; one that waits stands at zero, its word in the tip
+  const at = (v: Fig<Dec>): number => (waits(v) ? 0 : plot(v))
+  // a distribution a unit: four places under a dollar, else two
+  const perUnit = (v: Fig<Dec> | null) => (v == null ? '—' : waits(v) ? waiting(v) : money(v, '', absBelow(v, '1') ? 4 : 2))
+  const PIE = (i: number) => 'var(--pie-' + ((i % 8) + 1) + ')'
 
   type Col = { key: string; label: string; align?: string; width?: string; padLeft?: string; padRight?: string }
   const ycols: Col[] = [
@@ -60,8 +45,7 @@
 
   const c = $derived(model.cashflow)
   const ms = $derived(c.months || [])
-  const interest = $derived(cfInterestByMonth(c))
-  const peak = $derived(Math.max(...ms.map((x) => Math.max(x.value, interest[x.key] || 0)), 0))
+  const peak = $derived(Math.max(...ms.map((x) => Math.max(at(x.value), at(x.interest))), 0))
   const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
@@ -74,18 +58,16 @@
     return skipped.length ? skipped.join(', ') + (skipped.length > 1 ? ' filters do not' : ' filter does not') + ' apply to distributions — only account, date and symbol narrow this page.' : ''
   })
 
-  const holdingRows = $derived.by(() => {
-    const posById: Record<string, { mv: number }> = {}
-    ;(model.positions || []).forEach((p) => {
-      posById[p.id] = p
-    })
-    return (c.holdings || []).map((h) => Object.assign({}, h, { mv: posById[h.id] ? posById[h.id].mv : null }) as CashflowHolding)
-  })
-  const holdings = $derived(sortRows(holdingRows, sort.yoc.key, sort.yoc.dir, (r, k) => (r as unknown as Record<string, unknown>)[k]))
+  // a total sorts by what it adds; the projection column shows a month of it
+  const sortValue = (r: Record<string, unknown>, k: string) => {
+    const v = r[k === 'annual' ? 'perMonth' : k]
+    return v != null && typeof v === 'object' && 'leftOut' in v ? (v as Partial).total : v
+  }
+  const holdings = $derived(sortRows(c.holdings || [], sort.yoc.key, sort.yoc.dir, (r, k) => sortValue(r as unknown as Record<string, unknown>, k)))
   const rows = $derived(sortRows(c.rows || [], sort.cash.key, sort.cash.dir, (r, k) => (r as unknown as Record<string, unknown>)[k]))
 
-  const pie = $derived(pieSlices(holdingRows))
-  const pieFmt = (v: number) => money0(v) + '/mo'
+  const pie = $derived({ total: c.incomeTotal, items: (c.income || []).map((x, i) => ({ symbol: x.label, v: x.value, share: x.share, color: PIE(i) })) })
+  const pieFmt = (v: Fig<Dec>) => (waits(v) ? waiting(v) : money0(v) + '/mo')
   // arc geometry for the ring; accumulates share around the circle
   const pieArcs = $derived.by(() => {
     const R = 44, W = 14, C = 60
@@ -105,9 +87,9 @@
   let cfH = $state<number | null>(null)
   let pieH = $state<number>(-1)
 
-  function barOrder(b: { key: string; value: number; count: number }) {
-    const hd = b.count === 0 ? 0 : Math.max(1.5, (b.value / head) * 94)
-    const hi = ((interest[b.key] || 0) / head) * 94
+  function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; count: number }) {
+    const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
+    const hi = (at(b.interest) / head) * 94
     const dist = { h: hd, color: 'var(--accent-bar)' }
     const intr = { h: hi, color: 'var(--neg)' }
     const bars = hi > hd ? [intr, dist] : [dist, ...(hi > 0 ? [intr] : [])]
@@ -118,12 +100,12 @@
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px;min-height:380px">
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
     {#each c.tiles as t (t.label)}
-      {#if 'marginUsed' in t}
+      {#if t.kind === 'margin'}
         <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v" use:roll={money0(t.marginUsed)}></div><div class="s">{money0(t.interestPerMonth)}/mo margin interest</div></div>
-      {:else if 'yield' in t}
+      {:else if t.kind === 'yield'}
         <div class="card elev-sm kpi"><div class="lbl">Yield on cost</div><div class="tab v" style="color:var(--accent-300)" use:roll={t.yield == null ? '—' : pctPlain(t.yield, 2)}></div><div class="s">{money0(t.projected)}/mo</div></div>
       {:else}
-        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v" use:roll={money0(t.total)}></div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}</div></div>
+        <div class="card elev-sm kpi"><div class="lbl">{String(t.label).replace(/^\d{4} YTD$/, 'YTD')}</div><div class="tab v" use:roll={money0(t.total.total)}></div><div class="s">{t.label === 'All time' ? 'Total earned' : money0(t.perMonth) + '/mo avg'}{t.total.leftOut ? ' · ' + leftOut(t.total.leftOut) : ''}</div></div>
       {/if}
     {/each}
   </div>
@@ -147,13 +129,13 @@
           {@const b = ms[cfH]}
           {@const n = ms.length}
           {@const x = ((cfH + 0.5) / n * 100).toFixed(2) + '%'}
-          {@const intr = interest[b.key] || 0}
-          {@const net = b.value - intr}
+          {@const intr = b.interest}
+          {@const net = b.net}
           <div class="xline" style="left:{x}"></div>
           <div class="tip" style="left:{x};transform:translateX({cfH > n * 0.7 ? '-100%' : '-8px'})">
             <div class="tl" style="margin-bottom:2px">{monthLong(b.key)}</div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--accent-300)"><span style="font-weight:400;color:var(--ink60)">Distributions</span><span>{money0(b.value)}</span></div>
-            <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{intr ? signedMoney(-intr, '', 0) : money0(0)}</span></div>
+            <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:var(--neg)"><span style="font-weight:400;color:var(--ink60)">Margin interest</span><span>{signedMoney(intr, '', 0)}</span></div>
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:{color(net)}"><span style="font-weight:400;color:var(--ink60)">Net cashflow</span><span>{signedMoney(net, '', 0)}</span></div>
           </div>
         {/if}
@@ -199,15 +181,15 @@
                 <td style="text-align:right;color:var(--ink75)">{qty(h.qty)}</td>
                 <td style="text-align:right;color:var(--ink75)">{px(h.avg)}</td>
                 <td style="text-align:right;color:var(--ink75)">{money0(h.cost)}</td>
-                <td style="text-align:right;color:var(--ink75)">{h.mv == null ? '—' : money0(h.mv)}</td>
-                <td style="text-align:right;color:var(--ink75)">{h.per == null ? '—' : '$' + h.per.toFixed(h.per < 1 ? 4 : 2)}</td>
-                <td style="text-align:right">{money0(h.ytd)}</td>
-                <td style="text-align:right">{money0(h.all)}</td>
+                <td style="text-align:right;color:var(--ink75)">{money0(h.mv)}</td>
+                <td style="text-align:right;color:var(--ink75)">{perUnit(h.per)}</td>
+                <td style="text-align:right">{@render partial(h.ytd)}</td>
+                <td style="text-align:right">{@render partial(h.all)}</td>
                 <td style="text-align:right;color:{h.exPast ? 'var(--ink55)' : 'var(--ink)'}">{h.nextExDate || '—'}</td>
                 <td style="text-align:right;color:{h.payPast ? 'var(--ink55)' : 'var(--ink)'}">{h.nextPayDate || '—'}</td>
-                <td style="text-align:right">{h.annual == null ? '—' : money0(h.annual / 12)}</td>
-                <td style="text-align:right;font-weight:500;color:var(--accent-300)">{h.yoc == null ? '—' : pctPlain(h.yoc, 2)}</td>
-                <td style="text-align:right;padding-right:0;color:var(--ink75)">{h.currentYield == null ? '—' : pctPlain(h.currentYield, 2)}</td>
+                <td style="text-align:right">{money0(h.perMonth)}</td>
+                <td style="text-align:right;font-weight:500;color:var(--accent-300)">{pctPlain(h.yoc, 2)}</td>
+                <td style="text-align:right;padding-right:0;color:var(--ink75)">{pctPlain(h.currentYield, 2)}</td>
               </tr>
             {/each}
           {:else}
@@ -242,7 +224,8 @@
                 <div class="muted" style="font-size:11px;margin-top:2px">{pctPlain(x.share)}</div>
               {:else}
                 <div class="lbl">Projected</div>
-                <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{pieFmt(pie.total)}</div>
+                <div class="tab" style="font-size:17px;font-weight:500;margin-top:2px">{pieFmt(pie.total.total)}</div>
+                {#if pie.total.leftOut}<div class="muted" style="font-size:11px;margin-top:2px">{leftOut(pie.total.leftOut)}</div>{/if}
               {/if}
             </div>
           </div>
@@ -284,7 +267,7 @@
                   <td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">{symText(r.symbol)}</td>
                   <td style="font-variant-numeric:normal;color:var(--ink75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.account}</td>
                   <td style="text-align:right;color:var(--ink75)">{r.qty ? qty(r.qty) : '—'}</td>
-                  <td style="text-align:right;color:var(--ink75)">{r.per ? '$' + r.per.toFixed(4) : '—'}</td>
+                  <td style="text-align:right;color:var(--ink75)">{r.per == null ? '—' : waits(r.per) ? waiting(r.per) : money(r.per, '', 4)}</td>
                   <td style="text-align:right;font-weight:500">{money(r.amount, r.currency)}</td>
                 </tr>
               {/each}
@@ -297,3 +280,6 @@
     </div>
   </div>
 </div>
+
+<!-- a total, and under it how many it left out -->
+{#snippet partial(p: Partial)}{money0(p.total)}{#if p.leftOut}<div class="dim" style="font-size:10.5px">{leftOut(p.leftOut)}</div>{/if}{/snippet}

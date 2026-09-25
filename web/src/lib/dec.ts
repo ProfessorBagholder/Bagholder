@@ -83,6 +83,15 @@ export function plot(d: Dec): number {
   return Number(d)
 }
 
+/**
+ * A starting value for the order ticket, which works on what the person types, as
+ * numbers, and sends numbers (the order API's own shape): a held quantity, the
+ * accounts' value for a share of it. Never shown as a figure, never summed.
+ */
+export function ticketNumber(f: Fig<Dec> | null | undefined): number | null {
+  return f == null || waits(f) ? null : Number(f)
+}
+
 const formats = new Map<string, Intl.NumberFormat>()
 
 /** `|d|` written with `min`..`max` decimals and en-US grouping, from the exact text. */

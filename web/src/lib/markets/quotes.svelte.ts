@@ -16,7 +16,7 @@ export function sugKey(w: { symbol: string; exchange?: string }): string {
   return bareSymbol(w.symbol) + '@' + String(w.exchange || '').toUpperCase()
 }
 
-export function sugQuoteSchedule(rows: { symbol: string; exchange?: string; currency?: string; last?: number | null }[]): void {
+export function sugQuoteSchedule(rows: { symbol: string; exchange?: string; currency?: string; last?: unknown }[]): void {
   rows.forEach((w) => {
     const k = sugKey(w)
     if (w.last != null || sugQuotes[k] || pending[k]) return

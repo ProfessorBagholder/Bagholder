@@ -188,22 +188,13 @@ fn test_the_stream_says_hello_sends_the_view_once_and_then_only_what_changed() {
 }
 
 #[test]
-fn test_a_feed_with_nothing_new_has_nothing_to_say() {
-    let _g = guard();
-    let mut feed = crate::events::Feed::open(app(), None, None);
-    let first = feed.step(&crate::status::status);
-    assert_eq!(first.iter().map(|m| m.0).collect::<Vec<_>>(), ["snapshot"]);
-    assert!(feed.step(&crate::status::status).is_empty(), "the same view and the same status: no message at all");
-}
-
-#[test]
 fn test_a_new_notification_reaches_the_bell_as_one_row_inserted() {
     let _g = guard();
     std::env::set_var(crate::notify::MODE_ENV, "browser"); // never the system's own notifications from a test
     let conn = app_ref().open().unwrap();
     crate::notify::set_settings(&conn, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
     bagholder_store::feeds::clear_notifications(&conn).unwrap();
-    let mut feed = crate::events::Feed::open(app(), None, None);
+    let mut feed = crate::events::Feed::open(app(), None);
     assert!(app().events.watch(&app(), feed.id(), [("notifications".to_string(), json!({}))].into_iter().collect()));
     let first = feed.step(&crate::status::status);
     let bell = first.iter().find(|(_, data)| data["doc"] == "notifications").expect("the bell arrives whole once");

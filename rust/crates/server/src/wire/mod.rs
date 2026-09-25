@@ -12,6 +12,7 @@
 //!   their type declares (`#[diff(key = …)]`), never by one guessed from the data.
 
 pub mod build;
+pub mod context;
 pub mod filters;
 pub mod figures;
 

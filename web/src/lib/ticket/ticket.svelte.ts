@@ -6,6 +6,7 @@ import { symText } from '../sym'
 import { px, qty as qtyFmt } from '../fmt'
 import { computeVals, tick, plain, type Ticket, type TicketAccount, type ValsCtx } from './vals'
 import { call } from '../api'
+import { ticketNumber } from '../dec'
 
 // The order ticket's live state. Opened from a ⌘K row's Buy/Sell (or the trade
 // detail); the quote is polled while open; submit posts to /api/order. A draft is
@@ -27,12 +28,19 @@ export const draftStore = $state<{ d: TicketDraft | null }>({ d: null })
 const TK_DRAFT_KEYS = ['accountId', 'type', 'tif', 'qty', 'limit', 'stop', 'sl', 'tp', 'text'] as const
 
 
-// what the book knows about the symbol: its listing id, kind, and the open position
-function tkLookup(symbol: string): { securityId: string; kind: string; position: Position | null } {
+// what the book knows about the listing the broker names `securityId` (or, with none
+// given, the one symbol it holds by that text): its kind and the open position
+function tkLookup(symbol: string, securityId: string): { securityId: string; kind: string; position: Position | null } {
   const m = store.model
-  const pos = (m?.positions ?? []).find((p) => p.symbol === symbol) || null
-  const t = pos || (m?.trades ?? []).find((x) => x.symbol === symbol) || null
-  return { securityId: t ? t.securityId || '' : '', kind: t ? t.kind : '', position: pos }
+  const is = (x: { security: string; symbol: string }) => (securityId ? x.security === securityId : x.symbol === symbol)
+  const pos = (m?.positions ?? []).find(is) || null
+  const t = pos || (m?.trades ?? []).find(is) || null
+  return { securityId: t ? t.security : securityId, kind: t ? t.kind : '', position: pos }
+}
+
+// an account as an order names it: by the broker's own id for it
+function brokerAccount(id: string): string {
+  return (store.model?.accounts ?? []).find((a) => a.id === id)?.brokerAccount ?? ''
 }
 
 // The accounts a ticket can route to: the server's list once the quote has answered,
@@ -41,14 +49,15 @@ export function ticketAccounts(): TicketAccount[] {
   const t = ticketStore.t
   const out: TicketAccount[] = (t && t.data && t.data.accounts ? t.data.accounts : []).slice()
   ;(store.model?.accounts ?? [])
-    .filter((a) => a.status !== 'closed' && /^SELF_DIRECTED/.test(a.type) && !/CRYPTO|PREDICTIONS|MANAGED/.test(a.type))
+    .filter((a) => a.status !== 'closed' && a.tradable && a.brokerAccount != null)
     .forEach((a) => {
-      if (!out.some((x) => x.id === a.id)) out.push({ id: a.id, name: a.name, type: a.type, margin: /MARGIN/.test(a.type), marginAccountId: /MARGIN/.test(a.type) ? a.id : '' })
+      const id = a.brokerAccount as string
+      if (!out.some((x) => x.id === id)) out.push({ id, name: a.name, margin: a.margin, marginAccountId: a.margin ? id : '' })
     })
   return out
 }
 function nav(): number {
-  return (store.model?.accounts ?? []).filter((a) => a.status !== 'closed' && a.nav != null).reduce((s, a) => s + (a.nav ?? 0), 0)
+  return ticketNumber(store.model?.navTotal) ?? 0
 }
 export function ctx(): ValsCtx {
   return { nav: nav(), accounts: ticketAccounts() }
@@ -94,20 +103,21 @@ loadDraftFromStorage()
 // Signature preserved: openTicket(symbol, side, exchange='', securityId='') — the
 // command palette and the trade detail wire their Buy/Sell to exactly this.
 export function openTicket(symbol: string, side: 'BUY' | 'SELL', exchange = '', securityId = '') {
-  const info = tkLookup(symbol)
+  const info = tkLookup(symbol, securityId)
   const accounts = ticketAccounts()
   const held = info.position
-  let accountId = held && side === 'SELL' ? held.accountId : '' // a sell goes where the shares are
-  if (!accountId) accountId = tkRememberedAccount(accounts) || (held ? held.accountId : '')
+  const heldIn = held ? brokerAccount(held.accountId) : ''
+  let accountId = held && side === 'SELL' ? heldIn : '' // a sell goes where the shares are
+  if (!accountId) accountId = tkRememberedAccount(accounts) || heldIn
   if (!accountId) accountId = (accounts.find((a) => a.margin) || accounts[0] || { id: '' }).id || ''
   ui.menuOpen = false
   const t: Ticket = {
     step: 'form', symbol, securityId: securityId || info.securityId, exchange,
     side: side === 'SELL' ? 'SELL' : 'BUY', accountId, type: 'LIMIT', tif: 'DAY',
-    qty: held && side === 'SELL' ? held.qty : 1, limit: null, stop: null,
+    qty: held && side === 'SELL' ? ticketNumber(held.qty) : 1, limit: null, stop: null,
     sl: { on: true, kind: 'stop', price: null, pct: null, priceUnit: 'amt', trail: null, unit: 'pct' },
     tp: { on: true, price: null, pct: null, unit: 'amt' },
-    heldQty: held ? held.qty : null, text: {}, data: null, error: '', busy: false, submitError: '',
+    heldQty: held ? ticketNumber(held.qty) : null, text: {}, data: null, error: '', busy: false, submitError: '',
   }
   const d = draftStore.d // what was typed before the ticket closed
   if (d && d.symbol === symbol && d.side === t.side) for (const k of TK_DRAFT_KEYS) if ((d as unknown as Record<string, unknown>)[k] != null) (t as unknown as Record<string, unknown>)[k] = (d as unknown as Record<string, unknown>)[k]

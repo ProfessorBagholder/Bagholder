@@ -133,7 +133,7 @@ fn markets_declarations() -> String {
         crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::WatchlistBody, crate::http::markets::TilesSet,
         bagholder_store::feeds::WatchedListing, bagholder_model::input::TileRef,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { Fill, MarketTile, SymbolMatch } from './wire'\n\n");
+    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { MarketTile, SymbolMatch } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -433,7 +433,7 @@ fn figures_declarations() -> String {
         Slice, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, AccountOption, InstrumentOption, Options, Figures,
         crate::wire::filters::Range, crate::wire::filters::Filters,
     ];
-    let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\n\n");
+    let mut out = String::from("// Generated from rust/crates/server/src/wire. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.\n\nimport type { Dec } from '../dec'\nimport type { Markets, ExposureSlice } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());

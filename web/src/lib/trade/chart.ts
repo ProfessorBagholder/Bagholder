@@ -5,6 +5,7 @@
 // them verbatim.
 import type { Trade, Fill } from '../model'
 import { qty, px } from '../fmt'
+import { abs, sign, waits, type Dec, type Fig } from '../dec'
 import { lookup, query } from '../api'
 import type { ChartHistory, DayBar, HistoryQuery, TimeBar } from '../generated/chart'
 
@@ -39,7 +40,9 @@ export function setChartTf(id: string, tf: string): void {
 // The default timeframe follows the trade's length so the whole trade fits the view.
 function autoTf(t: Trade): string {
   if (t.listing) return '1d'
-  const days = Math.max(1, Math.round((Date.parse(t.exitDate) - Date.parse(t.entryDate)) / 86400000) + 1)
+  // an open trade runs to now
+  const end = t.exitDate != null ? Date.parse(t.exitDate) : Date.now()
+  const days = Math.max(1, Math.round((end - Date.parse(t.entryDate)) / 86400000) + 1)
   return days <= 2 ? '1h' : days <= 10 ? '4h' : days <= 180 ? '1d' : days <= 1100 ? '1w' : '1M'
 }
 export function chartTfFor(t: Trade, available?: string[]): string {
@@ -108,9 +111,13 @@ export interface FillMarker {
 }
 // A fill sits on the bar that contains it: by date on daily and coarser bars, by
 // bucket on intraday ones.
+const unsigned = (q: Fig<Dec>): Fig<Dec> => (waits(q) ? q : abs(q))
 export function fillMarkers(fills: Fill[], bars: Bar[], c: ChartColors): FillMarker[] {
   const keys = bars.map((b) => ('date' in b ? (b.date as string | number) : (b.time as number)))
-  const keyOf = (f: Fill) => (bars.length && 'date' in bars[0] ? f.date : Math.round(Date.parse(f.when) / 1000))
+  const daily = bars.length > 0 && 'date' in bars[0]
+  // an intraday bar holds a fill by its time; a fill whose time was not recorded sits on its day's first bar
+  const timed = (f: Fill) => f.when != null && isFinite(Date.parse(f.when))
+  const dayStart = (f: Fill) => Math.round(Date.parse(f.date + 'T00:00:00') / 1000)
   const onBar = (k: string | number) => {
     let best: string | number | null = null
     for (const x of keys) {
@@ -119,15 +126,17 @@ export function fillMarkers(fills: Fill[], bars: Bar[], c: ChartColors): FillMar
     }
     return best != null ? best : keys.length ? keys[0] : k
   }
+  const firstFrom = (k: number) => keys.find((x) => (x as number) >= k) ?? onBar(k)
+  const barOf = (f: Fill) => (daily ? onBar(f.date) : timed(f) ? onBar(Math.round(Date.parse(f.when as string) / 1000)) : firstFrom(dayStart(f)))
   const shown = (t: string | number) => (typeof t === 'number' ? localTime(t) : t)
   return fills.map((f) => ({
-    time: shown(bars.length ? onBar(keyOf(f)) : Math.round(Date.parse(f.when) / 1000)),
+    time: shown(bars.length ? barOf(f) : timed(f) ? Math.round(Date.parse(f.when as string) / 1000) : f.date),
     position: (f.side === 'BUY' ? 'belowBar' : 'aboveBar') as 'aboveBar' | 'belowBar',
     shape: (f.side === 'BUY' ? 'arrowUp' : 'arrowDown') as 'arrowUp' | 'arrowDown',
     color: f.side === 'BUY' ? c.up : c.down,
     text:
       (f.side === 'BUY' ? '+' : '−') +
-      qty(Math.abs(f.qty)) +
-      ((f.price ?? 0) > 0 ? ' @ ' + px(f.price) : f.flags && f.flags.indexOf('reward') >= 0 ? ' reward' : ''),
+      qty(unsigned(f.qty)) +
+      (!waits(f.price) && sign(f.price) > 0 ? ' @ ' + px(f.price) : f.flags.indexOf('reward') >= 0 ? ' reward' : ''),
   }))
 }

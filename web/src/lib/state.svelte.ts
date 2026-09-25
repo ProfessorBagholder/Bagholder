@@ -1,4 +1,4 @@
-import type { Model } from './model'
+import type { Fill, Model } from './model'
 import { filters } from './filters.svelte'
 import { connect, disconnect, onChange, onRestart } from './live'
 import { forgetHistory } from './trade/chart'
@@ -39,20 +39,20 @@ export function resync(): void {
 // again. They are kept beside the model, not in its row: the view never carries them,
 // so a view arriving again (the filters changed, the connection was made again) would
 // take them off the row and blank the open chart.
-export const detail = $state<{ id: string; legs: unknown[]; fills: unknown[] | undefined }>({ id: '', legs: [], fills: undefined })
+export const detail = $state<{ id: string; fills: Fill[] | undefined; error: string }>({ id: '', fills: undefined, error: '' })
 export async function loadDetail(id: string | null): Promise<void> {
-  if (id !== detail.id) Object.assign(detail, { id: id ?? '', legs: [], fills: undefined })
+  if (id !== detail.id) Object.assign(detail, { id: id ?? '', fills: undefined, error: '' })
   if (!id) return
-  try {
-    const d = await call('GET /api/trade', { query: { id } })
-    if (!d.ok || detail.id !== id) return
-    const next = { legs: d.legs ?? [], fills: d.fills ?? [] }
-    // the same answer is not a change: the chart and the executions stand as they are
-    if (detail.fills && JSON.stringify(next) === JSON.stringify({ legs: detail.legs, fills: detail.fills })) return
-    Object.assign(detail, next)
-  } catch {
-    /* the rest of the page stands; the detail is asked for again when the row next changes */
+  const d = await call('GET /api/figures/detail', { query: { id } })
+  if (detail.id !== id) return
+  // a failed read is said where the executions go, never left as a table waiting for ever
+  if (d.error || !Array.isArray(d.fills)) {
+    detail.error = d.error || 'The executions could not be read.'
+    return
   }
+  // the same answer is not a change: the chart and the executions stand as they are
+  if (detail.fills && JSON.stringify(d.fills) === JSON.stringify(detail.fills)) return
+  Object.assign(detail, { fills: d.fills, error: '' })
 }
 onChange((touched) => {
   if (detail.id && (touched === 'all' || touched.has(detail.id))) loadDetail(detail.id)

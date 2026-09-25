@@ -51,8 +51,9 @@ export function tradeChart(node: HTMLElement, initial: TradeChartParams) {
   // reports the library's default span): none of that is a range the person chose.
   let settling = false
 
+  // by day, and within a day by time; a fill whose time was not recorded stands first in its day
   const orderedFills = (p: TradeChartParams) =>
-    (p.fills || []).filter((f) => isFinite(Date.parse(f.when))).sort((a, b) => (a.when < b.when ? -1 : a.when > b.when ? 1 : 0))
+    (p.fills || []).slice().sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : (a.when ?? '') < (b.when ?? '') ? -1 : (a.when ?? '') > (b.when ?? '') ? 1 : 0))
 
   function chartOptions(p: TradeChartParams) {
     const c = p.colors

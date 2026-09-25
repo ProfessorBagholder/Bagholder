@@ -38,13 +38,14 @@ vi.mock('lightweight-charts', () => {
 
 import { tradeChart, type TradeChartParams } from './tradeChart'
 import type { Fill } from '../model'
+import type { Dec } from '../dec'
 
 const colors = { text: '#aaa', grid: '#222', up: '#0a0', down: '#a00' } as TradeChartParams['colors']
 const bars = [
   { date: '2026-09-14', open: 1, high: 2, low: 1, close: 2 },
   { date: '2026-09-15', open: 2, high: 3, low: 2, close: 3 },
 ] as TradeChartParams['bars']
-const fill = (id: string, when: string): Fill => ({ id, when, date: when.slice(0, 10), time: '', side: 'BUY', sub: '', qty: 5, price: 1.5, amount: -7.5, fees: 0, currency: 'CAD', flags: [] })
+const fill = (id: string, when: string): Fill => ({ id, when, date: when.slice(0, 10), side: 'BUY', sub: '', qty: '5' as Dec, price: '1.5' as Dec, amount: '-7.5' as Dec, currency: 'CAD', flags: [] })
 
 beforeEach(() => Object.keys(made).forEach((k) => ((made as Record<string, number>)[k] = 0)))
 

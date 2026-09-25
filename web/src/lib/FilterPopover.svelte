@@ -36,12 +36,13 @@
     if (wrap && !wrap.contains(e.target as Node)) onclose()
   }
 
-  // ---- the book's knowledge of a symbol, for the row's Buy/Sell (ledger tkLookup) ----
-  function tkLookup(symbol: string): { securityId: string; kind: string; hasPosition: boolean } {
+  // ---- the book's knowledge of an instrument, for the row's Buy/Sell ----
+  function tkLookup(instrument: string): { securityId: string; kind: string; hasPosition: boolean } {
     const m = store.model
-    const pos = (m?.positions ?? []).find((p) => p.symbol === symbol) ?? null
-    const t = pos ?? (m?.trades ?? []).find((x) => x.symbol === symbol) ?? null
-    return { securityId: (t?.securityId as string) || '', kind: (t?.kind as string) || '', hasPosition: !!pos }
+    const pos = (m?.positions ?? []).find((p) => p.instrument === instrument) ?? null
+    const t = pos ?? (m?.trades ?? []).find((x) => x.instrument === instrument) ?? null
+    const kind = options.instruments.find((i) => i.id === instrument)?.kind ?? ''
+    return { securityId: t?.security ?? '', kind, hasPosition: !!pos }
   }
 
   // ---- external symbol search ----
@@ -68,12 +69,12 @@
   function extRows(q: string): SymRow[] {
     const Q = q.trim().toUpperCase()
     if (!Q || extResults.q !== Q) return []
-    const held = new Set((options.symbols ?? []).map((v) => bareSymbol(v) + '|' + String(options.listings?.[v]?.exchange ?? '').toUpperCase()))
+    const held = new Set(options.instruments.map((i) => bareSymbol(i.symbol) + '|' + i.exchange.toUpperCase()))
     return extResults.rows.filter((r) => !held.has(bareSymbol((r.symbol ?? r.sym) as string) + '|' + String(r.exchange ?? '').toUpperCase()))
   }
 
   interface SymRow { book?: boolean; sym?: string; symbol?: string; name?: string; exchange?: string; currency?: string; kind?: string; rank?: number; sub?: string }
-  interface MergedSym { book: boolean; sym: string; name: string; exchange: string; currency: string; kind: string; rank: number; sub: string }
+  interface MergedSym { book: boolean; id: string; sym: string; name: string; exchange: string; currency: string; kind: string; rank: number; sub: string }
 
   function contractExpiry(sym: string): string {
     const m = OPTION_RE.exec(sym)
@@ -85,7 +86,6 @@
     const Q = q.trim().toUpperCase()
     if (!Q) return []
     const B = bareSymbol(Q)
-    const listings = options.listings ?? {}
     const rank = (sym: string, name?: string) => {
       const S = String(sym).toUpperCase()
       if (S === Q || bareSymbol(S) === Q || bareSymbol(S) === B) return 0
@@ -93,36 +93,43 @@
       return S.indexOf(Q) >= 0 || String(name ?? '').toUpperCase().indexOf(Q) >= 0 ? 2 : -1
     }
     const out: MergedSym[] = []
-    ;(options.symbols ?? []).forEach((sym) => {
-      const l = listings[sym] ?? {}
+    options.instruments.forEach((l) => {
+      const sym = l.symbol
       if (l.kind === 'Options' || OPTION_RE.test(sym)) {
-        const under = String(sym).split(' ')[0].toUpperCase()
-        if (bareSymbol(under) === Q || under.startsWith(Q) || String(sym).toUpperCase().indexOf(Q) >= 0)
-          out.push({ book: true, sym, name: '', exchange: l.exchange ?? '', currency: l.currency ?? '', kind: l.kind ?? '', rank: 3, sub: contractExpiry(sym) + sym })
+        const under = sym.split(' ')[0].toUpperCase()
+        if (bareSymbol(under) === Q || under.startsWith(Q) || sym.toUpperCase().indexOf(Q) >= 0)
+          out.push({ book: true, id: l.id, sym, name: '', exchange: l.exchange, currency: l.currency, kind: l.kind, rank: 3, sub: contractExpiry(sym) + sym })
         return
       }
       const r = rank(sym, l.name)
-      if (r >= 0) out.push({ book: true, sym, name: l.name ?? '', exchange: l.exchange ?? '', currency: l.currency ?? '', kind: l.kind ?? '', rank: r, sub: bareSymbol(sym) })
+      if (r >= 0) out.push({ book: true, id: l.id, sym, name: l.name, exchange: l.exchange, currency: l.currency, kind: l.kind, rank: r, sub: bareSymbol(sym) })
     })
     extRows(q).forEach((r) => {
       const s = (r.symbol ?? r.sym) as string
       const k = r.rank != null ? r.rank : rank(s, r.name)
-      out.push({ book: false, sym: s, name: r.name ?? '', exchange: r.exchange ?? '', currency: r.currency ?? '', kind: r.kind ?? '', rank: k < 0 ? 2 : k, sub: s })
+      out.push({ book: false, id: '', sym: s, name: r.name ?? '', exchange: r.exchange ?? '', currency: r.currency ?? '', kind: r.kind ?? '', rank: k < 0 ? 2 : k, sub: s })
     })
     out.sort((a, b) => a.rank - b.rank || (a.book === b.book ? 0 : a.book ? -1 : 1) || (a.sub < b.sub ? -1 : a.sub > b.sub ? 1 : 0))
     return out
   }
   // Values from every list field containing the typed text, symbols excluded here.
-  interface OtherMatch { key: string; value: string; label: string }
+  interface OtherMatch { key: string; value: string; text: string; label: string }
+  // A list field's choices, as (value, what the page shows for it): an account by its id, shown by its name.
+  interface Choice { v: string; text: string }
+  function choices(x: Field): Choice[] {
+    if (x.key === 'account') return options.accounts.map((a) => ({ v: a.id, text: a.name }))
+    if (x.key === 'symbol') return options.instruments.map((i) => ({ v: i.id, text: i.symbol }))
+    const vals = ((options[x.opt as keyof Options] as string[]) ?? []).slice()
+    if (x.key === 'tag') vals.push('untagged')
+    return vals.map((v) => ({ v, text: v }))
+  }
   function fieldMatches(q: string): OtherMatch[] {
     const Q = q.trim().toUpperCase()
     if (!Q) return []
     const out: OtherMatch[] = []
     for (const x of FIELDS) {
       if (x.kind !== 'list' || x.key === 'symbol') continue
-      const vals = ((options[x.opt as keyof Options] as string[]) ?? []).slice()
-      if (x.key === 'tag') vals.push('untagged')
-      for (const v of vals) if (String(v).toUpperCase().indexOf(Q) >= 0 && out.length < 40) out.push({ key: x.key, value: v, label: x.label })
+      for (const c of choices(x)) if (c.text.toUpperCase().indexOf(Q) >= 0 && out.length < 40) out.push({ key: x.key, value: c.v, text: c.text, label: x.label })
     }
     return out
   }
@@ -147,11 +154,10 @@
   const hasMatches = $derived(!!fieldsQ && matchTotal > 0)
 
   const valueOpts = $derived.by(() => {
-    if (!active || active.kind !== 'list') return { opts: [] as string[], shown: [] as string[] }
-    const opts = ((options[active.opt as keyof Options] as string[]) ?? []).slice()
-    if (active.key === 'tag') opts.push('untagged')
+    if (!active || active.kind !== 'list') return { opts: [] as Choice[], shown: [] as Choice[] }
+    const opts = choices(active)
     const q = valueQuery.trim().toUpperCase()
-    const shown = q ? opts.filter((v) => String(v).toUpperCase().indexOf(q) >= 0) : opts
+    const shown = q ? opts.filter((c) => c.text.toUpperCase().indexOf(q) >= 0) : opts
     return { opts, shown }
   })
 
@@ -184,24 +190,24 @@
   }
   function preset(p: string) { setFilters({ preset: filters.preset === p ? 'all' : p, years: [], from: '', to: '' }) }
   function rangeOp(key: RangeKey, op: string) { filters.ranges[key].op = op; if (filters.ranges[key].v != null) refilter() }
-  function rangeStep(key: RangeKey, v: number) { filters.ranges[key].v = String(filters.ranges[key].v) === String(v) ? null : v; refilter() }
+  function rangeStep(key: RangeKey, v: number) { filters.ranges[key].v = filters.ranges[key].v === String(v) ? null : String(v); refilter() }
 
   let rangeTimer: ReturnType<typeof setTimeout> | undefined
   function rangeInput(key: RangeKey, raw: string) {
     clearTimeout(rangeTimer)
     const v = raw.trim()
     rangeTimer = setTimeout(() => {
-      let n = v === '' ? null : Number(v.replace(/[$,]/g, ''))
-      if (v !== '' && n != null && isNaN(n)) n = null
-      filters.ranges[key].v = n
+      // the bound goes as the decimal text typed, never through a float; text that is not one sets none
+      const t = v.replace(/[$,]/g, '')
+      filters.ranges[key].v = /^-?(\d+\.?\d*|\.\d+)$/.test(t) ? t : null
       refilter()
     }, 500)
   }
 
-  // A symbol row goes to its ticker's page: the holding's where the book holds it, the listing's own otherwise.
-  function listingOpen(symbol: string, exchange: string) {
+  // A symbol row goes to its ticker's page: the holding's where the book holds the instrument, the listing's own otherwise.
+  function listingOpen(symbol: string, exchange: string, instrument = '') {
     onclose()
-    const held = store.model?.positions.find((p) => !OPTION_RE.test(p.symbol) && bareSymbol(p.symbol).toUpperCase() === symbol.toUpperCase() && (!exchange || !p.exchange || p.exchange.toUpperCase() === exchange.toUpperCase()))
+    const held = instrument ? store.model?.positions.find((p) => p.instrument === instrument) : undefined
     if (held) goSub('portfolio', held.id)
     else goSub('markets', rememberListing({ symbol, exchange }))
   }
@@ -217,14 +223,14 @@
     const i = Math.min(valueHi, matchTotal - 1)
     if (i < bookSyms.length) {
       const r = bookSyms[i]
-      if (OPTION_RE.test(r.sym)) toggleList('symbol', r.sym)
-      else listingOpen(bareSymbol(r.sym), r.exchange)
+      if (OPTION_RE.test(r.sym)) toggleList('symbol', r.id)
+      else listingOpen(bareSymbol(r.sym), r.exchange, r.id)
     } else if (i < bookSyms.length + others.length) {
       const m = others[i - bookSyms.length]
       toggleList(m.key, m.value)
     } else {
       const r = extSyms[i - bookSyms.length - others.length]
-      listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange)
+      listingOpen(r.book ? bareSymbol(r.sym) : r.sym, r.exchange, r.id)
     }
   }
   // ---- keys the two search boxes share (SPEC §3, Filters) ----
@@ -244,15 +250,15 @@
   // the value under the highlight, as (field, value), when it is one a list filter can hold
   function highlighted(): [string, string] | null {
     if (active) {
-      const v = valueOpts.shown[Math.min(valueHi, valueOpts.shown.length - 1)]
-      return v == null ? null : [active.key, v]
+      const c = valueOpts.shown[Math.min(valueHi, valueOpts.shown.length - 1)]
+      return c == null ? null : [active.key, c.v]
     }
     const i = Math.min(valueHi, matchTotal - 1)
     if (i < 0) return null
-    if (i < bookSyms.length) return ['symbol', bookSyms[i].sym]
+    if (i < bookSyms.length) return ['symbol', bookSyms[i].id]
     if (i < bookSyms.length + others.length) { const m = others[i - bookSyms.length]; return [m.key, m.value] }
     const r = extSyms[i - bookSyms.length - others.length]
-    return r?.book ? ['symbol', r.sym] : null
+    return r?.book ? ['symbol', r.id] : null
   }
   // Delete, or Backspace in an empty box, deselects the highlighted value
   function deselects(e: KeyboardEvent): boolean {
@@ -298,18 +304,19 @@
       valueHi = (Math.min(valueHi, rows.length - 1) + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length
     } else if (e.key === 'Enter' && active) {
       e.preventDefault()
-      const v = rows[Math.min(valueHi, rows.length - 1)]
-      if (v == null) return
-      if (active.key === 'symbol' && !OPTION_RE.test(v) && !e.shiftKey) { const l = options.listings?.[v] ?? {}; listingOpen(bareSymbol(v), l.exchange ?? '') }
-      else toggleList(active.key, v)
+      const c = rows[Math.min(valueHi, rows.length - 1)]
+      if (c == null) return
+      const l = active.key === 'symbol' ? options.instruments.find((i) => i.id === c.v) : undefined
+      if (l && !OPTION_RE.test(l.symbol) && !e.shiftKey) listingOpen(bareSymbol(l.symbol), l.exchange, l.id)
+      else toggleList(active.key, c.v)
     } else if (e.key === 'Escape') { e.stopPropagation(); onclose() } // this Esc closes the popover and does nothing else
   }
 
   const summaryFor = (x: Field): string =>
-    x.kind === 'date' ? (dateLabel() !== 'All time' ? dateLabel() : '') : x.kind === 'list' ? listSummary(x.key as ListKey) : rangeSummary(x.key as RangeKey)
+    x.kind === 'date' ? (dateLabel() !== 'All time' ? dateLabel() : '') : x.kind === 'list' ? listSummary(x.key as ListKey, options) : rangeSummary(x.key as RangeKey)
   const subheadSummary = $derived.by(() => {
     if (!active) return ''
-    return active.kind === 'date' ? dateLabel() : active.kind === 'list' ? (listSummary(active.key as ListKey) || 'Any') : (rangeSummary(active.key as RangeKey) || 'Any')
+    return active.kind === 'date' ? dateLabel() : active.kind === 'list' ? (listSummary(active.key as ListKey, options) || 'Any') : (rangeSummary(active.key as RangeKey) || 'Any')
   })
   const hasValue = $derived.by(() => {
     if (!active) return false
@@ -330,20 +337,20 @@
     <div>
       {#if hasMatches}
         <div class="scroll" style="max-height:300px;display:flex;flex-direction:column;gap:1px">
-          {#each bookSyms as r, i (r.sym + '|' + r.exchange + '#' + i)}
-            {@const on = filters.lists.symbol.indexOf(r.sym) >= 0}
+          {#each bookSyms as r, i (r.id)}
+            {@const on = filters.lists.symbol.indexOf(r.id) >= 0}
             {@const cls = (on ? ' on' : '') + (i === valueHi ? ' hi' : '')}
             {@const contract = OPTION_RE.test(r.sym)}
-            {@render symbolRow(contract ? r.sym : bareSymbol(r.sym), r.name, r.exchange, r.sym, cls, contract ? undefined : () => listingOpen(bareSymbol(r.sym), r.exchange), contract ? () => toggleList('symbol', r.sym) : undefined, true)}
+            {@render symbolRow(contract ? r.sym : bareSymbol(r.sym), r.name, r.exchange, r.id, r.sym, cls, contract ? undefined : () => listingOpen(bareSymbol(r.sym), r.exchange, r.id), contract ? () => toggleList('symbol', r.id) : undefined, true)}
           {/each}
           {#each others as m, i (m.key + '|' + m.value)}
             {@const on = filters.lists[m.key as ListKey].indexOf(m.value) >= 0}
-            <button class="pop-row{(on ? ' on' : '') + (bookSyms.length + i === valueHi ? ' hi' : '')}" tabindex="-1" onclick={() => toggleList(m.key, m.value)}>{m.value}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{m.label}</span></button>
+            <button class="pop-row{(on ? ' on' : '') + (bookSyms.length + i === valueHi ? ' hi' : '')}" tabindex="-1" onclick={() => toggleList(m.key, m.value)}>{m.text}<span style="margin-left:auto;font-size:11px;color:var(--ink55)">{m.label}</span></button>
           {/each}
-          {#each extSyms as r, i (r.sym + '|' + r.exchange + '#' + i)}
+          {#each extSyms as r, i ((r.id || r.sym + '|' + r.exchange) + '#' + i)}
             {@const hi = bookSyms.length + others.length + i === valueHi ? ' hi' : ''}
             {#if r.book}
-              {@render symbolRow(bareSymbol(r.sym), r.name, r.exchange, r.sym, (filters.lists.symbol.indexOf(r.sym) >= 0 ? ' on' : '') + hi, () => listingOpen(bareSymbol(r.sym), r.exchange), undefined, true)}
+              {@render symbolRow(bareSymbol(r.sym), r.name, r.exchange, r.id, r.sym, (filters.lists.symbol.indexOf(r.id) >= 0 ? ' on' : '') + hi, () => listingOpen(bareSymbol(r.sym), r.exchange, r.id), undefined, true)}
             {:else}
               {@render extRow(r, hi)}
             {/if}
@@ -381,15 +388,15 @@
         {:else if !valueOpts.shown.length}
           <div class="muted" style="padding:6px 7px;font-size:12px">No match.</div>
         {:else}
-          {#each valueOpts.shown as v, i (v)}
-            {@const on = filters.lists[active.key as ListKey].indexOf(v) >= 0}
+          {#each valueOpts.shown as c, i (c.v)}
+            {@const on = filters.lists[active.key as ListKey].indexOf(c.v) >= 0}
             {@const cls = (on ? ' on' : '') + (i === valueHi ? ' hi' : '')}
-            {#if active.key === 'symbol'}
-              {@const contract = OPTION_RE.test(v)}
-              {@const l = options.listings?.[v] ?? {}}
-              {@render symbolRow(contract ? v : bareSymbol(v), l.name ?? '', l.exchange ?? '', v, cls, contract ? undefined : () => listingOpen(bareSymbol(v), l.exchange ?? ''), contract ? () => toggleList('symbol', v) : undefined, true)}
+            {@const l = active.key === 'symbol' ? options.instruments.find((x) => x.id === c.v) : undefined}
+            {#if l}
+              {@const contract = OPTION_RE.test(l.symbol)}
+              {@render symbolRow(contract ? l.symbol : bareSymbol(l.symbol), l.name, l.exchange, l.id, l.symbol, cls, contract ? undefined : () => listingOpen(bareSymbol(l.symbol), l.exchange, l.id), contract ? () => toggleList('symbol', l.id) : undefined, true)}
             {:else}
-              <button class="pop-row{cls}" tabindex="-1" onclick={() => toggleList(active.key, v)}>{v}</button>
+              <button class="pop-row{cls}" tabindex="-1" onclick={() => toggleList(active.key, c.v)}>{c.text}</button>
             {/if}
           {/each}
         {/if}
@@ -419,7 +426,7 @@
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px">
         {#each active.steps ?? [] as v (v)}
-          <button class="pill{String(r.v) === String(v) ? ' on' : ''}" style="font-size:12px;padding:5px 0" onclick={() => rangeStep(active.key as RangeKey, v)}>{stepLabel(active, v)}</button>
+          <button class="pill{r.v === String(v) ? ' on' : ''}" style="font-size:12px;padding:5px 0" onclick={() => rangeStep(active.key as RangeKey, v)}>{stepLabel(active, v)}</button>
         {/each}
       </div>
       <input class="input" value={r.v == null ? '' : r.v} oninput={(e) => rangeInput(active.key as RangeKey, (e.target as HTMLInputElement).value)} placeholder={active.ph} aria-label="Custom value" style="margin-top:7px;min-height:30px;font-size:12px" inputmode="decimal" />
@@ -436,19 +443,19 @@
 
 <!-- The three-slot symbol row (ledger symbolRowHtml + symbolRowButtons): funnel, Buy, Sell.
      onOpen (the row itself) opens the listing; onToggle (a contract) toggles its filter. -->
-{#snippet symbolRow(sym: string, name: string, exchange: string, value: string, cls: string, onOpen: (() => void) | undefined, onToggle: (() => void) | undefined, book: boolean)}
-  {@const info = book ? tkLookup(value) : { securityId: '', kind: '', hasPosition: false }}
+{#snippet symbolRow(sym: string, name: string, exchange: string, id: string, full: string, cls: string, onOpen: (() => void) | undefined, onToggle: (() => void) | undefined, book: boolean)}
+  {@const info = book ? tkLookup(id) : { securityId: '', kind: '', hasPosition: false }}
   {@const share = info.kind === 'Shares'}
-  {@const filtered = filters.lists.symbol.indexOf(value) >= 0}
+  {@const filtered = filters.lists.symbol.indexOf(id) >= 0}
   <div class="pop-row{cls}" role="button" tabindex="-1" onclick={() => (onToggle ? onToggle() : onOpen?.())} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle ? onToggle() : onOpen?.() } }}>
     <span style="flex:none">{sym}</span>
     {#if name}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink55)">{name}</span>{/if}
     <span style="margin-left:auto;font-size:11px;color:var(--ink55);white-space:nowrap">{exchange || ''}</span>
     <span style="flex:none;width:70px;display:inline-flex;justify-content:flex-end">
       <span class="tk-rowbtns">
-        <button class="tk-rowbtn funnel{filtered ? ' on' : ''}" aria-label={(filtered ? 'Stop filtering by ' : 'Filter by ') + symText(value)} aria-pressed={filtered} onclick={(e) => { e.stopPropagation(); toggleList('symbol', value) }}>{@render iconSvg(ICONS.funnel)}</button>
-        {#if share}<button class="tk-rowbtn buy" aria-label="Buy {symText(value)}" onclick={(e) => { e.stopPropagation(); trade(value, 'BUY', exchange, info.securityId) }}>{@render iconSvg(ICONS.plus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>{/if}
-        {#if share && info.hasPosition}<button class="tk-rowbtn sell" aria-label="Sell {symText(value)}" onclick={(e) => { e.stopPropagation(); trade(value, 'SELL', exchange, info.securityId) }}>{@render iconSvg(ICONS.minus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>{/if}
+        <button class="tk-rowbtn funnel{filtered ? ' on' : ''}" aria-label={(filtered ? 'Stop filtering by ' : 'Filter by ') + symText(full)} aria-pressed={filtered} onclick={(e) => { e.stopPropagation(); toggleList('symbol', id) }}>{@render iconSvg(ICONS.funnel)}</button>
+        {#if share}<button class="tk-rowbtn buy" aria-label="Buy {symText(full)}" onclick={(e) => { e.stopPropagation(); trade(full, 'BUY', exchange, info.securityId) }}>{@render iconSvg(ICONS.plus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.plus)}</span>{/if}
+        {#if share && info.hasPosition}<button class="tk-rowbtn sell" aria-label="Sell {symText(full)}" onclick={(e) => { e.stopPropagation(); trade(full, 'SELL', exchange, info.securityId) }}>{@render iconSvg(ICONS.minus)}</button>{:else}<span class="tk-rowbtn off" aria-hidden="true">{@render iconSvg(ICONS.minus)}</span>{/if}
       </span>
     </span>
   </div>

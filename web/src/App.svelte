@@ -29,6 +29,7 @@
   import { isListingId, listingAsTrade, loadListing } from './lib/listing.svelte'
   import { PROTOCOL } from './lib/protocol'
   import { dismissInnermost } from './lib/escape'
+  import { holdingAsTrade } from './lib/holding'
   import Empty from './lib/Empty.svelte'
   import Skeleton from './lib/Skeleton.svelte'
   import Heatmap from './lib/heatmap/Heatmap.svelte'
@@ -57,11 +58,6 @@
     if (ui.menuOpen && menuWrap && !menuWrap.contains(e.target as Node)) ui.menuOpen = false
   }
 
-  // Present a held position as a trade for the shared detail view (holdingAsTrade).
-  function holdingAsTrade(p: any) {
-    if (!p) return null
-    return { ...p, holding: true, pnl: p.unreal, pnlPct: p.unrealPct, entryDate: p.opened, exitDate: '', entry: p.avg, exit: p.last, holdDays: p.held, status: 'open', legs: [] }
-  }
 
   const isFieldFocused = () => {
     const el = document.activeElement
@@ -154,13 +150,12 @@
   const status = $derived(store.model?.status ?? null)
   const DETAIL_PAGES: Tab[] = ['trades', 'portfolio', 'markets']
 
-  // A holding and the trade its sold part closed can carry one id (a round trip's id is its
-  // opening fill's): the address's tab says which is meant, a holding under Portfolio.
-  const sel = $derived.by(() => {
-    if (!DETAIL_PAGES.includes(route.tab) || !route.sub || !store.model) return null
-    const trade = store.model.trades.find((t) => t.id === route.sub)
-    const position = store.model.positions?.find((p) => p.id === route.sub)
-    return (route.tab === 'portfolio' ? position ?? trade : trade ?? position) ?? null
+  // The detail the address names: a holding under Portfolio, a trade under Trades, each by its id.
+  const selHolding = $derived(route.tab === 'portfolio' && route.sub ? store.model?.positions.find((p) => p.id === route.sub) ?? null : null)
+  const sel = $derived.by<import('./lib/model').Trade | null>(() => {
+    if (selHolding) return holdingAsTrade(selHolding)
+    if (route.tab !== 'trades' || !route.sub || !store.model) return null
+    return store.model.trades.find((t) => t.id === route.sub) ?? null
   })
   // the heatmap on its own: no header, no tabs, no frame
   $effect(() => {
@@ -349,7 +344,7 @@
     {/if}
     <div style="margin-left:auto;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 0">
       <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;overflow-x:auto;padding-bottom:1px">
-        {#each chips() as c (c.key)}
+        {#each chips(store.model?.options) as c (c.key)}
           <span class="chip"><span class="cf">{c.field}</span><button class="cv" onclick={() => editChip(c.key)}>{c.value}</button><button class="cx" aria-label="Remove filter" onclick={() => removeChip(c.key)}>×</button></span>
         {/each}
       </div>
@@ -373,9 +368,9 @@
     {:else if route.tab === 'cashflow'}
       <Cashflow model={store.model} />
     {:else if route.tab === 'portfolio'}
-      {#if sel}{#key sel.id}<TradeDetail trade={holdingAsTrade(sel) as import('./lib/model').Trade} />{/key}{:else}<Portfolio model={store.model} />{/if}
+      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Portfolio model={store.model} />{/if}
     {:else if route.tab === 'trades'}
-      {#if sel}{#key sel.id}<TradeDetail trade={sel as import('./lib/model').Trade} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
+      {#if sel}{#key sel.id}<TradeDetail trade={sel} />{/key}{:else}<Trades trades={store.model.trades} />{/if}
     {:else if route.tab === 'markets'}
       {#if listing}{#key listing.id}<TradeDetail trade={listing} />{/key}{:else}<Markets markets={store.model.markets} />{/if}
     {/if}

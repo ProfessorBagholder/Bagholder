@@ -2,6 +2,7 @@
 // `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_figures_types`.
 
 import type { Dec } from '../dec'
+import type { Markets, ExposureSlice } from './wire'
 
 export type Fig<T> = T | { 
 /**
@@ -41,7 +42,11 @@ exit: Fig<Dec> | null, entryDate: string,
 /**
  * The last close; none while open.
  */
-exitDate: string | null, holdDays: number, pnl: Fig<Dec>, pnlCad: Fig<Dec>, pnlPct: number | null, fees: Fig<Dec>, flags: Array<string>, grade: string, thesis: string, tags: Array<string>, };
+exitDate: string | null, 
+/**
+ * The day of its latest fill: the list's order, newest activity first.
+ */
+lastDate: string, holdDays: number, pnl: Fig<Dec>, pnlCad: Fig<Dec>, pnlPct: number | null, fees: Fig<Dec>, flags: Array<string>, grade: string, thesis: string, tags: Array<string>, };
 
 export type Position = { id: string, 
 /**
@@ -129,7 +134,7 @@ export type Grades = { buckets: Array<GradeBucket>, graded: number, };
 
 export type QueueRow = { id: string, symbol: string, date: string, pnl: Fig<Dec>, missing: string, };
 
-export type Slice = { label: string, value: Dec, share: number, 
+export type Slice = { label: string, value: Fig<Dec>, share: number, 
 /**
  * The one holding it is, where it is one.
  */
@@ -141,7 +146,12 @@ export type Portfolio = { positionCount: number, marketValue: Partial, costBasis
  */
 availableMarginUnavailable: Array<string>, cash: Fig<Dec>, cashPct: Fig<number | null>, dayChange: Partial | null, dayChangePct: Fig<number | null>, allocation: Array<Slice>, };
 
-export type Account = { id: string, name: string, status: string, 
+export type Account = { id: string, name: string, 
+/**
+ * The broker's own id for it, which an order names; none for an account
+ * kept by hand.
+ */
+brokerAccount: string | null, status: string, 
 /**
  * Whether the person trades in it: a self-directed account of cash or
  * margin, not one the broker manages.
@@ -152,23 +162,7 @@ tradable: boolean, margin: boolean,
  */
 nav: Dec | null, };
 
-export type CashflowTile = { label: string, 
-/**
- * What was paid over the span (a paid tile).
- */
-total: Partial | null, 
-/**
- * That, over the months that paid.
- */
-perMonth: Fig<Dec | null> | null, 
-/**
- * Margin drawn and what it costs a month (the margin tile).
- */
-marginUsed: Fig<Dec> | null, interestPerMonth: Fig<Dec | null> | null, 
-/**
- * Projected income over cost, and a month of it (the yield tile).
- */
-yield: Fig<number | null> | null, projected: Fig<Dec> | null, };
+export type CashflowTile = { "kind": "paid", label: string, total: Partial, perMonth: Fig<Dec | null>, } | { "kind": "margin", label: string, marginUsed: Fig<Dec>, interestPerMonth: Fig<Dec | null>, } | { "kind": "yield", label: string, yield: Fig<number | null>, projected: Fig<Dec>, };
 
 export type CashflowMonth = { 
 /**
@@ -212,7 +206,7 @@ export type Cashflow = { tiles: Array<CashflowTile>, months: Array<CashflowMonth
 /**
  * Projected income a month in CAD, by holding, as the pie draws it.
  */
-income: Array<Slice>, incomeTotal: Fig<Dec>, rows: Array<CashflowRow>, 
+income: Array<Slice>, incomeTotal: Partial, rows: Array<CashflowRow>, 
 /**
  * The filters in force that the cashflow does not read.
  */
@@ -236,7 +230,11 @@ activityCount: number, options: Options, kpi: Kpi, equity: Equity, years: Array<
 /**
  * Σ the accounts' values, for the ticket's share of it.
  */
-navTotal: Fig<Dec> | null, };
+navTotal: Fig<Dec> | null, 
+/**
+ * The market around the book, from its readers (`context`).
+ */
+markets: Markets, sectors: Array<ExposureSlice>, regions: Array<ExposureSlice>, };
 
 export type Range = { 
 /**

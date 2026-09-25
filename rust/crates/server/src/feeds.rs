@@ -2075,7 +2075,7 @@ pub enum ListingAnswer {
         name: String,
         #[serde(rename = "securityId")]
         security_id: String,
-        fills: Vec<bagholder_model::wire::Fill>,
+        fills: Vec<crate::wire::figures::Fill>,
         price: Option<f64>,
         #[serde(rename = "percentChange")]
         percent_change: Option<f64>,
@@ -2096,24 +2096,15 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
         return ListingAnswer::err("symbol required");
     }
     let (c, b) = match (conn(app), base(app)) { (Some(c), Some(b)) => (c, b), _ => return ListingAnswer::err("store unavailable") };
+    let Some(f) = app.figures.get() else { return ListingAnswer::err("the figures are not open") };
+    let names = match f.names() {
+        Ok(n) => n,
+        Err(e) => return ListingAnswer::err(e),
+    };
     let day = today();
     let named = |symbol: &str| tmx_symbol(symbol).trim().to_uppercase() == sym;
-    let positions: Vec<ListedRow> = b.positions.iter().filter(|p| named(&p.symbol)).map(|p| ListedRow { id: p.id.clone(), symbol: p.symbol.clone(), exchange: p.exchange.clone(), currency: p.currency.clone(), kind: p.kind.to_string(), name: p.name.clone(), security_id: p.security_id.clone(), fills: vec![] }).collect();
-    let trades: Vec<ListedRow> = b
-        .trades
-        .iter()
-        .filter(|t| named(&t.symbol))
-        .map(|t| ListedRow {
-            id: t.id.clone(),
-            symbol: t.symbol.clone(),
-            exchange: t.exchange.clone(),
-            currency: t.currency.clone(),
-            kind: t.kind.to_string(),
-            name: t.name.clone(),
-            security_id: t.security_id.clone(),
-            fills: t.fills.iter().flat_map(|fills| fills.iter()).cloned().collect(),
-        })
-        .collect();
+    // the book's holdings and trades of that ticker, by the figures' own ids
+    let Some((positions, trades)) = f.read(|e| crate::wire::build::listed(e, &names, &named)) else { return ListingAnswer::err("no page has stated its zone yet") };
     let watchlist: Vec<ListedRow> = b.watchlist.iter().filter(|w| named(&w.symbol)).map(|w| ListedRow { symbol: w.symbol.clone(), exchange: w.exchange.clone(), currency: w.currency.clone(), name: w.name.clone(), ..ListedRow::default() }).collect();
     listing_payload_in(&c, &positions, &trades, &watchlist, &sym, exchange, currency, name, &|rec| {
         bagholder_market::quotes::peek_quote(&c, rec, &day)
@@ -2121,8 +2112,7 @@ pub fn listing_payload(app: &Arc<App>, symbol: &str, exchange: &str, currency: &
 }
 
 /// A row of the book as the listing page reads it: a holding, a trade or a watched listing.
-#[derive(Clone, Debug, Default, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Debug, Default)]
 pub struct ListedRow {
     pub id: String,
     pub symbol: String,
@@ -2131,7 +2121,7 @@ pub struct ListedRow {
     pub kind: String,
     pub name: String,
     pub security_id: String,
-    pub fills: Vec<bagholder_model::wire::Fill>,
+    pub fills: Vec<crate::wire::figures::Fill>,
 }
 
 /// `listing_payload` over the book given, with the quote lookup given.
@@ -2181,8 +2171,9 @@ pub fn listing_payload_in(
         }
     }
     let kind = if known.kind.is_empty() { "Shares".to_string() } else { known.kind.clone() };
-    let mut fills: Vec<bagholder_model::wire::Fill> = trades.iter().flat_map(|t| t.fills.iter().cloned()).collect();
-    fills.sort_by_key(|x| x.when.clone());
+    // by day, and within a day by time; a fill whose time was not recorded stands first in its day
+    let mut fills: Vec<crate::wire::figures::Fill> = trades.iter().flat_map(|t| t.fills.iter().cloned()).collect();
+    fills.sort_by(|a, b| (&a.date, &a.when).cmp(&(&b.date, &b.when)));
     let nm = {
         let n = name.trim().to_string();
         if !n.is_empty() { n } else {
@@ -3138,12 +3129,47 @@ mod tests {
         json!({"when": when, "side": side, "qty": qty, "price": price})
     }
 
+    /// A row as the book gives one, from the JSON the cases are written in.
+    fn row(r: &Value) -> ListedRow {
+        use crate::wire::{Dec, Fig};
+        let text = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+        let dec = |v: &Value, k: &str| Fig::Stated(Dec(bagholder_core::Dec::parse(&v[k].as_f64().unwrap().to_string()).unwrap()));
+        ListedRow {
+            id: text(r, "id"),
+            symbol: text(r, "symbol"),
+            exchange: text(r, "exchange"),
+            currency: text(r, "currency"),
+            kind: text(r, "kind"),
+            name: text(r, "name"),
+            security_id: text(r, "securityId"),
+            fills: r["fills"]
+                .as_array()
+                .map(|fs| {
+                    fs.iter()
+                        .map(|x| crate::wire::figures::Fill {
+                            id: text(x, "when"),
+                            when: Some(text(x, "when")),
+                            date: text(x, "when")[..10].to_string(),
+                            side: text(x, "side"),
+                            sub: String::new(),
+                            qty: dec(x, "qty"),
+                            price: dec(x, "price"),
+                            amount: Fig::Waits { gaps: vec!["value-unstated".into()] },
+                            currency: text(r, "currency"),
+                            flags: Vec::new(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     const FILL: &str = "2026-03-02T14:31:00Z";
     const LATER: &str = "2026-04-09T15:02:00Z";
     const EARLIER: &str = "2026-01-05T14:40:00Z";
 
     fn listing(positions: &[Value], trades: &[Value], watchlist: &[Value], q: (f64, f64), args: (&str, &str, &str, &str)) -> Value {
-        let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(|r| serde_json::from_value(r.clone()).unwrap()).collect() };
+        let rows = |list: &[Value]| -> Vec<ListedRow> { list.iter().map(row).collect() };
         let (positions, trades, watchlist) = (&rows(positions), &rows(trades), &rows(watchlist));
         let c = store();
         let quote = move |_: &bagholder_model::input::Listing| {

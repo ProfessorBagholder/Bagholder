@@ -23,6 +23,8 @@ use super::{Dec, Fig};
 pub struct Names {
     /// The broker's id for each instrument, which an order names.
     pub security: BTreeMap<InstrumentId, String>,
+    /// The broker's id for each account, which an order names.
+    pub account: BTreeMap<bagholder_core::AccountId, String>,
 }
 
 impl Names {
@@ -34,7 +36,14 @@ impl Names {
                 security.insert(*id, r.value);
             }
         }
-        Ok(Names { security })
+        let mut account = BTreeMap::new();
+        for (id, info) in &inputs.ledger.accounts {
+            let refs = book.account_refs(*id).map_err(|e| e.to_string())?;
+            if let Some(r) = refs.into_iter().find(|r| r.broker == info.broker) {
+                account.insert(*id, r.value);
+            }
+        }
+        Ok(Names { security, account })
     }
 }
 
@@ -167,6 +176,7 @@ fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Option<String>)
         exit: t.exit.as_ref().map(fig_dec),
         entry_date: t.opened_on.to_string(),
         exit_date: t.closed_on.map(|d| d.to_string()),
+        last_date: t.last_on.to_string(),
         hold_days: t.hold_days,
         pnl: fig_money(&t.pnl),
         pnl_cad: fig_money(&t.pnl_cad),
@@ -228,14 +238,17 @@ fn slices(mut items: Vec<(String, Money, f64, Option<String>)>, cap: usize, last
     let kept_last = last.and_then(|l| items.iter().position(|x| x.0 == l)).map(|i| items.remove(i));
     items.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
     let rest = if items.len() > cap { items.split_off(cap) } else { Vec::new() };
-    let mut out: Vec<Slice> = items.into_iter().map(|(label, value, share, id)| Slice { label, value: dec(&value), share, id }).collect();
+    let mut out: Vec<Slice> = items.into_iter().map(|(label, value, share, id)| Slice { label, value: Fig::Stated(dec(&value)), share, id }).collect();
     if !rest.is_empty() {
         let n = rest.len();
-        let value = rest.iter().try_fold(Money::zero(rest[0].1.currency), |a, x| Money::add_to_fit(a, x.1)).unwrap_or(Money::zero(rest[0].1.currency));
-        out.push(Slice { label: format!("Other ({n})"), value: dec(&value), share: rest.iter().map(|x| x.2).sum(), id: None });
+        let value = match rest.iter().try_fold(Money::zero(rest[0].1.currency), |a, x| Money::add_to_fit(a, x.1)) {
+            Ok(v) => Fig::Stated(dec(&v)),
+            Err(e) => Fig::Waits { gaps: vec![format!("arithmetic: {e}")] },
+        };
+        out.push(Slice { label: format!("Other ({n})"), value, share: rest.iter().map(|x| x.2).sum(), id: None });
     }
     if let Some((label, value, share, id)) = kept_last {
-        out.push(Slice { label, value: dec(&value), share, id });
+        out.push(Slice { label, value: Fig::Stated(dec(&value)), share, id });
     }
     out
 }
@@ -295,18 +308,20 @@ fn paid_label(l: &PaidLabel) -> String {
 fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> Options {
     let accounts: Vec<AccountOption> = inputs.ledger.accounts.keys().map(|a| AccountOption { id: a.to_string(), name: account_name(inputs, *a) }).collect();
     let used: BTreeSet<InstrumentId> = trades.iter().flat_map(|t| t.instruments.iter().copied()).chain(positions.iter().map(|p| p.instrument)).collect();
-    let instruments: Vec<InstrumentOption> = used
-        .iter()
-        .filter_map(|i| inputs.ledger.instruments.get(i).map(|info| (i, info)))
-        .map(|(i, info)| {
-            let s = shown(inputs, *i);
-            InstrumentOption { id: i.to_string(), symbol: s.symbol, name: s.name, exchange: s.exchange, kind: kind_word(info.instrument.kind).into(), currency: info.instrument.currency.as_str().into() }
-        })
-        .collect();
+    // a contract's underlying too: the by-symbol rows and the symbol filter name a contract's trades by it
+    let underlyings: BTreeSet<InstrumentId> = used.iter().filter_map(|i| inputs.ledger.instruments.get(i)?.terms.as_ref().map(|t| t.underlying)).filter(|u| !used.contains(u)).collect();
+    let option = |i: &InstrumentId| {
+        let info = inputs.ledger.instruments.get(i)?;
+        let s = shown(inputs, *i);
+        Some(InstrumentOption { id: i.to_string(), symbol: s.symbol, name: s.name, exchange: s.exchange, kind: kind_word(info.instrument.kind).into(), currency: info.instrument.currency.as_str().into() })
+    };
+    let traded: Vec<InstrumentOption> = used.iter().filter_map(option).collect();
     let sorted = |v: BTreeSet<String>| v.into_iter().collect::<Vec<_>>();
     let tags = sorted(trades.iter().flat_map(|t| t.journal.tags.iter().cloned()).collect());
-    let exchanges = sorted(instruments.iter().map(|i| i.exchange.clone()).filter(|e| !e.is_empty()).collect());
-    let kinds: Vec<String> = ["Shares", "Options", "Crypto", "Futures"].iter().filter(|k| instruments.iter().any(|i| i.kind == **k)).map(|k| k.to_string()).collect();
+    let exchanges = sorted(traded.iter().map(|i| i.exchange.clone()).filter(|e| !e.is_empty()).collect());
+    let kinds: Vec<String> = ["Shares", "Options", "Crypto", "Futures"].iter().filter(|k| traded.iter().any(|i| i.kind == **k)).map(|k| k.to_string()).collect();
+    let mut instruments = traded;
+    instruments.extend(underlyings.iter().filter_map(option));
     let mut years: Vec<String> = trades.iter().filter_map(|t| t.closed_on).map(|d| d.year().to_string()).collect::<BTreeSet<_>>().into_iter().collect();
     years.reverse();
     Options {
@@ -323,7 +338,7 @@ fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> O
 }
 
 /// Everything the page shows of the book under `filters`.
-pub fn build(engine: &Engine, names: &Names, filters: &Filters) -> Figures {
+pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder_model::base::Base) -> Figures {
     let inputs = engine.inputs();
     let figs = engine.figures();
     let scoped: Scoped = engine.scope(filters);
@@ -397,6 +412,7 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters) -> Figures {
         .map(|(id, info)| Account {
             id: id.to_string(),
             name: account_name(inputs, *id),
+            broker_account: names.account.get(id).cloned(),
             status: info.account.status.as_str().into(),
             tradable: matches!(info.account.account_type, bagholder_core::account::AccountType::Known { managed: false, kind: bagholder_core::account::AccountKind::Cash | bagholder_core::account::AccountKind::Margin, .. }),
             margin: matches!(info.account.account_type, bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Margin, .. }),
@@ -411,7 +427,11 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters) -> Figures {
         })
     };
 
+    let context = super::context::context(base, &positions);
     Figures {
+        markets: context.markets,
+        sectors: context.sectors,
+        regions: context.regions,
         today: today.to_string(),
         activity_count: inputs.ledger.transactions.len(),
         options: options(inputs, figs.trades, figs.positions),
@@ -445,9 +465,9 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, scoped: &
         .tiles
         .iter()
         .map(|t| match t {
-            CashTile::Paid { label, total, per_paying_month, .. } => CashflowTile { label: paid_label(label), total: Some(partial(total)), per_month: Some(Fig::of(per_paying_month, |m| m.as_ref().map(dec))), margin_used: None, interest_per_month: None, yield_on_cost: None, projected: None },
-            CashTile::Margin { margin_used, interest_per_month, .. } => CashflowTile { label: "Margin used".into(), total: None, per_month: None, margin_used: Some(fig_money(margin_used)), interest_per_month: Some(Fig::of(interest_per_month, |m| m.as_ref().map(dec))), yield_on_cost: None, projected: None },
-            CashTile::Yield { yield_on_cost, projected_per_month, .. } => CashflowTile { label: "Yield on cost".into(), total: None, per_month: None, margin_used: None, interest_per_month: None, yield_on_cost: Some(yield_on_cost.clone().into_wire()), projected: Some(fig_money(projected_per_month)) },
+            CashTile::Paid { label, total, per_paying_month, .. } => CashflowTile::Paid { label: paid_label(label), total: partial(total), per_month: Fig::of(per_paying_month, |m| m.as_ref().map(dec)) },
+            CashTile::Margin { margin_used, interest_per_month, .. } => CashflowTile::Margin { label: "Margin used".into(), margin_used: fig_money(margin_used), interest_per_month: Fig::of(interest_per_month, |m| m.as_ref().map(dec)) },
+            CashTile::Yield { yield_on_cost, projected_per_month, .. } => CashflowTile::Yield { label: "Yield on cost".into(), yield_on_cost: yield_on_cost.clone().into_wire(), projected: fig_money(projected_per_month) },
         })
         .collect();
     let months = c
@@ -501,15 +521,20 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, scoped: &
         })
         .collect();
     let total = stated.iter().try_fold(Money::zero(bagholder_core::Currency::CAD), |a, x| Money::add_to_fit(a, x.1));
-    let income_total = match (&total, c.holdings.iter().any(|h| h.projected_per_month_cad.is_err())) {
-        (Ok(t), _) => Fig::Stated(dec(t)),
-        (Err(e), _) => Fig::Waits { gaps: vec![format!("arithmetic: {e}")] },
+    // the pie's total counts the holdings whose projection waits
+    let income_total = Partial {
+        total: match &total {
+            Ok(t) => Fig::Stated(dec(t)),
+            Err(e) => Fig::Waits { gaps: vec![format!("arithmetic: {e}")] },
+        },
+        left_out: c.holdings.iter().filter(|h| h.projected_per_month_cad.is_err()).count(),
     };
-    let mut income: Vec<Slice> = stated
+    let mut stated = stated;
+    stated.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    let income: Vec<Slice> = stated
         .iter()
-        .map(|(symbol, m, id)| Slice { label: symbol.clone(), value: dec(m), share: total.as_ref().ok().and_then(|t| bagholder_engine::stat::money_ratio(*m, *t)).unwrap_or(0.0), id: id.clone() })
+        .map(|(symbol, m, id)| Slice { label: symbol.clone(), value: Fig::Stated(dec(m)), share: total.as_ref().ok().and_then(|t| bagholder_engine::stat::money_ratio(*m, *t)).unwrap_or(0.0), id: id.clone() })
         .collect();
-    income.sort_by(|a, b| b.value.cmp(&a.value));
     let rows = c
         .rows
         .iter()
@@ -530,20 +555,51 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, scoped: &
 
 /// What a fill did, as its row shows it: an option's buy or sale opening or
 /// closing, a share's buy or sale, or what else moved the position.
-fn fill_words(tx: &bagholder_core::transaction::Transaction) -> (String, String) {
-    use bagholder_core::transaction::{Effect, Kind};
+/// A fill's side, and what it did in its trade (SPEC §Trades, the executions): an
+/// option's opens or closes (`BUY TO OPEN`, `SELL TO CLOSE`); a fill that closed one
+/// trade and opened the next, of any kind, `(close + open)`; else bought or sold.
+fn fill_words(tx: &bagholder_core::transaction::Transaction, option: bool, role: Option<bagholder_engine::ledger::FillRole>) -> (String, String) {
+    use bagholder_core::transaction::Kind;
     let side = match tx.kind {
         Kind::Buy => "BUY",
         Kind::Sell => "SELL",
         _ => "",
     };
-    let sub = match (tx.kind, tx.effect) {
-        (Kind::Buy | Kind::Sell, Some(Effect::Open)) => format!("{side} TO OPEN"),
-        (Kind::Buy | Kind::Sell, Some(Effect::Close)) => format!("{side} TO CLOSE"),
-        (Kind::Buy | Kind::Sell, None) => side.to_string(),
-        (k, _) => k.as_str().replace('-', " ").to_ascii_uppercase(),
+    if side.is_empty() {
+        return (String::new(), tx.kind.as_str().replace('-', " ").to_ascii_uppercase());
+    }
+    let sub = match role.map(|r| (r.closed, r.opened)) {
+        Some((true, true)) => format!("{side} (close + open)"),
+        Some((true, false)) if option => format!("{side} TO CLOSE"),
+        Some((false, true)) if option => format!("{side} TO OPEN"),
+        _ => side.to_string(),
     };
     (side.to_string(), sub)
+}
+
+/// The book's holdings and trades whose symbol `named` accepts, for a listing's
+/// page: a holding by its id, a trade with its fills.
+pub fn listed(engine: &Engine, names: &Names, named: &dyn Fn(&str) -> bool) -> (Vec<crate::feeds::ListedRow>, Vec<crate::feeds::ListedRow>) {
+    let inputs = engine.inputs();
+    let figs = engine.figures();
+    let positions = figs
+        .positions
+        .iter()
+        .map(|p| position(inputs, names, p, String::new()))
+        .filter(|p| named(&p.symbol))
+        .map(|p| crate::feeds::ListedRow { id: p.id, symbol: p.symbol, exchange: p.exchange, currency: p.currency, kind: p.kind, name: p.name, security_id: p.security, fills: Vec::new() })
+        .collect();
+    let trades = figs
+        .trades
+        .iter()
+        .map(|t| trade(inputs, names, t, None))
+        .filter(|t| named(&t.symbol))
+        .map(|t| {
+            let fills = detail(engine, &t.id).map(|d| d.fills).unwrap_or_default();
+            crate::feeds::ListedRow { id: t.id, symbol: t.symbol, exchange: t.exchange, currency: t.currency, kind: t.kind, name: t.name, security_id: t.security, fills }
+        })
+        .collect();
+    (positions, trades)
 }
 
 /// A trade's or holding's fills, by its id, for its page.
@@ -555,7 +611,8 @@ pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
         .iter()
         .filter_map(|f| by_id.get(f))
         .map(|tx| {
-            let (side, sub) = fill_words(tx);
+            let option = tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)).is_some_and(|i| i.instrument.kind == InstrumentKind::OptionContract);
+            let (side, sub) = fill_words(tx, option, figs.matched.roles.get(&tx.id).copied());
             let currency = tx.cash.map(|c| c.currency).or(tx.price.map(|p| p.currency));
             Fill {
                 id: tx.id.to_string(),
@@ -567,10 +624,7 @@ pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
                     Some(q) => Fig::Stated(Dec(q)),
                     None => Fig::Waits { gaps: vec!["quantity-unstated".into()] },
                 },
-                price: match tx.price {
-                    Some(p) => Fig::Stated(Dec(p.amount)),
-                    None => Fig::Waits { gaps: vec!["price-unknown".into()] },
-                },
+                price: fig_dec(&bagholder_engine::ledger::fill_price(tx, tx.instrument.and_then(|i| engine.inputs().ledger.instruments.get(&i)))),
                 amount: match tx.cash {
                     Some(c) => Fig::Stated(Dec(c.amount)),
                     None => Fig::Waits { gaps: vec!["value-unstated".into()] },
@@ -588,19 +642,82 @@ pub fn detail(engine: &Engine, id: &str) -> Option<Detail> {
 mod tests {
     use super::*;
 
+    /// A JSON value's shape: each object's fields and theirs, each list by the
+    /// shapes its rows take, each value by its type.
+    fn shape(v: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match v {
+            Value::Object(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), shape(v))).collect()),
+            Value::Array(a) => {
+                let mut rows: Vec<Value> = a.iter().map(shape).collect();
+                rows.sort_by_key(|r| r.to_string());
+                rows.dedup();
+                Value::Array(rows)
+            }
+            Value::String(_) => "string".into(),
+            Value::Number(_) => "number".into(),
+            Value::Bool(_) => "bool".into(),
+            Value::Null => Value::Null,
+        }
+    }
+
+    #[test]
+    fn a_fill_says_what_it_did_in_its_trade() {
+        use bagholder_core::transaction::{Kind, Transaction};
+        use bagholder_engine::ledger::FillRole;
+        let u = "0192a000-0000-7000-8000-00000000000";
+        let tx = |kind: Kind| Transaction {
+            id: bagholder_core::TransactionId::parse(&format!("{u}1/trade")).unwrap(),
+            mapping: bagholder_core::MappingVersion { source: bagholder_core::SourceName::named("test"), version: 1 },
+            account: AccountId::parse(&format!("{u}2")).unwrap(),
+            occurred_at: None,
+            trade_date: "2026-04-20".parse().unwrap(),
+            settle_date: None,
+            kind,
+            effect: None,
+            instrument: None,
+            quantity: None,
+            price: None,
+            cash: None,
+            fee: None,
+            fx_rate: None,
+        };
+        let words = |kind, option, closed, opened| fill_words(&tx(kind), option, Some(FillRole { closed, opened })).1;
+        assert_eq!(words(Kind::Buy, true, false, true), "BUY TO OPEN");
+        assert_eq!(words(Kind::Sell, true, true, false), "SELL TO CLOSE");
+        assert_eq!(words(Kind::Buy, true, true, true), "BUY (close + open)");
+        assert_eq!(words(Kind::Sell, false, true, true), "SELL (close + open)");
+        assert_eq!(words(Kind::Buy, false, false, true), "BUY", "shares and coins are bought and sold");
+        assert_eq!(words(Kind::Sell, false, true, false), "SELL");
+        assert_eq!(fill_words(&tx(Kind::Buy), true, None).1, "BUY", "a fill the match did not apply");
+    }
+
     /// The document built from a real month of one account: every list's rows
     /// told apart by their ids, every open trade naming its holding, every
     /// holding its trade.
     #[test]
     fn the_document_from_a_real_month_names_every_row_by_its_id() {
+        let _g = crate::tests_common::guard();
+        let base = crate::tests_common::app().base().unwrap();
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
+        // a made-up quote for each holding: a tenth over what it cost a unit
+        let cache = f.cache().unwrap();
+        let held: Vec<(InstrumentId, bagholder_core::Currency, bagholder_core::Dec)> = f
+            .read(|e| e.figures().positions.iter().filter_map(|p| p.avg.as_ref().ok().map(|a| (p.instrument, p.currency, *a))).collect())
+            .unwrap();
+        for (i, currency, avg) in &held {
+            let price = avg.checked_mul(bagholder_core::Dec::parse("1.1").unwrap()).unwrap().round(2, bagholder_core::Rounding::HalfEven);
+            let quote = bagholder_sources::cache::StoredQuote { instrument: *i, source: bagholder_core::SourceName::named("test"), price: Money::new(price, *currency), change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now };
+            cache.store_quote(&quote).unwrap();
+            f.price_changed(*i).unwrap();
+        }
         let book = f.book().unwrap();
         let names = f.read(|e| Names::load(&book, e.inputs())).unwrap().unwrap();
-        let doc = f.read(|e| build(e, &names, &Filters::default())).unwrap();
+        let doc = f.read(|e| build(e, &names, &Filters::default(), &base)).unwrap();
         assert!(!doc.trades.is_empty() && !doc.positions.is_empty());
         let unique = |ids: Vec<&str>| {
             let mut seen = std::collections::BTreeSet::new();
@@ -617,6 +734,21 @@ mod tests {
             assert!(!p.security.is_empty(), "{}: the broker's id an order names", p.symbol);
             assert!(!p.account.is_empty());
         }
+        // the page's own tests read this document: kept beside them, the market's
+        // context (which reads the day it is built on) left out
+        let mut page = serde_json::to_value(&doc).unwrap();
+        page["markets"] = serde_json::Value::Null;
+        page["sectors"] = serde_json::json!([]);
+        page["regions"] = serde_json::json!([]);
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/fixtures/figures_pulled_month.json");
+        if std::env::var("BAGHOLDER_BLESS").is_ok_and(|v| v == "1") {
+            std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+            std::fs::write(&fixture, serde_json::to_string_pretty(&page).unwrap() + "\n").unwrap();
+        }
+        // the ids are made new on every pull, so the fixture is held to the document's
+        // shape: every field the server writes, of the type it writes, and no other
+        let kept: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(shape(&kept), shape(&page), "web/src/lib/fixtures/figures_pulled_month.json is not the shape of the document the server builds: run with BAGHOLDER_BLESS=1 and review the diff");
         // money is text on the wire
         let json = serde_json::to_value(&doc).unwrap();
         assert!(json["positions"][0]["cost"].is_string() || json["positions"][0]["cost"]["gaps"].is_array());

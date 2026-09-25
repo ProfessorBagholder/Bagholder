@@ -3,6 +3,7 @@
 // card/leg/foot builders, the in-place editors, cancel and adjust.
 
 import { filters } from '../filters.svelte'
+import { store } from '../state.svelte'
 import { ui, flash } from '../ui.svelte'
 import { watchDoc } from '../live'
 import { draftStore } from '../ticket/ticket.svelte'
@@ -164,10 +165,11 @@ export function bracketLegs(b: Bracket): Leg[] {
   return legs
 }
 
-// the accounts in scope, from the page's filter
-function ordersScope(): string[] { return filters.lists.account || [] }
-export function inOrdersScope(account: string): boolean { const s = ordersScope(); return !s.length || s.indexOf(account) >= 0 }
-export function ordersScopeLabel(): string { const s = ordersScope(); return s.length ? s.join(', ') : 'All Accounts' }
+// the accounts in scope, from the page's filter, which names each by its id
+function ordersScope() { const on = filters.lists.account; return (store.model?.accounts ?? []).filter((a) => on.includes(a.id)) }
+// an order names its account by the broker's id for it
+export function inOrdersScope(brokerAccount: string): boolean { return !filters.lists.account.length || ordersScope().some((a) => a.brokerAccount === brokerAccount) }
+export function ordersScopeLabel(): string { const s = ordersScope(); return s.length ? s.map((a) => a.name).join(', ') : 'All Accounts' }
 
 // --- actions ---
 export function editOrder(id: string) { panel.orderEdit = { id, error: '', qty: null, limit: null }; panel.bracketEdit = null }

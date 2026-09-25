@@ -23,17 +23,34 @@ pub fn home() -> PathBuf {
     .clone()
 }
 
+/// The shared test app, made once, whoever asks first.
+fn made() -> &'static Arc<App> {
+    APP.get_or_init(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let app = App::new(home(), root, "127.0.0.1".into());
+        bagholder_store::schema::init_schema(&app.open().unwrap()).unwrap();
+        // the figure path, on a month of one account's recorded replies of its own
+        let book = home().join("figures");
+        std::fs::create_dir_all(&book).unwrap();
+        pulled_book(&book);
+        let now = bagholder_core::jiff::Timestamp::now();
+        let f = crate::figures::Figures::open(&book, now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let _ = app.figures.set(f);
+        app
+    })
+}
+
 /// Serialize and make sure the shared test app exists.
 pub fn guard() -> MutexGuard<'static, ()> {
     let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    APP.get_or_init(|| App::new(home(), root, "127.0.0.1".into()));
+    made();
     g
 }
 
-/// The one shared test app, set up by `guard()`.
+/// The one shared test app.
 pub fn app() -> Arc<App> {
-    APP.get().expect("guard() sets up the app").clone()
+    made().clone()
 }
 
 /// The same app as a genuine `'static` reference: for a local `db()`/`conn()`
@@ -41,7 +58,7 @@ pub fn app() -> Arc<App> {
 /// ties a `Pooled<'_>` to the `&App` that opened it, and only a `'static`
 /// reference lets that claim `Pooled<'static>` as the old global did).
 pub fn app_ref() -> &'static App {
-    APP.get().expect("guard() sets up the app")
+    made()
 }
 
 /// A book in `home` holding one account's month, pulled from the recorded

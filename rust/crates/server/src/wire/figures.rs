@@ -66,6 +66,8 @@ pub struct Trade {
     pub entry_date: String,
     /// The last close; none while open.
     pub exit_date: Option<String>,
+    /// The day of its latest fill: the list's order, newest activity first.
+    pub last_date: String,
     pub hold_days: i64,
     pub pnl: Fig<Dec>,
     pub pnl_cad: Fig<Dec>,
@@ -282,7 +284,7 @@ pub struct QueueRow {
 #[diff(key = label)]
 pub struct Slice {
     pub label: String,
-    pub value: Dec,
+    pub value: Fig<Dec>,
     pub share: f64,
     /// The one holding it is, where it is one.
     pub id: Option<String>,
@@ -314,9 +316,13 @@ pub struct Portfolio {
 /// An account, for the ticket and Add trade.
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
 #[diff(key = id)]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: String,
     pub name: String,
+    /// The broker's own id for it, which an order names; none for an account
+    /// kept by hand.
+    pub broker_account: Option<String>,
     pub status: String,
     /// Whether the person trades in it: a self-directed account of cash or
     /// margin, not one the broker manages.
@@ -330,23 +336,22 @@ pub struct Account {
 // cashflow
 // --------------------------------------------------------------------------
 
-/// A tile over the cashflow chart.
+/// A tile over the cashflow chart, by what it shows.
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
 #[diff(key = label)]
-#[serde(rename_all = "camelCase")]
-pub struct CashflowTile {
-    pub label: String,
-    /// What was paid over the span (a paid tile).
-    pub total: Option<Partial>,
-    /// That, over the months that paid.
-    pub per_month: Option<Fig<Option<Dec>>>,
-    /// Margin drawn and what it costs a month (the margin tile).
-    pub margin_used: Option<Fig<Dec>>,
-    pub interest_per_month: Option<Fig<Option<Dec>>>,
-    /// Projected income over cost, and a month of it (the yield tile).
-    #[serde(rename = "yield")]
-    pub yield_on_cost: Option<Fig<Option<f64>>>,
-    pub projected: Option<Fig<Dec>>,
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum CashflowTile {
+    /// What was paid over the span, and that over the months that paid.
+    Paid { label: String, total: Partial, per_month: Fig<Option<Dec>> },
+    /// Margin drawn and what it costs a month.
+    Margin { label: String, margin_used: Fig<Dec>, interest_per_month: Fig<Option<Dec>> },
+    /// Projected income over cost, and a month of it.
+    Yield {
+        label: String,
+        #[serde(rename = "yield")]
+        yield_on_cost: Fig<Option<f64>>,
+        projected: Fig<Dec>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
@@ -416,7 +421,7 @@ pub struct Cashflow {
     pub holdings: Vec<CashflowHolding>,
     /// Projected income a month in CAD, by holding, as the pie draws it.
     pub income: Vec<Slice>,
-    pub income_total: Fig<Dec>,
+    pub income_total: Partial,
     pub rows: Vec<CashflowRow>,
     /// The filters in force that the cashflow does not read.
     pub skipped_filters: Vec<String>,
@@ -462,7 +467,7 @@ pub struct Options {
 // --------------------------------------------------------------------------
 
 /// Everything the page shows of the book, for one set of filters.
-#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[derive(Clone, Debug, Serialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 pub struct Figures {
     /// Today, in the person's zone.
@@ -485,4 +490,8 @@ pub struct Figures {
     pub accounts: Vec<Account>,
     /// Σ the accounts' values, for the ticket's share of it.
     pub nav_total: Option<Fig<Dec>>,
+    /// The market around the book, from its readers (`context`).
+    pub markets: bagholder_model::wire::Markets,
+    pub sectors: Vec<bagholder_model::wire::ExposureSlice>,
+    pub regions: Vec<bagholder_model::wire::ExposureSlice>,
 }

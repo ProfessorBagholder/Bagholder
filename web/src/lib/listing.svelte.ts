@@ -73,7 +73,7 @@ export function listingAsTrade(id: string, model: Model | null): Trade | null {
     pnlPct: null,
     holdDays: null,
     entryDate: since,
-    exitDate: '',
+    exitDate: null,
     last: watched ? w.last : (l.price ?? null),
     percentChange: watched ? w.percentChange : (l.percentChange ?? null),
     kind: l.kind || w?.kind || 'Shares',

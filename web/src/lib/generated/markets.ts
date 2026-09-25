@@ -2,7 +2,8 @@
 // edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.
 
 import type { OkOr } from './common'
-import type { Fill, MarketTile, SymbolMatch } from './wire'
+import type { Fill } from './figures'
+import type { MarketTile, SymbolMatch } from './wire'
 
 export type GaugeReading = { label: string, score: number, rating: string, };
 

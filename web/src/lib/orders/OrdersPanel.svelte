@@ -38,9 +38,9 @@
     const data = ordersStore.data
     if (!data && ordersStore.error) return { state: 'error' as const, head: '', cards: [] as Card[], empty: '' }
     if (!data) return { state: 'loading' as const, head: '', cards: [] as Card[], empty: '' }
-    const entries = data.orders.filter((o) => o.role !== 'stop' && o.role !== 'target' && inOrdersScope(o.account))
+    const entries = data.orders.filter((o) => o.role !== 'stop' && o.role !== 'target' && inOrdersScope(o.accountId))
     const tab = panel.tab
-    const endedBrackets = (data.brackets || []).filter((b) => b.armedAt && !BRACKET_LIVE[b.status] && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.account) })())
+    const endedBrackets = (data.brackets || []).filter((b) => b.armedAt && !BRACKET_LIVE[b.status] && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.accountId) })())
     const mixed = (rows: Order[], brackets: Bracket[]): Card[] =>
       (rows.map((o) => ({ kind: 'order' as const, at: o.createdAt, o })) as Card[])
         .concat(brackets.map((b) => ({ kind: 'bracket' as const, at: (b.updatedAt || b.armedAt) as string, b })))
@@ -56,7 +56,7 @@
       return { state: 'ok' as const, head: 'Cancelled and rejected', cards: mixed(rows, offs), empty: rows.length || offs.length ? '' : 'Nothing cancelled or rejected.' }
     }
     const cards = (entries.filter((o) => ORDER_LIVE[o.status]).map((o) => ({ kind: 'order' as const, at: o.createdAt, o })) as Card[])
-      .concat((data.brackets || []).filter((b) => BRACKET_LIVE[b.status] && b.status !== 'waiting' && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.account) })()).map((b) => ({ kind: 'bracket' as const, at: (b.armedAt || b.createdAt) as string, b })))
+      .concat((data.brackets || []).filter((b) => BRACKET_LIVE[b.status] && b.status !== 'waiting' && (() => { const e = orderById(b.orderId); return !e || inOrdersScope(e.accountId) })()).map((b) => ({ kind: 'bracket' as const, at: (b.armedAt || b.createdAt) as string, b })))
       .sort((a, c) => (a.at < c.at ? 1 : a.at > c.at ? -1 : 0))
     return { state: 'ok' as const, head: 'Pending orders', cards, empty: cards.length ? '' : draftStore.d ? '' : 'No pending orders.' }
   })

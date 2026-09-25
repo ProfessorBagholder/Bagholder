@@ -257,6 +257,16 @@ pub struct Matched {
     /// Each holding's units (longs less shorts) at the end of each day they
     /// changed; a count whose lots cannot be summed exactly is that failure.
     pub units: BTreeMap<(AccountId, InstrumentId), BTreeMap<Date, Fig<Dec>>>,
+    /// What each fill did to its position: closed part of it, opened one, or both
+    /// (a fill that crossed through zero).
+    pub roles: BTreeMap<TransactionId, FillRole>,
+}
+
+/// What a fill did to its position, as the match found it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FillRole {
+    pub closed: bool,
+    pub opened: bool,
 }
 
 impl Matched {
@@ -326,6 +336,21 @@ pub fn fill_value(t: &Transaction, qty: Dec, acquiring: bool, currency: Currency
         return Err(Gaps::of(Gap::Arithmetic(format!("{} moves its cash against its direction", t.id))));
     }
     Ok(Money::new(v, currency))
+}
+
+/// A fill's price a unit, in the instrument's currency: as the broker states it,
+/// else its value (`fill_value`) over its units, quantity × multiplier, as a
+/// trade's entry is. A synced row states no price of its own.
+pub fn fill_price(t: &Transaction, info: Option<&InstrumentInfo>) -> Fig<Dec> {
+    let Some(i) = info else { return Err(Gaps::of(Gap::ValueUnstated(t.id.clone()))) };
+    if let Some(p) = t.price.filter(|p| p.currency == i.instrument.currency) {
+        return Ok(p.amount);
+    }
+    let q = t.quantity.filter(|q| !q.is_zero()).ok_or_else(|| Gaps::of(Gap::QuantityUnstated(t.id.clone())))?;
+    let units = q.abs();
+    let mult = multiplier(Some(i), i.instrument.id);
+    let value = fill_value(t, units, q.is_positive(), i.instrument.currency, &mult)?;
+    Ok(value.amount.div_rounded(units.checked_mul(mult?)?, crate::trades::PRICE_PLACES, Rounding::HalfEven)?)
 }
 
 /// An amount of a fill in the instrument's currency: as it is, or at the rate
@@ -1080,6 +1105,10 @@ impl<'a> Matcher<'a> {
         } else {
             Closed { left: qty, value_left: value, fee_left: fee }
         };
+        let closed = left < qty;
+        if closed {
+            self.out.roles.insert(t.id.clone(), FillRole { closed, opened: false });
+        }
         if !left.is_positive() {
             return;
         }
@@ -1099,6 +1128,7 @@ impl<'a> Matcher<'a> {
             flags.insert(Flag::Rolled);
         }
         self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, opens, left, value_left, fee_left, flags, joins);
+        self.out.roles.insert(t.id.clone(), FillRole { closed, opened: true });
     }
 
     /// The round trip a roll's opening leg continues: the one closed by another
@@ -1774,5 +1804,67 @@ impl Direction {
 
     pub fn flip(self) -> Direction {
         self.opposite()
+    }
+}
+
+#[cfg(test)]
+mod fill_price_tests {
+    use super::*;
+    use bagholder_core::instrument::{Instrument, OptionTerms};
+    use bagholder_core::{MappingVersion, SourceName};
+
+    const U: &str = "0192a000-0000-7000-8000-00000000000";
+
+    fn info(kind: InstrumentKind, multiplier: Option<&str>) -> InstrumentInfo {
+        let id = InstrumentId::parse(&format!("{U}1")).unwrap();
+        let terms = (kind == InstrumentKind::OptionContract).then(|| OptionTerms {
+            underlying: InstrumentId::parse(&format!("{U}2")).unwrap(),
+            expiry: "2026-10-16".parse().unwrap(),
+            strike: Dec::parse("260").unwrap(),
+            right: OptionRight::Call,
+            multiplier: multiplier.map(|m| Dec::parse(m).unwrap()),
+            source: SourceName::named("test"),
+        });
+        InstrumentInfo { instrument: Instrument { id, kind, currency: Currency::USD, issuer: None }, names: Vec::new(), terms }
+    }
+
+    fn fill(qty: &str, price: Option<&str>, cash: Option<&str>, fee: Option<&str>) -> Transaction {
+        let usd = |v: &str| Money::new(Dec::parse(v).unwrap(), Currency::USD);
+        Transaction {
+            id: TransactionId::parse(&format!("{U}3/trade")).unwrap(),
+            mapping: MappingVersion { source: SourceName::named("test"), version: 1 },
+            account: AccountId::parse(&format!("{U}4")).unwrap(),
+            occurred_at: None,
+            trade_date: "2026-04-20".parse().unwrap(),
+            settle_date: None,
+            kind: if qty.starts_with('-') { Kind::Sell } else { Kind::Buy },
+            effect: None,
+            instrument: Some(InstrumentId::parse(&format!("{U}1")).unwrap()),
+            quantity: Some(Dec::parse(qty).unwrap()),
+            price: price.map(usd),
+            cash: cash.map(usd),
+            fee: fee.map(usd),
+            fx_rate: None,
+        }
+    }
+
+    #[test]
+    fn a_fill_is_priced_as_stated_else_by_its_value_over_its_units() {
+        let share = info(InstrumentKind::Security, None);
+        let d = |v: &str| Dec::parse(v).unwrap();
+        // the broker's price stands
+        assert_eq!(fill_price(&fill("80", Some("78.3"), Some("-6264"), None), Some(&share)), Ok(d("78.3")));
+        // no price: the cash less the fee a buy paid, over its units
+        assert_eq!(fill_price(&fill("80", None, Some("-6269"), Some("5")), Some(&share)).map(|p| p.round(2, Rounding::HalfEven)), Ok(d("78.30")));
+        // a sale: the cash and the fee it paid, over its units
+        assert_eq!(fill_price(&fill("-80", None, Some("7043"), Some("5")), Some(&share)).map(|p| p.round(2, Rounding::HalfEven)), Ok(d("88.10")));
+        // a contract: over its units times what each is of the underlying
+        let call = info(InstrumentKind::OptionContract, Some("100"));
+        assert_eq!(fill_price(&fill("1", None, Some("-410"), None), Some(&call)).map(|p| p.round(2, Rounding::HalfEven)), Ok(d("4.10")));
+        // what cannot be priced says why
+        let unstated = info(InstrumentKind::OptionContract, None);
+        assert!(fill_price(&fill("1", None, Some("-410"), None), Some(&unstated)).is_err(), "a contract whose size is unstated");
+        assert!(fill_price(&fill("80", None, None, None), Some(&share)).is_err(), "neither a price nor cash");
+        assert!(fill_price(&fill("0", None, Some("-10"), None), Some(&share)).is_err(), "no units");
     }
 }

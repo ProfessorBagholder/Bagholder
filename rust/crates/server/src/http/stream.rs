@@ -21,9 +21,6 @@ pub struct EventsQuery {
     /// the page's filters, as the JSON it keeps them in
     #[serde(default, deserialize_with = "trimmed")]
     filters: Option<String>,
-    /// the trade whose page is open, when one is
-    #[serde(default, deserialize_with = "trimmed")]
-    trade: Option<String>,
     /// the time zone of the page's browser (IANA): the person's days are in it
     #[serde(default, deserialize_with = "trimmed")]
     zone: Option<String>,
@@ -35,7 +32,7 @@ pub struct EventsQuery {
 /// dropped and the `Feed` with it, which is what tells the background work that
 /// nobody is looking any more.
 pub async fn events(axum::extract::State(state): axum::extract::State<AppState>, Params(q): Params<EventsQuery>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let filters = q.filters.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    let filters = q.filters;
     let app = state.app;
     if let Some(zone) = q.zone {
         // the zone of the browser in use: kept, and "today" follows it
@@ -49,7 +46,7 @@ pub async fn events(axum::extract::State(state): axum::extract::State<AppState>,
         })
         .await;
     }
-    let feed = Feed::open(app.clone(), filters, q.trade);
+    let feed = Feed::open(app.clone(), filters);
     let hello = feed.hello();
     let changes = stream::unfold((Some(feed), app.events.subscribe(), true), move |(feed, mut rx, first)| {
     let value = app.clone();

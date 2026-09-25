@@ -1,3 +1,4 @@
+import { cmp as decCmp, waits, type Dec, type Fig } from './dec'
 // Sort state per table and the shared row sorter, ported from ledger.html
 // (state.sort + sortRows + the 'sort' action). Reactive $state so a header click
 // re-sorts only the table that reads it.
@@ -51,11 +52,18 @@ export function toggleSort(table: string, key: string): void {
   }
 }
 
+const DECIMAL = /^-?\d+(\.\d+)?$/
+
+// A figure that waits on something has no value to order by: it sinks like an empty cell.
+const value = (v: unknown): unknown => (waits(v as Fig<unknown>) ? null : v)
+
 function cmp(a: unknown, b: unknown): number {
   if (a == null && b == null) return 0
   if (a == null) return 1
   if (b == null) return -1
   if (typeof a === 'number' && typeof b === 'number') return a - b
+  // exact decimals, ordered digit by digit, never through a float
+  if (typeof a === 'string' && typeof b === 'string' && DECIMAL.test(a) && DECIMAL.test(b)) return decCmp(a as Dec, b as Dec)
   return String(a).localeCompare(String(b))
 }
 
@@ -64,8 +72,8 @@ function cmp(a: unknown, b: unknown): number {
 export function sortRows<T>(rows: T[], key: string, dir: Dir, get: (row: T, key: string) => unknown): T[] {
   const out = rows.slice()
   out.sort((a, b) => {
-    const va = get(a, key)
-    const vb = get(b, key)
+    const va = value(get(a, key))
+    const vb = value(get(b, key))
     if (va == null || vb == null) return cmp(va, vb)
     const c = cmp(va, vb)
     return dir === 'desc' ? -c : c

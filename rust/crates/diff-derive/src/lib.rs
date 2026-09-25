@@ -52,15 +52,22 @@ fn renamed(rule: &str, name: &str, span: proc_macro2::Span) -> syn::Result<Strin
 struct Container {
     rename_all: Option<String>,
     key: Option<Ident>,
+    /// `tag` or `rename_all_fields`: they shape an enum's JSON, which an enum is
+    /// compared as whole; a struct's fields are compared one by one, so on a
+    /// struct they are refused.
+    enum_shape: bool,
 }
 
 fn container(input: &DeriveInput) -> syn::Result<Container> {
-    let mut c = Container { rename_all: None, key: None };
+    let mut c = Container { rename_all: None, key: None, enum_shape: false };
     for attr in &input.attrs {
         if attr.path().is_ident("serde") {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename_all") {
                     c.rename_all = Some(meta.value()?.parse::<LitStr>()?.value());
+                } else if meta.path.is_ident("tag") || meta.path.is_ident("rename_all_fields") {
+                    meta.value()?.parse::<LitStr>()?;
+                    c.enum_shape = true;
                 } else if meta.path.is_ident("default") || meta.path.is_ident("untagged") {
                     if meta.input.peek(syn::Token![=]) {
                         meta.value()?.parse::<syn::Expr>()?;
@@ -130,6 +137,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         Data::Enum(_) => {
             quote!(#patch::as_json(self, new, path, ops))
         }
+        Data::Struct(_) if c.enum_shape => return Err(syn::Error::new_spanned(name, "Diff compares a struct field by field: `tag` and `rename_all_fields` are for an enum")),
         Data::Struct(s) => {
             let Fields::Named(named) = &s.fields else {
                 return Err(syn::Error::new_spanned(name, "Diff needs named fields"));

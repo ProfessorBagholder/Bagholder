@@ -1,7 +1,8 @@
 <script lang="ts">
   import { roll } from './actions/roll'
   import type { Model } from './model'
-  import { money0, signedMoney, pct, pctPlain, px, cls, color } from './fmt'
+  import { money0, signedMoney, pct, pctPlain, px, cls, color, leftOut, waiting } from './fmt'
+  import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { goSub } from './router.svelte'
@@ -11,6 +12,10 @@
   const pf = $derived(model.portfolio)
 
   // --- tiles (portfolioTilesHtml) ---
+  // a share under a tile: its word where it waits, a dash where there is none
+  const share = (v: number | null | { gaps: string[] }, then: (x: number) => string) => (v == null ? '—' : waits(v) ? waiting(v) : then(v))
+  // a total's sub line, with how many it left out
+  const also = (sub: string, n: number) => (n ? sub + ' · ' + leftOut(n) : sub)
   const tiles = $derived.by(() => {
     const n = pf.positionCount || 0
     const positions = n + (n === 1 ? ' position' : ' positions')
@@ -22,13 +27,13 @@
         sub: pf.nav == null ? '—' : pf.navAccounts + (pf.navAccounts === 1 ? ' account, ' : ' accounts, ') + positions,
         vcls: '',
       },
-      { label: 'Cost basis', value: money0(pf.costBasis), sub: 'Total book value', vcls: '' },
+      { label: 'Cost basis', value: money0(pf.costBasis.total), sub: also('Total book value', pf.costBasis.leftOut), vcls: '' },
     ]
     if (pf.hasMargin) {
       out.push({
         label: 'Margin used',
         value: money0(pf.marginUsed),
-        sub: pf.marginUsedPct == null ? '—' : pctPlain(pf.marginUsedPct) + ' of market value',
+        sub: share(pf.marginUsedPct, (x) => pctPlain(x) + ' of market value'),
         vcls: '',
       })
       out.push({
@@ -41,61 +46,39 @@
       out.push({
         label: 'Cash',
         value: money0(pf.cash),
-        sub: pf.cashPct == null ? '—' : pctPlain(pf.cashPct) + ' of net asset value',
+        sub: share(pf.cashPct, (x) => pctPlain(x) + ' of net asset value'),
         vcls: '',
       })
     }
     out.push({
       label: '1d change',
-      value: pf.dayChange == null ? '—' : signedMoney(pf.dayChange, undefined, 2),
-      sub: pf.dayChangePct == null ? '—' : pct(pf.dayChangePct) + ' today',
-      vcls: pf.dayChange == null ? '' : cls(pf.dayChange),
+      value: pf.dayChange == null ? '—' : signedMoney(pf.dayChange.total, undefined, 2),
+      sub: also(share(pf.dayChangePct, (x) => pct(x) + ' today'), pf.dayChange?.leftOut ?? 0),
+      vcls: pf.dayChange == null ? '' : cls(pf.dayChange.total),
     })
     out.push({
       label: 'Unrealized P&L',
-      value: signedMoney(pf.unrealized, undefined, 2),
-      sub: pf.unrealizedPct == null ? '—' : pct(pf.unrealizedPct) + (pf.unrealized >= 0 ? ' gain' : ' loss'),
-      vcls: cls(pf.unrealized),
+      value: signedMoney(pf.unrealized.total, undefined, 2),
+      sub: also(share(pf.unrealizedPct, (x) => pct(x) + (x >= 0 ? ' gain' : ' loss')), pf.unrealized.leftOut),
+      vcls: cls(pf.unrealized.total),
     })
     return out
   })
 
   // --- Allocation donut (portfolioSlices) ---
-  const allocItems = $derived.by<DonutItem[]>(() => {
-    const all = pf.allocation || []
-    const top = all.length > 10 ? all.slice(0, 10) : all
-    const rest = all.slice(top.length)
-    const base = top.map((x) => ({ label: x.symbol, v: x.value, share: x.share }))
-    if (rest.length)
-      base.push({
-        label: 'Other (' + rest.length + ')',
-        v: rest.reduce((a, x) => a + x.value, 0),
-        share: rest.reduce((a, x) => a + x.share, 0),
-      })
-    return base.map((x, i) => ({ ...x, color: 'var(--pie-' + ((i % 11) + 1) + ')' }))
-  })
+  // the server folds past ten holdings into `Other (n)`
+  const allocItems = $derived<DonutItem[]>((pf.allocation || []).map((x, i) => ({ label: x.label, v: x.value, share: x.share, color: 'var(--pie-' + ((i % 11) + 1) + ')' })))
 
   // --- Sectors / Regions donuts (exposureSlices) ---
+  // the server folds the long tail into `Other (n)` and puts what is not classified last
   type ExpRow = { name: string; value: number; share: number }
-  function exposureSlices(rows: ExpRow[] | undefined, cap?: number): DonutItem[] {
-    const known = (rows || []).filter((x) => x.name !== 'Not classified')
-    const unc = (rows || []).find((x) => x.name === 'Not classified')
-    const top = known.slice(0, cap || 10)
-    const rest = known.slice(cap || 10)
-    const base = top.map((x) => ({ label: x.name, v: x.value, share: x.share }))
-    if (rest.length)
-      base.push({
-        label: 'Other (' + rest.length + ')',
-        v: rest.reduce((a, x) => a + x.value, 0),
-        share: rest.reduce((a, x) => a + x.share, 0),
-      })
-    const items: DonutItem[] = base.map((x, i) => ({ ...x, color: 'var(--pie-' + ((i % 11) + 1) + ')' }))
-    if (unc) items.push({ label: unc.name, v: unc.value, share: unc.share, color: 'rgba(var(--ink-rgb),.28)' })
-    return items
+  const UNCLASSIFIED = 'Not classified'
+  function exposureSlices(rows: ExpRow[]): DonutItem[] {
+    return rows.map((x, i) => ({ label: x.name, v: x.value, share: x.share, color: x.name === UNCLASSIFIED ? 'rgba(var(--ink-rgb),.28)' : 'var(--pie-' + ((i % 11) + 1) + ')' }))
   }
-  const expCount = (rows: ExpRow[] | undefined) => String((rows || []).filter((x) => x.name !== 'Not classified' && x.value > 0).length)
-  const sec = $derived(exposureSlices(pf.sectors, 12))
-  const reg = $derived(exposureSlices(pf.regions))
+  const expCount = (rows: ExpRow[]) => String(rows.filter((x) => x.name !== UNCLASSIFIED && !x.name.startsWith('Other (') && x.value > 0).length)
+  const sec = $derived(exposureSlices(model.sectors))
+  const reg = $derived(exposureSlices(model.regions))
 
   // --- Holdings table ---
   type Col = { key: string; label: string; align?: 'right' | 'center'; padRight?: string }
@@ -110,10 +93,10 @@
     { key: 'unreal', label: 'Unrealized P&L', align: 'right', padRight: '0' },
   ]
 
+  // a holding with no value in the column sinks, whichever way the rest goes
   function posSortValue(p: (typeof model.positions)[number], key: string): unknown {
-    if (key === 'unreal') return p.unreal
-    if (key === 'day') return p.dayChange == null ? -Infinity : p.dayChange
-    if (key === 'dayPct') return p.percentChange == null ? -Infinity : p.percentChange
+    if (key === 'day') return p.dayChange
+    if (key === 'dayPct') return p.percentChange
     return (p as unknown as Record<string, unknown>)[key]
   }
   const rows = $derived(sortRows(model.positions || [], sort.positions.key, sort.positions.dir, posSortValue))
@@ -133,7 +116,7 @@
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>Allocation</h5></div>
       {#if allocItems.length}
         <div style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">
-          <Donut items={allocItems} total={pf.marketValue || 0} centreLabel="Market value" side="l" />
+          <Donut items={allocItems} total={pf.marketValue.total} totalLeftOut={pf.marketValue.leftOut} centreLabel="Market value" side="l" />
         </div>
       {:else}
         <div class="muted empty" style="flex:1;font-size:12px">No open positions in scope.</div>
@@ -163,7 +146,7 @@
                 <td style="text-align:right">{px(r.avg)}</td><td style="text-align:right">{px(r.last)}</td>
                 <td style="text-align:right">{money0(r.cost, r.currency)}</td><td style="text-align:right">{money0(r.mv, r.currency)}</td>
                 <td style="text-align:right;white-space:nowrap;color:{r.dayChange == null ? 'var(--ink55)' : color(r.dayChange)}">{r.dayChange == null ? '—' : signedMoney(r.dayChange, r.currency)}</td>
-                <td style="text-align:right;color:{r.percentChange == null ? 'var(--ink55)' : color(r.percentChange)}">{r.percentChange == null ? '—' : pct(r.percentChange / 100, 2)}</td>
+                <td style="text-align:right;color:{r.percentChange == null ? 'var(--ink55)' : color(r.percentChange)}">{r.percentChange == null ? '—' : pct(r.percentChange, 2)}</td>
                 <td style="text-align:right;padding-right:0;white-space:nowrap;font-weight:500;color:{color(r.unreal)}">{signedMoney(r.unreal, r.currency)} ({pct(r.unrealPct)})</td>
               </tr>
             {/each}
@@ -182,10 +165,10 @@
     {:else}
       <div style="display:grid;grid-template-columns:minmax(max-content,1fr) minmax(240px,340px) minmax(240px,340px) minmax(max-content,1fr);column-gap:40px;align-items:center">
         <div style="display:contents">
-          <Donut items={sec} total={null} centreLabel="Sectors" centreText={expCount(pf.sectors)} side="l" size="100%" legendFirst />
+          <Donut items={sec} total={null} centreLabel="Sectors" centreText={expCount(model.sectors)} side="l" size="100%" legendFirst />
         </div>
         <div style="display:contents">
-          <Donut items={reg} total={null} centreLabel="Regions" centreText={expCount(pf.regions)} side="r" size="100%" />
+          <Donut items={reg} total={null} centreLabel="Regions" centreText={expCount(model.regions)} side="r" size="100%" />
         </div>
       </div>
     {/if}

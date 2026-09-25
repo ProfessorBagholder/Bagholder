@@ -2,7 +2,8 @@
   import { spaceAxis } from './actions/spaceAxis'
   import { roll } from './actions/roll'
   import type { Model, EquityPoint } from './model'
-  import { money, money0, pct, pctPlain, cls, color, stamp, stampDay, hold, shortMoney } from './fmt'
+  import { money, money0, pct, pctPlain, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
+  import { abs, plot, waits, type Dec, type Fig } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { setBenchmark, setFilters } from './state.svelte'
@@ -22,7 +23,9 @@
   const k = $derived(model.kpi)
   const ann = $derived(model.equity.annualized)
   const dd = $derived(model.equity.drawdown)
-  const pf = $derived(k.profitFactorInfinite ? '∞' : k.profitFactor == null ? '—' : k.profitFactor.toFixed(2))
+  const pf = $derived(k.profitFactorInfinite ? '∞' : waits(k.profitFactor) ? waiting(k.profitFactor) : k.profitFactor == null ? '—' : k.profitFactor.toFixed(2))
+  // a figure's height on a chart; one that waits stands at zero, its word in the tip
+  const at = (v: Fig<Dec>): number => (waits(v) ? 0 : plot(v))
 
   // ---- equity geometry (eqGeom / niceMax) ----
   function niceMax(peak: number): number {
@@ -31,7 +34,7 @@
     return Math.max(step * 3, Math.ceil(peak / (step * 3)) * step * 3)
   }
   function eqGeom(series: EquityPoint[]) {
-    const vals = series.map((p) => p.v)
+    const vals = series.map((p) => plot(p.v))
     const peak = Math.max.apply(null, vals.concat([0]))
     const max = niceMax(peak)
     const W = 880, H = 260, pad = 8, top = 6
@@ -104,8 +107,8 @@
   // ---- monthly P&L geometry ----
   const ms = $derived(model.monthly || [])
   const mo = $derived.by(() => {
-    const posMax = Math.max.apply(null, ms.map((x) => Math.max(0, x.value)).concat([0]))
-    const negMax = Math.max.apply(null, ms.map((x) => Math.max(0, -x.value)).concat([0]))
+    const posMax = Math.max.apply(null, ms.map((x) => Math.max(0, at(x.value))).concat([0]))
+    const negMax = Math.max.apply(null, ms.map((x) => Math.max(0, -at(x.value))).concat([0]))
     const total = posMax + negMax || 1
     let base = negMax > 0 ? Math.min(0.93, Math.max(0.35, posMax / total)) : 0.93
     if (!(posMax > 0) && negMax > 0) base = 0.07
@@ -139,7 +142,7 @@
 
   // ---- grades ----
   const grades = $derived(model.grades)
-  const gradePeak = $derived(Math.max.apply(null, (grades?.buckets || []).map((b) => Math.abs(b.pnl)).concat([1])))
+  const gradePeak = $derived(Math.max.apply(null, (grades?.buckets || []).map((b) => Math.abs(at(b.pnl))).concat([1])))
 
   // ---- by symbol ----
   const bySymCols: { key: string; label: string; align?: string }[] = [
@@ -160,10 +163,11 @@
   function openTrade(id: string) {
     goSub('trades', id)
   }
-  function symbolOpen(row: { symbol: string; tradeIds: string[] }) {
+  // a row names its underlying instrument by id, and the filter holds it so
+  function symbolOpen(row: { id: string; tradeIds: string[] }) {
     if (row.tradeIds.length === 1) return openTrade(row.tradeIds[0])
     go('trades')
-    setFilters({ lists: { ...filters.lists, symbol: [row.symbol] } })
+    setFilters({ lists: { ...filters.lists, symbol: [row.id] } })
   }
   function monthOpen(i: number) {
     const b = ms[i]
@@ -186,11 +190,11 @@
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
   <!-- KPI row -->
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
-    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}{k.realizedLeftOut ? ' · ' + k.realizedLeftOut + ' waiting' : ''}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L{k.breakeven ? ' · ' + k.breakeven + ' BE' : ''}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v" use:roll={pf}></div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Expectancy</div><div class="v" use:roll={k.expectancy == null ? '—' : money(k.expectancy)}></div><div class="s">Avg W {money0(k.avgWin)} · L {money0(k.avgLoss)}</div></div>
-    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}" use:roll={dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}></div><div class="s">{dd.pct == null ? 'No NAV history' : '−$' + Math.abs(Math.round(dd.abs ?? 0)).toLocaleString('en-US') + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
+    <div class="card elev-sm kpi"><div class="lbl">Max drawdown</div><div class="v {dd.pct == null ? '' : 'neg'}" use:roll={dd.pct == null ? '—' : '−' + Math.abs(dd.pct * 100).toFixed(1) + '%'}></div><div class="s">{dd.pct == null ? 'No NAV history' : '−' + money0(dd.abs == null ? null : abs(dd.abs)) + (dd.at ? ' · ' + stamp(dd.at) : '')}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Avg annualized</div><div class="v {ann.rate == null ? '' : cls(ann.rate)}" use:roll={ann.rate == null ? '—' : pct(ann.rate)}></div><div class="s">{ann.rate == null ? 'No NAV history' : 'Over ' + ann.count + (ann.count === 1 ? ' year' : ' years')}</div></div>
   </div>
 
@@ -274,9 +278,10 @@
           <div style="position:absolute;left:0;right:0;top:{mo.posH.toFixed(1)}%;height:1px;background:var(--hair)"></div>
           {#if ms.length}
             {#each ms as b, i (b.key)}
-              {@const h = b.value >= 0 ? (mo.posMax ? Math.max(1.5, (b.value / mo.posMax) * mo.posH) : 0) : mo.negMax ? Math.max(1.5, (-b.value / mo.negMax) * mo.negH) : 0}
+              {@const v = at(b.value)}
+              {@const h = waits(b.value) ? 0 : v >= 0 ? (mo.posMax ? Math.max(1.5, (v / mo.posMax) * mo.posH) : 0) : mo.negMax ? Math.max(1.5, (-v / mo.negMax) * mo.negH) : 0}
               <div class="bar-col" role="presentation" onmouseenter={() => onMoEnter(i)} onclick={() => monthOpen(i)}>
-                {#if b.value >= 0}
+                {#if v >= 0}
                   <div style="position:absolute;left:0;right:0;bottom:{(100 - mo.posH).toFixed(1)}%;height:{h.toFixed(2)}%;background:var(--pos);border-radius:2px 2px 0 0"></div>
                 {:else}
                   <div style="position:absolute;left:0;right:0;top:{mo.posH.toFixed(1)}%;height:{h.toFixed(2)}%;background:var(--neg);border-radius:0 0 2px 2px"></div>
@@ -308,7 +313,7 @@
           {#each grades.buckets as b (b.grade)}
             <div class="bar-col" role="presentation" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px;height:100%;border-radius:4px;cursor:pointer" onclick={() => gradeOpen(b.grade)}>
               <span class="tab" style="font-size:11px;text-align:center;color:{b.n === 0 ? 'rgba(var(--ink-rgb),.45)' : color(b.pnl)}">{b.n ? shortMoney(b.pnl) : '—'}</span>
-              <div style="height:{b.n === 0 ? 0 : Math.max(3, (Math.abs(b.pnl) / gradePeak) * 100).toFixed(1)}%;background:{color(b.pnl)};border-radius:3px 3px 0 0"></div>
+              <div style="height:{b.n === 0 ? 0 : Math.max(3, (Math.abs(at(b.pnl)) / gradePeak) * 100).toFixed(1)}%;background:{color(b.pnl)};border-radius:3px 3px 0 0"></div>
             </div>
           {/each}
         </div>

@@ -2,7 +2,8 @@
 // the pieces the legacy `state` object tracked (menuOpen, modal, confirmOpen).
 import { store } from './state.svelte'
 import { request, call } from './api'
-import { localDay } from './fmt'
+import { localDay, waiting } from './fmt'
+import { waits } from './dec'
 
 // the server's own types (rust/crates/store/src/activities.rs and csvimport.rs), generated
 import type { ImportReport as ImportedFileReport, WatchStatus } from './generated/book'
@@ -337,10 +338,12 @@ export function exportCsv(): void {
   const m = store.model
   if (!m) return
   const cols = ['Open', 'Close', 'Symbol', 'Name', 'Account', 'Kind', 'Side', 'Status', 'Qty', 'Entry', 'Exit', 'Currency', 'P&L', 'P&L CAD', 'Fees', 'Hold days', 'Grade', 'Tags', 'Thesis']
-  const q = (v: unknown) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'
+  // an amount is written as the exact decimal the server sent; one that waits, as the page shows it
+  const cell = (v: unknown) => (waits(v as never) ? waiting(v as { gaps: string[] }) : v)
+  const q = (v: unknown) => '"' + String(v == null ? '' : cell(v)).replace(/"/g, '""') + '"'
   const lines = [cols.map(q).join(',')].concat(
     (m.trades || []).map((t) =>
-      [t.entryDate, t.exitDate, t.symbol, t.name, t.account, t.kind, t.side, t.status, t.qty, t.entry, t.exit, t.currency, t.pnl.toFixed(2), t.pnlCad.toFixed(2), (t.fees ?? 0).toFixed(2), t.holdDays, t.grade, (t.tags || []).join('; '), t.thesis].map(q).join(','),
+      [t.entryDate, t.exitDate, t.symbol, t.name, t.account, t.kind, t.side, t.status, t.qty, t.entry, t.exit, t.currency, t.pnl, t.pnlCad, t.fees, t.holdDays, t.grade, (t.tags || []).join('; '), t.thesis].map(q).join(','),
     ),
   )
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' })

@@ -66,7 +66,7 @@
       const k = bareSymbol(p.symbol) + '@' + String(p.exchange || '').toUpperCase()
       if (watchedKeys.has(k) || seen.has(k)) return
       seen.add(k)
-      out.push({ symbol: bareSymbol(p.symbol), exchange: p.exchange || '', name: p.name || '', currency: p.currency || '', last: p.last, percentChange: p.percentChange })
+      out.push({ symbol: bareSymbol(p.symbol), exchange: p.exchange || '', name: p.name || '', currency: p.currency || '', last: p.last, percentChange: p.percentChange == null ? null : p.percentChange * 100 }) // a holding's day change is a fraction; these rows' a percentage
     })
     return out.slice(0, 4)
   })
@@ -91,7 +91,7 @@
           const k = bareSymbol(m.symbol) + '@' + String(m.exchange || '').toUpperCase()
           if (watchedKeys.has(k) || out.some((x) => bareSymbol(x.symbol) + '@' + String(x.exchange || '').toUpperCase() === k)) return
           const p = (store.model?.positions || []).find((x) => x.symbol === m.symbol)
-          out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p ? p.percentChange : null })
+          out.push({ symbol: bareSymbol(m.symbol), exchange: m.exchange || '', name: m.name || '', currency: m.currency || (p ? p.currency : ''), last: p ? p.last : null, percentChange: p && p.percentChange != null ? p.percentChange * 100 : null })
         })
         matches = out.slice(0, 4)
       })

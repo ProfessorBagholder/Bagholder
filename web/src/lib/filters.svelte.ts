@@ -1,7 +1,7 @@
-// The global filter state. Changing any of it recomputes the model server-side
-// (loadModel sends it as ?filters=), so every tab reflects the same scope. A
-// filter change genuinely changes which trades/positions are in play, so a full
-// model recompute is the correct "update when needed" here.
+// The global filter state. Changing any of it asks the server for the figures in
+// that scope (the stream is opened again with it), so every tab reflects the same
+// scope. Accounts and instruments are held by their ids, never by a name or a
+// symbol another could share; the chips and summaries show their names.
 
 import type { Options } from './model'
 import { symText } from './sym'
@@ -11,7 +11,7 @@ export type RangeKey = 'price' | 'hold' | 'pnl' | 'qty'
 
 export interface Filters {
   lists: Record<ListKey, string[]>
-  ranges: Record<RangeKey, { op: string; v: number | null }>
+  ranges: Record<RangeKey, { op: string; v: string | null }>
   preset: string
   years: string[]
   from: string
@@ -86,7 +86,7 @@ export interface Field {
 export const FIELDS: Field[] = [
   { key: 'date', label: 'Date', kind: 'date' },
   { key: 'account', label: 'Account', kind: 'list', opt: 'accounts' },
-  { key: 'symbol', label: 'Symbol', kind: 'list', opt: 'symbols', search: true },
+  { key: 'symbol', label: 'Symbol', kind: 'list', opt: 'instruments', search: true },
   { key: 'grade', label: 'Grade', kind: 'list', opt: 'grades' },
   { key: 'tag', label: 'Tag', kind: 'list', opt: 'tags', search: true },
   { key: 'side', label: 'Side', kind: 'list', opt: 'sides' },
@@ -115,19 +115,37 @@ export function dateLabel(): string {
   return p ? p[1] : 'All time'
 }
 
-export function listSummary(key: ListKey): string {
+/** What the page shows for a list filter's value: an account's or an instrument's name for its id. */
+export function valueLabel(key: string, v: string, options: Options | null | undefined): string {
+  if (key === 'account') return options?.accounts.find((a) => a.id === v)?.name ?? v
+  if (key === 'symbol') {
+    const i = options?.instruments.find((x) => x.id === v)
+    return i ? symText(i.symbol) : v
+  }
+  return v
+}
+
+export function listSummary(key: ListKey, options: Options | null | undefined): string {
   const on = filters.lists[key]
   if (!on.length) return ''
-  const first = key === 'symbol' ? symText(on[0]) : on[0]
+  const first = valueLabel(key, on[0], options)
   return on.length === 1 ? first : first + ' +' + (on.length - 1)
+}
+
+/** A bound as the person typed it, with its digits grouped. */
+function grouped(v: string): string {
+  const [whole, frac] = v.split('.')
+  const sign = whole.startsWith('-') ? '-' : ''
+  const digits = whole.replace('-', '').replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return sign + digits + (frac != null ? '.' + frac : '')
 }
 
 export function rangeSummary(key: RangeKey): string {
   const r = filters.ranges[key]
-  if (r.v == null || (r.v as unknown) === '') return ''
+  if (r.v == null || r.v === '') return ''
   if (key === 'hold') return r.v + ' days'
-  if (key === 'qty') return Number(r.v).toLocaleString('en-US')
-  return '$' + Number(r.v).toLocaleString('en-US')
+  if (key === 'qty') return grouped(r.v)
+  return r.v.startsWith('-') ? '-$' + grouped(r.v.slice(1)) : '$' + grouped(r.v)
 }
 
 export interface Chip {
@@ -138,13 +156,13 @@ export interface Chip {
 
 // The active filters, in the order the tab bar shows them: the date, the free-text
 // search, then each list/range field that has a value. Matches ledger.html chips().
-export function chips(): Chip[] {
+export function chips(options: Options | null | undefined): Chip[] {
   const out: Chip[] = []
   if (dateLabel() !== 'All time') out.push({ field: 'Date', value: dateLabel(), key: 'date' })
   if (filters.search) out.push({ field: 'Search', value: filters.search, key: 'search' })
   for (const f of FIELDS) {
     if (f.kind === 'list' && filters.lists[f.key as ListKey].length)
-      out.push({ field: f.label + ' is', value: listSummary(f.key as ListKey), key: f.key })
+      out.push({ field: f.label + ' is', value: listSummary(f.key as ListKey, options), key: f.key })
     if (f.kind === 'range' && rangeSummary(f.key as RangeKey))
       out.push({ field: f.label + ' ' + filters.ranges[f.key as RangeKey].op, value: rangeSummary(f.key as RangeKey), key: f.key })
   }

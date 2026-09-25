@@ -89,6 +89,11 @@ pub struct Figures {
     /// Something changed that can make a read due (a zone stated, the record
     /// changed): the scheduler looks again at once (`due`).
     wake: std::sync::atomic::AtomicBool,
+    /// Counts each change to the figures, so a page's stream rebuilds its
+    /// document only when one moved.
+    version: std::sync::atomic::AtomicU64,
+    /// What the page calls each instrument by the broker, read once per record.
+    names: RwLock<Option<crate::wire::build::Names>>,
 }
 
 impl Figures {
@@ -103,7 +108,7 @@ impl Figures {
         if !book_path.exists() && old.exists() {
             crate::legacy_import::import(&old, home, at).map_err(|e| format!("the earlier database could not be carried into the book: {e}"))?;
         }
-        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false) };
+        let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), names: RwLock::new(None) };
         let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| format!("the book could not be opened: {e}"))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| format!("the market cache could not be opened: {e}"))?;
         if let Some(z) = book.zone().map_err(err)? {
@@ -129,21 +134,46 @@ impl Figures {
         self.engine.read().unwrap_or_else(|e| e.into_inner()).as_ref().map(f)
     }
 
+    /// Which change the figures are at.
+    pub fn version(&self) -> u64 {
+        self.version.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn moved(&self, m: Moved) -> Moved {
+        if !m.is_empty() {
+            self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        m
+    }
+
+    /// The broker's names for the instruments, read from the book once per record.
+    pub fn names(&self) -> Result<crate::wire::build::Names, String> {
+        if let Some(n) = self.names.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            return Ok(n.clone());
+        }
+        let book = self.book()?;
+        let n = self.read(|e| crate::wire::build::Names::load(&book, e.inputs())).unwrap_or_else(|| Ok(Default::default()))?;
+        *self.names.write().unwrap_or_else(|e| e.into_inner()) = Some(n.clone());
+        Ok(n)
+    }
+
     /// Apply one change: what moved, nothing before the engine is built.
     fn apply(&self, change: Change) -> Moved {
-        match self.engine.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        let m = match self.engine.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
             Some(e) => e.apply(change),
             None => Moved::default(),
-        }
+        };
+        self.moved(m)
     }
 
     /// Apply a change only where it differs from what the engine holds: a read
     /// that stored nothing new computes nothing.
     fn apply_if(&self, differs: impl FnOnce(&Inputs) -> bool, change: impl FnOnce() -> Change) -> Moved {
-        match self.engine.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        let m = match self.engine.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
             Some(e) if differs(e.inputs()) => e.apply(change()),
             _ => Moved::default(),
-        }
+        };
+        self.moved(m)
     }
 
     /// Ask the scheduler to look again now.
@@ -172,9 +202,14 @@ impl Figures {
                 let mut e = build(&book, &self.cache()?, clock(&zone, now)?)?;
                 settle_trades(&book, &mut e, now)?;
                 *engine = Some(e);
+                self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Moved::default())
             }
-            Some(e) if changed => Ok(e.apply(Change::Clock(clock(&zone, now)?))),
+            Some(e) if changed => {
+                let m = e.apply(Change::Clock(clock(&zone, now)?));
+                drop(engine);
+                Ok(self.moved(m))
+            }
             Some(_) => Ok(Moved::default()),
         }
     }

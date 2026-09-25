@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Trade } from './model'
-  import { money, pct, px, qty as fqty, hold, cls, color } from './fmt'
+  import { money, pct, px, qty as fqty, hold, cls, color, waiting } from './fmt'
+  import { waits } from './dec'
   import { symText } from './sym'
   import { sort, toggleSort, sortRows } from './sort.svelte'
   import { goSub } from './router.svelte'
@@ -32,6 +33,8 @@
       return i < 0 ? null : i
     }
     if (key === 'pnl') return t.pnlCad
+    // newest activity first: an open trade by its latest fill, a closed one by its close
+    if (key === 'exitDate') return t.lastDate
     return (t as unknown as Record<string, unknown>)[key]
   }
   const rows = $derived(sortRows(trades || [], sort.trades.key, sort.trades.dir, tradeSortValue))
@@ -65,18 +68,19 @@
         </tr></thead>
         <tbody>
           {#each rows as t (t.id)}
-            <tr class="tab" style="cursor:pointer" onclick={() => goSub('trades', t.id)}>
+            <tr class="tab" style="cursor:pointer" onclick={() => (t.position ? goSub('portfolio', t.position) : goSub('trades', t.id))}>
               <td class="dim" style="white-space:nowrap;padding-right:12px">{t.entryDate}</td>
-              <td class="dim" style="white-space:nowrap">{t.exitDate}</td>
+              <td class="dim" style="white-space:nowrap">{t.exitDate ?? 'Open'}</td>
               <td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{symText(t.symbol)}</td>
               <td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{t.exchange || '—'}</td>
               <td style="text-align:right">{fqty(t.qty)}</td>
               <td style="text-align:right">{px(t.entry)}</td>
               <td style="text-align:right">{px(t.exit)}</td>
               <td class="dim" style="font-variant-numeric:normal;text-align:center">{t.currency}</td>
-              {#if (t.flags || []).indexOf('basis-unknown') >= 0}
+              {#if waits(t.pnl)}
+                <!-- the dash in the figure's place, and what it waits for beside it -->
                 <td style="text-align:right" class="dim">—</td>
-                <td style="text-align:right" class="dim">deposited</td>
+                <td style="text-align:right" class="dim">{waiting(t.pnl).replace(/^— ?/, '')}</td>
               {:else}
                 <td style="text-align:right;font-weight:500;color:{color(t.pnl)}">{money(t.pnl, t.currency)}</td>
                 <td style="text-align:right;color:{color(t.pnl)}">{pct(t.pnlPct)}</td>

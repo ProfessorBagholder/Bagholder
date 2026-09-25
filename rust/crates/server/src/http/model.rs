@@ -169,7 +169,8 @@ async fn figures(State(state): State<AppState>, Params(q): Params<FiguresQuery>)
         let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
         let book = f.book().map_err(ApiError::Failed)?;
         let names = f.read(|e| crate::wire::build::Names::load(&book, e.inputs())).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))?.map_err(ApiError::Failed)?;
-        f.read(|e| crate::wire::build::build(e, &names, &filters)).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))
+        let base = app.base().map_err(|e| ApiError::Failed(format!("the market's context: {e}")))?;
+        f.read(|e| crate::wire::build::build(e, &names, &filters, &base)).ok_or_else(|| ApiError::Conflict("no page has stated its zone yet".into()))
     })
     .await??;
     Ok(Json(built))
