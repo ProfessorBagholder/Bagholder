@@ -274,5 +274,5 @@ fn tax_withheld_from_a_withdrawal_is_part_of_its_gross_amount() {
 fn a_credit_card_s_balance_is_what_is_owed_on_it() {
     let v = json::parse(&std::fs::read_to_string(fixtures().join("credit-card-account-1.json")).unwrap()).unwrap();
     let card = Node::root(&v).obj("data").unwrap().obj("creditCardAccount").unwrap().value().clone();
-    assert_eq!(bagholder_wealthsimple::read::card_balance(&card).unwrap(), dec("5140.28"));
+    assert_eq!(bagholder_wealthsimple::read::card_balance(&card, "anon-ca-4").unwrap(), dec("5140.28"));
 }

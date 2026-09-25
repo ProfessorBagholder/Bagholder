@@ -54,6 +54,10 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
 /// nodes): each security's units, a short's as a negative quantity. Cash is
 /// stated apart. The book value beside them is not read: no figure uses it (brief
 /// 07 §5), and Wealthsimple writes it to more digits than a decimal holds.
+///
+/// Wealthsimple writes a short's quantity negative and a long's not (every
+/// recorded reply): a quantity whose sign contradicts its direction is a
+/// mismatch, not a sign to correct.
 pub fn units(nodes: &Value) -> Read<Vec<Units>> {
     let mut out = Vec::new();
     for n in Node::root(nodes).as_list()? {
@@ -61,12 +65,15 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
         if id.starts_with("sec-c-") {
             continue;
         }
-        let q = n.dec_text("quantity")?;
-        let quantity = match n.text("direction")? {
-            "LONG" => q.abs(),
-            "SHORT" => q.abs().neg(),
+        let quantity = n.dec_text("quantity")?;
+        let agrees = match n.text("direction")? {
+            "LONG" => !quantity.is_negative(),
+            "SHORT" => !quantity.is_positive(),
             other => return Err(n.field("direction")?.mismatch(format!("expected LONG or SHORT, found {other:?}"))),
         };
+        if !agrees {
+            return Err(n.field("quantity")?.mismatch(format!("{} units held {}", quantity.to_text(), n.text("direction")?)));
+        }
         out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value: None });
     }
     Ok(out)
@@ -105,7 +112,13 @@ pub fn cash(accounts: &[Value]) -> Read<BTreeMap<String, BTreeMap<Currency, Dec>
 }
 
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
-/// posted purchases less payments; `pending` is apart).
-pub fn card_balance(node: &Value) -> Read<Dec> {
-    Node::root(node).obj("balance")?.dec_text("current")
+/// posted purchases less payments; `pending` is apart), of the card account
+/// asked for.
+pub fn card_balance(node: &Value, account: &str) -> Read<Dec> {
+    let n = Node::root(node);
+    let id = n.text("id")?;
+    if id != account {
+        return Err(n.field("id")?.mismatch(format!("the card account {id}, not {account}, which was asked")));
+    }
+    n.obj("balance")?.dec_text("current")
 }

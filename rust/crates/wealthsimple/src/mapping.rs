@@ -363,13 +363,13 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
         };
         let underlying_id = o.obj("underlyingSecurity")?.text("id")?;
         let underlying = instrument(root, underlying_id, seen)?;
-        Some(OptionDraft {
-            underlying: Box::new(underlying),
-            expiry: o.day("expiryDate")?,
-            strike: o.dec_text("strikePrice")?,
-            right,
-            multiplier: Some(o.dec("multiplier").or_else(|_| o.dec_text("multiplier"))?),
-        })
+        let multiplier = o.dec("multiplier").or_else(|_| o.dec_text("multiplier"))?;
+        // the units one contract is on: fills `option_terms.multiplier`, which
+        // every figure of the contract is scaled by
+        if !multiplier.is_positive() {
+            return Err(o.field("multiplier")?.mismatch(format!("a contract on {} units", multiplier.to_text())).into());
+        }
+        Some(OptionDraft { underlying: Box::new(underlying), expiry: o.day("expiryDate")?, strike: o.dec_text("strikePrice")?, right, multiplier: Some(multiplier) })
     } else {
         None
     };
@@ -415,7 +415,13 @@ fn multi_leg(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<()
         drafts.push(d);
     }
     if drafts.is_empty() {
-        // nothing filled: an expired or cancelled order moved nothing
+        // nothing filled: an expired or cancelled order moved nothing; a row
+        // stating it executed for an amount did move it, and its order does not say how
+        if row.status == "COMPLETED" {
+            if let Some(amount) = row.amount.filter(|a| !a.is_zero()) {
+                out.problems.push(Problem::new("legs-disagree", format!("the multi-leg row's amount {amount} is not its legs' net cash: its order states no leg filled")));
+            }
+        }
         return Ok(());
     }
     // the fee the order states is the account's, on top of the legs' net value
@@ -554,6 +560,11 @@ fn corporate_action(root: &Node, row: &Row, base: &Base, record: &RecordId, out:
             (k, a) => return Err(Problem::new("unclassified", format!("a corporate action entitlement this mapping does not place: {k} {a}")).into()),
         }
     }
+    if given.is_zero() && received.is_empty() && cash.is_none() {
+        // an event stated as done whose entitlements state nothing given up or
+        // received: what it moved is not stated
+        return Err(Problem::new("event-unstated", format!("a corporate action on {old} whose entitlements state no units given up or received")).into());
+    }
     let event = base.draft(row_leg(), Kind::CorporateEvent);
     let mut legs = Vec::new();
     // the units given up
@@ -615,10 +626,24 @@ fn conversion(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(
     let mut d = base.draft(leg("received"), Kind::CurrencyConversion);
     d.cash = received;
     out.legs.push(d);
-    let detail = root.obj("conversion")?;
+    let Ok(detail) = root.obj("conversion") else {
+        out.problems.push(Problem::new("conversion-side-unstated", "Wealthsimple did not answer this conversion's detail, which states the amount paid"));
+        return Ok(());
+    };
     // an internal transfer's detail states the amount paid and its currency;
-    // a funding intent's states only the side received
-    if detail.field("fxAdjustedAmount").is_ok() && detail.field("amount").is_ok() {
+    // a funding intent's states only the side received, which must be the row's
+    if let Ok(kind) = detail.field("fundableType") {
+        if kind.as_text()? != "CurrencyConversion" {
+            return Err(Problem::new("conversion-disagrees", format!("the conversion's detail is a funding intent of another kind: {}", kind.as_text()?)).into());
+        }
+        let f = detail.obj("fundableDetails")?;
+        let amount = f.dec_text("fxAdjustedAmount")?;
+        let currency = Currency::parse(f.text("targetCurrency")?).map_err(|e| f.field("targetCurrency").map(|t| t.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+        if Some(amount) != row.amount || Some(currency) != row.currency {
+            out.problems.push(Problem::new("conversion-disagrees", format!("the conversion's detail states {amount} {currency} received, not its row's")));
+        }
+        out.problems.push(Problem::new("conversion-side-unstated", "Wealthsimple states the side received of this conversion, not the amount paid"));
+    } else if detail.field("fxAdjustedAmount").is_ok() && detail.field("amount").is_ok() {
         let paid = detail.dec_text("amount")?;
         let currency = Currency::parse(detail.text("currency")?).map_err(|e| Problem::new("unreadable", e.to_string()))?;
         if Some(detail.dec_text("fxAdjustedAmount")?) != row.amount {

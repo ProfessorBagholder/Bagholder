@@ -8,7 +8,7 @@ use bagholder_wealthsimple::anonymise::{leaks, Anonymiser};
 #[test]
 fn every_recorded_reply_holds_only_stand_ins() {
     let mut seen = 0;
-    for folder in ["tests/replies/wealthsimple", "tests/replies/wealthsimple-pull"] {
+    for folder in ["tests/replies/wealthsimple", "tests/replies/wealthsimple-pull", "tests/replies/wealthsimple-ops"] {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(folder);
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

@@ -209,6 +209,11 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         Ok(cash) => {
             let read = book.broker_read(connection, "cash", now)?;
             for (id, ks) in &keys_of {
+                // an account the answer does not state has its cash unstated,
+                // not nothing: a statement is stored only whole
+                if !ks.iter().all(|k| cash.contains_key(k)) {
+                    continue;
+                }
                 let mut sum: BTreeMap<bagholder_core::Currency, Dec> = BTreeMap::new();
                 for k in ks {
                     for (c, v) in cash.get(k).cloned().unwrap_or_default() {

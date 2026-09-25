@@ -198,7 +198,9 @@ impl Source for Client<'_> {
         Ok(Some(c.value().clone()))
     }
     fn conversion(&mut self, id: &str) -> Answer<Option<Value>> {
-        if id.starts_with("funding") {
+        // a funding intent's id starts with its kind (`funding_intent-…`); a
+        // recorded reply's stand-in keeps that word (`anon-funding-3`)
+        if id.strip_prefix(crate::anonymise::STAND_IN).unwrap_or(id).starts_with("funding") {
             let data = self.graphql("FetchFundingIntent", obj(vec![("ids", Value::Array(vec![text(id)]))]))?;
             let edges = Node::root(&data).obj("searchFundingIntents").and_then(|f| f.list("edges")).map_err(|m| mismatch("FetchFundingIntent", m))?;
             return Ok(edges.first().and_then(|e| e.obj("node").ok()).map(|n| n.value().clone()));

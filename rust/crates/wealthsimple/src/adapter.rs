@@ -219,12 +219,21 @@ impl<S: Source> Replies for Wealthsimple<S> {
 pub fn row_of(value: &Value, day: jiff::civil::Date) -> Result<Row, Mismatch> {
     let n = Node::root(value);
     let reads_positions = assemble::needs(value, &day.to_string())?.reads_positions();
-    Ok(Row { key: n.text("canonicalId")?.to_string(), account: n.text("accountId")?.to_string(), day, settled: settled(n.text("unifiedStatus")?), reads_positions, value: value.clone() })
+    let status = n.text("unifiedStatus")?;
+    let settled = settled(status).ok_or_else(|| n.field("unifiedStatus").map(|f| f.mismatch(format!("a status Wealthsimple's web app does not list: {status:?}"))).unwrap_or_else(|m| m))?;
+    Ok(Row { key: n.text("canonicalId")?.to_string(), account: n.text("accountId")?.to_string(), day, settled, reads_positions, value: value.clone() })
 }
 
 /// Whether a status is final: a row pending or in progress is read again.
-pub fn settled(status: &str) -> bool {
-    !matches!(status, "PENDING" | "IN_PROGRESS" | "PROCESSING")
+/// Whether a status is final, as Wealthsimple's web app (release 0.3.668812)
+/// lists its statuses; None for one it does not list. A row not final is read
+/// again until it is; only a completed one moves anything (`crate::mapping`).
+pub fn settled(status: &str) -> Option<bool> {
+    match status {
+        "COMPLETED" | "CANCELLED" | "DECLINED" | "EXPIRED" | "FAILED" | "REJECTED" | "REFUNDED" | "REVERSED" => Some(true),
+        "PENDING" | "IN_PROGRESS" | "IN_REVIEW" | "PARTIALLY_FILLED" | "ACTION_REQUIRED" | "CANCEL_PENDING" | "TRANSFERRING" => Some(false),
+        _ => None,
+    }
 }
 
 /// The book's moves in the form a record keeps (`sec-c-<currency>` for cash).
@@ -337,7 +346,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     }
     fn unsettled(&self, payload: &Value) -> Option<(String, jiff::civil::Date)> {
         let row = Node::root(payload).obj("activity").ok()?;
-        if settled(row.text("unifiedStatus").ok()?) {
+        if settled(row.text("unifiedStatus").ok()?) != Some(false) {
             return None;
         }
         Some((row.text("accountId").ok()?.to_string(), self.day_of(row.value())?))
@@ -355,7 +364,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         // a card's balance is what is owed on it: the account's cash below zero
         for (key, currency) in self.cards.clone() {
             if accounts.contains(&key) {
-                let owed = crate::read::card_balance(&self.source.card(&key)?).map_err(mismatch)?;
+                let owed = crate::read::card_balance(&self.source.card(&key)?, &key).map_err(mismatch)?;
                 all.insert(key, BTreeMap::from([(currency, owed.neg())]));
             }
         }

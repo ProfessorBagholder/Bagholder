@@ -142,7 +142,8 @@ pub trait BrokerAdapter {
     fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
-    /// Each account's cash per currency now.
+    /// Each account's cash per currency now: an account left out is one the
+    /// broker did not state, and nothing is stored for it.
     fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>>;
     /// An account's positions as of a day.
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
