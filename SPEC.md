@@ -336,7 +336,7 @@ Avg and Market belong to the row's own position, matched by position id, never b
 
 **Allocation.** A donut of the income holdings in scope, each holding's share of the whole by projected monthly income; no switch. Slices are ordered largest first and coloured from the palette defined per theme: saturated on the dark themes, pastel in Light so the slices sit as softly on the page as its other colours do. The donut fills the card's height; the centre reads `Projected` and the total, or the hovered slice's symbol, value and share, laid out as the Portfolio donut's centre; the legend beside it is an aligned grid of symbol, value and share, vertically centred on the donut. No browser tooltips.
 
-**Distribution history.** Date · Symbol · Account · Qty · Distribution · Amount, newest first, amounts in native currency, scrolling inside its card. Qty is the units the payer's row states the distribution was paid on and Distribution the amount a unit, both `—` where the row states no units. No Type column: every row is a dividend.
+**Distribution history.** Date · Symbol · Account · Qty · Distribution · Amount, newest first, rows that tie on the sorted column by symbol and then account, amounts in native currency, scrolling inside its card. Qty is the units the payer's row states the distribution was paid on and Distribution the amount a unit, both `—` where the row states no units. No Type column: every row is a dividend.
 
 ### Order ticket
 

@@ -73,15 +73,26 @@ function cmp(a: unknown, b: unknown): number {
 }
 
 // Sort a copy; a row with nothing in the column always sinks to the bottom,
-// whichever direction the rest is going.
-export function sortRows<T>(rows: T[], key: string, dir: Dir, get: (row: T, key: string) => unknown): T[] {
+// whichever direction the rest is going. Rows equal in the column are ordered by
+// the `then` columns, ascending, so a tie reads the same on every load rather
+// than in whatever order the rows arrived.
+export function sortRows<T>(rows: T[], key: string, dir: Dir, get: (row: T, key: string) => unknown, then: string[] = []): T[] {
   const out = rows.slice()
   out.sort((a, b) => {
     const va = value(get(a, key))
     const vb = value(get(b, key))
-    if (va == null || vb == null) return cmp(va, vb)
-    const c = cmp(va, vb)
-    return dir === 'desc' ? -c : c
+    if (va == null || vb == null) {
+      const c = cmp(va, vb)
+      if (c) return c
+    } else {
+      const c = cmp(va, vb)
+      if (c) return dir === 'desc' ? -c : c
+    }
+    for (const k of then) {
+      const c = cmp(value(get(a, k)), value(get(b, k)))
+      if (c) return c
+    }
+    return 0
   })
   return out
 }
