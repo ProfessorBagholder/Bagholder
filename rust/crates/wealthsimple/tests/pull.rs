@@ -170,6 +170,7 @@ impl Mapping for Imported {
                 cash: Some(Money::new(Dec::parse(&cash).unwrap(), Currency::parse("CAD").unwrap())),
                 fee: None,
                 fx_rate: None,
+                paid_on: None,
             }],
             problems: vec![],
             adjustments: vec![],

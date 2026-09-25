@@ -312,7 +312,7 @@ Six tiles in the style of the dashboard tiles, CAD, dividends in scope. The Marg
 
 **Cashflow.** One bar per month from the first payment to the current month (or to the end of the date filter), CAD, an empty bar for a month with nothing paid yet, six axis labels. The month's distributions in the accent colour, with the month's margin interest (the Interest charge rows in scope, CAD) drawn over it from the same baseline at the same width in the negative colour, so the accent left showing above it is the net; in a month where the interest exceeds the distributions the negative colour rises above the accent. The scale fits the taller of the two. The title row carries the legend at the right. Hover shows the month, Distributions, Margin interest (with a minus sign) and Net cashflow (signed, coloured).
 
-**Cashflow Positions.** One row per open long position in a dividend-paying symbol, per account:
+**Cashflow Positions.** One row per open long position in a dividend-paying symbol, per account, largest YTD first until a header is clicked:
 
 | Column | Definition |
 |---|---|
@@ -336,7 +336,7 @@ Avg and Market belong to the row's own position, matched by position id, never b
 
 **Allocation.** A donut of the income holdings in scope, each holding's share of the whole by projected monthly income; no switch. Slices are ordered largest first and coloured from the palette defined per theme: saturated on the dark themes, pastel in Light so the slices sit as softly on the page as its other colours do. The donut fills the card's height; the centre reads `Projected` and the total, or the hovered slice's symbol, value and share, laid out as the Portfolio donut's centre; the legend beside it is an aligned grid of symbol, value and share, vertically centred on the donut. No browser tooltips.
 
-**Distribution history.** Date · Symbol · Account · Qty · Distribution · Amount, newest first, amounts in native currency, scrolling inside its card. No Type column: every row is a dividend.
+**Distribution history.** Date · Symbol · Account · Qty · Distribution · Amount, newest first, amounts in native currency, scrolling inside its card. Qty is the units the payer's row states the distribution was paid on and Distribution the amount a unit, both `—` where the row states no units. No Type column: every row is a dividend.
 
 ### Order ticket
 

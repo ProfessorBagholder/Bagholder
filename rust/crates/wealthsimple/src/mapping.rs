@@ -65,8 +65,9 @@ impl Mapping for WealthsimpleMapping {
         source()
     }
 
+    /// 2: a distribution keeps the units Wealthsimple states it was paid on.
     fn version(&self) -> u32 {
-        1
+        2
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -286,6 +287,7 @@ impl Base {
             cash: None,
             fee: None,
             fx_rate: None,
+            paid_on: None,
         }
     }
 }
@@ -319,6 +321,11 @@ fn single(root: &Node, row: &Row, base: &Base, r: &Rule, out: &mut Mapped) -> Re
             return Err(Problem::new("instrument-not-named", format!("a {} that names no security", r.kind)).into());
         };
         d.instrument = Some(instrument(root, id, base.day)?);
+    }
+    // a distribution's units, where Wealthsimple states them: what it was paid on,
+    // never a change to the holding
+    if r.kind == Kind::Dividend {
+        d.paid_on = row.quantity.filter(|q| q.is_positive());
     }
     match (r.units, row.quantity) {
         (Units::None, _) => {}

@@ -739,6 +739,7 @@ mod tests {
             cash: None,
             fee: None,
             fx_rate: None,
+            paid_on: None,
         };
         let words = |kind, option, closed, opened| fill_words(&tx(kind), option, Some(FillRole { closed, opened })).1;
         assert_eq!(words(Kind::Buy, true, false, true), "BUY TO OPEN");

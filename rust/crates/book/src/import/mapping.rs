@@ -190,8 +190,9 @@ impl Mapping for ImportMapping {
         import_source()
     }
 
+    /// 3: a dividend keeps the units the row states it was paid on.
     fn version(&self) -> u32 {
-        2
+        3
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -244,6 +245,8 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
     let ty = if ty == "STKDIS" && opt(&row.raw_type) == Some("DIVIDEND") { "Dividend" } else { ty };
     let sub = opt(&row.activity_sub_type).unwrap_or("");
     let quantity = number("quantity", &row.quantity)?;
+    // the row's own units, whatever the kind makes of them
+    let row_quantity = quantity.map(|q| q.abs());
     let cash_stated = number("cash", &row.net_cash_amount)?;
     let unit_price = number("price", &row.unit_price)?;
     let commission = number("commission", &row.commission)?;
@@ -269,6 +272,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
             cash: None,
             fee: None,
             fx_rate: None,
+            paid_on: None,
         };
         return Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() });
     };
@@ -352,6 +356,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
     };
     let price = if quantity.is_some() { price } else { None };
 
+    let paid_on = if rule.kind == Kind::Dividend { row_quantity.filter(|q| q.is_positive()) } else { None };
     let leg = Draft {
         leg: row_leg(),
         account,
@@ -366,6 +371,7 @@ fn map_row(ctx: &MapContext, p: &ImportedRow) -> Result<Mapped, Problem> {
         cash,
         fee,
         fx_rate: None,
+        paid_on,
     };
     Ok(Mapped { legs: vec![leg], problems, ..Mapped::default() })
 }

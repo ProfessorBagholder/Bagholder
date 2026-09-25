@@ -237,6 +237,8 @@ pub struct Stated {
     pub currency: Option<Currency>,
     /// The account the row names, as the file writes it.
     pub account: Option<String>,
+    /// For a distribution, the units the row states it was paid on.
+    pub paid_on: Option<Dec>,
     /// What the row states that the kind does not place (a row read, with its problems).
     pub problems: Vec<Problem>,
 }
@@ -331,6 +333,7 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         fee: commission.filter(|c| !c.is_zero()).map(|c| c.abs()),
         currency: currency(cells)?,
         account: cell(cells, "account_id").map(str::to_string),
+        paid_on: None,
         problems: vec![],
     };
     let Some(r) = rule(ty, sub, cash, &direction) else {
@@ -361,6 +364,9 @@ fn activities(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         out.quantity = None;
     }
     out.price = price.filter(|_| out.quantity.is_some());
+    if r.kind == Kind::Dividend {
+        out.paid_on = quantity.map(|q| q.abs()).filter(|q| q.is_positive());
+    }
     Ok(out)
 }
 
@@ -416,6 +422,7 @@ fn statement(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         fee: None,
         currency: currency(cells)?,
         account: None,
+        paid_on: None,
         problems: vec![],
     };
     let kind = match code.as_str() {
@@ -478,6 +485,7 @@ fn simple(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         fee: fee.filter(|f| !f.is_zero()).map(|f| f.abs()),
         currency: currency(cells)?,
         account: cell(cells, "account").map(str::to_string),
+        paid_on: None,
         problems: vec![],
     };
     let kind = match action.as_str() {
@@ -509,6 +517,9 @@ fn simple(cells: &BTreeMap<String, String>) -> Result<Stated, Problem> {
         out.price = price.filter(|_| out.quantity.is_some());
         // a trade's amount is what it paid or received, whichever way the file signs it
         out.cash = amount.map(|a| if kind == Kind::Buy { a.abs().neg() } else { a.abs() });
+    }
+    if kind == Kind::Dividend {
+        out.paid_on = quantity.map(|q| q.abs()).filter(|q| q.is_positive());
     }
     Ok(out)
 }
@@ -581,6 +592,7 @@ impl Mapping for CsvMapping {
                 cash: None,
                 fee: None,
                 fx_rate: None,
+                paid_on: None,
             }],
             problems,
             adjustments: vec![],
@@ -627,6 +639,7 @@ impl Mapping for CsvMapping {
                 cash: s.cash.map(money),
                 fee: s.fee.map(money),
                 fx_rate: None,
+                paid_on: s.paid_on,
             }],
             problems,
             adjustments: vec![],

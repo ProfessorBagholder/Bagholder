@@ -290,5 +290,23 @@
       ],
       "kpi": {"market_value": "632990.15", "market_value_left_out": 0}
     }
+  },
+  {
+    "name": "a distribution shows the units it states it was paid on, and moves none",
+    "spec": "SPEC.md §4 Cashflow, Distribution history: Qty and Distribution are the units the payer's row states it was paid on and the amount a unit",
+    "working": ["100 X held; a distribution of 25 stating 100 units: 0.25 a unit, the position still 100; one that states no units shows none"],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "12", "change": "0"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "d1", "account": "A", "day": "2026-03-05", "at": "2026-03-05T15:00:00Z", "kind": "dividend", "instrument": "X", "cash": "25", "paid_on": "100"},
+      {"id": "d2", "account": "A", "day": "2026-03-06", "at": "2026-03-06T15:00:00Z", "kind": "dividend", "instrument": "X", "cash": "5"}
+    ],
+    "expect": {
+      "positions": [{"account": "A", "instrument": "X", "qty": "100"}],
+      "cash": [{"tx": "d1", "qty": "100", "per": "0.25"}, {"tx": "d2", "qty": null, "per": null}]
+    }
   }
 ]

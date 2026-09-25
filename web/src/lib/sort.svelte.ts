@@ -16,7 +16,7 @@ const DEFAULTS: Record<string, SortState> = {
   execs: { key: 'when', dir: 'desc' },
   disc: { key: 'date', dir: 'desc' },
   ndisc: { key: 'when', dir: 'desc' },
-  yoc: { key: 'ttm', dir: 'desc' },
+  yoc: { key: 'ytd', dir: 'desc' },
   cash: { key: 'date', dir: 'desc' },
   orders: { key: 'placed', dir: 'desc' },
   watchlist: { key: 'added', dir: 'desc' },
@@ -27,7 +27,12 @@ const DEFAULTS: Record<string, SortState> = {
 function load(): Record<string, SortState> {
   try {
     const raw = localStorage.getItem('bh2.sort')
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) }
+    if (raw) {
+      const kept = { ...DEFAULTS, ...JSON.parse(raw) } as Record<string, SortState>
+      // a column the table no longer has (the trailing twelve months the earlier page sorted by)
+      if (kept.yoc?.key === 'ttm') kept.yoc = { ...DEFAULTS.yoc }
+      return kept
+    }
   } catch {
     /* ignore */
   }

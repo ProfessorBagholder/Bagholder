@@ -89,4 +89,7 @@ pub struct Transaction {
     pub fee: Option<Money>,
     /// The conversion rate the source applied, where it states one.
     pub fx_rate: Option<Dec>,
+    /// For a payment (a distribution, interest on a holding), the units it was
+    /// paid on, where the source states them: never a change to the position.
+    pub paid_on: Option<Dec>,
 }

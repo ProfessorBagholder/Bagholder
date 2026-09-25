@@ -322,6 +322,7 @@ impl Book {
                 cash: d.cash,
                 fee: d.fee,
                 fx_rate: d.fx_rate,
+                paid_on: d.paid_on,
             });
         }
         Ok((if blocking.is_empty() { Ok(rows) } else { Err(blocking) }, notes))
@@ -334,8 +335,8 @@ impl Book {
         let (fee, fee_cur) = amount(t.fee);
         self.conn().execute(
             "INSERT INTO transactions(record_id, leg, mapping_version, account_id, occurred_at, trade_date, settle_date, kind, effect, instrument_id,
-                                      quantity, price, price_currency, cash, cash_currency, fee, fee_currency, fx_rate)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                      quantity, price, price_currency, cash, cash_currency, fee, fee_currency, fx_rate, paid_on)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 t.id.record.to_string(),
                 t.id.leg.as_str(),
@@ -355,6 +356,7 @@ impl Book {
                 fee,
                 fee_cur,
                 t.fx_rate.map(|r| r.to_text()),
+                t.paid_on.map(|q| q.to_text()),
             ],
         )?;
         Ok(())
@@ -514,7 +516,7 @@ impl Book {
     fn transactions_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Transaction>> {
         let sql = format!(
             "SELECT t.record_id, t.leg, r.source, t.mapping_version, t.account_id, t.occurred_at, t.trade_date, t.settle_date, t.kind, t.effect,
-                    t.instrument_id, t.quantity, t.price, t.price_currency, t.cash, t.cash_currency, t.fee, t.fee_currency, t.fx_rate
+                    t.instrument_id, t.quantity, t.price, t.price_currency, t.cash, t.cash_currency, t.fee, t.fee_currency, t.fx_rate, t.paid_on
              FROM transactions t JOIN source_records r ON r.id = t.record_id {filter}
              ORDER BY t.account_id, t.trade_date, t.occurred_at, t.record_id, t.leg"
         );
@@ -542,6 +544,7 @@ impl Book {
                 cash: text::money(T, "cash", o(14)?, o(15)?)?,
                 fee: text::money(T, "fee", o(16)?, o(17)?)?,
                 fx_rate: text::opt_dec(T, "fx_rate", o(18)?)?,
+                paid_on: text::opt_dec(T, "paid_on", o(19)?)?,
             });
         }
         Ok(out)

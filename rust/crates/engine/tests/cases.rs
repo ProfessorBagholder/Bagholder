@@ -279,6 +279,22 @@ fn run(path: &Path) -> Vec<String> {
             if let Some(v) = want.get("amount_cad") {
                 c.money(&format!("cash {label} amount_cad"), v, &r.amount_cad);
             }
+            if let Some(v) = want.get("qty") {
+                let got = r.qty.map(|q| q.to_text()).unwrap_or_default();
+                if v.as_str() != Some(got.as_str()) && !(v.is_null() && got.is_empty()) {
+                    c.fail(format!("cash {label} qty: expected {v}, got {got:?}"));
+                }
+            }
+            if let Some(v) = want.get("per") {
+                let got = match &r.per {
+                    Some(Ok(m)) => m.amount.to_text(),
+                    Some(Err(_)) => "waits".into(),
+                    None => String::new(),
+                };
+                if v.as_str() != Some(got.as_str()) && !(v.is_null() && got.is_empty()) {
+                    c.fail(format!("cash {label} per: expected {v}, got {got:?}"));
+                }
+            }
         }
         for want in arr(&expect, "payers") {
             let i = b.ids.instrument(s(&want, "instrument").unwrap());

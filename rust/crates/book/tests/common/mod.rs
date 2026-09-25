@@ -143,6 +143,7 @@ impl Mapping for Spelled {
                 cash: money(l, "cash"),
                 fee: money(l, "fee"),
                 fx_rate: None,
+                paid_on: None,
             })
             .collect();
         let problems = v.get("problems").and_then(Value::as_array).map(|ps| ps.iter().map(|p| Problem::new(p.as_str().unwrap(), "stated by the test")).collect()).unwrap_or_default();

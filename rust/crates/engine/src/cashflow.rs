@@ -63,7 +63,8 @@ pub fn build_cashflow(inputs: &Inputs, matched: &Matched) -> Vec<CashRow> {
         };
         // a dividend of no cash is the broker's notice of one to come, not a payment
         let Some(cash) = t.cash.filter(|c| !c.amount.is_zero()) else { continue };
-        let qty = t.quantity.filter(|q| !q.is_zero()).map(|q| q.abs());
+        // the units the source states it was paid on (a payment moves no units)
+        let qty = t.paid_on.filter(|q| q.is_positive());
         let per: Option<Fig<Money>> = qty.map(|q| Ok(Money::new(cash.amount.abs().div_rounded(q, crate::trades::PRICE_PLACES, Rounding::HalfEven)?, cash.currency)));
         rows.push(CashRow {
             id: t.id.clone(),

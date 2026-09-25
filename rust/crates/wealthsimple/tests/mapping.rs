@@ -373,3 +373,18 @@ fn a_day_another_stated_move_between_the_accounts_accounts_for_is_not_this_move_
     assert!(cash_of(&m).is_none(), "{:?}", m.legs);
     assert!(m.problems.iter().any(|p| p.code == "moved-holdings-unstated"));
 }
+
+#[test]
+fn a_distribution_keeps_the_units_wealthsimple_states_it_was_paid_on_and_moves_none() {
+    let rows = all();
+    let mut stated = 0;
+    for (row, m) in rows.iter().filter(|(r, _)| text(r, "type") == Some("DIVIDEND") && text(r, "unifiedStatus") == Some("COMPLETED")) {
+        for d in m.legs.iter().filter(|d| d.kind == Kind::Dividend) {
+            let units = text(row, "assetQuantity").map(dec).filter(|q| q.is_positive());
+            assert_eq!(d.paid_on, units, "{row:?}");
+            assert_eq!(d.quantity, None, "a distribution moves no units");
+            stated += units.is_some() as usize;
+        }
+    }
+    assert!(stated > 0, "the recorded month holds a distribution that states its units");
+}

@@ -1892,6 +1892,7 @@ mod fill_price_tests {
             cash: cash.map(usd),
             fee: fee.map(usd),
             fx_rate: None,
+            paid_on: None,
         }
     }
 
