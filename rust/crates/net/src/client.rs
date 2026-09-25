@@ -456,6 +456,13 @@ impl Response {
 /// the network asserts is zero.
 static OUTBOUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Whether every request is named as it leaves (`BAGHOLDER_LOG_REQUESTS=1`): a
+/// client whose requests share one path names what each asks for beside it.
+pub fn logging_requests() -> bool {
+    static LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LOGGED.get_or_init(|| !std::env::var("BAGHOLDER_LOG_REQUESTS").unwrap_or_default().trim().is_empty())
+}
+
 /// How many requests this process has tried to send off the machine.
 pub fn outbound_requests() -> usize {
     OUTBOUND.load(std::sync::atomic::Ordering::SeqCst)
@@ -511,8 +518,7 @@ fn send(
         // BAGHOLDER_LOG_REQUESTS=1 names every request as it leaves: how "nothing is
         // asked for while nobody is looking" is checked on a running app. The query
         // is left out, so nothing a URL carries reaches a log.
-        static LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *LOGGED.get_or_init(|| !std::env::var("BAGHOLDER_LOG_REQUESTS").unwrap_or_default().trim().is_empty()) {
+        if logging_requests() {
             eprintln!("outbound {} {}{}", method, u.host, u.path.split('?').next().unwrap_or(""));
         }
 

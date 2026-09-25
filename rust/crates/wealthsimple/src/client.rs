@@ -93,6 +93,9 @@ impl<'n> Client<'n> {
     /// One GraphQL read: its `data`, or what failed.
     pub fn graphql(&mut self, op: &str, variables: Value) -> Answer<Value> {
         let body = obj(vec![("operationName", text(op)), ("query", text(doc(op))), ("variables", variables)]).canonical();
+        if bagholder_net::client::logging_requests() {
+            eprintln!("outbound graphql {op}");
+        }
         let mut refreshed = false;
         loop {
             let t = self.tokens()?;
