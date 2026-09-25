@@ -225,14 +225,15 @@ Nothing refused. Two points where the plan departs from what was written before,
   - A holding under a new security id with no event row (positions only): its units show on both ids.
   - Coins whose positions Wealthsimple states to fewer digits than its rows: the crypto account's differences below 0.000001 of a unit.
   - A move between two closed accounts whose row states no amount (±9,307.07): its detail (`FetchInternalTransfer`) states it, and is now read with the row; the capture did not hold that detail, so the real run keeps the difference until a live pull reads it.
-  - Not yet traced: 1,567.76 PEPE the book holds and Wealthsimple does not, and the smaller cash differences of four accounts (30.00, 56.91, 143.09 against 200, and a USD account at 6,159.07).
+  - A coin whose rows state its units rounded to whole units (PEPE: 2,590,417.0 on a fill) while its positions state them exactly: the rows' rounding leaves 1,567.76 PEPE in the book that Wealthsimple does not hold.
+  - Not yet traced: the smaller cash differences of four accounts (30.00, 56.91, 143.09 against 200, and a USD account at 6,159.07).
 - The comparison run again (`compare-figures … --facts-from-book`): portfolio market value 627,165.03 CAD with 3 left out (3a's run: 632,070.43 with 15), the contract sizes and the MSTY consolidation now stated; realized P&L by instrument 106 agree to the cent, 62 differ; the per-trade and per-payment matching reads 0 the same, because the tool matches by the imported records' keys, which Wealthsimple's records replaced (the tool's matching by the broker's own id is the follow-up below).
 - Owner entries: `engine/tests/cases/entries.json` (9 cases written by an agent that had not read the engine; one re-derived after `SPEC.md` set the day a return of capital applies) green; `book/tests/person.rs` green.
 
 ## Handoff
 
 Stopped at: the broker check's untraced accounts and the comparison's matching. What is left, in order:
-1. Trace the four accounts' smaller differences and the PEPE units, and name each cause.
+1. Trace the four accounts' smaller cash differences and name each cause.
 2. `compare-figures`: match old and new by the broker's own row id (`record_refs`), so per-trade and per-payment differences are shown again.
 3. Recorded replies of a refusal and of a lapsed session from Wealthsimple itself (the session's tests use replies written to the shapes the bundle shows).
 
