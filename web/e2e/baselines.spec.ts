@@ -51,6 +51,7 @@ for (const width of WIDTHS) {
       await open(page, width, 'trades')
       await page.locator('tbody tr', { hasText: 'UBER' }).first().click()
       await expect(page.getByText('Executions (2)')).toBeVisible()
+      await expect(page.getByRole('img', { name: /^Price chart/ })).toBeVisible()
       await shot(page, `trade-${width}`)
     })
 
@@ -58,6 +59,7 @@ for (const width of WIDTHS) {
       await open(page, width, 'portfolio')
       await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'TD', exact: true }) }).first().click()
       await expect(page.getByText(/^Executions/)).toBeVisible()
+      await expect(page.getByRole('img', { name: /^Price chart/ })).toBeVisible()
       await shot(page, `holding-${width}`)
     })
 
