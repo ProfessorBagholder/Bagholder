@@ -66,7 +66,7 @@ fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, n
         None => book.add_connection(&wealthsimple, "Wealthsimple", now).map_err(|e| e.to_string())?,
     };
     let today = adapter.day(now);
-    let r = pull(&book, adapter, connection, today, now).map_err(|e| e.to_string())?;
+    let r = pull(&book, adapter, connection, today, now, &mut |s| eprintln!("{s:?}")).map_err(|e| e.to_string())?;
     let mut out = String::new();
     use std::fmt::Write as _;
     let _ = writeln!(out, "accounts added {}, linked {}", r.accounts_added, r.accounts_linked);

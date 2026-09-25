@@ -104,30 +104,7 @@ fn shown(inputs: &Inputs, i: InstrumentId) -> Shown {
 
 /// An account's name: the person's for it, else what it is.
 fn account_name(inputs: &Inputs, a: AccountId) -> String {
-    use bagholder_core::account::{AccountKind, AccountType, Registration};
-    let Some(info) = inputs.ledger.accounts.get(&a) else { return String::new() };
-    if let Some(n) = info.account.nickname.as_deref().filter(|n| !n.trim().is_empty()) {
-        return n.trim().to_string();
-    }
-    match &info.account.account_type {
-        AccountType::Known { registration, kind, .. } => match registration {
-            Registration::Unregistered => match kind {
-                AccountKind::Cash => "Cash".into(),
-                AccountKind::Margin => "Margin".into(),
-                AccountKind::Crypto => "Crypto".into(),
-                other => {
-                    let w = other.as_str().replace('-', " ");
-                    let mut c = w.chars();
-                    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
-                }
-            },
-            r => match r {
-                Registration::GroupRrsp => "Group RRSP".into(),
-                other => other.as_str().to_ascii_uppercase(),
-            },
-        },
-        AccountType::Unrecognised(t) => t.clone(),
-    }
+    inputs.ledger.accounts.get(&a).map(|info| info.account.name()).unwrap_or_default()
 }
 
 fn trade_id(t: &TradeFig) -> String {

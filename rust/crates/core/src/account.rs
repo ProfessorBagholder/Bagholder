@@ -78,6 +78,45 @@ pub struct Account {
     pub nickname: Option<String>,
 }
 
+impl AccountType {
+    /// What the account is, as the screens name it: `TFSA`, `Margin`, `Group RRSP`,
+    /// or the broker's own words for a type Bagholder does not know.
+    pub fn label(&self) -> String {
+        match self {
+            AccountType::Known { registration, kind, .. } => match registration {
+                Registration::Unregistered => match kind {
+                    AccountKind::Cash => "Cash".into(),
+                    AccountKind::Margin => "Margin".into(),
+                    AccountKind::Crypto => "Crypto".into(),
+                    other => {
+                        let w = other.as_str().replace('-', " ");
+                        let mut c = w.chars();
+                        c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+                    }
+                },
+                Registration::GroupRrsp => "Group RRSP".into(),
+                other => other.as_str().to_ascii_uppercase(),
+            },
+            AccountType::Unrecognised(t) => t.clone(),
+        }
+    }
+}
+
+/// An account's name on every screen: the person's for it, else what it is.
+pub fn account_name(nickname: Option<&str>, account_type: &AccountType) -> String {
+    match nickname.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => account_type.label(),
+    }
+}
+
+impl Account {
+    /// Its name on every screen: the person's for it, else what it is.
+    pub fn name(&self) -> String {
+        account_name(self.nickname.as_deref(), &self.account_type)
+    }
+}
+
 /// A broker's own id for an account: the scheme is the broker.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AccountRef {

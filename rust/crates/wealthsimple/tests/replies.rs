@@ -215,7 +215,7 @@ fn pulled(op: Op, bodies: &[String]) -> Pulled {
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
     let f = answering(bodies);
     let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op });
-    let report = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now).unwrap();
+    let report = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap();
     drop(ws);
     Pulled { asked: f.asked(), _home: home, book, report }
 }

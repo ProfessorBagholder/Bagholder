@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bagholder_book::Book;
-use bagholder_broker::{BrokerAdapter, Failure};
+use bagholder_broker::{BrokerAdapter, Failure, Step};
 use bagholder_core::jiff::civil::{Time, Weekday};
 use bagholder_core::jiff::tz::TimeZone;
 use bagholder_core::jiff::{SignedDuration, Timestamp};
@@ -214,6 +214,41 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest) -> Result<
     Ok(next)
 }
 
+/// What the header says a pull is doing now (`SPEC.md` §4: the header shows the sync step).
+fn step_text(s: &Step) -> String {
+    match s {
+        Step::Accounts => "Fetching accounts…".into(),
+        Step::Activity { account, n, of } => format!("Fetching activity for {account} ({n} of {of})…"),
+        // in whole percents, so a long pull changes the header a hundred times at most
+        Step::Recording { done, of } => format!("Saving transactions… {}%", if *of == 0 { 100 } else { done * 100 / of }),
+        Step::Balances => "Fetching balances…".into(),
+        Step::Holdings { account, n, of } => format!("Fetching holdings for {account} ({n} of {of})…"),
+        Step::History { account, n, of } => format!("Fetching equity history for {account} ({n} of {of})…"),
+    }
+}
+
+/// The header's sync step, sent to the pages when it changes.
+fn set_step(app: &App, text: &str) {
+    {
+        let mut st = app.state.lock().unwrap();
+        if st.sync_step == text {
+            return;
+        }
+        st.sync_step = text.to_string();
+    }
+    app.events.signal();
+}
+
+/// The pull is over: no step, not syncing.
+fn end_steps(app: &App) {
+    {
+        let mut st = app.state.lock().unwrap();
+        st.syncing = false;
+        st.sync_step.clear();
+    }
+    app.events.signal();
+}
+
 enum Read {
     Done,
     /// A part failed: said in the header, read again after a rest.
@@ -232,20 +267,24 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     {
         let mut st = app.state.lock().unwrap();
         st.syncing = true;
-        st.sync_step = "Reading Wealthsimple…".into();
         st.error.clear();
     }
+    set_step(app, "Checking session…");
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
     let today = adapter.day(now);
-    let pulled = bagholder_broker::pull::pull(book, &mut adapter, conn, today, now);
-    {
-        let mut st = app.state.lock().unwrap();
-        st.syncing = false;
-        st.sync_step.clear();
-    }
-    let report = pulled.map_err(|e| e.to_string())?;
+    let pulled = bagholder_broker::pull::pull(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)));
+    let report = match pulled {
+        Ok(r) => r,
+        Err(e) => {
+            end_steps(app);
+            return Err(e.to_string());
+        }
+    };
     // what was stored is applied whatever else failed
-    f.record_changed(now)?;
+    set_step(app, "Saving…");
+    let applied = f.record_changed(now);
+    end_steps(app);
+    applied?;
     // a file's row the broker's own row now reports is linked to it
     let linking = crate::csv_import::link(f, now)?;
     if !linking.linked.is_empty() || !linking.ambiguous.is_empty() {
@@ -343,6 +382,18 @@ mod tests {
 
     fn t(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn the_header_names_each_step_and_a_long_recording_changes_it_a_hundred_times_at_most() {
+        assert_eq!(step_text(&Step::Accounts), "Fetching accounts…");
+        assert_eq!(step_text(&Step::Activity { account: "Personal".into(), n: 3, of: 29 }), "Fetching activity for Personal (3 of 29)…");
+        assert_eq!(step_text(&Step::History { account: "TFSA".into(), n: 1, of: 2 }), "Fetching equity history for TFSA (1 of 2)…");
+        for of in [0usize, 1, 7, 7863, 250_000] {
+            let texts: std::collections::BTreeSet<String> = (0..of.max(1)).map(|done| step_text(&Step::Recording { done, of })).collect();
+            assert!(texts.len() <= 101, "{of} rows gave {} header texts", texts.len());
+            assert!(texts.iter().all(|t| t.starts_with("Saving transactions… ") && t.ends_with('%')));
+        }
     }
 
     #[test]

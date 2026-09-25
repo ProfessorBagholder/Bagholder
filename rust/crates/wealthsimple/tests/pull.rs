@@ -44,8 +44,54 @@ fn once_with(book: &Book, replies: &Path, now: &str, edit: impl FnOnce(&mut Vec<
     let mut replay = Replay::read(replies).unwrap();
     edit(&mut replay.rows);
     let mut ws = Wealthsimple::new(replay);
-    let r = pull(book, &mut ws, connection, "2025-11-19".parse().unwrap(), at(now)).unwrap();
+    let r = pull(book, &mut ws, connection, "2025-11-19".parse().unwrap(), at(now), &mut |_| {}).unwrap();
     (r, ws.source.asked.clone())
+}
+
+#[test]
+fn a_pull_says_each_step_as_it_goes_every_account_by_name_and_counted() {
+    use bagholder_broker::Step;
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let connection = connection(&book, now);
+    let mut ws = Wealthsimple::new(Replay::read(&dir()).unwrap());
+    let mut steps: Vec<Step> = Vec::new();
+    let r = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at(now), &mut |s| steps.push(s)).unwrap();
+    assert!(r.failures.is_empty(), "{:?}", r.failures);
+    // the kinds of step, each run of one kind once, in the order the pull does them
+    let mut kinds: Vec<&str> = steps
+        .iter()
+        .map(|s| match s {
+            Step::Accounts => "accounts",
+            Step::Activity { .. } => "activity",
+            Step::Recording { .. } => "recording",
+            Step::Balances => "balances",
+            Step::Holdings { .. } => "holdings",
+            Step::History { .. } => "history",
+        })
+        .collect();
+    kinds.dedup();
+    assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "holdings", "history"]);
+    // each counted run goes 1..=of, every account named as the screens name it
+    for pick in [0u8, 1, 2] {
+        let run: Vec<(String, usize, usize)> = steps
+            .iter()
+            .filter_map(|s| match (pick, s) {
+                (0, Step::Activity { account, n, of }) | (1, Step::Holdings { account, n, of }) | (2, Step::History { account, n, of }) => Some((account.clone(), *n, *of)),
+                _ => None,
+            })
+            .collect();
+        assert!(!run.is_empty());
+        let of = run[0].2;
+        assert_eq!(run.iter().map(|x| x.1).collect::<Vec<_>>(), (1..=of).collect::<Vec<_>>());
+        assert!(run.iter().all(|x| x.2 == of && !x.0.trim().is_empty()));
+    }
+    // recording counts every row stored, from none
+    let rec: Vec<(usize, usize)> = steps.iter().filter_map(|s| match s { Step::Recording { done, of } => Some((*done, *of)), _ => None }).collect();
+    assert_eq!(rec.first().map(|x| x.0), Some(0));
+    assert!(rec.windows(2).all(|w| w[1].0 == w[0].0 + 1 && w[1].1 == w[0].1));
+    assert_eq!(rec.len(), rec[0].1, "one step per row recorded");
 }
 
 #[test]

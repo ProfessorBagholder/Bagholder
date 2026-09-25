@@ -19,7 +19,7 @@ use bagholder_core::record::RecordState;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, RecordId};
 
-use crate::{BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row};
+use crate::{BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row, Step};
 
 /// What one pull did and what failed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,10 +79,12 @@ impl BookMoves for Index {
 }
 
 /// Pull everything the broker has for one connection. `today` is the day the
-/// broker files rows under now; `now` the instant.
-pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp) -> Result<Report> {
+/// broker files rows under now; `now` the instant. `step` is told where the
+/// pull is as it goes.
+pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
     let mut report = Report::default();
     let broker = adapter.broker();
+    step(Step::Accounts);
 
     // accounts, and the links between them
     let stated = match adapter.accounts() {
@@ -136,13 +138,18 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     let mut spans: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
     // the day of each account's last full read before this one
     let mut read_before: BTreeMap<String, jiff::civil::Date> = BTreeMap::new();
+    // a closed account already read in full has nothing new
+    let mut to_read = Vec::new();
     for a in &stated {
-        let id = ids[&a.key];
-        let last = book.activity_read_at(id)?;
-        if !a.open && last.is_some() {
-            // a closed account already read in full has nothing new
-            continue;
+        let last = book.activity_read_at(ids[&a.key])?;
+        if a.open || last.is_none() {
+            to_read.push((a, last));
         }
+    }
+    let of = to_read.len();
+    for (n, (a, last)) in to_read.into_iter().enumerate() {
+        let id = ids[&a.key];
+        step(Step::Activity { account: a.name(), n: n + 1, of });
         if let Some(t) = last {
             read_before.insert(a.key.clone(), adapter.day(t));
         }
@@ -192,17 +199,23 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     adapter.prepare(&changed);
     let (first, second): (Vec<&Row>, Vec<&Row>) = changed.into_iter().partition(|r| !r.reads_positions);
+    let recording = first.len() + second.len();
+    let mut done = 0;
     let mut empty = Index { by: BTreeMap::new() };
     for row in &first {
+        step(Step::Recording { done, of: recording });
         store_row(book, adapter, &mut empty, connection, row, &scheme, &mut report, now)?;
+        done += 1;
     }
     let mut stored_second: Vec<(RecordId, &Row)> = Vec::new();
     if !second.is_empty() {
         let mut index = index(book, adapter, &source, &broker)?;
         for row in &second {
+            step(Step::Recording { done, of: recording });
             if let Some(id) = store_row(book, adapter, &mut index, connection, row, &scheme, &mut report, now)? {
                 stored_second.push((id, row));
             }
+            done += 1;
         }
     }
     let listed: BTreeSet<&str> = rows.iter().map(|r| r.key.as_str()).collect();
@@ -231,14 +244,21 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
     }
     let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
+    step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
+    // units already stated as of that day are not asked again
+    let mut holdings = Vec::new();
     for (id, ks) in &keys_of {
-        // units already stated as of that day are not asked again
-        if book.stated(*id)?.units.is_some_and(|(d, _)| d == as_of) {
-            continue;
+        if !book.stated(*id)?.units.is_some_and(|(d, _)| d == as_of) {
+            holdings.push((id, ks));
         }
+    }
+    let of = holdings.len();
+    for (n, (id, ks)) in holdings.into_iter().enumerate() {
+        let name = stated.iter().find(|a| ids[&a.key] == *id).map(|a| a.name()).unwrap_or_default();
+        step(Step::Holdings { account: name, n: n + 1, of });
         let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
         let mut complete = true;
         for k in ks {
@@ -290,13 +310,18 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     }
     let mut days_of: BTreeMap<AccountId, BTreeMap<jiff::civil::Date, (bagholder_core::Money, bagholder_core::Money)>> = BTreeMap::new();
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
+    // an account whose days are stated up to the last full day has none new
+    let mut dated = Vec::new();
     for a in &stated {
-        let id = ids[&a.key];
-        let last = book.last_account_day(id)?;
-        // an account whose days are stated up to the last full day has none new
-        if last.is_some_and(|d| d >= as_of) || (!a.open && last.is_some()) {
-            continue;
+        let last = book.last_account_day(ids[&a.key])?;
+        if !(last.is_some_and(|d| d >= as_of) || (!a.open && last.is_some())) {
+            dated.push((a, last));
         }
+    }
+    let of = dated.len();
+    for (n, (a, last)) in dated.into_iter().enumerate() {
+        let id = ids[&a.key];
+        step(Step::History { account: a.name(), n: n + 1, of });
         let from = last.and_then(|d| d.tomorrow().ok());
         match adapter.history(&a.key, from) {
             Ok(days) => {

@@ -119,6 +119,31 @@ pub enum MovedWhat {
     Cash(Currency),
 }
 
+/// Where a pull is, as it goes, for whoever shows it. An account is named as
+/// every screen names it (`AccountStated::name`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The accounts and the links between them.
+    Accounts,
+    /// One account's activity, `n` of `of`.
+    Activity { account: String, n: usize, of: usize },
+    /// The rows read, being recorded: `done` of `of`.
+    Recording { done: usize, of: usize },
+    /// Cash and what margin can borrow.
+    Balances,
+    /// One account's holdings, `n` of `of`.
+    Holdings { account: String, n: usize, of: usize },
+    /// One account's value by day, `n` of `of`.
+    History { account: String, n: usize, of: usize },
+}
+
+impl AccountStated {
+    /// Its name as every screen shows an account: the person's for it, else what it is.
+    pub fn name(&self) -> String {
+        bagholder_core::account::account_name(self.nickname.as_deref(), &self.account_type)
+    }
+}
+
 /// The book's own moves, for a record read against positions.
 pub trait BookMoves {
     fn moves(&mut self, accounts: &[String], days: &[jiff::civil::Date]) -> Vec<Moved>;

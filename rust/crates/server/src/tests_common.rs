@@ -70,7 +70,7 @@ pub fn pulled_book(home: &std::path::Path) {
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", at).unwrap();
     let replies = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wealthsimple/tests/replies/wealthsimple-pull");
     let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::replay::Replay::read(&replies).unwrap());
-    let r = bagholder_broker::pull::pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at).unwrap();
+    let r = bagholder_broker::pull::pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at, &mut |_| {}).unwrap();
     assert!(r.failures.is_empty(), "{:?}", r.failures);
 }
 
