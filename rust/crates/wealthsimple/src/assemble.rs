@@ -21,7 +21,8 @@ pub struct Needs {
     pub order: Option<String>,
     /// A corporate action's entitlements, by the row's id.
     pub entitlements: Option<String>,
-    /// A currency conversion's detail, by its id.
+    /// A currency conversion's detail, or the detail of a move between accounts
+    /// whose row states no amount, by its id.
     pub conversion: Option<String>,
     /// Positions of these accounts on these days.
     pub positions: BTreeSet<(String, String)>,
@@ -67,6 +68,8 @@ pub fn needs(row: &Value, day: &str) -> Read<Needs> {
         "OPTIONS_MULTILEG" => out.order = n.opt_text("externalCanonicalId")?.map(str::to_string),
         "CORPORATE_ACTION" => out.entitlements = Some(n.text("canonicalId")?.to_string()),
         "FUNDS_CONVERSION" => out.conversion = Some(n.opt_text("externalCanonicalId")?.unwrap_or(n.text("canonicalId")?).to_string()),
+        // a move between accounts whose row states no amount: its detail does
+        "INTERNAL_TRANSFER" if n.opt_text("amount")?.is_none() => out.conversion = n.opt_text("externalCanonicalId")?.map(str::to_string),
         _ => {}
     }
     let moves_holdings = ty == "CORPORATE_ACTION" || ty == "ASSET_MOVEMENT" || ty == "INSTITUTIONAL_TRANSFER_INTENT" || (ty == "INTERNAL_TRANSFER" && transfer_type.contains("in_kind"));

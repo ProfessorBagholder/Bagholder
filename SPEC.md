@@ -41,6 +41,15 @@ Per-trade fields, all in the trade's currency unless stated:
 | P&L (CAD) | The same P&L with each leg's notional converted on its own fill date; equals P&L for CAD trades |
 | Grade, thesis, tags | Journal entries keyed by the trade id |
 
+### What you enter
+
+Two facts no feed carries are yours to state, each from its own record, as trackers such as Sharesight take them:
+
+- **The cost of units that arrived without one.** Units moved in from another broker or a wallet arrive with no cost the record states (the lot is `basis-unknown`). You state what they cost you, in total in the instrument's currency, and the day you acquired them; they become the holding's lot at that cost and day. Entered in Add trade as an opening balance, against the arrival it prices.
+- **What a corporate event did to cost.** For a spin-off, the share of the parent's cost each new holding takes, as the issuer published it; for a return of capital, the capital returned per unit of a distribution, as the issuer published it, which lowers the cost of the units held on the day the distribution is paid, the day its record carries (as Sharesight records it, on the day paid); units sold before that day keep their cost. Capital returned beyond what is left of a lot's cost is realized that day and the lot's cost is then zero. Entered on the trade page, beside the journal, while the event waits on it.
+
+Each shows as entered by you. A value a source states for the same fact replaces yours; two entries of yours that disagree leave the figure waiting on which is right.
+
 ### Position
 
 An open position is the lots still held in one account, symbol, currency and direction. Its id is the round-trip id of the lot that opened it, so a note written on the position is the note of the trade it becomes.

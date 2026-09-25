@@ -954,6 +954,9 @@ impl<'a> Matcher<'a> {
             return self.unapplied(t, gaps);
         }
         let Some(instrument) = t.instrument else { return };
+        if t.kind == Kind::Dividend {
+            return self.apply_distribution(t);
+        }
         match mv {
             Move::Nothing => return,
             Move::Event => return self.apply_event(t),
@@ -1423,11 +1426,11 @@ impl<'a> Matcher<'a> {
                 Ok(())
             }
             // a return of capital: cash per unit taken off the cost
-            (Some(to), Some(cash)) if to == from => self.return_capital(account, from, cash, anchor),
+            (Some(to), Some(cash)) if to == from => self.return_capital(account, from, cash, anchor, day, at),
             // a merger for shares and cash: the cash per unit comes off the cost,
             // and the holding continues as the new shares
             (Some(_), Some(cash)) => {
-                self.return_capital(account, from, cash, anchor)?;
+                self.return_capital(account, from, cash, anchor, day, at)?;
                 let shares = AdjustmentLeg { cash_per_unit: None, ..leg.clone() };
                 self.apply_leg(account, anchor, day, at, &shares, stated, before, lieu)
             }
@@ -1526,20 +1529,68 @@ impl<'a> Matcher<'a> {
 
     /// Cash per unit paid back on a holding: taken off each lot's cost. A cost
     /// that would go below nothing is a gain the record does not describe: a gap.
-    fn return_capital(&mut self, account: AccountId, instrument: InstrumentId, cash: Money, anchor: &TransactionId) -> Result<(), Gaps> {
+    /// A return of capital: `cash` per unit held taken off each long lot's cost
+    /// (`SPEC.md` §2, "What you enter"). Capital returned beyond what is left
+    /// of a lot's cost is realized that day, a part of the lot's trade, and the
+    /// lot's cost is then zero.
+    fn return_capital(&mut self, account: AccountId, instrument: InstrumentId, cash: Money, anchor: &TransactionId, day: Date, at: Option<Timestamp>) -> Result<(), Gaps> {
+        let mut realized: Vec<Slice> = Vec::new();
         let book = self.book(account, instrument);
         for lot in book.lots.iter_mut().filter(|l| l.direction == Direction::Long) {
             let back = cash.times(lot.qty)?;
             lot.value = match &lot.value {
                 Ok(v) if v.currency != back.currency => Err(Gaps::of(Gap::CurrencyUnstated(anchor.clone()))),
                 Ok(v) => match v.checked_sub(back)? {
-                    left if left.amount.is_negative() => Err(Gaps::of(Gap::Arithmetic(format!("{anchor} pays back more than the units cost")))),
+                    left if left.amount.is_negative() => {
+                        // the excess is realized: a part of the trade with no units
+                        realized.push(Slice {
+                            trip: lot.trip.clone(),
+                            account,
+                            instrument,
+                            direction: Direction::Long,
+                            qty: Dec::ZERO,
+                            opened_by: lot.opened_by.clone(),
+                            opened_on: lot.day,
+                            opened_at: lot.at,
+                            closed_by: Closer::Transaction(anchor.clone()),
+                            closed_on: day,
+                            closed_at: at,
+                            entry: Ok(Money::zero(v.currency)),
+                            exit: Ok(left.neg()),
+                            entry_fee: Money::zero(v.currency),
+                            exit_fee: Money::zero(v.currency),
+                            flags: lot.flags.clone(),
+                            taint: Gaps::none(),
+                        });
+                        Ok(Money::zero(v.currency))
+                    }
                     left => Ok(left),
                 },
                 Err(g) => Err(g.clone()),
             };
         }
+        for slice in realized {
+            let key = slice.trip.clone();
+            let tr = self.trip_mut(&key);
+            tr.slices.push(slice);
+            tr.fills.insert(anchor.clone());
+        }
         Ok(())
+    }
+
+    /// A distribution the person or a source says returned capital: its legs'
+    /// cash per unit off the holding's cost, on the day it is paid.
+    fn apply_distribution(&mut self, t: &Transaction) {
+        let Some(adj) = self.inputs.facts.adjustments.get(&t.id).cloned() else { return };
+        for leg in &adj.legs {
+            if let (Some(from), Some(to), Some(cash)) = (leg.from, leg.to, leg.cash_per_unit) {
+                if from == to {
+                    if let Err(g) = self.return_capital(t.account, from, cash, &t.id, t.trade_date, t.occurred_at) {
+                        self.taint(t.account, from, &g);
+                    }
+                }
+            }
+        }
     }
 
     /// A holding's lots rescaled from `held` units to `new_total`, each in

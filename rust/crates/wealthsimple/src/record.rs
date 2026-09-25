@@ -12,7 +12,7 @@
 //!   "order":        a multi-leg row's order (FetchSoOrdersMultilegOrder)
 //!   "entitlements": a corporate action's children (FetchCorporateActionChildActivities)
 //!   "conversion":   a currency conversion's detail (FetchFundingIntent's node or
-//!                   FetchInternalTransfer's)
+//!                   FetchInternalTransfer's), or a move's that states no amount
 //!   "siblings":     moves between the same two accounts on neighbouring days
 //!   "positions":    [{ "account", "day", "nodes": positions as of that day }],
 //!                   around an event or a move of holdings

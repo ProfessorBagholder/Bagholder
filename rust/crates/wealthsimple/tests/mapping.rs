@@ -211,3 +211,16 @@ fn an_expiry_takes_a_long_out_and_brings_a_short_back() {
     assert!(short.legs[0].quantity.unwrap().is_positive());
     assert!(long.legs[0].cash.is_none() && short.legs[0].cash.is_none());
 }
+
+#[test]
+fn a_move_whose_row_states_no_amount_takes_it_from_its_detail() {
+    // the detail replayed is a real internal transfer's, its amount edited to
+    // this move's (edited-internal-transfer-full-in-kind.json)
+    let rows = all();
+    let (row, m) = rows.iter().find(|(r, _)| text(r, "type") == Some("INTERNAL_TRANSFER") && text(r, "amount").is_none() && text(r, "unifiedStatus") == Some("COMPLETED")).cloned().expect("a move with no amount");
+    assert_eq!(text(&row, "subType"), Some("SOURCE"));
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.legs.len(), 1);
+    assert_eq!(m.legs[0].kind, Kind::TransferOut);
+    assert_eq!(m.legs[0].cash, Some(bagholder_core::Money::new(dec("-9307.07"), Currency::CAD)));
+}

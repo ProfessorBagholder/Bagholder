@@ -147,21 +147,21 @@ Book migration 006 (gated here), with its schema snapshot `schema/v6.sql`:
 |---|---|
 | `account_links(account_id, linked_to, kind, stated_at)` | an account and the account Wealthsimple states it is linked to |
 | `account_days(account_id, day, net_value, net_deposits, currency, read_id)` | the broker's value and net deposits per account per day; a later read stating a different value for a day is kept beside the first, the newest used, and the change reported, as a broker revising its own row is (§6) |
-| `statements(id, account_id, stated_at, as_of_day, read_at)`, `statement_cash(statement_id, currency, amount)`, `statement_units(statement_id, instrument_id, quantity, book_value, currency)` | each statement of cash now and of units as of a day, with the book value Wealthsimple states per position, kept (the broker check is computed from them) |
+| `statements(id, account_id, kind, stated_at, as_of_day, read_id)`, `statement_cash(statement_id, currency, amount)`, `statement_units(statement_id, instrument_id, quantity, book_value, book_value_currency)` | each statement of cash now and of units as of a day, kept (the broker check is computed from them). The book value is not read: no figure uses it, and Wealthsimple writes it to more digits than a decimal holds |
 | `activity_reads(account_id, read_at, complete)` | each read of an account's activity and whether it was read in full |
 | `broker_reads(id, connection_id, part, at)` | each read the rows above came from |
 
-`BrokerAccount` (`engine/src/input.rs:230`) is built by one typed read of these tables: `net_value` and `net_deposits` from `account_days`, `cash` and `as_of` from the newest balances, `held` from the newest positions as of a day (with that day, a field `BrokerAccount` gains), `activity_read_at` from the newest complete read. Buying power is not stored: it is not a fact a figure in the book is computed from, and the Portfolio tile reads it live in 3c.
+`BrokerAccount` (`engine/src/input.rs:230`) is built by one typed read of these tables (`server/src/engine_inputs.rs`, `brokers`, beside the ledger's own read; the broker crate stays free of the engine): `net_value` and `net_deposits` from `account_days`, `cash` and `as_of` from the newest balances, `held` from the newest positions as of a day (with that day, a field `BrokerAccount` gains), `activity_read_at` from the newest complete read. Buying power is not stored: it is not a fact a figure in the book is computed from, and the Portfolio tile reads it live in 3c.
 
 ### The facts the owner enters
 
 Defined in `SPEC.md` first, in the same commit as the code (the text below is the proposal):
 
-- **Opening balance** (in "Add trade"): for a holding that arrived in an account without a cost (a transfer in, whose cost Wealthsimple does not state, question 7, shown today as `basis-unknown`), the person states one or more lots, each a quantity, a total cost in the instrument's currency and the day acquired. The lots' quantities add up to the units that arrived; if they do not, the holding's cost stays `basis-unknown` and says the entered lots do not match the units. The lots are the holding's first lots, in the order acquired.
-- **An event's allocation** (on the trade detail, beside the journal, for a holding whose event is `event-unknown`): for a spin-off, the share of the parent's cost that moves to each child, as the issuer published it; for a return of capital, the capital returned per unit, as the issuer published it for that distribution, reducing the holding's cost from its ex-date.
+- **Opening balance** (in "Add trade"): for units that arrived in an account without a cost (a transfer in, whose cost Wealthsimple does not state, question 7, shown today as `basis-unknown`), the person states their total cost in the instrument's currency and the day acquired, as Sharesight's opening balance takes a holding's cost and date; the units are the arrival's, as the broker states them. They become the holding's lot at that cost and day.
+- **An event's allocation** (on the trade detail, beside the journal, for a holding whose event is `event-unknown`): for a spin-off, the share of the parent's cost that moves to each child, as the issuer published it; for a return of capital, the capital returned per unit, as the issuer published it for that distribution, lowering the cost of the units held on the day it is paid (the day its record carries; Sharesight records it on the day paid). Returned beyond a lot's remaining cost is realized that day and the lot's cost is zero.
 - **Each is shown as entered by the person**, and a value from a source replaces it where one arrives (`input.rs:171`, `Adjustments::choose`: a sourced adjustment wins).
 
-In the book, each entry is a record whose source is the person (`SourceName::person()`), its mapping producing adjustment legs (`core/src/adjustment.rs:15-24`, "the person's cost for a deposit", spin-off, return of capital), so no new table. A typed route writes it (`POST /api/book/entries`), its types generated for the page; the forms are 3c's if decision 2 is taken.
+In the book, each entry is a record whose source is the person (`SourceName::person()`), its mapping (`book/src/person.rs`, `PersonMapping`) producing adjustment legs (`core/src/adjustment.rs:15-24`), so no new table. `Book::enter` keeps one, refusing what the book cannot stand behind (a cost in another currency than the instrument's, a share of cost outside (0, 1] or adding past the whole, capital returned that is not an amount). The HTTP route that calls it, and the forms, are 3c's: the server holds the book from the switch.
 
 Where a return of capital exceeds the holding's remaining cost, the excess is realized P&L on the ex-date and the cost is zero (the CRA's rule, above).
 
@@ -173,19 +173,19 @@ The stage 2 comparison (`server/src/compare.rs`) run on a copy of the person's d
 
 The template's page lines do not apply: the page does not change in this part.
 
-- [ ] **Build.** From `rust/`: `cargo test -q --workspace` green; `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets` clean; the applet test green alone.
-- [ ] **Research.** The eight rules above each hold on a recorded reply of their kind, a test per rule.
-- [ ] **Boundaries.** The boundary test holds `bagholder-broker` and `bagholder-wealthsimple` to their columns, each checked by feeding the checker a violation (a reply type in `-broker`; `f64`, a clock read, or `-ws` in `-wealthsimple`). The scan for the old guesses (`engine/tests/no_guesses.rs`, `lenient`, `option_multiplier`, `from_int(100)`, `relabel`) and the no-float scan cover both crates.
+- [x] **Build.** From `rust/`: `cargo test -q --workspace` green; `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets` clean; the applet test green alone.
+- [x] **Research.** The eight rules above each hold on a recorded reply of their kind, a test per rule.
+- [x] **Boundaries.** The boundary test holds `bagholder-broker` and `bagholder-wealthsimple` to their columns, each checked by feeding the checker a violation (a reply type in `-broker`; `f64`, a clock read, or `-ws` in `-wealthsimple`). The scan for the old guesses (`engine/tests/no_guesses.rs`, `lenient`, `option_multiplier`, `from_int(100)`, `relabel`) and the no-float scan cover both crates.
 - [ ] **Recorded replies.** Every operation the adapter asks has recorded real replies (an answer, an empty answer, a refusal, a lapsed session where Wealthsimple gives one), each with a wrong-shaped and a wrong-meaning copy, and a test per reply asserting exactly what is written, or that nothing is and which outcome is recorded. The anonymisation test passes on every one.
-- [ ] **Session**, each a test on recorded replies and a fake clock: a refresh adopted from a session another caller rotated, posting nothing; a refused refresh token never posted again; a 401 sets `Lapsed` and the read is not retried with the same token; a read retried once after a refresh, never twice.
-- [ ] **One limiter.** Every request the adapter sends goes through `bagholder-net`, on Wealthsimple's host settings: a test on the fake network counts them.
-- [ ] **Records.** On recorded replies: each row stored once as a source record, a changed row as a revision, an unchanged row as nothing new; an imported record with the same Wealthsimple id superseded and its trade and journal kept (the trade id unchanged); a row absent from a later pull not marked removed.
-- [ ] **Mapping**, each a test on a recorded row: a multi-leg order's cash from its legs, and a row whose amount differs from its legs' net a failure writing nothing; every `type`/`subType` pair in the person's rows in the table or kept as `unclassified`; option opening and closing as stated; a multi-leg order's legs as stated; an assignment's delivery; an expiry; a transfer's two sides linked by the broker's id (and a test that two rows with equal amounts and no shared id are not linked); a consolidation and a continuation under a new security id from their units, with cash in lieu.
-- [ ] **Statements and reads.** Migration 006 applied to a version 5 book with its rows intact, `schema/v6.sql` committed and compared; a day's value restated kept beside the first and the newest used; `activity_read_at` set only by a complete read, a pull failing part-way leaving the previous one; `BrokerAccount` built from the tables, a test per field.
-- [ ] **Owner entries.** `SPEC.md` defines the opening balance and the event allocation; engine cases whose expected figures were written by an agent that had not read the engine: a transfer in with two entered lots; lots that do not add up to the units; a spin-off allocation; a return of capital, including one exceeding the remaining cost; a sourced value replacing an entry. `cargo test -p bagholder-engine --test cases` green on them. The route writes a person record and a test reads its adjustment back.
-- [ ] **Only what changed, held by a test.** On recorded replies, a pull with nothing new sends exactly the accounts list and one activity page per open account; a pull with one new trade sends only what that trade needs; any other count fails. The same two counts on the real run, stated in Verification.
-- [ ] **Status and bad rows**, each a test: a cancelled and an expired multi-leg order move nothing and raise no gap; a partly filled then cancelled order books its filled part; a row failing its check is kept with its problem and the account's read completes. Verification lists the shapes the multi-leg sign rule was checked on (the row's currency against the legs', any fee).
-- [ ] **Decisions held by tests.** Each line of `docs/decisions.md` names the test that fails if it is broken, or says "review only"; the missing tests for the decisions 3b touches are added.
+- [x] **Session**, each a test on recorded replies and a fake clock: a refresh adopted from a session another caller rotated, posting nothing; a refused refresh token never posted again; a 401 sets `Lapsed` and the read is not retried with the same token; a read retried once after a refresh, never twice.
+- [x] **One limiter.** Every request the adapter sends goes through `bagholder-net`, on Wealthsimple's host settings: a test on the fake network counts them.
+- [x] **Records.** On recorded replies: each row stored once as a source record, a changed row as a revision, an unchanged row as nothing new; an imported record with the same Wealthsimple id superseded and its trade and journal kept (the trade id unchanged); a row absent from a later pull not marked removed.
+- [x] **Mapping**, each a test on a recorded row: a multi-leg order's cash from its legs, and a row whose amount differs from its legs' net a failure writing nothing; every `type`/`subType` pair in the person's rows in the table or kept as `unclassified`; option opening and closing as stated; a multi-leg order's legs as stated; an assignment's delivery; an expiry; a transfer's two sides linked by the broker's id (and a test that two rows with equal amounts and no shared id are not linked); a consolidation and a continuation under a new security id from their units, with cash in lieu.
+- [x] **Statements and reads.** Migration 006 applied to a version 5 book with its rows intact, `schema/v6.sql` committed and compared; a day's value restated kept beside the first and the newest used; `activity_read_at` set only by a complete read, a pull failing part-way leaving the previous one; `BrokerAccount` built from the tables, a test per field.
+- [x] **Owner entries.** `SPEC.md` defines the opening balance and the event allocation; engine cases whose expected figures were written by an agent that had not read the engine: a transfer in with its entered cost, and without; a spin-off allocation; a return of capital, including one exceeding the remaining cost and units sold before the day paid; a sourced value replacing an entry. `cargo test -p bagholder-engine --test cases` green on them. `Book::enter` writes a person record and a test reads its adjustment back; its refusals each a test.
+- [x] **Only what changed, held by a test.** On recorded replies, a pull with nothing new sends exactly the accounts list and one activity page per open account; a pull with one new trade sends only what that trade needs; any other count fails. The same two counts on the real run, stated in Verification.
+- [x] **Status and bad rows**, each a test: a cancelled and an expired multi-leg order move nothing and raise no gap; a partly filled then cancelled order books its filled part; a row failing its check is kept with its problem and the account's read completes. Verification lists the shapes the multi-leg sign rule was checked on (the row's currency against the legs', any fee).
+- [x] **Decisions held by tests.** Each line of `docs/decisions.md` names the test that fails if it is broken, or says "review only"; the missing tests for the decisions 3b touches are added.
 - [ ] **The real run.** `bagholder pull-broker` on a scratch copy of the person's data with the scratch sign-in of decision 1: its output in Verification (accounts, records stored and superseded, requests sent, outcomes); every imported record with a Wealthsimple id superseded, or listed with why no Wealthsimple row exists; no journal entry orphaned, or each listed.
 - [ ] **The broker check on the real run.** For every account, the check's differences between the book and the newest statement: none, or each named with its cause (a row not yet posted, a gap the engine names, a mapping error then fixed).
 - [ ] **The comparison run again**, its numbers in Verification against 3a's run, and each of 3a's waiting gaps resolved or named with what Wealthsimple states.
@@ -195,7 +195,6 @@ The template's page lines do not apply: the page does not change in this part.
 
 - `rust/crates/ws` and `server/src/session.rs`: untouched; the running server keeps using them until 3c.
 - `rust/crates/book/migrations/006-*.sql` and `schema/v6.sql`; `book/src/import/mapping.rs` (the ref the supersede finds).
-- `web/src/lib/generated/*.ts` for the entries route's types.
 - `TIMED_WAITS` (`server/src/tests_misc.rs`): unchanged; 3b adds no periodic read.
 - `docs/old-app-mistakes.md`; `rust/crates/engine/tests/cases/README.md`.
 - `docs/plans/trade-open-to-flat.md`: independent of this plan, but both touch `engine/src/identity.rs` and the engine cases; whichever lands second rebases its cases on the other.
@@ -208,8 +207,37 @@ Nothing refused. Two points where the plan departs from what was written before,
 
 ## Anti-stub self-check
 
+- No definition nobody references: `Source`, `Replay`, `Client`, `BrokerAdapter::prepare`/`holds`, the statements tables and `Book::enter` are each read by the pull, the command or a test; `statement_units.book_value` is written empty and read by nothing (migration 006 was pushed with it; a pushed migration is not edited).
+- No field written and never read: `BrokerAccount.held_as_of` is read by the broker check.
+- No branch only the switch knows: the entries' HTTP route and forms are 3c's whole, not stubbed.
+- No real-target run skipped: the pull ran on a copy of the owner's book from the owner's own capture (below). The network client has not met Wealthsimple itself: its tests are on a fake network; its first real run is the owner's first pull after the switch, or a scratch sign-in.
+
 ## Verification
 
+- Suite, from `rust/`: `cargo test -q --workspace` 1,025 passed, 0 failed before the entries; `RUSTFLAGS="-D warnings" cargo build -q --workspace --all-targets` clean.
+- Research: questions 1–8 settled from the web app's bundle (release 0.3.668812) and the owner's own lookups; each rule held by a test in `wealthsimple/tests/mapping.rs` on a real row of its kind.
+- The mapping on the owner's whole history (`BAGHOLDER_WS_CAPTURE=… cargo test -p bagholder-wealthsimple --test capture -- --ignored`): 7,859 rows, every kind read and placed; problems left, each named: 36 conversions whose paid side Wealthsimple does not state (`conversion-side-unstated`), 8 moves the capture kept no positions for (`moved-holdings-unstated`; a live pull reads them), 2 rows naming a security the capture did not read.
+- The real run (`bagholder pull-broker <copy of the book> --replay <the owner's capture, as sent>`): accounts added 0 (every account matched), 7,859 records new, 6,088 imported records replaced; 23,995 account days stored. A second pull the same day read 21 rows, all unchanged, and asked only the accounts, their activity and their cash.
+- Only what changed, held by `wealthsimple/tests/pull.rs`: a pull with nothing new asks exactly `accounts`, one activity read per open account and `balances`; one new trade adds one `securities` batch.
+- The broker check on the real run: 16 of 29 accounts agree exactly. Causes found and named:
+  - Two withdrawals from a locked-in account are in no activity row of Wealthsimple's, on either side: the locked-in account's rows hold only the withholding tax, its net deposits drop by the gross amounts on those days, and the chequing account they were paid into holds no deposit. The locked-in account's cash differs by 72,950.00, exactly the two net payouts; the chequing account's by the same less 1.73 left from May 2024.
+  - 36 conversions whose paid side is not stated: the trading account's CAD and USD cash stand above Wealthsimple's.
+  - A holding under a new security id with no event row (positions only): its units show on both ids.
+  - Coins whose positions Wealthsimple states to fewer digits than its rows: the crypto account's differences below 0.000001 of a unit.
+  - A move between two closed accounts whose row states no amount (±9,307.07): its detail (`FetchInternalTransfer`) states it, and is now read with the row; the capture did not hold that detail, so the real run keeps the difference until a live pull reads it.
+  - Not yet traced: 1,567.76 PEPE the book holds and Wealthsimple does not, and the smaller cash differences of four accounts (30.00, 56.91, 143.09 against 200, and a USD account at 6,159.07).
+- The comparison run again (`compare-figures … --facts-from-book`): portfolio market value 627,165.03 CAD with 3 left out (3a's run: 632,070.43 with 15), the contract sizes and the MSTY consolidation now stated; realized P&L by instrument 106 agree to the cent, 62 differ; the per-trade and per-payment matching reads 0 the same, because the tool matches by the imported records' keys, which Wealthsimple's records replaced (the tool's matching by the broker's own id is the follow-up below).
+- Owner entries: `engine/tests/cases/entries.json` (9 cases written by an agent that had not read the engine; one re-derived after `SPEC.md` set the day a return of capital applies) green; `book/tests/person.rs` green.
+
 ## Handoff
+
+Stopped at: the broker check's untraced accounts and the comparison's matching. What is left, in order:
+1. Trace the four accounts' smaller differences and the PEPE units, and name each cause.
+2. `compare-figures`: match old and new by the broker's own row id (`record_refs`), so per-trade and per-payment differences are shown again.
+3. Recorded replies of a refusal and of a lapsed session from Wealthsimple itself (the session's tests use replies written to the shapes the bundle shows).
+
+Not to redo: the mapping's rules, the capture, the anonymiser, the pull and its request counts.
+
+To resume: `cd rust && cargo run -q -p bagholder-server --bin bagholder -- pull-broker $TMPDIR/bh-3b/run3 --replay <capture as sent>` and `compare-figures $TMPDIR/old-ro.db $TMPDIR/bh-3b/run3 2026-09-24 --facts-from-book --cache $TMPDIR/bh-3b/run3/market.db`.
 
 **Nothing left running.**

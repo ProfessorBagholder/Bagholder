@@ -271,7 +271,8 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
         closed_at,
         hold_days: (hold_end - opened_on).get_days() as i64,
         entry: avg(&all_entries, &all_weight),
-        exit: if slices.is_empty() { None } else { Some(avg(&exits, &closed_weight)) },
+        // none before a unit has closed (a return of capital realized closes none)
+        exit: if slices.iter().all(|s| s.qty.is_zero()) { None } else { Some(avg(&exits, &closed_weight)) },
         basis: closed_entries,
         realized,
         pnl,

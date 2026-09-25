@@ -12,6 +12,7 @@ pub mod identity;
 pub mod import;
 pub mod links;
 pub mod mapping;
+pub mod person;
 pub mod records;
 pub mod schema;
 pub mod statements;

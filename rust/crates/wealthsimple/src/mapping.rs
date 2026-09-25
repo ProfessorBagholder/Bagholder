@@ -709,6 +709,22 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
         if row.amount.is_some() {
             return cash_leg(out);
         }
+        // the row states no amount: the move's detail does, in the source
+        // account's currency, and on the destination's side in the same
+        // currency where its rate is one
+        if let Ok(detail) = root.obj("conversion") {
+            let amount = detail.dec_text("amount")?;
+            let currency = Currency::parse(&detail.text("currency")?.to_uppercase()).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+            let same = detail.opt_dec_text("fxRate")?.is_none_or(|r| r == Dec::ONE) && detail.opt_dec_text("fxAdjustedAmount")?.is_none_or(|a| a == amount);
+            if incoming && !same {
+                unstated(out, "a move between accounts in two currencies whose detail states the amount sent, not the currency received".to_string());
+                return Ok(());
+            }
+            let mut d = base.draft(row_leg(), kind);
+            d.cash = Some(Money::new(if incoming { amount.abs() } else { amount.abs().neg() }, currency));
+            out.legs.push(d);
+            return Ok(());
+        }
         let other = row.node.opt_text("opposingAccountId")?;
         let mirrored: Vec<(String, Dec)> = match (other, change.get(row.account)) {
             (Some(o), Some(mine)) if group.len() == 2 => mine

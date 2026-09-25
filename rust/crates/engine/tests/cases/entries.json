@@ -1,0 +1,879 @@
+[
+  {
+    "name": "shares moved in from another broker take the cost and day the person entered, and their sale is scored",
+    "spec": "SPEC.md §2 What you enter (the cost of units that arrived without one); §2 Trade; §4 Dashboard",
+    "working": [
+      "t1: 50 X transferred in on 2026-02-10 with no cost on the record; the person states they cost 1,500 in total, acquired 2024-11-04",
+      "the lot is 50 X at 1,500 (30 a unit), dated 2024-11-04: Open = 2024-11-04",
+      "t2: 50 X sold for 2,000 on 2026-03-16: closed, P&L 2,000 − 1,500 = 500.00; entry 30, exit 40; P&L % 500 ÷ 1,500",
+      "hold 2024-11-04 → 2026-03-16 = 497 days; CAD trade, so P&L (CAD) = P&L",
+      "the cost is stated, so the trade is not basis-unknown and is in the performance figures: realized 500.00, 1 closed trade, none left out, win rate 1, expectancy 500.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-02-10",
+        "at": "2026-02-10T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "50"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-16",
+        "at": "2026-03-16T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-50",
+        "cash": "2000"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t1",
+        "source": "person",
+        "legs": [
+          {
+            "to": "X",
+            "cost": "1500",
+            "acquired": "2024-11-04"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "X",
+          "opened": "2024-11-04",
+          "closed": "2026-03-16",
+          "qty": "50",
+          "entry": "30",
+          "exit": "40",
+          "pnl": "500.00",
+          "pnl_cad": "500.00",
+          "pnl_pct": 0.3333333333333333,
+          "hold_days": 497
+        }
+      ],
+      "position_count": 0,
+      "kpi": {
+        "realized": "500.00",
+        "count": 1,
+        "left_out": 0,
+        "win_rate": 1.0,
+        "expectancy": "500.00"
+      }
+    }
+  },
+  {
+    "name": "shares moved in from another broker with no cost entered: the sale waits on the basis and is left out of the performance figures",
+    "spec": "SPEC.md §2 What you enter (the lot is basis-unknown); §2 Trade, Crypto (left out of realized, win rate, by-symbol, monthly; still listed); §4 Dashboard",
+    "working": [
+      "t1: 50 X transferred in on 2026-02-10, no cost on the record and none entered: the lot is basis-unknown",
+      "t2: 50 X sold for 2,000: the round trip stands on its own, its P&L waits (basis-unknown); it is still a trade",
+      "t3/t4: 10 Y bought for 100, sold for 150: P&L 50.00",
+      "realized sums what is stated: 50.00; closed trades scored 1 (Y), 1 left out (X); win rate 1 ÷ 1; expectancy 50.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      },
+      {
+        "id": "Y"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-02-10",
+        "at": "2026-02-10T15:00:00Z",
+        "kind": "transfer-in",
+        "instrument": "X",
+        "qty": "50"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-16",
+        "at": "2026-03-16T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-50",
+        "cash": "2000"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-02-10",
+        "at": "2026-02-10T16:00:00Z",
+        "kind": "buy",
+        "instrument": "Y",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-03-16",
+        "at": "2026-03-16T16:00:00Z",
+        "kind": "sell",
+        "instrument": "Y",
+        "qty": "-10",
+        "cash": "150"
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "X",
+          "closed": "2026-03-16",
+          "pnl": {
+            "gaps": [
+              "basis-unknown"
+            ]
+          }
+        },
+        {
+          "opened_by": "t3",
+          "instrument": "Y",
+          "pnl": "50.00"
+        }
+      ],
+      "kpi": {
+        "realized": "50.00",
+        "count": 1,
+        "left_out": 1,
+        "win_rate": 1.0,
+        "expectancy": "50.00"
+      }
+    }
+  },
+  {
+    "name": "a spin-off whose child the broker states in units, its share of the parent's cost entered by the person: each sale is scored on its share",
+    "spec": "SPEC.md §2 What you enter (a spin-off: the share of the parent's cost each new holding takes); docs/plans/stage-2-engine.md, Corporate events",
+    "working": [
+      "t1: 100 P bought for 2,000 on 2026-01-05",
+      "t2: the broker's row: 20 C received on 2026-03-02 (0.2 per P held); the person enters that C takes 9 % of P's cost",
+      "C's cost 2,000 × 0.09 = 180, its lot dated 2026-01-05 (the parent's); P keeps 2,000 − 180 = 1,820",
+      "t3: 20 C sold for 300 on 2026-04-01: P&L 300 − 180 = 120.00; entry 180 ÷ 20 = 9, exit 15; P&L % 120 ÷ 180; hold 2026-01-05 → 2026-04-01 = 86",
+      "t4: 100 P sold for 2,000 on 2026-04-01: P&L 2,000 − 1,820 = 180.00; entry 18.2, exit 20; P&L % 180 ÷ 1,820; hold 86",
+      "the child is opened by the event its adjustment applies to (t2), as the settled open-trades reading has it",
+      "realized 300.00, 2 closed, both wins, expectancy 150.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "C"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "100",
+        "cash": "-2000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T11:00:00Z",
+        "kind": "corporate-event",
+        "instrument": "C",
+        "qty": "20"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-20",
+        "cash": "300"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T16:00:00Z",
+        "kind": "sell",
+        "instrument": "P",
+        "qty": "-100",
+        "cash": "2000"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "P",
+            "to": "C",
+            "units_per_unit": "0.2",
+            "cost_share": "0.09"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "position_count": 0,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "P",
+          "opened": "2026-01-05",
+          "closed": "2026-04-01",
+          "qty": "100",
+          "entry": "18.2",
+          "exit": "20",
+          "pnl": "180.00",
+          "pnl_cad": "180.00",
+          "pnl_pct": 0.0989010989010989,
+          "hold_days": 86
+        },
+        {
+          "opened_by": "t2",
+          "instrument": "C",
+          "opened": "2026-01-05",
+          "closed": "2026-04-01",
+          "qty": "20",
+          "entry": "9",
+          "exit": "15",
+          "pnl": "120.00",
+          "pnl_cad": "120.00",
+          "pnl_pct": 0.6666666666666666,
+          "hold_days": 86
+        }
+      ],
+      "kpi": {
+        "realized": "300.00",
+        "count": 2,
+        "left_out": 0,
+        "win_rate": 1.0,
+        "expectancy": "150.00"
+      }
+    }
+  },
+  {
+    "name": "a return of capital the person enters on a distribution lowers the holding's cost from the ex-date, and the distribution's cash still counts as received",
+    "spec": "SPEC.md §2 What you enter (a return of capital lowers the holding's cost from the distribution's ex-date); §2 Distribution",
+    "working": [
+      "t1: 100 X bought for 1,000 on 2026-01-05",
+      "t2: a distribution of 0.80 a unit, ex 2026-03-10, paid 2026-03-20: cash 80; the person enters 0.30 a unit as capital returned",
+      "held at the ex-date: 100; cost falls by 100 × 0.30 = 30 to 970",
+      "t3: 100 X sold for 1,100 on 2026-04-01: P&L 1,100 − 970 = 130.00 (100.00 without the entry, higher by the 30 returned)",
+      "the distribution is still a Dividend row of its whole cash: 80.00 received",
+      "realized 130.00, 1 closed, expectancy 130.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T12:00:00Z",
+        "kind": "dividend",
+        "instrument": "X",
+        "cash": "80",
+        "ex_date": "2026-03-10"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-100",
+        "cash": "1100"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "0.30"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 0,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-04-01",
+          "qty": "100",
+          "pnl": "130.00",
+          "pnl_cad": "130.00"
+        }
+      ],
+      "cash": [
+        {
+          "tx": "t2",
+          "amount_cad": "80.00"
+        }
+      ],
+      "kpi": {
+        "realized": "130.00",
+        "count": 1,
+        "left_out": 0,
+        "win_rate": 1.0,
+        "expectancy": "130.00",
+        "dividends": "80.00"
+      }
+    }
+  },
+  {
+    "name": "a return of capital lowers the cost only of units held on the day the distribution is paid: units sold before that day keep their cost",
+    "spec": "SPEC.md §2 What you enter (the day the distribution is paid); §2 Trade (each sale realized on its own day)",
+    "working": [
+      "t1 buys 100 X for 1000: one lot of 100 at 10.00 per unit; it opens the trade rt:t1.",
+      "The return of capital (0.30 per unit, entered on t4) lowers the cost of the units held on the day t4 is paid, 2026-03-20 (SPEC §2 What you enter); units sold before that day keep their cost. The ex_date field is not used.",
+      "t2 (2026-03-05) sells 40: cost 40 x 10.00 = 400; P&L 480 - 400 = 80.00, realized that day.",
+      "t3 (2026-03-15) sells 60: cost 60 x 10.00 = 600; P&L 660 - 600 = 60.00. The position is flat: the trade closes 2026-03-15.",
+      "On 2026-03-20 no units are held, so the return of capital lowers no lot's cost and nothing beyond a lot's cost is realized; no sale's P&L changes.",
+      "Trade rt:t1: P&L 80.00 + 60.00 = 140.00; X has no stated currency, so it is CAD and P&L (CAD) equals P&L: 140.00.",
+      "Realized: 140.00."
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-05",
+        "at": "2026-03-05T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-40",
+        "cash": "480"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-03-15",
+        "at": "2026-03-15T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-60",
+        "cash": "660"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T12:00:00Z",
+        "kind": "dividend",
+        "instrument": "X",
+        "cash": "48",
+        "ex_date": "2026-03-10"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t4",
+        "source": "person",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "0.30"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "X",
+          "closed": "2026-03-15",
+          "pnl": "140.00",
+          "pnl_cad": "140.00"
+        }
+      ],
+      "kpi": {
+        "realized": "140.00"
+      }
+    }
+  },
+  {
+    "name": "capital returned beyond what is left of the cost is realized that day and the cost is then zero",
+    "spec": "SPEC.md §2 What you enter (capital returned beyond what is left of the cost is realized that day and the cost is then zero); §2 Trade (realized on its day); §4 Dashboard, Monthly P&L",
+    "working": [
+      "t1: 100 X bought for 100 on 2026-01-05 (1 a unit)",
+      "t2: a distribution of 1.50 a unit, ex 2026-03-10, paid 2026-03-20: cash 150; the person enters all 1.50 as capital returned",
+      "returned 100 × 1.50 = 150 against a cost of 100: the cost becomes 0 and the 50 beyond it is realized on the ex-date, 2026-03-10 (the day the cost falls)",
+      "t3: 100 X sold for 200 on 2026-04-01: P&L 200 − 0 = 200",
+      "trade P&L 50 + 200 = 250.00; realized by month: 2026-03 50.00, 2026-04 200.00; dividends received 150.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "100",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T12:00:00Z",
+        "kind": "dividend",
+        "instrument": "X",
+        "cash": "150",
+        "ex_date": "2026-03-10"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-100",
+        "cash": "200"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "1.50"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 0,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-04-01",
+          "qty": "100",
+          "pnl": "250.00",
+          "pnl_cad": "250.00"
+        }
+      ],
+      "cash": [
+        {
+          "tx": "t2",
+          "amount_cad": "150.00"
+        }
+      ],
+      "kpi": {
+        "realized": "250.00",
+        "count": 1,
+        "left_out": 0,
+        "win_rate": 1.0,
+        "expectancy": "250.00",
+        "dividends": "150.00",
+        "monthly": [
+          {
+            "year": 2026,
+            "month": 3,
+            "value": "50.00",
+            "count": 1
+          },
+          {
+            "year": 2026,
+            "month": 4,
+            "value": "200.00",
+            "count": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "capital returned beyond the cost on a holding still held: the excess is realized and the position's book is zero",
+    "spec": "SPEC.md §2 What you enter; §2 Trade (open: its P&L what it has realized so far); §2 Position",
+    "working": [
+      "as the case before, without the sale: 100 X bought for 100; 1.50 a unit returned (150) on ex 2026-03-10",
+      "the open trade has realized 50.00; the position is 100 X with book 0.00"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "100",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T12:00:00Z",
+        "kind": "dividend",
+        "instrument": "X",
+        "cash": "150",
+        "ex_date": "2026-03-10"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "1.50"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "position_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "open",
+          "qty": "100",
+          "exit": null,
+          "pnl": "50.00",
+          "pnl_cad": "50.00"
+        }
+      ],
+      "positions": [
+        {
+          "account": "A",
+          "instrument": "X",
+          "qty": "100",
+          "book": "0.00"
+        }
+      ],
+      "kpi": {
+        "realized": "50.00"
+      }
+    }
+  },
+  {
+    "name": "an issuer's return of capital for the same distribution replaces the person's entry",
+    "spec": "SPEC.md §2 What you enter (a value a source states for the same fact replaces yours); docs/plans/stage-2-engine.md, a sourced adjustment supersedes the person's",
+    "working": [
+      "t1: 100 X bought for 1,000; t2: a distribution of 0.80 a unit, ex 2026-03-10, cash 80",
+      "the person entered 0.30 a unit returned; the issuer states 0.50: the issuer's stands, and there is no conflict",
+      "cost 1,000 − 100 × 0.50 = 950; t3: 100 sold for 1,100: P&L 150.00 (130.00 had the person's entry stood)"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "100",
+        "cash": "-1000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-20",
+        "at": "2026-03-20T12:00:00Z",
+        "kind": "dividend",
+        "instrument": "X",
+        "cash": "80",
+        "ex_date": "2026-03-10"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "X",
+        "qty": "-100",
+        "cash": "1100"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "0.30"
+          }
+        ]
+      },
+      {
+        "applies_to": "t2",
+        "source": "issuer",
+        "legs": [
+          {
+            "from": "X",
+            "to": "X",
+            "units_per_unit": "1",
+            "cash_per_unit": "0.50"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 1,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "pnl": "150.00",
+          "pnl_cad": "150.00"
+        }
+      ],
+      "kpi": {
+        "realized": "150.00",
+        "count": 1,
+        "left_out": 0
+      }
+    }
+  },
+  {
+    "name": "an issuer's cost share for a spin-off replaces the person's, whichever is stored first",
+    "spec": "SPEC.md §2 What you enter (a value a source states for the same fact replaces yours)",
+    "working": [
+      "100 P bought for 2,000; 20 C received by the spin-off (t2)",
+      "the issuer states C takes 9 % of the cost; the person had entered 12 %; the issuer's stands",
+      "C: 180, P: 1,820; 20 C sold for 300 → 120.00; 100 P sold for 2,000 → 180.00 (with 12 %: 60.00 and 240.00)"
+    ],
+    "today": "2026-06-01",
+    "accounts": [
+      {
+        "id": "A"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "P"
+      },
+      {
+        "id": "C"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "P",
+        "qty": "100",
+        "cash": "-2000"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-03-02",
+        "at": "2026-03-02T11:00:00Z",
+        "kind": "corporate-event",
+        "instrument": "C",
+        "qty": "20"
+      },
+      {
+        "id": "t3",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-20",
+        "cash": "300"
+      },
+      {
+        "id": "t4",
+        "account": "A",
+        "day": "2026-04-01",
+        "at": "2026-04-01T16:00:00Z",
+        "kind": "sell",
+        "instrument": "P",
+        "qty": "-100",
+        "cash": "2000"
+      }
+    ],
+    "adjustments": [
+      {
+        "applies_to": "t2",
+        "source": "issuer",
+        "legs": [
+          {
+            "from": "P",
+            "to": "C",
+            "units_per_unit": "0.2",
+            "cost_share": "0.09"
+          }
+        ]
+      },
+      {
+        "applies_to": "t2",
+        "source": "person",
+        "legs": [
+          {
+            "from": "P",
+            "to": "C",
+            "units_per_unit": "0.2",
+            "cost_share": "0.12"
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "trade_count": 2,
+      "trades": [
+        {
+          "opened_by": "t1",
+          "instrument": "P",
+          "pnl": "180.00"
+        },
+        {
+          "opened_by": "t2",
+          "instrument": "C",
+          "pnl": "120.00"
+        }
+      ],
+      "kpi": {
+        "realized": "300.00",
+        "count": 2,
+        "left_out": 0
+      }
+    }
+  }
+]
