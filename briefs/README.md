@@ -16,3 +16,4 @@ Read from any checkout without switching branches:
 | 05 | [Every action is the best course for the objective](05-think-first.md) | Current |
 | 06 | [The owner's decisions that change stage 3a](06-owner-decisions-3a.md) | Current |
 | 07 | [Verdicts: stage 3b (Go with changes) and the trade plan (Go with one change)](07-stage-3b-and-trades-verdict.md) | Current |
+| 08 | [Stage 3b as built: accepted with three fixes; managed accounts decided](08-stage-3b-built-verdict.md) | Current |
