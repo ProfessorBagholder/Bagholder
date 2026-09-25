@@ -234,7 +234,7 @@ Nothing refused. Two points where the plan departs from what was written before,
 
 Stopped at: the broker check's untraced accounts and the comparison's matching. What is left, in order:
 1. Trace the four accounts' smaller cash differences and name each cause.
-2. `compare-figures`: match old and new by the broker's own row id (`record_refs`), so per-trade and per-payment differences are shown again.
+2. `compare-figures` now names a broker record by the imported row it replaced (`record_refs`); per-trade pairing still reads 0 the same, which points at the round trips' boundaries rather than the keys (the old model split a position's trips where the new one keeps one open to flat): pair by instrument and close instead, then read the differences.
 3. Recorded replies of a refusal and of a lapsed session from Wealthsimple itself (the session's tests use replies written to the shapes the bundle shows).
 
 Not to redo: the mapping's rules, the capture, the anonymiser, the pull and its request counts.

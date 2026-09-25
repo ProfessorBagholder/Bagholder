@@ -229,7 +229,22 @@ pub fn compare(old_path: &Path, book_dir: &Path, today: bagholder_core::jiff::ci
     engine.apply(Change::Trades(book.trades().map_err(err)?));
 
     // the old row each transaction came from
-    let keys = book.live_record_keys().map_err(err)?;
+    // the old row each record stands for: an imported record's own key, or,
+    // for a broker's record that replaced one, the key of the record it replaced
+    let mut keys = book.live_record_keys().map_err(err)?;
+    let import = bagholder_book::import::mapping::import_source();
+    for (id, key) in keys.iter_mut() {
+        if book.record(*id).map_err(err)?.source == import {
+            continue;
+        }
+        for r in book.records_by_ref(bagholder_book::import::mapping::WEALTHSIMPLE_RECORD, key).map_err(err)? {
+            let rec = book.record(r).map_err(err)?;
+            if rec.source == import {
+                *key = rec.source_key;
+                break;
+            }
+        }
+    }
     let old_row = |t: &TransactionId| -> String { keys.get(&t.record).cloned().unwrap_or_default() };
     let figures = engine.figures();
     let mut out = String::new();
