@@ -27,11 +27,6 @@ const server = spawn(join(rust, 'target', 'debug', 'bagholder' + exe), [], {
     BAGHOLDER_DRY_ORDERS: '1',
     BAGHOLDER_OFFLINE: '1',
     BAGHOLDER_NOTIFY: 'browser',
-    // the screenshot baselines' job sets the server's clock to one instant (faketime), so a
-    // figure measured to today reads the same on every run; the browser's is set by the test
-    ...(process.env.BAGHOLDER_E2E_FAKETIME
-      ? { LD_PRELOAD: process.env.BAGHOLDER_E2E_LIBFAKETIME, FAKETIME: '@' + process.env.BAGHOLDER_E2E_FAKETIME.replace('T', ' ').replace('Z', ''), TZ: 'UTC' }
-      : {}),
   },
 })
 const stop = () => {
