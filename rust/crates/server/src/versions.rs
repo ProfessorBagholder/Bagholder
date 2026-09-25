@@ -32,11 +32,3 @@ pub fn core_version(conn: &Connection) -> Result<String> {
     Ok(versions(conn)?.1)
 }
 
-/// What the header needs, read without counting the
-/// tables themselves.
-pub fn status_counts(conn: &Connection) -> Result<(i64, i64, String)> {
-    let acts: i64 = conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get(0))?;
-    let accounts: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
-    let synced = bagholder_store::tables::get_meta(conn, "synced_at", "")?;
-    Ok((acts, accounts, synced))
-}

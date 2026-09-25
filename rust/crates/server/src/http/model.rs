@@ -297,30 +297,46 @@ async fn data_clear(State(state): State<AppState>, Body(what): Body<Clear>) -> A
     .await
 }
 
-/// One trade's journal entry. A field left out is cleared, as the page sends all three.
+/// One trade's journal entry, whole: the page sends all three fields.
 #[derive(Deserialize, Default, TS)]
-#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct JournalEntryRequest {
-    #[serde(deserialize_with = "trimmed")]
-    id: Option<String>,
-    #[serde(flatten)]
-    #[ts(flatten)]
-    entry: bagholder_model::input::JournalEntry,
+    /// The trade's or the group's id, as the figures name it.
+    id: String,
+    thesis: String,
+    /// `A`, `B`, `C`, `F`, or empty for none.
+    grade: String,
+    tags: Vec<String>,
 }
 
-/// `POST /api/journal`.
+/// `POST /api/journal`: written to the book; the page hears it on its stream.
 #[derive(Serialize, TS)]
 pub struct JournalAnswer {
+    #[ts(type = "true")]
     ok: bool,
-    journal: bagholder_model::input::Journal,
 }
 
 async fn journal(State(state): State<AppState>, Body(e): Body<JournalEntryRequest>) -> Api<JournalAnswer> {
-    let id = e.id.unwrap_or_default();
-    if id.trim().is_empty() {
+    let id = e.id.trim().to_string();
+    if id.is_empty() {
         return Err(ApiError::BadRequest("id required".into()));
     }
-    with_store(&state, move |conn| Ok(JournalAnswer { ok: true, journal: bagholder_store::admin::save_journal_entry(conn, &id, Some(&e.entry))? })).await
+    let grade = match e.grade.trim() {
+        "" => None,
+        g => Some(bagholder_core::journal::Grade::parse(g).map_err(|err| ApiError::BadRequest(format!("grade {g:?}: {err}")))?),
+    };
+    let entry = bagholder_core::journal::JournalEntry { thesis: e.thesis, grade, tags: e.tags.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect() };
+    let app = state.app;
+    blocking(move || -> Result<JournalAnswer, ApiError> {
+        let f = app.figures.get().ok_or_else(|| ApiError::Failed("the figures are not open".into()))?;
+        match f.write_journal(&id, &entry, bagholder_core::jiff::Timestamp::now()) {
+            Ok(_) => Ok(JournalAnswer { ok: true }),
+            Err(crate::figures::JournalRefused::Unknown(id)) => Err(ApiError::NotFound(format!("no trade {id}"))),
+            Err(crate::figures::JournalRefused::Failed(e)) => Err(ApiError::Failed(e)),
+        }
+    })
+    .await?
+    .map(Json)
 }
 
 #[derive(Deserialize, Default, TS)]

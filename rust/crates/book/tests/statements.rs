@@ -72,3 +72,25 @@ fn a_move_s_two_sides_are_linked_as_stated() {
     f.book.link_transfer(&o, &i).unwrap();
     assert_eq!(f.book.transfer_links().unwrap(), vec![(o, i)]);
 }
+
+#[test]
+fn what_an_account_can_borrow_is_the_newest_statement_an_amount_or_why_not() {
+    let f = Fixture::new();
+    let a = f.account(&["margin-1"]);
+    assert!(f.book.stated(a).unwrap().buying_power.is_none(), "nothing stated is nothing, not zero");
+    let r = f.book.broker_read(f.connection, "balances", t0()).unwrap();
+    f.book.store_buying_power(a, at("2026-09-23T10:00:00Z"), &Ok(cad("1500.25")), &r).unwrap();
+    assert_eq!(f.book.stated(a).unwrap().buying_power, Some((at("2026-09-23T10:00:00Z"), Ok(cad("1500.25")))));
+    f.book.store_buying_power(a, at("2026-09-24T10:00:00Z"), &Err("UnavailableSecurities (2 securities)".into()), &r).unwrap();
+    assert_eq!(f.book.stated(a).unwrap().buying_power, Some((at("2026-09-24T10:00:00Z"), Err("UnavailableSecurities (2 securities)".to_string()))));
+}
+
+#[test]
+fn a_part_s_last_read_is_the_newest_of_its_reads() {
+    let f = Fixture::new();
+    assert_eq!(f.book.last_read(f.connection, "accounts").unwrap(), None);
+    f.book.broker_read(f.connection, "accounts", at("2026-09-23T20:00:00Z")).unwrap();
+    f.book.broker_read(f.connection, "accounts", at("2026-09-24T20:00:00Z")).unwrap();
+    f.book.broker_read(f.connection, "cash", at("2026-09-25T20:00:00Z")).unwrap();
+    assert_eq!(f.book.last_read(f.connection, "accounts").unwrap(), Some(at("2026-09-24T20:00:00Z")));
+}

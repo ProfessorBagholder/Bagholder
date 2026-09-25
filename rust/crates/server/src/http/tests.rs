@@ -92,7 +92,11 @@ fn test_every_answer_is_private_and_every_failure_has_one_shape() {
         assert_eq!(json_of(from_the_page(Method::GET, "/api/trade?id=none-such", None)).await, (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no such trade"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/filings?symbol=%20", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol required"})));
         assert_eq!(json_of(from_the_page(Method::GET, "/api/filings/doc?symbol=QNC", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "symbol and id required"})));
-        assert_eq!(json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"thesis":"x"}"#))).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "id required"})));
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/journal", None)).await, (StatusCode::BAD_REQUEST, json!({"ok": false, "error": "id required"})));
+        let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"id":"x","thesis":"x"}"#))).await;
+        assert_eq!((code, &body["ok"]), (StatusCode::BAD_REQUEST, &json!(false)), "the page sends the whole entry");
+        let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"id":"no-such","thesis":"","grade":"","tags":[]}"#))).await;
+        assert_eq!((code, body), (StatusCode::NOT_FOUND, json!({"ok": false, "error": "no trade no-such"})));
 
         let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some("{not json"))).await;
         assert_eq!(code, StatusCode::BAD_REQUEST);
@@ -108,9 +112,24 @@ fn test_a_write_with_no_body_is_a_write_with_nothing_to_say() {
     runtime().block_on(async {
         let (code, body) = json_of(from_the_page(Method::POST, "/api/notifications/read", None)).await;
         assert_eq!((code, &body["ok"]), (StatusCode::OK, &json!(true)));
-        let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(r#"{"id":"t1","grade":"A","tags":["x"],"thesis":"why"}"#))).await;
-        assert_eq!(code, StatusCode::OK);
-        assert_eq!(body["journal"]["t1"]["grade"], json!("A"));
+        // a trade of the figures, by its id: its journal kept in the book, and the figures' trade carrying it
+        let a = app();
+        let f = a.figures.get().unwrap();
+        let book = f.book().unwrap();
+        let names = f.names().unwrap();
+        let base = app().base().unwrap();
+        let doc = f.read(|e| crate::wire::build::build(e, &names, &Default::default(), &base)).unwrap();
+        let id = doc.trades[0].id.clone();
+        let (code, body) = json_of(from_the_page(Method::POST, "/api/journal", Some(&format!(r#"{{"id":"{id}","grade":"A","tags":["x", " "],"thesis":"why"}}"#)))).await;
+        assert_eq!((code, body), (StatusCode::OK, json!({"ok": true})));
+        let subject = bagholder_core::journal::JournalSubject::Trade(bagholder_core::TradeId::parse(&id).unwrap());
+        let kept = book.journal(subject).unwrap().unwrap();
+        assert_eq!((kept.thesis.as_str(), kept.grade.map(|g| g.as_str()), kept.tags), ("why", Some("A"), vec!["x".to_string()]));
+        let doc = f.read(|e| crate::wire::build::build(e, &names, &Default::default(), &base)).unwrap();
+        let t = doc.trades.iter().find(|t| t.id == id).unwrap();
+        assert_eq!((t.grade.as_str(), t.thesis.as_str()), ("A", "why"));
+        let (code, _) = json_of(from_the_page(Method::POST, "/api/journal", Some(&format!(r#"{{"id":"{id}","grade":"Z","tags":[],"thesis":""}}"#)))).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "a grade that is not one");
     });
 }
 

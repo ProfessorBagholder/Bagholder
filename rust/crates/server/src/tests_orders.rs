@@ -120,8 +120,10 @@ fn setup() -> MutexGuard<'static, ()> {
         json!({"id": "sec-s-ca", "symbol": "QNC.TO", "name": "Quantum Emotion Corp", "primaryExchange": "TSX-V", "primaryMic": "XTSX", "currency": "CAD", "underlyingId": null}),
     ]), &now_iso()).unwrap();
     bagholder_store::tables::replace_margin(&c, &typed_rows(&[json!({"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"})]), &now_iso()).unwrap();
+    crate::tests_common::order_accounts_in_book();
     g
 }
+
 
 fn ticket(over: Value) -> Value {
     let mut body = json!({"symbol": "QNC", "securityId": "sec-s-us", "accountId": "acct-margin", "side": "BUY", "type": "LIMIT", "tif": "DAY",
@@ -154,8 +156,9 @@ fn sent_order() -> String {
 #[test]
 fn test_tradable_accounts_are_open_self_directed_securities_accounts() {
     let _g = setup();
-    let accts = o::order_accounts(&app());
-    let ids: Vec<String> = accts.iter().map(|a| st(a, "id")).collect();
+    let accts = o::order_accounts(&app()).unwrap();
+    let mut ids: Vec<String> = accts.iter().map(|a| st(a, "id")).filter(|i| i.starts_with("acct-")).collect();
+    ids.sort();
     assert_eq!(ids, ["acct-margin", "acct-tfsa"], "crypto, managed and closed accounts are not offered");
     let m: HashMap<String, Value> = accts.iter().map(|a| (st(a, "id"), json!(a.margin))).collect();
     assert!(crate::app::truthy(m.get("acct-margin")));
@@ -163,13 +166,25 @@ fn test_tradable_accounts_are_open_self_directed_securities_accounts() {
 }
 
 #[test]
-fn test_a_symbol_resolves_to_its_share_listing_before_an_option_contract() {
+fn test_a_listing_resolves_from_the_book_by_its_id_or_the_symbol_it_is_known_by() {
     let _g = setup();
-    assert_eq!(st(&o::resolve_security(&app(), "QNC", "").unwrap(), "id"), "sec-s-us");
-    assert_eq!(st(&o::resolve_security(&app(), "qnc.to", "").unwrap(), "id"), "sec-s-ca");
-    assert_eq!(st(&o::resolve_security(&app(), "", "sec-s-ca").unwrap(), "id"), "sec-s-ca");
-    assert!(o::resolve_security(&app(), "NOPE", "").is_none());
-    assert_eq!(st(&o::resolve_security(&app(), "NVDA", "sec-nvda").unwrap(), "id"), "sec-nvda");
+    let resolve = |sym: &str, sid: &str| o::resolve_security(&app(), sym, sid).unwrap();
+    // a holding of the recorded month, as the book names it
+    let a = app();
+    let f = a.figures.get().unwrap();
+    let names = f.names().unwrap();
+    let (sid, symbol, currency) = f
+        .read(|e| {
+            let p = e.figures().positions.iter().find(|p| p.kind == bagholder_core::instrument::InstrumentKind::Security).unwrap();
+            let info = &e.inputs().ledger.instruments[&p.instrument];
+            (names.security[&p.instrument].clone(), info.current_name().unwrap().symbol.clone(), info.instrument.currency.as_str().to_string())
+        })
+        .unwrap();
+    let by_symbol = resolve(&symbol.to_lowercase(), "").unwrap();
+    assert_eq!((st(&by_symbol, "id"), st(&by_symbol, "symbol"), st(&by_symbol, "currency")), (sid.clone(), symbol.clone(), currency), "the book's record of it, whatever the case typed");
+    assert_eq!(st(&resolve("", &sid).unwrap(), "symbol"), symbol, "by the broker's id");
+    assert!(resolve("NOPE", "").is_none());
+    assert_eq!(st(&resolve("NVDA", "sec-nvda").unwrap(), "id"), "sec-nvda", "an id the book does not hold is taken as given");
 }
 
 #[test]
@@ -200,6 +215,7 @@ fn search_answer() -> Value {
         {"id": "sec-s-baig", "buyable": true, "status": "TRADING", "currency": "USD", "securityType": "EXCHANGE_TRADED_FUND", "wsTradeEligible": true, "stock": {"symbol": "BAIG", "name": "2X Long Bbai Daily ETF", "primaryExchange": "NASDAQ", "primaryMic": "XNAS"}},
         {"id": "sec-s-qnc-ca", "buyable": true, "status": "TRADING", "currency": "CAD", "securityType": "EQUITY", "wsTradeEligible": true, "stock": {"symbol": "QNC.TO", "name": "Quantum Emotion Corp", "primaryExchange": "TSX-V", "primaryMic": "XTSX"}},
         {"id": "sec-o-qnc", "buyable": true, "status": "TRADING", "currency": "USD", "securityType": "OPTION", "stock": {"symbol": "QNC", "name": "", "primaryExchange": "NYSE"}},
+        {"id": "sec-s-never", "buyable": true, "status": "TRADING", "currency": "USD", "securityType": "EQUITY", "wsTradeEligible": true, "stock": {"symbol": "NEVERHELD", "name": "Never Held Inc", "primaryExchange": "NYSE", "primaryMic": "XNYS"}},
     ]}})
 }
 
@@ -226,26 +242,25 @@ fn test_ticket_on_a_never_held_symbol_asks_wealthsimple_once_and_keeps_the_listi
             Ok(search_answer())
         }
         "FetchSecuritiesSummary" => {
-            assert_eq!(vars["ids"], json!(["sec-s-bbai"]), "the quote is asked for the id the search gave");
-            Ok(json!({"securities": [{"id": "sec-s-bbai", "buyable": true, "sellable": true, "wsTradeEligible": true, "securityType": "EQUITY", "currency": "USD",
-                "stock": {"name": "BigBear.ai Holdings Inc", "symbol": "BBAI", "primaryExchange": "NYSE"},
+            assert_eq!(vars["ids"], json!(["sec-s-never"]), "the quote is asked for the id the search gave");
+            Ok(json!({"securities": [{"id": "sec-s-never", "buyable": true, "sellable": true, "wsTradeEligible": true, "securityType": "EQUITY", "currency": "USD",
+                "stock": {"name": "BigBear.ai Holdings Inc", "symbol": "NEVERHELD", "primaryExchange": "NYSE"},
                 "quoteV2": {"__typename": "EquityQuote", "ask": 3.02, "bid": 3.0, "currency": "USD", "price": 3.01, "previousBaseline": 2.9, "marketStatus": "OPEN", "askSize": 5, "bidSize": 7}}]}))
         }
-        "FetchSecurityMarketData" => Ok(json!({"security": {"id": "sec-s-bbai", "allowedOrderSubtypes": ["MARKET", "LIMIT"], "marginRates": {"clientMarginRate": 0.5}}})),
+        "FetchSecurityMarketData" => Ok(json!({"security": {"id": "sec-s-never", "allowedOrderSubtypes": ["MARKET", "LIMIT"], "marginRates": {"clientMarginRate": 0.5}}})),
         "FetchTradingBalanceBuyingPower" => Ok(json!({"account": {"financials": {"current": {"tradingBalanceViewV2": {"buyingPower": {"quantity": 9000.0, "currency": "USD"}, "cash": {"quantity": 100.0, "currency": "USD"}}}}}})),
         _ => panic!("{}", op),
     });
     set_session(Some(tok()));
-    let r = jv(&o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE"));
+    let r = jv(&o::ticket_quote(&app(), "NEVERHELD", "", "acct-margin", "NYSE"));
     assert_eq!(r["ok"], json!(true), "{}", r);
-    assert_eq!(st(&r["quote"], "securityId"), "sec-s-bbai");
-    let again = jv(&o::ticket_quote(&app(), "BBAI", "", "acct-margin", "NYSE"));
+    assert_eq!(st(&r["quote"], "securityId"), "sec-s-never");
+    let again = jv(&o::ticket_quote(&app(), "NEVERHELD", "", "acct-margin", "NYSE"));
     unpatch();
     assert_eq!(again["ok"], json!(true));
-    assert_eq!(*searches.lock().unwrap(), vec!["BBAI".to_string()], "Wealthsimple's search is asked once");
-    let stored: Vec<bagholder_model::securities::Security> = bagholder_store::admin::list_securities(&conn()).unwrap().into_iter().filter(|x| x.id == "sec-s-bbai").collect();
-    assert_eq!((stored[0].symbol.clone(), stored[0].primary_exchange.clone(), stored[0].currency.clone()), ("BBAI".into(), "NYSE".into(), "USD".into()));
-    assert_eq!(st(&o::resolve_security(&app(), "BBAI", "").unwrap(), "id"), "sec-s-bbai", "a book symbol from now on");
+    assert_eq!(*searches.lock().unwrap(), vec!["NEVERHELD".to_string()], "Wealthsimple's search is asked once");
+    let kept = o::resolve_security(&app(), "NEVERHELD", "").unwrap().expect("known while the app runs");
+    assert_eq!(st(&kept, "id"), "sec-s-never", "the search is not asked again");
 }
 
 #[test]
@@ -282,10 +297,9 @@ fn test_collateral_account_names_the_margin_account_it_backs() {
     bagholder_store::tables::replace_accounts(&conn(), &slim_v).unwrap();
     let kept: HashMap<String, bagholder_store::broker::Account> = bagholder_store::tables::accounts(&conn()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
     assert_eq!(kept["acct-tfsa"].margin_account_id, "acct-margin", "the link survives the store");
-    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app()).into_iter().map(|a| (a.id.clone(), a)).collect();
+    let by_id: HashMap<String, o::OrderAccount> = o::order_accounts(&app()).unwrap().into_iter().map(|a| (a.id.clone(), a)).collect();
     assert_eq!(by_id["acct-margin"].margin_account_id, "acct-margin");
     assert_eq!(by_id["acct-tfsa"].margin_account_id, "acct-margin");
-    assert_eq!(by_id["acct-rrsp"].margin_account_id, "");
 }
 
 fn qnc_summary() -> Value {
@@ -307,7 +321,7 @@ fn test_ticket_quote_on_a_collateral_account_carries_the_margin_it_backs() {
         _ => panic!("{}", op),
     });
     set_session(Some(tok()));
-    let r = jv(&o::ticket_quote(&app(), "QNC", "", "acct-tfsa", ""));
+    let r = jv(&o::ticket_quote(&app(), "QNC", "sec-s-us", "acct-tfsa", ""));
     unpatch();
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(n(&r, "cash"), 500.0);
@@ -333,18 +347,24 @@ fn test_ticket_quote_answers_with_everything_the_panel_shows() {
     set_session(Some(tok()));
     // Orders are live by default; the test process runs with BAGHOLDER_DRY_ORDERS=1, so the switch is set here.
     set_live(Some(true));
-    let r = jv(&o::ticket_quote(&app(), "QNC", "", "acct-margin", ""));
+    let r = jv(&o::ticket_quote(&app(), "QNC", "sec-s-us", "acct-margin", ""));
     assert_eq!(r["ok"], json!(true), "{}", r);
     assert_eq!(st(&r["quote"], "symbol"), "QNC");
     assert_eq!(r["orderTypes"], json!(["MARKET", "LIMIT", "STOP_LIMIT"]));
     assert_eq!(n(&r, "marginRate"), 0.5);
     assert_eq!(n(&r, "marginAvailable"), 12680.45);
     assert_eq!((n(&r, "buyingPower"), n(&r, "cash")), (9000.0, 100.0));
-    let ids: Vec<String> = r["accounts"].as_array().unwrap().iter().map(|a| st(a, "id")).collect();
-    assert_eq!(ids, ["acct-margin", "acct-tfsa"]);
+    // the recorded month's own account, and the fixture's that can trade
+    let names: Vec<String> = r["accounts"].as_array().unwrap().iter().map(|a| st(a, "name")).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "by name");
+    let mut ids: Vec<String> = r["accounts"].as_array().unwrap().iter().map(|a| st(a, "id")).collect();
+    ids.sort();
+    assert_eq!(ids, ["acct-margin", "acct-tfsa", "anon-tfsa-1"]);
     assert_eq!(r["live"], json!(true));
     set_session(None);
-    assert_eq!(st(&o::ticket_quote(&app(), "QNC", "", "acct-margin", ""), "error"), "Not connected.");
+    assert_eq!(st(&o::ticket_quote(&app(), "QNC", "sec-s-us", "acct-margin", ""), "error"), "Not connected.");
     unpatch();
     assert!(st(&o::ticket_quote(&app(), "NOPE", "", "acct-margin", ""), "error").contains("No listing stored"));
 }
@@ -648,28 +668,6 @@ fn test_one_orders_read_after_a_send_does_not_count_as_a_check() {
 // StopFillBooksLocallyTest
 // ---------------------------------------------------------------------------
 
-fn long(cid: &str, qty: f64, price: f64) {
-    let date = "2026-09-01";
-    apply_ws(&[json!({
-        "canonicalId": cid, "occurredAt": format!("{}T14:00:00Z", date), "transactionDate": date, "settlementDate": date,
-        "accountId": "acct-tfsa", "bookId": "acct-tfsa", "fifoId": "acct-tfsa", "accountType": "TFSA",
-        "activityType": "Trade", "activitySubType": "BUY", "symbol": "QNC", "name": "QNC", "currency": "USD",
-        "quantity": qty, "unitPrice": price, "commission": 0.0, "netCashAmount": -(qty * price), "category": "trade",
-        "source": "wealthsimple",
-    })]);
-}
-
-fn ws_sell(cid: &str, qty: f64, price: f64, symbol: &str, sub: &str, atype: &str) -> Value {
-    let date = "2026-09-10";
-    json!({
-        "canonicalId": cid, "occurredAt": format!("{}T20:47:00Z", date), "transactionDate": date, "settlementDate": date,
-        "accountId": "acct-tfsa", "bookId": "acct-tfsa", "fifoId": "acct-tfsa", "accountType": "TFSA",
-        "activityType": atype, "activitySubType": sub, "symbol": symbol, "name": symbol, "currency": "USD",
-        "quantity": -qty, "unitPrice": price, "commission": 0.0, "netCashAmount": qty * price, "category": "trade",
-        "source": "wealthsimple",
-    })
-}
-
 fn place_live(oid: &str, symbol: &str, security_id: &str, qty: f64, typ: &str, role: &str) -> String {
     let order: so::Order = serde_json::from_value(json!({
         "id": oid, "accountId": "acct-tfsa", "account": "TFSA", "securityId": security_id, "symbol": symbol,
@@ -691,105 +689,43 @@ fn fill(oid: &str, filled: f64, avg: f64, submitted: Option<f64>) -> Value {
     jv(&r)
 }
 
-fn booked(symbol: &str) -> Vec<Value> {
-    activities().into_iter().filter(|a| st(a, "source") == "bagholder-fill" && st(a, "symbol") == symbol).collect()
+/// Whether a pull was asked since the last look, clearing it.
+fn pull_asked() -> bool {
+    app().pull_asked.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
 #[test]
-fn test_a_filled_order_is_booked_as_one_local_sell_that_closes_the_position() {
+fn test_a_filled_order_asks_for_wealthsimple_s_own_row_once() {
     let _g = setup();
-    long("ws-buy-1", 5.0, 1.40);
+    pull_asked();
     let oid = place_live("order-stop-1", "QNC", "sec-s-us", 5.0, "STOP", "stop");
     let r = fill(&oid, 5.0, 1.6374, None);
     assert_eq!(n(&r, "read"), 1.0, "{}", r);
-    let bk = booked("QNC");
-    assert_eq!(bk.len(), 1, "exactly one local activity for the fill");
-    let b = &bk[0];
-    assert_eq!((st(b, "symbol"), st(b, "accountId"), n(b, "quantity"), n(b, "unitPrice")), ("QNC".into(), "acct-tfsa".into(), -5.0, 1.6374));
-    assert_eq!(bagholder_store::activities::trade_side(&serde_json::from_value(b.clone()).unwrap()), "SELL");
-    assert_eq!(st(b, "transactionDate"), "2026-09-10");
-    assert!(b.get("canonicalId").map_or(true, |v| v.is_null()), "a local row, not a fabricated Wealthsimple row");
-    assert!(!bagholder_store::activities::looks_like_homemade_id(&st(b, "id")));
-    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
-    assert!(res.open.is_empty(), "the 5 shares are gone once the fill is on the book");
+    assert!(pull_asked(), "the fill is pulled as Wealthsimple records it");
     assert_eq!(n(&get_order(&oid), "fillBookedQty"), 5.0);
-}
-
-#[test]
-fn test_the_real_wealthsimple_sell_collapses_with_the_booked_row() {
-    let _g = setup();
-    long("ws-buy-1", 5.0, 1.40);
-    let oid = place_live("order-stop-2", "QNC", "sec-s-us", 5.0, "STOP", "stop");
-    fill(&oid, 5.0, 1.6374, None);
-    let before = bagholder_store::activities::activity_count(&conn()).unwrap();
-    assert_eq!(booked("QNC").len(), 1);
-    let result = apply_ws(&[ws_sell("ws-sell-9", 5.0, 1.6374, "QNC", "SELL", "Trade")]);
-    assert_eq!((result.linked, result.inserted), (1, 0), "the synced sell links to the booked row, none inserted");
-    assert_eq!(bagholder_store::activities::activity_count(&conn()).unwrap(), before);
-    let rows: Vec<Value> = activities().into_iter().filter(|a| bagholder_store::activities::trade_side(&serde_json::from_value(a.clone()).unwrap()) == "SELL" && st(a, "symbol") == "QNC").collect();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(st(&rows[0], "canonicalId"), "ws-sell-9");
-    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
-    assert!(res.open.is_empty());
-    assert_eq!(res.closed.iter().map(|t| t.quantity).sum::<f64>(), 5.0);
-    apply_ws(&[ws_sell("ws-sell-9", 5.0, 1.6374, "QNC", "SELL", "Trade")]);
-    assert_eq!(bagholder_store::activities::activity_count(&conn()).unwrap(), before);
-}
-
-#[test]
-fn test_re_reading_the_same_fill_books_nothing_more() {
-    let _g = setup();
-    long("ws-buy-1", 5.0, 1.40);
-    let oid = place_live("order-stop-3", "QNC", "sec-s-us", 5.0, "STOP", "stop");
-    fill(&oid, 5.0, 1.6374, None);
-    assert_eq!(booked("QNC").len(), 1);
+    assert!(booked_rows().is_empty(), "no trade of the app's own making");
+    // the same fill read again asks nothing more
     update_order(&oid, json!({"status": "sent"}));
     fill(&oid, 5.0, 1.6374, None);
-    assert_eq!(booked("QNC").len(), 1, "the durable fill_booked_qty marker prevents a duplicate");
+    assert!(!pull_asked(), "the durable fill_booked_qty marker asks once");
 }
 
 #[test]
-fn test_a_partial_fill_reduces_the_position_it_does_not_close_it() {
+fn test_a_fill_that_grows_asks_again_for_what_filled_beyond() {
     let _g = setup();
-    long("ws-buy-1", 10.0, 1.40);
+    pull_asked();
     let oid = place_live("order-stop-4", "QNC", "sec-s-us", 10.0, "STOP", "stop");
     fill(&oid, 5.0, 1.6374, Some(10.0));
-    let bk = booked("QNC");
-    assert_eq!(bk.len(), 1);
-    assert_eq!(n(&bk[0], "quantity"), -5.0, "the filled quantity, never the ordered quantity");
-    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
-    assert_eq!(res.open.len(), 1);
-    assert_eq!(res.open[0].qty, 5.0, "five shares still held");
+    assert!(pull_asked());
+    assert_eq!(n(&get_order(&oid), "fillBookedQty"), 5.0, "the filled quantity, never the ordered quantity");
+    update_order(&oid, json!({"status": "sent"}));
+    fill(&oid, 10.0, 1.6374, Some(10.0));
+    assert!(pull_asked());
+    assert_eq!(n(&get_order(&oid), "fillBookedQty"), 10.0);
 }
 
-/// Pins a known mistake of the old app (`docs/old-app-mistakes.md`: every
-/// contract taken to be 100 shares); goes with the old server at the switch.
-#[test]
-fn test_known_wrong_an_option_fill_nets_with_a_fixed_hundred_times_multiplier() {
-    let _g = setup();
-    let sym = "QNC 16JAN26 5.00 CALL";
-    assert!(bagholder_model::symbols::is_option_symbol(sym));
-    apply_ws(&[json!({
-        "canonicalId": "ws-opt-buy", "occurredAt": "2026-09-01T14:00:00Z", "transactionDate": "2026-09-01",
-        "settlementDate": "2026-09-01", "accountId": "acct-tfsa", "bookId": "acct-tfsa", "fifoId": "acct-tfsa",
-        "accountType": "TFSA", "activityType": "OPTIONS_BUY", "activitySubType": "BUYTOOPEN", "symbol": sym,
-        "name": sym, "currency": "USD", "quantity": 2, "unitPrice": 1.00, "commission": 0.0,
-        "netCashAmount": -200.0, "category": "trade", "source": "wealthsimple",
-    })]);
-    let oid = place_live("order-opt-1", sym, "sec-o-1", 2.0, "LIMIT", "entry");
-    fill(&oid, 2.0, 1.50, None);
-    let bk = booked(sym);
-    assert_eq!(bk.len(), 1);
-    let b = &bk[0];
-    assert_eq!((n(b, "quantity"), n(b, "unitPrice")), (-2.0, 1.50));
-    assert!((n(b, "netCashAmount") - 300.0).abs() < 1e-7, "the 100x multiplier is in the cash");
-    let res = bagholder_model::fifo::match_fifo(&activities().iter().map(|a| serde_json::from_value(a.clone()).unwrap()).collect::<Vec<_>>());
-    assert!(res.open.is_empty(), "the two contracts are closed");
-    assert!((res.closed.iter().map(|t| t.pnl).sum::<f64>() - 100.0).abs() < 1e-7);
-    let before = bagholder_store::activities::activity_count(&conn()).unwrap();
-    let result = apply_ws(&[ws_sell("ws-opt-sell", 2.0, 1.50, sym, "SELLTOCLOSE", "OPTIONS_SELL")]);
-    assert_eq!((result.linked, result.inserted), (1, 0));
-    assert_eq!(bagholder_store::activities::activity_count(&conn()).unwrap(), before);
+fn booked_rows() -> Vec<Value> {
+    activities().into_iter().filter(|a| st(a, "source") == "bagholder-fill").collect()
 }
 
 // ---------------------------------------------------------------------------

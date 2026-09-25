@@ -73,3 +73,33 @@ pub fn pulled_book(home: &std::path::Path) {
     let r = bagholder_broker::pull::pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at).unwrap();
     assert!(r.failures.is_empty(), "{:?}", r.failures);
 }
+
+/// The same accounts in the book the ticket reads, beside the shared test book's
+/// own month: each added once, the margin account's buying power stated again.
+pub fn order_accounts_in_book() {
+    use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType, Registration};
+    use bagholder_core::{Broker, Currency, Dec, Money};
+    let a = app();
+    let f = a.figures.get().unwrap();
+    let book = f.book().unwrap();
+    let now = bagholder_core::jiff::Timestamp::now();
+    let ws = Broker::named("wealthsimple");
+    let conn = book.connections().unwrap().into_iter().find(|c| c.broker == ws).unwrap().id;
+    let accounts = [
+        ("acct-margin", "Trading", AccountKind::Margin, Registration::Unregistered, false, AccountStatus::Open),
+        ("acct-tfsa", "TFSA", AccountKind::Cash, Registration::Tfsa, false, AccountStatus::Open),
+        ("acct-crypto", "Crypto", AccountKind::Crypto, Registration::Unregistered, false, AccountStatus::Open),
+        ("acct-old", "Old", AccountKind::Cash, Registration::Rrsp, false, AccountStatus::Closed),
+        ("acct-managed", "Managed", AccountKind::Cash, Registration::Tfsa, true, AccountStatus::Open),
+    ];
+    for (key, nickname, kind, registration, managed, status) in accounts {
+        let r = AccountRef::new(ws.clone(), key);
+        if book.account_by_ref(&r).unwrap().is_none() {
+            book.add_account(conn, &[r], &AccountType::Known { kind, registration, managed, joint: false }, status, Some(nickname), now).unwrap();
+        }
+    }
+    let margin = book.account_by_ref(&AccountRef::new(ws.clone(), "acct-margin")).unwrap().unwrap();
+    let read = book.broker_read(conn, "buying-power", now).unwrap();
+    book.store_buying_power(margin, now, &Ok(Money::new(Dec::parse("12680.45").unwrap(), Currency::CAD)), &read).unwrap();
+    f.record_changed(now).unwrap();
+}

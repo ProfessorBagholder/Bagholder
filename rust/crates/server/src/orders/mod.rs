@@ -122,6 +122,9 @@ pub struct OrdersState {
     /// What a bracket has already logged once, so it is not logged again.
     pub(crate) bracket_said: Mutex<HashSet<String>>,
     pub(crate) stop_allowed_cache: Mutex<HashMap<String, bool>>,
+    /// Listings the book does not hold, as Wealthsimple's search found them, by
+    /// symbol: a ticket on one asks the search once while the app runs.
+    pub(crate) found: Mutex<HashMap<String, bagholder_model::securities::Security>>,
 }
 
 #[cfg(test)]

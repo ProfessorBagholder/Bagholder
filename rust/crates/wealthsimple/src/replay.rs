@@ -25,6 +25,7 @@ pub struct Replay {
     conversions: BTreeMap<String, Value>,
     transfers: BTreeMap<String, Value>,
     cards: BTreeMap<String, Value>,
+    buying_power: BTreeMap<String, Value>,
     positions: BTreeMap<(String, String), Value>,
     /// The balances replies' accounts, each as Wealthsimple sent it.
     balances: Vec<Value>,
@@ -45,6 +46,7 @@ impl Replay {
             conversions: BTreeMap::new(),
             transfers: BTreeMap::new(),
             cards: BTreeMap::new(),
+            buying_power: BTreeMap::new(),
             positions: BTreeMap::new(),
             balances: vec![],
             history: BTreeMap::new(),
@@ -133,6 +135,8 @@ impl Replay {
                         }
                     }
                 }
+            } else if let Some((id, a)) = data.obj("account").ok().filter(|a| a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.field("marginV3")).is_ok()).and_then(|a| a.text("id").ok().map(|id| (id, a))) {
+                r.buying_power.insert(id.to_string(), a.value().clone());
             } else if let Ok(a) = data.obj("account") {
                 if let (Ok(id), Ok(edges)) = (a.text("id"), a.obj("financials").and_then(|f| f.obj("historicalDaily")).and_then(|h| h.list("edges"))) {
                     r.history.entry(id.to_string()).or_default().extend(edges.into_iter().filter_map(|e| e.obj("node").ok().map(|n| n.value().clone())));
@@ -190,6 +194,10 @@ impl Source for Replay {
     fn balances(&mut self, _accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
         Ok(self.balances.clone())
+    }
+    fn buying_power(&mut self, account: &str) -> Answer<Value> {
+        self.asked.push(format!("buying power {account}"));
+        self.buying_power.get(account).cloned().ok_or_else(|| Failure::Refused(format!("no buying power of {account} in the capture")))
     }
     fn history(&mut self, account: &str, _from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked.push(format!("history {account}"));

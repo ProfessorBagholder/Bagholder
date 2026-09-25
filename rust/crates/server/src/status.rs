@@ -64,7 +64,8 @@ pub struct StatusAnswer {
 
 pub fn status(app: &Arc<App>) -> Status {
     let conn = app.open().ok();
-    let (acts, accounts, synced) = conn.as_ref().and_then(|c| versions::status_counts(c).ok()).unwrap_or((0, 0, String::new()));
+    // the book's counts, as the figures hold them
+    let (acts, accounts) = app.figures.get().and_then(|f| f.read(|e| (e.inputs().ledger.transactions.len() as i64, e.inputs().ledger.accounts.len() as i64))).unwrap_or((0, 0));
     let upd = update::update_status(app);
     let sess = session::load_session(app);
     let notify_status = conn.as_ref().and_then(|c| notify::status(c).ok()).unwrap_or_default();
@@ -79,7 +80,7 @@ pub fn status(app: &Arc<App>) -> Status {
         ok: true,
         connected,
         email,
-        last_sync: if st.last_sync.is_empty() { synced } else { st.last_sync.clone() },
+        last_sync: st.last_sync.clone(),
         activity_count: acts,
         account_count: accounts,
         capturing: st.capturing,

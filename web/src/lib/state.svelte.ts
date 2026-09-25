@@ -103,12 +103,10 @@ export async function saveJournal(id: string, patch: { thesis?: string; grade?: 
       }
   }
   const body = { id, thesis: (t as { thesis?: string }).thesis ?? '', tags: (t as { tags?: string[] }).tags ?? [], grade: (t as { grade?: string }).grade ?? '' }
-  try {
-    const d = await call('POST /api/journal', { body })
-    if (!d.ok) throw new Error('save failed')
-  } catch {
-    // said in the header, and the row put back as the server has it
-    flash('Could not save journal entry.', 'err')
+  const d = await call('POST /api/journal', { body })
+  if (!d.ok) {
+    // said in the header, with the server's reason, and the row put back as the server has it
+    flash('Could not save journal entry: ' + (d.error || 'no answer'), 'err')
     resync()
   }
 }

@@ -111,6 +111,38 @@ pub fn cash(accounts: &[Value]) -> Read<BTreeMap<String, BTreeMap<Currency, Dec>
     Ok(out)
 }
 
+/// What a margin account can borrow now, in CAD (`FetchAccountCurrentMarginBuyingPowerV2`'s
+/// `account`, of the account asked for): the amount where Wealthsimple states one, or
+/// why it cannot (`BuyingPowerMetricUnavailable`'s reason, with how many securities
+/// hold it back).
+pub fn buying_power(node: &Value, account: &str) -> Read<Result<Dec, String>> {
+    let n = Node::root(node);
+    let id = n.text("id")?;
+    if id != account {
+        return Err(n.field("id")?.mismatch(format!("the account {id}, not {account}, which was asked")));
+    }
+    let bp = n.obj("financials")?.obj("current")?.obj("marginV3")?.obj("trading")?.obj("buyingPower")?;
+    match bp.text("__typename")? {
+        "BuyingPowerMetricAvailable" => {
+            let total = bp.obj("total")?;
+            let currency = total.text("currency")?;
+            if currency != "CAD" {
+                return Err(total.field("currency")?.mismatch(format!("{currency}, where CAD was asked")));
+            }
+            Ok(Ok(total.dec_text("amount")?))
+        }
+        "BuyingPowerMetricUnavailable" => {
+            let reason = bp.obj("reason")?;
+            let why = reason.text("__typename")?;
+            Ok(Err(match reason.field("securities").ok().map(|s| s.as_list()).transpose()? {
+                Some(held) if !held.is_empty() => format!("{why} ({} securities)", held.len()),
+                _ => why.to_string(),
+            }))
+        }
+        other => Err(bp.field("__typename")?.mismatch(format!("{other} is neither available nor unavailable"))),
+    }
+}
+
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
 /// posted purchases less payments; `pending` is apart), of the card account
 /// asked for.

@@ -37,6 +37,9 @@ pub trait Source {
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value>;
     /// The balances replies' accounts.
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>>;
+    /// A margin account's `account` node of `FetchAccountCurrentMarginBuyingPowerV2`:
+    /// what it can borrow now, in CAD.
+    fn buying_power(&mut self, account: &str) -> Answer<Value>;
     /// An account's `historicalDaily` nodes from `from`.
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>>;
     /// How many requests have been sent.
@@ -413,6 +416,14 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             }
         }
         Ok(all.into_iter().filter(|(k, _)| accounts.contains(k)).collect())
+    }
+    fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>> {
+        let mut out = BTreeMap::new();
+        for a in accounts {
+            let node = self.source.buying_power(a)?;
+            out.insert(a.clone(), crate::read::buying_power(&node, a).map_err(mismatch)?);
+        }
+        Ok(out)
     }
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>> {
         let nodes = self.source.positions(account, day)?;

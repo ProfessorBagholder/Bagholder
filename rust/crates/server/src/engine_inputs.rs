@@ -99,7 +99,7 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
     let mut out = BTreeMap::new();
     for a in book.accounts().map_err(err)? {
         let s = book.stated(a.id).map_err(err)?;
-        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() {
+        if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.activity_read_at.is_none() && s.buying_power.is_none() {
             continue;
         }
         let mut b = bagholder_engine::input::BrokerAccount::default();
@@ -121,6 +121,12 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
             b.held = units;
         }
         b.activity_read_at = s.activity_read_at;
+        b.buying_power = match s.buying_power {
+            None => None,
+            Some((_, Ok(m))) if m.currency == Currency::CAD => Some(Ok(m.amount)),
+            Some((_, Ok(m))) => return Err(format!("account {} states what it can borrow in {}, not CAD", a.id, m.currency)),
+            Some((_, Err(why))) => Some(Err(why)),
+        };
         out.insert(a.id, b);
     }
     Ok(out)

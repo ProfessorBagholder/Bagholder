@@ -196,7 +196,13 @@ pub(crate) fn feed_order_row(app: &Arc<App>, node: &wire::FeedOrder) -> Order {
         Some(sec) => (sec.id.clone(), sec.stock.as_ref().map(|st| st.symbol.clone()).unwrap_or_default()),
         None => (String::new(), String::new()),
     };
-    let acct = order_accounts(app).into_iter().find(|a| a.id == node.canonical_account_id);
+    let acct = match order_accounts(app) {
+        Ok(a) => a.into_iter().find(|a| a.id == node.canonical_account_id),
+        Err(e) => {
+            log(&format!("bagholder orders: the accounts could not be read for an order found at Wealthsimple: {e}"));
+            None
+        }
+    };
     let security_id = if node.security_id.is_empty() { sec_id } else { node.security_id.clone() };
     let mut symbol = must(so::symbol_for_security(&db(app), &security_id));
     if symbol.is_empty() {
@@ -255,70 +261,25 @@ pub fn kick_orders_refresh(app: &Arc<App>) -> bool {
     true
 }
 
-/// Write a fill as a trade in the book, until the next sync brings Wealthsimple's own row
-/// for it. Only an order placed here, only what has filled beyond what was already
-/// booked, and only once -- the booked quantity is kept on the order.
+/// A fill read back of an order placed here: Wealthsimple's own row for it is
+/// pulled at once (`docs/plans/stage-3c-switch.md`, §3: the pull runs when an order
+/// is read back filled), so the trade reaches the book as the broker records it,
+/// never as the app's own arithmetic. Only what has filled beyond what was
+/// already asked for, and only once -- the quantity asked for is kept on the
+/// order. Whether a pull was asked.
 pub fn book_order_fill(app: &Arc<App>, order: &Order, upd: &Reading) -> bool {
     if order.source == Source::Wealthsimple || !order.side.is_set() {
         return false;
     }
-    if !bagholder_store::activities::is_real_account(&order.account_id) || order.security_id.is_empty() {
-        return false;
-    }
-    let symbol = order.symbol.trim().to_string();
-    if symbol.is_empty() {
-        return false;
-    }
     let filled = upd.filled_qty.or(order.filled_qty).unwrap_or(0.0);
-    let price = upd.avg_fill.or(order.avg_fill).unwrap_or(0.0);
-    if filled <= 0.0 || price <= 0.0 {
+    if filled <= 0.0 || order.fill_booked_qty.unwrap_or(0.0) + 1e-9 >= filled {
         return false;
     }
-    if order.fill_booked_qty.unwrap_or(0.0) + 1e-9 >= filled {
-        return false;
-    }
-    let fill_time = [&upd.last_filled_at, &upd.first_filled_at, &order.submitted_at].into_iter().find(|t| !t.is_empty()).cloned().unwrap_or_default();
-    let mut date = date_only(Some(&json!(fill_time)));
-    if date.is_empty() {
-        date = crate::app::today_utc();
-    }
-    let currency = [&order.currency, &upd.currency].into_iter().map(|c| c.trim().to_uppercase()).find(|c| !c.is_empty()).filter(|c| c == "CAD" || c == "USD").unwrap_or_else(|| "CAD".into());
-    let stored_accounts: Vec<bagholder_store::broker::Account> = must(bagholder_store::tables::accounts(&db(app)));
-    let accts = bagholder_ws::mapping::Accounts::from_stored(&stored_accounts);
-    let mult = bagholder_model::symbols::option_multiplier(&symbol);
-    let buy = order.side == Side::Buy;
-    let account_id = order.account_id.clone();
-    let fifo = accts.pool(&account_id);
-    let act = bagholder_store::activities::ActivityRow {
-        id: uuid4(),
-        occurred_at: date.clone(),
-        transaction_date: date.clone(),
-        settlement_date: date,
-        account_id: account_id.clone(),
-        book_id: account_id.clone(),
-        fifo_id: fifo,
-        account_type: bagholder_ws::mapping::account_type(&account_id, &accts),
-        activity_type: "Trade".into(),
-        activity_sub_type: order.side.as_str().to_string(),
-        description: format!("{} {} {} @ {}", if buy { "Buy" } else { "Sell" }, qty_text(filled), symbol, rp(Some(price))),
-        direction: if buy { "DEBIT" } else { "CREDIT" }.into(),
-        symbol: symbol.clone(),
-        name: symbol.clone(),
-        currency,
-        quantity: if buy { filled } else { -filled },
-        unit_price: price,
-        commission: 0.0,
-        net_cash_amount: if buy { -(filled * price * mult) } else { filled * price * mult },
-        category: "trade".into(),
-        balance: None,
-        security_id: if order.security_id.is_empty() { None } else { Some(order.security_id.clone()) },
-        source: "bagholder-fill".into(),
-        ..Default::default()
-    };
     let conn = db(app);
-    must(bagholder_store::activities::insert_local(&conn, &act, &uuid4));
     must(so::mark_order_fill_booked(&conn, &order.id, filled, &now_iso()));
-    log(&format!("bagholder orders: {} filled {} {} @ {} booked as a local trade until the next sync", order.id, qty_text(filled), symbol, rp(Some(price))));
+    app.pull_asked.store(true, Ordering::SeqCst);
+    app.events.signal();
+    log(&format!("bagholder orders: {} filled {}: Wealthsimple's row for it is pulled", order.id, qty_text(filled)));
     true
 }
 

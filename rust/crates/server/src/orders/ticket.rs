@@ -9,8 +9,6 @@ use super::*;
 
 pub const ORDER_EXEC_TYPES: [&str; 4] = ["MARKET", "LIMIT", "STOP", "STOP_LIMIT"];
 pub const ORDER_TIFS: [&str; 2] = ["DAY", "UNTIL_CANCEL"];
-pub(super) const ORDER_TRADABLE_TYPES: [&str; 1] = ["SELF_DIRECTED"];
-pub(super) const ORDER_UNTRADABLE_MARKERS: [&str; 3] = ["CRYPTO", "PREDICTIONS", "MANAGED"];
 
 pub(super) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Session> {
     #[cfg(test)]
@@ -31,61 +29,121 @@ pub(super) fn ticket_session(app: &Arc<App>) -> Option<bagholder_ws::session::Se
 }
 
 /// One account the ticket may place against, as it offers accounts:
-/// tradable, self-directed, open.
+/// tradable, self-directed, open. Named by the broker's own id, which an order
+/// names.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
 #[diff(key = id)]
 pub struct OrderAccount {
     pub id: String,
     pub name: String,
-    #[serde(rename = "type")]
-    pub kind: String,
     pub margin: bool,
-    pub currency: String,
+    /// The margin account whose margin an order here moves: its own for a margin
+    /// account, the margin account it is linked to for one that is collateral.
     pub margin_account_id: String,
 }
 
-/// The accounts the ticket offers, from the stored accounts.
-pub fn order_accounts(app: &Arc<App>) -> Vec<OrderAccount> {
-    let mut out = Vec::new();
-    for a in must(bagholder_store::tables::accounts(&db(app))) {
-        let typ = a.unified_account_type.to_uppercase();
-        if a.id.is_empty() || a.status.to_lowercase() == "closed" || !ORDER_TRADABLE_TYPES.iter().any(|p| typ.starts_with(p)) {
-            continue;
-        }
-        if ORDER_UNTRADABLE_MARKERS.iter().any(|m| typ.contains(m)) {
-            continue;
-        }
-        let name = bagholder_model::value::norm_account_name(if a.nickname.is_empty() { &typ } else { &a.nickname });
-        let margin = typ.contains("MARGIN");
-        out.push(OrderAccount {
-            margin_account_id: if margin { a.id.clone() } else { a.margin_account_id },
-            id: a.id,
-            name,
-            kind: typ,
-            margin,
-            currency: a.currency,
-        });
-    }
-    out
+/// The accounts the ticket offers, from the book (`docs/plans/stage-3c-switch.md`,
+/// §3: what orders read).
+pub fn order_accounts(app: &Arc<App>) -> Result<Vec<OrderAccount>, String> {
+    let f = app.figures.get().ok_or("the figures are not open")?;
+    let names = f.names()?;
+    // A cash account backing a margin account (Wealthsimple's margin boost): the
+    // adapter does not read that feature yet, so the link is the earlier store's
+    // until it does (docs/plans/stage-3c-switch.md, step 8 needs it first).
+    let boosted: std::collections::BTreeMap<String, String> = bagholder_store::tables::accounts(&db(app))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|a| !a.margin_account_id.is_empty())
+        .map(|a| (a.id, a.margin_account_id))
+        .collect();
+    let accounts = f.read(|e| crate::wire::build::accounts(e.inputs(), &names)).ok_or("the figures are not built yet")?;
+    Ok(accounts
+        .iter()
+        .filter(|a| a.tradable && a.status != "closed")
+        .filter_map(|a| {
+            let id = a.broker_account.clone()?;
+            let margin_account_id = if a.margin {
+                id.clone()
+            } else {
+                // collateral: the margin account it backs, where that is an account the ticket offers
+                boosted.get(&id).filter(|m| accounts.iter().any(|x| x.margin && x.broker_account.as_deref() == Some(m.as_str()))).cloned().unwrap_or_default()
+            };
+            Some(OrderAccount { id, name: a.name.clone(), margin: a.margin, margin_account_id })
+        })
+        .collect::<Vec<_>>())
+    .map(|mut v| {
+        // as the person reads them: by name
+        v.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
+        v
+    })
 }
 
-pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Option<bagholder_model::securities::Security> {
-    let rows = must(bagholder_store::admin::list_securities(&db(app)));
+/// What a margin account can borrow, as the broker last stated it, by the
+/// broker's id for the account; and the Bank's USD rate today. From the book.
+fn ticket_figures(app: &Arc<App>, margin_account: &str) -> Result<(Option<f64>, Option<f64>), String> {
+    let f = app.figures.get().ok_or("the figures are not open")?;
+    let names = f.names()?;
+    f.read(|e| {
+        let i = e.inputs();
+        let available = names
+            .account
+            .iter()
+            .find(|(_, b)| !margin_account.is_empty() && b.as_str() == margin_account)
+            .and_then(|(a, _)| i.market.brokers.get(a))
+            .and_then(|b| b.buying_power.as_ref())
+            .and_then(|bp| bp.as_ref().ok())
+            .map(|d| d.to_f64());
+        let usd = bagholder_engine::fx::rate(&i.facts.rates, &i.clock, bagholder_core::Currency::USD, i.clock.today).ok().map(|d| d.to_f64());
+        (available, usd)
+    })
+    .ok_or_else(|| "the figures are not built yet".to_string())
+}
+
+/// The listing an order names, from the book: by the broker's id for it where one
+/// is given, else by the symbol the book knows it by, a share before a contract of
+/// it. A broker id the book does not hold is taken as given (a listing found
+/// outside the book). `None` where a symbol names nothing the book holds.
+pub fn resolve_security(app: &Arc<App>, symbol: &str, security_id: &str) -> Result<Option<bagholder_model::securities::Security>, String> {
+    use bagholder_core::instrument::InstrumentKind;
+    let f = app.figures.get().ok_or("the figures are not open")?;
+    let names = f.names()?;
     let sid = security_id.trim();
-    if !sid.is_empty() {
-        if let Some(r) = rows.iter().find(|r| r.id == sid) {
-            return Some(r.clone());
-        }
-        return Some(bagholder_model::securities::Security { id: sid.to_string(), symbol: symbol.trim().to_uppercase(), ..Default::default() });
-    }
     let sym = symbol.trim().to_uppercase();
-    if sym.is_empty() {
-        return None;
-    }
-    let mut same: Vec<bagholder_model::securities::Security> = rows.into_iter().filter(|r| r.symbol.to_uppercase() == sym).collect();
-    same.sort_by_key(|r| (if r.id.starts_with("sec-s-") { 0 } else { 1 }, r.id.clone()));
-    same.into_iter().next()
+    f.read(|e| {
+        let i = e.inputs();
+        let of = |id: &bagholder_core::InstrumentId| -> Option<bagholder_model::securities::Security> {
+            let info = i.ledger.instruments.get(id)?;
+            let n = info.current_name()?;
+            Some(bagholder_model::securities::Security {
+                id: names.security.get(id)?.clone(),
+                symbol: n.symbol.clone(),
+                name: n.name.clone().unwrap_or_default(),
+                primary_exchange: n.venue_name.clone().or_else(|| n.venue_mic.clone()).unwrap_or_default(),
+                primary_mic: n.venue_mic.clone().unwrap_or_default(),
+                currency: info.instrument.currency.as_str().to_string(),
+                ..Default::default()
+            })
+        };
+        if !sid.is_empty() {
+            let held = names.security.iter().find(|(_, s)| s.as_str() == sid).and_then(|(id, _)| of(id));
+            return Some(held.unwrap_or_else(|| bagholder_model::securities::Security { id: sid.to_string(), symbol: sym.clone(), ..Default::default() }));
+        }
+        if sym.is_empty() {
+            return None;
+        }
+        let mut same: Vec<(bool, bagholder_model::securities::Security)> = i
+            .ledger
+            .instruments
+            .iter()
+            .filter(|(_, info)| info.current_name().is_some_and(|n| n.symbol.to_uppercase() == sym))
+            .filter_map(|(id, info)| of(id).map(|s| (info.instrument.kind != InstrumentKind::Security, s)))
+            .collect();
+        same.sort_by(|a, b| (a.0, &a.1.id).cmp(&(b.0, &b.1.id)));
+        // the book's, else one Wealthsimple's search found while the app runs
+        same.into_iter().next().map(|(_, s)| s).or_else(|| app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).get(&sym).cloned())
+    })
+    .ok_or_else(|| "the figures are not built yet".to_string())
 }
 
 /// A ticket's own quote, as `GET /api/order/quote` and the ticket's live
@@ -265,7 +323,8 @@ pub fn lookup_listing(app: &Arc<App>, sess: &bagholder_ws::session::Session, sym
     };
     let sec = parse_listing_search(&data, symbol, exchange);
     if let Some(sec) = &sec {
-        must(bagholder_store::admin::upsert_securities(&db(app), std::slice::from_ref(sec), &now_iso()));
+        // known by its symbol while the app runs
+        app.orders.found.lock().unwrap_or_else(|e| e.into_inner()).insert(sec.symbol.to_uppercase(), sec.clone());
     }
     sec
 }
@@ -314,7 +373,10 @@ impl TicketQuote {
 
 pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id: &str, exchange: &str) -> TicketQuote {
     let name_of = || if symbol.is_empty() { security_id.to_string() } else { symbol.to_string() };
-    let mut sec = resolve_security(app, symbol, security_id);
+    let mut sec = match resolve_security(app, symbol, security_id) {
+        Ok(s) => s,
+        Err(e) => return TicketQuote::err(format!("The book could not be read: {e}")),
+    };
     if sec.is_none() && exchange.is_empty() {
         return TicketQuote::err(format!("No listing stored for {}.", name_of()));
     }
@@ -359,7 +421,10 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
         Ok(d) => md = parse_market_data(&d),
         Err(e) => log(&format!("bagholder ticket: market data for {} failed: {}", sid, e)),
     }
-    let accounts = order_accounts(app);
+    let accounts = match order_accounts(app) {
+        Ok(a) => a,
+        Err(e) => return TicketQuote::err(format!("The accounts could not be read: {e}")),
+    };
     let acct = accounts.iter().find(|a| a.id == account_id).cloned();
     let mut balance = BuyingPowerFigures::default();
     if let Some(a) = &acct {
@@ -369,24 +434,9 @@ pub fn ticket_quote(app: &Arc<App>, symbol: &str, security_id: &str, account_id:
             Err(e) => log(&format!("bagholder ticket: buying power for {} failed: {}", a.id, e)),
         }
     }
-    let mut margin_available = None;
-    if let Some(a) = &acct {
-        if !a.margin_account_id.is_empty() {
-            for m in must(bagholder_store::tables::margin(&db(app))) {
-                if m.account_id == a.margin_account_id {
-                    if let Some(bp) = m.buying_power {
-                        margin_available = Some(bp);
-                    }
-                }
-            }
-        }
-    }
-    let fx_map = must(bagholder_store::tables::fx_rates(&db(app), "USDCAD"));
-    let fx_usd_cad = if fx_map.is_empty() {
-        None
-    } else {
-        let fx: bagholder_model::fx::Fx = fx_map.into_iter().collect();
-        Some(bagholder_model::fx::rate_on(&fx, &bagholder_model::clock::today_local()))
+    let (margin_available, fx_usd_cad) = match ticket_figures(app, acct.as_ref().map_or("", |a| a.margin_account_id.as_str())) {
+        Ok(v) => v,
+        Err(e) => return TicketQuote::err(format!("The book could not be read: {e}")),
     };
     let order_types = if !md.order_types.is_empty() { md.order_types } else { ORDER_EXEC_TYPES.iter().map(|s| s.to_string()).collect() };
     TicketQuote::Ok(TicketQuoteOk {
@@ -515,11 +565,11 @@ pub fn ticket_order(app: &Arc<App>, t: &Ticket) -> Result<(Order, Value), String
     if has_stop && !positive(stop_price) {
         return Err("A stop price is required.".into());
     }
-    let acct = match order_accounts(app).into_iter().find(|a| a.id == t.account_id) {
+    let acct = match order_accounts(app)?.into_iter().find(|a| a.id == t.account_id) {
         Some(a) => a,
         None => return Err("Choose an account.".into()),
     };
-    let sec = match resolve_security(app, &t.symbol, &t.security_id) {
+    let sec = match resolve_security(app, &t.symbol, &t.security_id)? {
         Some(s) => s,
         None => return Err(format!("No listing stored for {}.", t.symbol)),
     };

@@ -63,7 +63,12 @@ live: boolean, refreshedAt: string, };
 
 export type QuoteOf = { symbol: string, security: string, account: string, exchange: string, };
 
-export type OrderAccount = { id: string, name: string, type: string, margin: boolean, currency: string, marginAccountId: string, };
+export type OrderAccount = { id: string, name: string, margin: boolean, 
+/**
+ * The margin account whose margin an order here moves: its own for a margin
+ * account, the margin account it is linked to for one that is collateral.
+ */
+marginAccountId: string, };
 
 export type TicketQuoteDetail = { securityId: string, symbol: string, name: string, exchange: string, currency: string, securityType: string, buyable: boolean, sellable: boolean, tradeEligible: boolean, status: string, last: number | null, bid: number | null, ask: number | null, bidSize: number | null, askSize: number | null, mid: number | null, change: number | null, changePct: number | null, marketStatus: string, quotedAsOf: string, multiplier: number | null, };
 

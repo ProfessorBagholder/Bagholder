@@ -1073,7 +1073,7 @@ mod tests {
         crate::session::note_session_expired(&app);
         assert!(!app.state.lock().unwrap().connected);
         for _ in 0..4 {
-            crate::session::note_sync_failed(&app, "Wealthsimple did not answer");
+            crate::broker_reads::sync_went(&app, Some("Wealthsimple did not answer"));
         }
         let got: Vec<(String, String)> = list(&conn).iter().map(|r| (f(r, "title"), f(r, "body"))).collect();
         assert_eq!(got, [("Sign in needed".to_string(), "The Wealthsimple session expired. Connect again from the menu.".to_string()), ("Sync failing".to_string(), "Wealthsimple did not answer".to_string())]);

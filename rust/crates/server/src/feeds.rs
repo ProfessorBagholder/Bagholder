@@ -2486,12 +2486,6 @@ pub fn watch_loop(app: Arc<App>) {
     }
 }
 
-pub fn sync_then_market(app: &Arc<App>) -> bool {
-    let ok = crate::session::run_sync(app, true, true);
-    refresh_market_data(app);
-    ok
-}
-
 // ---------------------------------------------------------------------------
 // chart history
 // ---------------------------------------------------------------------------

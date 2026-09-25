@@ -52,6 +52,14 @@ fn isolated() -> Arc<App> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let app = App::new(dir, root, "127.0.0.1".into());
     bagholder_store::relabel::ensure(&app.open().unwrap()).unwrap();
+    // the figure path, on the recorded month, as the shared test app has it
+    let book = app.home.join("figures");
+    std::fs::create_dir_all(&book).unwrap();
+    crate::tests_common::pulled_book(&book);
+    let now: bagholder_core::jiff::Timestamp = "2025-11-19T21:00:00Z".parse().unwrap();
+    let f = crate::figures::Figures::open(&book, now).unwrap();
+    f.state_zone("America/Toronto", now).unwrap();
+    let _ = app.figures.set(f);
     app
 }
 

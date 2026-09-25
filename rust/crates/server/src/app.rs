@@ -126,6 +126,8 @@ pub struct App {
     /// The network the figure path's readers and the Wealthsimple session use:
     /// the process's one limiter, on the machine's clock (a test answers it).
     pub net: bagholder_net::Net,
+    /// Sync now was asked: the broker's reads pull at once (`broker_reads`).
+    pub pull_asked: AtomicBool,
 }
 
 impl App {
@@ -161,6 +163,7 @@ impl App {
             orders: crate::orders::OrdersState::default(),
             figures: std::sync::OnceLock::new(),
             net,
+            pull_asked: AtomicBool::new(false),
         })
     }
 

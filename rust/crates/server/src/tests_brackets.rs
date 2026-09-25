@@ -146,6 +146,7 @@ fn setup() -> MutexGuard<'static, ()> {
     tb::replace_margin(&c, &typed_rows(&json!([{"accountId": "acct-margin", "buyingPower": 12680.45, "currency": "CAD"}])), &now()).unwrap();
     tb::replace_balances(&c, &typed_rows(&json!([{"accountId": "acct-margin", "securityId": "sec-s-us", "quantity": 25}]))).unwrap();
     tb::set_meta(&c, "balances_read_at", "").unwrap();
+    crate::tests_common::order_accounts_in_book();
     *lk(&seam::GQL) = Some(Arc::new(fake));
     *lk(&seam::SESSION) = Some(Some(serde_json::from_value(json!({"access_token": "t"})).unwrap()));
     live(true);

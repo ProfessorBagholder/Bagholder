@@ -161,6 +161,9 @@ impl Source for Routed<'_> {
     fn card(&mut self, account: &str) -> Answer<Value> {
         self.replay.card(account)
     }
+    fn buying_power(&mut self, account: &str) -> Answer<Value> {
+        self.replay.buying_power(account)
+    }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         if self.op == Op::Positions { self.client.positions(account, day) } else { self.replay.positions(account, day) }
     }
@@ -781,6 +784,47 @@ fn card_answered_for_another_account_is_a_mismatch() {
     let m = card_balance(&edited("wrong-meaning-card-another-account.json")).unwrap_err();
     assert_eq!(m.path, "id");
     assert!(m.why.contains("anon-ca-5"), "{}", m.why);
+}
+
+// -- buying power (FetchAccountCurrentMarginBuyingPowerV2) ---------------------
+//
+// The owner's capture holds no reply to this query yet: these are written from
+// the query's own selection (`graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql`)
+// with Money's amount as text, as every Money of the captured replies is. The
+// first real read is the check (the real run of stage 3c).
+
+fn buying_power_reply(bp: &str) -> String {
+    format!(r#"{{"data":{{"account":{{"id":"anon-margin-1","financials":{{"current":{{"id":"c","marginV3":{{"trading":{{"buyingPower":{bp},"__typename":"MarginTrading"}},"__typename":"MarginV3"}},"__typename":"Current"}},"__typename":"Financials"}},"__typename":"Account"}}}}}}"#)
+}
+
+fn buying_power(reply: &str) -> Result<Result<Dec, String>, bagholder_sources::reply::Mismatch> {
+    let f = answering(&[reply.to_string()]);
+    let node = f.client().buying_power("anon-margin-1").unwrap();
+    read::buying_power(&node, "anon-margin-1")
+}
+
+#[test]
+fn buying_power_available_is_its_amount_in_cad() {
+    let r = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricAvailable","total":{"amount":"12345.67","currency":"CAD","__typename":"Money"}}"#));
+    assert_eq!(r.unwrap(), Ok(dec("12345.67")));
+}
+
+#[test]
+fn buying_power_unavailable_is_the_reason_with_how_many_securities_hold_it_back() {
+    let r = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricUnavailable","reason":{"__typename":"UnavailableSecurities","securities":[{"securityId":"sec-s-1","status":"x","__typename":"S"},{"securityId":"sec-s-2","status":"x","__typename":"S"}]}}"#));
+    assert_eq!(r.unwrap(), Err("UnavailableSecurities (2 securities)".to_string()));
+}
+
+#[test]
+fn buying_power_of_another_shape_or_meaning_is_a_mismatch() {
+    let number = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricAvailable","total":{"amount":12345.67,"currency":"CAD"}}"#)).unwrap_err();
+    assert!(number.path.ends_with("total.amount"), "{}", number.path);
+    let usd = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricAvailable","total":{"amount":"1","currency":"USD"}}"#)).unwrap_err();
+    assert!(usd.why.contains("USD"), "{}", usd.why);
+    let other = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricSomethingElse"}"#)).unwrap_err();
+    assert!(other.why.contains("neither available nor unavailable"), "{}", other.why);
+    let another = buying_power(&buying_power_reply(r#"{"__typename":"BuyingPowerMetricAvailable","total":{"amount":"1","currency":"CAD"}}"#).replace("anon-margin-1", "anon-margin-2")).unwrap_err();
+    assert_eq!(another.path, "id");
 }
 
 // -- positions (FetchHoldingsExportPositionsAsOfDate) --------------------------

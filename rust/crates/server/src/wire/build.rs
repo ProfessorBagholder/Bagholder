@@ -337,6 +337,25 @@ fn options(inputs: &Inputs, trades: &[TradeFig], positions: &[PositionFig]) -> O
     }
 }
 
+/// The book's accounts, as the page and the order ticket name them.
+pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
+    use bagholder_core::account::{AccountKind, AccountType};
+    inputs
+        .ledger
+        .accounts
+        .iter()
+        .map(|(id, info)| Account {
+            id: id.to_string(),
+            name: account_name(inputs, *id),
+            broker_account: names.account.get(id).cloned(),
+            status: info.account.status.as_str().into(),
+            tradable: matches!(info.account.account_type, AccountType::Known { managed: false, kind: AccountKind::Cash | AccountKind::Margin, .. }),
+            margin: matches!(info.account.account_type, AccountType::Known { kind: AccountKind::Margin, .. }),
+            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value.iter().next_back().map(|(_, v)| Dec(*v))),
+        })
+        .collect()
+}
+
 /// Everything the page shows of the book under `filters`.
 pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder_model::base::Base) -> Figures {
     let inputs = engine.inputs();
@@ -405,20 +424,7 @@ pub fn build(engine: &Engine, names: &Names, filters: &Filters, base: &bagholder
 
     let cashflow = cashflow(inputs, &figs, &scoped, today);
 
-    let accounts: Vec<Account> = inputs
-        .ledger
-        .accounts
-        .iter()
-        .map(|(id, info)| Account {
-            id: id.to_string(),
-            name: account_name(inputs, *id),
-            broker_account: names.account.get(id).cloned(),
-            status: info.account.status.as_str().into(),
-            tradable: matches!(info.account.account_type, bagholder_core::account::AccountType::Known { managed: false, kind: bagholder_core::account::AccountKind::Cash | bagholder_core::account::AccountKind::Margin, .. }),
-            margin: matches!(info.account.account_type, bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::Margin, .. }),
-            nav: inputs.market.brokers.get(id).and_then(|b| b.net_value.iter().next_back().map(|(_, v)| Dec(*v))),
-        })
-        .collect();
+    let accounts = accounts(inputs, names);
     let nav_total = {
         let navs: Vec<bagholder_core::Dec> = accounts.iter().filter_map(|a| a.nav.map(|d| d.0)).collect();
         (!navs.is_empty()).then(|| match navs.into_iter().try_fold(bagholder_core::Dec::ZERO, |a, b| a.checked_add(b)) {

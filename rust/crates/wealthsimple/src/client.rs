@@ -33,6 +33,7 @@ fn doc(name: &str) -> &'static str {
         "Securities" => include_str!("../graphql/Securities.graphql"),
         "FetchInstitutionalTransfer" => include_str!("../graphql/FetchInstitutionalTransfer.graphql"),
         "FetchCreditCardAccount" => include_str!("../graphql/FetchCreditCardAccount.graphql"),
+        "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
         other => panic!("no document named {other}"),
     }
 }
@@ -237,6 +238,11 @@ impl Source for Client<'_> {
             out.extend(Node::root(&data).list("accounts").map_err(|m| mismatch("FetchAccountsWithBalance", m))?.into_iter().map(|n| n.value().clone()));
         }
         Ok(out)
+    }
+    fn buying_power(&mut self, account: &str) -> Answer<Value> {
+        let op = "FetchAccountCurrentMarginBuyingPowerV2";
+        let data = self.graphql(op, obj(vec![("accountId", text(account)), ("currency", text("CAD"))]))?;
+        Ok(Node::root(&data).obj("account").map_err(|m| mismatch(op, m))?.value().clone())
     }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         let start = from.map(|d| text(&d.to_string())).unwrap_or(Value::Null);

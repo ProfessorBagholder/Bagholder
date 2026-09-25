@@ -27,14 +27,17 @@ export type DataSummary = { ok: boolean, path: string, activities: number, first
 
 export type Clear = { journal?: boolean, market?: boolean, session?: boolean, };
 
-export type JournalEntryRequest = { id: string | null, thesis: string, 
+export type JournalEntryRequest = { 
 /**
- * A page old enough to send tags as one comma-joined string still reads:
- * each piece around a comma is its own tag.
+ * The trade's or the group's id, as the figures name it.
  */
-tags: Array<string>, grade: string, };
+id: string, thesis: string, 
+/**
+ * `A`, `B`, `C`, `F`, or empty for none.
+ */
+grade: string, tags: Array<string>, };
 
-export type JournalAnswer = { ok: boolean, journal: { [key in string]: JournalEntry }, };
+export type JournalAnswer = { ok: true, };
 
 export type Groups = { groups: Array<TradeGroup>, };
 

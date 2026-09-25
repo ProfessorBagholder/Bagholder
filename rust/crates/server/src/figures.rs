@@ -13,6 +13,7 @@
 //! engine's days, months and "today" are in it. The server's own zone is never
 //! read.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -79,6 +80,14 @@ fn settle_trades(book: &Book, engine: &mut Engine, at: Timestamp) -> Result<Move
         book.orphan_unclaimed(*trade).map_err(err)?;
     }
     Ok(engine.apply(Change::Trades(book.trades().map_err(err)?)))
+}
+
+/// Why a journal was not written.
+#[derive(Debug)]
+pub enum JournalRefused {
+    /// No trade or group of the figures has this id.
+    Unknown(String),
+    Failed(String),
 }
 
 /// What the server holds of the figure path.
@@ -221,6 +230,67 @@ impl Figures {
         Ok(self.apply(Change::Clock(clock(&zone.zone, now)?)))
     }
 
+    /// The person wrote a trade's or a group's journal: kept in the book, then the
+    /// journal applied. `id` is the trade's id as the page has it; one the figures
+    /// do not know, or a round trip not yet given its trade, is refused by name.
+    pub fn write_journal(&self, id: &str, entry: &bagholder_core::journal::JournalEntry, now: Timestamp) -> Result<Moved, JournalRefused> {
+        use bagholder_core::journal::JournalSubject;
+        use bagholder_engine::trades::TradeKey;
+        let subject = self
+            .read(|e| {
+                e.figures().trades.iter().find_map(|t| match &t.key {
+                    TradeKey::Group(g) if g.to_string() == id => Some(JournalSubject::Group(*g)),
+                    TradeKey::Trip(_) if t.trade.is_some_and(|x| x.to_string() == id) => t.trade.map(JournalSubject::Trade),
+                    _ => None,
+                })
+            })
+            .ok_or_else(|| JournalRefused::Failed("the figures are not built yet".into()))?
+            .ok_or_else(|| JournalRefused::Unknown(id.to_string()))?;
+        let book = self.book().map_err(JournalRefused::Failed)?;
+        book.set_journal(subject, entry, now).map_err(|e| JournalRefused::Failed(e.to_string()))?;
+        let journal = book.journal_entries().map_err(|e| JournalRefused::Failed(e.to_string()))?.into_iter().collect();
+        Ok(self.apply(Change::Journal(journal)))
+    }
+
+    /// The record changed (a pull stored, revised or removed records; an entry, an
+    /// import): the ledger and the adjustments applied, each round trip given its
+    /// trade, and what the broker stated beside the rows.
+    pub fn record_changed(&self, now: Timestamp) -> Result<Moved, String> {
+        let book = self.book()?;
+        let ledger = engine_inputs::ledger(&book)?;
+        let adjustments = engine_inputs::facts(&book)?.adjustments;
+        let brokers = engine_inputs::brokers(&book)?;
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        let mut moved = Moved::default();
+        if e.inputs().ledger != ledger {
+            merge(&mut moved, e.apply(Change::Ledger(ledger)));
+        }
+        if e.inputs().facts.adjustments != adjustments {
+            merge(&mut moved, e.apply(Change::Adjustments(adjustments)));
+        }
+        merge(&mut moved, settle_trades(&book, e, now)?);
+        let accounts: BTreeSet<bagholder_core::AccountId> = brokers.keys().chain(e.inputs().market.brokers.keys()).copied().collect();
+        for a in accounts {
+            let now_stated = brokers.get(&a).cloned();
+            if e.inputs().market.brokers.get(&a) != now_stated.as_ref() {
+                merge(&mut moved, e.apply(Change::Broker(a, now_stated)));
+            }
+        }
+        drop(guard);
+        // the broker's names for what the record holds are read again
+        *self.names.write().unwrap_or_else(|e| e.into_inner()) = None;
+        self.wake();
+        Ok(self.moved(moved))
+    }
+
+    /// What the broker states of an account now (its cash, what it can borrow)
+    /// changed.
+    pub fn broker_changed(&self, account: bagholder_core::AccountId) -> Result<Moved, String> {
+        let stated = engine_inputs::brokers(&self.book()?)?.remove(&account);
+        Ok(self.apply_if(|i| i.market.brokers.get(&account) != stated.as_ref(), || Change::Broker(account, stated.clone())))
+    }
+
     /// The Bank's rates or its calendar changed.
     pub fn rates_changed(&self) -> Result<Moved, String> {
         let rates = engine_inputs::facts(&self.book()?)?.rates;
@@ -327,6 +397,20 @@ mod tests {
         book.store_rates(bagholder_core::Currency::USD, &[("2025-11-18".parse().unwrap(), bagholder_core::Dec::parse("1.4012").unwrap())], ("2025-11-18".parse().unwrap(), "2025-11-18".parse().unwrap()), &bagholder_core::SourceName::named("bank-of-canada"), now).unwrap();
         f.rates_changed().unwrap();
         same_as_fresh(&f, now);
+        // the record changed: a row the broker no longer lists removed
+        let removed = book.live_records(&bagholder_core::SourceName::named("wealthsimple")).unwrap()[0];
+        book.mark_removed(removed, now).unwrap();
+        assert!(!f.record_changed(now).unwrap().is_empty());
+        same_as_fresh(&f, now);
+        // the broker states an account's cash and what it can borrow
+        let account = f.read(|e| e.figures().positions[0].account).unwrap();
+        let connection = book.connections().unwrap()[0].id;
+        let read = book.broker_read(connection, "cash", now).unwrap();
+        book.store_cash(account, now, &[(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("42.00").unwrap())].into_iter().collect(), &read).unwrap();
+        book.store_buying_power(account, now, &Ok(bagholder_core::Money::new(bagholder_core::Dec::parse("100").unwrap(), bagholder_core::Currency::CAD)), &read).unwrap();
+        assert!(!f.broker_changed(account).unwrap().is_empty());
+        same_as_fresh(&f, now);
+        assert!(f.broker_changed(account).unwrap().is_empty(), "the same statement again moves nothing");
         // the next day
         let later = at("2025-11-20T21:00:00Z");
         assert!(!f.clock_moved(later).unwrap().is_empty());

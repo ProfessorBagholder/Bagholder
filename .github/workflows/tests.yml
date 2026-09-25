@@ -66,9 +66,9 @@ jobs:
         run: cargo test --workspace
         working-directory: rust
 
-  # The same suite on a Mac, with the tests a sandboxed local run cannot hold (they are marked
-  # #[ignore] with their reason, e.g. the notification applet, built with osacompile, which needs
-  # Apple Events) run as well: every test counts on every push, whoever ran what locally.
+  # The same suite on a Mac, and the test a sandboxed local run cannot hold: the notification
+  # applet, built with osacompile, which needs Apple Events (#[ignore]d with that reason, so it
+  # runs here by name on every push, whoever ran what locally).
   rust-macos:
     runs-on: macos-latest
     steps:
@@ -79,10 +79,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-      - name: The Rust suite, ignored tests included
+      - name: The Rust suite
         env:
           CI: "true"
-        run: cargo test --workspace -- --include-ignored
+        run: cargo test --workspace
+        working-directory: rust
+      # the one test kept out of the suite for the machine it needs: the notification
+      # applet, built with osacompile (the capture tests read the owner's own data,
+      # kept outside the repository, and are run by hand)
+      - name: The notification applet, on macOS
+        env:
+          CI: "true"
+        run: cargo test -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
         working-directory: rust
 
   # Windows has no system time zone database, so the model reads the copy built into

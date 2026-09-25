@@ -9,6 +9,7 @@ mod app;
 mod compare;
 mod demo_facts;
 mod docs;
+mod broker_reads;
 mod due;
 mod engine_inputs;
 mod figures;
@@ -30,11 +31,9 @@ mod wire;
 
 use std::path::{Path, PathBuf};
 
-use app::{log, spawn};
+use app::log;
 
 const PORTS: [u16; 3] = [8765, 8766, 8767];
-const ACTIVITY_PULL_SEC: i64 = 24 * 60 * 60;
-
 fn home_dir() -> PathBuf {
     let env = std::env::var("BAGHOLDER_HOME").unwrap_or_default();
     if !env.trim().is_empty() {
@@ -157,7 +156,9 @@ fn serve() -> i32 {
     bagholder_market::localmodel::on_change(move || events_for_localmodel.signal());
     // the figure path's reads, each when it is due
     a.spawn_with("bagholder-figures", due::run);
-    a.spawn_with("bagholder-auto-sync", session::auto_sync_loop);
+    // Wealthsimple: the pull and the balances, each when it is due
+    a.spawn_with("bagholder-broker", broker_reads::run);
+    a.spawn_with("bagholder-token", session::token_loop);
     a.spawn_with("bagholder-market", |app| {
         feeds::refresh_market_data(&app);
     });
@@ -165,7 +166,6 @@ fn serve() -> i32 {
         update::check_for_update(&app);
     });
     a.spawn_with("bagholder-quote-loop", feeds::quote_loop);
-    a.spawn_with("bagholder-portfolio-loop", session::portfolio_loop);
     a.spawn_with("bagholder-orders-loop", |app| orders::orders_loop(&app));
     a.spawn_with("bagholder-bracket-loop", |app| orders::bracket_loop(&app));
     a.spawn_with("bagholder-exposure-loop", feeds::exposure_loop);
@@ -194,26 +194,6 @@ fn serve() -> i32 {
     // a second instance run for verification must not open anyone's browser
     if std::env::var("BAGHOLDER_NO_BROWSER").unwrap_or_default().trim().is_empty() {
         open_browser(&url);
-    }
-    if a.state.lock().unwrap().connected {
-        let due = a.open().ok().and_then(|c| bagholder_store::admin::activity_pull_due(&c, app::now_unix() as i64 - 0).ok()).unwrap_or(false);
-        let _ = ACTIVITY_PULL_SEC;
-        if due {
-            let b = a.clone();
-            spawn("bagholder-boot-sync", move || {
-                session::run_sync(&b, true, true);
-            });
-        } else {
-            let b = a.clone();
-            spawn("bagholder-listings", move || {
-                if let Some(sess) = session::load_session(&b) {
-                    let problems = session::fill_listings(&b, &sess, false);
-                    if !problems.is_empty() {
-                        b.state.lock().unwrap().error = problems.join("; ");
-                    }
-                }
-            });
-        }
     }
 
     // Ctrl-C and a service manager's TERM stop the app the way its own updater

@@ -37,6 +37,9 @@ pub struct Stated {
     pub units: Option<(jiff::civil::Date, BTreeMap<InstrumentId, Dec>)>,
     /// When the account's activity was last read in full.
     pub activity_read_at: Option<jiff::Timestamp>,
+    /// The newest statement of what it can borrow, when it was stated: an
+    /// amount, or the broker's reason it cannot say.
+    pub buying_power: Option<(jiff::Timestamp, std::result::Result<Money, String>)>,
 }
 
 /// A position as a statement of units states it.
@@ -54,6 +57,12 @@ impl Book {
         let id = new_uuid(at).to_string();
         self.conn().execute("INSERT INTO broker_reads (id, connection_id, part, at) VALUES (?1, ?2, ?3, ?4)", params![id, connection.to_string(), part, at_text(at)])?;
         Ok(ReadId(id))
+    }
+
+    /// When `part` of a connection was last read, if ever.
+    pub fn last_read(&self, connection: ConnectionId, part: &str) -> Result<Option<jiff::Timestamp>> {
+        let at: Option<String> = self.conn().query_row("SELECT MAX(at) FROM broker_reads WHERE connection_id = ?1 AND part = ?2", params![connection.to_string(), part], |r| r.get(0))?;
+        at.map(|t| text::instant("broker_reads", "at", &t)).transpose()
     }
 
     /// That `account` is linked to `to`, as the broker states it.
@@ -119,6 +128,20 @@ impl Book {
             }
             Ok(())
         })
+    }
+
+    /// Store what the account can borrow as the broker states it now: an amount,
+    /// or its reason it cannot say.
+    pub fn store_buying_power(&self, account: AccountId, stated_at: jiff::Timestamp, stated: &std::result::Result<Money, String>, read: &ReadId) -> Result<()> {
+        let (amount, currency, why) = match stated {
+            Ok(m) => (Some(m.amount.to_text()), Some(m.currency.to_string()), None),
+            Err(w) => (None, None, Some(w.as_str())),
+        };
+        self.conn().execute(
+            "INSERT INTO buying_power (account_id, stated_at, amount, currency, unavailable, read_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![account.to_string(), at_text(stated_at), amount, currency, why, read.0],
+        )?;
+        Ok(())
     }
 
     /// Store a statement of units as of a day.
@@ -214,6 +237,23 @@ impl Book {
             out.units = Some((text::date("statements", "as_of_day", &d)?, m));
         }
         out.activity_read_at = self.activity_read_at(account)?;
+        let bp: Option<(String, Option<String>, Option<String>, Option<String>)> = self
+            .conn()
+            .query_row(
+                "SELECT b.stated_at, b.amount, b.currency, b.unavailable FROM buying_power b JOIN broker_reads r ON r.id = b.read_id WHERE b.account_id = ?1 ORDER BY b.stated_at DESC, r.at DESC, r.id DESC LIMIT 1",
+                params![a],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        if let Some((at, amount, currency, why)) = bp {
+            let t = "buying_power";
+            let stated = match (amount, currency, why) {
+                (Some(v), Some(c), None) => Ok(Money::new(text::dec(t, "amount", &v)?, text::currency(t, "currency", &c)?)),
+                (None, None, Some(w)) => Err(w),
+                _ => return Err(crate::BookError::Corrupt { table: t, column: "unavailable", value: a.clone(), why: "states both an amount and a reason, or neither".into() }),
+            };
+            out.buying_power = Some((text::instant(t, "stated_at", &at)?, stated));
+        }
         Ok(out)
     }
 }

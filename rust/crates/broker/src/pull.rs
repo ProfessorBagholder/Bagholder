@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_book::records::Incoming;
 use bagholder_book::statements::{AccountDay, UnitsLine};
 use bagholder_book::Book;
-use bagholder_core::account::{AccountRef, AccountStatus};
+use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType};
 use bagholder_core::instrument::RefScheme;
 use bagholder_core::json;
 use bagholder_core::record::RecordState;
@@ -228,29 +228,9 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
     for a in stated.iter().filter(|a| a.open) {
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
     }
-    let keys: Vec<String> = keys_of.values().flatten().cloned().collect();
+    let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
+    store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
-    match adapter.cash(&keys) {
-        Ok(cash) => {
-            let read = book.broker_read(connection, "cash", now)?;
-            for (id, ks) in &keys_of {
-                // an account the answer does not state has its cash unstated,
-                // not nothing: a statement is stored only whole
-                if !ks.iter().all(|k| cash.contains_key(k)) {
-                    continue;
-                }
-                let mut sum: BTreeMap<bagholder_core::Currency, Dec> = BTreeMap::new();
-                for k in ks {
-                    for (c, v) in cash.get(k).cloned().unwrap_or_default() {
-                        let e = sum.entry(c).or_insert(Dec::ZERO);
-                        *e = add(*e, v)?;
-                    }
-                }
-                book.store_cash(*id, now, &sum, &read)?;
-            }
-        }
-        Err(f) => report.failed("cash", f),
-    }
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     for (id, ks) in &keys_of {
         // units already stated as of that day are not asked again
@@ -537,4 +517,111 @@ fn link_moves(book: &Book, stored: &[(RecordId, &Row)]) -> Result<usize> {
         }
     }
     Ok(linked)
+}
+
+
+/// Whether an account borrows: only a margin account's buying power is margin
+/// it can draw (a registered account's is its cash).
+fn is_margin(t: &AccountType) -> bool {
+    matches!(t, AccountType::Known { kind: AccountKind::Margin, .. })
+}
+
+/// What a read of the balances stored, and what failed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BalancesRead {
+    /// The book's accounts a statement was stored for.
+    pub accounts: Vec<AccountId>,
+    pub failures: Vec<(String, Failure)>,
+}
+
+/// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
+/// five minutes while a page is open): each open account's cash, and what each
+/// margin account can borrow, for the connection's accounts the book holds.
+pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, now: jiff::Timestamp) -> Result<BalancesRead> {
+    let broker = adapter.broker();
+    let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
+    let mut margin = BTreeSet::new();
+    for a in book.accounts()? {
+        if a.connection != connection || a.status != AccountStatus::Open {
+            continue;
+        }
+        let keys: Vec<String> = book.account_refs(a.id)?.into_iter().filter(|r| r.broker == broker).map(|r| r.value).collect();
+        if keys.is_empty() {
+            continue;
+        }
+        if is_margin(&a.account_type) {
+            margin.insert(a.id);
+        }
+        keys_of.insert(a.id, keys);
+    }
+    let mut failures = Vec::new();
+    let accounts = store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?;
+    Ok(BalancesRead { accounts, failures })
+}
+
+/// Each account's cash and, for a margin account, what it can borrow, stored as
+/// statements; one book account that is several of the broker's is theirs added
+/// up. What each stored statement was for.
+fn store_balances(
+    book: &Book,
+    adapter: &mut dyn BrokerAdapter,
+    connection: ConnectionId,
+    keys_of: &BTreeMap<AccountId, Vec<String>>,
+    margin: &BTreeSet<AccountId>,
+    now: jiff::Timestamp,
+    failures: &mut Vec<(String, Failure)>,
+) -> Result<Vec<AccountId>> {
+    let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
+    let mut stored = BTreeSet::new();
+    let keys: Vec<String> = keys_of.values().flatten().cloned().collect();
+    match adapter.cash(&keys) {
+        Ok(cash) => {
+            let read = book.broker_read(connection, "cash", now)?;
+            for (id, ks) in keys_of {
+                // an account the answer does not state has its cash unstated,
+                // not nothing: a statement is stored only whole
+                if !ks.iter().all(|k| cash.contains_key(k)) {
+                    continue;
+                }
+                let mut sum: BTreeMap<bagholder_core::Currency, Dec> = BTreeMap::new();
+                for k in ks {
+                    for (c, v) in cash.get(k).cloned().unwrap_or_default() {
+                        let e = sum.entry(c).or_insert(Dec::ZERO);
+                        *e = add(*e, v)?;
+                    }
+                }
+                book.store_cash(*id, now, &sum, &read)?;
+                stored.insert(*id);
+            }
+        }
+        Err(f) => failures.push(("cash".into(), f)),
+    }
+    let borrowing: Vec<String> = keys_of.iter().filter(|(id, _)| margin.contains(id)).flat_map(|(_, ks)| ks.iter().cloned()).collect();
+    if !borrowing.is_empty() {
+        match adapter.buying_power(&borrowing) {
+            Ok(bp) => {
+                let read = book.broker_read(connection, "buying-power", now)?;
+                for (id, ks) in keys_of.iter().filter(|(id, _)| margin.contains(id)) {
+                    if !ks.iter().all(|k| bp.contains_key(k)) {
+                        continue;
+                    }
+                    // several of the broker's accounts: their amounts added, or every reason one cannot say
+                    let why: Vec<&str> = ks.iter().filter_map(|k| bp[k].as_ref().err().map(|w| w.as_str())).collect();
+                    let stated = if why.is_empty() {
+                        let mut sum = Dec::ZERO;
+                        for k in ks {
+                            sum = add(sum, *bp[k].as_ref().expect("stated"))?;
+                        }
+                        Ok(bagholder_core::Money::new(sum, bagholder_core::Currency::CAD))
+                    } else {
+                        Err(why.join("; "))
+                    };
+                    book.store_buying_power(*id, now, &stated, &read)?;
+                    stored.insert(*id);
+                }
+            }
+            Err(f) => failures.push(("buying power".into(), f)),
+        }
+    }
+    Ok(stored.into_iter().collect())
 }

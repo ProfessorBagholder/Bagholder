@@ -82,16 +82,6 @@ pub(super) fn fmt_g(x: f64) -> String {
     }
 }
 
-pub(super) fn date_only(v: Option<&Value>) -> String {
-    let t = s(v);
-    let t = t.trim();
-    if t.is_empty() {
-        return String::new();
-    }
-    let t = t.split('T').next().unwrap_or("");
-    t.chars().take(10).collect()
-}
-
 pub(super) fn two(b: &[u8], i: usize) -> Option<i64> {
     let a = (b[i] as char).to_digit(10)?;
     let c = (b[i + 1] as char).to_digit(10)?;
