@@ -467,7 +467,8 @@ fn write_bars(dir: &Path, b: &Book) -> rusqlite::Result<()> {
     let mut written = 0usize;
     for (sym, ..) in LISTINGS.iter() {
         let mut anchors: Vec<(i64, f64)> = b.acts.iter()
-            .filter(|a| a.category == "trade" && a.symbol == *sym)
+            // a coin's buys and sells are traded too, though Wealthsimple files them under "other"
+            .filter(|a| (a.category == "trade" || matches!(a.raw_type.as_str(), "CRYPTO_BUY" | "CRYPTO_SELL")) && a.symbol == *sym)
             .filter_map(|a| {
                 let (y, m, d) = parse_iso(&a.transaction_date)?;
                 Some((to_days(y, m, d), a.unit_price))
