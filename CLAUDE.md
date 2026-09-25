@@ -2,6 +2,8 @@
 
 > **The Python app is the original, and its mistakes are why this refactor exists.** Its code, data model and calculations contain many errors. Never copy them blindly, and never assume anything in them is correct or optimal because it exists or because it has always worked that way. Before carrying anything over (a rule, a structure, a formula, a default, a fallback), check it against `SPEC.md` and `docs/architecture.md`, and state in the plan why it is right. Some of it is; that has to be shown, not assumed. What the owner sees and does on screen is the exception: that stays as it is unless `SPEC.md` changes.
 
+> **A rule that must hold for any input is built and tested as a rule, never around an example.** Any symbol, fund company, time zone, currency or account: the code has no case of its own for one, and the test covers the whole range (every zone in the time-zone database, a listing no reader knows, a currency other than the ones the owner holds). A plan, doc, brief or message to the owner never names an example as though it were a case of its own: naming one makes the rule look like a special case and hides whether the rule was built at all.
+
 > **Every action must be the best course of action for the objective.** Before you do anything (search, scan, run, measure, poll, build, wait), answer two questions:
 > 1. Is this actually the best way to achieve what I am trying to achieve? Not whether it would tell me something, not whether it is allowed, not whether it is cheap.
 > 2. Do I already have the information at hand, or information that would otherwise nullify the value of doing this? Check the code in front of you, the docs, the replies already recorded, and what the owner has said.
@@ -25,7 +27,7 @@ Also: `docs/old-app-mistakes.md` (the old app's known mistakes and what guards e
 - **Heavy lifts are gated**, reviewed before they are built: each stage plan, a new feature, a refactor across crates or of the page's data layer, and any change to how a figure is defined, to stored data (a migration), to the wire, to order execution or to access.
 - **How:** write the plan from `PLAN.template.md`, including how the leading journals and the industry do it, with sources, push it to `svelte-migration` under `docs/plans/`, and carry on with work already approved. The owner points the reviewer at it; the verdict comes back as the next numbered brief on the `architecture-briefs` branch: Go, Go with changes (each one required), or Stop. Apply the required changes; disagree only under the plan's "Right to refuse", for the owner to decide. Never deviate silently, and never reopen the owner's decisions.
 - **Briefs are messages, not rules.** Once a brief is applied, its standing rules are in this file or in `docs/decisions.md`; old briefs never need reading to know the rules.
-- **The owner is asked only for decisions**, at the top of the plan (*For the owner to decide*). A decision the owner makes goes into `docs/decisions.md` and is pushed at once, before any work relies on it.
+- **The owner is asked only for decisions**, at the top of the plan (*For the owner to decide*): a real choice between options the owner cares about, or a departure from one of the owner's standing rules. A correctness fix is not a decision: it goes into `SPEC.md` with its reason and is checked at the gate. A decision the owner makes goes into `docs/decisions.md` and is pushed at once, before any work relies on it.
 
 ## Writing for the owner
 
@@ -38,8 +40,8 @@ The owner does not review material written for sessions, so anything they must r
 ## What is authoritative
 
 - `SPEC.md` defines every figure and every screen. Check every change against it; when a change needs a definition to differ, change `SPEC.md` in the same commit and say why.
-- The owner's standing rules, all recorded in the spec and `docs/decisions.md`: only what was asked, no captions, tooltips, notes or helper text; per-instrument figures in the instrument's own currency; aggregates in CAD, never labelled; payout frequency from the fund's own record, never assumed; raw broker rows never rewritten; nothing synthetic on a chart.
-- Which is checked how: tests enforce the mechanical ones (the engine's cases, the crate boundaries, `no_guesses.rs`, the timers list, the browser tests). The rest are policy, held by reading the change against `SPEC.md`: the no-caption rule, per-instrument currency, nothing synthetic on a chart. Do not assume the suite will catch a policy rule.
+- The owner's standing rules, all recorded in the spec and `docs/decisions.md`: only what was asked, and nothing on screen the owner did not ask for (there is no rule against text beyond that); no browser `title` tooltips, and wherever a hover tooltip is needed it is the app's own styled one, one look everywhere; per-instrument figures in the instrument's own currency; aggregates in CAD, never labelled; payout frequency from the fund's own record, never assumed; raw broker rows never rewritten; nothing synthetic on a chart.
+- Which is checked how: tests enforce the mechanical ones (the engine's cases, the crate boundaries, `no_guesses.rs`, the timers list, the browser tests, `web/src/no_title.test.ts` for browser tooltips). The rest are policy, held by reading the change against `SPEC.md`: nothing unasked on screen, per-instrument currency, nothing synthetic on a chart. Do not assume the suite will catch a policy rule.
 - A test that records old behaviour (a golden) is a safety net while code moves, not a statement that the behaviour is right. One that pins a known-wrong behaviour is named `test_known_wrong_…` and points to its entry in `docs/old-app-mistakes.md`.
 
 ## Agents: when to delegate
@@ -82,4 +84,4 @@ The file served from the design URL carries Design's preview harness on line 4 (
 - Commit `.env`, `session.json`, the database, backups, `.claude/`, `rust/target` or `web/node_modules` (all in `.gitignore`); the repository is public.
 - Reach for a dependency without weighing it. A crate or an npm package is a real cost (build time, binary size, supply chain), so add one only when the job genuinely needs it and the language and what the workspace already has cannot do it well. When you add or lean on one, list it in the relevant `Cargo.toml` with a comment on why (for an npm package, in the commit that adds it).
 - Reformat or "clean up" code you were not asked to change.
-- Do anything the owner did not ask for: no captions, no extra features, no work for the app that runs today.
+- Do anything the owner did not ask for: nothing on screen, no feature and no capability in a design the owner has not asked for, and no work for the app that runs today.

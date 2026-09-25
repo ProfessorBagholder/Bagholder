@@ -4,7 +4,7 @@ A done-contract for a heavy lift (the gate in `CLAUDE.md`). Copy this file per p
 
 ## For the owner to decide
 
-Plain words, one decision per item: the decision first, then why it matters, then the recommendation and what happens if it isn't taken. No invented terms, and no section numbers without saying what they are. "Nothing open" when there is nothing. A decision the owner makes is written into `docs/decisions.md` and pushed at once.
+Only real choices between options the owner cares about, and departures from the owner's standing rules; a correctness fix goes into `SPEC.md` with its reason instead. Plain words, one decision per item: the decision first, then why it matters, then the recommendation and what happens if it isn't taken. No invented terms, and no section numbers without saying what they are. "Nothing open" when there is nothing. A decision the owner makes is written into `docs/decisions.md` and pushed at once.
 
 ## Scope
 
