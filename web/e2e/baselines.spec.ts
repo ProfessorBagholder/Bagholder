@@ -29,7 +29,12 @@ async function open(page: Page, width: number, hash: string) {
   await page.mouse.move(0, 0)
 }
 
-const shot = (page: Page, name: string) => expect(page).toHaveScreenshot(name + '.png', { fullPage: true, mask: masks(page) })
+// the pointer is taken off the page first: a click leaves it where the row was, and on a
+// chart that is a crosshair the screen does not otherwise show
+async function shot(page: Page, name: string) {
+  await page.mouse.move(0, 0)
+  await expect(page).toHaveScreenshot(name + '.png', { fullPage: true, mask: masks(page) })
+}
 
 for (const width of WIDTHS) {
   test.describe(`at ${width} px`, () => {
