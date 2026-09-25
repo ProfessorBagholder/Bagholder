@@ -144,7 +144,7 @@ fn eemv_states_every_distribution_from_its_first() {
 #[test]
 fn a_fund_the_screener_does_not_list_is_not_carried() {
     let n = need("ZZZQX", "BATS", Currency::USD, "iShares Trust - iShares Nothing ETF");
-    let ran = run_payer(common::Recorded::new().with(SCREENER, 200, IS, "screener-trimmed.json"), &n, IS);
+    let ran = run_payer(common::Recorded::new().with(SCREENER, 200, IS, "screener-trimmed.json").with_market_record_unknown(), &n, IS);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "iShares lists no US fund ZZZQX".to_string()));
     assert!(ran.wrote_nothing());
 }

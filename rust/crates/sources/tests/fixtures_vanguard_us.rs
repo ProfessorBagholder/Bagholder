@@ -133,10 +133,11 @@ fn vti_is_stored_whole_in_dollars_with_its_stated_schedule() {
 #[test]
 fn a_ticker_vanguard_answers_404_for_is_not_carried_and_writes_nothing() {
     let n = need("ZZZQX", "ARCX", Currency::USD, "Vanguard Index Funds - Vanguard Nothing ETF");
-    let ran = run_payer(common::Recorded::new().with(&format!("{API}zzzqx/validate"), 404, VG, "validate-ZZZQX-status-404.html"), &n, VG);
+    let ran = run_payer(common::Recorded::new().with(&format!("{API}zzzqx/validate"), 404, VG, "validate-ZZZQX-status-404.html").with_market_record_unknown(), &n, VG);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "status 404".to_string()));
     assert!(ran.wrote_nothing());
-    assert_eq!(ran.asked, vec![format!("{API}zzzqx/validate")]);
+    // then its market's record, which does not know it either
+    assert_eq!(ran.asked[0], format!("{API}zzzqx/validate"));
 }
 
 #[test]

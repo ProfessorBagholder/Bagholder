@@ -176,10 +176,11 @@ fn a_release_in_another_currency_is_a_mismatch_writing_nothing() {
 
 #[test]
 fn a_series_fidelity_does_not_list_is_not_carried() {
-    let ran = run_payer(common::Recorded::new().with(FUNDS, 200, DIR, "funds-trimmed.json"), &series("ZZZQX"), FD);
+    let ran = run_payer(common::Recorded::new().with(FUNDS, 200, DIR, "funds-trimmed.json").with_market_record_unknown(), &series("ZZZQX"), FD);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "Fidelity lists no series ZZZQX".to_string()));
     assert!(ran.wrote_nothing());
-    assert_eq!(ran.asked, vec![FUNDS.to_string()]);
+    // then its market's record, which does not know it either
+    assert_eq!(ran.asked[0], FUNDS);
 }
 
 #[test]

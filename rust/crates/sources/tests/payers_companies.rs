@@ -109,8 +109,9 @@ fn a_company_is_its_listing_not_its_name() {
     let id = InstrumentId::parse("0192a000-0000-7000-8000-000000000001").unwrap();
     let need = |symbol: &str, mic: &str| PayerNeed { listing: Listing { id, kind: InstrumentKind::Security, currency: Currency::CAD, symbol: symbol.into(), venue_mic: Some(mic.into()), routes: BTreeMap::new() }, name: Some("Bank of Nova Scotia".into()) };
     assert_eq!(payers::adapter_for(&need("BNS.TO", "XTSE")).map(|a| a.source().to_string()).as_deref(), Some("newswire"));
-    // the same ticker on another venue is another listing
-    assert!(payers::adapter_for(&need("BNS", "XNYS")).is_none());
+    // the same ticker on another venue is another listing, which no company
+    // reader serves: its market's record
+    assert_eq!(payers::adapter_for(&need("BNS", "XNYS")).map(|a| a.source().to_string()).as_deref(), Some("yahoo"));
 }
 
 #[test]

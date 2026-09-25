@@ -1,7 +1,6 @@
 //! TMX Money's GraphQL service (`app-money.tmx.com/graphql`): the quote of a
-//! Canadian listing, and the exchange-side record of distributions for a fund whose company's own
-//! publication cannot be read (Mackenzie's QCN and QUU; the owner's exception of
-//! 2026-09-24).
+//! Canadian listing, and the exchange's record of distributions: the market's
+//! record for every Canadian payer no company reader serves (`payers::exchange`).
 //!
 //! The service wants its own site's origin and a locale. An unknown symbol
 //! answers with an error naming code 404 and no data: not carried. A form of the

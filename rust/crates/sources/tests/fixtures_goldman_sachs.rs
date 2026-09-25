@@ -133,7 +133,7 @@ fn gswo_is_stored_whole_its_repeat_once_with_its_stated_schedule() {
 #[test]
 fn a_class_goldman_does_not_list_is_not_carried() {
     let n = need("GLOV", "BATS", Currency::USD, "Goldman Sachs ETF Trust - Goldman Sachs ActiveBeta World Low Vol Plus Equity ETF");
-    let ran = run_payer(common::Recorded::new().with_body(URL, "\"operationName\":\"Funds\"", 200, GS, "funds-trimmed.json"), &n, GS);
+    let ran = run_payer(common::Recorded::new().with_body(URL, "\"operationName\":\"Funds\"", 200, GS, "funds-trimmed.json").with_market_record_unknown(), &n, GS);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "Goldman Sachs lists no class GLOV".to_string()));
     assert!(ran.wrote_nothing());
 }

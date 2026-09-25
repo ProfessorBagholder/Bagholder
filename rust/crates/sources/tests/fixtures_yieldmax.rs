@@ -136,7 +136,7 @@ fn msty_real_page_is_refused_as_a_whole_for_its_record_date_ten_years_out() {
 #[test]
 fn a_fund_the_sites_data_does_not_list_is_not_carried() {
     let n = need("ZZZQX", "ARCX", Currency::USD, "Tidal Trust II - Yieldmax Nothing ETF");
-    let recorded = common::Recorded::new().with("https://yieldmaxetfs.com/wp-json/wp/v2/etf?slug=zzzqx", 200, YM, "etf-zzzqx.json").with(TERMS, 200, YM, "distribution-frequency.json");
+    let recorded = common::Recorded::new().with("https://yieldmaxetfs.com/wp-json/wp/v2/etf?slug=zzzqx", 200, YM, "etf-zzzqx.json").with(TERMS, 200, YM, "distribution-frequency.json").with_market_record_unknown();
     let ran = run_payer(recorded, &n, YM);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "YieldMax lists no fund zzzqx".to_string()));
     assert!(ran.wrote_nothing());

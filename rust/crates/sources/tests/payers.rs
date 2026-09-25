@@ -44,13 +44,18 @@ fn payer(n: u8, symbol: &str, mic: &str, currency: Currency, name: &str) -> Paye
 const NP: &str = "ninepoint";
 
 #[test]
-fn a_funds_brand_picks_its_companys_reader() {
+fn a_payer_has_its_companys_reader_else_its_markets_record() {
     let source = |p: &PayerNeed| payers::adapter_for(p).map(|a| a.source().to_string());
+    // its company's reader, by the brand its name carries
     assert_eq!(source(&payer(1, "CCHI", "XTSE", Currency::CAD, "Ninepoint Partners LP - Cameco Highshares ETF")).as_deref(), Some("ninepoint"));
-    assert_eq!(source(&payer(2, "QCN", "XTSE", Currency::CAD, "MacKenzie Financial Corp. - Canadian Equity Index ETF")).as_deref(), Some("tmx"));
-    assert_eq!(source(&payer(3, "WQTM", "BATS", Currency::USD, "Wisdomtree Trust - Quantum Computing Fund")).as_deref(), Some("yahoo"));
-    // a payer no reader serves waits on it, named
-    let unknown = payer(4, "ZZZ", "XTSE", Currency::CAD, "Nobody's Income Fund");
+    // no company reader serves it: its market's record, whatever it is called
+    for (symbol, mic, currency, want) in [("ZZZ", "XTSE", Currency::CAD, "tmx"), ("ZZZ", "XTSX", Currency::CAD, "tmx"), ("ZZZ", "XNAS", Currency::USD, "yahoo"), ("ZZZ", "BATS", Currency::USD, "yahoo")] {
+        let p = payer(2, symbol, mic, currency, "An Issuer No Reader Knows - Income Fund");
+        assert_eq!(source(&p).as_deref(), Some(want), "{mic}");
+        assert!(run::unread(std::slice::from_ref(&p)).is_empty());
+    }
+    // a listing on a venue no record covers waits on it, named
+    let unknown = payer(4, "ZZZ", "XXXX", Currency::CAD, "An Issuer No Reader Knows - Income Fund");
     assert_eq!(source(&unknown), None);
     assert_eq!(run::unread(std::slice::from_ref(&unknown)).len(), 1);
 }
@@ -131,6 +136,8 @@ const TMX: &str = "https://app-money.tmx.com/graphql";
 
 #[test]
 fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_stated() {
+    // a payer its company's reader serves, and two no company reader serves (their
+    // names carry no company any reader knows): those have the market's record
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-24T04:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
@@ -151,8 +158,8 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
     let needs = [
         payer(1, "CCHI", "XTSE", Currency::CAD, "Ninepoint Partners LP - Cameco Highshares ETF"),
-        payer(2, "QCN", "XTSE", Currency::CAD, "MacKenzie Financial Corp. - Canadian Equity Index ETF"),
-        payer(3, "WQTM", "BATS", Currency::USD, "Wisdomtree Trust - Quantum Computing Fund"),
+        payer(2, "QCN", "XTSE", Currency::CAD, "An Issuer No Reader Knows - Canadian Equity Index ETF"),
+        payer(3, "WQTM", "BATS", Currency::USD, "Another Issuer No Reader Knows - Quantum Computing Fund"),
     ];
     run::read(&ctx, &needs).unwrap();
     let declared = book.declared().unwrap();
@@ -161,12 +168,14 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
     assert_eq!(declared[&id(1)].source.as_str(), "ninepoint");
     assert_eq!(declared[&id(1)].items.len(), 14);
     assert_eq!((freq[&id(1)].per_year, freq[&id(1)].source.as_str()), (24, "ninepoint"));
-    // Mackenzie's fund: TMX's record and TMX's stated schedule, marked as TMX's
+    // a Canadian listing no company reader serves: the exchange's record and the
+    // schedule it states, marked as TMX's
     assert_eq!(declared[&id(2)].source.as_str(), "tmx");
     let units = declared[&id(2)].items.iter().find(|r| r.ex_date == date(2023, 12, 28)).unwrap();
     assert_eq!((units.amount.amount, units.reinvested), (Dec::ZERO, Some(dec("0.35705"))));
     assert_eq!((freq[&id(2)].per_year, freq[&id(2)].source.as_str()), (4, "tmx"));
-    // WisdomTree's fund: Yahoo's record (nothing paid yet), no schedule stated
+    // a US listing no company reader serves: Yahoo's record (nothing paid yet), and
+    // no schedule, since Yahoo states none
     assert_eq!(declared[&id(3)].source.as_str(), "yahoo");
     assert!(declared[&id(3)].items.is_empty());
     assert!(!freq.contains_key(&id(3)));
@@ -178,6 +187,30 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
     let asked = recorded.asked.lock().unwrap().len();
     run::read(&ctx, &needs).unwrap();
     assert_eq!(recorded.asked.lock().unwrap().len(), asked);
+}
+
+#[test]
+fn a_payer_its_companys_publication_does_not_carry_has_the_markets_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-09-24T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with("https://www.ninepoint.com/api/funds/getallfundswithpriceandperformance/en?showAllSeries=true", 200, NP, "funds-trimmed.json")
+            .with_body(TMX, "getQuoteBySymbol", 200, "tmx", "quote-QCN.json")
+            .with_body(TMX, "getDividendsForSymbol", 200, "tmx", "dividends-QCN.json"),
+    );
+    let net = common::net(&recorded, "2026-09-24T04:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    // the name carries a company a reader knows, whose own list does not hold the ticker
+    run::read(&ctx, &[payer(1, "QCN", "XTSE", Currency::CAD, "Ninepoint Partners LP - A Fund Its List Does Not Hold")]).unwrap();
+    let company = cache.outcomes(&SourceName::named("ninepoint")).unwrap();
+    assert_eq!(company.iter().map(|o| o.outcome).collect::<Vec<_>>(), vec![OutcomeKind::NotCarried]);
+    assert_eq!(book.declared().unwrap()[&id(1)].source.as_str(), "tmx");
+    assert_eq!(book.frequencies().unwrap()[&id(1)].per_year, 4);
 }
 
 #[test]
@@ -195,6 +228,8 @@ fn a_payers_failed_read_is_recorded_as_it_failed_and_writes_nothing() {
     assert!(book.declared().unwrap().is_empty());
     let outcomes = cache.outcomes(&SourceName::named("harvest")).unwrap();
     assert_eq!(outcomes.len(), 1);
+    // a company reader that failed is not passed over for the market's record
+    assert_eq!(recorded.asked.lock().unwrap().len(), 1);
     assert_eq!(outcomes[0].outcome, OutcomeKind::Unreachable);
     assert!(outcomes[0].detail.contains("status 500"), "{}", outcomes[0].detail);
     // Harvest answers 403 to a request without a User-Agent

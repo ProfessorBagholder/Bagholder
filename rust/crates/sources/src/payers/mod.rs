@@ -8,11 +8,11 @@
 //! broker's names are inconsistent, "MacKenzie Financial Corp. - …", "Tidal
 //! Trust II - Yieldmax …", but each names its brand); the company's adapter then
 //! finds the ticker in the company's own list, and answers "not carried" when it
-//! is not there. Two companies' publications cannot be read at all (their sites
-//! answer only a browser, and getting past a bot check is not something the app
-//! does): for them, and only them, the exchange-side record stands in (the
-//! owner's exception of 2026-09-24): Mackenzie through TMX, WisdomTree through
-//! Yahoo.
+//! is not there. Every payer no company reader serves (none knows its company,
+//! or its company's publication does not carry it) has the market's record
+//! (`exchange`): the exchange's for a Canadian listing, Yahoo's for a US one. A
+//! company reader that fails to answer is that source's failure and never a
+//! switch to the market's record.
 //!
 //! What a publication states is kept as stated, then checked here before
 //! anything is written: a row repeated identically is one row; two different
@@ -113,7 +113,8 @@ pub trait Payer: Send + Sync {
 pub const CANADA: &[Market] = &[Market::Canada, Market::CboeCanada];
 pub const US: &[Market] = &[Market::UnitedStates];
 
-/// Every payer adapter, in the order a fund's name is tried against them.
+/// Every payer adapter, in the order a payer is tried against them: its
+/// company's reader first, the market's record last.
 pub fn all() -> Vec<Box<dyn Payer>> {
     vec![
         Box::new(companies::Companies),
@@ -132,15 +133,23 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(us_pages::Defiance),
         Box::new(goldman::GoldmanSachs),
         Box::new(ishares_us::ISharesUs),
-        Box::new(exchange::Mackenzie),
-        Box::new(exchange::WisdomTree),
+        // the market's record, for every payer no company reader serves
+        Box::new(exchange::TmxRecord),
+        Box::new(exchange::YahooRecord),
     ]
 }
 
 /// The adapter for a payer: a company it names by its listing, else a fund
-/// company by the brand its name carries and the market it trades in.
+/// company by the brand its name carries and the market it trades in, else the
+/// market's record for the listing's market.
 pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
     all().into_iter().find(|p| p.serves(need))
+}
+
+/// The market's record for a payer's listing, whatever its company.
+pub fn market_record_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
+    let market: [Box<dyn Payer>; 2] = [Box::new(exchange::TmxRecord), Box::new(exchange::YahooRecord)];
+    market.into_iter().find(|p| p.serves(need))
 }
 
 /// A record checked, repeats folded: a meaning failure names what is wrong.

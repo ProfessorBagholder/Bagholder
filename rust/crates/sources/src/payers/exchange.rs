@@ -1,17 +1,14 @@
-//! The exchange-side record, for the two fund companies whose own publication
-//! cannot be read at all (the owner's exception of 2026-09-24; research 2):
+//! The market's record of a payer's distributions, for every held payer no
+//! reader of its own company serves (brief 09): the exchange's record for a
+//! Canadian listing (TMX's declared distributions, and the schedule TMX states
+//! as `dividendFrequency`), Yahoo's dividend events for a US listing (which state
+//! no schedule, so none is stored and the payer's annual income waits, named).
 //!
-//! - **Mackenzie** (QCN, QUU): TMX's declared distributions for the Canadian
-//!   listing, and the schedule TMX states (`dividendFrequency`, `Quarterly` for
-//!   both). The quote is read first: it says whether TMX knows the listing, on
-//!   the venue the book names, and states the schedule.
-//! - **WisdomTree** (WQTM): Yahoo's dividend events for the US listing. No source
-//!   states its schedule, so none is stored, and the fund's annual income waits,
-//!   named.
-//!
-//! Each is marked with the exchange-side source's name, never the company's. It
-//! is a fixed list, not a fallback: a fund company whose own page fails to answer
-//! is a failure of that source.
+//! The choice is by the listing's market alone: no brand, symbol or company is
+//! named in it. A company reader, where one serves the payer, comes first
+//! (`payers::all`), since a company states a schedule change first; its failed
+//! read is that source's failure, retried after its rest, and never a switch to
+//! the market's record. Each record is marked with the market source's name.
 
 use bagholder_core::jiff::civil::date;
 use bagholder_core::jiff::Timestamp;
@@ -24,9 +21,10 @@ use crate::outcome::{Noted, Outcome};
 use crate::payers::{Distribution, Payer, Record};
 use crate::venue;
 
-pub struct Mackenzie;
+/// A Canadian listing's record, on TMX.
+pub struct TmxRecord;
 
-impl Payer for Mackenzie {
+impl Payer for TmxRecord {
     fn source(&self) -> SourceName {
         tmx::source()
     }
@@ -36,11 +34,16 @@ impl Payer for Mackenzie {
     }
 
     fn brands(&self) -> &'static [&'static str] {
-        &["mackenzie"]
+        &[]
     }
 
     fn markets(&self) -> &'static [crate::contract::Market] {
         crate::payers::CANADA
+    }
+
+    /// Every listing in its markets, whatever its name.
+    fn serves(&self, need: &PayerNeed) -> bool {
+        need.listing.market().is_some_and(|m| self.markets().contains(&m))
     }
 
     fn read(&self, net: &Net, need: &PayerNeed, _now: Timestamp) -> Noted<Record> {
@@ -65,9 +68,10 @@ impl Payer for Mackenzie {
     }
 }
 
-pub struct WisdomTree;
+/// A US listing's record, on Yahoo.
+pub struct YahooRecord;
 
-impl Payer for WisdomTree {
+impl Payer for YahooRecord {
     fn source(&self) -> SourceName {
         yahoo::source()
     }
@@ -77,11 +81,16 @@ impl Payer for WisdomTree {
     }
 
     fn brands(&self) -> &'static [&'static str] {
-        &["wisdomtree"]
+        &[]
     }
 
     fn markets(&self) -> &'static [crate::contract::Market] {
         crate::payers::US
+    }
+
+    /// Every listing in its market, whatever its name.
+    fn serves(&self, need: &PayerNeed) -> bool {
+        need.listing.market().is_some_and(|m| self.markets().contains(&m))
     }
 
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {

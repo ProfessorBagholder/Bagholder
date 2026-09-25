@@ -139,7 +139,7 @@ fn zfl_states_a_monthly_schedule_and_every_distribution() {
 #[test]
 fn an_entity_the_service_does_not_know_is_not_carried_and_writes_nothing() {
     let n = need("ZZZQX", "XTSE", Currency::CAD, "BMO Asset Management Inc. - BMO Nothing ETF");
-    let ran = run_payer(common::Recorded::new().with_body(URL, "\"entityId\":\"ZZZQX-a\"", 200, BMO, "fund-ZZZQX.json"), &n, BMO);
+    let ran = run_payer(common::Recorded::new().with_body(URL, "\"entityId\":\"ZZZQX-a\"", 200, BMO, "fund-ZZZQX.json").with_market_record_unknown(), &n, BMO);
     assert_eq!(ran.outcome(), (OutcomeKind::NotCarried, "BMO's service does not know ZZZQX".to_string()));
     assert!(ran.wrote_nothing());
 }

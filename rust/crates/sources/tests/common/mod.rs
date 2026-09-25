@@ -58,6 +58,9 @@ pub fn headers(source: &str, name: &str) -> Vec<(String, String)> {
     last.lines().filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))).filter(|(k, _)| !k.starts_with("HTTP/")).collect()
 }
 
+/// Marks an answer's URL as a prefix (`Recorded::with_prefix`).
+const PREFIX: &str = "prefix:";
+
 /// A network that answers each URL it is given with a recorded reply, and
 /// fails the test on any other request.
 pub struct Recorded {
@@ -81,6 +84,19 @@ impl Recorded {
         self
     }
 
+    /// Answer every request whose URL begins with `prefix`.
+    pub fn with_prefix(mut self, prefix: &str, status: u16, source: &str, name: &str) -> Recorded {
+        self.answers.push((format!("{PREFIX}{prefix}"), String::new(), status, read(source, name).into_bytes(), headers(source, name)));
+        self
+    }
+
+    /// The market's record knows no listing: TMX has no quote for it, Yahoo no
+    /// chart. For a payer whose company's reader does not carry it, which is then
+    /// asked of its market's record (`payers::run`).
+    pub fn with_market_record_unknown(self) -> Recorded {
+        self.with_body("https://app-money.tmx.com/graphql", "getQuoteBySymbol", 200, "tmx", "quote-ZZZQX-unknown.json").with_prefix("https://query1.finance.yahoo.com/v8/finance/chart/", 404, "yahoo", "ZZZQX-status-404.json")
+    }
+
     /// Answer a request to `url` whose body contains `needle`.
     pub fn with_body(mut self, url: &str, needle: &str, status: u16, source: &str, name: &str) -> Recorded {
         self.answers.push((url.to_string(), needle.to_string(), status, read(source, name).into_bytes(), headers(source, name)));
@@ -97,7 +113,11 @@ impl bagholder_net::Transport for Shared {
         self.0.asked.lock().unwrap().push(ask.url.to_string());
         self.0.headers.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
         let sent = ask.body.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-        match self.0.answers.iter().find(|(u, needle, _, _, _)| u == ask.url && sent.contains(needle.as_str())) {
+        let hit = |u: &String| match u.strip_prefix(PREFIX) {
+            Some(prefix) => ask.url.starts_with(prefix),
+            None => u == ask.url,
+        };
+        match self.0.answers.iter().find(|(u, needle, _, _, _)| hit(u) && sent.contains(needle.as_str())) {
             Some((_, _, status, body, headers)) => Ok((*status, ask.url.to_string(), headers.clone(), body.clone())),
             None => panic!("a request no recorded reply answers: {}", ask.url),
         }

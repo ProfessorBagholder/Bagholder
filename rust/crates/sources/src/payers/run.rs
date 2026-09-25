@@ -19,8 +19,8 @@ use bagholder_core::{InstrumentId, Money};
 use crate::contract::{Benchmark, DataKind};
 use crate::market;
 use crate::needs::PayerNeed;
-use crate::outcome::Outcome;
-use crate::payers::{adapter_for, checked, companies, Record};
+use crate::outcome::{Outcome, OutcomeKind};
+use crate::payers::{adapter_for, checked, companies, market_record_for, Payer, Record};
 use crate::read::{Ctx, Result};
 
 /// Whether a payer is due, from what the book holds of it.
@@ -76,41 +76,58 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             continue;
         }
         let Some(adapter) = adapter_for(need) else {
-            // no adapter reads this payer: the figures wait on it, named
+            // no reader for its market either: the figures wait on it, named
             continue;
         };
-        // a failed read waits out its source's rest
-        let subject = id.to_string();
-        if ctx.resting(&subject, DataKind::Distributions, adapter.host())? {
-            continue;
-        }
-        let mut noted = adapter.read(ctx.net, need, ctx.now);
-        if let Outcome::Answered(record) = &mut noted.outcome {
-            if !dated(ctx, record)? {
-                // the exchange's sessions for its older declarations are not all
-                // held (their read failed or rests): the payer's answer is kept
-                // as a read of its source, nothing is stored, and it stays due
-                ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
-                continue;
-            }
-        }
-        noted.outcome = match noted.outcome {
-            Outcome::Answered(record) => match checked(record, ctx.now) {
-                Ok(r) => Outcome::Answered(r),
-                Err(why) => Outcome::Meaning(why),
-            },
-            other => other,
-        };
-        ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
-        ctx.attempted(&subject, DataKind::Distributions, &adapter.source(), noted.outcome.kind())?;
-        if let Outcome::Answered(record) = noted.outcome {
-            ctx.book.store_declared(id, &stored_rows(&record), &adapter.source(), ctx.now)?;
-            if let Some(n) = record.per_year {
-                ctx.book.store_frequency(id, n, &adapter.source(), Some(ctx.today()), ctx.now)?;
+        let outcome = read_with(ctx, need, adapter.as_ref())?;
+        // its company's publication does not carry it: no company reader serves
+        // it, so it has the market's record. A company reader that failed to
+        // answer is that source's failure, and is not passed over.
+        if outcome == Some(OutcomeKind::NotCarried) {
+            if let Some(market) = market_record_for(need).filter(|m| m.source() != adapter.source()) {
+                read_with(ctx, need, market.as_ref())?;
             }
         }
     }
     Ok(())
+}
+
+/// One reader's read of one payer, unless its source rests: what it answered is
+/// recorded, and what it states is stored.
+fn read_with(ctx: &Ctx, need: &PayerNeed, adapter: &dyn Payer) -> Result<Option<OutcomeKind>> {
+    let id = need.listing.id;
+    // a failed read waits out its source's rest
+    let subject = id.to_string();
+    if ctx.resting(&subject, DataKind::Distributions, adapter.host())? {
+        return Ok(None);
+    }
+    let mut noted = adapter.read(ctx.net, need, ctx.now);
+    if let Outcome::Answered(record) = &mut noted.outcome {
+        if !dated(ctx, record)? {
+            // the exchange's sessions for its older declarations are not all
+            // held (their read failed or rests): the payer's answer is kept
+            // as a read of its source, nothing is stored, and it stays due
+            ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
+            return Ok(None);
+        }
+    }
+    noted.outcome = match noted.outcome {
+        Outcome::Answered(record) => match checked(record, ctx.now) {
+            Ok(r) => Outcome::Answered(r),
+            Err(why) => Outcome::Meaning(why),
+        },
+        other => other,
+    };
+    let kind = noted.outcome.kind();
+    ctx.record(&adapter.source(), adapter.host(), DataKind::Distributions, Some(id), &noted)?;
+    ctx.attempted(&subject, DataKind::Distributions, &adapter.source(), kind)?;
+    if let Outcome::Answered(record) = noted.outcome {
+        ctx.book.store_declared(id, &stored_rows(&record), &adapter.source(), ctx.now)?;
+        if let Some(n) = record.per_year {
+            ctx.book.store_frequency(id, n, &adapter.source(), Some(ctx.today()), ctx.now)?;
+        }
+    }
+    Ok(Some(kind))
 }
 
 /// The payers no adapter reads: shown as waiting on their payer, named.
